@@ -1,16 +1,18 @@
 using System;
 using System.Buffers;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using CycloneGames.Hash.Core;
 using CycloneGames.Logger;
 using UnityEngine; // For Application.platform and platform-specific defines
 
-namespace CycloneGames.Utility.Runtime
+namespace CycloneGames.IO.Runtime
 {
     public enum HashAlgorithmType
     {
@@ -49,9 +51,18 @@ namespace CycloneGames.Utility.Runtime
         private const int ReadBufferSize = 65536;
 #endif
         private const long LargeFileThreshold = 10 * 1024 * 1024;
+        private const int SmallFileDirectIoThreshold = 64 * 1024;
 
         // Hex lookup table: avoids per-byte ToString("x2") allocation
         private static readonly char[] HexChars = "0123456789abcdef".ToCharArray();
+
+        private static readonly Encoding Utf8NoBomStrictEncoding = new UTF8Encoding(false, true);
+        private static readonly Encoding Utf16LittleEndianStrictEncoding = new UnicodeEncoding(false, true, true);
+        private static readonly Encoding Utf16BigEndianStrictEncoding = new UnicodeEncoding(true, true, true);
+        private static readonly Encoding Utf32LittleEndianStrictEncoding = new UTF32Encoding(false, true);
+        private static readonly Encoding Utf32BigEndianStrictEncoding = new UTF32Encoding(true, true);
+
+        public static Encoding Utf8NoBom => Utf8NoBomStrictEncoding;
 
         // When using FileOptions.Asynchronous with external ArrayPool buffers,
         // the FileStream's internal buffer is redundant for large sequential reads.
@@ -73,6 +84,766 @@ namespace CycloneGames.Utility.Runtime
         private static byte[] GetReadBuffer() => ArrayPool<byte>.Shared.Rent(ReadBufferSize);
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         private static void ReturnReadBuffer(byte[] buffer) => ArrayPool<byte>.Shared.Return(buffer);
+
+        private static void EnsureParentDirectoryExists(string filePath)
+        {
+            string directoryPath = Path.GetDirectoryName(filePath);
+            if (!string.IsNullOrEmpty(directoryPath) && !Directory.Exists(directoryPath))
+            {
+                // Fast path: skip CreateDirectory's path-walking when the directory already exists.
+                // This is race-safe because Directory.CreateDirectory is idempotent and does not throw
+                // if another thread creates the directory between this check and the call.
+                Directory.CreateDirectory(directoryPath);
+            }
+        }
+
+        public static string DecodeText(byte[] bytes)
+        {
+            return DecodeText(bytes, Utf8NoBomStrictEncoding, true);
+        }
+
+        public static string DecodeText(byte[] bytes, Encoding fallbackEncoding, bool detectEncodingFromByteOrderMarks = true)
+        {
+            return DecodeTextWithFallbacks(bytes, fallbackEncoding, null, detectEncodingFromByteOrderMarks);
+        }
+
+        public static string DecodeTextWithFallbacks(byte[] bytes, Encoding primaryFallbackEncoding, IReadOnlyList<Encoding> additionalFallbackEncodings, bool detectEncodingFromByteOrderMarks = true)
+        {
+            if (bytes == null)
+            {
+                throw new ArgumentNullException(nameof(bytes));
+            }
+
+            Encoding encoding = primaryFallbackEncoding ?? Utf8NoBomStrictEncoding;
+            int offset = 0;
+
+            if (detectEncodingFromByteOrderMarks && TryDetectEncodingFromByteOrderMarks(bytes, out Encoding detectedEncoding, out int preambleLength))
+            {
+                return DecodeTextWithEncoding(bytes, preambleLength, detectedEncoding);
+            }
+
+            DecoderFallbackException firstFailure = null;
+            if (TryDecodeTextWithEncoding(bytes, offset, encoding, out string text, out firstFailure))
+            {
+                return text;
+            }
+
+            if (additionalFallbackEncodings != null)
+            {
+                for (int i = 0; i < additionalFallbackEncodings.Count; i++)
+                {
+                    Encoding candidateEncoding = additionalFallbackEncodings[i];
+                    if (candidateEncoding == null)
+                    {
+                        continue;
+                    }
+
+                    if (TryDecodeTextWithEncoding(bytes, offset, candidateEncoding, out text, out _))
+                    {
+                        return text;
+                    }
+                }
+            }
+
+            throw firstFailure ?? new DecoderFallbackException("Unable to decode text with the provided fallback encodings.");
+        }
+
+        public static bool TryDecodeText(byte[] bytes, out string text)
+        {
+            return TryDecodeText(bytes, Utf8NoBomStrictEncoding, null, out text, true);
+        }
+
+        public static bool TryDecodeText(byte[] bytes, Encoding fallbackEncoding, out string text, bool detectEncodingFromByteOrderMarks = true)
+        {
+            return TryDecodeText(bytes, fallbackEncoding, null, out text, detectEncodingFromByteOrderMarks);
+        }
+
+        public static bool TryDecodeText(byte[] bytes, Encoding primaryFallbackEncoding, IReadOnlyList<Encoding> additionalFallbackEncodings, out string text, bool detectEncodingFromByteOrderMarks = true)
+        {
+            try
+            {
+                text = DecodeTextWithFallbacks(bytes, primaryFallbackEncoding, additionalFallbackEncodings, detectEncodingFromByteOrderMarks);
+                return true;
+            }
+            catch (DecoderFallbackException)
+            {
+                text = null;
+                return false;
+            }
+        }
+
+        public static string DecodeTextSmart(byte[] bytes)
+        {
+            return DecodeTextSmart(bytes, Utf8NoBomStrictEncoding, null);
+        }
+
+        public static string DecodeTextSmart(byte[] bytes, Encoding primaryFallbackEncoding, IReadOnlyList<Encoding> additionalFallbackEncodings = null)
+        {
+            if (bytes == null)
+            {
+                throw new ArgumentNullException(nameof(bytes));
+            }
+
+            if (TryDetectEncodingFromByteOrderMarks(bytes, out Encoding detectedEncoding, out int preambleLength))
+            {
+                return DecodeTextWithEncoding(bytes, preambleLength, detectedEncoding);
+            }
+
+            if (TryDetectLikelyUnicodeEncodingWithoutByteOrderMark(bytes, out detectedEncoding))
+            {
+                return DecodeTextWithEncoding(bytes, 0, detectedEncoding);
+            }
+
+            return DecodeTextWithFallbacks(bytes, primaryFallbackEncoding, additionalFallbackEncodings, false);
+        }
+
+        public static bool TryDecodeTextSmart(byte[] bytes, out string text)
+        {
+            return TryDecodeTextSmart(bytes, Utf8NoBomStrictEncoding, null, out text);
+        }
+
+        public static bool TryDecodeTextSmart(byte[] bytes, Encoding primaryFallbackEncoding, IReadOnlyList<Encoding> additionalFallbackEncodings, out string text)
+        {
+            try
+            {
+                text = DecodeTextSmart(bytes, primaryFallbackEncoding, additionalFallbackEncodings);
+                return true;
+            }
+            catch (DecoderFallbackException)
+            {
+                text = null;
+                return false;
+            }
+        }
+
+        private static string DecodeTextWithEncoding(byte[] bytes, int offset, Encoding encoding)
+        {
+            Encoding strictEncoding = GetStrictEncoding(encoding);
+            return strictEncoding.GetString(bytes, offset, bytes.Length - offset);
+        }
+
+        private static bool TryDecodeTextWithEncoding(byte[] bytes, int offset, Encoding encoding, out string text, out DecoderFallbackException exception)
+        {
+            try
+            {
+                text = DecodeTextWithEncoding(bytes, offset, encoding);
+                exception = null;
+                return true;
+            }
+            catch (DecoderFallbackException ex)
+            {
+                text = null;
+                exception = ex;
+                return false;
+            }
+        }
+
+        private static Encoding GetStrictEncoding(Encoding encoding)
+        {
+            if (encoding == null)
+            {
+                return Utf8NoBomStrictEncoding;
+            }
+
+            if (encoding.DecoderFallback == DecoderFallback.ExceptionFallback)
+            {
+                return encoding;
+            }
+
+            var strictEncoding = (Encoding)encoding.Clone();
+            strictEncoding.DecoderFallback = DecoderFallback.ExceptionFallback;
+            return strictEncoding;
+        }
+
+        private static bool TryDetectEncodingFromByteOrderMarks(byte[] bytes, out Encoding encoding, out int preambleLength)
+        {
+            if (bytes.Length >= 4)
+            {
+                if (bytes[0] == 0xFF && bytes[1] == 0xFE && bytes[2] == 0x00 && bytes[3] == 0x00)
+                {
+                    encoding = Utf32LittleEndianStrictEncoding;
+                    preambleLength = 4;
+                    return true;
+                }
+
+                if (bytes[0] == 0x00 && bytes[1] == 0x00 && bytes[2] == 0xFE && bytes[3] == 0xFF)
+                {
+                    encoding = Utf32BigEndianStrictEncoding;
+                    preambleLength = 4;
+                    return true;
+                }
+            }
+
+            if (bytes.Length >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF)
+            {
+                encoding = Utf8NoBomStrictEncoding;
+                preambleLength = 3;
+                return true;
+            }
+
+            if (bytes.Length >= 2)
+            {
+                if (bytes[0] == 0xFE && bytes[1] == 0xFF)
+                {
+                    encoding = Utf16BigEndianStrictEncoding;
+                    preambleLength = 2;
+                    return true;
+                }
+
+                if (bytes[0] == 0xFF && bytes[1] == 0xFE)
+                {
+                    encoding = Utf16LittleEndianStrictEncoding;
+                    preambleLength = 2;
+                    return true;
+                }
+            }
+
+            encoding = null;
+            preambleLength = 0;
+            return false;
+        }
+
+        private static bool TryDetectLikelyUnicodeEncodingWithoutByteOrderMark(byte[] bytes, out Encoding encoding)
+        {
+            if (bytes.Length >= 8)
+            {
+                int utf32Groups = bytes.Length / 4;
+                int utf32LittleEndianAsciiLike = 0;
+                int utf32BigEndianAsciiLike = 0;
+
+                for (int i = 0; i < utf32Groups; i++)
+                {
+                    int offset = i * 4;
+                    if (bytes[offset + 1] == 0x00 && bytes[offset + 2] == 0x00 && bytes[offset + 3] == 0x00)
+                    {
+                        utf32LittleEndianAsciiLike++;
+                    }
+
+                    if (bytes[offset] == 0x00 && bytes[offset + 1] == 0x00 && bytes[offset + 2] == 0x00)
+                    {
+                        utf32BigEndianAsciiLike++;
+                    }
+                }
+
+                if (utf32LittleEndianAsciiLike * 4 >= utf32Groups * 3)
+                {
+                    encoding = Utf32LittleEndianStrictEncoding;
+                    return true;
+                }
+
+                if (utf32BigEndianAsciiLike * 4 >= utf32Groups * 3)
+                {
+                    encoding = Utf32BigEndianStrictEncoding;
+                    return true;
+                }
+            }
+
+            if (bytes.Length >= 4)
+            {
+                int pairCount = bytes.Length / 2;
+                int evenZeroCount = 0;
+                int oddZeroCount = 0;
+
+                for (int i = 0; i < pairCount; i++)
+                {
+                    if (bytes[i * 2] == 0x00)
+                    {
+                        evenZeroCount++;
+                    }
+
+                    if (bytes[i * 2 + 1] == 0x00)
+                    {
+                        oddZeroCount++;
+                    }
+                }
+
+                if (oddZeroCount * 5 >= pairCount * 3 && evenZeroCount * 5 <= pairCount)
+                {
+                    encoding = Utf16LittleEndianStrictEncoding;
+                    return true;
+                }
+
+                if (evenZeroCount * 5 >= pairCount * 3 && oddZeroCount * 5 <= pairCount)
+                {
+                    encoding = Utf16BigEndianStrictEncoding;
+                    return true;
+                }
+            }
+
+            encoding = null;
+            return false;
+        }
+
+        public static string ReadAllTextSmart(string filePath)
+        {
+            return DecodeTextSmart(ReadAllBytes(filePath));
+        }
+
+        public static string ReadAllTextSmart(string filePath, Encoding primaryFallbackEncoding, IReadOnlyList<Encoding> additionalFallbackEncodings = null)
+        {
+            return DecodeTextSmart(ReadAllBytes(filePath), primaryFallbackEncoding, additionalFallbackEncodings);
+        }
+
+        public static async Task<string> ReadAllTextSmartAsync(string filePath, CancellationToken cancellationToken = default)
+        {
+            return await ReadAllTextSmartAsync(filePath, Utf8NoBomStrictEncoding, null, cancellationToken).ConfigureAwait(false);
+        }
+
+        public static async Task<string> ReadAllTextSmartAsync(string filePath, Encoding primaryFallbackEncoding, IReadOnlyList<Encoding> additionalFallbackEncodings, CancellationToken cancellationToken = default)
+        {
+            byte[] bytes = await ReadAllBytesAsync(filePath, cancellationToken).ConfigureAwait(false);
+            return DecodeTextSmart(bytes, primaryFallbackEncoding, additionalFallbackEncodings);
+        }
+
+        private static string GetTemporaryWritePath(string filePath)
+        {
+            return filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        }
+
+        private static void ReplaceFileWithTemporaryFile(string temporaryFilePath, string destinationFilePath)
+        {
+            if (File.Exists(destinationFilePath))
+            {
+                try
+                {
+                    File.Replace(temporaryFilePath, destinationFilePath, null);
+                    return;
+                }
+                catch (PlatformNotSupportedException)
+                {
+                }
+                catch (NotSupportedException)
+                {
+                }
+                catch (IOException)
+                {
+                }
+
+                File.Delete(destinationFilePath);
+            }
+
+            File.Move(temporaryFilePath, destinationFilePath);
+        }
+
+        private static void TryDeleteFile(string filePath)
+        {
+            try
+            {
+                if (File.Exists(filePath))
+                {
+                    File.Delete(filePath);
+                }
+            }
+            catch
+            {
+            }
+        }
+
+        // Best-effort flush to physical disk. Flush(true) maps to FlushFileBuffers/fsync where supported.
+        // Some platforms/filesystems (e.g. certain mobile/WebGL backends) treat it as a no-op or throw,
+        // so we degrade to a buffer flush instead of failing the whole write.
+        private static void FlushToDiskBestEffort(FileStream stream)
+        {
+            try
+            {
+                stream.Flush(true);
+            }
+            catch (NotSupportedException)
+            {
+                stream.Flush();
+            }
+            catch (IOException)
+            {
+                stream.Flush();
+            }
+        }
+
+        private static void WriteTemporaryFileDurable(string filePath, byte[] bytes)
+        {
+            EnsureParentDirectoryExists(filePath);
+
+            using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, AsyncFileStreamBufferSize, FileOptions.SequentialScan))
+            {
+                stream.Write(bytes, 0, bytes.Length);
+                FlushToDiskBestEffort(stream);
+            }
+        }
+
+        private static async Task WriteTemporaryFileDurableAsync(string filePath, byte[] bytes, CancellationToken cancellationToken)
+        {
+            EnsureParentDirectoryExists(filePath);
+
+            using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, AsyncFileStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+                FlushToDiskBestEffort(stream);
+            }
+        }
+
+        public static byte[] ReadAllBytes(string filePath)
+        {
+            return File.ReadAllBytes(filePath);
+        }
+
+        public static async Task<byte[]> ReadAllBytesAsync(string filePath, CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var fileInfo = new FileInfo(filePath);
+            if (fileInfo.Length > int.MaxValue)
+            {
+                throw new IOException($"File is too large to read into a byte array: {filePath}");
+            }
+
+            if (fileInfo.Length <= SmallFileDirectIoThreshold)
+            {
+                return File.ReadAllBytes(filePath);
+            }
+
+            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, AsyncFileStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                if (stream.Length > int.MaxValue)
+                {
+                    throw new IOException($"File is too large to read into a byte array: {filePath}");
+                }
+
+                int length = (int)stream.Length;
+                byte[] bytes = new byte[length];
+                int offset = 0;
+
+                while (offset < bytes.Length)
+                {
+                    int read = await stream.ReadAsync(bytes, offset, bytes.Length - offset, cancellationToken).ConfigureAwait(false);
+                    if (read == 0)
+                    {
+                        break;
+                    }
+
+                    offset += read;
+                }
+
+                if (offset != bytes.Length)
+                {
+                    Array.Resize(ref bytes, offset);
+                }
+
+                return bytes;
+            }
+        }
+
+        public static string ReadAllText(string filePath)
+        {
+            return ReadAllText(filePath, Utf8NoBomStrictEncoding, true);
+        }
+
+        public static string ReadAllText(string filePath, Encoding encoding)
+        {
+            return ReadAllText(filePath, encoding, true);
+        }
+
+        public static string ReadAllText(string filePath, Encoding encoding, bool detectEncodingFromByteOrderMarks)
+        {
+            if (encoding == null)
+            {
+                throw new ArgumentNullException(nameof(encoding));
+            }
+
+            return DecodeText(ReadAllBytes(filePath), encoding, detectEncodingFromByteOrderMarks);
+        }
+
+        public static async Task<string> ReadAllTextAsync(string filePath, CancellationToken cancellationToken = default)
+        {
+            return await ReadAllTextAsync(filePath, Utf8NoBomStrictEncoding, true, cancellationToken).ConfigureAwait(false);
+        }
+
+        public static async Task<string> ReadAllTextAsync(string filePath, Encoding encoding, CancellationToken cancellationToken = default)
+        {
+            return await ReadAllTextAsync(filePath, encoding, true, cancellationToken).ConfigureAwait(false);
+        }
+
+        public static async Task<string> ReadAllTextAsync(string filePath, Encoding encoding, bool detectEncodingFromByteOrderMarks, CancellationToken cancellationToken = default)
+        {
+            if (encoding == null)
+            {
+                throw new ArgumentNullException(nameof(encoding));
+            }
+
+            byte[] bytes = await ReadAllBytesAsync(filePath, cancellationToken).ConfigureAwait(false);
+            return DecodeText(bytes, encoding, detectEncodingFromByteOrderMarks);
+        }
+
+        public static void WriteAllBytes(string filePath, byte[] bytes)
+        {
+            if (bytes == null)
+            {
+                throw new ArgumentNullException(nameof(bytes));
+            }
+
+            WriteAllBytes(filePath, bytes.AsSpan());
+        }
+
+        public static void WriteAllBytes(string filePath, ReadOnlySpan<byte> bytes)
+        {
+            EnsureParentDirectoryExists(filePath);
+
+            using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, AsyncFileStreamBufferSize, FileOptions.SequentialScan))
+            {
+                stream.Write(bytes);
+            }
+        }
+
+        public static async Task WriteAllBytesAsync(string filePath, byte[] bytes, CancellationToken cancellationToken = default)
+        {
+            if (bytes == null)
+            {
+                throw new ArgumentNullException(nameof(bytes));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (bytes.Length <= SmallFileDirectIoThreshold)
+            {
+                WriteAllBytes(filePath, bytes);
+                return;
+            }
+
+            EnsureParentDirectoryExists(filePath);
+
+            using (var stream = new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, AsyncFileStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
+            {
+                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken).ConfigureAwait(false);
+            }
+        }
+
+        public static void WriteAllText(string filePath, string content)
+        {
+            WriteAllText(filePath, content, Utf8NoBomStrictEncoding);
+        }
+
+        public static void WriteAllText(string filePath, string content, Encoding encoding)
+        {
+            if (content == null)
+            {
+                throw new ArgumentNullException(nameof(content));
+            }
+
+            if (encoding == null)
+            {
+                throw new ArgumentNullException(nameof(encoding));
+            }
+
+            WriteAllBytes(filePath, encoding.GetBytes(content));
+        }
+
+        public static async Task WriteAllTextAsync(string filePath, string content, CancellationToken cancellationToken = default)
+        {
+            await WriteAllTextAsync(filePath, content, Utf8NoBomStrictEncoding, cancellationToken).ConfigureAwait(false);
+        }
+
+        public static async Task WriteAllTextAsync(string filePath, string content, Encoding encoding, CancellationToken cancellationToken = default)
+        {
+            if (content == null)
+            {
+                throw new ArgumentNullException(nameof(content));
+            }
+
+            if (encoding == null)
+            {
+                throw new ArgumentNullException(nameof(encoding));
+            }
+
+            byte[] bytes = encoding.GetBytes(content);
+            await WriteAllBytesAsync(filePath, bytes, cancellationToken).ConfigureAwait(false);
+        }
+
+        public static void WriteAllBytesAtomic(string filePath, byte[] bytes)
+        {
+            if (bytes == null)
+            {
+                throw new ArgumentNullException(nameof(bytes));
+            }
+
+            EnsureParentDirectoryExists(filePath);
+            string temporaryFilePath = GetTemporaryWritePath(filePath);
+
+            try
+            {
+                WriteTemporaryFileDurable(temporaryFilePath, bytes);
+                ReplaceFileWithTemporaryFile(temporaryFilePath, filePath);
+            }
+            catch
+            {
+                TryDeleteFile(temporaryFilePath);
+                throw;
+            }
+        }
+
+        public static async Task WriteAllBytesAtomicAsync(string filePath, byte[] bytes, CancellationToken cancellationToken = default)
+        {
+            if (bytes == null)
+            {
+                throw new ArgumentNullException(nameof(bytes));
+            }
+
+            EnsureParentDirectoryExists(filePath);
+            string temporaryFilePath = GetTemporaryWritePath(filePath);
+
+            try
+            {
+                await WriteTemporaryFileDurableAsync(temporaryFilePath, bytes, cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                ReplaceFileWithTemporaryFile(temporaryFilePath, filePath);
+            }
+            catch
+            {
+                TryDeleteFile(temporaryFilePath);
+                throw;
+            }
+        }
+
+        public static void WriteAllTextAtomic(string filePath, string content)
+        {
+            WriteAllTextAtomic(filePath, content, Utf8NoBomStrictEncoding);
+        }
+
+        public static void WriteAllTextAtomic(string filePath, string content, Encoding encoding)
+        {
+            if (content == null)
+            {
+                throw new ArgumentNullException(nameof(content));
+            }
+
+            if (encoding == null)
+            {
+                throw new ArgumentNullException(nameof(encoding));
+            }
+
+            WriteAllBytesAtomic(filePath, encoding.GetBytes(content));
+        }
+
+        public static async Task WriteAllTextAtomicAsync(string filePath, string content, CancellationToken cancellationToken = default)
+        {
+            await WriteAllTextAtomicAsync(filePath, content, Utf8NoBomStrictEncoding, cancellationToken).ConfigureAwait(false);
+        }
+
+        public static async Task WriteAllTextAtomicAsync(string filePath, string content, Encoding encoding, CancellationToken cancellationToken = default)
+        {
+            if (content == null)
+            {
+                throw new ArgumentNullException(nameof(content));
+            }
+
+            if (encoding == null)
+            {
+                throw new ArgumentNullException(nameof(encoding));
+            }
+
+            await WriteAllBytesAtomicAsync(filePath, encoding.GetBytes(content), cancellationToken).ConfigureAwait(false);
+        }
+
+        // --- Streaming primitives (avoid loading whole files into memory) ---
+
+        /// <summary>
+        /// Opens a file for asynchronous sequential reading. The caller owns the returned stream and must dispose it.
+        /// </summary>
+        public static FileStream OpenRead(string filePath)
+        {
+            return new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read, AsyncFileStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+
+        /// <summary>
+        /// Creates (or truncates) a file for asynchronous sequential writing and ensures the parent directory exists.
+        /// The caller owns the returned stream and must dispose it.
+        /// </summary>
+        public static FileStream OpenWrite(string filePath)
+        {
+            EnsureParentDirectoryExists(filePath);
+            return new FileStream(filePath, FileMode.Create, FileAccess.Write, FileShare.None, AsyncFileStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan);
+        }
+
+        /// <summary>
+        /// Streams <paramref name="source"/> into <paramref name="destinationFilePath"/> using a pooled buffer.
+        /// Use this for large payloads instead of buffering the whole content in memory. Returns bytes written.
+        /// </summary>
+        public static async Task<long> WriteFromStreamAsync(string destinationFilePath, Stream source, CancellationToken cancellationToken = default)
+        {
+            if (source == null)
+            {
+                throw new ArgumentNullException(nameof(source));
+            }
+
+            if (!source.CanRead)
+            {
+                throw new ArgumentException("Source stream must be readable.", nameof(source));
+            }
+
+            EnsureParentDirectoryExists(destinationFilePath);
+
+            byte[] buffer = GetReadBuffer();
+            long totalWritten = 0;
+            try
+            {
+                using (var destination = new FileStream(destinationFilePath, FileMode.Create, FileAccess.Write, FileShare.None, AsyncFileStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
+                {
+                    int bytesRead;
+                    int chunkCount = 0;
+                    while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false)) > 0)
+                    {
+                        await destination.WriteAsync(buffer, 0, bytesRead, cancellationToken).ConfigureAwait(false);
+                        totalWritten += bytesRead;
+                        if (++chunkCount % YieldIntervalChunks == 0)
+                            await Task.Yield();
+                    }
+                }
+            }
+            finally
+            {
+                ReturnReadBuffer(buffer);
+            }
+
+            return totalWritten;
+        }
+
+        /// <summary>
+        /// Streams the contents of <paramref name="sourceFilePath"/> into <paramref name="destination"/> using a pooled buffer.
+        /// The destination stream is not disposed by this method. Returns bytes read.
+        /// </summary>
+        public static async Task<long> ReadIntoStreamAsync(string sourceFilePath, Stream destination, CancellationToken cancellationToken = default)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            if (!destination.CanWrite)
+            {
+                throw new ArgumentException("Destination stream must be writable.", nameof(destination));
+            }
+
+            byte[] buffer = GetReadBuffer();
+            long totalRead = 0;
+            try
+            {
+                using (var source = new FileStream(sourceFilePath, FileMode.Open, FileAccess.Read, FileShare.Read, AsyncFileStreamBufferSize, FileOptions.Asynchronous | FileOptions.SequentialScan))
+                {
+                    int bytesRead;
+                    int chunkCount = 0;
+                    while ((bytesRead = await source.ReadAsync(buffer, 0, buffer.Length, cancellationToken).ConfigureAwait(false)) > 0)
+                    {
+                        await destination.WriteAsync(buffer, 0, bytesRead, cancellationToken).ConfigureAwait(false);
+                        totalRead += bytesRead;
+                        if (++chunkCount % YieldIntervalChunks == 0)
+                            await Task.Yield();
+                    }
+                }
+            }
+            finally
+            {
+                ReturnReadBuffer(buffer);
+            }
+
+            return totalRead;
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int GetHashSizeInBytes(HashAlgorithmType algorithmType)
@@ -266,6 +1037,19 @@ namespace CycloneGames.Utility.Runtime
             if (!filePath.Contains(Application.persistentDataPath)) { CLogger.LogWarning($"{DEBUG_FLAG} ComputeFileHashAsync on WebGL for non-persistentDataPath is unreliable."); }
 #endif
             if (hashBuffer.Length < GetHashSizeInBytes(algorithmType)) { CLogger.LogError($"{DEBUG_FLAG} Hash buffer too small."); return false; }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (File.Exists(filePath) && new FileInfo(filePath).Length <= SmallFileDirectIoThreshold)
+            {
+                bool success = ComputeFileHashDirect(filePath, algorithmType, hashBuffer);
+                if (success)
+                {
+                    progress?.Report(1f);
+                }
+
+                return success;
+            }
 
             var fileReadBuffer = GetReadBuffer();
             try
@@ -562,6 +1346,11 @@ namespace CycloneGames.Utility.Runtime
             }
             catch (Exception ex) { CLogger.LogError($"{DEBUG_FLAG} Error computing hash for {filePath}: {ex.Message}"); return false; }
             finally { ReturnReadBuffer(readBuffer); }
+        }
+
+        private static bool ComputeFileHashDirect(string filePath, HashAlgorithmType algorithmType, Memory<byte> hashBuffer)
+        {
+            return ComputeFileHash(filePath, algorithmType, hashBuffer.Span);
         }
 
         /// <summary>

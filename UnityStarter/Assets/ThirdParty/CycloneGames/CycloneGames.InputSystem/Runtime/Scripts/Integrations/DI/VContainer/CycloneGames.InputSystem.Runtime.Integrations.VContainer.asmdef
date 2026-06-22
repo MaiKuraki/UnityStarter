@@ -5,7 +5,7 @@
         "UniTask",
         "VContainer",
         "CycloneGames.InputSystem.Runtime",
-        "CycloneGames.Utility.Runtime",
+        "CycloneGames.IO.Runtime",
         "CycloneGames.Logger",
         "CycloneGames.AssetManagement.Runtime"
     ],
