@@ -1,12 +1,11 @@
 using System;
 using System.IO;
 using System.Text;
-using CycloneGames.Logger;
 using UnityEditor;
 using UnityEngine;
+using CycloneGames.IO.Runtime;
+using CycloneGames.Logger;
 using CycloneGames.UIFramework.Runtime;
-using Unio;
-using Unity.Collections;
 
 namespace CycloneGames.UIFramework.Editor
 {
@@ -311,7 +310,7 @@ namespace CycloneGames.UIFramework.Editor
             {
                 try
                 {
-                    string json = NativeFile.ReadAllText(settingsPath);
+                    string json = FileUtility.ReadAllText(settingsPath);
                     UIWindowCreatorSettings settings = JsonUtility.FromJson<UIWindowCreatorSettings>(json);
 
                     if (settings != null)
@@ -367,9 +366,7 @@ namespace CycloneGames.UIFramework.Editor
                 };
 
                 string json = JsonUtility.ToJson(settings, true);
-                byte[] bytes = Encoding.UTF8.GetBytes(json);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                NativeFile.WriteAllBytes(settingsPath, nativeBytes);
+                FileUtility.WriteAllText(settingsPath, json);
                 SaveEditorPrefsSelection();
             }
             catch (Exception e)
@@ -1771,9 +1768,7 @@ namespace {namespaceName}
 
         private void WriteScriptFile(string scriptPath, string content)
         {
-            byte[] bytes = Encoding.UTF8.GetBytes(content);
-            using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-            NativeFile.WriteAllBytes(scriptPath, nativeBytes);
+            FileUtility.WriteAllText(scriptPath, content);
 
             AssetDatabase.ImportAsset(scriptPath, ImportAssetOptions.ForceUpdate);
             AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);

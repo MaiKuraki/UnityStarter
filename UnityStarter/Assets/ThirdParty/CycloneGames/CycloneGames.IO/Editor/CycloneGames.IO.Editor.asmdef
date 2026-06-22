@@ -1,8 +1,9 @@
 {
-    "name": "CycloneGames.Utility.Editor",
-    "rootNamespace": "",
+    "name": "CycloneGames.IO.Editor",
+    "rootNamespace": "CycloneGames.IO.Editor",
     "references": [
-        "CycloneGames.Utility.Runtime"
+        "CycloneGames.IO.Runtime",
+        "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [
         "Editor"

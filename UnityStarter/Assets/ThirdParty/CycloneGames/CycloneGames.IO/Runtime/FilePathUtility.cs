@@ -1,7 +1,7 @@
 using UnityEngine;
 using System.IO; // For Path.Combine
 
-namespace CycloneGames.Utility.Runtime
+namespace CycloneGames.IO.Runtime
 {
     /// <summary>
     /// Defines the source location type for a file path.
@@ -48,7 +48,7 @@ namespace CycloneGames.Utility.Runtime
         {
             if (string.IsNullOrEmpty(path))
             {
-                Debug.LogError("[UnityPathUtility] Path cannot be null or empty.");
+                Debug.LogError("[FilePathUtility] Path cannot be null or empty.");
                 return null;
             }
 
@@ -81,7 +81,7 @@ namespace CycloneGames.Utility.Runtime
                     return FormatAbsolutePathAsFileUri(path);
 
                 default:
-                    Debug.LogError($"[UnityPathUtility] Unsupported UnityPathSource: {pathSource}");
+                    Debug.LogError($"[FilePathUtility] Unsupported UnityPathSource: {pathSource}");
                     return null;
             }
         }
@@ -94,7 +94,7 @@ namespace CycloneGames.Utility.Runtime
             if (string.IsNullOrEmpty(cleanRelativePath))
             {
                 Debug.LogError(
-                    "[UnityPathUtility] Relative path for StreamingAssets is effectively empty after trimming. Cannot construct URI for a directory or empty file name.");
+                    "[FilePathUtility] Relative path for StreamingAssets is effectively empty after trimming. Cannot construct URI for a directory or empty file name.");
                 return null; // Loading an empty file name or just a directory via UWR is usually not intended.
             }
 
@@ -130,7 +130,7 @@ namespace CycloneGames.Utility.Runtime
         {
             if (string.IsNullOrEmpty(absolutePathOrPotentialFileUri))
             {
-                Debug.LogError("[UnityPathUtility] Path for URI formatting is null or empty.");
+                Debug.LogError("[FilePathUtility] Path for URI formatting is null or empty.");
                 return null;
             }
 
@@ -162,20 +162,20 @@ namespace CycloneGames.Utility.Runtime
                     // or if the path was so malformed System.Uri couldn't parse it as a file.
                     // The main GetUnityWebRequestUri method already filters out http/https/jar URIs.
                     Debug.LogWarning(
-                        $"[UnityPathUtility] Path '{absolutePathOrPotentialFileUri}' was parsed by System.Uri but its scheme ('{fileUri.Scheme}') is not 'file'. Returning original path, but this might cause issues with UnityWebRequest if a file URI was expected.");
+                        $"[FilePathUtility] Path '{absolutePathOrPotentialFileUri}' was parsed by System.Uri but its scheme ('{fileUri.Scheme}') is not 'file'. Returning original path, but this might cause issues with UnityWebRequest if a file URI was expected.");
                     return absolutePathOrPotentialFileUri; // Fallback, though potentially problematic.
                 }
             }
             catch (System.UriFormatException ex)
             {
                 Debug.LogError(
-                    $"[UnityPathUtility] Failed to parse path '{absolutePathOrPotentialFileUri}' as a URI: {ex.Message}. Ensure it's a valid absolute path or a 'file://' prefixed URI.");
+                    $"[FilePathUtility] Failed to parse path '{absolutePathOrPotentialFileUri}' as a URI: {ex.Message}. Ensure it's a valid absolute path or a 'file://' prefixed URI.");
                 return null;
             }
             catch (System.ArgumentNullException)
             {
                 // This should ideally be caught by the initial IsNullOrEmpty check.
-                Debug.LogError("[UnityPathUtility] Absolute file path was null when attempting to create System.Uri.");
+                Debug.LogError("[FilePathUtility] Absolute file path was null when attempting to create System.Uri.");
                 return null;
             }
         }

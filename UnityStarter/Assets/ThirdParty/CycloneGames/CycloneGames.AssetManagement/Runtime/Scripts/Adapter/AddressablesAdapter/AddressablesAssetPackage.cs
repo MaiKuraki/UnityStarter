@@ -2,14 +2,12 @@
 using Cysharp.Threading.Tasks;
 using System;
 using System.IO;
-using System.Text;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
-using Unio;
-using Unity.Collections;
+using CycloneGames.IO.Runtime;
 using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
@@ -197,9 +195,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 var versionData = new VersionDataJson { contentVersion = version };
                 string jsonContent = JsonUtility.ToJson(versionData, true);
 
-                byte[] bytes = Encoding.UTF8.GetBytes(jsonContent);
-                using var nativeBytes = new NativeArray<byte>(bytes, Allocator.Temp);
-                await NativeFile.WriteAllBytesAsync(versionFilePath, nativeBytes);
+                await FileUtility.WriteAllTextAtomicAsync(versionFilePath, jsonContent, FileUtility.Utf8NoBom, cancellationToken);
                 CLogger.LogInfo($"[AddressablesAssetPackage] Saved version to persistent data: {version}");
             }
             catch (Exception ex)
@@ -261,7 +257,7 @@ namespace CycloneGames.AssetManagement.Runtime
                     return string.Empty;
                 }
 
-                string jsonContent = await ReadFileAsync(versionFilePath, cancellationToken);
+                string jsonContent = await ReadLocalFileAsync(versionFilePath, cancellationToken);
                 if (!string.IsNullOrEmpty(jsonContent))
                 {
                     var versionData = JsonUtility.FromJson<VersionDataJson>(jsonContent);
@@ -280,27 +276,30 @@ namespace CycloneGames.AssetManagement.Runtime
             return string.Empty;
         }
 
-        private async UniTask<string> ReadFileAsync(string filePath, CancellationToken cancellationToken)
+        private static async UniTask<string> ReadLocalFileAsync(string filePath, CancellationToken cancellationToken)
+        {
+            if (!File.Exists(filePath))
+            {
+                return string.Empty;
+            }
+
+            return await FileUtility.ReadAllTextAsync(filePath, FileUtility.Utf8NoBom, cancellationToken).ConfigureAwait(false);
+        }
+
+        private static async UniTask<string> ReadStreamingAssetsFileAsync(string filePath, CancellationToken cancellationToken)
         {
 #if UNITY_ANDROID || UNITY_WEBGL
-            // On Android and WebGL, use UnityWebRequest for file access
             using (var request = UnityEngine.Networking.UnityWebRequest.Get(filePath))
             {
                 await request.SendWebRequest().WithCancellation(cancellationToken);
                 if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
                 {
-                    return request.downloadHandler.text;
+                    return FileUtility.DecodeText(request.downloadHandler.data);
                 }
             }
             return string.Empty;
 #else
-            // On other platforms, use direct file I/O
-            if (File.Exists(filePath))
-            {
-                using var nativeBytes = await NativeFile.ReadAllBytesAsync(filePath, SynchronizationStrategy.BlockOnThreadPool, cancellationToken);
-                return Encoding.UTF8.GetString(nativeBytes.AsSpan());
-            }
-            return string.Empty;
+            return await ReadLocalFileAsync(filePath, cancellationToken);
 #endif
         }
 
@@ -320,7 +319,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 {
                     try
                     {
-                        string jsonContent = await ReadFileAsync(versionFilePath, cancellationToken);
+                        string jsonContent = await ReadStreamingAssetsFileAsync(versionFilePath, cancellationToken);
                         if (!string.IsNullOrEmpty(jsonContent))
                         {
                             var versionData = JsonUtility.FromJson<VersionDataJson>(jsonContent);
