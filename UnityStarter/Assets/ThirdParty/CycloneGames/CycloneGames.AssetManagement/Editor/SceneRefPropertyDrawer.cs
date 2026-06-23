@@ -15,6 +15,8 @@ namespace CycloneGames.AssetManagement.Editor
     {
         private static readonly GUIContent s_MissingIcon = EditorGUIUtility.TrIconContent(
             "console.warnicon.sml", "Referenced scene is missing.");
+        private static readonly GUIContent s_StaleLocationIcon = EditorGUIUtility.TrIconContent(
+            "console.infoicon.sml", "Referenced scene moved. Run AssetRef validation to repair the stored location.");
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
@@ -30,6 +32,7 @@ namespace CycloneGames.AssetManagement.Editor
             string guid = guidProp.stringValue;
             UnityEngine.Object currentObj = null;
             bool isBroken = false;
+            bool hasStaleLocation = false;
 
             if (!string.IsNullOrEmpty(guid))
             {
@@ -39,8 +42,7 @@ namespace CycloneGames.AssetManagement.Editor
                     currentObj = AssetDatabase.LoadAssetAtPath<SceneAsset>(currentPath);
                     if (currentObj != null && locationProp.stringValue != currentPath)
                     {
-                        locationProp.stringValue = currentPath;
-                        property.serializedObject.ApplyModifiedPropertiesWithoutUndo();
+                        hasStaleLocation = true;
                     }
                 }
                 else
@@ -52,11 +54,11 @@ namespace CycloneGames.AssetManagement.Editor
             EditorGUI.BeginProperty(position, label, property);
 
             Rect fieldRect = position;
-            if (isBroken)
+            if (isBroken || hasStaleLocation)
             {
                 var iconRect = new Rect(position.xMax - 18, position.y + 1, 16, 16);
                 fieldRect = new Rect(position.x, position.y, position.width - 20, position.height);
-                GUI.Label(iconRect, s_MissingIcon);
+                GUI.Label(iconRect, isBroken ? s_MissingIcon : s_StaleLocationIcon);
             }
 
             EditorGUI.BeginChangeCheck();

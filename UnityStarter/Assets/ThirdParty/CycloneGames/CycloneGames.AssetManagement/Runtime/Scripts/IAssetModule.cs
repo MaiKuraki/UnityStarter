@@ -21,9 +21,10 @@ namespace CycloneGames.AssetManagement.Runtime
 		UniTask InitializeAsync(AssetManagementOptions options = default);
 
 		/// <summary>
-		/// Destroys the module and releases all resources.
+		/// Destroys the module and releases all resources asynchronously.
+		/// Production composition roots should prefer this method so provider cleanup can finish deterministically.
 		/// </summary>
-		void Destroy();
+		UniTask DestroyAsync(CancellationToken cancellationToken = default);
 
 		/// <summary>
 		/// Creates a new logical package. Package must be initialized via <see cref="IAssetPackage.InitializeAsync"/> before use.
@@ -52,10 +53,10 @@ namespace CycloneGames.AssetManagement.Runtime
 	}
 
 	/// <summary>
-	/// Base interface for handles supporting explicit Automatic Reference Counting (ARC).
-	/// Required for sharing resources safely between multiple consumers (e.g. UI layers, Object Pools).
+	/// Internal handle lease used by the cache to pin shared provider handles.
+	/// Public callers use IDisposable only; Retain/Release must stay inside the ownership layer.
 	/// </summary>
-	public interface IReferenceCounted : IDisposable
+	internal interface IReferenceCounted : IDisposable
 	{
 		int RefCount { get; }
 		
@@ -73,6 +74,16 @@ namespace CycloneGames.AssetManagement.Runtime
 	internal interface IInternalCacheable
 	{
 		void ForceDispose();
+	}
+
+	/// <summary>
+	/// Optional contract implemented by cacheable asset handles to report an approximate
+	/// runtime memory footprint (bytes). The cache uses this for memory-budget eviction in
+	/// addition to entry-count limits. Non-asset handles (scene/instantiate) do not implement this.
+	/// </summary>
+	internal interface IAssetMemoryFootprint
+	{
+		long EstimateRuntimeBytes();
 	}
 
 	/// <summary>
@@ -145,8 +156,24 @@ namespace CycloneGames.AssetManagement.Runtime
 		ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null);
 		UniTask UnloadSceneAsync(ISceneHandle sceneHandle);
 
+		// --- Query ---
+		/// <summary>
+		/// Returns true if an asset of type <typeparamref name="TAsset"/> at <paramref name="location"/> is
+		/// currently held by the cache (either retained/in-use or pooled idle). Does not trigger a load and
+		/// does not affect reference counts or LRU ordering.
+		/// </summary>
+		bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object;
+
 		// --- Maintenance ---
 		UniTask UnloadUnusedAssetsAsync();
+
+		/// <summary>
+		/// Overrides the cache's idle (RefCount == 0) memory budget at runtime, in bytes. Pass a positive
+		/// value to set an explicit budget, or 0 to restore the automatic platform-aware default. Immediately
+		/// evicts idle handles to honor the new budget. Lets a host project tune memory pressure on the fly
+		/// (e.g. tighten before a heavy scene) without modifying the asset module.
+		/// </summary>
+		void SetCacheIdleMemoryBudget(long maxIdleBytes);
 
 		/// <summary>
 		/// Forces the evaluation and clearing of handles associated with a specific logical bucket group. 
@@ -189,18 +216,18 @@ namespace CycloneGames.AssetManagement.Runtime
 		void WaitForAsyncComplete();
 	}
 
-	public interface IAssetHandle<out TAsset> : IOperation, IReferenceCounted where TAsset : UnityEngine.Object
+	public interface IAssetHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
 	{
 		TAsset Asset { get; }
 		UnityEngine.Object AssetObject { get; }
 	}
 
-	public interface IAllAssetsHandle<out TAsset> : IOperation, IReferenceCounted where TAsset : UnityEngine.Object
+	public interface IAllAssetsHandle<out TAsset> : IOperation, IDisposable where TAsset : UnityEngine.Object
 	{
 		IReadOnlyList<TAsset> Assets { get; }
 	}
 
-	public interface IInstantiateHandle : IOperation, IReferenceCounted
+	public interface IInstantiateHandle : IOperation, IDisposable
 	{
 		GameObject Instance { get; }
 	}
@@ -232,13 +259,13 @@ namespace CycloneGames.AssetManagement.Runtime
 		Activated = 2,
 	}
 
-	public interface ISceneHandle : IOperation, IReferenceCounted
+	public interface ISceneHandle : IOperation, IDisposable
 	{
 		string ScenePath { get; }
 		Scene Scene { get; }
 		/// <summary>
 		/// Scene handles use explicit unload semantics.
-		/// Calling <see cref="IReferenceCounted.Release"/> / <see cref="IDisposable.Dispose"/> only releases
+		/// Calling <see cref="IDisposable.Dispose"/> only releases
 		/// the caller's ownership of the handle wrapper; it does NOT unload the scene itself.
 		/// Use <see cref="IAssetPackage.UnloadSceneAsync"/> as the single cross-provider unload path.
 		/// </summary>
@@ -269,7 +296,7 @@ namespace CycloneGames.AssetManagement.Runtime
 	/// Handle for raw file operations. Raw files are non-compressed files suitable for JSON, text, binary data, etc.
 	/// Thread-safe for read operations after loading completes. Dispose must be called on the main thread.
 	/// </summary>
-	public interface IRawFileHandle : IOperation, IReferenceCounted
+	public interface IRawFileHandle : IOperation, IDisposable
 	{
 		/// <summary>
 		/// Gets the file path. Returns empty string if not available.
@@ -299,12 +326,20 @@ namespace CycloneGames.AssetManagement.Runtime
 		public readonly ILogger Logger;
 		public readonly bool EnableHandleTracking;
 
-		public AssetManagementOptions(long operationSystemMaxTimeSliceMs = 16, int bundleLoadingMaxConcurrency = int.MaxValue, ILogger logger = null, bool enableHandleTracking = true)
+		/// <summary>
+		/// Module-wide default for the cache idle (RefCount == 0) memory budget, in bytes, applied to every
+		/// package this module creates. 0 = leave the automatic platform-aware default. A per-package
+		/// <see cref="AssetPackageInitOptions.IdleMemoryBudgetBytesOverride"/> still takes precedence.
+		/// </summary>
+		public readonly long DefaultIdleMemoryBudgetBytes;
+
+		public AssetManagementOptions(long operationSystemMaxTimeSliceMs = 16, int bundleLoadingMaxConcurrency = int.MaxValue, ILogger logger = null, bool enableHandleTracking = true, long defaultIdleMemoryBudgetBytes = 0)
 		{
 			OperationSystemMaxTimeSliceMs = operationSystemMaxTimeSliceMs < 10 ? 10 : operationSystemMaxTimeSliceMs;
 			BundleLoadingMaxConcurrency = bundleLoadingMaxConcurrency;
 			Logger = logger;
 			EnableHandleTracking = enableHandleTracking;
+			DefaultIdleMemoryBudgetBytes = defaultIdleMemoryBudgetBytes;
 		}
 	}
 
@@ -317,11 +352,19 @@ namespace CycloneGames.AssetManagement.Runtime
 		public readonly object ProviderOptions;
 		public readonly int? BundleLoadingMaxConcurrencyOverride;
 
-		public AssetPackageInitOptions(AssetPlayMode playMode, object providerOptions, int? bundleLoadingMaxConcurrencyOverride = null)
+		/// <summary>
+		/// Optional override for the cache's idle (RefCount == 0) memory budget, in bytes.
+		/// Positive = explicit budget; null = leave the automatic platform-aware default.
+		/// Lets a host project tune memory pressure per package without modifying the asset module.
+		/// </summary>
+		public readonly long? IdleMemoryBudgetBytesOverride;
+
+		public AssetPackageInitOptions(AssetPlayMode playMode, object providerOptions, int? bundleLoadingMaxConcurrencyOverride = null, long? idleMemoryBudgetBytesOverride = null)
 		{
 			PlayMode = playMode;
 			ProviderOptions = providerOptions;
 			BundleLoadingMaxConcurrencyOverride = bundleLoadingMaxConcurrencyOverride;
+			IdleMemoryBudgetBytesOverride = idleMemoryBudgetBytesOverride;
 		}
 	}
 

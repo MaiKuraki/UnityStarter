@@ -4,7 +4,7 @@ English | [简体中文](./README.SCH.md)
 
 A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (YooAsset, Addressables, or Resources), enabling cleaner, more portable, and high-performance code.
 
-Built on a **W-TinyLFU** inspired caching architecture, it provides deterministic memory management, fine-grained resource tracking (via Tag/Owner metadata), and comes with powerful editor debugging tools (Cache Debugger and Handle Tracker) to guarantee leak-free memory operations.
+Built on a **W-TinyLFU** inspired caching architecture, it provides deterministic memory management, fine-grained resource tracking (via Tag/Owner metadata), and comes with powerful editor debugging tools (Cache Debugger, Handle Tracker, Scene Tracker, and Runtime Governance) to guarantee leak-free memory operations.
 
 ## Table of Contents
 
@@ -33,13 +33,25 @@ Built on a **W-TinyLFU** inspired caching architecture, it provides deterministi
 | YooAsset     | Optional | `com.tuyoogame.yooasset` - Recommended provider |
 | Addressables | Optional | `com.unity.addressables` - Alternative provider |
 | VContainer   | Optional | `jp.hadashikick.vcontainer` - DI integration    |
-| R3           | Optional | `com.cysharp.r3` - For `IPatchService` events   |
+| R3           | Yes      | `com.cysharp.r3` - For `IPatchService` events   |
 
 ## Installation
 
 1. Import the package into your Unity project
-2. The module automatically detects available providers via Assembly Definition references
+2. Provider assemblies are enabled through asmdef `versionDefines` and `defineConstraints`
 3. No manual scripting define symbols configuration required
+
+### Assembly Layout
+
+The core runtime assembly only depends on UniTask, R3, and CycloneGames.Logger. Provider and integration code lives in separate assemblies:
+
+| Assembly | Purpose | Optional dependency |
+| --- | --- | --- |
+| `CycloneGames.AssetManagement.Runtime` | Core interfaces, cache, Resources provider, references, diagnostics | None beyond core dependencies |
+| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | YooAsset provider and YooAsset patch workflow | `com.tuyoogame.yooasset` |
+| `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | Addressables provider and version-file helpers | `com.unity.addressables` |
+| `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | VContainer composition helper | `jp.hadashikick.vcontainer` |
+| `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | Navigathena scene bridge backed by `IAssetPackage` | `com.mackysoft.navigathena` |
 
 ---
 
@@ -346,6 +358,21 @@ public async UniTask RunPatchFlow()
 }
 ```
 
+#### Tuning Download Parameters
+
+`RunAsync` accepts an optional `PatchDownloadOptions` to tune the download phase. Any non-positive field falls back to its default, so passing `default` is always safe:
+
+```csharp
+await patchService.RunAsync(
+    autoDownloadOnFoundNewVersion: true,
+    downloadOptions: new PatchDownloadOptions
+    {
+        MaxConcurrentDownloads = 16,   // default 10
+        FailedRetryCount       = 5,    // default 3
+        RequestTimeoutSeconds  = 90,   // default 60
+    });
+```
+
 ### Low-Level API (Fine-grained Control)
 
 For custom update flows:
@@ -479,7 +506,7 @@ package.ClearBucket("UI");
 ```
 
 > [!NOTE]
-> `ClearBucket` / `ClearBucketsByPrefix` only evict handles whose `RefCount` has already reached 0 (idle in Trial or Main pools). Active handles (still in use) are **never** evicted — this prevents dangling references by design.
+> `ClearBucket` / `ClearBucketsByPrefix` only evict handles whose `RefCount` has already reached 0 (idle in Trial or Main pools). Active handles (still in use) are **never** evicted; this prevents dangling references by design.
 
 #### Hierarchical Bucket Paths
 
@@ -528,6 +555,69 @@ uiScope.ClearHierarchy();  // clears "UI" and all descendants
 shopScope.Clear();          // clears "UI.Shop" only
 ```
 
+### Automatic Memory Management
+
+Beyond entry-count limits, the cache enforces an **automatic, platform-aware idle memory budget**. Idle (`RefCount == 0`) handles are evicted once their estimated runtime footprint exceeds the budget — even when the entry count is within limits — so memory stays bounded under sustained load:
+
+| Device profile (system RAM) | Idle budget |
+| --------------------------- | ----------- |
+| Desktop / console (>= 4 GB) | 512 MB      |
+| Mid-range (>= 2 GB)         | 256 MB      |
+| Low-end / WebGL             | 96 MB       |
+
+The budget is derived automatically at startup — no configuration required. Footprint is measured with `Profiler.GetRuntimeMemorySizeLong` in the Editor / Development builds, and an allocation-free heuristic (texture / mesh / audio size) in release builds.
+
+The cache also subscribes to **`Application.lowMemory`**: on an OS memory-pressure signal it immediately drops every idle handle (Active, in-use handles are never touched), giving the OS headroom before it terminates the app.
+
+#### Overriding the Budget
+
+The default is automatic, but a host project can override it **without modifying the package** — module-wide, per package, or at runtime. Precedence: per-package override > module default > automatic.
+
+```csharp
+// 1) Module-wide default — applies to every package this module creates.
+await module.InitializeAsync(new AssetManagementOptions(
+    defaultIdleMemoryBudgetBytes: 256L * 1024 * 1024));   // 256 MB for all packages
+
+// 2) Per-package override at init (wins over the module default).
+await package.InitializeAsync(new AssetPackageInitOptions(
+    playMode, providerOptions,
+    idleMemoryBudgetBytesOverride: 128L * 1024 * 1024));  // 128 MB
+
+// 3) At runtime (any time after init) — e.g. tighten before a heavy scene, relax afterwards.
+package.SetCacheIdleMemoryBudget(64L * 1024 * 1024);   // 64 MB
+package.SetCacheIdleMemoryBudget(0);                   // 0 = restore platform-aware default
+```
+
+Setting a new budget immediately evicts idle handles to honor it (Active handles are never touched).
+
+### Querying Cache State
+
+Use the non-allocating `IsAssetCached<T>` to check residency before deciding to load:
+
+```csharp
+// True if the asset is currently resident (Active OR sitting in an idle Trial/Main pool).
+if (package.IsAssetCached<GameObject>("Prefabs/Boss"))
+{
+    // LoadAssetAsync will be a cache hit — no bundle IO.
+}
+```
+
+### Bundle Loading Concurrency
+
+Uncapped bundle concurrency causes IO thrash and memory spikes on constrained devices. When the concurrency knob is left unset, the system applies a **platform-aware default** (`AssetPlatformDefaults.BundleLoadingMaxConcurrency`): WebGL = 4, Android / iOS = 8, desktop / console = `clamp(cores x 2, 8, 32)`.
+
+```csharp
+// Module-level default (applies to packages that don't override it).
+// int.MaxValue or any value <= 0 means "use the platform-aware default".
+await module.InitializeAsync(new AssetManagementOptions(
+    bundleLoadingMaxConcurrency: int.MaxValue));
+
+// Per-package override (takes precedence over the module value).
+await package.InitializeAsync(new AssetPackageInitOptions(
+    playMode, providerOptions,
+    bundleLoadingMaxConcurrencyOverride: 16));
+```
+
 ### Resource Tracking & Metadata
 
 To make runtime resource tracking effortless, loading APIs support zero-GC `tag` and `owner` metadata parameters. This enables fine-grained tracking of exactly _who_ loaded an asset and _what_ it is used for.
@@ -559,14 +649,43 @@ A comprehensive view of the entire W-TinyLFU cache.
 - **Tier Visualization**: Instantly see if assets are Active, in Trial, or in the Main hot cache.
 - **Metadata Columns**: Sort and filter by `Tag`, `Owner`, and `Bucket`.
 - **Ref-count Anomalies**: Automatically highlights active assets with unusually high reference counts (> 8), warning you of potential missing `Dispose()` calls.
+- **Memory Footprint**: The Summary tab reports the live idle-pool footprint versus the platform memory budget, so you can see eviction pressure at a glance.
 - **Summary Breakdowns**: Statistical distribution of assets by Provider, Tag, and Owner.
 
 #### 2. Handle Tracker Window (`Tools/CycloneGames/AssetManagement/Asset Handle Tracker`)
 
 A microscopic view of every active handle allocation, cross-referenced against the cache.
 
-- **Smart Status Identification**: Detects whether an active handle (Refs=0) is safely sitting in the idle cache (`Cached`), or if it is a genuine memory leak (`Leaked`).
-- **Stack Trace Expansion**: Click any leaked handle to instantly reveal the exact C# stack trace where it was allocated.
+- **Smart Status Identification**: Classifies each long-lived handle as `Cached` (safely held in an idle pool), `Persistent` (developer-declared long-lived), or `Leaked` (genuinely unexplained).
+- **Persistent Marking**: Right-click any row -> **Mark Persistent** to silence false-positive leaks for intentionally long-lived assets (DontDestroyOnLoad, bootstrap UI, the main scene). See [Marking Persistent Handles](#marking-persistent-handles).
+- **Stack Trace Expansion**: Click any leaked handle to instantly reveal the exact C# stack trace where it was allocated (enable **Stack Traces** in the toolbar first).
+
+#### 3. Scene Tracker Window (`Tools/CycloneGames/AssetManagement/Scene Tracker`)
+
+Live view of every tracked scene handle: provider, package, bucket, activation state (Loading / Waiting / Activated / Unload Pending), progress, refs, and age. Use it to catch scenes stuck in `WaitingForActivation` or pending unload.
+
+#### 4. Runtime Governance Window (`Tools/CycloneGames/AssetManagement/Runtime Governance`)
+
+A single dashboard combining handles, scenes, and cache tiers — overview metric cards, top buckets, longest-lived active handles, and a scene-lifecycle snapshot. The fastest place to assess overall asset health during stress tests.
+
+> All four windows repaint with **zero per-frame GC** (data is pre-built on a throttled snapshot) and adapt to both the Pro (dark) and Light editor skins.
+
+#### Marking Persistent Handles
+
+The leak heuristic flags any handle alive > 5 min that is not explained by the cache. For intentionally long-lived assets (DontDestroyOnLoad, bootstrap UI, main-scene infrastructure) this is a false positive. Declare them persistent so they show as `Persistent` instead of `Leaked`:
+
+```csharp
+using CycloneGames.AssetManagement.Runtime;
+
+// At bootstrap, for permanently-resident assets:
+HandleTracker.MarkPersistent("Assets/.../UIFramework.prefab");
+HandleTracker.MarkPersistent("Assets/.../EventSystem.prefab");
+
+// Remove the marking if an asset is no longer persistent:
+HandleTracker.UnmarkPersistent("Assets/.../UIFramework.prefab");
+```
+
+> Right-click -> **Mark Persistent** in the window is convenient but **session-only** (it lives in runtime static state and resets on domain reload / play-stop). For permanent suppression, call `HandleTracker.MarkPersistent` from your bootstrap code.
 
 <img src="./Documents~/Doc_01.png" style="width: 100%; height: auto; max-width: 900px;" />
 <img src="./Documents~/Doc_02.png" style="width: 100%; height: auto; max-width: 900px;" />
@@ -718,9 +837,9 @@ Before shipping, validate all references via the menu:
 This scans every Prefab and ScriptableObject in the project:
 
 - **Broken refs**: GUID no longer resolves → logged as error.
-- **Stale locations**: Asset was moved/renamed but GUID is still valid → location auto-healed.
+- **Stale locations**: Asset was moved/renamed but GUID is still valid. Drawers display a warning icon without mutating assets; `ValidateAll()` heals locations explicitly.
 
-Integrate this into your CI/CD pipeline by calling `AssetRefValidator.ValidateAll()` from a build script.
+Use `AssetRefValidator.ValidateAllReportOnly()` for CI/reporting flows that must not modify project assets. Use `AssetRefValidator.ValidateAll()` when the build step is allowed to heal stale locations.
 
 ---
 
@@ -731,7 +850,7 @@ Integrate this into your CI/CD pipeline by calling `AssetRefValidator.ValidateAl
 | Method                     | Description                            |
 | -------------------------- | -------------------------------------- |
 | `InitializeAsync(options)` | Initialize the asset system            |
-| `Destroy()`                | Cleanup and release resources          |
+| `DestroyAsync()`           | Cleanup and release resources deterministically |
 | `CreatePackage(name)`      | Create a new asset package             |
 | `GetPackage(name)`         | Get an existing package                |
 | `RemovePackageAsync(name)` | Remove and destroy a package           |
@@ -746,14 +865,26 @@ Integrate this into your CI/CD pipeline by calling `AssetRefValidator.ValidateAl
 | `LoadAssetAsync<T>(...)`       | Load an asset asynchronously (supports `bucket`/`tag`/`owner`)      |
 | `LoadAssetSync<T>(...)`        | Load an asset synchronously (supports `bucket`/`tag`/`owner`)       |
 | `LoadAllAssetsAsync<T>(...)`   | Load all assets at location (supports `bucket`/`tag`/`owner`)       |
+| `IsAssetCached<T>(location)`   | Non-allocating residency check (Active or idle Trial/Main pool)     |
 | `InstantiateAsync(handle)`     | Instantiate a loaded prefab                                         |
 | `InstantiateSync(handle)`      | Sync instantiate (zero-GC)                                          |
 | `LoadSceneAsync(location)`     | Load a scene                                                        |
 | `UnloadSceneAsync(handle)`     | Unload a scene                                                      |
 | `LoadRawFileAsync(location)`   | Load a raw file                                                     |
 | `UnloadUnusedAssetsAsync()`    | Global sweep of all unused assets                                   |
+| `SetCacheIdleMemoryBudget(bytes)` | Override the idle memory budget at runtime (0 = restore auto)     |
 | `ClearBucket(bucket)`          | Evict idle handles matching an exact bucket name                    |
 | `ClearBucketsByPrefix(prefix)` | Evict idle handles matching a bucket prefix and all its descendants |
+
+### HandleTracker (Diagnostics)
+
+| Member | Description |
+| --- | --- |
+| `Enabled` | Master switch for handle tracking. |
+| `EnableStackTrace` | Capture allocation stack traces (slower; enable when hunting leaks). |
+| `MarkPersistent(location)` | Exclude an intentionally long-lived asset from leak heuristics. |
+| `UnmarkPersistent(location)` / `ClearPersistent()` | Remove persistent markings. |
+| `IsPersistent(location)` | Query whether a location is marked persistent. |
 
 ### Scripting Define Symbols
 
@@ -764,6 +895,7 @@ These symbols are automatically defined based on installed packages:
 | `YOOASSET_PRESENT`     | YooAsset package is installed     |
 | `ADDRESSABLES_PRESENT` | Addressables package is installed |
 | `VCONTAINER_PRESENT`   | VContainer package is installed   |
+| `NAVIGATHENA_PRESENT`  | Navigathena package is installed  |
 
 ---
 
@@ -774,3 +906,4 @@ These symbols are automatically defined based on installed packages:
 3. **Choose the right provider** - YooAsset for production, Resources for prototyping
 4. **Enable handle tracking in development** - Helps find memory leaks early
 5. **Use DI containers** - Register `IAssetModule` as a singleton for clean architecture
+6. **Mark persistent assets** - Declare DontDestroyOnLoad / bootstrap / main-scene assets via `HandleTracker.MarkPersistent` so the leak detector stays signal-rich

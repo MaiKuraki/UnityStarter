@@ -132,7 +132,7 @@ namespace CycloneGames.AssetManagement.Runtime
                     info.SupportsManualActivation = handle.SupportsManualActivation;
                     info.IsDone = handle.IsDone;
                     info.Progress = handle.Progress;
-                    info.RefCount = handle.RefCount;
+                    info.RefCount = handle is IReferenceCounted referenceCounted ? referenceCounted.RefCount : 0;
                     info.Error = handle.Error;
 
                     Scene runtimeScene = handle.Scene;

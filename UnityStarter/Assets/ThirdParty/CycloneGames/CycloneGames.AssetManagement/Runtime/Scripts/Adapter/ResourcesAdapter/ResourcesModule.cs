@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.AssetManagement.Runtime
@@ -11,26 +12,36 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly object _packagesLock = new object();
         private volatile bool _initialized;
         private volatile List<string> _packageNamesCache;
+        private long _defaultIdleMemoryBudgetBytes;
 
         public bool Initialized => _initialized;
 
         public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
+            _defaultIdleMemoryBudgetBytes = options.DefaultIdleMemoryBudgetBytes;
             if (_initialized) return UniTask.CompletedTask;
             _initialized = true;
             return UniTask.CompletedTask;
         }
 
-        public void Destroy()
+        public async UniTask DestroyAsync(CancellationToken cancellationToken = default)
         {
             if (!_initialized) return;
+            _initialized = false;
 
+            List<IAssetPackage> packages;
             lock (_packagesLock)
             {
+                packages = new List<IAssetPackage>(_packages.Values);
                 _packages.Clear();
                 _packageNamesCache = null;
             }
-            _initialized = false;
+
+            for (int i = 0; i < packages.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await packages[i].DestroyAsync();
+            }
         }
 
         public IAssetPackage CreatePackage(string packageName)
@@ -46,6 +57,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
 
                 var package = new ResourcesAssetPackage(packageName);
+                if (_defaultIdleMemoryBudgetBytes > 0) package.SetCacheIdleMemoryBudget(_defaultIdleMemoryBudgetBytes);
                 _packages.Add(packageName, package);
                 _packageNamesCache = null;
                 return package;
@@ -62,21 +74,24 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        public UniTask<bool> RemovePackageAsync(string packageName)
+        public async UniTask<bool> RemovePackageAsync(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) return UniTask.FromResult(false);
+            if (string.IsNullOrEmpty(packageName)) return false;
 
+            IAssetPackage package;
             lock (_packagesLock)
             {
-                if (!_packages.TryGetValue(packageName, out _))
+                if (!_packages.TryGetValue(packageName, out package))
                 {
-                    return UniTask.FromResult(false);
+                    return false;
                 }
 
                 _packages.Remove(packageName);
                 _packageNamesCache = null;
             }
-            return UniTask.FromResult(true);
+
+            await package.DestroyAsync();
+            return true;
         }
 
         public IReadOnlyList<string> GetAllPackageNames()

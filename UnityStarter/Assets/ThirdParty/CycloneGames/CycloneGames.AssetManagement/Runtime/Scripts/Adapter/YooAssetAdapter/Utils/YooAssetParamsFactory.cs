@@ -41,7 +41,6 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 case AssetPlayMode.EditorSimulate:
                     var createParameters = new EditorSimulateModeParameters();
-                    string simulateManifestPath = string.Empty;
                     string packageRoot = System.IO.Path.Combine(Environment.CurrentDirectory, "Bundles", "Simulate");
                     createParameters.EditorFileSystemParameters = FileSystemParameters.CreateDefaultEditorFileSystemParameters(packageRoot);
                     
@@ -124,7 +123,7 @@ namespace CycloneGames.AssetManagement.Runtime
             public RemoteServices(string defaultHost, string fallbackHost)
             {
                 _defaultHost = defaultHost;
-                _fallbackHost = fallbackHost;
+                _fallbackHost = string.IsNullOrEmpty(fallbackHost) ? defaultHost : fallbackHost;
             }
             public string GetRemoteMainURL(string fileName) => $"{_defaultHost}/{fileName}";
             public string GetRemoteFallbackURL(string fileName) => $"{_fallbackHost}/{fileName}";

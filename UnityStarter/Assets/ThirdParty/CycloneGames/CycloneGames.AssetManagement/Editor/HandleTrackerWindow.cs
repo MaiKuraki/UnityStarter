@@ -12,7 +12,10 @@ namespace CycloneGames.AssetManagement.Editor
     {
         // ── Pre-allocated snapshots ───────────────────────────────────────────────
         private readonly List<HandleTracker.HandleInfo> _snapshot = new List<HandleTracker.HandleInfo>(256);
-        private readonly List<HandleTracker.HandleInfo> _filtered = new List<HandleTracker.HandleInfo>(256);
+        // Pre-formatted, repaint-stable view models (rebuilt only on refresh).
+        private readonly List<HandleRowView> _views = new List<HandleRowView>(256);
+        // Indices into _views passing the current filter (rebuilt only when display is dirty).
+        private readonly List<int> _filteredIndices = new List<int>(256);
 
         // Set of locations currently resident in AssetCacheService's idle pools
         // (Trial + Main). Rebuilt each repaint from GlobalInstances diagnostics.
@@ -29,9 +32,34 @@ namespace CycloneGames.AssetManagement.Editor
 
         // ── State ────────────────────────────────────────────────────────────────
         private string _searchFilter = string.Empty;
+        private string _lastSearchFilter = "\0";
+        private bool _displayDirty = true;
         private Vector2 _scrollPos;
         private double _nextRepaint;
         private bool _hasSnapshot;
+
+        // Cached stat text + reusable content (rebuilt only when display changes).
+        private string _totalText = "  Total: 0";
+        private string _filteredText = string.Empty;
+        private string _normalPill = "Normal: 0";
+        private string _cachedPill = "Cached (idle pool): 0";
+        private string _persistentPill = string.Empty;
+        private string _leakPill = string.Empty;
+        private int _persistentCount;
+        private int _leakCount;
+        private readonly GUIContent _cell = new GUIContent();
+
+        // Cached GUILayoutOption arrays — avoids per-call params[] allocations.
+        private GUILayoutOption[] _wId, _wPkg, _wDesc, _wTag, _wOwner, _wStatus, _wTime, _wDur, _pillOpts;
+        private float _lastDescWidth = -1f;
+        private bool _widthsBuilt;
+
+        private const string LeakTooltip =
+            "Handle alive >5 min and NOT found in any AssetCacheService idle pool.\nThis may indicate a missing Dispose() call.\nIf this is intentional (DontDestroyOnLoad / bootstrap / main scene), right-click → Mark Persistent.";
+        private const string CachedTooltip =
+            "Handle is long-lived because AssetCacheService is intentionally keeping this\nasset in its Trial/Main idle pool for fast re-use. Not a leak.";
+        private const string PersistentTooltip =
+            "Marked persistent (intentionally long-lived, e.g. DontDestroyOnLoad / bootstrap / main-scene assets).\nExcluded from leak heuristics. Right-click to unmark.";
 
         // ── Lazy styles ──────────────────────────────────────────────────────────
         private GUIStyle _monoStyle;
@@ -40,14 +68,20 @@ namespace CycloneGames.AssetManagement.Editor
         private GUIStyle _pillStyle;
         private bool _stylesBuilt;
 
-        private static readonly Color _rowEven = new Color(0.22f, 0.22f, 0.22f);
-        private static readonly Color _rowOdd = new Color(0.19f, 0.19f, 0.19f);
+        private static bool IsPro => EditorGUIUtility.isProSkin;
+        private static Color RowEven => IsPro ? new Color(0.22f, 0.22f, 0.22f) : new Color(0.86f, 0.86f, 0.86f);
+        private static Color RowOdd => IsPro ? new Color(0.19f, 0.19f, 0.19f) : new Color(0.80f, 0.80f, 0.80f);
         // True leak: handle has RefCount > 0 but is long-lived and NOT explained by cache.
-        private static readonly Color _leakRowBg = new Color(0.38f, 0.12f, 0.10f);
+        private static Color LeakRowBg => IsPro ? new Color(0.38f, 0.12f, 0.10f) : new Color(0.98f, 0.80f, 0.78f);
         private static readonly Color _leakTextColor = new Color(1.0f, 0.35f, 0.25f);
         // Cached idle: long-lived but AssetCacheService is intentionally holding it.
-        private static readonly Color _cachedRowBg = new Color(0.16f, 0.22f, 0.30f);
+        private static Color CachedRowBg => IsPro ? new Color(0.16f, 0.22f, 0.30f) : new Color(0.80f, 0.88f, 0.98f);
         private static readonly Color _cachedTextColor = new Color(0.4f, 0.75f, 1.0f);
+        // Persistent: developer-declared long-lived (DontDestroyOnLoad / bootstrap / main scene).
+        private static Color PersistentRowBg => IsPro ? new Color(0.12f, 0.26f, 0.24f) : new Color(0.80f, 0.94f, 0.90f);
+        private static readonly Color _persistentTextColor = new Color(0.35f, 0.85f, 0.70f);
+        private static Color DimColor => IsPro ? new Color(0.45f, 0.45f, 0.45f) : new Color(0.5f, 0.5f, 0.5f);
+        private static readonly Color _normalPillColor = new Color(0.3f, 0.75f, 0.3f);
 
         // Column widths
         private const float ID_W = 44f;
@@ -152,36 +186,36 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             if (!_hasSnapshot) RefreshSnapshot();
-            BuildFiltered();
-
-            // ── Stats bar ────────────────────────────────────────────────────────
-            // Categorise for display
-            int leaked = 0, cached = 0, normal = 0;
-            for (int i = 0; i < _filtered.Count; i++)
+            if (_searchFilter != _lastSearchFilter)
             {
-                var s = ClassifyHandle(_filtered[i]);
-                if (s == HandleStatus.Leaked) leaked++;
-                else if (s == HandleStatus.Cached) cached++;
-                else normal++;
+                _lastSearchFilter = _searchFilter;
+                _displayDirty = true;
             }
+            if (_displayDirty) RebuildDisplay();
 
+            EnsureWidths();
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                GUILayout.Label($"  Total: {_snapshot.Count}", EditorStyles.boldLabel);
-                if (_searchFilter.Length > 0)
-                    GUILayout.Label($"  Filtered: {_filtered.Count}", EditorStyles.miniLabel);
+                GUILayout.Label(_totalText, EditorStyles.boldLabel);
+                if (_filteredText.Length > 0)
+                    GUILayout.Label(_filteredText, EditorStyles.miniLabel);
                 GUILayout.Space(8f);
-                DrawPill("Normal", normal, new Color(0.3f, 0.75f, 0.3f));
+                DrawPill(_normalPill, _normalPillColor);
                 GUILayout.Space(4f);
-                DrawPill("Cached (idle pool)", cached, _cachedTextColor);
+                DrawPill(_cachedPill, _cachedTextColor);
                 GUILayout.Space(4f);
-                if (leaked > 0)
-                    DrawPill($"⚠ Leak suspect: {leaked}", leaked, _leakTextColor);
+                if (_persistentCount > 0)
+                {
+                    DrawPill(_persistentPill, _persistentTextColor);
+                    GUILayout.Space(4f);
+                }
+                if (_leakCount > 0)
+                    DrawPill(_leakPill, _leakTextColor);
                 GUILayout.FlexibleSpace();
                 GUILayout.Label("Right-click a row for options  ", EditorStyles.miniLabel);
             }
 
-            if (_filtered.Count == 0)
+            if (_filteredIndices.Count == 0)
             {
                 GUILayout.Space(16f);
                 EditorGUILayout.LabelField(
@@ -193,17 +227,17 @@ namespace CycloneGames.AssetManagement.Editor
             DrawTableHeader();
 
             _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
-            for (int i = 0; i < _filtered.Count; i++)
-                DrawRow(_filtered[i], i);
+            for (int i = 0; i < _filteredIndices.Count; i++)
+                DrawRow(_views[_filteredIndices[i]], i);
             EditorGUILayout.EndScrollView();
         }
 
         // ── Classification ───────────────────────────────────────────────────────
-        private enum HandleStatus { Normal, Cached, Leaked }
+        private enum HandleStatus { Normal, Cached, Leaked, Persistent }
 
-        private HandleStatus ClassifyHandle(HandleTracker.HandleInfo info)
+        private HandleStatus ClassifyHandle(HandleTracker.HandleInfo info, DateTime nowUtc)
         {
-            double lifeSeconds = (DateTime.UtcNow - info.RegistrationTime).TotalSeconds;
+            double lifeSeconds = (nowUtc - info.RegistrationTime).TotalSeconds;
             if (lifeSeconds < 300.0) return HandleStatus.Normal;
 
             if (!string.IsNullOrEmpty(info.Description) &&
@@ -213,13 +247,15 @@ namespace CycloneGames.AssetManagement.Editor
                 return HandleStatus.Normal;
             }
 
-            // Long-lived — check if AssetCacheService is intentionally holding it.
+            // Long-lived — check if it is explained by the cache or an explicit persistent marking.
             // Extract the asset location from the description (format: "TypeName : location")
             string location = ExtractLocation(info.Description);
             if (location != null && _idleCacheLocations.Contains(location))
-                return HandleStatus.Cached;     // in idle pool — expected
+                return HandleStatus.Cached;        // in idle pool — expected
+            if (location != null && HandleTracker.IsPersistent(location))
+                return HandleStatus.Persistent;    // developer-declared long-lived — not a leak
 
-            return HandleStatus.Leaked;         // long-lived and NOT in any cache pool
+            return HandleStatus.Leaked;            // long-lived and NOT explained
         }
 
         // Description format: "AssetAsync TypeName : path/to/asset"
@@ -233,98 +269,93 @@ namespace CycloneGames.AssetManagement.Editor
         // ── Table header ─────────────────────────────────────────────────────────
         private void DrawTableHeader()
         {
+            EnsureWidths();
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                GUILayout.Label("ID", EditorStyles.boldLabel, GUILayout.Width(ID_W));
-                GUILayout.Label("Package", EditorStyles.boldLabel, GUILayout.Width(PKG_W));
-                GUILayout.Label("Description", EditorStyles.boldLabel, GUILayout.Width(DescWidth));
-                GUILayout.Label("Tag", EditorStyles.boldLabel, GUILayout.Width(TAG_W));
-                GUILayout.Label("Owner", EditorStyles.boldLabel, GUILayout.Width(OWNER_W));
-                GUILayout.Label("Status", EditorStyles.boldLabel, GUILayout.Width(STATUS_W));
-                GUILayout.Label("Registered", EditorStyles.boldLabel, GUILayout.Width(TIME_W));
-                GUILayout.Label("Duration", EditorStyles.boldLabel, GUILayout.Width(DUR_W));
+                GUILayout.Label("ID", EditorStyles.boldLabel, _wId);
+                GUILayout.Label("Package", EditorStyles.boldLabel, _wPkg);
+                GUILayout.Label("Description", EditorStyles.boldLabel, _wDesc);
+                GUILayout.Label("Tag", EditorStyles.boldLabel, _wTag);
+                GUILayout.Label("Owner", EditorStyles.boldLabel, _wOwner);
+                GUILayout.Label("Status", EditorStyles.boldLabel, _wStatus);
+                GUILayout.Label("Registered", EditorStyles.boldLabel, _wTime);
+                GUILayout.Label("Duration", EditorStyles.boldLabel, _wDur);
             }
         }
 
         // ── Row drawing ──────────────────────────────────────────────────────────
-        private void DrawRow(HandleTracker.HandleInfo info, int rowIndex)
+        private void DrawRow(in HandleRowView v, int rowIndex)
         {
-            var status = ClassifyHandle(info);
-            double lifeSec = (DateTime.UtcNow - info.RegistrationTime).TotalSeconds;
-
-            Color rowBg = status switch
-            {
-                HandleStatus.Leaked => _leakRowBg,
-                HandleStatus.Cached => _cachedRowBg,
-                _ => rowIndex % 2 == 0 ? _rowEven : _rowOdd
-            };
+            Color rowBg = v.Status == 2 ? LeakRowBg
+                : v.Status == 3 ? PersistentRowBg
+                : v.Status == 1 ? CachedRowBg
+                : (rowIndex % 2 == 0 ? RowEven : RowOdd);
 
             var rect = EditorGUILayout.BeginHorizontal();
             if (Event.current.type == EventType.Repaint)
                 EditorGUI.DrawRect(rect, rowBg);
 
-            GUILayout.Label(info.Id.ToString(), _rowStyle, GUILayout.Width(ID_W));
-            GUILayout.Label(info.PackageName ?? "—", _rowStyle, GUILayout.Width(PKG_W));
+            GUILayout.Label(v.IdText, _rowStyle, _wId);
+            GUILayout.Label(v.Package, _rowStyle, _wPkg);
 
-            var descContent = new GUIContent(info.Description, info.Description);
-            GUILayout.Label(descContent, _monoStyle, GUILayout.Width(DescWidth));
+            _cell.text = v.Description; _cell.tooltip = v.Description;
+            GUILayout.Label(_cell, _monoStyle, _wDesc);
 
-            // Tag + Owner from cache diagnostics
-            string location = ExtractLocation(info.Description);
-            _tagOwnerMap.TryGetValue(location ?? string.Empty, out var tagOwner);
-
-            if (string.IsNullOrEmpty(tagOwner.Tag))
+            // Tag
+            if (!v.HasTag)
             {
-                GUI.contentColor = new Color(0.4f, 0.4f, 0.4f);
-                GUILayout.Label("—", _rowStyle, GUILayout.Width(TAG_W));
+                GUI.contentColor = DimColor;
+                GUILayout.Label("—", _rowStyle, _wTag);
             }
             else
             {
                 GUI.contentColor = new Color(0.6f, 0.9f, 0.6f);
-                GUILayout.Label(tagOwner.Tag, _rowStyle, GUILayout.Width(TAG_W));
+                GUILayout.Label(v.Tag, _rowStyle, _wTag);
             }
             GUI.contentColor = Color.white;
 
-            if (string.IsNullOrEmpty(tagOwner.Owner))
+            // Owner
+            if (!v.HasOwner)
             {
-                GUI.contentColor = new Color(0.4f, 0.4f, 0.4f);
-                GUILayout.Label("—", _rowStyle, GUILayout.Width(OWNER_W));
+                GUI.contentColor = DimColor;
+                GUILayout.Label("—", _rowStyle, _wOwner);
             }
             else
             {
                 GUI.contentColor = new Color(0.85f, 0.75f, 1.0f);
-                GUILayout.Label(tagOwner.Owner, _rowStyle, GUILayout.Width(OWNER_W));
+                GUILayout.Label(v.Owner, _rowStyle, _wOwner);
             }
             GUI.contentColor = Color.white;
 
             // Status badge
-            switch (status)
+            switch (v.Status)
             {
-                case HandleStatus.Leaked:
+                case 2:
                     GUI.contentColor = _leakTextColor;
-                    GUILayout.Label(new GUIContent("⚠ Leak?",
-                        "Handle alive >5 min and NOT found in any AssetCacheService idle pool.\nThis may indicate a missing Dispose() call."),
-                        _rowStyle, GUILayout.Width(STATUS_W));
+                    _cell.text = "⚠ Leak?"; _cell.tooltip = LeakTooltip;
+                    GUILayout.Label(_cell, _rowStyle, _wStatus);
                     break;
-                case HandleStatus.Cached:
+                case 1:
                     GUI.contentColor = _cachedTextColor;
-                    GUILayout.Label(new GUIContent("● Cached",
-                        "Handle is long-lived because AssetCacheService is intentionally keeping this\nasset in its Trial/Main idle pool for fast re-use. Not a leak."),
-                        _rowStyle, GUILayout.Width(STATUS_W));
+                    _cell.text = "● Cached"; _cell.tooltip = CachedTooltip;
+                    GUILayout.Label(_cell, _rowStyle, _wStatus);
+                    break;
+                case 3:
+                    GUI.contentColor = _persistentTextColor;
+                    _cell.text = "◆ Persistent"; _cell.tooltip = PersistentTooltip;
+                    GUILayout.Label(_cell, _rowStyle, _wStatus);
                     break;
                 default:
-                    GUI.contentColor = new Color(0.6f, 0.6f, 0.6f);
-                    GUILayout.Label("—", _rowStyle, GUILayout.Width(STATUS_W));
+                    GUI.contentColor = DimColor;
+                    GUILayout.Label("—", _rowStyle, _wStatus);
                     break;
             }
             GUI.contentColor = Color.white;
 
-            GUILayout.Label(info.RegistrationTime.ToLocalTime().ToString("HH:mm:ss"),
-                _rowStyle, GUILayout.Width(TIME_W));
+            GUILayout.Label(v.RegisteredText, _rowStyle, _wTime);
 
-            Color durColor = status == HandleStatus.Leaked ? _leakTextColor : Color.white;
-            GUI.contentColor = durColor;
-            GUILayout.Label(FormatDuration(lifeSec), _rowStyle, GUILayout.Width(DUR_W));
+            GUI.contentColor = v.Status == 2 ? _leakTextColor : Color.white;
+            GUILayout.Label(v.DurationText, _rowStyle, _wDur);
             GUI.contentColor = Color.white;
 
             EditorGUILayout.EndHorizontal();
@@ -334,16 +365,29 @@ namespace CycloneGames.AssetManagement.Editor
                 && Event.current.type == EventType.MouseDown && Event.current.button == 1)
             {
                 var menu = new GenericMenu();
-                string desc = info.Description;
-                string stack = info.StackTrace;
+                string desc = v.Description;
+                string stack = v.StackTrace;
                 menu.AddItem(new GUIContent("Copy Description"), false,
                     () => EditorGUIUtility.systemCopyBuffer = desc);
+
+                string menuLoc = ExtractLocation(v.Description);
+                if (!string.IsNullOrEmpty(menuLoc))
+                {
+                    string capturedLoc = menuLoc;
+                    if (HandleTracker.IsPersistent(capturedLoc))
+                        menu.AddItem(new GUIContent("Unmark Persistent"), false,
+                            () => { HandleTracker.UnmarkPersistent(capturedLoc); RefreshSnapshot(); Repaint(); });
+                    else
+                        menu.AddItem(new GUIContent("Mark Persistent (ignore leak)"), false,
+                            () => { HandleTracker.MarkPersistent(capturedLoc); RefreshSnapshot(); Repaint(); });
+                }
+
                 if (!string.IsNullOrEmpty(stack))
                 {
                     menu.AddItem(new GUIContent("Copy Stack Trace"), false,
                         () => EditorGUIUtility.systemCopyBuffer = stack);
-                    bool expanded = _expandedIds.Contains(info.Id);
-                    int capturedId = info.Id;
+                    bool expanded = _expandedIds.Contains(v.Id);
+                    int capturedId = v.Id;
                     menu.AddItem(new GUIContent(expanded ? "Collapse Stack Trace" : "Expand Stack Trace"),
                         false, () =>
                         {
@@ -357,13 +401,13 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             // Expanded stack trace
-            if (!string.IsNullOrEmpty(info.StackTrace) && IsRowExpanded(info.Id))
+            if (!string.IsNullOrEmpty(v.StackTrace) && _expandedIds.Contains(v.Id))
             {
                 using (new EditorGUI.IndentLevelScope(1))
                 using (new EditorGUILayout.VerticalScope(_boxStyle))
                 {
                     EditorGUILayout.LabelField("Stack Trace", EditorStyles.boldLabel);
-                    EditorGUILayout.SelectableLabel(info.StackTrace, _monoStyle,
+                    EditorGUILayout.SelectableLabel(v.StackTrace, _monoStyle,
                         GUILayout.ExpandHeight(true));
                 }
             }
@@ -371,7 +415,6 @@ namespace CycloneGames.AssetManagement.Editor
 
         // ── Expanded ids ─────────────────────────────────────────────────────────
         private readonly HashSet<int> _expandedIds = new HashSet<int>();
-        private bool IsRowExpanded(int id) => _expandedIds.Contains(id);
 
         // ── Idle-location set ────────────────────────────────────────────────────
         private void RebuildIdleLocationSet()
@@ -414,35 +457,119 @@ namespace CycloneGames.AssetManagement.Editor
         {
             RebuildIdleLocationSet();
             _snapshot.Clear();
+            _views.Clear();
             var active = HandleTracker.GetActiveHandles();
+            DateTime nowUtc = DateTime.UtcNow;
             if (active != null)
-                for (int i = 0; i < active.Count; i++) _snapshot.Add(active[i]);
+            {
+                for (int i = 0; i < active.Count; i++)
+                {
+                    _snapshot.Add(active[i]);
+                    _views.Add(BuildView(active[i], nowUtc));
+                }
+            }
+            _displayDirty = true;
             _hasSnapshot = true;
         }
 
-        private void BuildFiltered()
+        private HandleRowView BuildView(HandleTracker.HandleInfo info, DateTime nowUtc)
         {
-            _filtered.Clear();
-            bool hasFilter = _searchFilter.Length > 0;
-            for (int i = 0; i < _snapshot.Count; i++)
+            byte status = (byte)ClassifyHandle(info, nowUtc);
+            double lifeSec = (nowUtc - info.RegistrationTime).TotalSeconds;
+            string loc = ExtractLocation(info.Description);
+            _tagOwnerMap.TryGetValue(loc ?? string.Empty, out var to);
+            return new HandleRowView
             {
-                var h = _snapshot[i];
-                if (!hasFilter || MatchesFilter(h))
-                    _filtered.Add(h);
+                Id = info.Id,
+                IdText = info.Id.ToString(),
+                Package = info.PackageName ?? "—",
+                Description = info.Description ?? string.Empty,
+                Tag = to.Tag,
+                Owner = to.Owner,
+                HasTag = !string.IsNullOrEmpty(to.Tag),
+                HasOwner = !string.IsNullOrEmpty(to.Owner),
+                Status = status,
+                RegisteredText = info.RegistrationTime.ToLocalTime().ToString("HH:mm:ss"),
+                DurationText = FormatDuration(lifeSec),
+                StackTrace = info.StackTrace
+            };
+        }
+
+        private void RebuildDisplay()
+        {
+            _filteredIndices.Clear();
+            bool hasFilter = _searchFilter.Length > 0;
+            int normal = 0, cached = 0, leaked = 0, persistent = 0;
+            for (int i = 0; i < _views.Count; i++)
+            {
+                if (hasFilter && !MatchesFilter(_views[i])) continue;
+                _filteredIndices.Add(i);
+                byte s = _views[i].Status;
+                if (s == 2) leaked++;
+                else if (s == 1) cached++;
+                else if (s == 3) persistent++;
+                else normal++;
+            }
+            _leakCount = leaked;
+            _persistentCount = persistent;
+            _totalText = "  Total: " + _snapshot.Count;
+            _filteredText = hasFilter ? "  Filtered: " + _filteredIndices.Count : string.Empty;
+            _normalPill = "Normal: " + normal;
+            _cachedPill = "Cached (idle pool): " + cached;
+            _persistentPill = persistent > 0 ? "◆ Persistent: " + persistent : string.Empty;
+            _leakPill = leaked > 0 ? "⚠ Leak suspect: " + leaked : string.Empty;
+            _displayDirty = false;
+        }
+
+        private bool MatchesFilter(in HandleRowView v)
+        {
+            return (v.Description != null && v.Description.IndexOf(_searchFilter, StringComparison.OrdinalIgnoreCase) >= 0)
+                || (v.Package != null && v.Package.IndexOf(_searchFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+        }
+
+        private void EnsureWidths()
+        {
+            if (!_widthsBuilt)
+            {
+                _wId = new[] { GUILayout.Width(ID_W) };
+                _wPkg = new[] { GUILayout.Width(PKG_W) };
+                _wTag = new[] { GUILayout.Width(TAG_W) };
+                _wOwner = new[] { GUILayout.Width(OWNER_W) };
+                _wStatus = new[] { GUILayout.Width(STATUS_W) };
+                _wTime = new[] { GUILayout.Width(TIME_W) };
+                _wDur = new[] { GUILayout.Width(DUR_W) };
+                _pillOpts = new[] { GUILayout.ExpandWidth(false) };
+                _widthsBuilt = true;
+            }
+            float dw = DescWidth;
+            if (_wDesc == null || Mathf.Abs(dw - _lastDescWidth) > 0.5f)
+            {
+                _wDesc = new[] { GUILayout.Width(dw) };
+                _lastDescWidth = dw;
             }
         }
 
-        private bool MatchesFilter(HandleTracker.HandleInfo h)
+        private struct HandleRowView
         {
-            return (h.Description != null && h.Description.IndexOf(_searchFilter, StringComparison.OrdinalIgnoreCase) >= 0)
-                || (h.PackageName != null && h.PackageName.IndexOf(_searchFilter, StringComparison.OrdinalIgnoreCase) >= 0);
+            public int Id;
+            public string IdText;
+            public string Package;
+            public string Description;
+            public string Tag;
+            public string Owner;
+            public byte Status;          // 0 = normal, 1 = cached, 2 = leaked
+            public string RegisteredText;
+            public string DurationText;
+            public string StackTrace;
+            public bool HasTag;
+            public bool HasOwner;
         }
 
-        private void DrawPill(string label, int count, Color color)
+        private void DrawPill(string text, Color color)
         {
             var prev = GUI.contentColor;
             GUI.contentColor = color;
-            GUILayout.Label($"  {label}: {count}  ", _pillStyle, GUILayout.ExpandWidth(false));
+            GUILayout.Label(text, _pillStyle, _pillOpts);
             GUI.contentColor = prev;
         }
 
