@@ -41,6 +41,17 @@ namespace CycloneGames.AssetManagement.Editor
         [MenuItem("Tools/CycloneGames/AssetManagement/Validate All AssetRefs")]
         public static void ValidateAll()
         {
+            ValidateAllInternal(heal: true);
+        }
+
+        [MenuItem("Tools/CycloneGames/AssetManagement/Report AssetRefs Without Healing")]
+        public static void ValidateAllReportOnly()
+        {
+            ValidateAllInternal(heal: false);
+        }
+
+        private static void ValidateAllInternal(bool heal)
+        {
             var sw = System.Diagnostics.Stopwatch.StartNew();
 
             try
@@ -258,7 +269,7 @@ namespace CycloneGames.AssetManagement.Editor
                 // ══════════════════════════════════════════════════════════════
                 // Phase 4 — Write-back via SerializedObject (only affected files)
                 // ══════════════════════════════════════════════════════════════
-                if (healsPerFile.Count > 0)
+                if (heal && healsPerFile.Count > 0)
                 {
                     EditorUtility.DisplayProgressBar("AssetRef Validation", $"Healing {healsPerFile.Count} file(s)...", 0.95f);
 
@@ -303,15 +314,20 @@ namespace CycloneGames.AssetManagement.Editor
                 sw.Stop();
 
                 string fileStats = $"{totalFiles} files scanned, {totalRefs} ref(s) found";
+                string staleSummary = heal ? $"{healed} healed" : $"{healed} stale";
                 if (broken > 0)
                 {
-                    Debug.LogError($"[AssetRef Validation] {broken} broken, {healed} healed. ({sw.ElapsedMilliseconds}ms, {fileStats})");
+                    Debug.LogError($"[AssetRef Validation] {broken} broken, {staleSummary}. ({sw.ElapsedMilliseconds}ms, {fileStats})");
                     foreach (var err in errors)
                         Debug.LogError(err);
                 }
+                else if (!heal && healed > 0)
+                {
+                    Debug.LogWarning($"[AssetRef Validation] No broken refs, {staleSummary}. ({sw.ElapsedMilliseconds}ms, {fileStats})");
+                }
                 else
                 {
-                    Debug.Log($"[AssetRef Validation] All valid. {healed} healed. ({sw.ElapsedMilliseconds}ms, {fileStats})");
+                    Debug.Log($"[AssetRef Validation] All valid. {staleSummary}. ({sw.ElapsedMilliseconds}ms, {fileStats})");
                 }
             }
             finally

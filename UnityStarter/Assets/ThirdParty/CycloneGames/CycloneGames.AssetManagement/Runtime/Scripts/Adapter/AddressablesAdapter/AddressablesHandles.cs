@@ -27,15 +27,18 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private static readonly Stack<T> _pool = new Stack<T>(SOFT_LIMIT);
         private static readonly object _poolLock = new object();
-        // Tracks the last idle start: updated only when pool is not being actively accessed.
-        private static long _idleStartTicks = long.MaxValue;
+        // Monotonic millisecond clock (Environment.TickCount64 is unavailable on Unity's runtime).
+        private static readonly double s_msPerTick = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        private static long NowMs() => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * s_msPerTick);
+        // Tracks the last idle start as monotonic ms; long.MaxValue means actively in use.
+        private static long _idleStartMs = long.MaxValue;
         private static int _highWaterMark;
 
         public static T Get()
         {
             lock (_poolLock)
             {
-                _idleStartTicks = long.MaxValue; // pool is active; reset idle timer
+                _idleStartMs = long.MaxValue; // pool is active; reset idle timer
                 if (_pool.Count > 0) return _pool.Pop();
             }
             return new T();
@@ -54,8 +57,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
 
                 // Begin idle timer only after this release if pool is above soft limit.
-                if (_pool.Count > SOFT_LIMIT && _idleStartTicks == long.MaxValue)
-                    _idleStartTicks = DateTime.UtcNow.Ticks;
+                if (_pool.Count > SOFT_LIMIT && _idleStartMs == long.MaxValue)
+                    _idleStartMs = NowMs();
 
                 TryShrinkIfIdle();
             }
@@ -63,15 +66,15 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private static void TryShrinkIfIdle()
         {
-            if (_pool.Count <= SOFT_LIMIT || _idleStartTicks == long.MaxValue) return;
+            if (_pool.Count <= SOFT_LIMIT || _idleStartMs == long.MaxValue) return;
 
-            long idleMs = (DateTime.UtcNow.Ticks - _idleStartTicks) / TimeSpan.TicksPerMillisecond;
+            long idleMs = NowMs() - _idleStartMs;
             if (idleMs < SHRINK_THRESHOLD_MS) return;
 
             int toRemove = Math.Min(SHRINK_BATCH_SIZE, _pool.Count - SOFT_LIMIT);
             for (int i = 0; i < toRemove; i++) _pool.Pop();
 
-            if (_pool.Count <= SOFT_LIMIT) _idleStartTicks = long.MaxValue;
+            if (_pool.Count <= SOFT_LIMIT) _idleStartMs = long.MaxValue;
         }
 
         public static (int current, int highWaterMark) GetStats()
@@ -85,7 +88,7 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 _pool.Clear();
                 _highWaterMark = 0;
-                _idleStartTicks = long.MaxValue;
+                _idleStartMs = long.MaxValue;
             }
         }
     }
@@ -103,7 +106,7 @@ namespace CycloneGames.AssetManagement.Runtime
         protected void SetId(int id) => Id = id;
     }
 
-    internal sealed class AddressableAssetHandle<TAsset> : AddressablesOperationHandle, IAssetHandle<TAsset>, IInternalCacheable where TAsset : UnityEngine.Object
+    internal sealed class AddressableAssetHandle<TAsset> : AddressablesOperationHandle, IAssetHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
     {
         internal AsyncOperationHandle<TAsset> Raw;
         public override bool IsDone => Raw.IsDone;
@@ -182,9 +185,10 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
+        long IAssetMemoryFootprint.EstimateRuntimeBytes() => Raw.IsValid() ? Cache.AssetMemoryEstimator.Estimate(Raw.Result) : 0;
     }
 
-    internal sealed class AddressableAllAssetsHandle<TAsset> : AddressablesOperationHandle, IAllAssetsHandle<TAsset>, IInternalCacheable where TAsset : UnityEngine.Object
+    internal sealed class AddressableAllAssetsHandle<TAsset> : AddressablesOperationHandle, IAllAssetsHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
     {
         private AsyncOperationHandle<IList<TAsset>> raw;
         public override bool IsDone => raw.IsDone;
@@ -261,9 +265,17 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
+        long IAssetMemoryFootprint.EstimateRuntimeBytes()
+        {
+            if (!raw.IsValid() || raw.Result == null) return 0;
+            long total = 0;
+            var all = raw.Result;
+            for (int i = 0; i < all.Count; i++) total += Cache.AssetMemoryEstimator.Estimate(all[i]);
+            return total;
+        }
     }
 
-    internal sealed class AddressableInstantiateHandle : AddressablesOperationHandle, IInstantiateHandle, IInternalCacheable
+    internal sealed class AddressableInstantiateHandle : AddressablesOperationHandle, IInstantiateHandle, IReferenceCounted, IInternalCacheable
     {
         private AsyncOperationHandle<GameObject> raw;
         public override bool IsDone => raw.IsDone;
@@ -319,9 +331,8 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             if (newCount == 0)
             {
-                // Scene lifetimes are explicitly controlled via IAssetPackage.UnloadSceneAsync.
-                // Reaching RefCount == 0 only means the caller released the wrapper; it must not
-                // implicitly unload or detach the underlying scene in a provider-specific way.
+                if (_onReleaseToCache != null) _onReleaseToCache(null, this);
+                else DisposeInternal();
             }
         }
 
@@ -331,7 +342,13 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
-            if (raw.IsValid()) Addressables.Release(raw);
+            if (raw.IsValid())
+            {
+                if (!Addressables.ReleaseInstance(raw))
+                {
+                    Addressables.Release(raw);
+                }
+            }
             this.raw = default;
             _onReleaseToCache = null;
             AdaptiveAddressablesPool<AddressableInstantiateHandle>.Release(this);
@@ -347,16 +364,13 @@ namespace CycloneGames.AssetManagement.Runtime
         public string Error { get; private set; }
         public UniTask Task => UniTask.CompletedTask;
         public GameObject Instance => null;
-        public int RefCount => 0;
 
         public FailedInstantiateHandle(string error) { Error = error; }
         public void WaitForAsyncComplete() { }
-        public void Retain() { }
-        public void Release() { }
         public void Dispose() { }
     }
 
-    internal sealed class AddressableSceneHandle : AddressablesOperationHandle, ISceneHandle, IInternalCacheable
+    internal sealed class AddressableSceneHandle : AddressablesOperationHandle, ISceneHandle, IReferenceCounted, IInternalCacheable
     {
         internal AsyncOperationHandle<SceneInstance> Raw;
         internal int DebugId => Id;
@@ -480,8 +494,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             if (newCount == 0)
             {
-                if (_onReleaseToCache != null) _onReleaseToCache(null, this);
-                else DisposeInternal();
+                CLogger.LogWarning("[AddressableSceneHandle] Release only releases caller ownership. Use IAssetPackage.UnloadSceneAsync to unload the scene.");
             }
         }
 
@@ -492,7 +505,6 @@ namespace CycloneGames.AssetManagement.Runtime
             _disposed = true;
             SceneTracker.Unregister(Id);
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
-            if (Raw.IsValid()) Addressables.Release(Raw);
             Raw = default;
             ScenePath = null;
             ActivationMode = SceneActivationMode.ActivateOnLoad;
@@ -508,19 +520,29 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private AsyncOperationHandle raw;
         private bool _cancelled;
-        public bool IsDone => _cancelled || raw.IsDone;
-        public bool Succeed => !_cancelled && raw.Status == AsyncOperationStatus.Succeeded;
-        public float Progress => _cancelled ? 0f : raw.PercentComplete;
+        private readonly bool _completedWithoutWork;
+        public bool IsDone => _completedWithoutWork || _cancelled || (raw.IsValid() && raw.IsDone);
+        public bool Succeed => _completedWithoutWork || (!_cancelled && raw.IsValid() && raw.Status == AsyncOperationStatus.Succeeded);
+        public float Progress => _completedWithoutWork ? 1f : _cancelled ? 0f : raw.IsValid() ? raw.PercentComplete : 0f;
         public int TotalDownloadCount => 0;
         public int CurrentDownloadCount => 0;
-        public long TotalDownloadBytes => _cancelled ? 0 : raw.GetDownloadStatus().TotalBytes;
-        public long CurrentDownloadBytes => _cancelled ? 0 : raw.GetDownloadStatus().DownloadedBytes;
-        public string Error => _cancelled ? "Cancelled" : raw.OperationException?.Message;
+        public long TotalDownloadBytes => _completedWithoutWork || _cancelled || !raw.IsValid() ? 0 : raw.GetDownloadStatus().TotalBytes;
+        public long CurrentDownloadBytes => _completedWithoutWork || _cancelled || !raw.IsValid() ? 0 : raw.GetDownloadStatus().DownloadedBytes;
+        public string Error => _cancelled ? "Cancelled" : raw.IsValid() ? raw.OperationException?.Message : string.Empty;
 
-        public AddressableDownloader(AsyncOperationHandle raw) { this.raw = raw; }
+        public AddressableDownloader(AsyncOperationHandle raw)
+        {
+            this.raw = raw;
+            _completedWithoutWork = !raw.IsValid();
+        }
 
         public void Begin() { }
-        public UniTask StartAsync(CancellationToken cancellationToken = default) => raw.ToUniTask(cancellationToken: cancellationToken);
+        public UniTask StartAsync(CancellationToken cancellationToken = default)
+        {
+            return _completedWithoutWork || _cancelled || !raw.IsValid()
+                ? UniTask.CompletedTask
+                : raw.ToUniTask(cancellationToken: cancellationToken);
+        }
         public void Pause() => CLogger.LogWarning("[AddressableDownloader] Pause is not supported by Addressables.");
         public void Resume() => CLogger.LogWarning("[AddressableDownloader] Resume is not supported by Addressables.");
         public void Cancel()

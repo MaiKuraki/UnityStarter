@@ -22,6 +22,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly Subject<(PatchEvent, object)> _patchEvents = new Subject<(PatchEvent, object)>();
         private EPatchState _currentState = EPatchState.None;
         private IDownloader _downloader;
+        private PatchDownloadOptions _downloadOptions = PatchDownloadOptions.Default;
 
         public string PackageName => _package.Name;
         public Observable<(PatchEvent, object)> PatchEvents => _patchEvents;
@@ -31,28 +32,30 @@ namespace CycloneGames.AssetManagement.Runtime
             _package = package ?? throw new ArgumentNullException(nameof(package));
         }
 
-        public async UniTask RunAsync(bool autoDownloadOnFoundNewVersion, CancellationToken cancellationToken = default)
+        public async UniTask RunAsync(bool autoDownloadOnFoundNewVersion, PatchDownloadOptions downloadOptions = default, CancellationToken cancellationToken = default)
         {
             if (_currentState != EPatchState.None)
             {
                 throw new InvalidOperationException("Patch service is already running.");
             }
 
+            _downloadOptions = downloadOptions.Normalized();
+
             try
             {
                 SetState(EPatchState.Initialize);
-                
+
                 SetState(EPatchState.CheckVersion);
-                string packageVersion = await _package.RequestPackageVersionAsync(cancellationToken: cancellationToken);
-                
-                var updateManifestOperation = await _package.UpdatePackageManifestAsync(packageVersion, 60, cancellationToken);
+                string packageVersion = await _package.RequestPackageVersionAsync(timeoutSeconds: _downloadOptions.RequestTimeoutSeconds, cancellationToken: cancellationToken);
+
+                var updateManifestOperation = await _package.UpdatePackageManifestAsync(packageVersion, _downloadOptions.RequestTimeoutSeconds, cancellationToken);
                 if (!updateManifestOperation)
                 {
                     throw new Exception("Failed to update package manifest.");
                 }
 
                 SetState(EPatchState.Download);
-                _downloader = _package.CreateDownloaderForAll(10, 3);
+                _downloader = _package.CreateDownloaderForAll(_downloadOptions.MaxConcurrentDownloads, _downloadOptions.FailedRetryCount);
 
                 if (_downloader.TotalDownloadCount == 0)
                 {

@@ -16,7 +16,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
         private readonly UnityEngine.SceneManagement.LoadSceneMode loadSceneMode;
         private readonly bool activateOnLoad;
 
-        public AssetManagementSceneIdentifier(IAssetPackage assetPackage, string location, UnityEngine.SceneManagement.LoadSceneMode loadSceneMode = UnityEngine.SceneManagement.LoadSceneMode.Single, bool activateOnLoad = true)
+        public AssetManagementSceneIdentifier(IAssetPackage assetPackage, string location, UnityEngine.SceneManagement.LoadSceneMode loadSceneMode = UnityEngine.SceneManagement.LoadSceneMode.Additive, bool activateOnLoad = true)
         {
             this.assetPackage = assetPackage;
             this.location = location;
@@ -53,12 +53,21 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
 
         public async UniTask<UnityEngine.SceneManagement.Scene> Load(IProgress<float> progress = null, CancellationToken cancellationToken = default)
         {
+            if (sceneHandle.ActivationMode == SceneActivationMode.Manual)
+            {
+                await sceneHandle.ActivateAsync(cancellationToken);
+                progress?.Report(1f);
+                return sceneHandle.Scene;
+            }
+
             while (!sceneHandle.IsDone)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 progress?.Report(sceneHandle.Progress);
                 await UniTask.Yield(cancellationToken);
             }
+
+            progress?.Report(1f);
             
             return sceneHandle.Scene;
         }
@@ -76,7 +85,8 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
             // Only dispose if Unload was never called.
             if (!_unloaded)
             {
-                (sceneHandle as IDisposable)?.Dispose();
+                _unloaded = true;
+                assetPackage.UnloadSceneAsync(sceneHandle).Forget();
             }
         }
     }

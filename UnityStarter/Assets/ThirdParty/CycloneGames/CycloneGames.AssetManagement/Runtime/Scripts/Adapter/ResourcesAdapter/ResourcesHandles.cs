@@ -43,7 +43,7 @@ namespace CycloneGames.AssetManagement.Runtime
         protected void SetId(int id) => Id = id;
     }
 
-    internal sealed class ResourcesAssetHandle<TAsset> : ResourcesOperationHandle, IAssetHandle<TAsset>, IInternalCacheable where TAsset : UnityEngine.Object
+    internal sealed class ResourcesAssetHandle<TAsset> : ResourcesOperationHandle, IAssetHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
     {
         private ResourceRequest _request;
         private TAsset _syncAsset;
@@ -142,9 +142,10 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
+        long IAssetMemoryFootprint.EstimateRuntimeBytes() => Cache.AssetMemoryEstimator.Estimate(AssetObject);
     }
 
-    internal sealed class ResourcesAllAssetsHandle<TAsset> : ResourcesOperationHandle, IAllAssetsHandle<TAsset>, IInternalCacheable where TAsset : UnityEngine.Object
+    internal sealed class ResourcesAllAssetsHandle<TAsset> : ResourcesOperationHandle, IAllAssetsHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
     {
         private UniTask _task;
 
@@ -220,9 +221,17 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
+        long IAssetMemoryFootprint.EstimateRuntimeBytes()
+        {
+            var all = Assets;
+            if (all == null) return 0;
+            long total = 0;
+            for (int i = 0; i < all.Count; i++) total += Cache.AssetMemoryEstimator.Estimate(all[i]);
+            return total;
+        }
     }
 
-    internal sealed class ResourcesInstantiateHandle : ResourcesOperationHandle, IInstantiateHandle, IInternalCacheable
+    internal sealed class ResourcesInstantiateHandle : ResourcesOperationHandle, IInstantiateHandle, IReferenceCounted, IInternalCacheable
     {
         public GameObject Instance { get; private set; }
 
@@ -278,6 +287,10 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             _disposed = true;
             if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
+            if (Instance != null)
+            {
+                UnityEngine.Object.Destroy(Instance);
+            }
             Instance = null;
             _onReleaseToCache = null;
             ResourcesHandlePool<ResourcesInstantiateHandle>.Release(this);

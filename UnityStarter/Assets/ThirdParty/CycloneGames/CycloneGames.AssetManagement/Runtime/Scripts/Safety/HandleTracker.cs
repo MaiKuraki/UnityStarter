@@ -99,5 +99,60 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             _activeHandles.Clear();
         }
+
+        // ── Persistent (intentionally long-lived) registry ───────────────────────
+        // Locations marked persistent are excluded from leak heuristics — e.g. DontDestroyOnLoad
+        // infrastructure, bootstrap UI, and the main scene's always-resident assets. The registry is
+        // independent of <see cref="Enabled"/> and is safe to call from any thread.
+        private static readonly HashSet<string> _persistentLocations = new HashSet<string>(System.StringComparer.Ordinal);
+        private static readonly object _persistentLock = new object();
+        private static volatile bool _hasPersistent;
+
+        /// <summary>True when at least one location has been marked persistent.</summary>
+        public static bool HasPersistentEntries => _hasPersistent;
+
+        /// <summary>
+        /// Marks an asset location as intentionally long-lived. Diagnostics report its handles as
+        /// "Persistent" rather than leak suspects. Safe to call before or after the asset is loaded.
+        /// </summary>
+        public static void MarkPersistent(string location)
+        {
+            if (string.IsNullOrEmpty(location)) return;
+            lock (_persistentLock)
+            {
+                if (_persistentLocations.Add(location)) _hasPersistent = true;
+            }
+        }
+
+        /// <summary>Removes a previously marked persistent location.</summary>
+        public static void UnmarkPersistent(string location)
+        {
+            if (string.IsNullOrEmpty(location)) return;
+            lock (_persistentLock)
+            {
+                _persistentLocations.Remove(location);
+                _hasPersistent = _persistentLocations.Count > 0;
+            }
+        }
+
+        /// <summary>Clears all persistent markings.</summary>
+        public static void ClearPersistent()
+        {
+            lock (_persistentLock)
+            {
+                _persistentLocations.Clear();
+                _hasPersistent = false;
+            }
+        }
+
+        /// <summary>Returns true if the given location has been marked persistent.</summary>
+        public static bool IsPersistent(string location)
+        {
+            if (!_hasPersistent || string.IsNullOrEmpty(location)) return false;
+            lock (_persistentLock)
+            {
+                return _persistentLocations.Contains(location);
+            }
+        }
     }
 }
