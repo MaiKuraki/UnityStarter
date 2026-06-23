@@ -1,6 +1,7 @@
 #if YOOASSET_PRESENT
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using YooAsset;
 using Cysharp.Threading.Tasks;
 
@@ -13,11 +14,13 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly object _packagesLock = new object();
         private volatile bool _initialized;
         private volatile List<string> _packageNamesCache;
+        private long _defaultIdleMemoryBudgetBytes;
 
         public bool Initialized => _initialized;
 
         public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
+            _defaultIdleMemoryBudgetBytes = options.DefaultIdleMemoryBudgetBytes;
             if (_initialized) return UniTask.CompletedTask;
 
             YooAssets.Initialize();
@@ -30,18 +33,26 @@ namespace CycloneGames.AssetManagement.Runtime
             return UniTask.CompletedTask;
         }
 
-        public void Destroy()
+        public async UniTask DestroyAsync(CancellationToken cancellationToken = default)
         {
             if (!_initialized) return;
+            _initialized = false;
 
+            List<IAssetPackage> packages;
             lock (_packagesLock)
             {
+                packages = new List<IAssetPackage>(_packages.Values);
                 _packages.Clear();
                 _packageNamesCache = null;
             }
 
+            for (int i = 0; i < packages.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await packages[i].DestroyAsync();
+            }
+
             YooAssets.Destroy();
-            _initialized = false;
         }
 
         public IAssetPackage CreatePackage(string packageName)
@@ -58,6 +69,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
                 var yooPackage = YooAssets.CreatePackage(packageName);
                 var wrapped = new YooAssetPackage(yooPackage);
+                if (_defaultIdleMemoryBudgetBytes > 0) wrapped.SetCacheIdleMemoryBudget(_defaultIdleMemoryBudgetBytes);
                 _packages.Add(packageName, wrapped);
                 _packageNamesCache = null;
                 return wrapped;

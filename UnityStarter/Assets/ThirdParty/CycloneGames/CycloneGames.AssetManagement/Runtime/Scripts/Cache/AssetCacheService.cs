@@ -5,6 +5,13 @@ using UnityEngine;
 
 namespace CycloneGames.AssetManagement.Runtime.Cache
 {
+    internal enum AssetCacheOperationKind : byte
+    {
+        Asset = 0,
+        AllAssets = 1,
+        RawFile = 2,
+    }
+
     /// <summary>
     /// Multi-tier asset cache implementing a W-TinyLFU-inspired strategy:
     /// - Active (ARC): handles with RefCount > 0 are pinned and never evicted.
@@ -23,6 +30,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             public string Owner;
             public IReferenceCounted Handle;
             public int AccessCount;
+            // Approximate runtime footprint in bytes, computed when the node enters the idle pool.
+            public long EstimatedBytes;
 
             public CacheNode Next;
             public CacheNode Prev;
@@ -32,7 +41,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         private sealed class CacheKeyPoolNode
         {
-            public (string Location, Type AssetType) Key;
+            public (string Location, Type AssetType, AssetCacheOperationKind OperationKind) Key;
             public string CacheKey;
             public CacheKeyPoolNode Prev;
             public CacheKeyPoolNode Next;
@@ -59,6 +68,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 node.Next = null;
                 node.Prev = null;
                 node.AccessCount = 0;
+                node.EstimatedBytes = 0;
                 node.IsInMainPool = false;
 
                 lock (_lock)
@@ -96,27 +106,44 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         private int _releaseOpCount;
         private const int AGING_INTERVAL = 512;
 
-        private readonly ReaderWriterLockSlim _rwLock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
+        // Memory-budget eviction: idle (RefCount == 0) handles are evicted not only by entry count
+        // but also when their aggregate estimated footprint exceeds this budget. This prevents a few
+        // large assets (e.g. 4K textures) from silently blowing the memory ceiling on low-end devices.
+        private long _idleBytes;
+        private long _maxIdleBytes;
+
+        // The cache is main-thread-affine in practice (Unity asset/scene/instantiate APIs are main-thread
+        // only). A plain monitor is used instead of ReaderWriterLockSlim: it is far cheaper when uncontended,
+        // avoids the upgradeable-lock serialization that throttled the hot hit path, and still guarantees
+        // correctness if a background thread ever touches the cache (e.g. diagnostics).
+        private readonly object _gate = new object();
         private int _disposed;
 
         /// <summary>
-        /// Creates a cache service. Pass 0/0 to auto-size based on device memory.
+        /// Creates a cache service. Pass 0 for any sizing argument to auto-size based on device memory and platform.
         /// </summary>
-        public AssetCacheService(IAssetPackage package, int maxTrialEntries = 0, int maxMainEntries = 0)
+        public AssetCacheService(IAssetPackage package, int maxTrialEntries = 0, int maxMainEntries = 0, long maxIdleBytes = 0)
         {
             _package = package ?? throw new ArgumentNullException(nameof(package));
 
+            int ramMB = SystemInfo.systemMemorySize;
             if (maxTrialEntries <= 0 || maxMainEntries <= 0)
             {
                 // Adaptive sizing: scale cache to available device RAM.
-                int ramMB = SystemInfo.systemMemorySize;
                 if (ramMB >= 4096) { maxTrialEntries = 64; maxMainEntries = 512; }
                 else if (ramMB >= 2048) { maxTrialEntries = 32; maxMainEntries = 256; }
                 else { maxTrialEntries = 16; maxMainEntries = 128; }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+                // WebGL has a hard browser memory ceiling and no real threads; keep the idle pool small.
+                maxTrialEntries = Math.Min(maxTrialEntries, 16);
+                maxMainEntries = Math.Min(maxMainEntries, 96);
+#endif
             }
 
             _maxTrialEntries = Math.Max(1, maxTrialEntries);
             _maxMainEntries = Math.Max(1, maxMainEntries);
+            _maxIdleBytes = ResolveIdleBudget(maxIdleBytes);
 
             _activeMap = new Dictionary<string, CacheNode>(128, StringComparer.Ordinal);
             _idleMap = new Dictionary<string, CacheNode>(_maxTrialEntries + _maxMainEntries, StringComparer.Ordinal);
@@ -124,9 +151,56 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _nodesToClearScratch = new List<CacheNode>(16);
             _matchedBucketsScratch = new List<string>(8);
 
+            // On memory pressure (iOS/Android), drain the entire idle pool immediately. Active handles
+            // (RefCount > 0) are never touched, so in-use assets remain valid.
+            Application.lowMemory += HandleLowMemory;
+
 #if UNITY_EDITOR
             lock (_globalInstancesLock) { GlobalInstances.Add(this); }
 #endif
+        }
+
+        /// <summary>
+        /// Resolves the effective idle memory budget. A positive value is used verbatim (floored to 1 MB);
+        /// 0 or negative falls back to the automatic, platform-aware default derived from device RAM.
+        /// </summary>
+        private static long ResolveIdleBudget(long requested)
+        {
+            long bytes = requested;
+            if (bytes <= 0)
+            {
+                int ramMB = SystemInfo.systemMemorySize;
+                if (ramMB >= 4096) bytes = 512L * 1024 * 1024;
+                else if (ramMB >= 2048) bytes = 256L * 1024 * 1024;
+                else bytes = 96L * 1024 * 1024;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+                bytes = Math.Min(bytes, 96L * 1024 * 1024);
+#endif
+            }
+            return Math.Max(1L * 1024 * 1024, bytes);
+        }
+
+        /// <summary>
+        /// Overrides the idle (RefCount == 0) memory budget at runtime. Pass a positive byte value to set an
+        /// explicit budget, or 0 to restore the automatic platform-aware default. Immediately runs an
+        /// eviction pass so the idle pool is brought back under the new budget. Thread-safe.
+        /// </summary>
+        public void SetIdleMemoryBudget(long maxIdleBytes)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            lock (_gate)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return;
+                _maxIdleBytes = ResolveIdleBudget(maxIdleBytes);
+                EvictIfNeeded();
+            }
+        }
+
+        private void HandleLowMemory()
+        {
+            if (Volatile.Read(ref _disposed) != 0) return;
+            ClearAll();
         }
 
         /// <summary>
@@ -138,8 +212,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         /// A bounded LRU is used instead of an unbounded dictionary so long-lived sessions
         /// do not accumulate metadata forever.
         /// </summary>
-        private static readonly Dictionary<(string, Type), CacheKeyPoolNode> _cacheKeyPool =
-            new Dictionary<(string, Type), CacheKeyPoolNode>(128);
+        private static readonly Dictionary<(string, Type, AssetCacheOperationKind), CacheKeyPoolNode> _cacheKeyPool =
+            new Dictionary<(string, Type, AssetCacheOperationKind), CacheKeyPoolNode>(128);
         private static readonly object _cacheKeyPoolLock = new object();
         private const int MAX_CACHE_KEY_POOL_SIZE = 4096;
         private static CacheKeyPoolNode _cacheKeyPoolHead;
@@ -148,11 +222,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
         internal static string BuildCacheKey(string location, Type assetType)
         {
-            // For the common single-type case, avoid allocation by returning location directly
-            // when the caller passes null (e.g. RawFile which has no type ambiguity).
-            if (assetType == null) return location;
+            return BuildCacheKey(location, assetType, assetType == null ? AssetCacheOperationKind.RawFile : AssetCacheOperationKind.Asset);
+        }
 
-            var key = (location, assetType);
+        internal static string BuildCacheKey(string location, Type assetType, AssetCacheOperationKind operationKind)
+        {
+            var key = (location, assetType, operationKind);
             lock (_cacheKeyPoolLock)
             {
                 if (_cacheKeyPool.TryGetValue(key, out var node))
@@ -162,7 +237,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 }
             }
 
-            var result = string.Concat(location, "|", assetType.FullName);
+            // Build the composite key without boxing the enum (string.Concat(object[]) would box + allocate
+            // an object[]). Use a precomputed string prefix so the all-string Concat overload is selected.
+            string kindPrefix = operationKind == AssetCacheOperationKind.Asset ? "0|"
+                : operationKind == AssetCacheOperationKind.AllAssets ? "1|"
+                : "2|";
+            var result = string.Concat(kindPrefix, location, "|", assetType?.FullName ?? string.Empty);
             lock (_cacheKeyPoolLock)
             {
                 if (_cacheKeyPool.TryGetValue(key, out var existingNode))
@@ -238,8 +318,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         {
             if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(cacheKey)) return;
 
-            _rwLock.EnterWriteLock();
-            try
+            lock (_gate)
             {
                 if (_idleMap.Remove(cacheKey, out var oldIdle))
                 {
@@ -265,10 +344,6 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
                 _activeMap[cacheKey] = node;
             }
-            finally
-            {
-                _rwLock.ExitWriteLock();
-            }
         }
 
         /// <summary>
@@ -279,8 +354,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         {
             if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(cacheKey)) return null;
 
-            _rwLock.EnterUpgradeableReadLock();
-            try
+            lock (_gate)
             {
                 if (_activeMap.TryGetValue(cacheKey, out var activeNode))
                 {
@@ -291,39 +365,37 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     return activeNode.Handle;
                 }
 
-                if (_idleMap.TryGetValue(cacheKey, out _))
+                if (_idleMap.TryGetValue(cacheKey, out var idleNode))
                 {
-                    _rwLock.EnterWriteLock();
-                    try
-                    {
-                        if (_idleMap.TryGetValue(cacheKey, out var idleNode))
-                        {
-                            _idleMap.Remove(cacheKey);
-                            RemoveFromLru(idleNode);
-                            RemoveFromBucketIndex(idleNode);
+                    _idleMap.Remove(cacheKey);
+                    RemoveFromLru(idleNode);
+                    RemoveFromBucketIndex(idleNode);
 
-                            idleNode.AccessCount++;
-                            idleNode.Handle.Retain();
+                    idleNode.AccessCount++;
+                    idleNode.Handle.Retain();
 
-                            if (!string.IsNullOrEmpty(bucket)) idleNode.Bucket = bucket;
-                            if (!string.IsNullOrEmpty(tag)) idleNode.Tag = tag;
-                            if (!string.IsNullOrEmpty(owner)) idleNode.Owner = owner;
+                    if (!string.IsNullOrEmpty(bucket)) idleNode.Bucket = bucket;
+                    if (!string.IsNullOrEmpty(tag)) idleNode.Tag = tag;
+                    if (!string.IsNullOrEmpty(owner)) idleNode.Owner = owner;
 
-                            _activeMap[cacheKey] = idleNode;
-                            return idleNode.Handle;
-                        }
-                    }
-                    finally
-                    {
-                        _rwLock.ExitWriteLock();
-                    }
+                    _activeMap[cacheKey] = idleNode;
+                    return idleNode.Handle;
                 }
 
                 return null;
             }
-            finally
+        }
+
+        /// <summary>
+        /// Returns true if a handle for the given cache key is currently retained (active) or pooled (idle).
+        /// Does not load anything and does not affect LRU ordering or reference counts.
+        /// </summary>
+        internal bool Contains(string cacheKey)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(cacheKey)) return false;
+            lock (_gate)
             {
-                _rwLock.ExitUpgradeableReadLock();
+                return _activeMap.ContainsKey(cacheKey) || _idleMap.ContainsKey(cacheKey);
             }
         }
 
@@ -347,8 +419,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 return;
             }
 
-            _rwLock.EnterWriteLock();
-            try
+            lock (_gate)
             {
                 if (!_activeMap.TryGetValue(cacheKey, out var node) || node.Handle != handle)
                 {
@@ -356,8 +427,18 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     return;
                 }
 
+                // Revival guard: the refcount drop to zero happens before this lock is taken, so another
+                // caller may have re-acquired (Retained) the same key in between. If so the handle is live
+                // again and must stay in the active map — never sink a still-referenced handle into the idle
+                // pool, where it could be evicted and disposed out from under its owner.
+                if (handle.RefCount != 0)
+                {
+                    return;
+                }
+
                 _activeMap.Remove(cacheKey);
                 _idleMap[cacheKey] = node;
+                node.EstimatedBytes = (handle as IAssetMemoryFootprint)?.EstimateRuntimeBytes() ?? 0;
                 AddToBucketIndex(node);
 
                 // Promotion: multiple-access or previously-promoted → main pool; first-time idle → trial pool.
@@ -374,10 +455,6 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
                 MaybeAge();
                 EvictIfNeeded();
-            }
-            finally
-            {
-                _rwLock.ExitWriteLock();
             }
         }
 
@@ -397,14 +474,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         {
             if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(bucket)) return;
 
-            _rwLock.EnterWriteLock();
-            try
+            lock (_gate)
             {
                 ClearBucketsInternal(bucket, includeChildren: false);
-            }
-            finally
-            {
-                _rwLock.ExitWriteLock();
             }
         }
 
@@ -412,40 +484,48 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         {
             if (Volatile.Read(ref _disposed) != 0 || string.IsNullOrEmpty(bucketPrefix)) return;
 
-            _rwLock.EnterWriteLock();
-            try
+            lock (_gate)
             {
                 ClearBucketsInternal(bucketPrefix, includeChildren: true);
-            }
-            finally
-            {
-                _rwLock.ExitWriteLock();
             }
         }
 
         public void ClearAll()
         {
-            _rwLock.EnterWriteLock();
-            try
+            lock (_gate)
             {
-                DrainList(_trialHead);
-                DrainList(_mainHead);
-
-                _idleMap.Clear();
-                _bucketIndex.Clear();
-
-                _trialHead = null;
-                _trialTail = null;
-                _trialCount = 0;
-
-                _mainHead = null;
-                _mainTail = null;
-                _mainCount = 0;
+                ClearAllInternal(includeActive: false);
             }
-            finally
+        }
+
+        private void ClearAllInternal(bool includeActive)
+        {
+            if (includeActive)
             {
-                _rwLock.ExitWriteLock();
+                foreach (var kvp in _activeMap)
+                {
+                    ForceDisposeHandle(kvp.Value.Handle);
+                    NodePool.Release(kvp.Value);
+                }
+
+                _activeMap.Clear();
             }
+
+            DrainList(_trialHead);
+            DrainList(_mainHead);
+
+            _idleMap.Clear();
+            _bucketIndex.Clear();
+
+            _trialHead = null;
+            _trialTail = null;
+            _trialCount = 0;
+
+            _mainHead = null;
+            _mainTail = null;
+            _mainCount = 0;
+
+            _idleBytes = 0;
         }
 
         // Static to avoid delegate allocation on every ClearAll call.
@@ -525,23 +605,29 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         {
             while (_trialCount > _maxTrialEntries && _trialTail != null)
             {
-                var victim = _trialTail;
-                RemoveFromLru(victim);
-                RemoveFromBucketIndex(victim);
-                _idleMap.Remove(victim.Location);
-                ForceDisposeHandle(victim.Handle);
-                NodePool.Release(victim);
+                EvictNode(_trialTail);
             }
 
             while (_mainCount > _maxMainEntries && _mainTail != null)
             {
-                var victim = _mainTail;
-                RemoveFromLru(victim);
-                RemoveFromBucketIndex(victim);
-                _idleMap.Remove(victim.Location);
-                ForceDisposeHandle(victim.Handle);
-                NodePool.Release(victim);
+                EvictNode(_mainTail);
             }
+
+            // Memory-budget pass: even within entry-count limits, a few large assets can blow the byte
+            // budget. Evict idle handles (trial/probation first, then main) until back under budget.
+            while (_idleBytes > _maxIdleBytes && (_trialTail != null || _mainTail != null))
+            {
+                EvictNode(_trialTail ?? _mainTail);
+            }
+        }
+
+        private void EvictNode(CacheNode victim)
+        {
+            RemoveFromLru(victim);
+            RemoveFromBucketIndex(victim);
+            _idleMap.Remove(victim.Location);
+            ForceDisposeHandle(victim.Handle);
+            NodePool.Release(victim);
         }
 
         private void AddToTrialHead(CacheNode node)
@@ -552,6 +638,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _trialHead = node;
             if (_trialTail == null) _trialTail = node;
             _trialCount++;
+            _idleBytes += node.EstimatedBytes;
         }
 
         private void AddToMainHead(CacheNode node)
@@ -562,6 +649,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _mainHead = node;
             if (_mainTail == null) _mainTail = node;
             _mainCount++;
+            _idleBytes += node.EstimatedBytes;
         }
 
         private void RemoveFromLru(CacheNode node)
@@ -578,6 +666,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 if (node.Next != null) node.Next.Prev = node.Prev; else _trialTail = node.Prev;
                 _trialCount--;
             }
+
+            _idleBytes -= node.EstimatedBytes;
+            if (_idleBytes < 0) _idleBytes = 0;
 
             node.Next = null;
             node.Prev = null;
@@ -607,8 +698,11 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
-            ClearAll();
-            _rwLock.Dispose();
+            Application.lowMemory -= HandleLowMemory;
+            lock (_gate)
+            {
+                ClearAllInternal(includeActive: true);
+            }
 
 #if UNITY_EDITOR
             lock (_globalInstancesLock) { GlobalInstances.Remove(this); }
@@ -618,6 +712,11 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 #if UNITY_EDITOR
         private static readonly object _globalInstancesLock = new object();
         public static readonly List<AssetCacheService> GlobalInstances = new List<AssetCacheService>();
+
+        /// <summary>Approximate aggregate footprint (bytes) of all idle (RefCount == 0) handles.</summary>
+        public long IdleBytesApprox { get { lock (_gate) { return _idleBytes; } } }
+        /// <summary>The idle memory budget (bytes) above which idle handles are evicted regardless of count.</summary>
+        public long MaxIdleBytesBudget => _maxIdleBytes;
 
         public struct CacheDiagnosticEntry
         {
@@ -633,10 +732,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             public int RefCount;
             public int AccessCount;
             public string ProviderType;
+            /// <summary>Approximate runtime footprint (bytes) of the underlying asset.</summary>
+            public long EstimatedBytes;
         }
 
         /// <summary>
-        /// Splits a composite cache key ("location|TypeFullName") into a clean location and short type name.
+        /// Splits a composite cache key into a clean location and short type name.
         /// </summary>
         internal static void ParseCacheKey(string cacheKey, out string location, out string assetTypeName)
         {
@@ -647,16 +748,23 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 return;
             }
 
-            int sep = cacheKey.LastIndexOf('|');
-            if (sep < 0)
+            int firstSep = cacheKey.IndexOf('|');
+            int lastSep = cacheKey.LastIndexOf('|');
+            if (firstSep <= 0 || lastSep <= firstSep)
             {
                 location = cacheKey;
                 assetTypeName = null;
             }
             else
             {
-                location = cacheKey.Substring(0, sep);
-                string fullName = cacheKey.Substring(sep + 1);
+                location = cacheKey.Substring(firstSep + 1, lastSep - firstSep - 1);
+                string fullName = cacheKey.Substring(lastSep + 1);
+                if (string.IsNullOrEmpty(fullName))
+                {
+                    assetTypeName = null;
+                    return;
+                }
+
                 int dot = fullName.LastIndexOf('.');
                 assetTypeName = dot >= 0 ? fullName.Substring(dot + 1) : fullName;
             }
@@ -668,8 +776,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             trial?.Clear();
             main?.Clear();
 
-            _rwLock.EnterReadLock();
-            try
+            lock (_gate)
             {
                 if (active != null)
                 {
@@ -686,7 +793,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                             Owner = kvp.Value.Owner,
                             RefCount = kvp.Value.Handle.RefCount,
                             AccessCount = kvp.Value.AccessCount,
-                            ProviderType = GetProviderType(kvp.Value.Handle)
+                            ProviderType = GetProviderType(kvp.Value.Handle),
+                            EstimatedBytes = (kvp.Value.Handle as IAssetMemoryFootprint)?.EstimateRuntimeBytes() ?? 0
                         });
                     }
                 }
@@ -707,7 +815,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                             Owner = node.Owner,
                             RefCount = node.Handle?.RefCount ?? 0,
                             AccessCount = node.AccessCount,
-                            ProviderType = GetProviderType(node.Handle)
+                            ProviderType = GetProviderType(node.Handle),
+                            EstimatedBytes = node.EstimatedBytes
                         });
                         node = node.Next;
                     }
@@ -729,15 +838,12 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                             Owner = node.Owner,
                             RefCount = node.Handle?.RefCount ?? 0,
                             AccessCount = node.AccessCount,
-                            ProviderType = GetProviderType(node.Handle)
+                            ProviderType = GetProviderType(node.Handle),
+                            EstimatedBytes = node.EstimatedBytes
                         });
                         node = node.Next;
                     }
                 }
-            }
-            finally
-            {
-                _rwLock.ExitReadLock();
             }
         }
 

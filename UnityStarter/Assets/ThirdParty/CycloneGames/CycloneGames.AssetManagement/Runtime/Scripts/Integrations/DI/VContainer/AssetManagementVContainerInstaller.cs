@@ -1,6 +1,7 @@
 #if VCONTAINER_PRESENT
 using System;
 using System.Threading;
+using Cysharp.Threading.Tasks;
 using VContainer;
 using VContainer.Unity;
 
@@ -19,7 +20,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
     /// The installer registers:
     ///   - IAssetModule as Singleton (auto-detected or custom factory)
     ///   - IAsyncStartable entry point that calls InitializeAsync (VContainer lifecycle-safe)
-    ///   - Dispose callback that calls Destroy() when the LifetimeScope is destroyed
+    ///   - Dispose callback that starts DestroyAsync when the LifetimeScope is destroyed
     /// </summary>
     public class AssetManagementVContainerInstaller : IInstaller
     {
@@ -44,45 +45,63 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
 
         public void Install(IContainerBuilder builder)
         {
-            // ── Register IAssetModule ────────────────────────────────────────
+            // Register IAssetModule.
             if (_moduleFactory != null)
             {
                 builder.Register(_moduleFactory, Lifetime.Singleton).As<IAssetModule>();
             }
             else
             {
-#if YOOASSET_PRESENT
-                builder.Register<YooAssetModule>(Lifetime.Singleton).As<IAssetModule>();
-#elif ADDRESSABLES_PRESENT
-                builder.Register<AddressablesModule>(Lifetime.Singleton).As<IAssetModule>();
-#else
-                builder.Register<ResourcesModule>(Lifetime.Singleton).As<IAssetModule>();
-#endif
+                builder.Register(_ => CreateDefaultModule(), Lifetime.Singleton).As<IAssetModule>();
             }
 
-            // ── Async initialization via VContainer entry point lifecycle ────
-            // Registers AssetModuleStartable as IAsyncStartable.
-            // VContainer's EntryPointDispatcher will await StartAsync before any
-            // IStartable or ITickable begins, ensuring the module is ready.
+            // Async initialization via VContainer entry point lifecycle.
             var options = _options;
             builder.RegisterEntryPoint(
                 resolver => new AssetModuleStartable(resolver.Resolve<IAssetModule>(), options),
                 Lifetime.Singleton);
 
-            // ── Deterministic cleanup when LifetimeScope is destroyed ────────
+            // Deterministic cleanup when LifetimeScope is destroyed.
             builder.RegisterDisposeCallback(resolver =>
             {
                 if (resolver.TryResolve<IAssetModule>(out var module))
                 {
-                    module.Destroy();
+                    module.DestroyAsync().Forget();
                 }
             });
+        }
+
+        private static IAssetModule CreateDefaultModule()
+        {
+#if YOOASSET_PRESENT
+            var yooAssetModule = TryCreateModule("CycloneGames.AssetManagement.Runtime.YooAssetModule, CycloneGames.AssetManagement.Runtime.Providers.YooAsset");
+            if (yooAssetModule != null)
+            {
+                return yooAssetModule;
+            }
+#endif
+
+#if ADDRESSABLES_PRESENT
+            var addressablesModule = TryCreateModule("CycloneGames.AssetManagement.Runtime.AddressablesModule, CycloneGames.AssetManagement.Runtime.Providers.Addressables");
+            if (addressablesModule != null)
+            {
+                return addressablesModule;
+            }
+#endif
+
+            return new ResourcesModule();
+        }
+
+        private static IAssetModule TryCreateModule(string assemblyQualifiedTypeName)
+        {
+            var type = Type.GetType(assemblyQualifiedTypeName, throwOnError: false);
+            return type == null ? null : Activator.CreateInstance(type) as IAssetModule;
         }
     }
 
     /// <summary>
     /// Internal entry point that initializes the asset module during VContainer's
-    /// IAsyncStartable lifecycle — fully awaited, exception-safe, cancellation-aware.
+    /// IAsyncStartable lifecycle: fully awaited, exception-safe, cancellation-aware.
     /// </summary>
     internal sealed class AssetModuleStartable : IAsyncStartable
     {
@@ -97,7 +116,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
 
         public async
 #if VCONTAINER_UNITASK_INTEGRATION
-            Cysharp.Threading.Tasks.UniTask
+            UniTask
 #elif UNITY_2023_1_OR_NEWER
             UnityEngine.Awaitable
 #else

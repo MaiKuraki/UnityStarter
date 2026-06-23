@@ -15,14 +15,15 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly Dictionary<string, IAssetPackage> _packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private readonly object _packagesLock = new object();
         private volatile bool _initialized;
-        private AsyncOperationHandle _initializationHandle;
         private volatile List<string> _packageNamesCache;
         private readonly SemaphoreSlim _initSemaphore = new SemaphoreSlim(1, 1);
+        private long _defaultIdleMemoryBudgetBytes;
 
         public bool Initialized => _initialized;
 
         public async UniTask InitializeAsync(AssetManagementOptions options = default)
         {
+            _defaultIdleMemoryBudgetBytes = options.DefaultIdleMemoryBudgetBytes;
             if (_initialized) return;
 
             await _initSemaphore.WaitAsync();
@@ -47,32 +48,42 @@ namespace CycloneGames.AssetManagement.Runtime
 
                 try
                 {
-                    _initializationHandle = Addressables.InitializeAsync();
+                    var initializationHandle = Addressables.InitializeAsync(autoReleaseHandle: false);
 
-                    if (!_initializationHandle.IsValid())
+                    try
                     {
-                        _initialized = true;
-                        CLogger.LogInfo($"{DEBUG_FLAG} Addressables initialization handle invalid, assuming already initialized.");
-                        return;
-                    }
-
-                    await _initializationHandle;
-
-                    if (_initializationHandle.IsValid())
-                    {
-                        if (_initializationHandle.Status == AsyncOperationStatus.Succeeded)
+                        if (!initializationHandle.IsValid())
                         {
                             _initialized = true;
+                            CLogger.LogInfo($"{DEBUG_FLAG} Addressables initialization handle invalid, assuming already initialized.");
+                            return;
+                        }
+
+                        await initializationHandle;
+
+                        if (initializationHandle.IsValid())
+                        {
+                            if (initializationHandle.Status == AsyncOperationStatus.Succeeded)
+                            {
+                                _initialized = true;
+                            }
+                            else
+                            {
+                                CLogger.LogError($"{DEBUG_FLAG} Initialization failed. Status: {initializationHandle.Status}, Exception: {initializationHandle.OperationException}");
+                            }
                         }
                         else
                         {
-                            CLogger.LogError($"{DEBUG_FLAG} Initialization failed. Status: {_initializationHandle.Status}, Exception: {_initializationHandle.OperationException}");
+                            _initialized = true;
+                            CLogger.LogInfo($"{DEBUG_FLAG} Initialization handle became invalid after await, assuming initialization succeeded.");
                         }
                     }
-                    else
+                    finally
                     {
-                        _initialized = true;
-                        CLogger.LogInfo($"{DEBUG_FLAG} Initialization handle became invalid after await, assuming initialization succeeded.");
+                        if (initializationHandle.IsValid())
+                        {
+                            Addressables.Release(initializationHandle);
+                        }
                     }
                 }
                 catch (Exception ex)
@@ -102,21 +113,24 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        public void Destroy()
+        public async UniTask DestroyAsync(CancellationToken cancellationToken = default)
         {
             if (!_initialized) return;
+            _initialized = false;
 
-            if (_initializationHandle.IsValid())
-            {
-                Addressables.Release(_initializationHandle);
-            }
-
+            List<IAssetPackage> packages;
             lock (_packagesLock)
             {
+                packages = new List<IAssetPackage>(_packages.Values);
                 _packages.Clear();
                 _packageNamesCache = null;
             }
-            _initialized = false;
+
+            for (int i = 0; i < packages.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                await packages[i].DestroyAsync();
+            }
         }
 
         public IAssetPackage CreatePackage(string packageName)
@@ -132,6 +146,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
 
                 var package = new AddressablesAssetPackage(packageName);
+                if (_defaultIdleMemoryBudgetBytes > 0) package.SetCacheIdleMemoryBudget(_defaultIdleMemoryBudgetBytes);
                 _packages.Add(packageName, package);
                 _packageNamesCache = null;
                 return package;
@@ -148,21 +163,24 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        public UniTask<bool> RemovePackageAsync(string packageName)
+        public async UniTask<bool> RemovePackageAsync(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) return UniTask.FromResult(false);
+            if (string.IsNullOrEmpty(packageName)) return false;
 
+            IAssetPackage package;
             lock (_packagesLock)
             {
-                if (!_packages.TryGetValue(packageName, out _))
+                if (!_packages.TryGetValue(packageName, out package))
                 {
-                    return UniTask.FromResult(false);
+                    return false;
                 }
 
                 _packages.Remove(packageName);
                 _packageNamesCache = null;
             }
-            return UniTask.FromResult(true);
+
+            await package.DestroyAsync();
+            return true;
         }
 
         public IReadOnlyList<string> GetAllPackageNames()

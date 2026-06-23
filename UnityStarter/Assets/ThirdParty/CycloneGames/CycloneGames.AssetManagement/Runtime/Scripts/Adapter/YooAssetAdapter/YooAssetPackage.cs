@@ -31,21 +31,38 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public async UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
         {
+            if (options.IdleMemoryBudgetBytesOverride.HasValue)
+                _cacheService.SetIdleMemoryBudget(options.IdleMemoryBudgetBytesOverride.Value);
+
             if (options.ProviderOptions is not InitializeParameters yooOptions)
             {
                 CLogger.LogError("[YooAssetPackage] Invalid provider options provided for initialization.");
                 return false;
             }
+
+            // Bundle-loading concurrency precedence: explicit per-package override > user-provided value
+            // > platform-aware default. This prevents YooAsset's int.MaxValue default from causing IO
+            // thrash and memory spikes on mobile/WebGL when the caller did not tune it.
+            if (options.BundleLoadingMaxConcurrencyOverride.HasValue)
+            {
+                yooOptions.BundleLoadingMaxConcurrency = Math.Max(1, options.BundleLoadingMaxConcurrencyOverride.Value);
+            }
+            else if (yooOptions.BundleLoadingMaxConcurrency <= 0 || yooOptions.BundleLoadingMaxConcurrency == int.MaxValue)
+            {
+                yooOptions.BundleLoadingMaxConcurrency = AssetPlatformDefaults.BundleLoadingMaxConcurrency;
+            }
+
             var op = _rawPackage.InitializeAsync(yooOptions);
             await op.WithCancellation(cancellationToken);
             return op.Status == EOperationStatus.Succeed;
         }
 
-        public UniTask DestroyAsync()
+        public async UniTask DestroyAsync()
         {
             _cacheService.Dispose();
+            var op = _rawPackage.DestroyAsync();
+            await op.WithCancellation(CancellationToken.None);
             YooAssets.RemovePackage(Name);
-            return UniTask.CompletedTask;
         }
 
         public async UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
@@ -94,7 +111,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
@@ -108,7 +125,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
@@ -125,7 +142,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.AllAssets);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
 
@@ -142,7 +159,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IRawFileHandle LoadRawFileSync(string location, string bucket = null, string tag = null, string owner = null)
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, null);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, null, Cache.AssetCacheOperationKind.RawFile);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IRawFileHandle)cached;
 
@@ -156,7 +173,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IRawFileHandle LoadRawFileAsync(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default)
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, null);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, null, Cache.AssetCacheOperationKind.RawFile);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IRawFileHandle)cached;
 
@@ -262,7 +279,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false)
         {
-            if (handle is YooAssetHandle<GameObject> yooHandle && yooHandle.Raw.IsDone)
+            if (handle is YooAssetHandle<GameObject> yooHandle && yooHandle.Raw != null && yooHandle.Raw.IsDone)
             {
                 return yooHandle.Raw.InstantiateSync(parent, worldPositionStays);
             }
@@ -271,9 +288,9 @@ namespace CycloneGames.AssetManagement.Runtime
         }
         public IInstantiateHandle InstantiateAsync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false, bool setActive = true)
         {
-            if (handle is not YooAssetHandle<GameObject> yooHandle)
+            if (handle is not YooAssetHandle<GameObject> yooHandle || yooHandle.Raw == null)
             {
-                CLogger.LogError("[YooAssetPackage] Invalid handle type passed to InstantiateAsync.");
+                CLogger.LogError("[YooAssetPackage] Invalid or disposed handle passed to InstantiateAsync.");
                 return null;
             }
 
@@ -291,6 +308,17 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             _cacheService.ClearAll();
             await _rawPackage.UnloadUnusedAssetsAsync();
+        }
+
+        public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object
+        {
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
+            return _cacheService.Contains(cacheKey);
+        }
+
+        public void SetCacheIdleMemoryBudget(long maxIdleBytes)
+        {
+            _cacheService.SetIdleMemoryBudget(maxIdleBytes);
         }
 
         public void ClearBucket(string bucket)

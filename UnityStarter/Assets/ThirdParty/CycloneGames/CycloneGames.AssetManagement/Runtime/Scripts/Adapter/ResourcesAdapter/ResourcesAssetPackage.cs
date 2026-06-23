@@ -28,6 +28,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
         {
+            if (options.IdleMemoryBudgetBytesOverride.HasValue)
+                _cacheService.SetIdleMemoryBudget(options.IdleMemoryBudgetBytesOverride.Value);
             return UniTask.FromResult(true);
         }
 
@@ -84,7 +86,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
@@ -98,7 +100,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
@@ -115,7 +117,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.AllAssets);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
 
@@ -192,6 +194,17 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheService.ClearAll();
             CLogger.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync triggers Resources.UnloadUnusedAssets(). This can cause hitches on the main thread, so prefer explicit handle release and bucket clears whenever possible.");
             await Resources.UnloadUnusedAssets().ToUniTask();
+        }
+
+        public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object
+        {
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
+            return _cacheService.Contains(cacheKey);
+        }
+
+        public void SetCacheIdleMemoryBudget(long maxIdleBytes)
+        {
+            _cacheService.SetIdleMemoryBudget(maxIdleBytes);
         }
 
         public void ClearBucket(string bucket)

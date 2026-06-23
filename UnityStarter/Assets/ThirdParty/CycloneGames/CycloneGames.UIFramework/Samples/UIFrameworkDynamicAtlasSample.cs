@@ -1,8 +1,9 @@
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.UIFramework.DynamicAtlas;
-using Cysharp.Threading.Tasks;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
+using Cysharp.Threading.Tasks;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.UIFramework.DynamicAtlas;
 
 namespace CycloneGames.UIFramework.Samples
 {
@@ -19,6 +20,8 @@ namespace CycloneGames.UIFramework.Samples
 
         private IAssetModule _assetModule;
         private IAssetPackage _assetPackage;
+        private readonly Dictionary<string, IAssetHandle<Texture2D>> _loadedTextureHandles =
+            new Dictionary<string, IAssetHandle<Texture2D>>(8);
 
         private async void Start()
         {
@@ -46,20 +49,34 @@ namespace CycloneGames.UIFramework.Samples
             DynamicAtlasManager.Instance.Configure(
                 load: (path) =>
                 {
+                    if (_loadedTextureHandles.TryGetValue(path, out var cachedHandle))
+                    {
+                        return cachedHandle.Asset;
+                    }
+
                     // Synchronous load requirement for DynamicAtlas
                     var handle = _assetPackage.LoadAssetSync<Texture2D>(path);
                     if (handle.Asset == null)
                     {
+                        handle.Dispose();
                         Debug.LogError($"[AtlasSample] Failed to load texture: {path}");
                         return null;
                     }
-                    // Note: In a real system, you should cache the handle to release it later.
+
+                    _loadedTextureHandles[path] = handle;
                     return handle.Asset;
                 },
                 unload: (path, tex) =>
                 {
-                    // Simple unload for Resources
-                    Resources.UnloadAsset(tex);
+                    if (_loadedTextureHandles.Remove(path, out var handle))
+                    {
+                        handle.Dispose();
+                    }
+
+                    if (tex != null)
+                    {
+                        Resources.UnloadAsset(tex);
+                    }
                 }
             );
 
@@ -119,7 +136,25 @@ namespace CycloneGames.UIFramework.Samples
 
         private void OnDestroy()
         {
-            _assetModule?.Destroy();
+            ReleaseLoadedTextureHandles();
+
+            if (_assetModule != null)
+            {
+                _assetModule.DestroyAsync().Forget();
+                _assetModule = null;
+            }
+
+            _assetPackage = null;
+        }
+
+        private void ReleaseLoadedTextureHandles()
+        {
+            foreach (var handle in _loadedTextureHandles.Values)
+            {
+                handle.Dispose();
+            }
+
+            _loadedTextureHandles.Clear();
         }
     }
 }

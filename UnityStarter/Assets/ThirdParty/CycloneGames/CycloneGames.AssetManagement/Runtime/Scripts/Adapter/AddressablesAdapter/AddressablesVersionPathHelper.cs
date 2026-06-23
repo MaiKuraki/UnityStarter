@@ -266,14 +266,9 @@ namespace CycloneGames.AssetManagement.Runtime
             // Editor: use project root
             string projectPath = Path.GetDirectoryName(Application.dataPath);
             return Path.Combine(projectPath, ADDRESSABLES_CACHE_FOLDER);
-#elif UNITY_STANDALONE_WIN || UNITY_STANDALONE_LINUX
-            // Windows/Linux: use data path
-            return Path.Combine(Application.dataPath, ADDRESSABLES_CACHE_FOLDER);
-#elif UNITY_STANDALONE_OSX
-            // Mac: use persistent data path
-            return Path.Combine(Application.persistentDataPath, ADDRESSABLES_CACHE_FOLDER);
 #else
-            // Mobile platforms: use persistent data path (writable)
+            // Player builds: use persistent data path. Application.dataPath may be read-only
+            // in installed desktop builds, mobile sandboxes, WebGL, and console environments.
             return Path.Combine(Application.persistentDataPath, ADDRESSABLES_CACHE_FOLDER);
 #endif
         }

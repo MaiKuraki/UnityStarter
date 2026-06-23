@@ -10,13 +10,27 @@ namespace CycloneGames.AssetManagement.Editor
     public sealed class SceneTrackerWindow : EditorWindow
     {
         private readonly List<SceneTracker.SceneInfo> _snapshot = new List<SceneTracker.SceneInfo>(16);
-        private readonly List<SceneTracker.SceneInfo> _filtered = new List<SceneTracker.SceneInfo>(16);
+        // Pre-formatted, repaint-stable view models for the full snapshot (rebuilt only on refresh).
+        private readonly List<SceneRowView> _views = new List<SceneRowView>(16);
+        // Indices into _snapshot/_views that pass the current filter (rebuilt only when the display is dirty).
+        private readonly List<int> _filteredIndices = new List<int>(16);
+        private readonly string[] _metricValues = new string[6];
+        private readonly GUIContent _cell = new GUIContent();
+        private string _trackedText = "Tracked: 0";
 
         private string _search = string.Empty;
-        private Vector2 _scroll;
+        private string _lastSearch = string.Empty;
         private int _stateFilter;
+        private int _lastStateFilter = -1;
+        private bool _displayDirty = true;
+        private Vector2 _scroll;
         private double _nextRepaint;
         private bool _hasSnapshot;
+
+        // Cached GUILayoutOption arrays — avoids the per-call params[] allocation of GUILayout.Width.
+        private GUILayoutOption[] _wScene, _wProvider, _wPackage, _wBucket, _wState, _wProgress, _wRefs, _wAge, _wMetric;
+        private float _lastSceneColWidth = -1f;
+        private bool _widthsBuilt;
 
         private const float PROVIDER_W = 90f;
         private const float PACKAGE_W = 110f;
@@ -75,7 +89,15 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             if (!_hasSnapshot) RefreshSnapshot();
-            Filter();
+            if (_search != _lastSearch || _stateFilter != _lastStateFilter)
+            {
+                _lastSearch = _search;
+                _lastStateFilter = _stateFilter;
+                _displayDirty = true;
+            }
+            if (_displayDirty) RebuildDisplay();
+
+            EnsureWidths();
             DrawSummary();
             DrawTable();
         }
@@ -98,27 +120,72 @@ namespace CycloneGames.AssetManagement.Editor
                 _search = EditorGUILayout.TextField(_search, EditorStyles.toolbarSearchField);
 
                 GUILayout.FlexibleSpace();
-                GUILayout.Label($"Tracked: {_snapshot.Count}", EditorStyles.miniLabel);
+                GUILayout.Label(_trackedText, EditorStyles.miniLabel);
             }
         }
 
         private void RefreshSnapshot()
         {
             _snapshot.Clear();
+            _views.Clear();
             var scenes = SceneTracker.GetTrackedScenes();
-            for (int i = 0; i < scenes.Count; i++) _snapshot.Add(scenes[i]);
+            DateTime nowUtc = DateTime.UtcNow;
+            for (int i = 0; i < scenes.Count; i++)
+            {
+                var info = scenes[i];
+                _snapshot.Add(info);
+                _views.Add(BuildView(info, nowUtc));
+            }
+            _trackedText = "Tracked: " + _snapshot.Count;
+            _displayDirty = true;
             _hasSnapshot = true;
         }
 
-        private void Filter()
+        private static SceneRowView BuildView(SceneTracker.SceneInfo info, DateTime nowUtc)
         {
-            _filtered.Clear();
+            byte kind = info.UnloadRequested ? (byte)1
+                : info.ActivationState == SceneActivationState.WaitingForActivation ? (byte)2 : (byte)0;
+            string label = !string.IsNullOrEmpty(info.RuntimeSceneName) ? info.RuntimeSceneName : info.SceneLocation;
+            return new SceneRowView
+            {
+                SceneLabel = label ?? "-",
+                SceneTooltip = info.ScenePath ?? info.SceneLocation ?? string.Empty,
+                Provider = info.ProviderType ?? "-",
+                Package = info.PackageName ?? "-",
+                Bucket = string.IsNullOrEmpty(info.Bucket) ? "-" : info.Bucket,
+                State = GetStateLabel(info),
+                Progress = (info.Progress * 100f).ToString("F0") + "%",
+                Refs = info.RefCount.ToString(),
+                Age = FormatAge(info.RegistrationTimeUtc, nowUtc),
+                StateKind = kind
+            };
+        }
+
+        private void RebuildDisplay()
+        {
+            _filteredIndices.Clear();
+            int loading = 0, waiting = 0, activated = 0, unloadPending = 0, manual = 0;
             for (int i = 0; i < _snapshot.Count; i++)
             {
                 var info = _snapshot[i];
                 if (!MatchesState(info) || !MatchesSearch(info)) continue;
-                _filtered.Add(info);
+                _filteredIndices.Add(i);
+                if (info.UnloadRequested) unloadPending++;
+                if (info.ActivationMode == SceneActivationMode.Manual) manual++;
+                switch (info.ActivationState)
+                {
+                    case SceneActivationState.Loading: loading++; break;
+                    case SceneActivationState.WaitingForActivation: waiting++; break;
+                    case SceneActivationState.Activated: activated++; break;
+                }
             }
+            _metricValues[0] = _filteredIndices.Count.ToString();
+            _metricValues[1] = loading.ToString();
+            _metricValues[2] = waiting.ToString();
+            _metricValues[3] = activated.ToString();
+            _metricValues[4] = unloadPending.ToString();
+            _metricValues[5] = manual.ToString();
+            _displayDirty = false;
         }
 
         private bool MatchesState(SceneTracker.SceneInfo info)
@@ -152,89 +219,103 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void DrawSummary()
         {
-            int loading = 0, waiting = 0, activated = 0, unloadPending = 0, manual = 0;
-            for (int i = 0; i < _filtered.Count; i++)
-            {
-                var info = _filtered[i];
-                if (info.UnloadRequested) unloadPending++;
-                if (info.ActivationMode == SceneActivationMode.Manual) manual++;
-
-                switch (info.ActivationState)
-                {
-                    case SceneActivationState.Loading: loading++; break;
-                    case SceneActivationState.WaitingForActivation: waiting++; break;
-                    case SceneActivationState.Activated: activated++; break;
-                }
-            }
-
             using (new EditorGUILayout.HorizontalScope(EditorStyles.helpBox))
             {
-                DrawMetric("Visible", _filtered.Count);
-                DrawMetric("Loading", loading);
-                DrawMetric("Waiting", waiting);
-                DrawMetric("Activated", activated);
-                DrawMetric("Unload Pending", unloadPending);
-                DrawMetric("Manual", manual);
+                DrawMetric("Visible", _metricValues[0]);
+                DrawMetric("Loading", _metricValues[1]);
+                DrawMetric("Waiting", _metricValues[2]);
+                DrawMetric("Activated", _metricValues[3]);
+                DrawMetric("Unload Pending", _metricValues[4]);
+                DrawMetric("Manual", _metricValues[5]);
             }
         }
 
-        private static void DrawMetric(string label, int value)
+        private void DrawMetric(string label, string value)
         {
-            using (new EditorGUILayout.VerticalScope(GUILayout.Width(110f)))
+            using (new EditorGUILayout.VerticalScope(_wMetric))
             {
                 GUILayout.Label(label, EditorStyles.miniLabel);
-                GUILayout.Label(value.ToString(), EditorStyles.boldLabel);
+                GUILayout.Label(value, EditorStyles.boldLabel);
             }
         }
 
         private void DrawTable()
         {
+            EnsureWidths();
             using (new EditorGUILayout.HorizontalScope(EditorStyles.toolbar))
             {
-                GUILayout.Label("Scene", EditorStyles.boldLabel, GUILayout.Width(SceneColumnWidth));
-                GUILayout.Label("Provider", EditorStyles.boldLabel, GUILayout.Width(PROVIDER_W));
-                GUILayout.Label("Package", EditorStyles.boldLabel, GUILayout.Width(PACKAGE_W));
-                GUILayout.Label("Bucket", EditorStyles.boldLabel, GUILayout.Width(BUCKET_W));
-                GUILayout.Label("State", EditorStyles.boldLabel, GUILayout.Width(STATE_W));
-                GUILayout.Label("Progress", EditorStyles.boldLabel, GUILayout.Width(PROGRESS_W));
-                GUILayout.Label("Refs", EditorStyles.boldLabel, GUILayout.Width(REFS_W));
-                GUILayout.Label("Age", EditorStyles.boldLabel, GUILayout.Width(AGE_W));
+                GUILayout.Label("Scene", EditorStyles.boldLabel, _wScene);
+                GUILayout.Label("Provider", EditorStyles.boldLabel, _wProvider);
+                GUILayout.Label("Package", EditorStyles.boldLabel, _wPackage);
+                GUILayout.Label("Bucket", EditorStyles.boldLabel, _wBucket);
+                GUILayout.Label("State", EditorStyles.boldLabel, _wState);
+                GUILayout.Label("Progress", EditorStyles.boldLabel, _wProgress);
+                GUILayout.Label("Refs", EditorStyles.boldLabel, _wRefs);
+                GUILayout.Label("Age", EditorStyles.boldLabel, _wAge);
                 GUILayout.FlexibleSpace();
             }
 
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
-            for (int i = 0; i < _filtered.Count; i++)
+            for (int i = 0; i < _filteredIndices.Count; i++)
             {
-                DrawRow(_filtered[i], i);
+                DrawRow(_views[_filteredIndices[i]], i);
             }
             EditorGUILayout.EndScrollView();
         }
 
-        private void DrawRow(SceneTracker.SceneInfo info, int rowIndex)
+        private void DrawRow(in SceneRowView view, int rowIndex)
         {
-            Color bg = rowIndex % 2 == 0
-                ? new Color(0.22f, 0.22f, 0.22f, 1f)
-                : new Color(0.19f, 0.19f, 0.19f, 1f);
-
-            if (info.UnloadRequested) bg = new Color(0.28f, 0.20f, 0.12f, 1f);
-            else if (info.ActivationState == SceneActivationState.WaitingForActivation) bg = new Color(0.16f, 0.22f, 0.30f, 1f);
+            Color bg = view.StateKind == 1 ? RowUnloading
+                : view.StateKind == 2 ? RowWaiting
+                : (rowIndex % 2 == 0 ? RowEven : RowOdd);
 
             var rect = EditorGUILayout.BeginHorizontal();
             if (Event.current.type == EventType.Repaint) EditorGUI.DrawRect(rect, bg);
 
-            string sceneLabel = !string.IsNullOrEmpty(info.RuntimeSceneName) ? info.RuntimeSceneName : info.SceneLocation;
-            GUILayout.Label(new GUIContent(sceneLabel, info.ScenePath ?? info.SceneLocation), EditorStyles.label, GUILayout.Width(SceneColumnWidth));
-            GUILayout.Label(info.ProviderType ?? "-", EditorStyles.label, GUILayout.Width(PROVIDER_W));
-            GUILayout.Label(info.PackageName ?? "-", EditorStyles.label, GUILayout.Width(PACKAGE_W));
-            GUILayout.Label(string.IsNullOrEmpty(info.Bucket) ? "-" : info.Bucket, EditorStyles.label, GUILayout.Width(BUCKET_W));
-            GUILayout.Label(GetStateLabel(info), EditorStyles.label, GUILayout.Width(STATE_W));
-            GUILayout.Label($"{info.Progress * 100f:F0}%", EditorStyles.label, GUILayout.Width(PROGRESS_W));
-            GUILayout.Label(info.RefCount.ToString(), EditorStyles.label, GUILayout.Width(REFS_W));
-            GUILayout.Label(FormatAge(info.RegistrationTimeUtc), EditorStyles.label, GUILayout.Width(AGE_W));
+            _cell.text = view.SceneLabel; _cell.tooltip = view.SceneTooltip;
+            GUILayout.Label(_cell, EditorStyles.label, _wScene);
+            GUILayout.Label(view.Provider, EditorStyles.label, _wProvider);
+            GUILayout.Label(view.Package, EditorStyles.label, _wPackage);
+            GUILayout.Label(view.Bucket, EditorStyles.label, _wBucket);
+            GUILayout.Label(view.State, EditorStyles.label, _wState);
+            GUILayout.Label(view.Progress, EditorStyles.label, _wProgress);
+            GUILayout.Label(view.Refs, EditorStyles.label, _wRefs);
+            GUILayout.Label(view.Age, EditorStyles.label, _wAge);
             GUILayout.FlexibleSpace();
 
             EditorGUILayout.EndHorizontal();
         }
+
+        private void EnsureWidths()
+        {
+            if (!_widthsBuilt)
+            {
+                _wProvider = new[] { GUILayout.Width(PROVIDER_W) };
+                _wPackage = new[] { GUILayout.Width(PACKAGE_W) };
+                _wBucket = new[] { GUILayout.Width(BUCKET_W) };
+                _wState = new[] { GUILayout.Width(STATE_W) };
+                _wProgress = new[] { GUILayout.Width(PROGRESS_W) };
+                _wRefs = new[] { GUILayout.Width(REFS_W) };
+                _wAge = new[] { GUILayout.Width(AGE_W) };
+                _wMetric = new[] { GUILayout.Width(110f) };
+                _widthsBuilt = true;
+            }
+            float scw = SceneColumnWidth;
+            if (_wScene == null || Mathf.Abs(scw - _lastSceneColWidth) > 0.5f)
+            {
+                _wScene = new[] { GUILayout.Width(scw) };
+                _lastSceneColWidth = scw;
+            }
+        }
+
+        private static Color RowEven => EditorGUIUtility.isProSkin
+            ? new Color(0.22f, 0.22f, 0.22f, 1f) : new Color(0.86f, 0.86f, 0.86f, 1f);
+        private static Color RowOdd => EditorGUIUtility.isProSkin
+            ? new Color(0.19f, 0.19f, 0.19f, 1f) : new Color(0.80f, 0.80f, 0.80f, 1f);
+        private static Color RowUnloading => EditorGUIUtility.isProSkin
+            ? new Color(0.28f, 0.20f, 0.12f, 1f) : new Color(0.98f, 0.90f, 0.76f, 1f);
+        private static Color RowWaiting => EditorGUIUtility.isProSkin
+            ? new Color(0.16f, 0.22f, 0.30f, 1f) : new Color(0.79f, 0.88f, 0.98f, 1f);
 
         private static string GetStateLabel(SceneTracker.SceneInfo info)
         {
@@ -248,12 +329,26 @@ namespace CycloneGames.AssetManagement.Editor
             }
         }
 
-        private static string FormatAge(DateTime registeredUtc)
+        private static string FormatAge(DateTime registeredUtc, DateTime nowUtc)
         {
-            double seconds = (DateTime.UtcNow - registeredUtc).TotalSeconds;
-            if (seconds < 60) return $"{seconds:F0}s";
-            if (seconds < 3600) return $"{seconds / 60d:F1}m";
-            return $"{seconds / 3600d:F1}h";
+            double seconds = (nowUtc - registeredUtc).TotalSeconds;
+            if (seconds < 60) return seconds.ToString("F0") + "s";
+            if (seconds < 3600) return (seconds / 60d).ToString("F1") + "m";
+            return (seconds / 3600d).ToString("F1") + "h";
+        }
+
+        private struct SceneRowView
+        {
+            public string SceneLabel;
+            public string SceneTooltip;
+            public string Provider;
+            public string Package;
+            public string Bucket;
+            public string State;
+            public string Progress;
+            public string Refs;
+            public string Age;
+            public byte StateKind; // 0 = normal, 1 = unloading, 2 = waiting
         }
     }
 }
