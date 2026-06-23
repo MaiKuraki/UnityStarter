@@ -22,7 +22,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void WaitForAsyncComplete() { }
     }
 
-    internal sealed class TestAssetHandle<TAsset> : IAssetHandle<TAsset> where TAsset : Object
+    internal sealed class TestAssetHandle<TAsset> : IAssetHandle<TAsset>, IReferenceCounted where TAsset : Object
     {
         public TAsset Asset { get; set; }
         public Object AssetObject => Asset;
@@ -37,7 +37,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void WaitForAsyncComplete() { }
     }
 
-    internal sealed class TestAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset> where TAsset : Object
+    internal sealed class TestAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset>, IReferenceCounted where TAsset : Object
     {
         public IReadOnlyList<TAsset> Assets { get; set; } = new List<TAsset>(0);
         public bool IsDone => true;
@@ -51,7 +51,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void WaitForAsyncComplete() { }
     }
 
-    internal sealed class TestRawFileHandle : IRawFileHandle
+    internal sealed class TestRawFileHandle : IRawFileHandle, IReferenceCounted
     {
         public string FilePath { get; set; } = string.Empty;
         public bool IsDone => true;
@@ -67,7 +67,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void WaitForAsyncComplete() { }
     }
 
-    internal sealed class TestSceneHandle : ISceneHandle
+    internal sealed class TestSceneHandle : ISceneHandle, IReferenceCounted
     {
         public string ScenePathValue;
         public SceneActivationMode ActivationModeValue;
@@ -76,7 +76,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public bool IsDoneValue;
         public float ProgressValue;
         public int RefCountValue = 1;
-        public string ErrorValue;
+        public string ErrorValue = string.Empty;
 
         public string ScenePath => ScenePathValue;
         public Scene Scene => default;
@@ -195,6 +195,10 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public UniTask UnloadSceneAsync(ISceneHandle sceneHandle) => UniTask.CompletedTask;
         public UniTask UnloadUnusedAssetsAsync() => UniTask.CompletedTask;
 
+        public bool IsAssetCached<TAsset>(string location) where TAsset : Object => false;
+
+        public void SetCacheIdleMemoryBudget(long maxIdleBytes) { }
+
         public void ClearBucket(string bucket)
         {
             LastCall = "ClearBucket";
@@ -235,9 +239,10 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             return UniTask.CompletedTask;
         }
 
-        public void Destroy()
+        public UniTask DestroyAsync(CancellationToken cancellationToken = default)
         {
             InitializedValue = false;
+            return UniTask.CompletedTask;
         }
 
         public IAssetPackage CreatePackage(string packageName)

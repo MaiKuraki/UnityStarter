@@ -36,6 +36,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
         {
+            if (options.IdleMemoryBudgetBytesOverride.HasValue)
+                _cacheService.SetIdleMemoryBudget(options.IdleMemoryBudgetBytesOverride.Value);
             // Addressables initializes globally and automatically.
             return UniTask.FromResult(true);
         }
@@ -44,6 +46,9 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             // Addressables does not have a package-level destroy concept.
             _cacheService.Dispose();
+#if UNITY_EDITOR
+            AddressablesEditorCleanupUtility.RemoveInvalidTrackedSceneHandles();
+#endif
             return UniTask.CompletedTask;
         }
 
@@ -132,9 +137,9 @@ namespace CycloneGames.AssetManagement.Runtime
                     }
                 }
             }
-            catch
+            catch (Exception ex)
             {
-
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to inspect resource locators for remote catalog detection: {ex.Message}");
             }
 
             _hasRemoteCatalogCache = result;
@@ -459,7 +464,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAssetHandle<TAsset>)cached;
 
@@ -476,7 +481,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset));
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.AllAssets);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
             if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
 
@@ -560,11 +565,13 @@ namespace CycloneGames.AssetManagement.Runtime
                     // NOTE: AsyncOperationHandle<SceneInstance>.ToUniTask() triggers a warning because
                     // "yield SceneInstance is not supported on await IEnumerator".
                     // Use UniTask.WaitUntil to poll IsDone status instead.
-                    var unloadOp = Addressables.UnloadSceneAsync(sh.Raw, false);
+                    var unloadOp = Addressables.UnloadSceneAsync(sh.Raw, true);
                     await UniTask.WaitUntil(() => unloadOp.IsDone);
                 }
-                // Dispose internal explicitly to release handle from Pool
                 sh.DisposeInternal();
+#if UNITY_EDITOR
+                AddressablesEditorCleanupUtility.RemoveInvalidTrackedSceneHandles();
+#endif
             }
         }
 
@@ -573,6 +580,17 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheService.ClearAll();
             CLogger.LogWarning("[AddressablesAssetPackage] UnloadUnusedAssetsAsync is not recommended. Please release individual asset handles via Dispose() for precise memory management.");
             return UniTask.CompletedTask;
+        }
+
+        public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object
+        {
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
+            return _cacheService.Contains(cacheKey);
+        }
+
+        public void SetCacheIdleMemoryBudget(long maxIdleBytes)
+        {
+            _cacheService.SetIdleMemoryBudget(maxIdleBytes);
         }
 
         public void ClearBucket(string bucket)

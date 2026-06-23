@@ -1,11 +1,13 @@
 {
-    "name": "CycloneGames.AssetManagement.Runtime.Integrations.Navigathena",
+    "name": "CycloneGames.AssetManagement.Runtime.Providers.Addressables",
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "MackySoft.Navigathena",
-        "MackySoft.Navigathena.SceneManagement",
-        "CycloneGames.AssetManagement.Runtime"
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.IO.Runtime",
+        "CycloneGames.Logger",
+        "Unity.Addressables",
+        "Unity.ResourceManager"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -14,13 +16,13 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [
-        "NAVIGATHENA_PRESENT"
+        "ADDRESSABLES_PRESENT"
     ],
     "versionDefines": [
         {
-            "name": "com.mackysoft.navigathena",
+            "name": "com.unity.addressables",
             "expression": "",
-            "define": "NAVIGATHENA_PRESENT"
+            "define": "ADDRESSABLES_PRESENT"
         }
     ],
     "noEngineReferences": false

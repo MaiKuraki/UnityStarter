@@ -1,11 +1,12 @@
 {
-    "name": "CycloneGames.AssetManagement.Runtime.Integrations.Navigathena",
+    "name": "CycloneGames.AssetManagement.Runtime.Providers.YooAsset",
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "MackySoft.Navigathena",
-        "MackySoft.Navigathena.SceneManagement",
-        "CycloneGames.AssetManagement.Runtime"
+        "R3.Unity",
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.Logger",
+        "YooAsset"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -14,13 +15,13 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [
-        "NAVIGATHENA_PRESENT"
+        "YOOASSET_PRESENT"
     ],
     "versionDefines": [
         {
-            "name": "com.mackysoft.navigathena",
+            "name": "com.tuyoogame.yooasset",
             "expression": "",
-            "define": "NAVIGATHENA_PRESENT"
+            "define": "YOOASSET_PRESENT"
         }
     ],
     "noEngineReferences": false

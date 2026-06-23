@@ -51,22 +51,44 @@ namespace CycloneGames.AssetManagement.Runtime.Batch
 		public async UniTask StartAsync(CancellationToken cancellationToken = default)
 		{
 			if (IsDone) return;
-			if (_items.Count == 0) { IsDone = true; Progress = 1f; return; }
+			if (_items.Count == 0) { IsDone = true; Progress = 1f; _tcs.TrySetResult(null); return; }
 			_canceled = false; _error = null; Progress = 0f;
-			float accWeight = 0f;
-			for (int i = 0; i < _items.Count; i++)
+
+			// Poll all items concurrently for smooth weighted progress. Items already began loading when
+			// added, so this does not serialize them. A faulted item is recorded via its Error string
+			// instead of throwing, so a single failed asset does not abort the whole batch.
+			while (true)
 			{
 				cancellationToken.ThrowIfCancellationRequested();
-				var it = _items[i];
-				if (it.Op != null)
-				{
-					await it.Op.Task.AttachExternalCancellation(cancellationToken);
-				}
 				if (_canceled) break;
-				if (!string.IsNullOrEmpty(it.Op?.Error) && string.IsNullOrEmpty(_error)) _error = it.Op.Error;
-				accWeight += it.Weight;
-				Progress = Math.Min(1f, _totalWeight <= 0f ? 1f : accWeight / _totalWeight);
+
+				float acc = 0f;
+				bool allDone = true;
+				for (int i = 0; i < _items.Count; i++)
+				{
+					var it = _items[i];
+					var op = it.Op;
+					if (op == null) { acc += it.Weight; continue; }
+
+					if (op.IsDone)
+					{
+						acc += it.Weight;
+						if (!string.IsNullOrEmpty(op.Error) && string.IsNullOrEmpty(_error)) _error = op.Error;
+					}
+					else
+					{
+						allDone = false;
+						float p = op.Progress;
+						if (p < 0f) p = 0f; else if (p > 1f) p = 1f;
+						acc += it.Weight * p;
+					}
+				}
+
+				Progress = _totalWeight <= 0f ? 1f : Math.Min(1f, acc / _totalWeight);
+				if (allDone) break;
+				await UniTask.Yield(cancellationToken);
 			}
+
 			IsDone = true;
 			Progress = 1f;
 			if (!string.IsNullOrEmpty(_error))

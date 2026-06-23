@@ -26,15 +26,18 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private static readonly Stack<T> _pool = new Stack<T>(SOFT_LIMIT);
         private static readonly object _poolLock = new object();
-        // long.MaxValue signals "not idle" (pool is actively in use).
-        private static long _idleStartTicks = long.MaxValue;
+        // Monotonic millisecond clock (Environment.TickCount64 is unavailable on Unity's runtime).
+        private static readonly double s_msPerTick = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+        private static long NowMs() => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * s_msPerTick);
+        // long.MaxValue signals "not idle" (pool is actively in use). Stored as monotonic ms.
+        private static long _idleStartMs = long.MaxValue;
         private static int _highWaterMark;
 
         public static T Get()
         {
             lock (_poolLock)
             {
-                _idleStartTicks = long.MaxValue; // reset idle timer on every access
+                _idleStartMs = long.MaxValue; // reset idle timer on every access
                 if (_pool.Count > 0) return _pool.Pop();
             }
             return new T();
@@ -53,8 +56,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
 
                 // Start idle timer only when pool is above soft limit and no timer is running.
-                if (_pool.Count > SOFT_LIMIT && _idleStartTicks == long.MaxValue)
-                    _idleStartTicks = DateTime.UtcNow.Ticks;
+                if (_pool.Count > SOFT_LIMIT && _idleStartMs == long.MaxValue)
+                    _idleStartMs = NowMs();
 
                 TryShrinkIfIdle();
             }
@@ -62,15 +65,15 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private static void TryShrinkIfIdle()
         {
-            if (_pool.Count <= SOFT_LIMIT || _idleStartTicks == long.MaxValue) return;
+            if (_pool.Count <= SOFT_LIMIT || _idleStartMs == long.MaxValue) return;
 
-            long idleMs = (DateTime.UtcNow.Ticks - _idleStartTicks) / TimeSpan.TicksPerMillisecond;
+            long idleMs = NowMs() - _idleStartMs;
             if (idleMs < SHRINK_THRESHOLD_MS) return;
 
             int toRemove = Math.Min(SHRINK_BATCH_SIZE, _pool.Count - SOFT_LIMIT);
             for (int i = 0; i < toRemove; i++) _pool.Pop();
 
-            if (_pool.Count <= SOFT_LIMIT) _idleStartTicks = long.MaxValue;
+            if (_pool.Count <= SOFT_LIMIT) _idleStartMs = long.MaxValue;
         }
 
         public static (int current, int highWaterMark) GetStats()
@@ -84,12 +87,12 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 _pool.Clear();
                 _highWaterMark = 0;
-                _idleStartTicks = long.MaxValue;
+                _idleStartMs = long.MaxValue;
             }
         }
     }
 
-    public sealed class YooAssetHandle<TAsset> : IAssetHandle<TAsset>, IInternalCacheable where TAsset : UnityEngine.Object
+    internal sealed class YooAssetHandle<TAsset> : IAssetHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
     {
         private int _id;
         internal AssetHandle Raw;
@@ -165,9 +168,10 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
+        long IAssetMemoryFootprint.EstimateRuntimeBytes() => Cache.AssetMemoryEstimator.Estimate(AssetObject);
     }
 
-    public sealed class YooAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset>, IInternalCacheable where TAsset : UnityEngine.Object
+    internal sealed class YooAllAssetsHandle<TAsset> : IAllAssetsHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
     {
         // Wraps a List<UnityEngine.Object> as IReadOnlyList<TAsset> without allocating a new list.
         private sealed class ReadOnlyListAdapter : IReadOnlyList<TAsset>
@@ -273,9 +277,17 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
+        long IAssetMemoryFootprint.EstimateRuntimeBytes()
+        {
+            if (Raw == null || !Raw.IsDone || Raw.AllAssetObjects == null) return 0;
+            long total = 0;
+            var all = Raw.AllAssetObjects;
+            for (int i = 0; i < all.Count; i++) total += Cache.AssetMemoryEstimator.Estimate(all[i]);
+            return total;
+        }
     }
 
-    public sealed class YooInstantiateHandle : IInstantiateHandle, IInternalCacheable
+    internal sealed class YooInstantiateHandle : IInstantiateHandle, IReferenceCounted, IInternalCacheable
     {
         private int _id;
         internal InstantiateOperation Raw;
@@ -328,9 +340,8 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             if (newCount == 0)
             {
-                // Scene lifetimes are explicitly controlled via IAssetPackage.UnloadSceneAsync.
-                // Reaching RefCount == 0 only means the caller released the wrapper; it must not
-                // implicitly unload the scene or mutate provider state in a provider-specific way.
+                if (_onReleaseToCache != null) _onReleaseToCache(null, this);
+                else DisposeInternal();
             }
         }
 
@@ -339,6 +350,18 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             _disposed = true;
+            if (Raw != null)
+            {
+                if (!Raw.IsDone)
+                {
+                    Raw.Cancel();
+                }
+
+                if (Raw.Result != null)
+                {
+                    UnityEngine.Object.Destroy(Raw.Result);
+                }
+            }
             Raw = null;
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
@@ -348,7 +371,7 @@ namespace CycloneGames.AssetManagement.Runtime
         void IInternalCacheable.ForceDispose() => DisposeInternal();
     }
 
-    public sealed class YooSceneHandle : ISceneHandle, IInternalCacheable
+    internal sealed class YooSceneHandle : ISceneHandle, IReferenceCounted, IInternalCacheable
     {
         private int _id;
         internal int DebugId => _id;
@@ -357,6 +380,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private volatile bool _disposed;
         private Action<string, IReferenceCounted> _onReleaseToCache;
         private SceneActivationState _activationState;
+        private bool _manualLoadResumed;
 
         public static bool SupportsDeferredActivation => true;
         public SceneActivationMode ActivationMode { get; private set; }
@@ -379,6 +403,7 @@ namespace CycloneGames.AssetManagement.Runtime
             Raw = raw;
             ActivationMode = activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual;
             _activationState = isActivated ? SceneActivationState.Activated : SceneActivationState.Loading;
+            _manualLoadResumed = false;
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
@@ -407,6 +432,12 @@ namespace CycloneGames.AssetManagement.Runtime
 
             if (!IsDone)
             {
+                if (ActivationMode == SceneActivationMode.Manual && Raw != null && !_manualLoadResumed)
+                {
+                    Raw.UnSuspend();
+                    _manualLoadResumed = true;
+                }
+
                 await Task.AttachExternalCancellation(cancellationToken);
             }
 
@@ -427,7 +458,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 return;
             }
 
-            Raw.UnSuspend();
+            if (!_manualLoadResumed)
+            {
+                Raw.UnSuspend();
+                _manualLoadResumed = true;
+            }
             await Task.AttachExternalCancellation(cancellationToken);
 
             _activationState = SceneActivationState.Activated;
@@ -443,7 +478,9 @@ namespace CycloneGames.AssetManagement.Runtime
                 return;
             }
 
-            _activationState = SceneActivationState.Activated;
+            _activationState = ActivationMode == SceneActivationMode.Manual && !_manualLoadResumed
+                ? SceneActivationState.WaitingForActivation
+                : SceneActivationState.Activated;
         }
 
         public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
@@ -465,8 +502,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             if (newCount == 0)
             {
-                if (_onReleaseToCache != null) _onReleaseToCache(null, this);
-                else DisposeInternal();
+                CLogger.LogWarning("[YooSceneHandle] Release only releases caller ownership. Use IAssetPackage.UnloadSceneAsync to unload the scene.");
             }
         }
 
@@ -486,6 +522,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             ActivationMode = SceneActivationMode.ActivateOnLoad;
             _activationState = SceneActivationState.Loading;
+            _manualLoadResumed = false;
             _onReleaseToCache = null;
             if (HandleTracker.Enabled) HandleTracker.Unregister(_id);
             AdaptiveHandlePool<YooSceneHandle>.Release(this);
@@ -494,7 +531,7 @@ namespace CycloneGames.AssetManagement.Runtime
         void IInternalCacheable.ForceDispose() => DisposeInternal();
     }
 
-    public sealed class YooRawFileHandle : IRawFileHandle, IInternalCacheable
+    internal sealed class YooRawFileHandle : IRawFileHandle, IReferenceCounted, IInternalCacheable
     {
         private int _id;
         private RawFileHandle _raw;
@@ -583,7 +620,7 @@ namespace CycloneGames.AssetManagement.Runtime
         void IInternalCacheable.ForceDispose() => DisposeInternal();
     }
 
-    public sealed class YooDownloader : IDownloader
+    internal sealed class YooDownloader : IDownloader
     {
         private ResourceDownloaderOperation _op;
 

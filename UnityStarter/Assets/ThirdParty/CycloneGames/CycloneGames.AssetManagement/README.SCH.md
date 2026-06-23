@@ -4,7 +4,7 @@
 
 一个为 Unity 设计的 DI 优先、接口驱动的统一资源管理抽象层。它将游戏逻辑与底层资源系统（YooAsset、Addressables 或 Resources）解耦，让您编写更清晰、更易移植的高性能代码。
 
-基于 **W-TinyLFU** 架构，它提供了确定性的内存管理、细粒度的资源追踪（通过 Tag/Owner 元数据），并配备了强大的可视化编辑器调试工具（缓存调试器与句柄泄漏追踪器），助您彻底告别内存泄漏。
+基于 **W-TinyLFU** 架构，它提供了确定性的内存管理、细粒度的资源追踪（通过 Tag/Owner 元数据），并配备了强大的可视化编辑器调试工具（缓存调试器、句柄追踪器、场景追踪器与运行时治理面板），助您彻底告别内存泄漏。
 
 ## 目录
 
@@ -33,13 +33,25 @@
 | YooAsset     | 可选    | `com.tuyoogame.yooasset` - 推荐的提供器      |
 | Addressables | 可选    | `com.unity.addressables` - 备选提供器        |
 | VContainer   | 可选    | `jp.hadashikick.vcontainer` - DI 集成        |
-| R3           | 可选    | `com.cysharp.r3` - 用于 `IPatchService` 事件 |
+| R3           | 是      | `com.cysharp.r3` - 用于 `IPatchService` 事件 |
 
 ## 安装
 
 1. 将包导入您的 Unity 项目
-2. 模块会通过程序集定义引用自动检测可用的提供器
+2. 提供器程序集通过 asmdef `versionDefines` 和 `defineConstraints` 自动启用
 3. 无需手动配置脚本定义符号
+
+### 程序集布局
+
+核心 Runtime 程序集只依赖 UniTask、R3 和 CycloneGames.Logger。提供器和集成代码位于独立程序集：
+
+| 程序集 | 用途 | 可选依赖 |
+| --- | --- | --- |
+| `CycloneGames.AssetManagement.Runtime` | 核心接口、缓存、Resources 提供器、引用和诊断 | 除核心依赖外无额外依赖 |
+| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | YooAsset 提供器和 YooAsset 补丁工作流 | `com.tuyoogame.yooasset` |
+| `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | Addressables 提供器和版本文件辅助逻辑 | `com.unity.addressables` |
+| `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | VContainer 组合辅助 | `jp.hadashikick.vcontainer` |
+| `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | 基于 `IAssetPackage` 的 Navigathena 场景桥接 | `com.mackysoft.navigathena` |
 
 ---
 
@@ -346,6 +358,21 @@ public async UniTask RunPatchFlow()
 }
 ```
 
+#### 调整下载参数
+
+`RunAsync` 接受一个可选的 `PatchDownloadOptions` 用于调整下载阶段的参数。任何非正值字段都会回退到默认值，所以传 `default` 始终是安全的：
+
+```csharp
+await patchService.RunAsync(
+    autoDownloadOnFoundNewVersion: true,
+    downloadOptions: new PatchDownloadOptions
+    {
+        MaxConcurrentDownloads = 16,   // 默认 10
+        FailedRetryCount       = 5,    // 默认 3
+        RequestTimeoutSeconds  = 90,   // 默认 60
+    });
+```
+
 ### 底层 API（精细控制）
 
 用于自定义更新流程：
@@ -479,7 +506,7 @@ package.ClearBucket("UI");
 ```
 
 > [!NOTE]
-> `ClearBucket` / `ClearBucketsByPrefix` 只会驱逐 `RefCount` 已归零的空闲句柄（位于 Trial 或 Main 池中）。仍在使用中的 Active 句柄**永远不会**被桶清理操作驱逐 —— 这是为了从设计上避免悬垂引用。
+> `ClearBucket` / `ClearBucketsByPrefix` 只会驱逐 `RefCount` 已归零的空闲句柄（位于 Trial 或 Main 池中）。仍在使用中的 Active 句柄**永远不会**被桶清理操作驱逐；这是为了从设计上避免悬垂引用。
 
 #### 层级式桶路径
 
@@ -528,6 +555,69 @@ uiScope.ClearHierarchy();  // 清理 "UI" 及所有后代
 shopScope.Clear();          // 仅清理 "UI.Shop"
 ```
 
+### 自动内存管理
+
+除了条目数量上限，缓存还会执行**自动的、平台自适应的空闲内存预算**。当空闲（`RefCount == 0`）句柄的估算运行时占用超过预算时，即使条目数量未超限，它们也会被驱逐，从而在持续高压下保持内存有界：
+
+| 设备档位（系统内存） | 空闲预算 |
+| -------------------- | -------- |
+| 桌面 / 主机 (>= 4 GB) | 512 MB   |
+| 中端 (>= 2 GB)        | 256 MB   |
+| 低端 / WebGL          | 96 MB    |
+
+预算在启动时自动推导，无需配置。占用估算在 Editor / Development 构建中使用 `Profiler.GetRuntimeMemorySizeLong`，在正式包中使用零分配的启发式估算（贴图 / 网格 / 音频体积）。
+
+缓存还订阅了 **`Application.lowMemory`**：收到操作系统内存压力信号时，会立即丢弃所有空闲句柄（绝不触碰仍在使用的 Active 句柄），在系统杀进程前争取出空间。
+
+#### 覆写预算
+
+默认是自动的，但宿主项目可以**在不修改包的前提下**覆写它 —— 模块级、按包、或运行时。优先级：单包覆盖 > 模块默认 > 自动。
+
+```csharp
+// 1) 模块级默认 —— 应用于该模块创建的每个包。
+await module.InitializeAsync(new AssetManagementOptions(
+    defaultIdleMemoryBudgetBytes: 256L * 1024 * 1024));   // 所有包 256 MB
+
+// 2) 初始化时的单包覆盖（优先于模块默认）。
+await package.InitializeAsync(new AssetPackageInitOptions(
+    playMode, providerOptions,
+    idleMemoryBudgetBytesOverride: 128L * 1024 * 1024));  // 128 MB
+
+// 3) 运行时（初始化后任意时刻）—— 例如进重场景前收紧，之后放宽。
+package.SetCacheIdleMemoryBudget(64L * 1024 * 1024);   // 64 MB
+package.SetCacheIdleMemoryBudget(0);                   // 0 = 恢复平台自适应默认值
+```
+
+设置新预算后会立即驱逐空闲句柄以满足预算（绝不触碰 Active 句柄）。
+
+### 查询缓存状态
+
+使用零分配的 `IsAssetCached<T>` 在决定加载前检查资源是否已驻留：
+
+```csharp
+// 资源当前是否驻留（Active 或位于空闲 Trial/Main 池）。
+if (package.IsAssetCached<GameObject>("Prefabs/Boss"))
+{
+    // LoadAssetAsync 将命中缓存 —— 无 bundle IO。
+}
+```
+
+### Bundle 加载并发
+
+不设上限的 bundle 并发会在受限设备上引发 IO 抖动与内存尖峰。当并发参数未设置时，系统会应用**平台自适应默认值**（`AssetPlatformDefaults.BundleLoadingMaxConcurrency`）：WebGL = 4，Android / iOS = 8，桌面 / 主机 = `clamp(核心数 x 2, 8, 32)`。
+
+```csharp
+// 模块级默认值（应用于未单独覆盖的包）。
+// int.MaxValue 或任何 <= 0 的值表示“使用平台自适应默认值”。
+await module.InitializeAsync(new AssetManagementOptions(
+    bundleLoadingMaxConcurrency: int.MaxValue));
+
+// 单包覆盖（优先级高于模块级数值）。
+await package.InitializeAsync(new AssetPackageInitOptions(
+    playMode, providerOptions,
+    bundleLoadingMaxConcurrencyOverride: 16));
+```
+
 ### 资源追踪与元数据 (Metadata Tracking)
 
 为了让运行时资源的追踪变得极其简单，所有加载 API 均支持零 GC 的 `tag` 和 `owner` 参数。这让你能够细粒度地追踪**是谁**加载了该资源，以及该资源的**用途**。
@@ -559,14 +649,43 @@ var handle = package.LoadAssetAsync<GameObject>("Prefabs/Hero",
 - **层级 (Tier) 可视化**: 直观显示资源当前是处于 Active 状态、Trial 试用池，还是 Main 热缓存区。
 - **元数据显示**: 直接显示和过滤 `Tag`、`Owner` 以及 `Bucket`。
 - **引用计数异常警告**: 自动高亮显示引用计数异常偏高（> 8）的资源，警告你可能遗漏了 `Dispose()` 调用。
+- **内存占用**: Summary 页展示空闲池的实时内存占用与平台内存预算的对比，一眼看出驱逐压力。
 - **智能汇总**: 按资源提供者、Tag 和 Owner 统计内存分布。
 
 #### 2. 句柄泄漏追踪追踪器 (Handle Tracker)
 
 微观级别监控每一个活动句柄的分配，并自动与缓存系统交叉比对。(`Tools/CycloneGames/AssetManagement/Asset Handle Tracker`)
 
-- **智能状态识别**: 自动判断引用计数为 0 的句柄是安全驻留在空闲缓存中 (`Cached`)，还是真正的内存泄漏 (`Leaked`)。
-- **内存泄漏堆栈**: 点击展开任何泄露的句柄，直接跳转到分配该句柄的精准 C# 代码行。
+- **智能状态识别**: 将每个长寿命句柄分类为 `Cached`（安全驻留于空闲池）、`Persistent`（开发者声明的长期驻留），或 `Leaked`（真正无法解释的泄漏）。
+- **标记持久**: 右键任意行 -> **Mark Persistent**，为故意长期驻留的资源（DontDestroyOnLoad、引导 UI、主场景）消除误报泄漏。参见 [标记持久句柄](#标记持久句柄)。
+- **内存泄漏堆栈**: 点击展开任何泄露的句柄，直接跳转到分配该句柄的精准 C# 代码行（需先在工具栏启用 **Stack Traces**）。
+
+#### 3. 场景追踪器 (Scene Tracker) (`Tools/CycloneGames/AssetManagement/Scene Tracker`)
+
+实时查看每个被追踪的场景句柄：提供者、包、桶、激活状态（Loading / Waiting / Activated / Unload Pending）、进度、引用数与存活时长。用于捕捉卡在 `WaitingForActivation` 或待卸载的场景。
+
+#### 4. 运行时治理面板 (Runtime Governance) (`Tools/CycloneGames/AssetManagement/Runtime Governance`)
+
+将句柄、场景与缓存层级汇聚为单一仪表盘 —— 概览指标卡片、Top Buckets、最长寿的活动句柄、以及场景生命周期快照。压力测试时评估整体资源健康度最快的入口。
+
+> 四个窗口都以**零逐帧 GC** 重绘（数据在限速快照上预构建），并同时适配 Pro（深色）与 Light（浅色）编辑器皮肤。
+
+#### 标记持久句柄
+
+泄漏启发式会标记任何存活 > 5 分钟且未被缓存解释的句柄。对于故意长期驻留的资源（DontDestroyOnLoad、引导 UI、主场景基础设施），这是误报。将它们声明为持久，使其显示为 `Persistent` 而非 `Leaked`：
+
+```csharp
+using CycloneGames.AssetManagement.Runtime;
+
+// 在启动时，为永久驻留的资源标记：
+HandleTracker.MarkPersistent("Assets/.../UIFramework.prefab");
+HandleTracker.MarkPersistent("Assets/.../EventSystem.prefab");
+
+// 若某资源不再持久，可移除标记：
+HandleTracker.UnmarkPersistent("Assets/.../UIFramework.prefab");
+```
+
+> 窗口里右键 -> **Mark Persistent** 很方便，但是**仅会话级**的（存于运行时静态状态，域重载 / 停止播放后重置）。如需永久生效，请在启动代码中调用 `HandleTracker.MarkPersistent`。
 
 <img src="./Documents~/Doc_01.png" style="width: 100%; height: auto; max-width: 900px;" />
 <img src="./Documents~/Doc_02.png" style="width: 100%; height: auto; max-width: 900px;" />
@@ -718,9 +837,9 @@ package.LoadAsync(config.Prefab);                    // 扩展方法（推荐）
 该功能会扫描项目中的所有 Prefab 和 ScriptableObject：
 
 - **失效引用**: GUID 无法解析 → 以 Error 形式输出日志。
-- **过期路径**: 资源被移动/重命名但 GUID 仍然有效 → 自动修复 location。
+- **过期路径**: 资源被移动/重命名但 GUID 仍然有效。Drawer 只显示警告图标，不会在绘制时修改资产；`ValidateAll()` 会显式修复 location。
 
-可通过在构建脚本中调用 `AssetRefValidator.ValidateAll()` 将其集成到 CI/CD 流水线。
+CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidator.ValidateAllReportOnly()`。允许自动修复过期 location 时，再调用 `AssetRefValidator.ValidateAll()`。
 
 ---
 
@@ -731,7 +850,7 @@ package.LoadAsync(config.Prefab);                    // 扩展方法（推荐）
 | 方法                       | 说明                        |
 | -------------------------- | --------------------------- |
 | `InitializeAsync(options)` | 初始化资源系统              |
-| `Destroy()`                | 清理并释放资源              |
+| `DestroyAsync()`           | 确定性清理并释放资源        |
 | `CreatePackage(name)`      | 创建新的资源包              |
 | `GetPackage(name)`         | 获取已存在的资源包          |
 | `RemovePackageAsync(name)` | 移除并销毁资源包            |
@@ -746,14 +865,26 @@ package.LoadAsync(config.Prefab);                    // 扩展方法（推荐）
 | `LoadAssetAsync<T>(...)`       | 异步加载资源 (支持 `bucket`/`tag`/`owner`)           |
 | `LoadAssetSync<T>(...)`        | 同步加载资源 (支持 `bucket`/`tag`/`owner`)           |
 | `LoadAllAssetsAsync<T>(...)`   | 加载指定位置的所有资源 (支持 `bucket`/`tag`/`owner`) |
+| `IsAssetCached<T>(location)`   | 零分配驻留检查（Active 或空闲 Trial/Main 池）    |
 | `InstantiateAsync(handle)`     | 异步实例化预制体                                     |
 | `InstantiateSync(handle)`      | 同步实例化（零 GC）                                  |
 | `LoadSceneAsync(location)`     | 加载场景                                             |
 | `UnloadSceneAsync(handle)`     | 卸载场景                                             |
 | `LoadRawFileAsync(location)`   | 加载原生文件                                         |
 | `UnloadUnusedAssetsAsync()`    | 全局清扫所有未使用的资源                             |
+| `SetCacheIdleMemoryBudget(bytes)` | 运行时覆写空闲内存预算（0 = 恢复自动）             |
 | `ClearBucket(bucket)`          | 驱逐精确匹配桶名的空闲句柄                           |
 | `ClearBucketsByPrefix(prefix)` | 驱逐匹配桶前缀及其所有后代的空闲句柄                 |
+
+### HandleTracker（诊断）
+
+| 成员 | 说明 |
+| --- | --- |
+| `Enabled` | 句柄追踪总开关。 |
+| `EnableStackTrace` | 捕获分配堆栈（较慢；排查泄漏时启用）。 |
+| `MarkPersistent(location)` | 将故意长期驻留的资源排除出泄漏启发式。 |
+| `UnmarkPersistent(location)` / `ClearPersistent()` | 移除持久标记。 |
+| `IsPersistent(location)` | 查询某位置是否被标记为持久。 |
 
 ### 脚本定义符号
 
@@ -764,6 +895,7 @@ package.LoadAsync(config.Prefab);                    // 扩展方法（推荐）
 | `YOOASSET_PRESENT`     | 已安装 YooAsset 包     |
 | `ADDRESSABLES_PRESENT` | 已安装 Addressables 包 |
 | `VCONTAINER_PRESENT`   | 已安装 VContainer 包   |
+| `NAVIGATHENA_PRESENT`  | 已安装 Navigathena 包  |
 
 ---
 
@@ -774,3 +906,4 @@ package.LoadAsync(config.Prefab);                    // 扩展方法（推荐）
 3. **选择合适的提供器** - 正式项目用 YooAsset，原型开发用 Resources
 4. **开发时启用句柄追踪** - 帮助尽早发现内存泄漏
 5. **使用 DI 容器** - 将 `IAssetModule` 注册为单例以保持架构清晰
+6. **标记持久资源** - 通过 `HandleTracker.MarkPersistent` 声明 DontDestroyOnLoad / 引导 / 主场景资源，使泄漏检测保持高信号
