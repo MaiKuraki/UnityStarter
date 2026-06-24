@@ -1,18 +1,20 @@
 #if ADDRESSABLES_PRESENT
-using Cysharp.Threading.Tasks;
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
+using UnityEngine.ResourceManagement.ResourceLocations;
+using Cysharp.Threading.Tasks;
 using CycloneGames.IO.Runtime;
 using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class AddressablesAssetPackage : IAssetPackage
+    internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetCatalogQuery
     {
         private readonly string packageName;
         private int nextId = 1;
@@ -588,9 +590,68 @@ namespace CycloneGames.AssetManagement.Runtime
             return _cacheService.Contains(cacheKey);
         }
 
+        public async UniTask<bool> TryGetAssetLocationsByTagAsync(string tag, List<string> results, CancellationToken cancellationToken = default)
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            results.Clear();
+            if (string.IsNullOrEmpty(tag))
+            {
+                return false;
+            }
+
+            var handle = Addressables.LoadResourceLocationsAsync(tag, typeof(UnityEngine.Object));
+            try
+            {
+                await handle.WithCancellation(cancellationToken);
+                if (handle.Status != AsyncOperationStatus.Succeeded)
+                {
+                    return false;
+                }
+
+                IList<IResourceLocation> locations = handle.Result;
+                int count = locations?.Count ?? 0;
+                for (int i = 0; i < count; i++)
+                {
+                    var location = locations[i];
+                    if (location == null)
+                    {
+                        continue;
+                    }
+
+                    AssetCatalogQueryUtils.AddUniqueLocation(results, location.PrimaryKey);
+                }
+
+                return results.Count > 0;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                CLogger.LogWarning($"[AddressablesAssetPackage] Failed to query asset locations by tag '{tag}': {ex.Message}");
+                return false;
+            }
+            finally
+            {
+                Addressables.Release(handle);
+            }
+        }
+
         public void SetCacheIdleMemoryBudget(long maxIdleBytes)
         {
             _cacheService.SetIdleMemoryBudget(maxIdleBytes);
+        }
+
+        public int TrimIdleCache(AssetCacheRetentionPolicy policy)
+        {
+            return _cacheService.TrimIdle(policy);
         }
 
         public void ClearBucket(string bucket)

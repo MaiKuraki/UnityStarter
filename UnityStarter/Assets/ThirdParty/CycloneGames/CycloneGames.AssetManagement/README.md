@@ -52,6 +52,7 @@ The core runtime assembly only depends on UniTask, R3, and CycloneGames.Logger. 
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | Addressables provider and version-file helpers | `com.unity.addressables` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | VContainer composition helper | `jp.hadashikick.vcontainer` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | Navigathena scene bridge backed by `IAssetPackage` | `com.mackysoft.navigathena` |
+| `CycloneGames.AssetManagement.Runtime.CacheRetention` | Optional, opt-in scheduler that periodically applies cache retention policies | None beyond core dependencies |
 
 ---
 
@@ -602,6 +603,105 @@ if (package.IsAssetCached<GameObject>("Prefabs/Boss"))
 }
 ```
 
+### Cache Retention Policy & Scheduler
+
+The idle (`RefCount == 0`) cache is intentionally **policy-neutral**: by design it has no built-in timer and no hard-coded lifetime rule. Idle handles are reclaimed when an eviction trigger runs: entry-count limits, the idle memory budget, `Application.lowMemory`, explicit `ClearBucket` / `ClearBucketsByPrefix` / `UnloadUnusedAssetsAsync`, `DestroyAsync`, or a caller-provided retention policy.
+
+This keeps the core cache deterministic and testable while still supporting product-specific retention: UI-heavy games, open-world streaming, headless simulations, tools, low-memory devices, and scene-boundary cleanup can all use different rules without forking the provider.
+
+#### The mechanism hook: `TrimIdleCache`
+
+```csharp
+var policy = AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(60));
+int evicted = package.TrimIdleCache(policy);
+```
+
+`TrimIdleCache` has no timer and no frame driver. You decide when to call it: a HUD button, a scene boundary, a low-memory event, a telemetry-driven memory governor, or the scheduler below.
+
+#### Composing retention rules
+
+Policies are built from `IAssetCacheRetentionRule` instances. Common rules are available through `AssetCacheRetentionRules`, and custom rules can inspect bucket, tag, owner, idle duration, access count, estimated bytes, and cache tier.
+
+```csharp
+// Global rule: evict anything idle for at least 120 seconds.
+// Scene rule: evict Scene.Battle and its children after 30 seconds.
+var policy = AssetCacheRetentionPolicy.MatchingAny(
+    AssetCacheRetentionRules.IdleForAtLeast(TimeSpan.FromSeconds(120)),
+    AssetCacheRetentionRules.All(
+        AssetCacheRetentionRules.Bucket("Scene.Battle", includeChildren: true),
+        AssetCacheRetentionRules.IdleForAtLeast(TimeSpan.FromSeconds(30))));
+
+int evicted = package.TrimIdleCache(policy);
+```
+
+Use preserve rules when a global policy should not touch intentionally resident buckets:
+
+```csharp
+var policy = AssetCacheRetentionPolicy
+    .IdleForAtLeast(TimeSpan.FromMinutes(5))
+    .WithPreserveRules(AssetCacheRetentionRules.Bucket("UI.Persistent", includeChildren: true));
+```
+
+#### Option A: Drive it from code or DI
+
+`AssetCacheRetentionScheduler` (assembly `CycloneGames.AssetManagement.Runtime.CacheRetention`) is a pure-C# `IDisposable` that applies an `AssetCacheRetentionPolicy` on a fixed real-time interval. It uses `UniTask`, owns an internal `CancellationTokenSource`, and does not throw into the host loop.
+
+```csharp
+using CycloneGames.AssetManagement.Runtime.CacheRetention;
+
+var policy = AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(120));
+var scheduler = new AssetCacheRetentionScheduler(package, policy, TimeSpan.FromSeconds(30));
+scheduler.Start();
+
+// Later, on shutdown:
+scheduler.Dispose();
+
+// The package can be resolved lazily, which is useful during DI wiring.
+var lazy = new AssetCacheRetentionScheduler(
+    () => AssetManagementLocator.DefaultPackage,
+    policy,
+    TimeSpan.FromSeconds(30));
+```
+
+#### Option B: Drive it from a scene object
+
+For Inspector-driven setups, drop `AssetCacheRetentionBehaviour` on a persistent GameObject. It resolves its package from an explicit `Bind(package)` call, falling back to `AssetManagementLocator.DefaultPackage`.
+
+| Field | Meaning | Default |
+| --- | --- | --- |
+| `MinimumIdleSeconds` | Idle age threshold; `0` evicts all matched idle handles | `120` |
+| `CheckIntervalSeconds` | Seconds between passes (min 1) | `30` |
+| `Bucket` | Optional exact bucket or bucket root to trim | Empty |
+| `IncludeChildBuckets` | Include child buckets when `Bucket` is set | `true` |
+| `LogEvictions` | Log the evicted count of each non-empty pass | `false` |
+| `AutoStartFromLocator` | Start in `OnEnable` using the locator's default package | `true` |
+
+#### Option C: Apply retention on scene transitions (Navigathena)
+
+When the Navigathena integration is present (`NAVIGATHENA_PRESENT`), pass `ApplyPackageCacheRetentionOperation` as the transition `interruptOperation`. It complements `UnloadPackageAssetsOperation`, which clears on-disk bundle files.
+
+```csharp
+var policy = new AssetCacheRetentionPolicy(
+    AssetCacheRetentionRules.Bucket("Scene.Battle", includeChildren: true));
+
+var trim = new ApplyPackageCacheRetentionOperation(package, policy);
+await navigator.Change(sceneId, interruptOperation: trim);
+```
+
+#### Option D: Auto-register the scheduler with VContainer
+
+The VContainer installer can register and lifetime-bind the scheduler for you. It is off by default.
+
+```csharp
+var policy = AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(120));
+var installer = new AssetManagementVContainerInstaller(
+    cacheRetentionOptions: new AssetCacheRetentionOptions(
+        enabled: true,
+        policy: policy,
+        checkIntervalSeconds: 30));
+installer.Install(builder);
+```
+
 ### Bundle Loading Concurrency
 
 Uncapped bundle concurrency causes IO thrash and memory spikes on constrained devices. When the concurrency knob is left unset, the system applies a **platform-aware default** (`AssetPlatformDefaults.BundleLoadingMaxConcurrency`): WebGL = 4, Android / iOS = 8, desktop / console = `clamp(cores x 2, 8, 32)`.
@@ -637,6 +737,26 @@ var handle = package.LoadAssetAsync<GameObject>("Prefabs/Hero",
 - `tag`: The asset category (e.g., `UIConfig` or `UIPrefab`)
 
 This makes it instantly clear in the debugger which UI is holding onto memory.
+
+### Provider Catalog Queries
+
+Some providers expose catalog-side tags or labels that can be queried before loading assets. Use the optional `IAssetCatalogQuery` capability when a workflow needs to expand a provider tag into concrete load locations:
+
+```csharp
+if (package is IAssetCatalogQuery catalogQuery)
+{
+    var locations = new List<string>(64);
+    if (await catalogQuery.TryGetAssetLocationsByTagAsync("UI", locations))
+    {
+        for (int i = 0; i < locations.Count; i++)
+        {
+            // Load or build a plan from locations[i].
+        }
+    }
+}
+```
+
+This is a low-frequency planning API, not a gameplay hot-path API. YooAsset and Addressables can map provider catalog tags or labels to locations. The Resources provider has no runtime catalog tag system, so it does not implement this capability by default. Provider catalog tags are separate from the runtime `tag` metadata passed to load APIs for cache tracking and retention rules.
 
 ### Advanced Editor Debugging Tools
 
@@ -873,6 +993,7 @@ Use `AssetRefValidator.ValidateAllReportOnly()` for CI/reporting flows that must
 | `LoadRawFileAsync(location)`   | Load a raw file                                                     |
 | `UnloadUnusedAssetsAsync()`    | Global sweep of all unused assets                                   |
 | `SetCacheIdleMemoryBudget(bytes)` | Override the idle memory budget at runtime (0 = restore auto)     |
+| `TrimIdleCache(policy)` | Apply an idle cache retention policy; returns the evicted count |
 | `ClearBucket(bucket)`          | Evict idle handles matching an exact bucket name                    |
 | `ClearBucketsByPrefix(prefix)` | Evict idle handles matching a bucket prefix and all its descendants |
 
