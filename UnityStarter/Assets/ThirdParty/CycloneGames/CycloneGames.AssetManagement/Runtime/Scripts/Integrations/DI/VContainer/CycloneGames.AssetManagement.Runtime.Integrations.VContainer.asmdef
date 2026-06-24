@@ -4,9 +4,8 @@
     "references": [
         "VContainer",
         "UniTask",
-        "YooAsset",
-        "CycloneGames.Logger",
-        "CycloneGames.AssetManagement.Runtime"
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.AssetManagement.Runtime.CacheRetention"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

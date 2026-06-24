@@ -1,9 +1,9 @@
-using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -176,6 +176,13 @@ namespace CycloneGames.AssetManagement.Runtime
 		void SetCacheIdleMemoryBudget(long maxIdleBytes);
 
 		/// <summary>
+		/// Evicts idle (RefCount == 0) cached handles matched by <paramref name="policy"/>, disposing each and
+		/// returning how many were evicted. Active (in-use) handles are never touched.
+		/// The package carries no timer or frame driver; callers own the retention schedule and rule composition.
+		/// </summary>
+		int TrimIdleCache(AssetCacheRetentionPolicy policy);
+
+		/// <summary>
 		/// Forces the evaluation and clearing of handles associated with a specific logical bucket group. 
 		/// Handles belonging to this bucket that have RefCount == 0 will be immediately purged, bypassing LRU delays.
 		/// </summary>
@@ -186,6 +193,20 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// Useful for hierarchical lifetime domains such as "UI.Scene" or "Gameplay.Levels.BossRoom".
 		/// </summary>
 		void ClearBucketsByPrefix(string bucketPrefix);
+	}
+
+	/// <summary>
+	/// Optional low-frequency provider catalog query contract. Querying by catalog tag may scan provider manifests and
+	/// allocate inside provider SDKs, so callers must keep this out of gameplay/UI hot paths and use explicit lifetime
+	/// buckets for loads. Catalog tags are provider-side labels, not the runtime cache metadata tags passed to load APIs.
+	/// </summary>
+	public interface IAssetCatalogQuery
+	{
+		/// <summary>
+		/// Fills <paramref name="results"/> with provider-normalized load locations for assets that match
+		/// <paramref name="tag"/>. Implementations clear the list before adding results.
+		/// </summary>
+		UniTask<bool> TryGetAssetLocationsByTagAsync(string tag, List<string> results, CancellationToken cancellationToken = default);
 	}
 
 	public interface IDownloader

@@ -52,6 +52,7 @@
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | Addressables 提供器和版本文件辅助逻辑 | `com.unity.addressables` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | VContainer 组合辅助 | `jp.hadashikick.vcontainer` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | 基于 `IAssetPackage` 的 Navigathena 场景桥接 | `com.mackysoft.navigathena` |
+| `CycloneGames.AssetManagement.Runtime.CacheRetention` | 可选、需显式启用的缓存保留策略调度器，周期性应用空闲缓存回收规则 | 除核心依赖外无额外依赖 |
 
 ---
 
@@ -602,6 +603,105 @@ if (package.IsAssetCached<GameObject>("Prefabs/Boss"))
 }
 ```
 
+### 缓存保留策略与调度器
+
+空闲（`RefCount == 0`）缓存被刻意设计为**策略中立**：它没有内置定时器，也没有写死的生命周期规则。空闲句柄只会在驱逐触发运行时被回收：条目数上限、空闲内存预算、`Application.lowMemory` 信号、显式 `ClearBucket` / `ClearBucketsByPrefix` / `UnloadUnusedAssetsAsync`、`DestroyAsync`，或调用者提供的缓存保留策略。
+
+这让核心缓存保持确定性和可测试，同时仍能支持产品级差异化保留策略：UI 密集项目、开放世界流式加载、headless simulation、工具链、低内存设备和场景边界清理都可以使用不同规则，而不需要 fork provider。
+
+#### 机制 hook：`TrimIdleCache`
+
+```csharp
+var policy = AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(60));
+int evicted = package.TrimIdleCache(policy);
+```
+
+`TrimIdleCache` 不携带定时器，也没有帧驱动。由你决定何时调用它：HUD 按钮、场景边界、低内存事件、遥测驱动的内存治理器，或下面的调度器。
+
+#### 组合保留规则
+
+策略由 `IAssetCacheRetentionRule` 组成。常见规则通过 `AssetCacheRetentionRules` 创建；自定义规则可以读取 bucket、tag、owner、空闲时长、访问次数、估算内存和缓存层级。
+
+```csharp
+// 全局规则：驱逐空闲至少 120 秒的任意句柄。
+// 场景规则：Scene.Battle 及其子 bucket 空闲 30 秒后即可驱逐。
+var policy = AssetCacheRetentionPolicy.MatchingAny(
+    AssetCacheRetentionRules.IdleForAtLeast(TimeSpan.FromSeconds(120)),
+    AssetCacheRetentionRules.All(
+        AssetCacheRetentionRules.Bucket("Scene.Battle", includeChildren: true),
+        AssetCacheRetentionRules.IdleForAtLeast(TimeSpan.FromSeconds(30))));
+
+int evicted = package.TrimIdleCache(policy);
+```
+
+当全局策略不应触碰某些常驻 bucket 时，使用 preserve rules：
+
+```csharp
+var policy = AssetCacheRetentionPolicy
+    .IdleForAtLeast(TimeSpan.FromMinutes(5))
+    .WithPreserveRules(AssetCacheRetentionRules.Bucket("UI.Persistent", includeChildren: true));
+```
+
+#### 方案 A：从代码或 DI 驱动
+
+`AssetCacheRetentionScheduler`（程序集 `CycloneGames.AssetManagement.Runtime.CacheRetention`）是一个纯 C# 的 `IDisposable`，按固定真实时间间隔应用 `AssetCacheRetentionPolicy`。它使用 `UniTask`，拥有内部 `CancellationTokenSource`，且不会向宿主循环抛出异常。
+
+```csharp
+using CycloneGames.AssetManagement.Runtime.CacheRetention;
+
+var policy = AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(120));
+var scheduler = new AssetCacheRetentionScheduler(package, policy, TimeSpan.FromSeconds(30));
+scheduler.Start();
+
+// 关闭时：
+scheduler.Dispose();
+
+// package 可以延迟解析，便于 DI wiring。
+var lazy = new AssetCacheRetentionScheduler(
+    () => AssetManagementLocator.DefaultPackage,
+    policy,
+    TimeSpan.FromSeconds(30));
+```
+
+#### 方案 B：从场景对象驱动
+
+对于 Inspector 配置的场景，把 `AssetCacheRetentionBehaviour` 挂到一个常驻 GameObject 上。它通过显式 `Bind(package)` 解析目标 package，并回退到 `AssetManagementLocator.DefaultPackage`。
+
+| 字段 | 含义 | 默认值 |
+| --- | --- | --- |
+| `MinimumIdleSeconds` | 空闲年龄阈值；`0` 驱逐全部匹配的空闲句柄 | `120` |
+| `CheckIntervalSeconds` | 每次扫描的间隔秒数（最小 1） | `30` |
+| `Bucket` | 可选精确 bucket 或 bucket 根；空值表示全局应用 | 空 |
+| `IncludeChildBuckets` | 设置 `Bucket` 时是否包含子 bucket | `true` |
+| `LogEvictions` | 记录每次非空扫描驱逐的数量 | `false` |
+| `AutoStartFromLocator` | 在 `OnEnable` 中使用 locator 的默认 package 启动 | `true` |
+
+#### 方案 C：在场景切换时应用策略 (Navigathena)
+
+当存在 Navigathena 集成（`NAVIGATHENA_PRESENT`）时，把 `ApplyPackageCacheRetentionOperation` 作为切换的 `interruptOperation` 传入。它与 `UnloadPackageAssetsOperation` 互补，后者负责清理磁盘 bundle 文件。
+
+```csharp
+var policy = new AssetCacheRetentionPolicy(
+    AssetCacheRetentionRules.Bucket("Scene.Battle", includeChildren: true));
+
+var trim = new ApplyPackageCacheRetentionOperation(package, policy);
+await navigator.Change(sceneId, interruptOperation: trim);
+```
+
+#### 方案 D：通过 VContainer 自动注册调度器
+
+VContainer installer 可以替你注册并绑定 scheduler 生命周期，默认关闭。
+
+```csharp
+var policy = AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(120));
+var installer = new AssetManagementVContainerInstaller(
+    cacheRetentionOptions: new AssetCacheRetentionOptions(
+        enabled: true,
+        policy: policy,
+        checkIntervalSeconds: 30));
+installer.Install(builder);
+```
+
 ### Bundle 加载并发
 
 不设上限的 bundle 并发会在受限设备上引发 IO 抖动与内存尖峰。当并发参数未设置时，系统会应用**平台自适应默认值**（`AssetPlatformDefaults.BundleLoadingMaxConcurrency`）：WebGL = 4，Android / iOS = 8，桌面 / 主机 = `clamp(核心数 x 2, 8, 32)`。
@@ -637,6 +737,26 @@ var handle = package.LoadAssetAsync<GameObject>("Prefabs/Hero",
 - `tag`: 资源分类（如 `UIConfig` 或 `UIPrefab`）
 
 这样在调试器中，你可以一眼看出是哪个 UI 占用了内存。
+
+### Provider Catalog 查询
+
+部分 provider 暴露 catalog 侧的 tag 或 label，可以在真正加载资源前查询。需要把 provider tag 展开为具体加载位置时，使用可选能力 `IAssetCatalogQuery`：
+
+```csharp
+if (package is IAssetCatalogQuery catalogQuery)
+{
+    var locations = new List<string>(64);
+    if (await catalogQuery.TryGetAssetLocationsByTagAsync("UI", locations))
+    {
+        for (int i = 0; i < locations.Count; i++)
+        {
+            // 基于 locations[i] 加载资源或生成计划。
+        }
+    }
+}
+```
+
+这是低频规划 API，不是 gameplay 热路径 API。YooAsset 和 Addressables 可以把 provider catalog tag 或 label 映射为加载位置。Resources provider 没有运行时 catalog tag 系统，因此默认不实现该能力。Provider catalog tag 与加载 API 中用于缓存追踪和保留规则的运行时 `tag` metadata 是两个独立概念。
 
 ### 高级编辑器调试工具
 
@@ -873,6 +993,7 @@ CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidat
 | `LoadRawFileAsync(location)`   | 加载原生文件                                         |
 | `UnloadUnusedAssetsAsync()`    | 全局清扫所有未使用的资源                             |
 | `SetCacheIdleMemoryBudget(bytes)` | 运行时覆写空闲内存预算（0 = 恢复自动）             |
+| `TrimIdleCache(policy)` | 应用空闲缓存保留策略，返回驱逐数量 |
 | `ClearBucket(bucket)`          | 驱逐精确匹配桶名的空闲句柄                           |
 | `ClearBucketsByPrefix(prefix)` | 驱逐匹配桶前缀及其所有后代的空闲句柄                 |
 

@@ -4,6 +4,7 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using VContainer;
 using VContainer.Unity;
+using CycloneGames.AssetManagement.Runtime.CacheRetention;
 
 namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
 {
@@ -26,6 +27,8 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
     {
         private readonly Func<IObjectResolver, IAssetModule> _moduleFactory;
         private readonly AssetManagementOptions _options;
+        private readonly AssetCacheRetentionOptions _cacheRetentionOptions;
+        private readonly Func<IObjectResolver, IAssetPackage> _packageResolver;
 
         /// <summary>
         /// Creates an installer with optional custom module factory and options.
@@ -35,12 +38,26 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
         /// via conditional compilation (YooAsset > Addressables > Resources).
         /// </param>
         /// <param name="options">Global options passed to InitializeAsync.</param>
+        /// <param name="cacheRetentionOptions">
+        /// Optional cache retention configuration. When <see cref="AssetCacheRetentionOptions.Enabled"/> is false
+        /// (the default), no scheduler is registered and behaviour is unchanged. When enabled, an
+        /// <see cref="AssetCacheRetentionScheduler"/> is registered as a VContainer entry point.
+        /// </param>
+        /// <param name="packageResolver">
+        /// Resolves the package the scheduler should trim. If null, the scheduler falls back to
+        /// <see cref="AssetManagementLocator.DefaultPackage"/>. Provide a resolver when the package is
+        /// registered in the container or created outside the locator.
+        /// </param>
         public AssetManagementVContainerInstaller(
             Func<IObjectResolver, IAssetModule> moduleFactory = null,
-            AssetManagementOptions options = default)
+            AssetManagementOptions options = default,
+            AssetCacheRetentionOptions cacheRetentionOptions = default,
+            Func<IObjectResolver, IAssetPackage> packageResolver = null)
         {
             _moduleFactory = moduleFactory;
             _options = options;
+            _cacheRetentionOptions = cacheRetentionOptions;
+            _packageResolver = packageResolver;
         }
 
         public void Install(IContainerBuilder builder)
@@ -60,6 +77,27 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
             builder.RegisterEntryPoint(
                 resolver => new AssetModuleStartable(resolver.Resolve<IAssetModule>(), options),
                 Lifetime.Singleton);
+
+            // Optional retention scheduler, started with the scope and disposed with it.
+            if (_cacheRetentionOptions.Enabled)
+            {
+                var retention = _cacheRetentionOptions;
+                var packageResolver = _packageResolver;
+                builder.RegisterEntryPoint(
+                    resolver =>
+                    {
+                        Func<IAssetPackage> provider = packageResolver != null
+                            ? () => packageResolver(resolver)
+                            : () => AssetManagementLocator.DefaultPackage;
+                        var scheduler = new AssetCacheRetentionScheduler(
+                            provider,
+                            retention.Policy,
+                            TimeSpan.FromSeconds(retention.CheckIntervalSeconds),
+                            retention.LogEvictions);
+                        return new AssetCacheRetentionStartable(scheduler);
+                    },
+                    Lifetime.Singleton);
+            }
 
             // Deterministic cleanup when LifetimeScope is destroyed.
             builder.RegisterDisposeCallback(resolver =>
@@ -125,6 +163,65 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
             StartAsync(CancellationToken cancellation = default)
         {
             await _module.InitializeAsync(_options);
+        }
+    }
+
+    /// <summary>
+    /// Configuration for the optional cache retention scheduler registered by <see cref="AssetManagementVContainerInstaller"/>.
+    /// Default value has <see cref="Enabled"/> == false, so the installer behaves exactly as before unless a caller opts in.
+    /// </summary>
+    public readonly struct AssetCacheRetentionOptions
+    {
+        private const double DEFAULT_CHECK_INTERVAL_SECONDS = 30d;
+        private const double DEFAULT_MINIMUM_IDLE_SECONDS = 120d;
+
+        public readonly bool Enabled;
+        public readonly AssetCacheRetentionPolicy Policy;
+        public readonly double CheckIntervalSeconds;
+        public readonly bool LogEvictions;
+
+        public AssetCacheRetentionOptions(
+            bool enabled,
+            AssetCacheRetentionPolicy policy = default,
+            double checkIntervalSeconds = 30d,
+            bool logEvictions = false)
+        {
+            Enabled = enabled;
+            Policy = enabled && policy.EvictionRules.Count == 0 && policy.PreserveRules.Count == 0
+                ? AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(DEFAULT_MINIMUM_IDLE_SECONDS))
+                : policy;
+            CheckIntervalSeconds = IsInvalidInterval(checkIntervalSeconds)
+                ? DEFAULT_CHECK_INTERVAL_SECONDS
+                : checkIntervalSeconds;
+            LogEvictions = logEvictions;
+        }
+
+        private static bool IsInvalidInterval(double seconds)
+        {
+            return double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds <= 0d;
+        }
+    }
+
+    /// <summary>
+    /// Bridges <see cref="AssetCacheRetentionScheduler"/> to VContainer's entry-point lifecycle.
+    /// </summary>
+    internal sealed class AssetCacheRetentionStartable : IStartable, IDisposable
+    {
+        private readonly AssetCacheRetentionScheduler _scheduler;
+
+        public AssetCacheRetentionStartable(AssetCacheRetentionScheduler scheduler)
+        {
+            _scheduler = scheduler ?? throw new ArgumentNullException(nameof(scheduler));
+        }
+
+        public void Start()
+        {
+            _scheduler.Start();
+        }
+
+        public void Dispose()
+        {
+            _scheduler.Dispose();
         }
     }
 }

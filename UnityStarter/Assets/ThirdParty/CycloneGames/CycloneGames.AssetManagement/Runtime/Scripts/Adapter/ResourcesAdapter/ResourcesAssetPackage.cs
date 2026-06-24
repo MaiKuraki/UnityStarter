@@ -207,6 +207,11 @@ namespace CycloneGames.AssetManagement.Runtime
             _cacheService.SetIdleMemoryBudget(maxIdleBytes);
         }
 
+        public int TrimIdleCache(AssetCacheRetentionPolicy policy)
+        {
+            return _cacheService.TrimIdle(policy);
+        }
+
         public void ClearBucket(string bucket)
         {
             _cacheService.ClearBucket(bucket);

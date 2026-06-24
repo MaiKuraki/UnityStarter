@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
 using UnityEngine;
 
@@ -10,6 +11,34 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         Asset = 0,
         AllAssets = 1,
         RawFile = 2,
+    }
+
+    internal interface IAssetCacheClock
+    {
+        long Timestamp { get; }
+        TimeSpan GetElapsed(long startTimestamp, long endTimestamp);
+    }
+
+    internal sealed class StopwatchAssetCacheClock : IAssetCacheClock
+    {
+        public static readonly StopwatchAssetCacheClock Instance = new StopwatchAssetCacheClock();
+
+        private StopwatchAssetCacheClock()
+        {
+        }
+
+        public long Timestamp => Stopwatch.GetTimestamp();
+
+        public TimeSpan GetElapsed(long startTimestamp, long endTimestamp)
+        {
+            long delta = endTimestamp - startTimestamp;
+            if (delta <= 0L)
+            {
+                return TimeSpan.Zero;
+            }
+
+            return TimeSpan.FromSeconds(delta / (double)Stopwatch.Frequency);
+        }
     }
 
     /// <summary>
@@ -32,6 +61,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             public int AccessCount;
             // Approximate runtime footprint in bytes, computed when the node enters the idle pool.
             public long EstimatedBytes;
+            // Monotonic timestamp captured when the node enters the idle pool (RefCount == 0). 0 while active.
+            public long IdleSinceTimestamp;
 
             public CacheNode Next;
             public CacheNode Prev;
@@ -69,6 +100,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 node.Prev = null;
                 node.AccessCount = 0;
                 node.EstimatedBytes = 0;
+                node.IdleSinceTimestamp = 0;
                 node.IsInMainPool = false;
 
                 lock (_lock)
@@ -79,6 +111,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         }
 
         private readonly IAssetPackage _package;
+        private readonly IAssetCacheClock _clock;
 
         private readonly int _maxTrialEntries;
         private readonly int _maxMainEntries;
@@ -123,8 +156,14 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         /// Creates a cache service. Pass 0 for any sizing argument to auto-size based on device memory and platform.
         /// </summary>
         public AssetCacheService(IAssetPackage package, int maxTrialEntries = 0, int maxMainEntries = 0, long maxIdleBytes = 0)
+            : this(package, maxTrialEntries, maxMainEntries, maxIdleBytes, StopwatchAssetCacheClock.Instance)
+        {
+        }
+
+        internal AssetCacheService(IAssetPackage package, int maxTrialEntries, int maxMainEntries, long maxIdleBytes, IAssetCacheClock clock)
         {
             _package = package ?? throw new ArgumentNullException(nameof(package));
+            _clock = clock ?? throw new ArgumentNullException(nameof(clock));
 
             int ramMB = SystemInfo.systemMemorySize;
             if (maxTrialEntries <= 0 || maxMainEntries <= 0)
@@ -439,6 +478,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 _activeMap.Remove(cacheKey);
                 _idleMap[cacheKey] = node;
                 node.EstimatedBytes = (handle as IAssetMemoryFootprint)?.EstimateRuntimeBytes() ?? 0;
+                node.IdleSinceTimestamp = _clock.Timestamp;
                 AddToBucketIndex(node);
 
                 // Promotion: multiple-access or previously-promoted → main pool; first-time idle → trial pool.
@@ -495,6 +535,64 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             lock (_gate)
             {
                 ClearAllInternal(includeActive: false);
+            }
+        }
+
+        /// <summary>
+        /// Evicts idle (RefCount == 0) handles matched by <paramref name="policy"/> and disposes them.
+        /// Active (RefCount &gt; 0) handles are never touched. Returns the number of handles evicted.
+        /// The cache carries no timer and no frame driver; callers own the scheduling policy.
+        /// Thread-safe.
+        /// </summary>
+        public int TrimIdle(AssetCacheRetentionPolicy policy)
+        {
+            if (Volatile.Read(ref _disposed) != 0) return 0;
+
+            lock (_gate)
+            {
+                if (Volatile.Read(ref _disposed) != 0) return 0;
+                if (_trialHead == null && _mainHead == null) return 0;
+
+                long nowTimestamp = _clock.Timestamp;
+
+                _nodesToClearScratch.Clear();
+                CollectMatching(_trialHead, nowTimestamp, policy, _nodesToClearScratch);
+                CollectMatching(_mainHead, nowTimestamp, policy, _nodesToClearScratch);
+
+                int evicted = _nodesToClearScratch.Count;
+                for (int i = 0; i < evicted; i++)
+                {
+                    EvictNode(_nodesToClearScratch[i]);
+                }
+
+                _nodesToClearScratch.Clear();
+                return evicted;
+            }
+        }
+
+        // Eviction must not happen while iterating the list (EvictNode rewires links), so matching nodes are
+        // collected first, then evicted by the caller.
+        private void CollectMatching(CacheNode head, long nowTimestamp, AssetCacheRetentionPolicy policy, List<CacheNode> outList)
+        {
+            var current = head;
+            while (current != null)
+            {
+                var entry = new AssetCacheEntryInfo(
+                    current.Location,
+                    current.Bucket,
+                    current.Tag,
+                    current.Owner,
+                    current.AccessCount,
+                    current.EstimatedBytes,
+                    _clock.GetElapsed(current.IdleSinceTimestamp, nowTimestamp),
+                    current.IsInMainPool ? AssetCacheIdleTier.Main : AssetCacheIdleTier.Trial);
+
+                if (policy.ShouldEvict(in entry))
+                {
+                    outList.Add(current);
+                }
+
+                current = current.Next;
             }
         }
 
@@ -695,6 +793,22 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             }
         }
 
+        // --- Runtime-visible diagnostics ---
+        // Lightweight, allocation-free counters usable in any build (not Editor-only). Intended for retention
+        // schedulers, in-game memory HUDs, or telemetry. Per-entry enumeration stays Editor-only (see below).
+
+        /// <summary>Approximate aggregate footprint (bytes) of all idle (RefCount == 0) handles. Thread-safe.</summary>
+        public long IdleBytesApprox { get { lock (_gate) { return _idleBytes; } } }
+
+        /// <summary>The idle memory budget (bytes) above which idle handles are evicted regardless of count.</summary>
+        public long MaxIdleBytesBudget => Volatile.Read(ref _maxIdleBytes);
+
+        /// <summary>Number of idle (RefCount == 0) handles currently pooled across the trial and main tiers. Thread-safe.</summary>
+        public int IdleCount { get { lock (_gate) { return _trialCount + _mainCount; } } }
+
+        /// <summary>Number of active (RefCount &gt; 0) handles currently pinned and never evictable. Thread-safe.</summary>
+        public int ActiveCount { get { lock (_gate) { return _activeMap.Count; } } }
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;
@@ -712,11 +826,6 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 #if UNITY_EDITOR
         private static readonly object _globalInstancesLock = new object();
         public static readonly List<AssetCacheService> GlobalInstances = new List<AssetCacheService>();
-
-        /// <summary>Approximate aggregate footprint (bytes) of all idle (RefCount == 0) handles.</summary>
-        public long IdleBytesApprox { get { lock (_gate) { return _idleBytes; } } }
-        /// <summary>The idle memory budget (bytes) above which idle handles are evicted regardless of count.</summary>
-        public long MaxIdleBytesBudget => _maxIdleBytes;
 
         public struct CacheDiagnosticEntry
         {
