@@ -108,6 +108,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public bool LastActivateOnLoad;
         public int LastPriority;
         public int InitializeCallCount;
+        public AssetCacheRetentionPolicy LastRetentionPolicy;
 
         public string Name => NameValue;
 
@@ -198,6 +199,13 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public bool IsAssetCached<TAsset>(string location) where TAsset : Object => false;
 
         public void SetCacheIdleMemoryBudget(long maxIdleBytes) { }
+
+        public int TrimIdleCache(AssetCacheRetentionPolicy policy)
+        {
+            LastCall = "TrimIdleCache";
+            LastRetentionPolicy = policy;
+            return 0;
+        }
 
         public void ClearBucket(string bucket)
         {
