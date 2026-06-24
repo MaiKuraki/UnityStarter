@@ -1,15 +1,16 @@
 #if YOOASSET_PRESENT
-using Cysharp.Threading.Tasks;
 using System;
+using System.Collections.Generic;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using Cysharp.Threading.Tasks;
 using YooAsset;
 using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    public sealed class YooAssetPackage : IAssetPackage
+    public sealed class YooAssetPackage : IAssetPackage, IAssetCatalogQuery
     {
         private readonly ResourcePackage _rawPackage;
         public string Name => _rawPackage.PackageName;
@@ -316,9 +317,68 @@ namespace CycloneGames.AssetManagement.Runtime
             return _cacheService.Contains(cacheKey);
         }
 
+        public UniTask<bool> TryGetAssetLocationsByTagAsync(string tag, List<string> results, CancellationToken cancellationToken = default)
+        {
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+
+            results.Clear();
+            if (string.IsNullOrEmpty(tag))
+            {
+                return UniTask.FromResult(false);
+            }
+
+            AssetInfo[] assetInfos;
+            try
+            {
+                assetInfos = _rawPackage.GetAssetInfos(tag);
+            }
+            catch (Exception ex)
+            {
+                CLogger.LogWarning($"[YooAssetPackage] Failed to query asset locations by tag '{tag}': {ex.Message}");
+                return UniTask.FromResult(false);
+            }
+
+            if (assetInfos == null || assetInfos.Length == 0)
+            {
+                return UniTask.FromResult(false);
+            }
+
+            for (int i = 0; i < assetInfos.Length; i++)
+            {
+                AssetInfo assetInfo = assetInfos[i];
+                if (assetInfo == null || assetInfo.IsInvalid)
+                {
+                    continue;
+                }
+
+                string location = assetInfo.Address;
+                if (string.IsNullOrEmpty(location))
+                {
+                    location = assetInfo.AssetPath;
+                }
+
+                if (!string.IsNullOrEmpty(location))
+                {
+                    AssetCatalogQueryUtils.AddUniqueLocation(results, location);
+                }
+            }
+
+            return UniTask.FromResult(results.Count > 0);
+        }
+
         public void SetCacheIdleMemoryBudget(long maxIdleBytes)
         {
             _cacheService.SetIdleMemoryBudget(maxIdleBytes);
+        }
+
+        public int TrimIdleCache(AssetCacheRetentionPolicy policy)
+        {
+            return _cacheService.TrimIdle(policy);
         }
 
         public void ClearBucket(string bucket)
