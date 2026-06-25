@@ -1217,7 +1217,13 @@ For event-driven camera feedback at specific points (e.g., damage hit), you can:
 
 **Purpose**: Spawn point for players. Uses a **static registry pattern** for zero-GC lookup — no `FindObjectsOfType` at runtime.
 
-**Features**: Auto-register/unregister on enable/disable. Name-based matching for portal/checkpoint systems. Gizmo visualization in editor.
+**Features**: Auto-register/unregister on enable/disable. Name-based matching for portal/checkpoint systems. Collider-aware Gizmo visualization in editor for 3D, side-scroller 2D, and top-down 2D authoring.
+
+**Editor visualization**: The `PlayerStart` scene gizmo is drawn by the Editor assembly. It uses the same GameObject's `CharacterController`, `CapsuleCollider`, `BoxCollider`, `SphereCollider`, `BoxCollider2D`, `CapsuleCollider2D`, `CircleCollider2D`, or fallback collider bounds to size a shallow transparent footprint/section preview and a high-contrast spawn-facing arrow. A collider is optional; without one, the gizmo falls back to a compact default marker. The old serialized `Arrow` field has been removed and is no longer required for authoring.
+
+**2D authoring**: Scene Gizmo settings are editor-only metadata on `PlayerStart`; they are compiled only in the Unity Editor and do not change runtime spawn selection. Use `SideScroller2D` when the spawn direction should default to `transform.right`, such as horizontal platformers. Use `TopDown2D` when the spawn direction should default to `transform.up`, such as top-down action or tactics games. Override `Facing Axis` when a sprite or pawn uses a different local forward convention.
+
+**Runtime contract**: `GameMode` still spawns at the `PlayerStart` transform position and rotation. Gizmo debug switches and arrow length settings only affect Scene View visualization.
 
 **Example — Portal-based spawning with named starts**:
 

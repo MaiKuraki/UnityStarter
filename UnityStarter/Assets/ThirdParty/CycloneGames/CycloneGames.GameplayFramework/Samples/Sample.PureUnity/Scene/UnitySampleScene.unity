@@ -155,7 +155,6 @@ MonoBehaviour:
   bCanBeDamaged: 1
   bHidden: 0
   tags: []
-  Arrow: {fileID: 0}
 --- !u!4 &339494085
 Transform:
   m_ObjectHideFlags: 0
