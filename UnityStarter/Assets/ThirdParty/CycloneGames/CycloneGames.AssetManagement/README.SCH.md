@@ -767,9 +767,12 @@ if (package is IAssetCatalogQuery catalogQuery)
 提供对整个 W-TinyLFU 缓存系统全局的透视。(`Tools/CycloneGames/AssetManagement/Asset Cache Debugger`)
 
 - **层级 (Tier) 可视化**: 直观显示资源当前是处于 Active 状态、Trial 试用池，还是 Main 热缓存区。
+- **可调整列宽**: 可在表头分隔处拖拽列宽，便于对齐较长的 location、provider、bucket、tag 和 owner。使用 **Reset Columns** 可恢复当前会话默认列宽。
 - **元数据显示**: 直接显示和过滤 `Tag`、`Owner` 以及 `Bucket`。
 - **引用计数异常警告**: 自动高亮显示引用计数异常偏高（> 8）的资源，警告你可能遗漏了 `Dispose()` 调用。
-- **内存占用**: Summary 页展示空闲池的实时内存占用与平台内存预算的对比，一眼看出驱逐压力。
+- **内存占用**: 表格提供单行估算内存列，Summary 页展示空闲池的实时内存占用与平台内存预算的对比。
+- **选择与复制菜单**: 单击选择行，Ctrl/Cmd 单击切换多选，Shift 单击按当前可见顺序选择范围。右键行或表头可复制单个字段、选中行、完整行、TSV/JSON 输出，或复制当前可见的全部行；项目资源路径还可从菜单中 ping 到 Project 窗口。
+- **稳定滚动位置**: 各缓存 tab 在切换时保留各自滚动位置，首次进入某个 tab 时从顶部开始。
 - **智能汇总**: 按资源提供者、Tag 和 Owner 统计内存分布。
 
 #### 2. 句柄泄漏追踪追踪器 (Handle Tracker)
@@ -777,12 +780,19 @@ if (package is IAssetCatalogQuery catalogQuery)
 微观级别监控每一个活动句柄的分配，并自动与缓存系统交叉比对。(`Tools/CycloneGames/AssetManagement/Asset Handle Tracker`)
 
 - **智能状态识别**: 将每个长寿命句柄分类为 `Cached`（安全驻留于空闲池）、`Persistent`（开发者声明的长期驻留），或 `Leaked`（真正无法解释的泄漏）。
+- **可调整列宽**: 可在表头分隔处拖拽列宽，按当前调试场景对齐 package、description、location、tag、owner、status 和 lifetime 等列。
+- **Location 列**: 在可解析时从 handle description 中提取资源位置，方便与缓存行和项目资源进行对照。
+- **选择与复制菜单**: 单击选择行，Ctrl/Cmd 单击切换多选，Shift 单击按当前可见顺序选择范围。右键行或表头可复制单个字段、选中行、完整行、TSV/JSON 输出、堆栈，或复制当前可见的全部行。
 - **标记持久**: 右键任意行 -> **Mark Persistent**，为故意长期驻留的资源（DontDestroyOnLoad、引导 UI、主场景）消除误报泄漏。参见 [标记持久句柄](#标记持久句柄)。
-- **内存泄漏堆栈**: 点击展开任何泄露的句柄，直接跳转到分配该句柄的精准 C# 代码行（需先在工具栏启用 **Stack Traces**）。
+- **内存泄漏堆栈**: 对已捕获堆栈的行右键选择 **Expand Stack Trace**，即可查看分配该句柄的 C# 调用堆栈（需先在工具栏启用 **Stack Traces**）。
 
 #### 3. 场景追踪器 (Scene Tracker) (`Tools/CycloneGames/AssetManagement/Scene Tracker`)
 
-实时查看每个被追踪的场景句柄：提供者、包、桶、激活状态（Loading / Waiting / Activated / Unload Pending）、进度、引用数与存活时长。用于捕捉卡在 `WaitingForActivation` 或待卸载的场景。
+实时查看每个被追踪的场景句柄：提供者、包、桶、激活状态（Loading / Waiting / Activated / Unload Pending / Error）、加载模式、激活模式、进度、引用数、存活时长和最近错误。用于捕捉卡在 `WaitingForActivation`、待卸载或 provider 操作失败的场景。
+
+- **可调整列宽**: 可在表头分隔处拖拽 scene、provider、package、bucket、state、activation、progress、refs、age 和 error 等列宽。
+- **选择与复制菜单**: 支持与缓存和句柄窗口一致的单击、Ctrl/Cmd 多选、Shift 范围选择，并提供选中行/可见行 TSV 和 JSON 导出。
+- **场景资源定位**: 右键由 `Assets/` 或 `Packages/` 路径支持的行，可 ping 到对应 scene asset。
 
 #### 4. 运行时治理面板 (Runtime Governance) (`Tools/CycloneGames/AssetManagement/Runtime Governance`)
 
@@ -911,12 +921,14 @@ public class LevelLoader
 
     public async UniTask LoadBossArena(EnemyConfig config)
     {
+        const string sceneBucket = "Scene.BossArena";
+
         // 方式 A：通过 IAssetPackage 直接加载场景
-        var sceneHandle = package.LoadSceneAsync(config.BossArena);
+        var sceneHandle = package.LoadSceneAsync(config.BossArena, bucket: sceneBucket);
         await sceneHandle.Task;
 
         // 方式 B：通过 Navigathena 进行场景导航（push/pop/change）
-        await navigator.Push(config.BossArena.ToSceneIdentifier(package));
+        await navigator.Push(config.BossArena.ToSceneIdentifier(package, bucket: sceneBucket));
     }
 }
 ```

@@ -21,9 +21,10 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
             this SceneRef sceneRef,
             IAssetPackage package,
             LoadSceneMode loadSceneMode = LoadSceneMode.Single,
-            bool activateOnLoad = true)
+            bool activateOnLoad = true,
+            string bucket = null)
         {
-            return new AssetManagementSceneIdentifier(package, sceneRef.Location, loadSceneMode, activateOnLoad);
+            return new AssetManagementSceneIdentifier(package, sceneRef.Location, loadSceneMode, activateOnLoad, bucket);
         }
     }
 }

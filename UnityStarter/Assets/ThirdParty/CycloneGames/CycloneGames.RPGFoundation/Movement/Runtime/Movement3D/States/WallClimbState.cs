@@ -89,6 +89,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
         public override void OnExit(ref MovementContext context)
         {
+            if (context.ClimbingMode == ClimbingMode.Wall)
+            {
+                context.ClimbingMode = ClimbingMode.None;
+            }
+
             context.WallClimbNormal = Vector3.zero;
             context.WallClingTimer = 0f;
             context.IsWallSliding = false;
@@ -113,8 +118,6 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
         {
             if (context.JumpPressed && context.Config.EnableWallJump)
             {
-                float3 jumpDir = math.normalize((float3)context.WallClimbNormal + context.WorldUp);
-
                 context.WallJumpDirection = new Vector3(
                     context.WallClimbNormal.x * context.Config.WallJumpForceHorizontal,
                     context.Config.WallJumpForceVertical,

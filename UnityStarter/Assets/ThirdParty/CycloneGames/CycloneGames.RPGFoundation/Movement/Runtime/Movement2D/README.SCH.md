@@ -75,7 +75,7 @@
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime.Movement2D;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 
 public class Player2DController : MonoBehaviour
 {
@@ -105,7 +105,7 @@ public class Player2DController : MonoBehaviour
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime.Movement2D;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 
 public class DNFStyleController : MonoBehaviour
 {
@@ -215,8 +215,7 @@ if (astarInput.HasReachedDestination)
 
 - 使用 A\* 原生 2D Grid/Point 图
 - 在 XY 平面工作
-- 在 XY 平面工作
-- 通过反射调用 `MovementComponent2D.SetInputDirection`
+- 通过 A\* integration provider 调用 `MovementComponent2D.SetInputDirection`
 
 ### 🧗 攀爬系统 (2D)
 
@@ -329,7 +328,9 @@ movement.MovementAuthority = GetComponent<GASMovementAuthority2D>();
 ### 简单使用（无需 GAS）
 
 ```csharp
-using CycloneGames.RPGFoundation.Runtime.Movement;
+using CycloneGames.RPGFoundation.Movement.Core;
+using CycloneGames.RPGFoundation.Movement.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 using UnityEngine;
 
 public class SimpleAttributeController2D : MonoBehaviour
@@ -355,9 +356,15 @@ public class SimpleAttributeController2D : MonoBehaviour
 
 ### GAS 集成
 
+GameplayAbilities integration 只会在其 integration assembly 启用 `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` 时编译。该符号代表完整依赖组：`CycloneGames.GameplayAbilities.Runtime` 和 `CycloneGames.GameplayTags.Core`。
+
+如果跳跃、翻滚、爬墙等移动动作由 ability 拥有，应由 ability 使用 `MovementStateRequestContext.FromAbility(this)` 请求移动状态。这样移动权威校验仍然生效，同时不会递归尝试再次激活同一个 ability。
+
 ```csharp
 #if CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES
-using CycloneGames.RPGFoundation.Runtime.Movement;
+using CycloneGames.RPGFoundation.Movement.Core;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
+using CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities;
 using UnityEngine;
 
 public class GASAttributeController2D : MonoBehaviour
@@ -405,7 +412,13 @@ void SetInputDirection(Vector2 direction);
 void SetJumpPressed(bool pressed);
 void SetSprintHeld(bool held);
 void SetCrouchHeld(bool held);
+void SetRollPressed(bool pressed);
+bool RequestClimb(ClimbingMode climbingMode, int wallSide = 0, object context = null);
+bool StopClimb();
 bool RequestStateChange(MovementStateType type);
+MovementSnapshot GetSnapshot();
+void ApplySnapshot(in MovementSnapshot snapshot);
+void ResetFromSnapshot(in MovementSnapshot snapshot);
 
 // 事件
 event Action<MovementStateType, MovementStateType> OnStateChanged;
@@ -430,9 +443,9 @@ void Update()
 }
 ```
 
-## 🎯 最佳实践
+## 最佳实践
 
-### ✅ 应该
+### 推荐做法
 
 - 在角色脚部设置 `groundCheck` Transform
 - 使用 `coyoteTime` 和 `jumpBufferTime` 获得更好手感
@@ -440,10 +453,13 @@ void Update()
 - 使用 `maxFallSpeed` 防止过快的下落速度
 - 使用 `Velocity.magnitude` 做 BlendTree 动画（更平滑的过渡）
 - 使用 `MovementAttributeAuthority` 进行运行时属性修改
+- 使用 `SetRollPressed`、`RequestClimb` 和 `StopClimb` 驱动动作状态输入
+- snapshot 只作为网络交接数据；Unity 组件调用必须留在 Unity main thread
 
-### ❌ 不应该
+### 避免事项
 
 - 混合使用 2D 和 3D 物理组件
 - 忘记将 Rigidbody2D 设置为 Continuous 碰撞检测
 - 在非 2D 游戏中使用（请使用 MovementComponent）
 - 如果需要平滑插值，在 BlendTree 中使用 `CurrentSpeed`（应使用 `Velocity.magnitude`）
+- 从 worker thread 调用 `MovementComponent2D`；多线程模拟应放入纯数据系统

@@ -3,6 +3,7 @@ using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using MackySoft.Navigathena.SceneManagement;
+using UnityEngine.SceneManagement;
 
 namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
 {
@@ -13,15 +14,22 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
     {
         private readonly IAssetPackage assetPackage;
         private readonly string location;
-        private readonly UnityEngine.SceneManagement.LoadSceneMode loadSceneMode;
+        private readonly LoadSceneMode loadSceneMode;
         private readonly bool activateOnLoad;
+        private readonly string bucket;
 
-        public AssetManagementSceneIdentifier(IAssetPackage assetPackage, string location, UnityEngine.SceneManagement.LoadSceneMode loadSceneMode = UnityEngine.SceneManagement.LoadSceneMode.Additive, bool activateOnLoad = true)
+        public AssetManagementSceneIdentifier(
+            IAssetPackage assetPackage,
+            string location,
+            LoadSceneMode loadSceneMode = LoadSceneMode.Additive,
+            bool activateOnLoad = true,
+            string bucket = null)
         {
             this.assetPackage = assetPackage;
             this.location = location;
             this.loadSceneMode = loadSceneMode;
             this.activateOnLoad = activateOnLoad;
+            this.bucket = bucket;
         }
 
         public MackySoft.Navigathena.SceneManagement.ISceneHandle CreateHandle()
@@ -29,7 +37,8 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
             var sceneHandle = assetPackage.LoadSceneAsync(
                 location,
                 loadSceneMode,
-                activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual);
+                activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual,
+                bucket: bucket);
             return new NavigathenaSceneHandleAdapter(sceneHandle, assetPackage);
         }
     }

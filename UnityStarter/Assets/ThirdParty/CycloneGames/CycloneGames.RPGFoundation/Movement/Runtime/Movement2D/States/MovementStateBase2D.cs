@@ -9,9 +9,9 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 
         public virtual void OnEnter(ref MovementContext2D context) { }
 
-        public virtual void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public virtual void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
-            velocity = float2.zero;
+            displacement = float2.zero;
         }
 
         public virtual void OnFixedUpdate(ref MovementContext2D context) { }
