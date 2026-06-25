@@ -1,10 +1,22 @@
 # CycloneGames.RPGFoundation
 
-CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优先按功能模块组织，然后在每个模块内按运行职责分层。
+[English](./README.md) | 简体中文
+
+`CycloneGames.RPGFoundation` 为 Unity 项目提供可复用的 RPG 基础模块。包内系统按玩法领域组织，核心契约与 Unity 运行时对象解耦，Unity-facing 组件通过独立的 Runtime、Editor、Tests 和 Integration 程序集暴露。
+
+当前包包含 Interaction 和 Movement 模块。可选网络桥接和第三方集成位于独立程序集或独立包中，项目可以只启用实际使用的依赖。
+
+## 快速入门
+
+1. 根据需要引用对应模块程序集，例如 Unity 移动组件引用 `CycloneGames.RPGFoundation.Movement.Runtime`，交互组件引用 `CycloneGames.RPGFoundation.Interaction.Runtime`。
+2. 在 server、headless、simulation、CLI 或 EditMode 测试中优先使用 `Core` 契约。
+3. 在 Unity 场景绑定、ScriptableObject 配置和 adapter-facing 行为中使用 `Runtime` 组件。
+4. 只有当对应依赖已安装并满足 asmdef 条件时，才启用可选 integration assembly。
+5. 修改契约、asmdef、序列化数据或 integration 边界后运行模块 EditMode 测试。
 
 ## 模块布局
 
-长期维护的模块使用以下布局：
+长期维护模块使用以下布局：
 
 ```text
 <Module>/
@@ -14,43 +26,42 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
   Runtime/
   Editor/
   Tests/
+  Runtime/Integrations/
 ```
 
-`Core/` 放置不依赖 Unity 的契约、值对象、校验逻辑、确定性数据，以及可在 server、headless、CLI 和 Unity 测试环境运行的服务。可行时 Core assembly 使用 `noEngineReferences`。
-
-`Runtime/` 放置 Unity-facing component、ScriptableObject authoring bridge、runtime adapter，以及默认 Unity 实现。
-
-`Editor/` 放置 inspector、window、validator、drawer 和 authoring tool。
-
-`Tests/` 放置该模块的 EditMode 和 PlayMode 测试。
-
-当前包使用该结构组织：
-
-| 模块 | 用途 |
+| 目录 | 作用 |
 | --- | --- |
-| `Interaction/` | 交互契约、本地运行时组件、权威校验、确定性桥接、Inspector 和测试 |
-| `Movement/` | 移动核心契约、2D/3D Unity 移动组件、寻路 adapter、动画 adapter、Inspector 和测试 |
+| `Core/` | 不依赖 Unity 的契约、值对象、校验逻辑、确定性数据，以及可在 server、headless、CLI 和 Unity 测试环境运行的服务。 |
+| `Runtime/` | Unity-facing 组件、ScriptableObject authoring bridge、runtime adapter 和默认 Unity 实现。 |
+| `Editor/` | Inspector、窗口、validator、drawer 和 authoring 工具。 |
+| `Tests/` | 模块契约和运行时行为的 EditMode 与 PlayMode 测试。 |
+| `Runtime/Integrations/` | 通过独立 asmdef 隔离的可选第三方或 Cyclone 模块 adapter。 |
 
-## 程序集布局
+当前模块：
 
-当前包已经拆成模块程序集，而不是把所有源码放入一个宽泛的 runtime assembly：
+| 模块 | 作用 |
+| --- | --- |
+| `Interaction/` | 交互契约、本地运行时组件、权威校验、确定性桥接、Inspector 和测试。 |
+| `Movement/` | 移动核心契约、2D/3D Unity 移动组件、寻路 adapter、动画 adapter、Inspector 和测试。 |
+
+## 程序集边界
 
 | Assembly | 职责 |
 | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Core` | 不依赖 Unity 的交互契约、值对象、校验、限流和权威服务 |
-| `CycloneGames.RPGFoundation.Interaction.Runtime` | Unity-facing 交互组件和运行时服务 |
-| `CycloneGames.RPGFoundation.Interaction.Editor` | 交互 Inspector、validator 和 Editor 工具 |
-| `CycloneGames.RPGFoundation.Interaction.Tests.Editor` | 交互 EditMode 测试 |
-| `CycloneGames.RPGFoundation.Movement.Core` | 不依赖 Unity 的移动契约、属性、状态标识、快照和 helper 类型 |
-| `CycloneGames.RPGFoundation.Movement.Runtime` | Unity-facing 2D/3D 移动组件、ScriptableObject 配置、动画抽象和寻路抽象 |
-| `CycloneGames.RPGFoundation.Movement.Editor` | 移动 Inspector 和 authoring 校验 |
-| `CycloneGames.RPGFoundation.Movement.Tests.Editor` | 移动 EditMode 测试 |
+| `CycloneGames.RPGFoundation.Interaction.Core` | 不依赖 Unity 的交互契约、值对象、校验、限流和权威服务。 |
+| `CycloneGames.RPGFoundation.Interaction.Runtime` | Unity-facing 交互组件和运行时服务。 |
+| `CycloneGames.RPGFoundation.Interaction.Editor` | 交互 Inspector、validator 和 Editor 工具。 |
+| `CycloneGames.RPGFoundation.Interaction.Tests.Editor` | 交互 EditMode 测试。 |
+| `CycloneGames.RPGFoundation.Movement.Core` | 不依赖 Unity 的移动契约、属性、状态标识、快照和 helper 类型。 |
+| `CycloneGames.RPGFoundation.Movement.Runtime` | Unity-facing 2D/3D 移动组件、ScriptableObject 配置、动画抽象和寻路抽象。 |
+| `CycloneGames.RPGFoundation.Movement.Editor` | 移动 Inspector 和 authoring 校验。 |
+| `CycloneGames.RPGFoundation.Movement.Tests.Editor` | 移动 EditMode 测试。 |
 
-旧程序集 `CycloneGames.RPGFoundation.Runtime`、`CycloneGames.RPGFoundation.Editor` 和 `CycloneGames.RPGFoundation.Tests.Editor` 会作为轻量兼容壳保留。新代码应直接引用模块程序集。
+Movement state change 使用 `MovementStateRequestContext` 携带 source、payload、tick、sequence、prediction key 和 custom flags，同时保持 `Movement.Core` 不依赖 GameplayAbilities、GameplayTags 或 Networking。Ability、input、pathfinding、AI 和 network integration 通过独立程序集共享同一套状态门控。
 
 ## 可选集成
 
-可选集成被隔离到独立 assembly 中，这样基础包在未安装可选包时也能正常编译。Cyclone networking 桥接由独立可选包提供，不属于基础 RPGFoundation 包。
+可选集成隔离在独立程序集中，因此基础包在未安装可选包时也能编译。Cyclone 网络桥接由独立可选包提供。
 
 | Integration Assembly | 依赖 |
 | --- | --- |
@@ -62,40 +73,47 @@ CycloneGames.RPGFoundation 是可复用的 RPG foundation package。包结构优
 | `CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation` | `Unity.AI.Navigation` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AStar` | `AstarPathfindingProject` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation` | ProjectDawn Agents Navigation |
-| `CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities` | `CycloneGames.GameplayAbilities.Runtime` |
+| `CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities` | `CycloneGames.GameplayAbilities.Runtime` + `CycloneGames.GameplayTags.Core` |
 
-可选 networking 包：
+可选网络包：
 
-| Package | 依赖 | 用途 |
+| Package | 依赖 | 作用 |
 | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Networking` | `CycloneGames.Networking.Core` | 与传输层无关的 interaction request、result、cancel 和 authority validation DTO |
-| `CycloneGames.RPGFoundation.Movement.Networking` | `CycloneGames.Networking.Core` | 与传输层无关的 movement input、authoritative snapshot、correction、teleport、full-state request 和 authority transfer DTO |
-
-当 RPGFoundation 和可选依赖都以 UPM package 安装时，integration assembly 会通过自身 asmdef 的 `versionDefines` 和 `defineConstraints` 自动启用。基础 Core、Runtime 和 Editor assembly 不需要项目级 scripting define symbol。
-
-当依赖直接复制到 `Assets/` 下时，Unity 不能可靠地把 `package.json` 暴露给 `asmdef.versionDefines`。在这种布局下，RPGFoundation 基础包仍会正常编译；强类型可选 integration 会保持禁用，除非该依赖通过 Package Manager 提供，例如使用 local UPM package path。本包不把项目级全局 scripting define symbol 作为常规 integration 开关。
+| `CycloneGames.RPGFoundation.Interaction.Networking` | `CycloneGames.Networking.Core` | 与传输层无关的 interaction request、result、cancel 和 authority validation contract。 |
+| `CycloneGames.RPGFoundation.Movement.Networking` | `CycloneGames.Networking.Core` | 与传输层无关的 movement input、authoritative snapshot、correction、teleport、full-state request、authority transfer、input validation、history 和 reconciliation contract。 |
 
 ## Define 符号
 
-这些符号由 integration asmdef 通过 `versionDefines` 生成；这里只作为诊断和 integration 内部条件编译说明，不作为项目级全局要求：
+以下符号由 integration asmdef 通过 `versionDefines` 或 define constraints 生成。它们用于诊断和 integration-local 条件编译，不作为项目级全局要求。
 
 | Symbol | 启用内容 |
 | --- | --- |
-| `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction 与 Movement DeterministicMath 集成 |
-| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework 集成 |
-| `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer 集成 |
-| `CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION` | Movement Unity AI Navigation 集成 |
-| `CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING` | Movement A* Pathfinding 集成 |
-| `CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION` | Movement Agents Navigation 集成 |
-| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` | Movement GameplayAbilities 集成 |
+| `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction 和 Movement DeterministicMath 集成。 |
+| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework 集成。 |
+| `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer 集成。 |
+| `CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION` | Movement Unity AI Navigation 集成。 |
+| `CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING` | Movement A* Pathfinding 集成。 |
+| `CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION` | Movement Agents Navigation 集成。 |
+| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` | Movement GameplayAbilities 集成，依赖 GameplayAbilities 和 GameplayTags 程序集。 |
+
+## 持久化
+
+本包不定义运行时存档、Editor 偏好、PlayerPrefs、EditorPrefs、SessionState、registry entry 或隐藏缓存。配置和持久化玩法状态由接入项目或明确声明该行为的可选模块持有。
 
 ## 验证
 
-修改程序集或移动文件后：
+修改程序集、移动文件、更新 integration reference 或调整序列化契约后运行以下检查：
 
-1. 打开 Unity，等待项目重新导入 assemblies。
-2. 确认 Console 没有编译错误。
-3. 运行 `CycloneGames.RPGFoundation.Interaction.Tests.Editor` 和 `CycloneGames.RPGFoundation.Movement.Tests.Editor` 的 EditMode 测试。
-4. 如果存在可选 networking 包，运行对应 EditMode 测试。
-5. 如果可选包通过 Package Manager 安装，确认对应 integration assembly 能编译。
-6. 对 Animancer movement，在 movement component 旁添加 `AnimancerMovementAnimationBinder`，并分配 Animancer component。
+```text
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Interaction.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Tests.Editor
+Unity Test Runner > EditMode > optional RPGFoundation networking package tests when present
+```
+
+Unity 刷新 generated project files 后可执行 CLI 编译：
+
+```text
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Core.csproj --nologo
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Runtime.csproj --nologo
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Tests.Editor.csproj --nologo
+```

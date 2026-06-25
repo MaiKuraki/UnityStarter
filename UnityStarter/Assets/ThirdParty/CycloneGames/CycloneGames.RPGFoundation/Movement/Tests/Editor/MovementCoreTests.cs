@@ -93,6 +93,38 @@ namespace CycloneGames.RPGFoundation.Movement.Tests.Editor
             AssertSnapshot(second, provider.GetSnapshot());
         }
 
+        [Test]
+        public void MovementStateRequestContext_Carries_NetworkTimeline_Without_NetworkingDependency()
+        {
+            MovementStateRequestContext context = MovementStateRequestContext.FromNetwork(
+                payload: "roll",
+                tick: 120,
+                sequence: 9,
+                predictionKey: 77,
+                flags: 3U);
+
+            Assert.That(context.Source, Is.EqualTo(MovementStateRequestSource.Network));
+            Assert.That(context.Payload, Is.EqualTo("roll"));
+            Assert.That(context.Tick, Is.EqualTo(120));
+            Assert.That(context.Sequence, Is.EqualTo(9));
+            Assert.That(context.PredictionKey, Is.EqualTo(77));
+            Assert.That(context.Flags, Is.EqualTo(3U));
+            Assert.That(context.IsNetworkDriven, Is.True);
+            Assert.That(context.HasTimeline, Is.True);
+            Assert.That(context.HasPredictionKey, Is.True);
+        }
+
+        [Test]
+        public void MovementStateRequestContext_AbilitySource_DoesNot_Imply_NetworkTimeline()
+        {
+            MovementStateRequestContext context = MovementStateRequestContext.FromAbility(payload: this);
+
+            Assert.That(context.IsAbilityDriven, Is.True);
+            Assert.That(context.IsNetworkDriven, Is.False);
+            Assert.That(context.HasTimeline, Is.False);
+            Assert.That(context.Payload, Is.SameAs(this));
+        }
+
         private static void AssertSnapshot(in MovementSnapshot expected, in MovementSnapshot actual)
         {
             Assert.That(math.distance(expected.Position, actual.Position), Is.LessThan(0.0001f));

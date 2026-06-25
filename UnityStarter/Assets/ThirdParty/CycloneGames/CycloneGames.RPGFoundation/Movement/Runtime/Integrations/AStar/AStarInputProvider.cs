@@ -1,6 +1,7 @@
 using UnityEngine;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 
 #if CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING
 using Pathfinding;
@@ -35,7 +36,7 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
 
         private Seeker _seeker;
         private MovementComponent _movement3D;
-        private Movement2D.MovementComponent2D _movement2D;
+        private MovementComponent2D _movement2D;
         private Path _currentPath;
         private int _currentWaypoint;
         private bool _hasDestination;
@@ -100,7 +101,7 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
         {
             _seeker = GetComponent<Seeker>();
             _movement3D = GetComponent<MovementComponent>();
-            _movement2D = GetComponent<Movement2D.MovementComponent2D>();
+            _movement2D = GetComponent<MovementComponent2D>();
         }
 
         private void Update()

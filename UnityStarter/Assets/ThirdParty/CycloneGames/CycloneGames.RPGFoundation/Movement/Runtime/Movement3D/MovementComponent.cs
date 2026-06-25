@@ -1910,12 +1910,78 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             bool wasPressed = _context.JumpPressed;
             _context.JumpPressed = pressed;
 
-            if (pressed && !wasPressed && CanJump())
+            if (!pressed || wasPressed)
+            {
+                return;
+            }
+
+            if (CanJump())
+            {
                 RequestStateChange(MovementStateType.Jump);
+                return;
+            }
+
+            _jumpBufferCounter = config != null ? config.JumpBufferTime : 0f;
         }
 
         public void SetSprintHeld(bool held) => _context.SprintHeld = held;
         public void SetCrouchHeld(bool held) => _context.CrouchHeld = held;
+
+        public void SetRollPressed(bool pressed)
+        {
+            bool wasPressed = _context.RollPressed;
+            _context.RollPressed = pressed;
+
+            if (pressed && !wasPressed)
+            {
+                RequestStateChange(MovementStateType.Roll);
+            }
+        }
+
+        public bool RequestClimb(ClimbingMode climbingMode, Vector3 wallNormal = default, object context = null)
+        {
+            if (config == null)
+            {
+                return false;
+            }
+
+            switch (climbingMode)
+            {
+                case ClimbingMode.Ladder:
+                    if (!config.EnableLadderClimbing)
+                    {
+                        return false;
+                    }
+                    break;
+                case ClimbingMode.Wall:
+                    if (!config.EnableWallClimbing || wallNormal.sqrMagnitude <= kMinSqrMagnitude)
+                    {
+                        return false;
+                    }
+                    _context.WallClimbNormal = wallNormal.normalized;
+                    break;
+                case ClimbingMode.None:
+                    return StopClimb();
+                default:
+                    return false;
+            }
+
+            _context.ClimbingMode = climbingMode;
+            return RequestStateChange(MovementStateType.Climb, context ?? climbingMode);
+        }
+
+        public bool StopClimb()
+        {
+            _context.ClimbingMode = ClimbingMode.None;
+            _context.WallClimbNormal = Vector3.zero;
+
+            if (CurrentState != MovementStateType.Climb)
+            {
+                return true;
+            }
+
+            return RequestStateChange(_context.IsGrounded ? MovementStateType.Idle : MovementStateType.Fall);
+        }
 
         public void SetLookDirection(Vector3 worldDirection)
         {
@@ -2024,7 +2090,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 MovementStateType.Roll => StatePool<MovementStateBase>.GetState<RollState>(),
                 MovementStateType.Swim => StatePool<MovementStateBase>.GetState<SwimState>(),
                 MovementStateType.Fly => StatePool<MovementStateBase>.GetState<FlyState>(),
-                MovementStateType.Climb => StatePool<MovementStateBase>.GetState<WallClimbState>(),
+                MovementStateType.Climb => _context.ClimbingMode switch
+                {
+                    ClimbingMode.Ladder => StatePool<MovementStateBase>.GetState<LadderClimbState>(),
+                    ClimbingMode.Wall => StatePool<MovementStateBase>.GetState<WallClimbState>(),
+                    _ => null
+                },
                 _ => StatePool<MovementStateBase>.GetState<IdleState>()
             };
         }
@@ -2105,14 +2176,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
                 _jumpBufferCounter -= deltaTime;
             }
 
-            if (_context.JumpPressed && !_context.IsGrounded && _coyoteTimeCounter <= 0f)
+            if (_jumpBufferCounter > 0f && _context.IsGrounded)
             {
-                _jumpBufferCounter = config.JumpBufferTime;
-            }
-            else if (_jumpBufferCounter > 0f && _context.IsGrounded)
-            {
-                _jumpBufferCounter = 0f;
-                RequestStateChange(MovementStateType.Jump);
+                if (RequestStateChange(MovementStateType.Jump))
+                {
+                    _jumpBufferCounter = 0f;
+                }
             }
         }
 
@@ -2365,7 +2434,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             if (_isGrounded)
             {
                 float slopeAngle = Vector3.Angle(_groundNormal, WorldUp);
-                sb.AppendLine($"Slope Angle: {slopeAngle:F1}° (Limit: {config?.SlopeLimit ?? 45}°)");
+                sb.AppendLine($"Slope Angle: {slopeAngle:F1} deg (Limit: {config?.SlopeLimit ?? 45} deg)");
             }
 
             sb.AppendLine($"Velocity: {_velocity.magnitude:F2} m/s");

@@ -19,18 +19,25 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             }
         }
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
             float climbSpeed = context.Config.LadderClimbSpeed;
             float verticalInput = context.InputDirection.y;
             float horizontalInput = context.InputDirection.x;
             
-            velocity = new float2(horizontalInput, verticalInput) * climbSpeed;
-            context.CurrentSpeed = math.length(velocity);
+            float2 currentVelocity = new float2(horizontalInput, verticalInput) * climbSpeed;
+            displacement = currentVelocity * context.DeltaTime;
+            context.CurrentSpeed = math.length(currentVelocity);
+            context.CurrentVelocity = currentVelocity;
         }
 
         public override void OnExit(ref MovementContext2D context)
         {
+            if (context.ClimbingMode == ClimbingMode.Ladder)
+            {
+                context.ClimbingMode = ClimbingMode.None;
+            }
+
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
                 int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);

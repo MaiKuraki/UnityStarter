@@ -49,6 +49,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.States
 
         public override void OnExit(ref MovementContext context)
         {
+            if (context.ClimbingMode == ClimbingMode.Ladder)
+            {
+                context.ClimbingMode = ClimbingMode.None;
+            }
+
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
                 int hash = AnimationParameterCache.GetHash(context.Config.ClimbingParameter);

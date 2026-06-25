@@ -7,22 +7,19 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
     {
         public override MovementStateType StateType => MovementStateType.Crouch;
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
             float speed = context.GetFinalSpeed(context.Config.CrouchSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
 
 #if UNITY_6000_0_OR_NEWER
-            velocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
+            float2 currentVelocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
 #else
-            velocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
+            float2 currentVelocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
 #endif
+            displacement = currentVelocity * context.DeltaTime;
             context.CurrentSpeed = math.abs(horizontalVelocity);
-#if UNITY_6000_0_OR_NEWER
-            context.CurrentVelocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
-#else
-            context.CurrentVelocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
-#endif
+            context.CurrentVelocity = currentVelocity;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
