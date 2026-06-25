@@ -1217,7 +1217,13 @@ public sealed class PowerStrikeAbility : GameplayAbility
 
 **用途**：玩家出生点。使用 **静态注册表模式** 实现零 GC 查找 — 运行时无需 `FindObjectsOfType`。
 
-**特性**：启用/禁用时自动注册/注销。支持基于名称的匹配，用于传送门/检查点系统。编辑器中绘制 Gizmo。
+**特性**：启用/禁用时自动注册/注销。支持基于名称的匹配，用于传送门/检查点系统。编辑器中绘制可感知 Collider 的 Gizmo，支持 3D、横板 2D 和俯视角 2D authoring。
+
+**编辑器可视化**：`PlayerStart` 的 Scene Gizmo 由 Editor assembly 绘制。它会读取同一 GameObject 上的 `CharacterController`、`CapsuleCollider`、`BoxCollider`、`SphereCollider`、`BoxCollider2D`、`CapsuleCollider2D`、`CircleCollider2D` 或后备 Collider bounds，用浅色半透明落点/剖面预览和高对比出生朝向箭头表达出生点。Collider 是可选的；没有 Collider 时会回退为紧凑的默认标记。旧版序列化 `Arrow` 字段已移除，authoring 时不再需要维护该字段。
+
+**2D authoring**：Scene Gizmo 设置是 `PlayerStart` 上的 editor-only metadata；它们只在 Unity Editor 中编译，不改变运行时出生点选择。横板平台类游戏通常使用 `SideScroller2D`，出生朝向默认读取 `transform.right`。俯视角动作或战术类游戏通常使用 `TopDown2D`，出生朝向默认读取 `transform.up`。如果 sprite 或 pawn 使用不同的本地朝向约定，可以覆盖 `Facing Axis`。
+
+**运行时契约**：`GameMode` 仍然使用 `PlayerStart` 的 transform position 和 rotation 生成 Pawn。Gizmo debug 开关和箭头长度设置只影响 Scene View 可视化。
 
 **示例 — 基于传送门名称的出生点选择**：
 
