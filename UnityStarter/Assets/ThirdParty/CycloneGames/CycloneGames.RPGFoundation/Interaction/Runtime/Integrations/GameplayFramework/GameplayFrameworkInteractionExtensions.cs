@@ -1,6 +1,7 @@
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEngine;
 using CycloneGames.RPGFoundation.Interaction.Core;
+using CycloneGames.RPGFoundation.Interaction.Runtime;
 
 namespace CycloneGames.RPGFoundation.Interaction.Integrations.GameplayFramework
 {
