@@ -7,7 +7,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
     {
         public override MovementStateType StateType => MovementStateType.Idle;
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
             // For BeltScroll and TopDown modes, stop Y movement when idle
             // For Platformer, preserve physics-driven Y velocity (for falling)
@@ -21,9 +21,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 #endif
             }
 
-            velocity = new float2(0, verticalVelocity);
+            float2 currentVelocity = new float2(0, verticalVelocity);
+            displacement = currentVelocity * context.DeltaTime;
             context.CurrentSpeed = 0f;
-            context.CurrentVelocity = velocity;
+            context.CurrentVelocity = currentVelocity;
 
             // Update animation parameter
             if (context.AnimationController != null && context.AnimationController.IsValid)

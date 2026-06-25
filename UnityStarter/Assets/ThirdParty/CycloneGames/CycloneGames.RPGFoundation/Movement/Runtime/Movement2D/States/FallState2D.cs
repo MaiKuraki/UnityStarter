@@ -7,7 +7,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
     {
         public override MovementStateType StateType => MovementStateType.Fall;
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
             float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
             float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.AirControlMultiplier);
@@ -21,9 +21,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 #endif
             verticalVelocity = math.max(verticalVelocity, -context.Config.MaxFallSpeed);
 
-            velocity = new float2(horizontalVelocity, verticalVelocity);
+            float2 currentVelocity = new float2(horizontalVelocity, verticalVelocity);
+            displacement = currentVelocity * context.DeltaTime;
             context.CurrentSpeed = math.abs(horizontalVelocity);
-            context.CurrentVelocity = velocity;
+            context.CurrentVelocity = currentVelocity;
 
             // BeltScroll: accumulate Y input as pending depth while airborne
             if (context.Config.MovementType == MovementType2D.BeltScroll)
@@ -37,7 +38,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                 int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 int verticalHash = AnimationParameterCache.GetHash(context.Config.VerticalSpeedParameter);
                 context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
-                context.AnimationController.SetFloat(verticalHash, velocity.y);
+                context.AnimationController.SetFloat(verticalHash, currentVelocity.y);
             }
         }
 

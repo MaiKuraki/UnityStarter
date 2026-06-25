@@ -2,19 +2,19 @@
 
 A high-performance, state machine-based 2D character movement system for Unity platformer and side-scrolling games with zero GC allocation and optional Gameplay Ability System (GAS) integration.
 
-<p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
+<p align="left"><br> English | <a href="README.SCH.md">Simplified Chinese</a></p>
 
-## ✨ Features
+## Features
 
-- 🎮 **State Machine Architecture** - Clean separation of 2D movement states
-- ⚡ **Zero Garbage Collection** - Uses Unity.Mathematics for allocation-free calculations
-- 🎯 **Platform Game Ready** - Coyote time, jump buffering, air control
-- 🔌 **GAS Integration Ready** - Optional integration via interfaces
-- 📝 **ScriptableObject Config** - Designer-friendly parameters
-- 🎨 **2D Physics** - Full Rigidbody2D and Physics2D integration
-- 🕐 **Slowmotion Support** - Multi-layer time scaling
+- **State Machine Architecture** - Clean separation of 2D movement states
+- **Zero Garbage Collection** - Uses Unity.Mathematics for allocation-free calculations
+- **Platform Game Ready** - Coyote time, jump buffering, air control
+- **GAS Integration Ready** - Optional integration via interfaces
+- **ScriptableObject Config** - Designer-friendly parameters
+- **2D Physics** - Full Rigidbody2D and Physics2D integration
+- **Slowmotion Support** - Multi-layer time scaling
 
-## 🎯 Perfect For
+## Perfect For
 
 - **DNF-style Games** - Side-scrolling beat 'em up with depth movement
 - **Platformers** - Metroidvania, Castlevania
@@ -22,7 +22,7 @@ A high-performance, state machine-based 2D character movement system for Unity p
 - **2.5D Games** - Trine, LittleBigPlanet
 - **Top-Down RPGs** - Classic RPG style
 
-## 📦 Movement Types
+## Movement Types
 
 ### MovementType2D Enum
 
@@ -41,23 +41,23 @@ Belt-scrolling games like DNF (Dungeon Fighter) use a **pseudo-3D** approach whe
 - **Jump**: Temporarily adds Y offset via Rigidbody2D physics
 
 ```
-┌────────────────────────────────────────────┐
+----------------------------------------------
   DNF-Style Belt-Scrolling Movement
-├────────────────────────────────────────────┤
-  Input.y ↑ = Move "into" the screen (far)
-  Input.y ↓ = Move "out" of the screen (near)
+----------------------------------------------
+  Input.y up = Move "into" the screen (far)
+  Input.y down = Move "out" of the screen (near)
   Jump = Temporary Y offset (physics-driven)
   Sprite Sorting = Based on Y position
-└────────────────────────────────────────────┘
+----------------------------------------------
 ```
 
 **Important**: Use SpriteRenderer's `Sorting Layer` or `Order in Layer` based on Y position for proper depth rendering.
 
-## 📦 Quick Start
+## Quick Start
 
 ### Step 1: Create Configuration
 
-Right-click in Project window → `Create > CycloneGames > RPG Foundation > Movement Config 2D`
+Right-click in Project window -> `Create > CycloneGames > RPG Foundation > Movement Config 2D`
 
 ### Step 2: Add Component
 
@@ -75,7 +75,7 @@ Assign:
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime.Movement2D;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 
 public class Player2DController : MonoBehaviour
 {
@@ -105,7 +105,7 @@ public class Player2DController : MonoBehaviour
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime.Movement2D;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 
 public class DNFStyleController : MonoBehaviour
 {
@@ -132,7 +132,7 @@ public class DNFStyleController : MonoBehaviour
 }
 ```
 
-## 🎮 2D-Specific Features
+## 2D-Specific Features
 
 ### Coyote Time
 
@@ -173,7 +173,7 @@ config.airControlMultiplier = 0.5f; // 50% control in air
 When running fast, the character maintains grounded state across small gaps - just like Mario!
 
 ```
-Running fast → No ground detected → Check ahead → Ground found → Stay grounded!
+Running fast -> No ground detected -> Check ahead -> Ground found -> Stay grounded!
 ```
 
 | Parameter              | Description                      | Default |
@@ -190,9 +190,9 @@ For 2D games, **A\* Pathfinding Project** is the recommended solution as it nati
 
 | System            | 2D Support | Reason                 |
 | ----------------- | ---------- | ---------------------- |
-| A\* Pathfinding   | ✅         | Native 2D Grid support |
-| Unity NavMesh     | ❌         | XZ plane only          |
-| Agents Navigation | ❌         | 3D DOTS focus          |
+| A\* Pathfinding   | Yes        | Native 2D Grid support |
+| Unity NavMesh     | No         | XZ plane only          |
+| Agents Navigation | No         | 3D DOTS focus          |
 
 #### Using A\* PathFinding in 2D
 
@@ -215,7 +215,7 @@ Features:
 
 - Uses A\* native 2D Grid/Point graphs
 - Works on XY plane
-- Calls `MovementComponent2D.SetInputDirection` via reflection
+- Calls `MovementComponent2D.SetInputDirection` through the A\* integration provider
 
 ### Climbing System (2D)
 
@@ -244,7 +244,7 @@ Complete climbing support for 2D platformers and top-down games:
   config.wallSlideSpeed = 2f;
   ```
 
-## ⚙️ Configuration
+## Configuration
 
 ### MovementConfig2D Parameters
 
@@ -261,7 +261,7 @@ Complete climbing support for 2D platformers and top-down games:
 | **Feel**    | coyoteTime     | Late jump window       | 0.1s    |
 | **Feel**    | jumpBufferTime | Early jump window      | 0.1s    |
 
-## 🔄 Differences from 3D Version
+## Differences from 3D Version
 
 | Feature          | 3D (MovementComponent)         | 2D (MovementComponent2D) |
 | ---------------- | ------------------------------ | ------------------------ |
@@ -270,10 +270,10 @@ Complete climbing support for 2D platformers and top-down games:
 | **Gravity**      | Manual calculation             | Physics2D.gravity        |
 | **Ground Check** | CharacterController.isGrounded | Physics2D.OverlapBox     |
 | **Rotation**     | Slerp CurrentMovement Dir      | X Flip(Platformer)       |
-| **Coyote Time**  | ❌                             | ✅                       |
-| **Jump Buffer**  | ❌                             | ✅                       |
+| **Coyote Time**  | No                             | Yes                      |
+| **Jump Buffer**  | No                             | Yes                      |
 
-## 🎬 Slow Motion Support
+## Slow Motion Support
 
 Same as 3D version:
 
@@ -288,7 +288,7 @@ movementComponent.LocalTimeScale = 1.5f;
 movementComponent.ignoreTimeScale = true;
 ```
 
-## 🔌 GAS Integration
+## GAS Integration
 
 Identical interface to 3D version:
 
@@ -321,14 +321,16 @@ public class GASMovementAuthority2D : MonoBehaviour, IMovementAuthority
 movement.MovementAuthority = GetComponent<GASMovementAuthority2D>();
 ```
 
-## 🎛️ Attribute Modification System
+## Attribute Modification System
 
 The Movement system supports runtime modification of all movement attributes.
 
 ### Simple Usage (No GAS)
 
 ```csharp
-using CycloneGames.RPGFoundation.Runtime.Movement;
+using CycloneGames.RPGFoundation.Movement.Core;
+using CycloneGames.RPGFoundation.Movement.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
 using UnityEngine;
 
 public class SimpleAttributeController2D : MonoBehaviour
@@ -354,9 +356,15 @@ public class SimpleAttributeController2D : MonoBehaviour
 
 ### GAS Integration
 
+The GameplayAbilities integration compiles only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled for its integration assembly. The symbol represents the whole dependency group: `CycloneGames.GameplayAbilities.Runtime` and `CycloneGames.GameplayTags.Core`.
+
+If jump, roll, wall-climb, or similar movement verbs are owned by abilities, let the ability request the movement state with `MovementStateRequestContext.FromAbility(this)`. This keeps movement authority checks active without recursively trying to activate the same ability again.
+
 ```csharp
 #if CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES
-using CycloneGames.RPGFoundation.Runtime.Movement;
+using CycloneGames.RPGFoundation.Movement.Core;
+using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
+using CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities;
 using UnityEngine;
 
 public class GASAttributeController2D : MonoBehaviour
@@ -386,7 +394,7 @@ public class GASAttributeController2D : MonoBehaviour
 
 **Supported Attributes**: WalkSpeed, RunSpeed, SprintSpeed, CrouchSpeed, JumpForce, Gravity, AirControlMultiplier
 
-## 📊 API Reference
+## API Reference
 
 ### MovementComponent2D
 
@@ -404,7 +412,13 @@ void SetInputDirection(Vector2 direction);
 void SetJumpPressed(bool pressed);
 void SetSprintHeld(bool held);
 void SetCrouchHeld(bool held);
+void SetRollPressed(bool pressed);
+bool RequestClimb(ClimbingMode climbingMode, int wallSide = 0, object context = null);
+bool StopClimb();
 bool RequestStateChange(MovementStateType type);
+MovementSnapshot GetSnapshot();
+void ApplySnapshot(in MovementSnapshot snapshot);
+void ResetFromSnapshot(in MovementSnapshot snapshot);
 
 // Events
 event Action<MovementStateType, MovementStateType> OnStateChanged;
@@ -429,9 +443,9 @@ void Update()
 }
 ```
 
-## 🎯 Best Practices
+## Best Practices
 
-### ✅ Do
+### Do
 
 - Set up `groundCheck` Transform at character's feet
 - Use `coyoteTime` and `jumpBufferTime` for better feel
@@ -439,10 +453,13 @@ void Update()
 - Use `maxFallSpeed` to prevent crazy fall speeds
 - Use `Velocity.magnitude` for BlendTree animations (smoother transitions)
 - Use `MovementAttributeAuthority` for runtime attribute modification
+- Use `SetRollPressed`, `RequestClimb`, and `StopClimb` for action state input
+- Use snapshots only as network handoff data; Unity component calls must stay on the Unity main thread
 
-### ❌ Don't
+### Don't
 
 - Mix 2D and 3D physics components
 - Forget to set Rigidbody2D to Continuous collision detection
 - Use on non-2D games (use MovementComponent instead)
 - Use `CurrentSpeed` for BlendTree if you need smooth interpolation (use `Velocity.magnitude` instead)
+- Call `MovementComponent2D` from worker threads; move threaded simulation into pure data systems

@@ -7,7 +7,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
     {
         public override MovementStateType StateType => MovementStateType.Run;
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
             float speed = context.GetFinalSpeed(context.Config.RunSpeed, StateType);
             float horizontalVelocity = context.InputDirection.x * speed;
@@ -28,9 +28,10 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 #endif
             }
 
-            velocity = new float2(horizontalVelocity, verticalVelocity);
-            context.CurrentSpeed = math.length(new float2(horizontalVelocity, verticalVelocity));
-            context.CurrentVelocity = velocity;
+            float2 currentVelocity = new float2(horizontalVelocity, verticalVelocity);
+            displacement = currentVelocity * context.DeltaTime;
+            context.CurrentSpeed = math.length(currentVelocity);
+            context.CurrentVelocity = currentVelocity;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {

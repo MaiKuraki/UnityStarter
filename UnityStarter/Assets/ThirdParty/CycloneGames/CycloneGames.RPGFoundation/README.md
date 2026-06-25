@@ -1,6 +1,18 @@
 # CycloneGames.RPGFoundation
 
-CycloneGames.RPGFoundation is a reusable RPG foundation package. It is organized by feature module first, then by runtime role inside each module.
+English | [Simplified Chinese](./README.SCH.md)
+
+`CycloneGames.RPGFoundation` provides reusable RPG-oriented foundation modules for Unity projects. It groups gameplay-facing systems by domain, keeps core contracts independent from Unity runtime objects, and exposes Unity-facing components through dedicated runtime, editor, test, and integration assemblies.
+
+The package currently includes Interaction and Movement modules. Optional networking and third-party integrations are hosted in separate assemblies or packages so product projects can enable only the dependencies they use.
+
+## Quick Start
+
+1. Reference the module assembly that matches the feature you need, such as `CycloneGames.RPGFoundation.Movement.Runtime` for Unity movement components or `CycloneGames.RPGFoundation.Interaction.Runtime` for interaction components.
+2. Use `Core` contracts for server, headless, simulation, CLI, or EditMode test code.
+3. Use `Runtime` components for Unity scene binding, ScriptableObject configuration, and adapter-facing behavior.
+4. Use optional integration assemblies only when the corresponding dependency is installed and enabled through its asmdef conditions.
+5. Run the module EditMode tests after changing contracts, asmdefs, serialized data, or integration boundaries.
 
 ## Module Layout
 
@@ -14,43 +26,42 @@ Long-lived modules use this layout:
   Runtime/
   Editor/
   Tests/
+  Runtime/Integrations/
 ```
 
-`Core/` contains Unity-free contracts, value objects, validation logic, deterministic data, and services that can run in server, headless, CLI, and Unity test contexts. Core assemblies use `noEngineReferences` when possible.
+| Directory | Purpose |
+| --- | --- |
+| `Core/` | Unity-free contracts, value objects, validation logic, deterministic data, and services for server, headless, CLI, and Unity test contexts. |
+| `Runtime/` | Unity-facing components, ScriptableObject authoring bridges, runtime adapters, and default Unity implementations. |
+| `Editor/` | Inspectors, windows, validators, drawers, and authoring tools. |
+| `Tests/` | EditMode and PlayMode coverage for module contracts and runtime behavior. |
+| `Runtime/Integrations/` | Optional third-party or Cyclone module adapters isolated behind their own asmdefs. |
 
-`Runtime/` contains Unity-facing components, ScriptableObject authoring bridges, runtime adapters, and default Unity implementations.
-
-`Editor/` contains inspectors, windows, validators, drawers, and authoring tools.
-
-`Tests/` contains EditMode and PlayMode tests for the module.
-
-The current package uses this structure for:
+Current modules:
 
 | Module | Purpose |
 | --- | --- |
-| `Interaction/` | Interaction contracts, local runtime components, authority validation, deterministic bridges, inspectors, and tests |
-| `Movement/` | Movement core contracts, 2D/3D Unity movement components, pathfinding adapters, animation adapters, inspectors, and tests |
+| `Interaction/` | Interaction contracts, local runtime components, authority validation, deterministic bridges, inspectors, and tests. |
+| `Movement/` | Movement core contracts, 2D/3D Unity movement components, pathfinding adapters, animation adapters, inspectors, and tests. |
 
-## Assembly Layout
-
-The package now exposes module assemblies instead of putting all source files into one broad runtime assembly:
+## Assembly Boundary
 
 | Assembly | Role |
 | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Core` | Unity-free interaction contracts, value objects, validation, rate limiting, and authority services |
-| `CycloneGames.RPGFoundation.Interaction.Runtime` | Unity-facing interaction components and runtime services |
-| `CycloneGames.RPGFoundation.Interaction.Editor` | Interaction inspectors, validators, and editor tools |
-| `CycloneGames.RPGFoundation.Interaction.Tests.Editor` | Interaction EditMode tests |
-| `CycloneGames.RPGFoundation.Movement.Core` | Unity-free movement contracts, attributes, state identifiers, snapshots, and helper types |
-| `CycloneGames.RPGFoundation.Movement.Runtime` | Unity-facing 2D/3D movement components, ScriptableObject configs, animation abstraction, and pathfinding abstraction |
-| `CycloneGames.RPGFoundation.Movement.Editor` | Movement inspectors and authoring validation |
-| `CycloneGames.RPGFoundation.Movement.Tests.Editor` | Movement EditMode tests |
+| `CycloneGames.RPGFoundation.Interaction.Core` | Unity-free interaction contracts, value objects, validation, rate limiting, and authority services. |
+| `CycloneGames.RPGFoundation.Interaction.Runtime` | Unity-facing interaction components and runtime services. |
+| `CycloneGames.RPGFoundation.Interaction.Editor` | Interaction inspectors, validators, and editor tools. |
+| `CycloneGames.RPGFoundation.Interaction.Tests.Editor` | Interaction EditMode tests. |
+| `CycloneGames.RPGFoundation.Movement.Core` | Unity-free movement contracts, attributes, state identifiers, snapshots, and helper types. |
+| `CycloneGames.RPGFoundation.Movement.Runtime` | Unity-facing 2D/3D movement components, ScriptableObject configs, animation abstraction, and pathfinding abstraction. |
+| `CycloneGames.RPGFoundation.Movement.Editor` | Movement inspectors and authoring validation. |
+| `CycloneGames.RPGFoundation.Movement.Tests.Editor` | Movement EditMode tests. |
 
-The legacy assemblies `CycloneGames.RPGFoundation.Runtime`, `CycloneGames.RPGFoundation.Editor`, and `CycloneGames.RPGFoundation.Tests.Editor` are kept as lightweight compatibility shells. New code should reference the module assemblies directly.
+Movement state changes use `MovementStateRequestContext` to carry source, payload, tick, sequence, prediction key, and custom flags without making `Movement.Core` depend on GameplayAbilities, GameplayTags, or Networking. Ability, input, pathfinding, AI, and network integrations share the same state gate through isolated assemblies.
 
 ## Optional Integrations
 
-Optional integrations are isolated in their own assemblies so the base package can compile without optional packages installed. Cyclone networking bridges are provided by separate optional packages, not by the base RPGFoundation package.
+Optional integrations are isolated in their own assemblies so the base package compiles without optional packages installed. Cyclone networking bridges are provided by separate optional packages.
 
 | Integration Assembly | Dependency |
 | --- | --- |
@@ -62,40 +73,47 @@ Optional integrations are isolated in their own assemblies so the base package c
 | `CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation` | `Unity.AI.Navigation` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AStar` | `AstarPathfindingProject` |
 | `CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation` | ProjectDawn Agents Navigation |
-| `CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities` | `CycloneGames.GameplayAbilities.Runtime` |
+| `CycloneGames.RPGFoundation.Movement.Integrations.GameplayAbilities` | `CycloneGames.GameplayAbilities.Runtime` + `CycloneGames.GameplayTags.Core` |
 
 Optional networking packages:
 
 | Package | Dependency | Purpose |
 | --- | --- | --- |
-| `CycloneGames.RPGFoundation.Interaction.Networking` | `CycloneGames.Networking.Core` | Transport-neutral interaction request, result, cancel, and authority validation DTOs |
-| `CycloneGames.RPGFoundation.Movement.Networking` | `CycloneGames.Networking.Core` | Transport-neutral movement input, authoritative snapshot, correction, teleport, full-state request, and authority transfer DTOs |
-
-When RPGFoundation and its optional dependencies are installed as UPM packages, integration assemblies enable themselves through their own `versionDefines` and `defineConstraints`. The base Core, Runtime, and Editor assemblies do not require project-wide scripting define symbols.
-
-When dependencies are copied directly under `Assets/`, Unity does not reliably expose package identity to `asmdef.versionDefines`. In that layout, the base RPGFoundation package still compiles, while strong-typed optional integration assemblies remain disabled unless the dependency is provided through Package Manager, for example as a local UPM package path. Do not use project-wide scripting define symbols as the normal integration switch for this package.
+| `CycloneGames.RPGFoundation.Interaction.Networking` | `CycloneGames.Networking.Core` | Transport-neutral interaction request, result, cancel, and authority validation contracts. |
+| `CycloneGames.RPGFoundation.Movement.Networking` | `CycloneGames.Networking.Core` | Transport-neutral movement input, authoritative snapshot, correction, teleport, full-state request, authority transfer, input validation, history, and reconciliation contracts. |
 
 ## Defines
 
-These symbols are generated by integration asmdefs through `versionDefines`; they are documented for diagnostics and conditional code inside the integration assemblies, not as project-wide requirements:
+These symbols are generated by integration asmdefs through `versionDefines` or define constraints. They are diagnostics and integration-local compile switches, not project-wide requirements.
 
 | Symbol | Enables |
 | --- | --- |
-| `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction and Movement DeterministicMath integrations |
-| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework integration |
-| `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer integration |
-| `CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION` | Movement Unity AI Navigation integration |
-| `CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING` | Movement A* Pathfinding integration |
-| `CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION` | Movement Agents Navigation integration |
-| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` | Movement GameplayAbilities integration |
+| `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` | Interaction and Movement DeterministicMath integrations. |
+| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK` | Interaction GameplayFramework integration. |
+| `CYCLONE_RPGFOUNDATION_HAS_ANIMANCER` | Movement Animancer integration. |
+| `CYCLONE_RPGFOUNDATION_HAS_UNITY_AI_NAVIGATION` | Movement Unity AI Navigation integration. |
+| `CYCLONE_RPGFOUNDATION_HAS_ASTAR_PATHFINDING` | Movement A* Pathfinding integration. |
+| `CYCLONE_RPGFOUNDATION_HAS_AGENTS_NAVIGATION` | Movement Agents Navigation integration. |
+| `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` | Movement GameplayAbilities integration with GameplayAbilities and GameplayTags assemblies. |
 
-## Verification
+## Persistence
 
-After changing assemblies or moving files:
+This package does not define runtime save files, editor preferences, PlayerPrefs, EditorPrefs, SessionState data, registry entries, or hidden caches. Configuration and persistent gameplay state are owned by the consuming project or by the specific optional module that declares them.
 
-1. Open Unity and let the project reimport assemblies.
-2. Confirm the Console has no compile errors.
-3. Run EditMode tests for `CycloneGames.RPGFoundation.Interaction.Tests.Editor` and `CycloneGames.RPGFoundation.Movement.Tests.Editor`.
-4. If optional networking packages are present, run their EditMode tests.
-5. If optional packages are installed through Package Manager, confirm the matching integration assembly compiles.
-6. For Animancer movement, add `AnimancerMovementAnimationBinder` beside the movement component and assign the Animancer component.
+## Validation
+
+Run these checks after changing assemblies, moving files, updating integration references, or changing serialized contracts:
+
+```text
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Interaction.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Tests.Editor
+Unity Test Runner > EditMode > optional RPGFoundation networking package tests when present
+```
+
+For CLI-oriented checks after Unity refreshes generated project files:
+
+```text
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Core.csproj --nologo
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Runtime.csproj --nologo
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Tests.Editor.csproj --nologo
+```

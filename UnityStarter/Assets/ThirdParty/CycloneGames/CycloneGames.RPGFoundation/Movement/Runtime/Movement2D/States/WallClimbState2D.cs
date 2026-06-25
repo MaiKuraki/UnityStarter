@@ -25,9 +25,9 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             }
         }
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
-            velocity = float2.zero;
+            float2 currentVelocity = float2.zero;
 
             context.WallClingTimer += context.DeltaTime;
 
@@ -39,12 +39,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             if (context.IsWallSliding)
             {
                 float slideSpeed = context.Config.WallSlideSpeed;
-                velocity = new float2(0, -slideSpeed) * context.DeltaTime;
+                currentVelocity = new float2(0, -slideSpeed);
                 context.CurrentSpeed = slideSpeed;
 
                 if (context.AnimationController != null && context.AnimationController.IsValid)
                 {
-                    int slideHash = AnimationParameterCache.GetHash(context.Config.WallClimbSpeed.ToString());
+                    int slideHash = AnimationParameterCache.GetHash(context.Config.WallSlidingParameter);
                     context.AnimationController.SetBool(slideHash, true);
                 }
             }
@@ -60,7 +60,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                     moveDir = math.normalize(moveDir);
                 }
 
-                velocity = moveDir * climbSpeed * context.DeltaTime;
+                currentVelocity = moveDir * climbSpeed;
                 context.CurrentSpeed = math.length(moveDir) * climbSpeed;
 
                 if (context.AnimationController != null && context.AnimationController.IsValid)
@@ -70,7 +70,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
                 }
             }
 
-            context.CurrentVelocity = velocity / math.max(context.DeltaTime, 0.0001f);
+            displacement = currentVelocity * context.DeltaTime;
+            context.CurrentVelocity = currentVelocity;
         }
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
@@ -97,6 +98,11 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 
         public override void OnExit(ref MovementContext2D context)
         {
+            if (context.ClimbingMode == ClimbingMode.Wall)
+            {
+                context.ClimbingMode = ClimbingMode.None;
+            }
+
             context.WallClimbSide = 0;
             context.WallClingTimer = 0f;
             context.IsWallSliding = false;

@@ -760,16 +760,19 @@ This is a low-frequency planning API, not a gameplay hot-path API. YooAsset and 
 
 ### Advanced Editor Debugging Tools
 
-`CycloneGames.AssetManagement` provide a powerful, best-in-class editor windows to visualize cache health and identify memory leaks without guessing.
+`CycloneGames.AssetManagement` provides developer-friendly editor windows to visualize cache health and identify memory leaks without guessing.
 
 #### 1. Asset Cache Debugger Window (`Tools/CycloneGames/AssetManagement/Asset Cache Debugger`)
 
 A comprehensive view of the entire W-TinyLFU cache.
 
 - **Tier Visualization**: Instantly see if assets are Active, in Trial, or in the Main hot cache.
-- **Metadata Columns**: Sort and filter by `Tag`, `Owner`, and `Bucket`.
+- **Resizable Table Columns**: Drag header separators to tune column widths for long locations, provider names, buckets, tags, and owners. Use **Reset Columns** to restore the session defaults.
+- **Metadata Columns**: Inspect and filter by `Tag`, `Owner`, and `Bucket`.
 - **Ref-count Anomalies**: Automatically highlights active assets with unusually high reference counts (> 8), warning you of potential missing `Dispose()` calls.
-- **Memory Footprint**: The Summary tab reports the live idle-pool footprint versus the platform memory budget, so you can see eviction pressure at a glance.
+- **Memory Footprint**: The table shows a per-row estimated memory column, and the Summary tab reports the live idle-pool footprint versus the platform memory budget.
+- **Selection and Copy Menus**: Single-click selects a row, Ctrl/Cmd-click toggles rows, and Shift-click selects a visible range. Right-click a row or header to copy individual fields, selected rows, a full row, TSV/JSON output, or all currently visible rows. Project asset locations can also be pinged from the context menu.
+- **Stable View Scroll**: Cache tabs keep independent scroll positions during tab switches and start at the top the first time a tab is opened.
 - **Summary Breakdowns**: Statistical distribution of assets by Provider, Tag, and Owner.
 
 #### 2. Handle Tracker Window (`Tools/CycloneGames/AssetManagement/Asset Handle Tracker`)
@@ -777,12 +780,19 @@ A comprehensive view of the entire W-TinyLFU cache.
 A microscopic view of every active handle allocation, cross-referenced against the cache.
 
 - **Smart Status Identification**: Classifies each long-lived handle as `Cached` (safely held in an idle pool), `Persistent` (developer-declared long-lived), or `Leaked` (genuinely unexplained).
+- **Resizable Table Columns**: Drag header separators to align package, description, location, tag, owner, status, and lifetime columns for the current debugging session.
+- **Location Column**: Extracts the asset location from the handle description when possible, making it easier to compare handles with cache rows and project assets.
+- **Selection and Copy Menus**: Single-click selects a row, Ctrl/Cmd-click toggles rows, and Shift-click selects a visible range. Right-click a row or header to copy individual fields, selected rows, a full row, TSV/JSON output, stack traces, or all currently visible rows.
 - **Persistent Marking**: Right-click any row -> **Mark Persistent** to silence false-positive leaks for intentionally long-lived assets (DontDestroyOnLoad, bootstrap UI, the main scene). See [Marking Persistent Handles](#marking-persistent-handles).
-- **Stack Trace Expansion**: Click any leaked handle to instantly reveal the exact C# stack trace where it was allocated (enable **Stack Traces** in the toolbar first).
+- **Stack Trace Expansion**: Right-click any row with a captured stack trace and choose **Expand Stack Trace** to inspect where it was allocated (enable **Stack Traces** in the toolbar first).
 
 #### 3. Scene Tracker Window (`Tools/CycloneGames/AssetManagement/Scene Tracker`)
 
-Live view of every tracked scene handle: provider, package, bucket, activation state (Loading / Waiting / Activated / Unload Pending), progress, refs, and age. Use it to catch scenes stuck in `WaitingForActivation` or pending unload.
+Live view of every tracked scene handle: provider, package, bucket, activation state (Loading / Waiting / Activated / Unload Pending / Error), load mode, activation mode, progress, refs, age, and latest error. Use it to catch scenes stuck in `WaitingForActivation`, pending unload, or failed provider operations.
+
+- **Resizable Table Columns**: Drag header separators to tune scene, provider, package, bucket, state, activation, progress, refs, age, and error widths.
+- **Selection and Copy Menus**: Supports the same single-click, Ctrl/Cmd-click, and Shift-click multi-select model as the cache and handle windows, with selected/visible TSV and JSON export.
+- **Scene Asset Ping**: Right-click rows backed by `Assets/` or `Packages/` scene paths to ping the source scene asset.
 
 #### 4. Runtime Governance Window (`Tools/CycloneGames/AssetManagement/Runtime Governance`)
 
@@ -911,12 +921,14 @@ public class LevelLoader
 
     public async UniTask LoadBossArena(EnemyConfig config)
     {
+        const string sceneBucket = "Scene.BossArena";
+
         // Option A: Direct scene loading via IAssetPackage
-        var sceneHandle = package.LoadSceneAsync(config.BossArena);
+        var sceneHandle = package.LoadSceneAsync(config.BossArena, bucket: sceneBucket);
         await sceneHandle.Task;
 
         // Option B: Navigathena scene navigation (push/pop/change)
-        await navigator.Push(config.BossArena.ToSceneIdentifier(package));
+        await navigator.Push(config.BossArena.ToSceneIdentifier(package, bucket: sceneBucket));
     }
 }
 ```

@@ -143,7 +143,7 @@
 5. 服务端执行权威交互并广播 `InteractionResult`。
 6. 客户端根据服务端结果对本地聚焦、进度和 UI 做重对齐。
 
-内置 `INetworkInteractionSystem` 是 adapter 契约，`InteractionAuthorityService` 是校验/预约核心。二者都不是完整 transport、prediction、rollback 或 replication 实现。
+内置 `INetworkInteractionSystem` 是 adapter 契约，`InteractionAuthorityService` 是校验/预约核心。Transport、prediction、rollback 和 replication 由独立网络 adapter 或项目 package 接入。
 
 **集成边界：** `InteractionVector3` 是最低公共值对象，不是 `CycloneGames.Networking.NetworkVector3`、`CycloneGames.DeterministicMath.FPVector3` 或 `UnityEngine.Vector3` 的替代品。需要跨网络包时，添加独立的 `CycloneGames.RPGFoundation.Interaction.Networking` 包，在 `InteractionVector3` 与 `NetworkVector3` 之间转换，并使用 `InteractionNetworkProtocol`、`InteractionNetworkRequest`、`InteractionNetworkCancelRequest` 与 `InteractionNetworkResult` 作为更适合传输的 DTO/协议构件。需要接入 GameplayFramework 时，使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.GameplayFramework` 将 `Actor` 的位置与稳定 ID 适配为 `InteractionTargetSnapshot` 或 `GameObjectInstigator`。如果需要 lockstep、rollback、replay 或 bit-identical server simulation，应使用 `CycloneGames.RPGFoundation.Runtime.Interaction.Integrations.DeterministicMath` 与 `InteractionDeterministicAuthorityService`；它使用 `FPVector3` / `FPInt64` 做范围校验，而不是把权威判定转换回 float。
 
@@ -1429,7 +1429,7 @@ detector.CurrentInteractable.Subscribe(target =>
 
 ## 常见问题
 
-**Q：我的对象没被检测到，应该检查什么？**
+**Q：对象未被检测到时需要检查哪些内容？**
 
 > 1. 对象拥有 `Collider`/`Collider2D` 且设为 **Is Trigger = true**（SpatialHash 模式不需要碰撞体）。
 > 2. 对象图层匹配检测器的 **Interactable Layer**。
@@ -1472,4 +1472,4 @@ detector.CurrentInteractable.Subscribe(target =>
 
 **Q：如何处理按键重绑定？**
 
-> `InteractionAction` 上的 `InputHint` 字段是显示字符串，非输入绑定。玩家重绑定按键时在运行时更新该字段。系统本身不处理输入 — 你的输入处理器调用 `TryInteract()`。
+> `InteractionAction` 上的 `InputHint` 字段是显示字符串，非输入绑定。玩家重绑定按键时在运行时更新该字段。输入处理由项目的 input adapter 负责，并由该 adapter 调用 `TryInteract()`。

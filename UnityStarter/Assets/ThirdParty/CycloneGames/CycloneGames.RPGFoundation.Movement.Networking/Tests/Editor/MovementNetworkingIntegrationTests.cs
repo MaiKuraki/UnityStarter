@@ -131,11 +131,13 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
                 customFlags: 0x80u,
                 deltaTime: 0.016f,
                 moveAxes: new NetworkVector3(1f, 0f, 0f),
-                aimDirection: NetworkVector3.Forward);
+                aimDirection: NetworkVector3.Forward,
+                predictionKey: 99);
 
             Assert.That(command.IsValid, Is.True);
             Assert.That(command.HasButton(SprintButton), Is.True);
             Assert.That(command.CustomFlags, Is.EqualTo(0x80u));
+            Assert.That(command.PredictionKey, Is.EqualTo(99));
         }
 
         [Test]

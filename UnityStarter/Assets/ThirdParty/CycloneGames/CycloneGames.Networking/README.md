@@ -4,7 +4,16 @@ English | [Simplified Chinese](./README.SCH.md)
 
 `CycloneGames.Networking` is the transport-neutral networking foundation used by CycloneGames runtime packages. It defines common contracts for network managers, transports, connections, serializers, message catalogs, protocol manifests, runtime profiles, replication planning, session discovery, reconnection, host migration, security validation, and optional backend adapters.
 
-The package is a framework layer, not a complete online service. Concrete transports, platform identity, relay services, server orchestration, persistence, and game-specific replication rules are supplied by adapters or project packages.
+Product-specific transports, platform identity, relay services, server orchestration, persistence, and gameplay replication policies are supplied by adapter or project assemblies.
+
+## Quick Start
+
+1. Define message IDs in the `NetworkMessageKind.User` range or use a Cyclone module protocol manifest.
+2. Register each `NetworkProtocolManifest` through `INetworkMessageCatalog.RegisterProtocolManifest` during bootstrap.
+3. Configure an `INetworkManager` with the transport, serializer, runtime profile, and security pipeline selected by the product.
+4. Register typed message handlers before opening a connection or accepting clients.
+5. Use replication, session, security, and simulation helpers from `Core/` to keep gameplay packages independent from a specific backend SDK.
+6. Run EditMode tests for the core package and every bridge package that depends on the changed networking contract.
 
 ## Package Layout
 
@@ -26,6 +35,7 @@ CycloneGames.Networking/
     Serialization/      Serializer contracts and built-in serializer factory
     Services/           Service registration helpers
     Session/            Session, directory, matchmaking, reconnection, host migration
+    Simulation/         Deterministic simulation and authoritative action contracts
     Spawning/           Network spawn manager contracts
     StateSync/          State synchronization contracts
     Transports/         Transport adapter base contracts
@@ -325,6 +335,56 @@ The `Replication` folder contains pure C# helpers for state replication:
 
 Gameplay packages, such as GameplayAbilities, GameplayTags, BehaviorTree, AIPerception, Interaction, and Movement, define their own payload DTOs and register their own protocol ranges on top of these generic helpers.
 
+## Simulation and Authoritative Actions
+
+The `Simulation` folder contains pure C# contracts for deterministic stepping and genre-neutral authoritative actions. Deterministic simulation (`IDeterministicSimulation<TInput, TState>`) is used by lockstep, rollback, and client prediction adapters. The action contracts describe a higher-level command lifecycle that can be shared by combat, movement, vehicles, weapons, abilities, interactions, or project-specific systems.
+
+| Type | Purpose |
+| --- | --- |
+| `NetworkActionCommand` | Client or server action request with entity id, action id, client/server ticks, sequence, prediction key, input mask, flags, payload hash, and two generic vectors. |
+| `NetworkActionResult` | Compact result for accepted, corrected, rejected, expired, duplicate, out-of-order, unauthorized, rate-limited, and conflicting actions. |
+| `NetworkActionStateSnapshot` | Generic server snapshot for reconciling action state, transform, velocity, phase, sequence, and state hash. |
+| `NetworkActionValidationContext` | Server-side validation context with sender, server tick, last accepted client tick/sequence, authority mode, tick drift window, and input/flag masks. |
+| `DefaultNetworkActionValidator` | Allocation-free baseline validator for command shape, authentication, tick ordering, drift, input mask, and flags. |
+| `NetworkActionHistory<TSnapshot>` | Fixed-capacity ring history for prediction, rewind, reconciliation, late-join catch-up, and replay indexing. |
+
+The action contracts provide lifecycle primitives for authoritative gameplay events. GameplayAbilities and GameplayTags provide ability, effect, tag, cost, cooldown, and state-gate semantics, while product or domain packages define combat windows, hit volumes, recoil, target acquisition, presentation rules, and genre-specific validation on top of these networking contracts.
+
+Example action validation:
+
+```csharp
+using CycloneGames.Networking;
+using CycloneGames.Networking.Simulation;
+
+public static class ActionValidationExample
+{
+    public static NetworkActionResult ValidateDodge(
+        INetConnection sender,
+        ulong entityId,
+        NetworkTickId clientTick,
+        NetworkTickId serverTick,
+        ushort sequence,
+        int predictionKey)
+    {
+        var command = new NetworkActionCommand(
+            entityId,
+            actionId: 1001U,
+            clientTick,
+            lastKnownServerTick: serverTick - 1,
+            sequence,
+            predictionKey);
+        var context = new NetworkActionValidationContext(
+            sender,
+            serverTick,
+            lastAcceptedClientTick: NetworkTickId.Invalid,
+            authorityMode: NetworkActionAuthorityMode.ClientPredictedServerAuthoritative,
+            maxAcceptedTickDrift: 8);
+
+        return DefaultNetworkActionValidator.Instance.Validate(command, context);
+    }
+}
+```
+
 ## Session, Discovery, Reconnection, and Host Migration
 
 The `Session` folder contains backend-neutral runtime models:
@@ -468,7 +528,7 @@ The `Hardening` folder provides deterministic runtime models for validation plan
 | `NetworkProtocolFuzzValidationProbe` | Deterministic frame codec fuzz probe. |
 | `NetworkReplicationLoadValidationProbe` | Deterministic replication load probe. |
 
-These APIs record validation facts; they do not execute an external load rig or certify a live deployment by themselves.
+These APIs produce deterministic readiness evidence for CI, editor tooling, and deployment reviews. External load rigs, platform certification, and production launch approvals remain project-owned processes.
 
 ## Persistence
 

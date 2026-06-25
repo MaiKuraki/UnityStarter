@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.RPGFoundation.Movement.Tests.Editor",
     "references": [
         "CycloneGames.RPGFoundation.Movement.Core",
+        "CycloneGames.RPGFoundation.Movement.Runtime",
         "Unity.Mathematics"
     ],
     "includePlatforms": [

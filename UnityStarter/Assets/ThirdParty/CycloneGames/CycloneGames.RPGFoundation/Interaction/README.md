@@ -109,7 +109,7 @@ A high-performance, zero-GC, reactive interaction system for Unity. Supports **3
 
 ## Production-Scale Architecture
 
-This module is intended to be the local interaction kernel for a commercial project. At very large multiplayer scale, it should be used with a server-authoritative adapter rather than as a complete networking stack by itself.
+This module provides the local interaction kernel for commercial Unity projects. Large multiplayer deployments pair it with a server-authoritative adapter for transport, prediction, rollback, replication, and backend ownership.
 
 **Core responsibilities provided by this module:**
 
@@ -120,7 +120,7 @@ This module is intended to be the local interaction kernel for a commercial proj
 - Bounded `InteractionQueue` with duplicate request rejection for server-authoritative reservation/queue adapters.
 - Shared `InteractionRequestHistory` replay protection with a bounded capacity, used by both floating-point and deterministic authority services.
 - Unity-free `InteractionAuthorityService` for server-side request validation: world scope, stable IDs, tick drift, duplicate requests, replay-history pressure, per-instigator rate limits, action availability, target availability, range checks, and queue pressure.
-- `InteractionTargetSnapshot` and `InteractionVector3` for headless/server adapters that should not depend on `UnityEngine`.
+- `InteractionTargetSnapshot` and `InteractionVector3` for headless/server adapters without `UnityEngine` dependency.
 - `IInteractionPositionProvider` for pluggable position sources, so Networking, GameplayFramework, ECS, or a backend simulation can feed authority checks without sharing a concrete vector type.
 - Optional bridges for `CycloneGames.GameplayFramework.Runtime` and `CycloneGames.DeterministicMath.Core`, plus a separate `CycloneGames.RPGFoundation.Interaction.Networking` package for `CycloneGames.Networking.Core`, keeping Mirror/Mirage/backend choices outside the Interaction core.
 - `InteractionMetrics` / `InteractionMetricsSnapshot` for accepted, rejected, queued, dropped, completed, failed, and faulted interaction counters.
@@ -159,7 +159,7 @@ The built-in `INetworkInteractionSystem` is an adapter contract, and `Interactio
 
 `InteractionDeterministicMathExtensions.ToFPVector3(InteractionVector3)` and `ToDeterministicTargetSnapshot(InteractionTargetSnapshot)` are kept only as migration, editor, diagnostics, or non-authoritative bridges and are marked obsolete to discourage using float data as a deterministic trust source.
 
-CycloneGames integrations are isolated behind dedicated asmdef files or separate optional packages. The Interaction Cyclone networking bridge lives in `CycloneGames.RPGFoundation.Interaction.Networking` and does not require PlayerSettings scripting define symbols. Remaining in-package integrations use their own assembly references and should not be enabled through project-wide scripting define symbols.
+CycloneGames integrations are isolated behind dedicated asmdef files or separate optional packages. The Interaction Cyclone networking bridge lives in `CycloneGames.RPGFoundation.Interaction.Networking` and does not require PlayerSettings scripting define symbols. Remaining in-package integrations use their own assembly references instead of project-wide scripting define symbols.
 
 ---
 
@@ -1110,7 +1110,7 @@ The system:
 - Initializes automatically on first spawn (lazy init).
 - Uses a main-thread `Dictionary<int, ObjectPool<...>>`; Unity object creation and pool access must stay on the Unity main thread.
 - Pools are keyed by prefab `InstanceID`, one pool per unique prefab.
-- Falls back to `Instantiate()` if the prefab has no `PooledEffect` component. This fallback is not zero-GC and should not be used on hot paths.
+- Falls back to `Instantiate()` if the prefab has no `PooledEffect` component. This fallback is not zero-GC; keep hot paths on pooled effects.
 - Auto-disposes when the owner scene is unloaded.
 
 ### VitalRouter Integration
@@ -1429,7 +1429,7 @@ The `SpatialHashGrid` uses a Data-Oriented Design (DOD) Structure-of-Arrays (SoA
 
 ## FAQ
 
-**Q: My object isn't detected. What should I check?**
+**Q: Which settings are required when an object is not detected?**
 
 > 1. The object has a `Collider`/`Collider2D` set as **Is Trigger = true** (not needed in SpatialHash mode).
 > 2. The object's layer matches the detector's **Interactable Layer**.
