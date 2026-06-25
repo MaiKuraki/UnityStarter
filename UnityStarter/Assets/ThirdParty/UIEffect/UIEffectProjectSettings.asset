@@ -20,8 +20,9 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 7d43f626d9b5f4d729097092ded48bdb, type: 3}
   m_Name: UIEffectProjectSettings
   m_EditorClassIdentifier: 
-  m_TransformSensitivity: 1
+  m_PreLoadSettingsInBuild: 1
   m_RuntimePresets: []
+  m_RuntimePresetsV2: []
   m_UseHDRColorPicker: 1
   m_ShaderVariantCollection: {fileID: 0}
   m_ShaderVariantRegistry:
@@ -29,5 +30,6 @@ MonoBehaviour:
     - key: Hidden/UI/Default (SoftMaskable)
       value: Hidden/UI/Default (UIEffect)
     m_Asset: {fileID: -1997124294754715270}
+    m_RegisteredShaders: []
     m_ErrorOnUnregisteredVariant: 0
     m_UnregisteredVariants: []
