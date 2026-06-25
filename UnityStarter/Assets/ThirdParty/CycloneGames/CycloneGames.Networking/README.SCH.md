@@ -4,7 +4,16 @@
 
 `CycloneGames.Networking` 是 CycloneGames runtime packages 使用的传输无关网络基础包。它定义 network manager、transport、connection、serializer、message catalog、protocol manifest、runtime profile、replication planning、session discovery、reconnection、host migration、security validation 和可选 backend adapter 的通用契约。
 
-本包是 framework layer，不是完整在线服务。具体 transport、platform identity、relay service、server orchestration、persistence 和游戏专属 replication rule 由 adapter 或项目 package 提供。
+具体 transport、platform identity、relay service、server orchestration、persistence 和 gameplay replication policy 由 adapter 或项目程序集提供。
+
+## 快速入门
+
+1. 在 `NetworkMessageKind.User` 范围内定义项目消息 ID，或使用 Cyclone 模块提供的 protocol manifest。
+2. 在 bootstrap 阶段通过 `INetworkMessageCatalog.RegisterProtocolManifest` 注册每个 `NetworkProtocolManifest`。
+3. 按产品需求为 `INetworkManager` 配置 transport、serializer、runtime profile 和 security pipeline。
+4. 在打开连接或接受客户端前注册 typed message handler。
+5. 使用 `Core/` 中的 replication、session、security 和 simulation helper，让 gameplay package 与具体 backend SDK 解耦。
+6. 修改 networking contract 后运行 core package 以及依赖该契约的 bridge package EditMode 测试。
 
 ## 包结构
 
@@ -26,6 +35,7 @@ CycloneGames.Networking/
     Serialization/      Serializer contract 和内置 serializer factory
     Services/           Service registration helper
     Session/            Session、directory、matchmaking、reconnection、host migration
+    Simulation/         Deterministic simulation 和 authoritative action contract
     Spawning/           Network spawn manager contract
     StateSync/          State synchronization contract
     Transports/         Transport adapter base contract
@@ -320,6 +330,56 @@ public static class RuntimeContextFactory
 
 GameplayAbilities、GameplayTags、BehaviorTree、AIPerception、Interaction 和 Movement 等 gameplay package 会在这些通用 helper 之上定义各自的 payload DTO 和协议范围。
 
+## Simulation 与 Authoritative Actions
+
+`Simulation` 文件夹包含纯 C# deterministic stepping contract 和类型无关的 authoritative action contract。Deterministic simulation（`IDeterministicSimulation<TInput, TState>`）用于 lockstep、rollback 和 client prediction adapter。Action contract 描述更高层的 command lifecycle，可被 combat、movement、vehicle、weapon、ability、interaction 或项目自定义系统共享。
+
+| Type | 作用 |
+| --- | --- |
+| `NetworkActionCommand` | Client 或 server 的 action request，包含 entity id、action id、client/server tick、sequence、prediction key、input mask、flag、payload hash 和两个通用 vector。 |
+| `NetworkActionResult` | 紧凑表示 accepted、corrected、rejected、expired、duplicate、out-of-order、unauthorized、rate-limited 和 conflicting action 的结果。 |
+| `NetworkActionStateSnapshot` | 用于 action state、transform、velocity、phase、sequence 和 state hash reconciliation 的通用 server snapshot。 |
+| `NetworkActionValidationContext` | Server-side validation context，包含 sender、server tick、last accepted client tick/sequence、authority mode、tick drift window 和 input/flag mask。 |
+| `DefaultNetworkActionValidator` | Allocation-free baseline validator，覆盖 command shape、authentication、tick ordering、drift、input mask 和 flag。 |
+| `NetworkActionHistory<TSnapshot>` | 固定容量 ring history，用于 prediction、rewind、reconciliation、late-join catch-up 和 replay indexing。 |
+
+这些 action contract 为权威 gameplay event 提供生命周期基础。GameplayAbilities 和 GameplayTags 提供 ability、effect、tag、cost、cooldown 和 state gate 语义；产品或领域 package 在这些 networking contract 之上定义 combat window、hit volume、recoil、target acquisition、presentation rule 和品类相关校验。
+
+Action validation 示例：
+
+```csharp
+using CycloneGames.Networking;
+using CycloneGames.Networking.Simulation;
+
+public static class ActionValidationExample
+{
+    public static NetworkActionResult ValidateDodge(
+        INetConnection sender,
+        ulong entityId,
+        NetworkTickId clientTick,
+        NetworkTickId serverTick,
+        ushort sequence,
+        int predictionKey)
+    {
+        var command = new NetworkActionCommand(
+            entityId,
+            actionId: 1001U,
+            clientTick,
+            lastKnownServerTick: serverTick - 1,
+            sequence,
+            predictionKey);
+        var context = new NetworkActionValidationContext(
+            sender,
+            serverTick,
+            lastAcceptedClientTick: NetworkTickId.Invalid,
+            authorityMode: NetworkActionAuthorityMode.ClientPredictedServerAuthoritative,
+            maxAcceptedTickDrift: 8);
+
+        return DefaultNetworkActionValidator.Instance.Validate(command, context);
+    }
+}
+```
+
 ## Session、Discovery、Reconnection 与 Host Migration
 
 `Session` 文件夹包含 backend-neutral runtime model：
@@ -463,7 +523,7 @@ Core serializer contract 是 `INetSerializer`。Adapter code 通过 `INetworkSer
 | `NetworkProtocolFuzzValidationProbe` | Deterministic frame codec fuzz probe。 |
 | `NetworkReplicationLoadValidationProbe` | Deterministic replication load probe。 |
 
-这些 API 记录 validation fact；它们本身不执行外部 load rig，也不对 live deployment 进行认证。
+这些 API 为 CI、Editor 工具和部署评审产出确定性的 readiness evidence。外部 load rig、平台认证和 production launch approval 属于项目流程。
 
 ## 持久化
 

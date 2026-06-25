@@ -2,15 +2,22 @@
 
 A high-performance, state machine-based character movement system for Unity RPG games and compatible with Gameplay Ability System (GAS).
 
-<p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
+<p align="left"><br> English | <a href="README.SCH.md">Simplified Chinese</a></p>
 
 ## GameplayFramework Integration
 
 `MovementComponent` does not directly depend on `CycloneGames.GameplayFramework`. Movement and spawn ownership stay decoupled so the base Movement runtime can compile in Unity projects, headless tools, and package layouts that do not include GameplayFramework.
 
-Strong-typed GameplayFramework integration should live in a dedicated integration asmdef and be enabled by that asmdef through `versionDefines` and `defineConstraints`. Do not use project-wide scripting define symbols as the normal switch.
+Strong-typed GameplayFramework integration belongs in a dedicated integration asmdef and is enabled by that asmdef through `versionDefines` and `defineConstraints`. Project-wide scripting define symbols are not the standard switch for this integration.
 
 If no GameplayFramework integration assembly is active, set the initial rotation from your spawn logic.
+
+## GameplayAbilities Integration
+
+`MovementComponent` can work with ability-owned movement verbs without making GameplayAbilities or GameplayTags a hard dependency of the base Movement runtime. The optional integration assembly is compiled only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled and both `CycloneGames.GameplayAbilities.Runtime` and `CycloneGames.GameplayTags.Core` are available.
+
+When jump, roll, ladder-climb, wall-climb, or similar actions are implemented as abilities, the ability requests the movement state with `MovementStateRequestContext.FromAbility(this)`. Direct player input can still request states normally; the GAS authority decides whether to activate an ability, enter the state directly, or block the direct state transition.
+
 ### Controlling Rotation
 
 **Movement and rotation are decoupled** - the `MovementComponent` handles only movement, not automatic rotation. You must manually control rotation using one of these methods:
@@ -29,6 +36,25 @@ movement.SetRotation(targetDirection, immediate: true);
 movement.ClearLookDirection();
 ```
 
+### Core Runtime API
+
+```csharp
+movement.SetInputDirection(localMoveDirection);
+movement.SetJumpPressed(jumpPressed);
+movement.SetSprintHeld(sprintHeld);
+movement.SetCrouchHeld(crouchHeld);
+movement.SetRollPressed(rollPressed);
+movement.RequestClimb(ClimbingMode.Ladder);
+movement.RequestClimb(ClimbingMode.Wall, wallNormal);
+movement.StopClimb();
+
+MovementSnapshot snapshot = movement.GetSnapshot();
+movement.ApplySnapshot(snapshot);
+movement.ResetFromSnapshot(snapshot);
+```
+
+`MovementComponent` is a Unity component and must be called from the Unity main thread. Use `MovementSnapshot` as network handoff data only; threaded simulation belongs in pure data systems or deterministic integration assemblies.
+
 **Example: Separate movement and rotation inputs**
 
 Here are several common implementations for `CalculateLookDirection`:
@@ -37,7 +63,7 @@ Here are several common implementations for `CalculateLookDirection`:
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime;
 
 public class PlayerController : MonoBehaviour
 {
@@ -170,7 +196,7 @@ For third-person action games where:
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime;
 
 public class ThirdPersonPlayerController : MonoBehaviour
 {
@@ -267,7 +293,7 @@ void Update()
 }
 ```
 
-## 🎨 Extending the System
+## Extending the System
 
 ### Adding New States
 

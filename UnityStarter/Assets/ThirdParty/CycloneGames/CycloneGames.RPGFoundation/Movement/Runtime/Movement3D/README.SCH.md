@@ -11,6 +11,13 @@
 强类型 GameplayFramework 集成应放在独立 integration asmdef 中，并由该 asmdef 通过 `versionDefines` 和 `defineConstraints` 启用。不要把项目级全局 scripting define symbol 作为常规开关。
 
 如果没有启用 GameplayFramework integration assembly，请在生成逻辑中设置初始旋转。
+
+## GameplayAbilities 集成
+
+`MovementComponent` 可以配合由 ability 拥有的移动动作，同时不把 GameplayAbilities 或 GameplayTags 变成基础 Movement runtime 的硬依赖。可选 integration assembly 只会在启用 `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES`，并且 `CycloneGames.GameplayAbilities.Runtime` 与 `CycloneGames.GameplayTags.Core` 都可用时编译。
+
+当跳跃、翻滚、梯子攀爬、墙面攀爬等动作由 ability 实现时，应由 ability 使用 `MovementStateRequestContext.FromAbility(this)` 请求移动状态。直接玩家输入仍可照常请求状态；GAS authority 会决定激活 ability、直接进入状态，或阻止直接状态切换。
+
 ### 控制旋转
 
 **移动和旋转已分离** - `MovementComponent` 只负责移动，不自动旋转。您必须使用以下方法之一手动控制旋转：
@@ -29,6 +36,25 @@ movement.SetRotation(targetDirection, immediate: true);
 movement.ClearLookDirection();
 ```
 
+### 核心 Runtime API
+
+```csharp
+movement.SetInputDirection(localMoveDirection);
+movement.SetJumpPressed(jumpPressed);
+movement.SetSprintHeld(sprintHeld);
+movement.SetCrouchHeld(crouchHeld);
+movement.SetRollPressed(rollPressed);
+movement.RequestClimb(ClimbingMode.Ladder);
+movement.RequestClimb(ClimbingMode.Wall, wallNormal);
+movement.StopClimb();
+
+MovementSnapshot snapshot = movement.GetSnapshot();
+movement.ApplySnapshot(snapshot);
+movement.ResetFromSnapshot(snapshot);
+```
+
+`MovementComponent` 是 Unity 组件，必须从 Unity main thread 调用。`MovementSnapshot` 只作为网络交接数据；多线程模拟应放入纯数据系统或 deterministic integration assembly。
+
 **示例：分离移动和旋转输入**
 
 以下是 `CalculateLookDirection` 的几种常见实现方式：
@@ -37,7 +63,7 @@ movement.ClearLookDirection();
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime;
 
 public class PlayerController : MonoBehaviour
 {
@@ -170,7 +196,7 @@ private Vector3 CalculateLookDirection(Vector2 lookInput)
 
 ```csharp
 using UnityEngine;
-using CycloneGames.RPGFoundation.Runtime;
+using CycloneGames.RPGFoundation.Movement.Runtime;
 
 public class ThirdPersonPlayerController : MonoBehaviour
 {

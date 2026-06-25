@@ -8,6 +8,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
         public int ClientTick;
         public int LastReceivedServerTick;
         public ushort InputSequence;
+        public int PredictionKey;
         public uint ButtonMask;
         public uint CustomFlags;
         public float DeltaTime;
@@ -23,12 +24,14 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             uint customFlags,
             float deltaTime,
             NetworkVector3 moveAxes,
-            NetworkVector3 aimDirection)
+            NetworkVector3 aimDirection,
+            int predictionKey = 0)
         {
             EntityId = entityId;
             ClientTick = clientTick;
             LastReceivedServerTick = lastReceivedServerTick;
             InputSequence = inputSequence;
+            PredictionKey = predictionKey;
             ButtonMask = buttonMask;
             CustomFlags = customFlags;
             DeltaTime = deltaTime;
@@ -43,6 +46,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
                 return EntityId != 0UL
                        && ClientTick >= 0
                        && LastReceivedServerTick >= 0
+                       && float.IsFinite(DeltaTime)
                        && DeltaTime >= 0f
                        && DeltaTime <= MovementNetworkProtocol.MAX_INPUT_DELTA_TIME
                        && MoveAxes.IsFinite()

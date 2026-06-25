@@ -5,23 +5,21 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 {
     public class RollState2D : MovementStateBase2D
     {
-        private float _rollTimer;
-        private float2 _rollDirection;
-
         public override MovementStateType StateType => MovementStateType.Roll;
 
         public override void OnEnter(ref MovementContext2D context)
         {
-            _rollTimer = 0f;
+            context.RollTimer = 0f;
+            context.RollPressed = false;
 
             if (math.lengthsq(context.InputDirection) > 0.0001f)
             {
-                _rollDirection = math.normalize(context.InputDirection);
+                context.RollDirection = math.normalize(context.InputDirection);
             }
             else
             {
                 float facingSign = context.Transform.localScale.x > 0f ? 1f : -1f;
-                _rollDirection = new float2(facingSign, 0f);
+                context.RollDirection = new float2(facingSign, 0f);
             }
 
             context.CurrentSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
@@ -36,17 +34,17 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             }
         }
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
-            _rollTimer += context.DeltaTime;
+            context.RollTimer += context.DeltaTime;
 
             float rollDistance = context.Config.RollDistance;
             float rollDuration = context.Config.RollDuration;
             float rollSpeed = rollDuration > 0f ? rollDistance / rollDuration : 5f;
 
-            velocity = _rollDirection * rollSpeed * context.DeltaTime;
+            displacement = context.RollDirection * rollSpeed * context.DeltaTime;
             context.CurrentSpeed = rollSpeed;
-            context.CurrentVelocity = _rollDirection * rollSpeed;
+            context.CurrentVelocity = context.RollDirection * rollSpeed;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
@@ -57,7 +55,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 
         public override MovementStateBase2D EvaluateTransition(ref MovementContext2D context)
         {
-            if (_rollTimer >= context.Config.RollDuration)
+            if (context.RollTimer >= context.Config.RollDuration)
             {
                 if (!context.IsGrounded)
                 {
@@ -79,6 +77,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
 
         public override void OnExit(ref MovementContext2D context)
         {
+            context.RollTimer = 0f;
+            context.RollDirection = float2.zero;
         }
     }
 }

@@ -97,6 +97,6 @@ The rule is owned by Windows Defender Firewall and can be removed from Windows s
 2. Set the protocol and port used by the selected transport.
 3. Confirm the window lists at least one LAN IPv4 address.
 4. On Windows, click `Request Firewall Rule` and approve the UAC prompt.
-5. Click `Verify Firewall Rule`; the status should report a verified rule (no further configuration required).
+5. Click `Verify Firewall Rule`; confirm the status reports a verified rule with no further configuration required.
 6. From another machine on the same LAN, connect to the listed host IP and port.
 7. Build a Windows standalone player and repeat the firewall request from the build so the rule targets the player executable rather than the Unity Editor executable.

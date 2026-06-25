@@ -30,6 +30,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         public bool SprintHeld;
         public bool CrouchHeld;
         public bool RollPressed;
+        public float RollTimer;
+        public float3 RollDirection;
 
         public int JumpCount;
 
@@ -44,6 +46,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         public float LastWallJumpTime;
 
         public IMovementAuthority MovementAuthority;
+
+        public ClimbingMode ClimbingMode;
 
         // Wall climb per-instance state (moved from WallClimbState for flyweight safety)
         public Vector3 WallClimbNormal;

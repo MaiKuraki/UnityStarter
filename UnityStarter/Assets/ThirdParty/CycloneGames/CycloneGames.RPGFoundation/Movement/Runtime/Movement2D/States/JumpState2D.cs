@@ -35,7 +35,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             }
         }
 
-        public override void OnUpdate(ref MovementContext2D context, out float2 velocity)
+        public override void OnUpdate(ref MovementContext2D context, out float2 displacement)
         {
             float runSpeed = context.GetAttributeValue(MovementAttribute.RunSpeed, context.Config.RunSpeed);
             float airControl = context.GetAttributeValue(MovementAttribute.AirControlMultiplier, context.Config.AirControlMultiplier);
@@ -43,19 +43,20 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States
             float horizontalVelocity = context.InputDirection.x * airControlSpeed;
 
 #if UNITY_6000_0_OR_NEWER
-            velocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
+            float2 currentVelocity = new float2(horizontalVelocity, context.Rigidbody.linearVelocity.y);
 #else
-            velocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
+            float2 currentVelocity = new float2(horizontalVelocity, context.Rigidbody.velocity.y);
 #endif
+            displacement = currentVelocity * context.DeltaTime;
             context.CurrentSpeed = math.abs(horizontalVelocity);
-            context.CurrentVelocity = velocity;
+            context.CurrentVelocity = currentVelocity;
 
             if (context.AnimationController != null && context.AnimationController.IsValid)
             {
                 int speedHash = AnimationParameterCache.GetHash(context.Config.MovementSpeedParameter);
                 int verticalHash = AnimationParameterCache.GetHash(context.Config.VerticalSpeedParameter);
                 context.AnimationController.SetFloat(speedHash, context.CurrentSpeed);
-                context.AnimationController.SetFloat(verticalHash, velocity.y);
+                context.AnimationController.SetFloat(verticalHash, currentVelocity.y);
             }
         }
 
