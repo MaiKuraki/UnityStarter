@@ -16,18 +16,30 @@ UnityStarter is not intended to be a beginner-first, plug-and-play framework for
 
 ## Table of Contents
 
-1. [Why UnityStarter](#why-unitystarter)
-2. [What Is Inside](#what-is-inside)
-3. [Architecture Principles](#architecture-principles)
-4. [Repository Layout](#repository-layout)
-5. [Module Map](#module-map)
-6. [Networking Status](#networking-status)
-7. [Build, CI/CD And Project Tooling](#build-cicd-and-project-tooling)
-8. [Getting Started](#getting-started)
-9. [Technology Stack](#technology-stack)
-10. [Documentation](#documentation)
-11. [Validation Status](#validation-status)
-12. [Related Projects](#related-projects)
+- [Table of Contents](#table-of-contents)
+- [Why UnityStarter](#why-unitystarter)
+- [What Is Inside](#what-is-inside)
+- [Architecture Principles](#architecture-principles)
+  - [Project Ownership Model](#project-ownership-model)
+- [Repository Layout](#repository-layout)
+- [Module Map](#module-map)
+  - [Gameplay](#gameplay)
+  - [AI](#ai)
+  - [Data, Assets And Content](#data-assets-and-content)
+  - [Runtime Infrastructure](#runtime-infrastructure)
+  - [Build, Tools And Quality](#build-tools-and-quality)
+- [Networking Status](#networking-status)
+- [Build, CI/CD And Project Tooling](#build-cicd-and-project-tooling)
+  - [Build is project-owned infrastructure](#build-is-project-owned-infrastructure)
+  - [Tools for derived projects](#tools-for-derived-projects)
+- [Getting Started](#getting-started)
+  - [Requirements](#requirements)
+  - [First Run](#first-run)
+  - [Using Individual Modules](#using-individual-modules)
+- [Technology Stack](#technology-stack)
+- [Documentation](#documentation)
+- [Validation Status](#validation-status)
+- [Related Projects](#related-projects)
 
 ## Why UnityStarter
 
@@ -42,21 +54,11 @@ Its value is the reusable engineering foundation around ownership, testability, 
 
 ## What Is Inside
 
-| Area | Highlights |
-| --- | --- |
-| Gameplay architecture | Unreal-inspired `Actor`, `Pawn`, `Controller`, `GameMode`, camera and scene-flow foundations. |
-| Asset management | Interface-first `AssetManagement` layer with W-TinyLFU-inspired caching, `CacheRetention` policies/scheduler, async loading flows, provider abstraction, and optional backends. |
-| Ability system | GAS-style abilities, attributes, effects, costs, cooldowns, cues, and optional networking bridge. |
-| Tags and data | Hierarchical gameplay tags, source generation, DataTable workflow, optional Luban and MessagePack integration. |
-| AI | Behavior trees, editor tooling, Burst/DOD-oriented perception, and scalable runtime patterns. |
-| UI and player systems | `UIFramework` delegates prefab/config/atlas asset lifecycles to `AssetManagement` handles and its W-TinyLFU `AssetCacheService`; it does not own a separate `CacheRetention` policy layer. `InputSystem` supports local multiplayer, device detection, and device switching, alongside device feedback, audio, localization, services, utility modules, and font assets. |
-| Infrastructure | Pooling/factory, logging, deterministic math, hashing, IO utilities, services, and cheat/debug helpers. |
-| Build and tools | Project-owned build pipeline, CI entry points, hot-update hooks, Roslyn analyzers, and Go maintenance tools. |
-| Documentation | Bilingual root docs and module docs for long-lived packages. |
+UnityStarter combines a reusable `CycloneGames` framework layer with a Unity project template, a project-owned Build/CI module, standalone maintenance tools, bilingual documentation, and validation-oriented analyzer support.
 
-Current checkout facts:
+For module-level details, use the [Module Map](#module-map). It is the primary index for gameplay, content, UI/input, AI, runtime infrastructure, build tooling, and experimental networking packages.
 
-| Item | Value |
+| Item | Detail |
 | --- | --- |
 | Unity project root | `UnityStarter/` |
 | Unity version source | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
