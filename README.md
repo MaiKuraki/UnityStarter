@@ -48,7 +48,7 @@ UnityStarter is for developers and teams who want production-grade Unity structu
 Use the repository in two practical ways:
 
 - **As a project template**: open `UnityStarter/` in Unity, rename it with the bundled tools, and let the project-owned `Assets/Build/` layer evolve with your game.
-- **As a module source**: copy selected `CycloneGames` packages into another Unity project, keeping only the systems you need.
+- **As a package (UPM)**: move out folders under `CycloneGames`, add from PackageManager.
 
 Its value is the reusable engineering foundation around ownership, testability, optional integrations, build configuration, editor tooling, and documentation.
 
@@ -263,8 +263,8 @@ See [Tools README](Tools/README.md) for usage details.
 
 ### Requirements
 
-- Unity version recorded in `UnityStarter/ProjectSettings/ProjectVersion.txt` (`2022.3.62f3` in this checkout).
-- Git, used by the Build module for automatic version information.
+- `2022.3.62f3`+
+- Git / Perforce / SVN, used by the Build module for automatic version information.
 
 ### First Run
 
@@ -325,4 +325,4 @@ The repository contains tests and analyzer rules, but the safest validation path
 
 ---
 
-**License**: [MIT](LICENSE) | **Support**: [GitHub Issues](https://github.com/MaiKuraki/UnityStarter/issues)
+**License**: [MIT](LICENSE)
