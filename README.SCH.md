@@ -1,6 +1,8 @@
 ![Unity Project Starter](<https://capsule-render.vercel.app/api?type=waving&height=220&color=gradient&text=Unity%20Project%20Starter&section=header&reversal=false&textBg=false&desc=GameplayFramework%20│%20GameplayAbility(GAS)%20│%20UIFramework%20│%20HotUpdate%20Ready%20(HybridCLR)%20│%20CI/CD%20Ready&descAlign=50&descAlignY=58&descSize=16&fontAlignY=30&fontSize=72>)
 
-一个生产就绪、模块化的 Unity 全栈游戏框架，借鉴**虚幻引擎**架构，专为大型商业游戏开发设计。性能优先的系统、完善的工具链、现代化的 CI/CD 工作流。
+一套面向生产、模块化的 Unity **基础工程**与可复用框架底座，借鉴**虚幻引擎**架构。其中 `GameplayFramework` 采用类似 Unreal 的 `Actor`、`Pawn`、`Controller`、`GameMode` 组织方式，**Gameplay Abilities** 与 **GameplayTags** 则提供 GAS 风格的能力与标签基础，用于建立清晰的玩法契约。
+
+UnityStarter 并不是面向新人和小型项目的开箱即用框架。它的设计目标是成为中大型 Unity 项目中稳定、可维护、可长期演进的底层工程基础：明确的所有权边界、性能优先的运行时系统、引擎无关核心，以及由项目自身维护的构建与工具基础设施。
 
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
@@ -8,168 +10,317 @@
 > 如果你觉得这个项目对你有帮助，请点一个 Star ⭐，谢谢！
 
 ![Unity](https://img.shields.io/badge/Unity-2022.3%20LTS-black?logo=unity)
-![Unity6](https://img.shields.io/badge/Unity-6000.3%20LTS-black?logo=unity)
+![Unity6](https://img.shields.io/badge/Unity-6000.x%20Compatible-black?logo=unity)
 ![License](https://img.shields.io/badge/License-MIT-green.svg)
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MaiKuraki/UnityStarter)
 
 ## 目录
 
-1. [概述](#概述)
-2. [架构设计](#架构设计)
-3. [模块目录](#模块目录)
-4. [快速上手](#快速上手)
-5. [技术栈](#技术栈)
-6. [相关项目](#相关项目)
+1. [为什么是 UnityStarter](#为什么是-unitystarter)
+2. [项目内容概览](#项目内容概览)
+3. [架构原则](#架构原则)
+4. [仓库结构](#仓库结构)
+5. [模块地图](#模块地图)
+6. [Networking 状态](#networking-状态)
+7. [Build、CI/CD 与项目工具](#buildcicd-与项目工具)
+8. [快速开始](#快速开始)
+9. [技术栈](#技术栈)
+10. [文档入口](#文档入口)
+11. [验证状态](#验证状态)
+12. [相关项目](#相关项目)
 
-## 概述
+## 为什么是 UnityStarter
 
-UnityStarter 是一套经过验证的专业游戏开发基础——不是零散的实用工具集合，而是一个完整、一致的全栈游戏框架。它提供：
+UnityStarter 面向希望从第一天就具备生产级工程结构的 Unity 开发者和团队：可预测的资源所有权、清晰拆分的 gameplay architecture、data-driven content、明确的 module boundaries、build automation、analyzers，以及项目维护工具。
 
-- **完整游戏架构** — Actor/Pawn/Controller/GameMode 的虚幻风格架构
-- **全套战斗系统** — GAS 风格技能系统：Ability、Attribute、Effect、Cooldown、Cost
-- **生产级 AI** — 可视化行为树编辑器，Burst/DOD 方案扩展至 10,000+ 智能体
-- **双模网络同步** — 状态同步 + Lockstep 回滚，5 种 AOI 策略
-- **性能优先** — 所有核心系统热路径零 GC
-- **模块化设计** — 24+ 个自包含 Package，按需导入
-- **热更新就绪** — HybridCLR（C#）+ YooAsset/Addressables（资源）+ Obfuz（代码保护）
-- **开发者工具** — 自研 Roslyn Analyzer、构建管线、Cheat 控制台、UI 性能分析器
-- **跨引擎核心** — 关键模块面向 `netstandard2.0`，零 Unity API，已为 Godot 做好准备
+这个仓库可以用两种方式使用：
 
-## 架构设计
+- **作为项目模板**：在 Unity 中打开 `UnityStarter/`，用内置工具改名，让项目自有的 `Assets/Build/` 层随着你的游戏继续演进。
+- **作为模块来源**：把需要的 `CycloneGames` packages 复制到其他 Unity 项目，只保留真正需要的系统。
 
-```text
-UnityStarter/
-├── Assets/
-│   ├── Build/                  # 构建管线与 CI/CD（HybridCLR、Obfuz、YooAsset/Addressables）
-│   ├── Plugins/                # 第三方原生插件
-│   ├── Settings/               # URP PipelineAssets（Performant/Balanced/HighFidelity）
-│   ├── ThirdParty/CycloneGames/ # 核心框架（22+ 模块、80+ asmdef）
-│   └── UnityStarter/           # 项目特有代码与场景
-├── Analyzers/                  # Roslyn 分析器（22 条已实现规则）[独立 .sln]
-├── Packages/                   # UPM 清单
-├── ProjectSettings/            # Unity 项目配置
-└── Tools/                      # Go 工具脚本
+它真正提供的是围绕所有权、可测试性、可选集成、构建配置、Editor tooling 和文档形成的可复用工程基础。
+
+## 项目内容概览
+
+| 领域 | 主要内容 |
+| --- | --- |
+| Gameplay architecture | 受 Unreal 启发的 `Actor`、`Pawn`、`Controller`、`GameMode`、camera 与 scene-flow foundations。 |
+| Asset management | Interface-first `AssetManagement` 层，包含 W-TinyLFU-inspired caching、`CacheRetention` policies/scheduler、async loading flows、provider abstraction 和可选 backends。 |
+| Ability system | GAS 风格的 abilities、attributes、effects、costs、cooldowns、cues，以及可选 networking bridge。 |
+| Tags and data | 层级 gameplay tags、source generation、DataTable workflow、可选 Luban 与 MessagePack integration。 |
+| AI | Behavior trees、editor tooling、Burst/DOD-oriented perception，以及可扩展 runtime patterns。 |
+| UI and player systems | `UIFramework` 将 prefab/config/atlas 等资源生命周期委托给 `AssetManagement` handles 与 W-TinyLFU `AssetCacheService`；自身不维护独立的 `CacheRetention` 策略层。`InputSystem` 支持本地多人、多设备自动检测与多设备自动切换，同时包含 device feedback、audio、localization、services、utility modules 和 font assets。 |
+| Infrastructure | Pooling/factory、logging、deterministic math、hashing、IO utilities、services 和 cheat/debug helpers。 |
+| Build and tools | 项目自有 build pipeline、CI entry points、hot-update hooks、Roslyn analyzers 和 Go maintenance tools。 |
+| Documentation | 根文档与长期维护模块文档均提供中英文版本。 |
+
+当前 checkout 事实：
+
+| 项目 | 值 |
+| --- | --- |
+| Unity 项目根目录 | `UnityStarter/` |
+| Unity 版本来源 | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
+| 当前 Unity 版本 | `2022.3.62f3` |
+| CycloneGames 模块目录 | `UnityStarter/Assets/ThirdParty/CycloneGames/` 下 30+ 个 |
+| Assembly definitions | `UnityStarter/Assets/` 下 140+ 个 `.asmdef` 文件 |
+| Analyzer 规则 | 20+ 条已实现的 `CycloneGames.Analyzers` 规则 |
+| 独立工具 | `Tools/Executable/Windows/` 下的 Go 工具 Windows 可执行文件 |
+
+## 架构原则
+
+- **关键逻辑优先纯 C#**：当逻辑需要在 CLI、EditMode、headless simulation 或未来 adapter 中测试时，核心契约避免泄露 `UnityEngine` 类型。
+- **Unity 负责集成与表现**：`MonoBehaviour`、`ScriptableObject`、Editor tools、scene bindings 和 assets 负责桥接 runtime systems，而不是承载复杂领域规则。
+- **可选集成物理隔离**：DI containers、tween engines、scene navigation、serializers、transports 和 hot-update backends 都放在独立 integration assemblies 后面。
+- **性能是设计约束**：热路径以 zero-GC 或 low-GC 为目标，强调可预测所有权、可复用 buffers 和明确 lifecycle cleanup。
+- **Build 是项目自有层**：`Assets/Build/` 应随派生项目一起演进，根据产品需求调整。
+- **文档是 API 的一部分**：长期维护模块应同步维护 `README.md` 和 `README.SCH.md`。
+
+### 项目所有权模型
+
+这张图用于说明仓库所有权与模块职责，不表示运行时依赖顺序。它的重点是：哪些部分会随派生项目持续维护，哪些部分属于可复用框架模块，哪些部分是可选或实验性集成。
+
+```mermaid
+flowchart TD
+  subgraph ProjectOwned["项目自有模板层"]
+    StarterAssets["Assets/UnityStarter/\nScenes、项目资源、组合入口"]
+    BuildLayer["Assets/Build/\nBuild 与 CI 入口"]
+    ProjectTools["Tools/\n改名、清理、维护工具"]
+  end
+
+  subgraph FrameworkModules["可复用 CycloneGames 模块"]
+    Gameplay["Gameplay\nGameplayFramework、Abilities、Tags、RPGFoundation"]
+    Content["Content\nAssetManagement、DataTable、Localization、Audio"]
+    Presentation["Presentation/Input\nUIFramework、InputSystem、DeviceFeedback"]
+    AI["AI\nBehaviorTree、AIPerception"]
+    Infrastructure["Runtime Infrastructure\nFactory、Logger、DeterministicMath、Hash、IO"]
+  end
+
+  subgraph OptionalIntegrations["可选 / 实验性集成"]
+    Networking["Networking packages\n端到端验证前保持实验性"]
+    HotUpdate["Hot-update 构建钩子\n安装 HybridCLR、YooAsset、Addressables 后启用"]
+  end
+
+  ProjectTools --> StarterAssets
+  ProjectTools --> BuildLayer
+  StarterAssets --> Gameplay
+  StarterAssets --> Content
+  StarterAssets --> Presentation
+  StarterAssets --> AI
+  Gameplay --> Infrastructure
+  Content --> Infrastructure
+  Presentation --> Content
+  AI --> Infrastructure
+  BuildLayer -. 检测 / 调用 .-> HotUpdate
+  Gameplay -. 可选桥接 .-> Networking
+  AI -. 可选桥接 .-> Networking
+
+  class StarterAssets,BuildLayer,ProjectTools projectNode
+  class Gameplay,Content,Presentation,AI frameworkNode
+  class Infrastructure infraNode
+  class Networking,HotUpdate optionalNode
+
+  classDef projectNode fill:#E6F4FF,stroke:#6B9BC3,color:#263238,stroke-width:1px
+  classDef frameworkNode fill:#FFF1D9,stroke:#C99745,color:#263238,stroke-width:1px
+  classDef infraNode fill:#F4F4F5,stroke:#9CA3AF,color:#263238,stroke-width:1px
+  classDef optionalNode fill:#E8F8F5,stroke:#67A69A,color:#263238,stroke-width:1px,stroke-dasharray: 5 4
 ```
 
-每个模块遵循相同的内部结构：`Runtime/`（核心）→ `Editor/`（工具）→ 可选 `Core/`（引擎无关）→ 可选 `Integrations/`（跨模块桥接）→ `Samples/`。每个模块均有中英双语 `README.md` + `README.SCH.md`。
+## 仓库结构
 
-## 模块目录
+```text
+<repo-root>/
+  README.md / README.SCH.md              # 根目录中英文总览
+  Docs/                                  # 跨模块指南
+  Tools/                                 # 独立维护工具
+  UnityStarter/                          # Unity 项目根目录
+    Analyzers/CycloneGames.Analyzers/    # Roslyn analyzer 项目
+    Assets/Build/                        # 项目自有 Build/CI 模块
+    Assets/ThirdParty/CycloneGames/      # 可复用 CycloneGames 框架模块
+    Assets/UnityStarter/                 # 模板项目 scenes 与 game-side assets
+    Packages/                            # Unity package manifest 与 lock file
+    ProjectSettings/                     # Unity settings，包含版本来源
+```
 
-> **📚** 每个模块目录下都有详细文档，点击下方的链接直接跳转。
+## 模块地图
 
-### 🎮 游戏玩法系统
+这里作为模块导航地图使用。快速评估时，建议先看 `GameplayFramework`、`AssetManagement`、`GameplayAbilities`、`GameplayTags`、`DataTable` 和 `Build`。
 
-| 模块 | 描述 | 文档 |
+### Gameplay
+
+| 模块 | 职责 | 文档 |
 | --- | --- | --- |
-| **GameplayFramework** | UE 风格 Actor/Pawn/Controller/GameMode 架构。DI 友好，高度可扩展。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md) |
-| **GameplayAbilities** | 数据驱动技能系统（GAS）。ScriptableObject 技能、属性、效果、消耗/冷却、GameplayCue。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
-| **GameplayAbilities.Networking** | 网络化 GAS：客户端预测、回滚、状态复制、14 种网络消息、漂移检测。 | 模块目录 |
-| **GameplayTags** | 层级标签系统。Source Generator 生成，零分配查询，Unity Editor 集成。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md) |
-| **BehaviorTree** | 可视化 AI 行为树。GraphView 编辑器、DOD/Burst 批量仿真、30+ 节点、网络同步。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.SCH.md) |
-| **AIPerception** | Burst 加速 AI 感知。视觉/深度/接近查询、空间网格、每 Tick 零 GC。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.SCH.md) |
-| **RPGFoundation** | RPG 扩展：背包、属性、任务、2D/3D 移动控制器。 | 模块目录 |
-| **UIFramework** | 层级式 UI 框架。窗口状态机、MVP 支持、多 Tween 后端、动态图集。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
+| **GameplayFramework** | Actor/Pawn/Controller/GameMode 结构、gameplay lifecycle、camera flow 与 scene-flow foundation。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md) |
+| **GameplayAbilities** | GAS 风格 data-driven ability、attribute、effect、cost、cooldown 与 cue system。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
+| **GameplayTags** | 层级 tags、generated constants、query helpers、editor tooling 与 integration points。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md) |
+| **RPGFoundation** | RPG movement 与 interaction foundations，可与其他 gameplay packages 集成。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.SCH.md) |
+| **UIFramework** | Window management、UI flow、presentation patterns，以及委托给 `AssetManagement` W-TinyLFU cache 的 asset-backed UI loading；`UIFramework` 自身不维护独立的 `CacheRetention` 策略层。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
+| **Foundation2D** | 面向派生项目的 2D foundation package 与 samples。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/) |
 
-### 🏗️ 核心基础设施
+### AI
 
-| 模块 | 描述 | 文档 |
+| 模块 | 职责 | 文档 |
 | --- | --- | --- |
-| **Factory** | 高性能对象池。线程安全、自动扩缩、O(1) 操作、DOD 变体。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md) |
-| **Logger** | 结构化日志。多线程、文件轮转、可插拔处理器、WebGL 支持。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md) |
-| **AssetManagement** | 资源加载抽象层。W-TinyLFU 缓存、YooAsset/Addressables/Resources 三后端。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
-| **DataTable** | 配置数据管线。Luban/MessagePack 双后端、零 GC O(1) 查询、Core 引擎无关。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.SCH.md) |
-| **Audio** | 音频管理。类似 Wwise 的 API、Bank 系统、平台 Profile、语音策略。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md) |
-| **Localization** | BCP 47 本地化框架。CLDR 复数规则（25+ 语言）、回退链、伪本地化 QA。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.SCH.md) |
+| **BehaviorTree** | Behavior tree runtime、editor support、tests 与 data-oriented runtime pieces。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree/README.SCH.md) |
+| **AIPerception** | Jobs/Burst-oriented perception、sensor queries、spatial structures 与 low-GC runtime flow。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception/README.SCH.md) |
 
-### 🌐 网络
+### Data、Assets And Content
 
-| 模块 | 描述 | 文档 |
+| 模块 | 职责 | 文档 |
 | --- | --- | --- |
-| **Networking** | 网络抽象层。可插拔传输（Mirror/Mirage）、QoS 通道、4 种序列化器、Burst AOI。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.SCH.md) |
+| **AssetManagement** | Interface-first asset loading abstraction，包含 W-TinyLFU-inspired caching、`CacheRetention` policies/scheduler、provider abstraction、diagnostics 和 async loading flows。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.SCH.md) |
+| **DataTable** | 面向策划配置的数据管线，支持可选 Luban、MessagePack 与 asset-management bridges。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.SCH.md) |
+| **GameplayTags.DataTable** | GameplayTags authoring 与 loading 的 DataTable integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags.DataTable/README.SCH.md) |
+| **Localization** | String tables、locale fallback、asset variants 与 hot-reload-oriented loading。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.SCH.md) |
+| **Audio** | Audio management layer，包含 async loading、runtime ownership 与 platform-aware policies。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md) |
+| **FontAssets** | CJK、Latin、symbols 与 number font assets。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets/) |
 
-### 🕹️ 输入与设备
+### Runtime Infrastructure
 
-| 模块 | 描述 | 文档 |
+| 模块 | 职责 | 文档 |
 | --- | --- | --- |
-| **InputSystem** | 响应式输入封装。上下文栈、本地多人、设备自动检测、运行时改键。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
-| **DeviceFeedback** | 跨平台设备反馈。手机振动（Android/iOS/WebGL）、手柄震动、灯条控制。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md) |
+| **Factory** | Factory 与 object pooling module，支持 DI-friendly usage 和 ECS/DOD variants。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md) |
+| **Logger** | Thread-safe logging，包含 levels、filtering、background processing 与 Unity integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md) |
+| **DeterministicMath** | Fixed-point deterministic math，用于 replay、simulation 与 lockstep-friendly systems。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeterministicMath/README.SCH.md) |
+| **Hash** | Deterministic hashing primitives，用于 manifests、protocol checks、IDs 与 consistency。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Hash/README.SCH.md) |
+| **IO** | 面向 Unity-aware foundation modules 的 managed file and path utilities。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.IO/README.SCH.md) |
+| **InputSystem** | Reactive input wrapper，包含 YAML config、editor tooling、本地多人/多设备支持、多设备自动检测、多设备自动切换、context stacks 与 device pairing。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
+| **DeviceFeedback** | Haptics、vibration、rumble 与 device-light feedback abstractions。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md) |
+| **Services** | 面向派生项目的 Unity-facing service helpers。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services/) |
+| **Utility** | Common Unity utility components and helpers。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility/) |
+| **Cheat** | Build-gated internal cheat command system，集成 VitalRouter。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat/README.SCH.md) |
 
-### 🧰 开发者工具
+### Build、Tools And Quality
 
-| 模块 | 描述 | 文档 |
+| 区域 | 职责 | 文档 |
 | --- | --- | --- |
-| **Analyzers** | 自研 Roslyn 分析器。22 条已实现规则覆盖 5 大类别，2 个 CodeFix。 | [README.SCH](UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md) |
-| **Cheat** | 类型安全调试命令控制台。VitalRouter 集成、异步命令、线程安全执行。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat/README.SCH.md) |
-| **Utility** | 通用工具集：FPS 计数器、安全区域适配、启动画面、文件操作。 | 模块目录 |
-| **Services** | 服务抽象：摄像机管理、图形设置、设备配置。 | 模块目录 |
-| **FontAssets** | 多语言字体。拉丁文、中日韩（简体/繁体/日文/韩文）。 | 模块目录 |
+| **Build** | 项目自有 player build pipeline、version info、可选 hot-update hooks 与 CI-facing methods。 | [README.SCH](UnityStarter/Assets/Build/README.SCH.md) |
+| **Tools** | 用于项目改名、package trimming、cleanup、file trees 与 asset processing 的 Go tools。 | [README.SCH](Tools/README.SCH.md) |
+| **Analyzers** | 面向 Unity performance、safety、async 与 conventions 的 Roslyn analyzer rules。 | [README.SCH](UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md) |
 
-### 🎯 2D 与平台
+## Networking 状态
 
-| 模块 | 描述 | 文档 |
+Networking layer 已经存在并有文档，但尚未完成项目级端到端验证。在使用真实 transport、serializer、authority model、reconnect flow、目标平台和 gameplay replication policy 完整测试前，请把它视为 experimental foundation。
+
+| 模块 | 职责 | 状态 |
 | --- | --- | --- |
-| **Foundation2D** | 2D 游戏基础。性能基准测试、平台跳跃组件、Sprite 管理。 | 模块目录 |
+| **Networking** | Transport-neutral contracts、message catalogs、protocol manifests、sessions、replication、security、serializers、adapters 与 diagnostics。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.SCH.md) |
+| **GameplayAbilities.Networking** | Ability activation、effect replication、attribute/tag sync、prediction keys、reconnect state 与 security policy bridge。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities.Networking/README.SCH.md) |
+| **GameplayFramework.Networking** | Session bridge、actor migration serialization、authority roles 与 observer resolution。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework.Networking/README.SCH.md) |
+| **GameplayTags.Networking** | Manifest handshakes 与 tag payload wrappers。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags.Networking/README.SCH.md) |
+| **AIPerception.Networking** | Perception event、snapshot、memory、authority 与 host-migration contracts。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception.Networking/README.SCH.md) |
+| **BehaviorTree.Networking** | Behavior tree replication profiles、authority helpers、snapshots 与 blackboard deltas。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree.Networking/README.SCH.md) |
+| **RPGFoundation.Movement.Networking** | Movement input、snapshot、correction、teleport、authority transfer、validation、history 与 reconciliation contracts。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation.Movement.Networking/README.SCH.md) |
+| **RPGFoundation.Interaction.Networking** | Interaction DTOs、vector conversion、authority validation bridge 与 message catalog registration。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation.Interaction.Networking/README.SCH.md) |
 
-### 🔧 构建与部署
+## Build、CI/CD 与项目工具
 
-| 模块 | 描述 | 文档 |
-| --- | --- | --- |
-| **Build** | 完整构建管线。HybridCLR + Obfuz + 资源管理。CLI 驱动，CI/CD 就绪。 | [README.SCH](UnityStarter/Assets/Build/README.SCH.md) |
+### Build 是项目自有基础设施
 
-## 快速上手
+`UnityStarter/Assets/Build/` 是项目自有层。它不是冻结的底层包，因为真实产品一定需要调整 scenes、version prefixes、output layout、hot-update assembly lists、platform signing 和 release rules。
 
-### 前置条件
+当开发者从 UnityStarter 派生新游戏并运行 `rename_project` 后，Build layer 会保留在新项目中，并应继续由该项目维护。
 
-- **Unity 2022.3 LTS** 或更高版本（同时支持 6000.3 LTS）
-- **Git**（Build 模块自动版本控制需要）
+Build 模块包含：
 
-### 快速开始
+- `BuildData` ScriptableObject 配置。
+- 通过 `Build.VersionControl.Editor` 获取 Git-based version information。
+- Editor menu items 与 command-line player build entry points。
+- HybridCLR、Obfuz、YooAsset、Addressables 和 Buildalon 的可选反射检测 integrations。
+- 面向内部构建的 Cheat define control。
+- 例如 `Build.Pipeline.Editor.BuildScript.PerformBuild_CI` 的 CI-facing methods。
+
+最小命令形态：
+
+```bash
+Unity -batchmode -quit -projectPath UnityStarter \
+  -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
+  -buildTarget StandaloneWindows64 \
+  -output Build/Windows/UnityStarter.exe \
+  -clean
+```
+
+[Build README](UnityStarter/Assets/Build/README.SCH.md) 包含更详细的配置说明、hot-update workflows 和 CI examples。
+
+### 派生项目工具
+
+`Tools/` 目录包含独立 Go 工具：
+
+| 工具 | 用途 |
+| --- | --- |
+| `rename_project` | 安全、可重复地重命名从 UnityStarter 派生的项目。 |
+| `remove_unity_packages` | 从 `manifest.json` 移除不需要的 packages。 |
+| `unity_project_full_clean` | 清理 Unity caches、generated projects 和 build artifacts。 |
+| `audio_volume_normalizer` | 按类别目标标准化 audio loudness。 |
+| `texture_channel_packer` | 为 mask maps 等工作流打包 texture channels。 |
+| `unity_video_webm_converter` | 将视频转换为 Unity-friendly VP8 WebM。 |
+| `generate_file_tree` | 生成用于文档的 Markdown directory trees。 |
+
+详见 [Tools README](Tools/README.SCH.md)。
+
+## 快速开始
+
+### 环境要求
+
+- `UnityStarter/ProjectSettings/ProjectVersion.txt` 中记录的 Unity 版本，当前 checkout 为 `2022.3.62f3`。
+- Git，用于 Build 模块生成自动版本信息。
+
+### 首次运行
 
 ```bash
 git clone https://github.com/MaiKuraki/UnityStarter.git
 ```
 
-1. **在 Unity 中打开** — 将 `UnityStarter/` 目录添加到 Unity Hub
-2. **探索架构** — 从 `GameplayFramework` 开始了解项目架构
-3. **阅读文档** — 每个模块均有 `README.md` + `README.SCH.md`
-4. **配置构建** — 详见 [Build 模块文档](UnityStarter/Assets/Build/README.SCH.md)
+1. 在 Unity Hub 中打开 `UnityStarter/`。
+2. 打开 `UnityStarter/Assets/UnityStarter/Scenes/Scene_Launch.unity`。
+3. 阅读 [GameplayFramework](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md)，理解高层架构。
+4. 修改 build settings 或 CI methods 前，先阅读 [Build](UnityStarter/Assets/Build/README.SCH.md)。
+5. 如果你要从该模板创建新项目，运行 `Tools/Executable/Windows/rename_project.exe`，并阅读 [Tools README](Tools/README.SCH.md)。
 
-### 在现有项目中使用单个模块
+### 单独使用模块
 
-从 `UnityStarter/Assets/ThirdParty/CycloneGames/` 复制需要的模块文件夹到你自己的项目。查看模块的 README 了解依赖关系——大多数模块是自包含的。
+从 `UnityStarter/Assets/ThirdParty/CycloneGames/` 复制模块目录到你的项目，然后检查该模块的 `package.json`、`.asmdef`、README、dependencies 和可选 `Integrations/` 文件夹。有些模块相对自包含，另一些模块依赖共享 CycloneGames packages 或 Unity packages。
 
 ## 技术栈
 
-### 运行时
+具体版本应以 `UnityStarter/Packages/manifest.json`、`UnityStarter/Packages/packages-lock.json` 和 `UnityStarter/Packages/nuget-packages/InstalledPackages/` 为准。
 
-| 包 | 用途 |
+| 领域 | 当前 checkout 示例 |
 | --- | --- |
-| `UniTask` (Cysharp) | 零分配 async/await |
-| `R3` (Cysharp) | 响应式数据流 |
-| `VContainer` (hadashiA) | DI/IoC 容器 |
-| `VitalRouter` (hadashiA) | 消息路由 |
-| `VYaml` (hadashiA) | YAML 序列化 |
-| `LitMotion` (annulusgames) | Tween 动画 |
-| `PrimeTween` | 备选 Tween 后端 |
-| `MessagePack-CSharp` | 二进制序列化 |
-| `Unity Debug Sheet` (harumak) | 游戏内调试面板 |
+| Async and reactive | `com.cysharp.unitask`、`com.cysharp.r3`、NuGet `R3` |
+| Routing and data | `jp.hadashikick.vitalrouter.unity`、`jp.hadashikick.vyaml`、NuGet `VitalRouter`、NuGet `VYaml` |
+| Unity performance stack | Burst、Collections、Mathematics、Profiling Core、Memory Profiler、Profile Analyzer |
+| Unity gameplay stack | Input System、Cinemachine、URP、TextMeshPro、UGUI、Splines |
+| UI and debug helpers | SoftMask、UIEffect、CompositeCanvasRenderer、UnityDebugSheet、InGameDebugConsole、uPalette |
+| Build and analysis | Scriptable Build Pipeline、NuGetForUnity、CycloneGames analyzers 使用的 Roslyn packages |
+| Optional integrations | VContainer、PrimeTween、Navigathena、Luban、MessagePack、HybridCLR、YooAsset、Addressables、Obfuz、Mirror、Mirage |
 
-### 构建与管线
+## 文档入口
 
-| 工具 | 用途 |
+| 位置 | 用途 |
 | --- | --- |
-| `HybridCLR` | C# 代码热更新 |
-| `YooAsset` / `Addressables` | 资源热更新与管理 |
-| `Obfuz` / `Obfuz4HybridCLR` | 代码混淆 |
-| `Mirror` / `Mirage` | 网络传输层 |
-| `Navigathena` | 场景管理 |
-| `Unity MCP` | AI 辅助开发 |
+| `UnityStarter/Assets/ThirdParty/CycloneGames/*/README.SCH.md` | 长期维护 packages 的模块级文档。 |
+| [`UnityStarter/Assets/Build/README.SCH.md`](UnityStarter/Assets/Build/README.SCH.md) | Build pipeline、hot update、optional packages 与 CI。 |
+| [`UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md`](UnityStarter/Analyzers/CycloneGames.Analyzers/README.SCH.md) | Analyzer rules、build instructions 与 activation guidance。 |
+| [`Tools/README.SCH.md`](Tools/README.SCH.md) | 独立项目维护工具。 |
+| [`Docs/AudioBestPractices/AudioBestPractices.SCH.md`](Docs/AudioBestPractices/AudioBestPractices.SCH.md) | Audio import 与 runtime audio guidance。 |
+| [`Docs/Networking/GameJamLanMultiplayerGuide.SCH.md`](Docs/Networking/GameJamLanMultiplayerGuide.SCH.md) | LAN multiplayer planning guide。 |
+| [DeepWiki](https://deepwiki.com/MaiKuraki/UnityStarter) | 生成式 codebase overview。 |
+
+## 验证状态
+
+仓库中包含 tests 和 analyzer rules，但最可靠的验证路径仍然需要通过 Unity：
+
+- 在 Unity 中打开项目，确认 Console 没有编译错误。
+- 对修改过的模块运行相关 EditMode tests。
+- 使用 `dotnet build UnityStarter/Analyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj -c Release` 构建 analyzer project。
+- 修改 BuildData 或 CI settings 前，使用 `Build > Print Debug Info`。
+- Networking 在完成目标环境中的真实多人验证前，应视为 experimental。
 
 ## 相关项目
 
-- **[Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)** — 音乐游戏机制合集
-- **[Unity GAS Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)** — GAS 系统演示项目
+- **[Rhythm Pulse](https://github.com/MaiKuraki/RhythmPulse)** - Rhythm game mechanics collection
+- **[Unity GAS Sample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)** - GAS demonstration project
 
 ---
 
-**许可证**: [MIT](LICENSE) · **支持**: [GitHub Issues](https://github.com/MaiKuraki/UnityStarter/issues)
+**许可证**: [MIT](LICENSE) | **支持**: [GitHub Issues](https://github.com/MaiKuraki/UnityStarter/issues)
