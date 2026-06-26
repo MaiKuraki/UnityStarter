@@ -18,6 +18,7 @@ Visit [vitalrouter.hadashikick.jp](https://vitalrouter.hadashikick.jp) for the f
 - **Thread-Safe**: Designed for safe use across multiple threads.
 - **Unidirectional Flow**: Promotes a predictable data flow through your application.
 - **Declarative Routing**: Use attributes like `[Routes]` and `[Route]` to define handlers.
+- **Sequential Control**: Declaratively queue, drop, or cancel overlapping async handlers — perfect for game cutscenes, dialogue, and tutorials.
 - **Async Interceptor Pipeline**: Build sophisticated message processing chains.
 - **Versatile Compatibility**: Works seamlessly in both Unity and standard .NET projects.
 - **DI Integration**: Native support for VContainer (Unity) and Microsoft.Extensions.DependencyInjection.
@@ -124,6 +125,57 @@ await router.PublishAsync(new MoveCommand(...));
 // → "Before" → handler → "After"
 ```
 
+## Sequential Control (Command Ordering)
+
+One of VitalRouter's standout features is **declarative control over how concurrent async handlers run**. This matters most in games, where dialogue, cutscenes, and tutorials must play *in order* — never overlapping.
+
+Take a cutscene. You just publish commands, and VitalRouter plays them back-to-back:
+
+```csharp
+public readonly record struct WalkCommand(Vector3 To) : ICommand;
+public readonly record struct SpeakCommand(string Text) : ICommand;
+public readonly record struct WaitCommand(float Seconds) : ICommand;
+
+// `Sequential`: each command waits for the previous handler to finish.
+[Routes(CommandOrdering.Sequential)]
+public partial class CutscenePresenter : MonoBehaviour
+{
+    [Route]
+    async UniTask On(WalkCommand cmd) => await character.WalkToAsync(cmd.To);
+
+    [Route]
+    async UniTask On(SpeakCommand cmd) => await dialogueView.ShowAsync(cmd.Text);
+
+    [Route]
+    async UniTask On(WaitCommand cmd) => await UniTask.Delay(TimeSpan.FromSeconds(cmd.Seconds));
+}
+```
+
+```csharp
+// Fire-and-forget. VitalRouter queues these and runs them strictly in order.
+router.PublishAsync(new WalkCommand(stage.Center));
+router.PublishAsync(new SpeakCommand("Hello there!"));
+router.PublishAsync(new WaitCommand(0.5f));
+router.PublishAsync(new SpeakCommand("Welcome to our little town."));
+```
+
+Without ordering, all four handlers would start at the same time and the scene would be a mess. With `Sequential`, the character walks in, *then* speaks, *then* pauses, *then* speaks again — no manual coroutine chaining or hand-rolled state machine required.
+
+Pick the strategy that fits each case:
+
+| Ordering              | Behavior                                          | Typical use                                         |
+| :-------------------- | :------------------------------------------------ | :-------------------------------------------------- |
+| `Parallel` (default)  | Run all handlers concurrently                     | Independent reactions                               |
+| `Sequential`          | Queue, then run one at a time in order            | Dialogue, cutscenes, tutorials                      |
+| `Drop`                | Ignore new commands while one is still running    | Debounce buttons, prevent double-firing             |
+| `Switch`              | Cancel the running handler, start the new one     | "Latest wins" — re-targeting, search-as-you-type    |
+
+Ordering can be set globally, per Router, per `[Routes]` class, per `[Route]` method, or per `SubscribeAwait` call.
+
+[Read more](https://vitalrouter.hadashikick.jp/pipeline/sequential-control)
+
+---
+
 ## Unity Integration
 
 VitalRouter is highly optimized for Unity, especially when combined with UniTask.
@@ -193,7 +245,7 @@ Requires: UniTask >= 2.5.5
 Install the following package to use Unity-specific features, including integration with VContainer/UniTask.
 
 ```text
-https://github.com/hadashiA/VitalRouter.git?path=/src/VitalRouter.Unity/Assets/VitalRouter#2.6.1
+https://github.com/hadashiA/VitalRouter.git?path=/src/VitalRouter.Unity/Assets/VitalRouter#2.7.1
 ```
 
 ---
