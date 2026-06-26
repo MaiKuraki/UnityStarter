@@ -48,7 +48,7 @@ UnityStarter 面向希望从第一天就具备生产级工程结构的 Unity 开
 这个仓库可以用两种方式使用：
 
 - **作为项目模板**：在 Unity 中打开 `UnityStarter/`，用内置工具改名，让项目自有的 `Assets/Build/` 层随着你的游戏继续演进。
-- **作为模块来源**：把需要的 `CycloneGames` packages 复制到其他 Unity 项目，只保留真正需要的系统。
+- **以 Package（UPM）形式**：把`CycloneGames` 目录下的包，移动到项目外，然后用 PackageManager 引入项目。
 
 它真正提供的是围绕所有权、可测试性、可选集成、构建配置、Editor tooling 和文档形成的可复用工程基础。
 
@@ -57,7 +57,7 @@ UnityStarter 面向希望从第一天就具备生产级工程结构的 Unity 开
 UnityStarter 由可复用的 `CycloneGames` 框架层、Unity 项目模板、项目自有 Build/CI 模块、独立维护工具、中英文文档，以及面向验证和工程规范的 analyzer 支持共同组成。
 
 如果需要查看具体模块，请直接阅读[模块地图](#模块地图)。它是 gameplay、content、UI/input、AI、runtime infrastructure、build tooling 与 experimental networking packages 的主要入口。
-f
+
 | 项目 | 详细信息 |
 | --- | --- |
 | Unity 项目根目录 | `UnityStarter/` |
@@ -263,8 +263,8 @@ Unity -batchmode -quit -projectPath UnityStarter \
 
 ### 环境要求
 
-- `UnityStarter/ProjectSettings/ProjectVersion.txt` 中记录的 Unity 版本，当前 checkout 为 `2022.3.62f3`。
-- Git，用于 Build 模块生成自动版本信息。
+- `2022.3.62f3`+
+- Git / Perforce / SVN 等，用于 Build 模块生成自动版本信息。
 
 ### 首次运行
 
@@ -325,4 +325,4 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 
 ---
 
-**许可证**: [MIT](LICENSE) | **支持**: [GitHub Issues](https://github.com/MaiKuraki/UnityStarter/issues)
+**许可证**: [MIT](LICENSE)
