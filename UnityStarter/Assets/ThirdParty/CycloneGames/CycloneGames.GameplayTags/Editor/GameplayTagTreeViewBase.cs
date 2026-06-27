@@ -4,6 +4,15 @@ using System.Text;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
+
+#if UNITY_6000_0_OR_NEWER
+using TreeViewItem = UnityEditor.IMGUI.Controls.TreeViewItem<int>;
+using TreeViewState = UnityEditor.IMGUI.Controls.TreeViewState<int>;
+#else
+using TreeViewItem = UnityEditor.IMGUI.Controls.TreeViewItem;
+using TreeViewState = UnityEditor.IMGUI.Controls.TreeViewState;
+#endif
+
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
