@@ -43,6 +43,7 @@ UpgradeLog.htm
 ExportedObj/
 .consulo/
 *.csproj
+!/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/*.csproj
 *.unityproj
 *.sln
 *.slnx
@@ -153,3 +154,7 @@ AppLog.txt
 ![Aa]nalyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj
 [Aa]nalyzers/CycloneGames.Analyzers/bin
 [Aa]nalyzers/CycloneGames.Analyzers/obj
+
+# DataTable local .NET tool build cache
+/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/bin/
+/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/obj/
