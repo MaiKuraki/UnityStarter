@@ -1,6 +1,14 @@
-﻿using UnityEditor;
+using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
+
+#if UNITY_6000_0_OR_NEWER
+using UnityTreeView = UnityEditor.IMGUI.Controls.TreeView<int>;
+using UnityTreeViewState = UnityEditor.IMGUI.Controls.TreeViewState<int>;
+#else
+using UnityTreeView = UnityEditor.IMGUI.Controls.TreeView;
+using UnityTreeViewState = UnityEditor.IMGUI.Controls.TreeViewState;
+#endif
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -16,9 +24,9 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
    public class TreeViewPopupContent : PopupWindowContent
    {
-      public abstract class TreeView : UnityEditor.IMGUI.Controls.TreeView
+      public abstract class TreeView : UnityTreeView
       {
-         public TreeView(TreeViewState state) : base(state)
+         public TreeView(UnityTreeViewState state) : base(state)
          {
          }
 
@@ -50,4 +58,3 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       }
    }
 }
-
