@@ -41,6 +41,7 @@ A modular, backend-agnostic data table pipeline for Unity. Designers edit Excel 
   - [Editor Tools](#editor-tools)
     - [Luban Build](#luban-build)
       - [Configuration](#configuration)
+    - [CodeGen Post-Processing](#codegen-post-processing)
     - [Data Validation (Planned)](#data-validation-planned)
   - [Performance Design](#performance-design)
   - [Best Practices](#best-practices)
@@ -803,6 +804,33 @@ DataTableLubanRunner.LubanScriptNameOverride = "build_all";
 - Missing script path logs a detailed error referencing the discovered config asset path
 
 The build process captures stdout/stderr and logs them to the Unity Console. On success (`exit code 0`), `AssetDatabase.Refresh()` is called automatically (unless `RefreshAssetsAfterLubanBuild` is disabled).
+
+### CodeGen Post-Processing
+
+`Tools~/CodeGen/CycloneGames.DataTable.CodeGen.csproj` is a small .NET tool used after Luban succeeds. It reads `build_config.ini`, `luban.conf`, `__tables__.xlsx`, and the configured Excel workbooks, then emits additional C# helper code. The current supported post-process is string constant generation.
+
+The tool is designed to be project-template friendly:
+
+- It depends only on the .NET standard library.
+- The `.csproj` is committed source; local `bin/` and `obj/` folders are build caches.
+- Paths are configured through `build_config.ini`, not hard-coded into scripts.
+- `string_constant_scope_column` can split one table into multiple generated classes.
+- `string_constant_generated_comment_language` controls generated file header language (`en` by default, `zh-CN` for Chinese projects).
+
+Example:
+
+```ini
+[codegen]
+codegen_project=../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/CycloneGames.DataTable.CodeGen.csproj
+string_constant_tables=GameplayTags.TbGameplayTagDefinition
+string_constant_value_column=name
+string_constant_comment_column=comment
+string_constant_enabled_column=enabled
+string_constant_scope_column=scope
+string_constant_generated_comment_language=en
+```
+
+If two scope values generate the same C# class name, CodeGen fails early with a clear error instead of overwriting one file.
 
 ### Data Validation (Planned)
 

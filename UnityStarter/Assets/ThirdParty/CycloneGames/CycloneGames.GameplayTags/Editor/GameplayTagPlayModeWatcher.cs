@@ -14,14 +14,28 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       private static void OnPlayModeStateChanged(PlayModeStateChange change)
       {
-         if (change == PlayModeStateChange.EnteredPlayMode)
+         if (change != PlayModeStateChange.EnteredPlayMode)
          {
-            if (GameplayTagManager.HasBeenReloaded)
-            {
-               Debug.LogWarning("A domain reload is required for the Gameplay Tags to function correctly." +
-                  " Please disable 'Enter Play Mode Options' or trigger a domain reload.");
-            }
+            return;
          }
+
+         if (!GameplayTagManager.HasBeenReloaded)
+         {
+            return;
+         }
+
+         if (!EditorSettings.enterPlayModeOptionsEnabled)
+         {
+            return;
+         }
+
+         if ((EditorSettings.enterPlayModeOptions & EnterPlayModeOptions.DisableDomainReload) == 0)
+         {
+            return;
+         }
+
+         Debug.LogWarning("A domain reload is required for the Gameplay Tags to function correctly." +
+            " Please disable 'Enter Play Mode Options > Reload Domain' bypass or trigger a domain reload.");
       }
    }
 }

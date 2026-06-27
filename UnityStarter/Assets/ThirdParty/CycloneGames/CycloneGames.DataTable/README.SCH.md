@@ -39,6 +39,7 @@
   - [编辑器工具](#编辑器工具)
     - [Luban 构建](#luban-构建)
       - [配置](#配置)
+    - [CodeGen 后处理](#codegen-后处理)
     - [配置校验（计划中）](#配置校验计划中)
   - [性能设计](#性能设计)
   - [最佳实践](#最佳实践)
@@ -795,6 +796,33 @@ DataTableLubanRunner.LubanScriptNameOverride = "build_all";
 - 脚本路径缺失时输出详细错误，包含发现到的配置资产路径
 
 构建过程捕获 stdout/stderr 并输出到 Unity Console。成功（`exit code 0`）后自动调用 `AssetDatabase.Refresh()`（除非 `RefreshAssetsAfterLubanBuild` 关闭）。
+
+### CodeGen 后处理
+
+`Tools~/CodeGen/CycloneGames.DataTable.CodeGen.csproj` 是 Luban 成功后执行的小型 .NET 工具。它读取 `build_config.ini`、`luban.conf`、`__tables__.xlsx` 和配置的 Excel workbook，继续生成额外的 C# 辅助代码。当前支持的后处理是字符串常量生成。
+
+该工具按项目模板复用场景设计：
+
+- 只依赖 .NET 标准库。
+- `.csproj` 是需要提交的源码；本地 `bin/` 和 `obj/` 是构建缓存。
+- 路径通过 `build_config.ini` 配置，不写死在脚本中。
+- `string_constant_scope_column` 可以把一张表拆成多个生成类。
+- `string_constant_generated_comment_language` 控制生成文件头注释语言（默认 `en`，中文项目可用 `zh-CN`）。
+
+示例：
+
+```ini
+[codegen]
+codegen_project=../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/CycloneGames.DataTable.CodeGen.csproj
+string_constant_tables=GameplayTags.TbGameplayTagDefinition
+string_constant_value_column=name
+string_constant_comment_column=comment
+string_constant_enabled_column=enabled
+string_constant_scope_column=scope
+string_constant_generated_comment_language=en
+```
+
+如果两个 scope 值会生成同一个 C# 类名，CodeGen 会提前失败并给出明确错误，避免静默覆盖文件。
 
 ### 配置校验（计划中）
 

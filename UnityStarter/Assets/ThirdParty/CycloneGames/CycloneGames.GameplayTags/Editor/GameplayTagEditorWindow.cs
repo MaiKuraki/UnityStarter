@@ -3,6 +3,13 @@ using System.Collections.Generic;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
+
+#if UNITY_6000_0_OR_NEWER
+using TreeViewState = UnityEditor.IMGUI.Controls.TreeViewState<int>;
+#else
+using TreeViewState = UnityEditor.IMGUI.Controls.TreeViewState;
+#endif
+
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
@@ -224,13 +231,14 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private void RefreshSelectedTag()
         {
-            if (string.IsNullOrEmpty(_selectedTag.Name))
+            if (_selectedTag.IsNone)
             {
                 _selectedTag = GameplayTag.None;
                 return;
             }
 
-            _selectedTag = GameplayTagManager.RequestTag(_selectedTag.Name, false);
+            string selectedTagName = _selectedTag.Name;
+            _selectedTag = GameplayTagManager.RequestTag(selectedTagName, false);
         }
 
         private void DrawDetailsPanel(Rect rect)
@@ -320,7 +328,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             EditorGUILayout.LabelField(label, $"{tags.Length}");
             for (int i = 0; i < tags.Length; i++)
             {
-                EditorGUILayout.LabelField("  " + tags[i].Name);
+                GameplayTag tag = tags[i];
+                EditorGUILayout.LabelField("  " + (tag.IsNone ? "<None>" : tag.Name));
             }
         }
 
