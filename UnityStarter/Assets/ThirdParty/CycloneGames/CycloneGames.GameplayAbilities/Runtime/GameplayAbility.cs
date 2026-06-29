@@ -368,7 +368,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void EndAbility()
         {
-            if (isEnding) return;
+            if (isEnding)
+            {
+                return;
+            }
+
             isEnding = true;
 
             for (int i = activeTasks.Count - 1; i >= 0; i--)
@@ -749,7 +753,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.CurrentActivationInfo = default;
             this.isEnding = false;
             this.activeTasks.Clear();
+            this.activeTaskIndexByTask.Clear();
             this.tickableTasks.Clear();
+            this.tickableTaskIndexByTask.Clear();
         }
     }
 }

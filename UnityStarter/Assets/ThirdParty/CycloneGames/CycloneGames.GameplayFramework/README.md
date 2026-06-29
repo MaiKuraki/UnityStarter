@@ -111,7 +111,8 @@ CycloneGames.GameplayFramework addresses this by defining a stable gameplay kern
 - **DI-friendly**: All spawning goes through `IUnityObjectSpawner` — swap in any DI container or object pool without touching framework code.
 - **Stable gameplay kernel**: Core gameplay semantics live on `Actor`, `Pawn`, `Controller`, `PlayerController`, `GameMode`, and `PlayerState`. These base classes define the default usage habits and naming style.
 - **Layered extensibility**: Use inheritance for gameplay roles, strategy objects for optional rules such as camera policies and camera modes, and interfaces for infrastructure adapters.
-- **No forced dependencies**: The framework has **zero** compile-time dependency on GameplayAbilities, GameplayTags, Networking, or any other CycloneGames package. Integration is handled through interfaces and opaque context fields.
+- **No forced dependencies in core**: The core runtime assembly has **zero** compile-time dependency on GameplayAbilities, GameplayTags, Networking, or any other optional CycloneGames package. Optional integration assemblies live under `Runtime/Scripts/Integrations/` and may reference both sides directly when the integration is imported.
+- **Package-shape compatibility**: Cyclone packages may be imported under `Assets/ThirdParty` or as UPM packages. Integration source should not rely solely on UPM `versionDefines`; local package mode must remain valid through explicit asmdef boundaries and direct references.
 
 ### What This Package Standardizes
 

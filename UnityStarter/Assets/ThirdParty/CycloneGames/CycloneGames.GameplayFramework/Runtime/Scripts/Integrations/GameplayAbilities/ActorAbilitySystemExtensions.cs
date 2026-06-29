@@ -1,5 +1,4 @@
 #if GAMEPLAY_FRAMEWORK_PRESENT && GAMEPLAY_ABILITIES_PRESENT
-
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEngine;
@@ -23,7 +22,10 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities
         public static bool TryGetAbilitySystem(this Actor actor, out AbilitySystemComponent abilitySystem)
         {
             abilitySystem = null;
-            if (actor == null) return false;
+            if (actor == null)
+            {
+                return false;
+            }
 
             if (actor is IAbilitySystemProvider provider && provider.AbilitySystem != null)
             {
@@ -43,16 +45,26 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities
 
         public static bool InitializeAbilityActorInfo(this Actor actor, Actor avatarOverride = null)
         {
+            return actor.InitializeAbilityActorInfo(null, avatarOverride);
+        }
+
+        public static bool InitializeAbilityActorInfo(this Actor actor, Actor ownerOverride, Actor avatarOverride)
+        {
             if (!actor.TryGetAbilitySystem(out AbilitySystemComponent abilitySystem))
             {
                 return false;
             }
 
+            Actor owner = ownerOverride != null ? ownerOverride : actor.GetOwner();
+            if (owner == null)
+            {
+                owner = actor;
+            }
+
             Actor avatar = avatarOverride != null ? avatarOverride : actor;
-            abilitySystem.InitAbilityActorInfo(actor, avatar);
+            abilitySystem.InitAbilityActorInfo(owner, avatar);
             return true;
         }
     }
 }
-
 #endif
