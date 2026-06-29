@@ -7,7 +7,8 @@ namespace CycloneGames.GameplayAbilities.Networking
 {
     public struct AbilityActivateRequest
     {
-        public int AbilityIndex;
+        public int AbilityDefinitionId;
+        public int AbilitySpecHandle;
         public int PredictionKey;
         public int PredictionKeyOwner;
         public int PredictionInputSequence;
@@ -18,7 +19,8 @@ namespace CycloneGames.GameplayAbilities.Networking
 
     public struct AbilityActivateConfirm
     {
-        public int AbilityIndex;
+        public int AbilityDefinitionId;
+        public int AbilitySpecHandle;
         public int PredictionKey;
         public int PredictionKeyOwner;
         public int PredictionInputSequence;
@@ -26,7 +28,8 @@ namespace CycloneGames.GameplayAbilities.Networking
 
     public struct AbilityActivateReject
     {
-        public int AbilityIndex;
+        public int AbilityDefinitionId;
+        public int AbilitySpecHandle;
         public int PredictionKey;
         public int PredictionKeyOwner;
         public int PredictionInputSequence;
@@ -34,12 +37,14 @@ namespace CycloneGames.GameplayAbilities.Networking
 
     public struct AbilityEndMessage
     {
-        public int AbilityIndex;
+        public int AbilityDefinitionId;
+        public int AbilitySpecHandle;
     }
 
     public struct AbilityCancelMessage
     {
-        public int AbilityIndex;
+        public int AbilityDefinitionId;
+        public int AbilitySpecHandle;
     }
 
     public struct EffectReplicationData
@@ -124,7 +129,8 @@ namespace CycloneGames.GameplayAbilities.Networking
     public struct AbilityMulticastData
     {
         public uint SourceNetworkId;
-        public int AbilityIndex;
+        public int AbilityDefinitionId;
+        public int AbilitySpecHandle;
         public NetworkVector3 TargetPosition;
         public NetworkVector3 Direction;
         public uint TargetNetworkId;
@@ -154,6 +160,7 @@ namespace CycloneGames.GameplayAbilities.Networking
     public struct GrantedAbilityEntry
     {
         public int AbilityDefinitionId;
+        public int AbilitySpecHandle;
         public int Level;
         public bool IsActive;
     }
@@ -572,6 +579,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         private static void WriteGrantedAbilityEntry(INetWriter writer, GrantedAbilityEntry value)
         {
             writer.WriteInt(value.AbilityDefinitionId);
+            writer.WriteInt(value.AbilitySpecHandle);
             writer.WriteInt(value.Level);
             writer.WriteByte(value.IsActive ? (byte)1 : (byte)0);
         }
@@ -581,6 +589,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             return new GrantedAbilityEntry
             {
                 AbilityDefinitionId = reader.ReadInt(),
+                AbilitySpecHandle = reader.ReadInt(),
                 Level = reader.ReadInt(),
                 IsActive = reader.ReadByte() != 0
             };

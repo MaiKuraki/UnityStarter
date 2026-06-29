@@ -1,3 +1,4 @@
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.Logger;
@@ -37,17 +38,17 @@ namespace CycloneGames.GameplayAbilities.Sample
         /// <summary>
         /// Called before a change is made to an attribute's CurrentValue. Perfect for clamping.
         /// </summary>
-        public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
+        public override void PreAttributeChange(GameplayAttribute attribute, ref GASFixedValue newValue)
         {
             base.PreAttributeChange(attribute, ref newValue);
 
             if (attribute == Health)
             {
-                newValue = System.Math.Clamp(newValue, 0, GetCurrentValue(MaxHealth));
+                newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, GetCurrentFixedValue(MaxHealth));
             }
             else if (attribute == Mana)
             {
-                newValue = System.Math.Clamp(newValue, 0, GetCurrentValue(MaxMana));
+                newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, GetCurrentFixedValue(MaxMana));
             }
         }
 

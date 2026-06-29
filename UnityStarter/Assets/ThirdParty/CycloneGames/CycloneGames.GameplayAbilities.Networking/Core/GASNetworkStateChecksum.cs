@@ -27,6 +27,7 @@ namespace CycloneGames.GameplayAbilities.Networking
             {
                 var ability = abilities[i];
                 hash = HashInt(hash, ability.AbilityDefinitionId);
+                hash = HashInt(hash, ability.AbilitySpecHandle);
                 hash = HashInt(hash, ability.Level);
                 hash = HashBool(hash, ability.IsActive);
             }

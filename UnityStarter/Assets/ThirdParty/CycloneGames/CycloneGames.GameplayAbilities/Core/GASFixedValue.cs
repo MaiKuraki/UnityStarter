@@ -154,5 +154,45 @@ namespace CycloneGames.GameplayAbilities.Core
         {
             return left.RawValue >= right.RawValue;
         }
+
+        /// <summary>
+        /// Returns the smaller of two deterministic values using a raw integer comparison.
+        /// Zero allocation; bit-identical across platforms and backends.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue Min(GASFixedValue a, GASFixedValue b)
+        {
+            return a.RawValue <= b.RawValue ? a : b;
+        }
+
+        /// <summary>
+        /// Returns the larger of two deterministic values using a raw integer comparison.
+        /// Zero allocation; bit-identical across platforms and backends.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue Max(GASFixedValue a, GASFixedValue b)
+        {
+            return a.RawValue >= b.RawValue ? a : b;
+        }
+
+        /// <summary>
+        /// Clamps a value into the inclusive range [min, max] using raw integer comparisons only.
+        /// Fully deterministic; no float is involved. If max is less than min the lower bound wins
+        /// (result == min), which avoids throwing on degenerate ranges in hot paths.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static GASFixedValue Clamp(GASFixedValue value, GASFixedValue min, GASFixedValue max)
+        {
+            long raw = value.RawValue;
+            if (raw > max.RawValue)
+            {
+                raw = max.RawValue;
+            }
+            if (raw < min.RawValue)
+            {
+                raw = min.RawValue;
+            }
+            return new GASFixedValue(raw);
+        }
     }
 }
