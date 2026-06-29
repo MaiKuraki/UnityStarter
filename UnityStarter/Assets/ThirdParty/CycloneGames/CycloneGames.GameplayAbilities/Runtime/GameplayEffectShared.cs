@@ -1,3 +1,4 @@
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -135,6 +136,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
+    /// Defines how a modifier magnitude is calculated.
+    /// UE5: EGameplayEffectMagnitudeCalculation.
+    /// </summary>
+    public enum EGameplayEffectMagnitudeCalculation
+    {
+        ScalableFloat,
+        AttributeBased,
+        CustomCalculation,
+        SetByCaller
+    }
+
+    /// <summary>
+    /// Defines which part of a captured attribute contributes to an attribute-based magnitude.
+    /// UE5: EAttributeBasedFloatCalculationType.
+    /// </summary>
+    public enum EAttributeBasedFloatCalculationType
+    {
+        AttributeMagnitude,
+        AttributeBaseValue,
+        AttributeBonusMagnitude
+    }
+
+    /// <summary>
     /// Defines how an effect stacks with other instances of the same effect.
     /// </summary>
     public enum EGameplayEffectStackingType
@@ -209,22 +233,186 @@ namespace CycloneGames.GameplayAbilities.Runtime
     }
 
     /// <summary>
+    /// Calculates a modifier magnitude from a captured source or target attribute.
+    /// Formula matches the UE GAS attribute-based float core:
+    /// Coefficient * (AttributeValue + PreMultiplyAdditiveValue) + PostMultiplyAdditiveValue.
+    /// </summary>
+    [System.Serializable]
+    public readonly struct AttributeBasedMagnitude
+    {
+        public readonly string AttributeName;
+        public readonly EGameplayEffectAttributeCaptureSource CaptureSource;
+        public readonly EAttributeBasedFloatCalculationType CalculationType;
+        public readonly ScalableFloat Coefficient;
+        public readonly ScalableFloat PreMultiplyAdditiveValue;
+        public readonly ScalableFloat PostMultiplyAdditiveValue;
+        public readonly EGameplayEffectAttributeCaptureSnapshot SnapshotPolicy;
+
+        public AttributeBasedMagnitude(
+            string attributeName,
+            EGameplayEffectAttributeCaptureSource captureSource = EGameplayEffectAttributeCaptureSource.Source,
+            EAttributeBasedFloatCalculationType calculationType = EAttributeBasedFloatCalculationType.AttributeMagnitude,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(
+                attributeName,
+                captureSource,
+                calculationType,
+                new ScalableFloat(1f),
+                new ScalableFloat(0f),
+                new ScalableFloat(0f),
+                snapshotPolicy)
+        {
+        }
+
+        public AttributeBasedMagnitude(
+            string attributeName,
+            EGameplayEffectAttributeCaptureSource captureSource,
+            EAttributeBasedFloatCalculationType calculationType,
+            ScalableFloat coefficient,
+            ScalableFloat preMultiplyAdditiveValue,
+            ScalableFloat postMultiplyAdditiveValue,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+        {
+            AttributeName = attributeName;
+            CaptureSource = captureSource;
+            CalculationType = calculationType;
+            Coefficient = coefficient;
+            PreMultiplyAdditiveValue = preMultiplyAdditiveValue;
+            PostMultiplyAdditiveValue = postMultiplyAdditiveValue;
+            SnapshotPolicy = snapshotPolicy;
+        }
+
+        public bool TryGetAttribute(GameplayEffectSpec spec, out GameplayAttribute attribute)
+        {
+            attribute = null;
+            if (spec == null || string.IsNullOrEmpty(AttributeName))
+            {
+                return false;
+            }
+
+            var asc = CaptureSource == EGameplayEffectAttributeCaptureSource.Source ? spec.Source : spec.Target;
+            if (asc == null)
+            {
+                return false;
+            }
+
+            attribute = asc.GetAttribute(AttributeName);
+            return attribute != null;
+        }
+
+        public bool DependsOnAttribute(GameplayAttribute attribute, GameplayEffectSpec spec)
+        {
+            if (attribute == null)
+            {
+                return false;
+            }
+
+            return TryGetAttribute(spec, out var capturedAttribute) && ReferenceEquals(attribute, capturedAttribute);
+        }
+
+        public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level)
+        {
+            if (!TryGetAttribute(spec, out var attribute))
+            {
+                return 0L;
+            }
+
+            GASFixedValue attributeValue;
+            switch (CalculationType)
+            {
+                case EAttributeBasedFloatCalculationType.AttributeBaseValue:
+                    attributeValue = attribute.BaseFixedValue;
+                    break;
+                case EAttributeBasedFloatCalculationType.AttributeBonusMagnitude:
+                    attributeValue = attribute.CurrentFixedValue - attribute.BaseFixedValue;
+                    break;
+                default:
+                    attributeValue = attribute.CurrentFixedValue;
+                    break;
+            }
+
+            var coefficient = GASFixedValue.FromFloat(Coefficient.GetValueAtLevel(level));
+            var preAdd = GASFixedValue.FromFloat(PreMultiplyAdditiveValue.GetValueAtLevel(level));
+            var postAdd = GASFixedValue.FromFloat(PostMultiplyAdditiveValue.GetValueAtLevel(level));
+            return ((coefficient * (attributeValue + preAdd)) + postAdd).RawValue;
+        }
+    }
+
+    /// <summary>
+    /// Resolves a modifier magnitude from GameplayEffectSpec SetByCaller data.
+    /// Use GameplayTag keys for replicated effects; name keys are local/legacy convenience keys.
+    /// </summary>
+    [System.Serializable]
+    public readonly struct SetByCallerMagnitude
+    {
+        public readonly GameplayTag DataTag;
+        public readonly string DataName;
+        public readonly float DefaultValue;
+        public readonly bool WarnIfNotFound;
+
+        public SetByCallerMagnitude(GameplayTag dataTag, float defaultValue = 0f, bool warnIfNotFound = true)
+        {
+            DataTag = dataTag;
+            DataName = null;
+            DefaultValue = defaultValue;
+            WarnIfNotFound = warnIfNotFound;
+        }
+
+        public SetByCallerMagnitude(string dataName, float defaultValue = 0f, bool warnIfNotFound = true)
+        {
+            DataTag = GameplayTag.None;
+            DataName = dataName;
+            DefaultValue = defaultValue;
+            WarnIfNotFound = warnIfNotFound;
+        }
+
+        public long CalculateMagnitudeRaw(GameplayEffectSpec spec)
+        {
+            if (spec == null)
+            {
+                return GASFixedValue.FromFloat(DefaultValue).RawValue;
+            }
+
+            long defaultValueRaw = GASFixedValue.FromFloat(DefaultValue).RawValue;
+            if (!DataTag.IsNone)
+            {
+                return spec.GetSetByCallerMagnitudeRaw(DataTag, WarnIfNotFound, defaultValueRaw);
+            }
+
+            if (!string.IsNullOrEmpty(DataName))
+            {
+                return spec.GetSetByCallerMagnitudeRaw(DataName, WarnIfNotFound, defaultValueRaw);
+            }
+
+            if (WarnIfNotFound)
+            {
+                GASLog.Warning(sb => sb.Append("SetByCallerMagnitude has no DataTag or DataName on effect '")
+                    .Append(spec.Def?.Name).Append("'."));
+            }
+
+            return defaultValueRaw;
+        }
+    }
+
+    /// <summary>
     /// An immutable definition for an attribute modifier.
-    /// Can use a simple ScalableFloat or a complex custom calculation class.
+    /// Can use scalable, attribute-based, custom, or SetByCaller magnitude sources.
     /// </summary>
     public class ModifierInfo
     {
         public readonly string AttributeName;
         public readonly EAttributeModifierOperation Operation;
+        public readonly GASModifierEvaluationChannel EvaluationChannel;
+        public readonly EGameplayEffectMagnitudeCalculation MagnitudeCalculationType;
 
-        // One of these two will be used for calculation.
         public readonly ScalableFloat Magnitude;
+        public readonly AttributeBasedMagnitude AttributeBasedMagnitude;
         public readonly GameplayModMagnitudeCalculation CustomCalculation;
+        public readonly SetByCallerMagnitude SetByCallerMagnitude;
 
         /// <summary>
         /// Determines whether the modifier magnitude is snapshotted at application time
         /// or recalculated live each evaluation. Default is Snapshot (UE5 default behavior).
-        /// Only meaningful for modifiers using CustomCalculation.
         /// </summary>
         public readonly EGameplayEffectAttributeCaptureSnapshot SnapshotPolicy;
 
@@ -232,11 +420,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Constructor for data-driven, scalable float modifiers.
         /// </summary>
         public ModifierInfo(string attributeName, EAttributeModifierOperation operation, ScalableFloat magnitude)
+            : this(attributeName, operation, magnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            ScalableFloat magnitude,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attributeName;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
+            MagnitudeCalculationType = EGameplayEffectMagnitudeCalculation.ScalableFloat;
             Magnitude = magnitude;
+            AttributeBasedMagnitude = default;
             CustomCalculation = null;
+            SetByCallerMagnitude = default;
             SnapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot;
         }
 
@@ -244,32 +445,202 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Constructor for creating modifiers directly in C# code.
         /// </summary>
         public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, ScalableFloat magnitude)
+            : this(attribute, operation, magnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            ScalableFloat magnitude,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attribute.Name;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
+            MagnitudeCalculationType = EGameplayEffectMagnitudeCalculation.ScalableFloat;
             Magnitude = magnitude;
+            AttributeBasedMagnitude = default;
             CustomCalculation = null;
+            SetByCallerMagnitude = default;
             SnapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot;
+        }
+
+        public ModifierInfo(string attributeName, EAttributeModifierOperation operation, AttributeBasedMagnitude attributeBasedMagnitude)
+            : this(attributeName, operation, attributeBasedMagnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            AttributeBasedMagnitude attributeBasedMagnitude,
+            GASModifierEvaluationChannel evaluationChannel)
+        {
+            AttributeName = attributeName;
+            Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
+            MagnitudeCalculationType = EGameplayEffectMagnitudeCalculation.AttributeBased;
+            Magnitude = default;
+            AttributeBasedMagnitude = attributeBasedMagnitude;
+            CustomCalculation = null;
+            SetByCallerMagnitude = default;
+            SnapshotPolicy = attributeBasedMagnitude.SnapshotPolicy;
+        }
+
+        public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, AttributeBasedMagnitude attributeBasedMagnitude)
+            : this(attribute, operation, attributeBasedMagnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            AttributeBasedMagnitude attributeBasedMagnitude,
+            GASModifierEvaluationChannel evaluationChannel)
+            : this(attribute.Name, operation, attributeBasedMagnitude, evaluationChannel)
+        {
+        }
+
+        public ModifierInfo(string attributeName, EAttributeModifierOperation operation, SetByCallerMagnitude setByCallerMagnitude)
+            : this(attributeName, operation, setByCallerMagnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            SetByCallerMagnitude setByCallerMagnitude,
+            GASModifierEvaluationChannel evaluationChannel)
+        {
+            AttributeName = attributeName;
+            Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
+            MagnitudeCalculationType = EGameplayEffectMagnitudeCalculation.SetByCaller;
+            Magnitude = default;
+            AttributeBasedMagnitude = default;
+            CustomCalculation = null;
+            SetByCallerMagnitude = setByCallerMagnitude;
+            SnapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot;
+        }
+
+        public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, SetByCallerMagnitude setByCallerMagnitude)
+            : this(attribute, operation, setByCallerMagnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            SetByCallerMagnitude setByCallerMagnitude,
+            GASModifierEvaluationChannel evaluationChannel)
+            : this(attribute.Name, operation, setByCallerMagnitude, evaluationChannel)
+        {
         }
 
         public ModifierInfo(string attributeName, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation,
             EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attributeName, operation, customCalculation, snapshotPolicy, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            GASModifierEvaluationChannel evaluationChannel,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attributeName, operation, customCalculation, snapshotPolicy, evaluationChannel)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attributeName;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
+            MagnitudeCalculationType = EGameplayEffectMagnitudeCalculation.CustomCalculation;
             Magnitude = default;
+            AttributeBasedMagnitude = default;
             CustomCalculation = customCalculation;
+            SetByCallerMagnitude = default;
             SnapshotPolicy = snapshotPolicy;
         }
 
         public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation,
             EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attribute, operation, customCalculation, snapshotPolicy, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            GASModifierEvaluationChannel evaluationChannel,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attribute, operation, customCalculation, snapshotPolicy, evaluationChannel)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attribute.Name;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
+            MagnitudeCalculationType = EGameplayEffectMagnitudeCalculation.CustomCalculation;
             Magnitude = default;
+            AttributeBasedMagnitude = default;
             CustomCalculation = customCalculation;
+            SetByCallerMagnitude = default;
             SnapshotPolicy = snapshotPolicy;
+        }
+
+        public bool ShouldRecalculateLiveMagnitude =>
+            SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot
+            && MagnitudeCalculationType != EGameplayEffectMagnitudeCalculation.ScalableFloat
+            && MagnitudeCalculationType != EGameplayEffectMagnitudeCalculation.SetByCaller;
+
+        public bool ShouldRecalculateWhenTargetAssigned =>
+            MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.CustomCalculation
+            || (MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased
+                && AttributeBasedMagnitude.CaptureSource == EGameplayEffectAttributeCaptureSource.Target);
+
+        public bool DependsOnLiveAttribute(GameplayAttribute attribute, GameplayEffectSpec spec)
+        {
+            return MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.AttributeBased
+                && SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot
+                && AttributeBasedMagnitude.DependsOnAttribute(attribute, spec);
+        }
+
+        public long CalculateMagnitudeRaw(GameplayEffectSpec spec, int level)
+        {
+            switch (MagnitudeCalculationType)
+            {
+                case EGameplayEffectMagnitudeCalculation.AttributeBased:
+                    return AttributeBasedMagnitude.CalculateMagnitudeRaw(spec, level);
+                case EGameplayEffectMagnitudeCalculation.CustomCalculation:
+                    return GASFixedValue.FromFloat(CustomCalculation != null ? CustomCalculation.CalculateMagnitude(spec) : 0f).RawValue;
+                case EGameplayEffectMagnitudeCalculation.SetByCaller:
+                    return SetByCallerMagnitude.CalculateMagnitudeRaw(spec);
+                default:
+                    return GASFixedValue.FromFloat(Magnitude.GetValueAtLevel(level)).RawValue;
+            }
+        }
+
+        public float CalculateMagnitude(GameplayEffectSpec spec, int level)
+        {
+            return GASFixedValue.FromRaw(CalculateMagnitudeRaw(spec, level)).ToFloat();
         }
     }
 }

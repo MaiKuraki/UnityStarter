@@ -13,7 +13,7 @@ This document is both a module reference and an onboarding guide. It explains wh
 - Sample Project: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
   - <img src="./Documents~/DemoPreview_2.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
 
-- In-Package Smaple: [In-Package Smaple](./Samples)
+- In-Package Sample: [In-Package Sample](./Samples)
   - <img src="./Documents~/DemoPreview_1.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
 
 ## Table Of Contents
@@ -38,6 +38,8 @@ This document is both a module reference and an onboarding guide. It explains wh
   - [GameplayTags Usage Guide](#gameplaytags-usage-guide)
   - [ScriptableObject Authoring Workflow](#scriptableobject-authoring-workflow)
   - [Cost, Cooldown, Buffs, Debuffs, And Passives](#cost-cooldown-buffs-debuffs-and-passives)
+  - [Modifier Aggregation And Channels](#modifier-aggregation-and-channels)
+  - [Modifier Magnitude Types](#modifier-magnitude-types)
   - [AbilityTasks](#abilitytasks)
   - [Targeting System](#targeting-system)
   - [Execution Calculations](#execution-calculations)
@@ -612,6 +614,89 @@ Use runtime C# subclasses for behavior that requires logic. Use assets for data 
 | Temporary granted skill | Duration or infinite effect with `GrantedAbilities`. |
 
 This uniform representation is the main reason GAS scales. A cooldown, poison, aura, equipment bonus, and temporary skill grant are all effects with different data.
+
+## Modifier Aggregation And Channels
+
+Attribute modifiers are evaluated through an aggregator-style pipeline inspired by Unreal GAS. `Channel0` is the default path and requires no special setup. Advanced projects can place modifiers into `GASModifierEvaluationChannel.Channel1` through `Channel9` when a later modifier domain must evaluate after an earlier one.
+
+Core evaluation is ordered:
+
+1. Start from the attribute base value.
+2. Evaluate all qualified modifiers in `Channel0`.
+3. Feed that result into `Channel1`, then continue through `Channel9`.
+4. Inside each channel, Add, Multiply, Division, and Override follow the same modifier operation rules used by the Core state.
+
+Use channels for rule layering, not for content grouping. Typical examples include separating base/equipment modifiers from passive rules, temporary buffs, or final environment/ruleset adjustments. If ordering does not matter, leave modifiers on `Channel0`.
+
+```csharp
+var modifiers = new List<ModifierInfo>
+{
+    new ModifierInfo("AttackPower", EAttributeModifierOperation.Add, 10f),
+    new ModifierInfo(
+        "AttackPower",
+        EAttributeModifierOperation.Multiply,
+        1.25f,
+        GASModifierEvaluationChannel.Channel1)
+};
+```
+
+`GameplayEffectSO` exposes the same channel on serialized modifiers. `DataTableModifierFactory` also accepts an optional `evaluationChannel` parameter so Excel/Luban-driven values can participate in the same deterministic pipeline.
+
+## Modifier Magnitude Types
+
+`ModifierInfo` uses a first-class magnitude model that follows Unreal GAS' `FGameplayEffectModifierMagnitude` shape. The target attribute, operation, and evaluation channel describe where the modifier lands. The magnitude type describes where the numeric value comes from.
+
+| Magnitude type | Unreal GAS equivalent | Use case | Notes |
+| --- | --- | --- | --- |
+| `ScalableFloat` | `ScalableFloatMagnitude` | Constant or level-scaled values such as base cooldown, flat cost, or fixed buff amount. | Cyclone uses `BaseValue + ScalingFactorPerLevel * (Level - 1)`. Unreal can also bind curve tables; use DataTable integration when designers need large external tables. |
+| `AttributeBased` | `FAttributeBasedFloat` | Values derived from a source or target attribute, such as damage from attack power or shield size from max health. | Supports source/target capture, base/current/bonus attribute value, snapshot/live capture timing, and the Unreal-style coefficient/pre-add/post-add formula. |
+| `CustomCalculation` | `FCustomCalculationBasedFloat` / `UGameplayModMagnitudeCalculation` | Code-owned calculations that need custom runtime logic. | Runtime C# can construct this directly. `GameplayEffectSO` serialized modifiers cannot store arbitrary custom calculation instances; use `GameplayEffectExecutionCalculationSO` or C# construction for authored custom logic. |
+| `SetByCaller` | `FSetByCallerFloat` | Ability code supplies a value on the `GameplayEffectSpec`, such as charge time, combo multiplier, or externally rolled damage. | Use GameplayTag keys for replicated effects. Name keys are local/legacy convenience keys. |
+
+Attribute-based magnitudes use the same core formula as Unreal GAS:
+
+```text
+Magnitude = Coefficient * (AttributeValue + PreMultiplyAdditiveValue) + PostMultiplyAdditiveValue
+```
+
+`AttributeValue` can be the captured attribute's current magnitude, base value, or bonus magnitude (`Current - Base`). Cyclone currently does not implement Unreal's attribute curve lookup, source/target tag filters inside `FAttributeBasedFloat`, or `AttributeMagnitudeEvaluatedUpToChannel`; use modifier channels, tag requirements, or execution calculations for those cases.
+
+Example: source attack power drives target damage.
+
+```csharp
+var damageModifier = new ModifierInfo(
+    "Damage",
+    EAttributeModifierOperation.Add,
+    new AttributeBasedMagnitude(
+        "AttackPower",
+        EGameplayEffectAttributeCaptureSource.Source,
+        EAttributeBasedFloatCalculationType.AttributeMagnitude,
+        coefficient: new ScalableFloat(1.5f),
+        preMultiplyAdditiveValue: new ScalableFloat(0f),
+        postMultiplyAdditiveValue: new ScalableFloat(10f)));
+```
+
+Example: ability code supplies a replicated SetByCaller magnitude before applying the spec.
+
+```csharp
+var damageModifier = new ModifierInfo(
+    "Damage",
+    EAttributeModifierOperation.Add,
+    new SetByCallerMagnitude(CombatTags.DataDamage));
+
+GameplayEffectSpec spec = GameplayEffectSpec.Create(damageEffect, sourceAsc, level: 1);
+spec.SetSetByCallerMagnitude(CombatTags.DataDamage, 42f);
+targetAsc.ApplyGameplayEffectSpecToSelf(spec);
+```
+
+Snapshot behavior is intentionally explicit:
+
+- Source-captured snapshot values are calculated when the spec is created.
+- Target-captured snapshot values are recalculated when the target ASC is assigned during application.
+- `NotSnapshot` attribute-based and custom magnitudes are recalculated during dirty attribute evaluation.
+- Same-ASC live attribute dependencies are marked dirty automatically. For outgoing effects that live on another ASC while reading source attributes live, prefer snapshot capture or provide project-level invalidation when the source attribute changes.
+
+Networking does not replicate modifier formulas. Peers resolve the same effect definition by stable id, then replicate authoritative state, level, stack count, duration, and SetByCaller GameplayTag values. Server code should remain authoritative over externally supplied SetByCaller values.
 
 ## AbilityTasks
 
