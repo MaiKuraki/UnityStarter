@@ -146,21 +146,27 @@ public static class AbilityInputSender
 {
     public static void RequestActivation(
         NetworkedAbilityBridge bridge,
-        int abilityIndex,
+        int abilityDefinitionId,
+        int abilitySpecHandle,
         int predictionKey,
         NetworkVector3 targetPosition,
         NetworkVector3 direction,
         uint targetNetworkId)
     {
         bridge.ClientRequestActivateAbility(
-            abilityIndex,
+            abilityDefinitionId,
+            abilitySpecHandle,
             predictionKey,
-            targetPosition,
-            direction,
-            targetNetworkId);
+            predictionKeyOwner: 0,
+            predictionInputSequence: 0,
+            targetPos: targetPosition,
+            direction: direction,
+            targetNetworkId: targetNetworkId);
     }
 }
 ```
+
+`abilityDefinitionId` 必须来自共享的 `IGASNetIdRegistry`。如果客户端已经拥有权威复制下来的 `GameplayAbilitySpec.Handle`，也应作为 `abilitySpecHandle` 一起发送；接收端会优先按 spec handle 解析，只有旧协议或单 spec 场景才回退到 definition id。不要把本地 activatable ability list index 当作网络标识，因为动态 grant/remove ability 会改变列表顺序。
 
 Server-side gameplay layer 根据 ability rules 验证请求，然后调用 `ServerConfirmActivation` 或 `ServerRejectActivation`。Bridge 会将结果路由给已注册的 `INetworkedASC`。
 

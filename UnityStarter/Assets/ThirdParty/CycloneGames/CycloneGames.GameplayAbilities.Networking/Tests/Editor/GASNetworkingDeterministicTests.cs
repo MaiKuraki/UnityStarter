@@ -278,10 +278,37 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             var network = new CapturingNetworkManager();
             var bridge = new NetworkedAbilityBridge(network, installSerializer: false, serializerOptions: null);
 
-            bridge.ClientNotifyAbilityEnd(3, wasCancelled: true);
+            bridge.ClientNotifyAbilityEnd(abilityDefinitionId: 3003, abilitySpecHandle: 9009, wasCancelled: true);
 
             Assert.That(network.LastServerMessageId, Is.EqualTo(NetworkedAbilityBridge.MsgAbilityCancel));
             Assert.That(network.LastServerMessageType, Is.EqualTo(typeof(AbilityCancelMessage)));
+            var message = (AbilityCancelMessage)network.LastServerMessage;
+            Assert.That(message.AbilityDefinitionId, Is.EqualTo(3003));
+            Assert.That(message.AbilitySpecHandle, Is.EqualTo(9009));
+        }
+
+        [Test]
+        public void NetworkedAbilityBridge_ClientRequestActivateAbility_UsesStableAbilityReference()
+        {
+            var network = new CapturingNetworkManager();
+            var bridge = new NetworkedAbilityBridge(network, installSerializer: false, serializerOptions: null);
+
+            bridge.ClientRequestActivateAbility(
+                abilityDefinitionId: 44,
+                abilitySpecHandle: 7007,
+                predictionKey: 100,
+                predictionKeyOwner: 2,
+                predictionInputSequence: 3,
+                targetPos: new NetworkVector3(1f, 2f, 3f),
+                direction: new NetworkVector3(0f, 0f, 1f),
+                targetNetworkId: 55u);
+
+            Assert.That(network.LastServerMessageId, Is.EqualTo(NetworkedAbilityBridge.MsgAbilityActivateRequest));
+            Assert.That(network.LastServerMessageType, Is.EqualTo(typeof(AbilityActivateRequest)));
+            var message = (AbilityActivateRequest)network.LastServerMessage;
+            Assert.That(message.AbilityDefinitionId, Is.EqualTo(44));
+            Assert.That(message.AbilitySpecHandle, Is.EqualTo(7007));
+            Assert.That(message.PredictionKey, Is.EqualTo(100));
         }
 
         [Test]
@@ -424,6 +451,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             public AttributeUpdateData LastAttributeData;
             public ushort LastServerMessageId;
             public Type LastServerMessageType;
+            public object LastServerMessage;
             public INetTransport Transport => null;
             public INetSerializer Serializer => null;
 
@@ -433,6 +461,7 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             {
                 LastServerMessageId = msgId;
                 LastServerMessageType = typeof(T);
+                LastServerMessage = message;
                 return NetworkSendResult.Accepted(0, 0);
             }
 
@@ -604,12 +633,12 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
                 };
             }
 
-            public void OnServerConfirmActivation(int abilityIndex, int predictionKey) { }
-            public void OnServerConfirmActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence) { }
-            public void OnServerRejectActivation(int abilityIndex, int predictionKey) { }
-            public void OnServerRejectActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence) { }
-            public void OnAbilityEnded(int abilityIndex) { }
-            public void OnAbilityCancelled(int abilityIndex) { }
+            public void OnServerConfirmActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey) { }
+            public void OnServerConfirmActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey, int predictionKeyOwner, int predictionInputSequence) { }
+            public void OnServerRejectActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey) { }
+            public void OnServerRejectActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey, int predictionKeyOwner, int predictionInputSequence) { }
+            public void OnAbilityEnded(int abilityDefinitionId, int abilitySpecHandle) { }
+            public void OnAbilityCancelled(int abilityDefinitionId, int abilitySpecHandle) { }
             public void OnAbilityMulticast(AbilityMulticastData data) { }
             public void OnReplicatedEffectApplied(EffectReplicationData data) { }
             public void OnReplicatedEffectRemoved(int effectInstanceId) { }

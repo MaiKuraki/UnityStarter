@@ -174,21 +174,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
         }
 
-        public virtual void PreAttributeChange(GameplayAttribute attribute, ref float newValue) { }
-        public virtual void PreAttributeBaseChange(GameplayAttribute attribute, ref float newBaseValue) { }
-        public virtual void PreAttributeChangeFixed(GameplayAttribute attribute, ref GASFixedValue newValue)
-        {
-            float value = newValue.ToFloat();
-            PreAttributeChange(attribute, ref value);
-            newValue = GASFixedValue.FromFloat(value);
-        }
+        /// <summary>
+        /// Hook invoked before an attribute's CurrentValue is recalculated. Default is a no-op.
+        /// Override to clamp or adjust the value. Stays in fixed-point: use GASFixedValue.Clamp / Min / Max
+        /// so results are bit-identical across platforms and backends (required for lockstep /
+        /// server-authoritative play).
+        /// </summary>
+        public virtual void PreAttributeChange(GameplayAttribute attribute, ref GASFixedValue newValue) { }
 
-        public virtual void PreAttributeBaseChangeFixed(GameplayAttribute attribute, ref GASFixedValue newBaseValue)
-        {
-            float value = newBaseValue.ToFloat();
-            PreAttributeBaseChange(attribute, ref value);
-            newBaseValue = GASFixedValue.FromFloat(value);
-        }
+        /// <summary>
+        /// Hook invoked before an attribute's BaseValue changes (instant effects). Default is a no-op.
+        /// Override to clamp or adjust the base value. Stays in fixed-point for deterministic results.
+        /// </summary>
+        public virtual void PreAttributeBaseChange(GameplayAttribute attribute, ref GASFixedValue newBaseValue) { }
 
         /// <summary>
         /// Called after a GameplayEffect is executed on this AttributeSet. This is the main entry point for attribute modifications.
@@ -235,7 +233,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     break;
             }
 
-            PreAttributeBaseChangeFixed(attribute, ref newBase);
+            PreAttributeBaseChange(attribute, ref newBase);
 
             SetBaseValue(attribute, newBase);
             SetCurrentValue(attribute, newBase);
