@@ -146,21 +146,27 @@ public static class AbilityInputSender
 {
     public static void RequestActivation(
         NetworkedAbilityBridge bridge,
-        int abilityIndex,
+        int abilityDefinitionId,
+        int abilitySpecHandle,
         int predictionKey,
         NetworkVector3 targetPosition,
         NetworkVector3 direction,
         uint targetNetworkId)
     {
         bridge.ClientRequestActivateAbility(
-            abilityIndex,
+            abilityDefinitionId,
+            abilitySpecHandle,
             predictionKey,
-            targetPosition,
-            direction,
-            targetNetworkId);
+            predictionKeyOwner: 0,
+            predictionInputSequence: 0,
+            targetPos: targetPosition,
+            direction: direction,
+            targetNetworkId: targetNetworkId);
     }
 }
 ```
+
+`abilityDefinitionId` must come from the shared `IGASNetIdRegistry`. When the client already has an authoritative replicated `GameplayAbilitySpec.Handle`, also send it as `abilitySpecHandle`; the receiver resolves by spec handle first and only falls back to definition id for legacy or single-spec cases. Do not use the local activatable ability list index as a network identifier because dynamic grants/removals can reorder that list.
 
 The server-side gameplay layer validates the request through ability rules, then calls `ServerConfirmActivation` or `ServerRejectActivation`. The bridge routes the response to the registered `INetworkedASC`.
 

@@ -164,9 +164,25 @@ flowchart TB
     ASC --> Replication
     ASC --> Cues
     ASC --> Tags
-    ASC --> Core
+    ASC -. optional mirror .-> Core
     Replication --> Network
     Cues --> Network
+```
+
+`AbilitySystemComponent` owns the runtime source of truth for Unity gameplay. `GASAbilitySystemState` is an optional Unity-free mirror used for deterministic diagnostics, snapshot capture, checksum validation, and pure C# simulation tooling. Do not treat both graphs as independent mutable state. Runtime gameplay code should mutate the ASC APIs; Core-only simulations should use `GASAbilitySystemState` and `GASAbilitySystemFacade` directly without constructing an ASC.
+
+| Mode | Use case | Runtime behavior |
+| --- | --- | --- |
+| `GASCoreStateMode.MirrorRuntime` | Default compatibility mode, deterministic validation, tooling, checksum capture, and migration testing. | ASC writes the runtime graph and mirrors supported grants, attributes, active effects, and prediction data into Core state. |
+| `GASCoreStateMode.RuntimeOnly` | High-density gameplay actors, low-end clients, pure presentation clients, and server shards that do not need Core diagnostics for every ASC. | ASC keeps only the runtime graph. `TryGetCoreState`, `TryGetCoreFacade`, and `TryGetCoreSpecHandle` return `false`; `CoreState` and `Core` are unavailable. |
+
+```csharp
+AbilitySystemComponent mirroredAsc = new AbilitySystemComponent(
+    new GameplayEffectContextFactory());
+
+AbilitySystemComponent runtimeOnlyAsc = new AbilitySystemComponent(
+    new GameplayEffectContextFactory(),
+    GASAbilitySystemRuntimeOptions.RuntimeOnly);
 ```
 
 The current collaborator split owns the most error-sensitive list, dictionary, prediction, and replication bookkeeping: ability grants and removals, ticking spec membership, effect swap-back removal, network id lookup, stacking lookup, granted tag lookup, ability-applied effect cleanup, prediction window indexes, pending predicted effect removal, closed prediction records, replicated dirty flags, removed id tracking, tag edge folding, state version advancement, and delta capture cleanup.
@@ -298,15 +314,15 @@ public sealed class CombatAttributeSet : AttributeSet
         MaxMana.SetCurrentValue(50f);
     }
 
-    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
+    public override void PreAttributeChange(GameplayAttribute attribute, ref GASFixedValue newValue)
     {
         if (attribute == Health)
         {
-            newValue = System.Math.Clamp(newValue, 0f, MaxHealth.CurrentValue);
+            newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, MaxHealth.CurrentFixedValue);
         }
         else if (attribute == Mana)
         {
-            newValue = System.Math.Clamp(newValue, 0f, MaxMana.CurrentValue);
+            newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, MaxMana.CurrentFixedValue);
         }
     }
 
@@ -966,9 +982,16 @@ asc.PrewarmRuntimePools(
 
 Use larger capacities for shared server simulations, boss encounters, and rooms with many monsters. Capacity misses are visible through `GetRuntimeDiagnostics()` and `GetRuntimeListPoolStatistics()`.
 
+Choose the Core state mode per actor class or simulation role:
+
+- Use `MirrorRuntime` for player characters, authority debugging, deterministic replay validation, QA builds, and systems that need Core checksums or Core snapshots.
+- Use `RuntimeOnly` for large numbers of simple monsters, projectiles, temporary summons, cosmetic-only ASCs, and low-end clients when Core diagnostics are not required for those actors.
+- Use pure `GASAbilitySystemState` plus `GASAbilitySystemFacade` for non-Unity deterministic simulation, rollback labs, CLI validation, or server-side tools that do not need Unity-facing abilities or ScriptableObject authoring.
+
 Hot-path rules:
 
 - Reserve ability, effect, attribute, prediction, SetByCaller, target data, and pool capacity before combat starts.
+- Reserve `coreModifierCapacity` only matters when Core mirroring is enabled.
 - Avoid creating abilities, effects, target actors, and cue assets during combat spikes.
 - Use `GameplayEffectSpec` SetByCaller values instead of ad hoc runtime objects for variable magnitudes.
 - Keep domain calculations in Core or pure runtime classes, not in `MonoBehaviour` update loops.

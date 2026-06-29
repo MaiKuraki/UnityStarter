@@ -7,12 +7,12 @@ namespace CycloneGames.GameplayAbilities.Networking
         uint NetworkId { get; }
         int OwnerConnectionId { get; }
 
-        void OnServerConfirmActivation(int abilityIndex, int predictionKey);
-        void OnServerConfirmActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence);
-        void OnServerRejectActivation(int abilityIndex, int predictionKey);
-        void OnServerRejectActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence);
-        void OnAbilityEnded(int abilityIndex);
-        void OnAbilityCancelled(int abilityIndex);
+        void OnServerConfirmActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey);
+        void OnServerConfirmActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey, int predictionKeyOwner, int predictionInputSequence);
+        void OnServerRejectActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey);
+        void OnServerRejectActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey, int predictionKeyOwner, int predictionInputSequence);
+        void OnAbilityEnded(int abilityDefinitionId, int abilitySpecHandle);
+        void OnAbilityCancelled(int abilityDefinitionId, int abilitySpecHandle);
         void OnAbilityMulticast(AbilityMulticastData data);
 
         void OnReplicatedEffectApplied(EffectReplicationData data);

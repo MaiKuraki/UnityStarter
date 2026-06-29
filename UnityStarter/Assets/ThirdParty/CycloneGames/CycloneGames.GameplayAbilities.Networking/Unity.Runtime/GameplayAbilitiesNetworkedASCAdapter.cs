@@ -131,7 +131,13 @@ namespace CycloneGames.GameplayAbilities.Networking
         private readonly Dictionary<int, GameplayAbilitySpec> _abilitySpecByDefinitionIdScratch =
             new Dictionary<int, GameplayAbilitySpec>(32);
 
+        private readonly Dictionary<int, GameplayAbilitySpec> _abilitySpecByHandleScratch =
+            new Dictionary<int, GameplayAbilitySpec>(32);
+
         private readonly HashSet<int> _fullStateAbilityDefinitionIdsScratch =
+            new HashSet<int>();
+
+        private readonly HashSet<int> _fullStateAbilitySpecHandlesScratch =
             new HashSet<int>();
 
         private readonly List<EffectReplicationData> _addedEffectsScratch =
@@ -192,8 +198,14 @@ namespace CycloneGames.GameplayAbilities.Networking
         public Action<int, int> OnRejectActivation { get; set; }
         public Action<int, GASPredictionKey> OnConfirmActivationKey { get; set; }
         public Action<int, GASPredictionKey> OnRejectActivationKey { get; set; }
+        public Action<int, int, int> OnConfirmActivationSpec { get; set; }
+        public Action<int, int, int> OnRejectActivationSpec { get; set; }
+        public Action<int, int, GASPredictionKey> OnConfirmActivationSpecKey { get; set; }
+        public Action<int, int, GASPredictionKey> OnRejectActivationSpecKey { get; set; }
         public Action<int> OnReplicatedAbilityEnd { get; set; }
         public Action<int> OnReplicatedAbilityCancel { get; set; }
+        public Action<int, int> OnReplicatedAbilityEndSpec { get; set; }
+        public Action<int, int> OnReplicatedAbilityCancelSpec { get; set; }
         public Action<AbilityMulticastData> OnAbilityMulticastReceived { get; set; }
         public Action<GASFullStateData> OnFullStateReceived { get; set; }
         public Action<GASStateSyncMetadata, GASStateDriftReason> OnStateDriftDetected { get; set; }
@@ -324,56 +336,74 @@ namespace CycloneGames.GameplayAbilities.Networking
             _publicAttributeIds.Remove(attributeId);
         }
 
-        public void OnServerConfirmActivation(int abilityIndex, int predictionKey)
+        public void OnServerConfirmActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey)
         {
             AssertRuntimeThread();
-            OnConfirmActivation?.Invoke(abilityIndex, predictionKey);
+            OnConfirmActivationSpec?.Invoke(abilityDefinitionId, abilitySpecHandle, predictionKey);
+            OnConfirmActivation?.Invoke(abilityDefinitionId, predictionKey);
         }
 
-        public void OnServerConfirmActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence)
+        public void OnServerConfirmActivation(
+            int abilityDefinitionId,
+            int abilitySpecHandle,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence)
         {
             AssertRuntimeThread();
             var key = BuildPredictionKey(predictionKey, predictionKeyOwner, predictionInputSequence);
-            OnConfirmActivationKey?.Invoke(abilityIndex, key);
-            OnConfirmActivation?.Invoke(abilityIndex, predictionKey);
+            OnConfirmActivationSpecKey?.Invoke(abilityDefinitionId, abilitySpecHandle, key);
+            OnConfirmActivationSpec?.Invoke(abilityDefinitionId, abilitySpecHandle, predictionKey);
+            OnConfirmActivationKey?.Invoke(abilityDefinitionId, key);
+            OnConfirmActivation?.Invoke(abilityDefinitionId, predictionKey);
         }
 
-        public void OnServerRejectActivation(int abilityIndex, int predictionKey)
+        public void OnServerRejectActivation(int abilityDefinitionId, int abilitySpecHandle, int predictionKey)
         {
             AssertRuntimeThread();
-            OnRejectActivation?.Invoke(abilityIndex, predictionKey);
+            OnRejectActivationSpec?.Invoke(abilityDefinitionId, abilitySpecHandle, predictionKey);
+            OnRejectActivation?.Invoke(abilityDefinitionId, predictionKey);
         }
 
-        public void OnServerRejectActivation(int abilityIndex, int predictionKey, int predictionKeyOwner, int predictionInputSequence)
+        public void OnServerRejectActivation(
+            int abilityDefinitionId,
+            int abilitySpecHandle,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence)
         {
             AssertRuntimeThread();
             var key = BuildPredictionKey(predictionKey, predictionKeyOwner, predictionInputSequence);
-            OnRejectActivationKey?.Invoke(abilityIndex, key);
-            OnRejectActivation?.Invoke(abilityIndex, predictionKey);
+            OnRejectActivationSpecKey?.Invoke(abilityDefinitionId, abilitySpecHandle, key);
+            OnRejectActivationSpec?.Invoke(abilityDefinitionId, abilitySpecHandle, predictionKey);
+            OnRejectActivationKey?.Invoke(abilityDefinitionId, key);
+            OnRejectActivation?.Invoke(abilityDefinitionId, predictionKey);
         }
 
-        public void OnAbilityEnded(int abilityIndex)
+        public void OnAbilityEnded(int abilityDefinitionId, int abilitySpecHandle)
         {
             AssertRuntimeThread();
-            var spec = TryResolveAbilitySpec(abilityIndex);
+            var spec = TryResolveAbilitySpec(abilityDefinitionId, abilitySpecHandle);
             if (spec?.GetPrimaryInstance() != null)
             {
                 spec.GetPrimaryInstance().EndAbility();
             }
 
-            OnReplicatedAbilityEnd?.Invoke(abilityIndex);
+            OnReplicatedAbilityEndSpec?.Invoke(abilityDefinitionId, abilitySpecHandle);
+            OnReplicatedAbilityEnd?.Invoke(abilityDefinitionId);
         }
 
-        public void OnAbilityCancelled(int abilityIndex)
+        public void OnAbilityCancelled(int abilityDefinitionId, int abilitySpecHandle)
         {
             AssertRuntimeThread();
-            var spec = TryResolveAbilitySpec(abilityIndex);
+            var spec = TryResolveAbilitySpec(abilityDefinitionId, abilitySpecHandle);
             if (spec?.GetPrimaryInstance() != null)
             {
                 spec.GetPrimaryInstance().CancelAbility();
             }
 
-            OnReplicatedAbilityCancel?.Invoke(abilityIndex);
+            OnReplicatedAbilityCancelSpec?.Invoke(abilityDefinitionId, abilitySpecHandle);
+            OnReplicatedAbilityCancel?.Invoke(abilityDefinitionId);
         }
 
         public void OnAbilityMulticast(AbilityMulticastData data)
@@ -703,7 +733,9 @@ namespace CycloneGames.GameplayAbilities.Networking
             int safeCount = abilities != null ? Math.Min(abilityCount, abilities.Length) : 0;
             var specs = _asc.GetActivatableAbilities();
             _abilitySpecByDefinitionIdScratch.Clear();
+            _abilitySpecByHandleScratch.Clear();
             _fullStateAbilityDefinitionIdsScratch.Clear();
+            _fullStateAbilitySpecHandlesScratch.Clear();
 
             for (int i = 0; i < safeCount; i++)
             {
@@ -712,11 +744,22 @@ namespace CycloneGames.GameplayAbilities.Networking
                 {
                     _fullStateAbilityDefinitionIdsScratch.Add(abilityDefinitionId);
                 }
+
+                int abilitySpecHandle = abilities[i].AbilitySpecHandle;
+                if (abilitySpecHandle != 0)
+                {
+                    _fullStateAbilitySpecHandlesScratch.Add(abilitySpecHandle);
+                }
             }
 
             for (int i = 0; i < specs.Count; i++)
             {
                 var spec = specs[i];
+                if (spec.Handle != 0)
+                {
+                    _abilitySpecByHandleScratch[spec.Handle] = spec;
+                }
+
                 var ability = spec.AbilityCDO ?? spec.Ability;
                 int abilityId = ability != null ? _idRegistry.GetAbilityDefinitionId(ability) : 0;
                 if (abilityId != 0)
@@ -730,10 +773,16 @@ namespace CycloneGames.GameplayAbilities.Networking
                 var spec = specs[i];
                 var ability = spec.AbilityCDO ?? spec.Ability;
                 int abilityId = ability != null ? _idRegistry.GetAbilityDefinitionId(ability) : 0;
-                if (abilityId == 0 || !_fullStateAbilityDefinitionIdsScratch.Contains(abilityId))
+                bool keepByHandle = spec.Handle != 0 && _fullStateAbilitySpecHandlesScratch.Contains(spec.Handle);
+                bool keepByDefinitionId = _fullStateAbilitySpecHandlesScratch.Count == 0 &&
+                    abilityId != 0 &&
+                    _fullStateAbilityDefinitionIdsScratch.Contains(abilityId);
+                if (!keepByHandle && !keepByDefinitionId)
                 {
+                    int abilitySpecHandle = spec.Handle;
                     _asc.ClearAbility(spec);
                     _abilitySpecByDefinitionIdScratch.Remove(abilityId);
+                    _abilitySpecByHandleScratch.Remove(abilitySpecHandle);
                 }
             }
 
@@ -743,7 +792,16 @@ namespace CycloneGames.GameplayAbilities.Networking
                 if (entry.AbilityDefinitionId == 0)
                     continue;
 
-                _abilitySpecByDefinitionIdScratch.TryGetValue(entry.AbilityDefinitionId, out var existingSpec);
+                GameplayAbilitySpec existingSpec = null;
+                if (entry.AbilitySpecHandle != 0)
+                {
+                    _abilitySpecByHandleScratch.TryGetValue(entry.AbilitySpecHandle, out existingSpec);
+                }
+                else
+                {
+                    _abilitySpecByDefinitionIdScratch.TryGetValue(entry.AbilityDefinitionId, out existingSpec);
+                }
+
                 if (existingSpec != null)
                 {
                     existingSpec.Level = Math.Max(1, entry.Level);
@@ -752,10 +810,14 @@ namespace CycloneGames.GameplayAbilities.Networking
 
                 if (_idRegistry.TryResolveAbilityDefinition(entry.AbilityDefinitionId, out var ability) && ability != null)
                 {
-                    var granted = _asc.GrantAbility(ability, Math.Max(1, entry.Level));
+                    var granted = _asc.GrantAbility(ability, Math.Max(1, entry.Level), entry.AbilitySpecHandle);
                     if (granted != null)
                     {
                         _abilitySpecByDefinitionIdScratch[entry.AbilityDefinitionId] = granted;
+                        if (granted.Handle != 0)
+                        {
+                            _abilitySpecByHandleScratch[granted.Handle] = granted;
+                        }
                     }
                 }
             }
@@ -970,21 +1032,41 @@ namespace CycloneGames.GameplayAbilities.Networking
             _replicatedEffectStates.Clear();
             _replicatedEffectStateIds.Clear();
             _replicatedSetByCallerBaselineArrays.Clear();
+            _abilitySpecByDefinitionIdScratch.Clear();
+            _abilitySpecByHandleScratch.Clear();
+            _fullStateAbilityDefinitionIdsScratch.Clear();
+            _fullStateAbilitySpecHandlesScratch.Clear();
             _attributeIdByName.Clear();
             _attributeById.Clear();
             _attributeIds.Clear();
             _cachedAttributeRegistryVersion = 0;
         }
 
-        private GameplayAbilitySpec TryResolveAbilitySpec(int abilityDefinitionId)
+        private GameplayAbilitySpec TryResolveAbilitySpec(int abilityDefinitionId, int abilitySpecHandle)
         {
             var specs = _asc.GetActivatableAbilities();
             for (int i = 0; i < specs.Count; i++)
             {
+                if (abilitySpecHandle > 0 && specs[i].Handle == abilitySpecHandle)
+                {
+                    return specs[i];
+                }
+            }
+
+            if (abilityDefinitionId == 0)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < specs.Count; i++)
+            {
                 var ability = specs[i].AbilityCDO ?? specs[i].Ability;
                 if (_idRegistry.GetAbilityDefinitionId(ability) == abilityDefinitionId)
+                {
                     return specs[i];
+                }
             }
+
             return null;
         }
 
@@ -1220,6 +1302,7 @@ namespace CycloneGames.GameplayAbilities.Networking
                 entries[i] = new GrantedAbilityEntry
                 {
                     AbilityDefinitionId = ability != null ? _idRegistry.GetAbilityDefinitionId(ability) : 0,
+                    AbilitySpecHandle = spec.Handle,
                     Level = spec.Level,
                     IsActive = spec.IsActive
                 };
