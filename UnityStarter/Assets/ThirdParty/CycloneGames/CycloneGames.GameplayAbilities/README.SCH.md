@@ -164,9 +164,25 @@ flowchart TB
     ASC --> Replication
     ASC --> Cues
     ASC --> Tags
-    ASC --> Core
+    ASC -. optional mirror .-> Core
     Replication --> Network
     Cues --> Network
+```
+
+`AbilitySystemComponent` 拥有 Unity gameplay runtime 的唯一真相源。`GASAbilitySystemState` 是可选的 Unity-free mirror，用于 deterministic diagnostics、snapshot capture、checksum validation 和纯 C# simulation tooling。不要把两套 graph 当作彼此独立的可变状态。Runtime gameplay 代码应只通过 ASC API 修改状态；Core-only simulation 应直接使用 `GASAbilitySystemState` 和 `GASAbilitySystemFacade`，不需要构造 ASC。
+
+| 模式 | 适用场景 | Runtime 行为 |
+| --- | --- | --- |
+| `GASCoreStateMode.MirrorRuntime` | 默认兼容模式、deterministic validation、tooling、checksum capture 和 migration testing。 | ASC 写入 runtime graph，并把已支持的 grant、attribute、active effect 和 prediction data mirror 到 Core state。 |
+| `GASCoreStateMode.RuntimeOnly` | 高密度 gameplay actor、低端客户端、纯表现客户端，以及不需要为每个 ASC 启用 Core diagnostics 的 server shard。 | ASC 只保留 runtime graph。`TryGetCoreState`、`TryGetCoreFacade` 和 `TryGetCoreSpecHandle` 返回 `false`；`CoreState` 和 `Core` 不可用。 |
+
+```csharp
+AbilitySystemComponent mirroredAsc = new AbilitySystemComponent(
+    new GameplayEffectContextFactory());
+
+AbilitySystemComponent runtimeOnlyAsc = new AbilitySystemComponent(
+    new GameplayEffectContextFactory(),
+    GASAbilitySystemRuntimeOptions.RuntimeOnly);
 ```
 
 当前 collaborator split 已经接管最容易出错的 list、dictionary、prediction 和 replication bookkeeping：ability grant/removal、ticking spec 成员关系、effect swap-back removal、network id lookup、stacking lookup、granted tag lookup、ability-applied effect cleanup、prediction window index、pending predicted effect removal、closed prediction record、replicated dirty flag、removed id tracking、tag edge folding、state version advancement 和 delta capture cleanup。
@@ -298,15 +314,15 @@ public sealed class CombatAttributeSet : AttributeSet
         MaxMana.SetCurrentValue(50f);
     }
 
-    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
+    public override void PreAttributeChange(GameplayAttribute attribute, ref GASFixedValue newValue)
     {
         if (attribute == Health)
         {
-            newValue = System.Math.Clamp(newValue, 0f, MaxHealth.CurrentValue);
+            newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, MaxHealth.CurrentFixedValue);
         }
         else if (attribute == Mana)
         {
-            newValue = System.Math.Clamp(newValue, 0f, MaxMana.CurrentValue);
+            newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, MaxMana.CurrentFixedValue);
         }
     }
 
@@ -966,9 +982,16 @@ asc.PrewarmRuntimePools(
 
 共享服务器模拟、大型 Boss 战和大量怪物房间应使用更高 capacity。容量 miss 可通过 `GetRuntimeDiagnostics()` 和 `GetRuntimeListPoolStatistics()` 观察。
 
+按 actor class 或 simulation role 选择 Core state mode：
+
+- 玩家角色、authority debugging、deterministic replay validation、QA build，以及需要 Core checksum 或 Core snapshot 的系统使用 `MirrorRuntime`。
+- 大量简单怪物、projectile、临时 summon、cosmetic-only ASC，以及不需要为这些 actor 启用 Core diagnostics 的低端客户端使用 `RuntimeOnly`。
+- 非 Unity deterministic simulation、rollback lab、CLI validation 或不需要 Unity-facing ability 与 ScriptableObject authoring 的 server-side tool，直接使用纯 `GASAbilitySystemState` 加 `GASAbilitySystemFacade`。
+
 热路径规则：
 
 - 战斗前预分配 ability、effect、attribute、prediction、SetByCaller、target data 和 pool capacity。
+- 只有启用 Core mirroring 时，`coreModifierCapacity` 才会产生实际意义。
 - 避免在战斗峰值中临时创建 ability、effect、target actor 和 cue asset。
 - 变量幅度优先使用 `GameplayEffectSpec` SetByCaller value，而不是临时 runtime object。
 - 领域计算放在 Core 或纯 runtime class 中，不放在 `MonoBehaviour` update loop。

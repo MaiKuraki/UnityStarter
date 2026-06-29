@@ -22,6 +22,41 @@ namespace CycloneGames.GameplayAbilities.Runtime
         Throw
     }
 
+    /// <summary>
+    /// Selects whether the Unity-facing AbilitySystemComponent mirrors its runtime object graph into the pure C# Core state.
+    /// </summary>
+    public enum GASCoreStateMode : byte
+    {
+        /// <summary>
+        /// The AbilitySystemComponent keeps only the Runtime object graph as its authoritative state.
+        /// Use this for high-density clients or gameplay objects that do not need Core simulation snapshots.
+        /// </summary>
+        RuntimeOnly,
+
+        /// <summary>
+        /// The AbilitySystemComponent keeps Runtime as the authoritative state and mirrors ability/effect/attribute data into Core.
+        /// Use this when tooling, deterministic validation, or Core-level simulation needs a synchronized mirror.
+        /// </summary>
+        MirrorRuntime
+    }
+
+    /// <summary>
+    /// Construction options for AbilitySystemComponent runtime state ownership and optional mirrors.
+    /// </summary>
+    public sealed class GASAbilitySystemRuntimeOptions
+    {
+        public static readonly GASAbilitySystemRuntimeOptions Default = new GASAbilitySystemRuntimeOptions();
+        public static readonly GASAbilitySystemRuntimeOptions RuntimeOnly = new GASAbilitySystemRuntimeOptions(GASCoreStateMode.RuntimeOnly);
+        public static readonly GASAbilitySystemRuntimeOptions MirrorRuntime = new GASAbilitySystemRuntimeOptions(GASCoreStateMode.MirrorRuntime);
+
+        public GASAbilitySystemRuntimeOptions(GASCoreStateMode coreStateMode = GASCoreStateMode.MirrorRuntime)
+        {
+            CoreStateMode = coreStateMode;
+        }
+
+        public GASCoreStateMode CoreStateMode { get; }
+    }
+
     // Delegate for gameplay event delivery (UE5: SendGameplayEventToActor)
     public delegate void GameplayEventDelegate(GameplayEventData eventData);
 
@@ -79,6 +114,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public ulong LastReplicatedStateVersion;
         public AbilitySystemStateChangeMask PendingStateChangeMask;
         public ulong ReplicatedStateChecksum;
+        public GASCoreStateMode CoreStateMode;
+        public bool IsCoreStateEnabled;
         public int CoreAbilitySpecCount;
         public int CoreActiveEffectCount;
         public int CoreAttributeCount;
@@ -399,14 +436,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 flags |= GASRuntimeDiagnosticFlags.RuntimeIndexMismatch;
             }
 
-            if (coreSpecHandles.Count != activatableAbilities.Count ||
-                coreState.AbilitySpecCount != activatableAbilities.Count)
+            if (IsCoreStateEnabled &&
+                (coreSpecHandles.Count != activatableAbilities.Count ||
+                 coreState.AbilitySpecCount != activatableAbilities.Count))
             {
                 flags |= GASRuntimeDiagnosticFlags.CoreAbilitySpecHandleMismatch;
             }
 
-            if (coreActiveEffectHandles.Count > activeEffects.Count ||
-                coreState.ActiveEffectCount > activeEffects.Count)
+            if (IsCoreStateEnabled &&
+                (coreActiveEffectHandles.Count > activeEffects.Count ||
+                 coreState.ActiveEffectCount > activeEffects.Count))
             {
                 flags |= GASRuntimeDiagnosticFlags.CoreActiveEffectHandleMismatch;
             }
@@ -498,12 +537,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 LastReplicatedStateVersion = lastReplicatedStateVersion,
                 PendingStateChangeMask = pendingMask,
                 ReplicatedStateChecksum = computeChecksum ? ComputeReplicatedStateChecksum() : 0UL,
-                CoreAbilitySpecCount = coreState.AbilitySpecCount,
-                CoreActiveEffectCount = coreState.ActiveEffectCount,
-                CoreAttributeCount = coreState.AttributeCount,
-                CoreModifierCount = coreState.ModifierCount,
-                CoreSpecHandleCount = coreSpecHandles.Count,
-                CoreActiveEffectHandleCount = coreActiveEffectHandles.Count,
+                CoreStateMode = coreStateMode,
+                IsCoreStateEnabled = IsCoreStateEnabled,
+                CoreAbilitySpecCount = IsCoreStateEnabled ? coreState.AbilitySpecCount : 0,
+                CoreActiveEffectCount = IsCoreStateEnabled ? coreState.ActiveEffectCount : 0,
+                CoreAttributeCount = IsCoreStateEnabled ? coreState.AttributeCount : 0,
+                CoreModifierCount = IsCoreStateEnabled ? coreState.ModifierCount : 0,
+                CoreSpecHandleCount = IsCoreStateEnabled ? coreSpecHandles.Count : 0,
+                CoreActiveEffectHandleCount = IsCoreStateEnabled ? coreActiveEffectHandles.Count : 0,
                 RuntimeThreadId = runtimeThreadId,
                 CurrentThreadId = System.Threading.Thread.CurrentThread.ManagedThreadId,
                 RuntimeThreadViolationCount = runtimeThreadViolationCount,
@@ -526,18 +567,61 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private static int s_NextCoreEntityId;
         private int networkReplicationScopeDepth;
 
+        private readonly GASCoreStateMode coreStateMode;
+        private readonly GASEntityId coreEntity;
         private readonly GASAbilitySystemState coreState;
         private readonly GASAbilitySystemFacade core;
-        private readonly Dictionary<GameplayAbilitySpec, GASSpecHandle> coreSpecHandles = new Dictionary<GameplayAbilitySpec, GASSpecHandle>(16);
-        private readonly Dictionary<ActiveGameplayEffect, GASActiveEffectHandle> coreActiveEffectHandles = new Dictionary<ActiveGameplayEffect, GASActiveEffectHandle>(32);
+        private readonly Dictionary<GameplayAbilitySpec, GASSpecHandle> coreSpecHandles;
+        private readonly Dictionary<ActiveGameplayEffect, GASActiveEffectHandle> coreActiveEffectHandles;
         private GASModifierData[] coreModifierBuffer = Array.Empty<GASModifierData>();
         private GameplayTag[] effectReplicationSetByCallerTags = Array.Empty<GameplayTag>();
         private long[] effectReplicationSetByCallerValuesRaw = Array.Empty<long>();
         private GameplayTag[] stateApplySetByCallerTags = Array.Empty<GameplayTag>();
         private long[] stateApplySetByCallerValuesRaw = Array.Empty<long>();
         private int[] targetDataNetworkIdBuffer = Array.Empty<int>();
+
+        /// <summary>
+        /// Current Core mirror mode. Runtime state remains authoritative in every mode.
+        /// </summary>
+        public GASCoreStateMode CoreStateMode => coreStateMode;
+
+        /// <summary>
+        /// True when this ASC owns a synchronized Core mirror.
+        /// </summary>
+        public bool IsCoreStateEnabled => coreState != null;
+
+        /// <summary>
+        /// Stable Core entity id assigned to this ASC even when Core mirroring is disabled.
+        /// </summary>
+        public GASEntityId CoreEntity => coreEntity;
+
+        /// <summary>
+        /// Optional Core mirror. Prefer TryGetCoreState when code can run in RuntimeOnly mode.
+        /// </summary>
         public GASAbilitySystemState CoreState => coreState;
+
+        /// <summary>
+        /// Optional Core facade. Prefer TryGetCoreFacade when code can run in RuntimeOnly mode.
+        /// </summary>
         public GASAbilitySystemFacade Core => core;
+
+        /// <summary>
+        /// Gets the optional Core mirror without assuming the ASC was constructed in MirrorRuntime mode.
+        /// </summary>
+        public bool TryGetCoreState(out GASAbilitySystemState state)
+        {
+            state = coreState;
+            return state != null;
+        }
+
+        /// <summary>
+        /// Gets the optional Core facade without assuming the ASC was constructed in MirrorRuntime mode.
+        /// </summary>
+        public bool TryGetCoreFacade(out GASAbilitySystemFacade facade)
+        {
+            facade = core;
+            return facade != null;
+        }
 
         public IFactory<IGameplayEffectContext> EffectContextFactory { get; private set; }
 
@@ -670,7 +754,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         #endregion
 
         public AbilitySystemComponent(IFactory<IGameplayEffectContext> effectContextFactory)
+            : this(effectContextFactory, GASAbilitySystemRuntimeOptions.Default)
         {
+        }
+
+        public AbilitySystemComponent(
+            IFactory<IGameplayEffectContext> effectContextFactory,
+            GASAbilitySystemRuntimeOptions options)
+        {
+            if (options == null)
+            {
+                options = GASAbilitySystemRuntimeOptions.Default;
+            }
+
             AbilitySpecs = new AbilitySpecContainer();
             ActiveEffectContainer = new ActiveEffectContainer();
             AttributeAggregator = new AttributeAggregator();
@@ -703,8 +799,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
             this.EffectContextFactory = effectContextFactory;
             BindRuntimeThreadToCurrent();
             int entityId = System.Threading.Interlocked.Increment(ref s_NextCoreEntityId);
-            coreState = new GASAbilitySystemState(new GASEntityId(entityId));
-            core = new GASAbilitySystemFacade(coreState);
+            coreEntity = new GASEntityId(entityId);
+            coreStateMode = options.CoreStateMode;
+            if (coreStateMode == GASCoreStateMode.MirrorRuntime)
+            {
+                coreState = new GASAbilitySystemState(coreEntity);
+                core = new GASAbilitySystemFacade(coreState);
+                coreSpecHandles = new Dictionary<GameplayAbilitySpec, GASSpecHandle>(16);
+                coreActiveEffectHandles = new Dictionary<ActiveGameplayEffect, GASActiveEffectHandle>(32);
+            }
+            else
+            {
+                coreState = null;
+                core = null;
+                coreSpecHandles = null;
+                coreActiveEffectHandles = null;
+            }
+
             CombinedTags.OnAnyTagNewOrRemove += TrackTagCountChange;
         }
 
@@ -761,7 +872,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 activeEffectCapacity,
                 abilityCapacity);
 
-            if (coreModifierBuffer.Length < coreModifierCapacity)
+            if (IsCoreStateEnabled && coreModifierBuffer.Length < coreModifierCapacity)
             {
                 coreModifierBuffer = new GASModifierData[coreModifierCapacity];
             }
@@ -771,12 +882,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EnsureTargetDataNetworkIdCapacity(targetDataObjectCapacity);
             EnsurePredictionTransactionRecordCapacity(predictionTransactionRecordCapacity);
 
-            coreState.Reserve(
-                abilityCapacity,
-                attributeCapacity,
-                activeEffectCapacity,
-                coreModifierCapacity,
-                corePredictionCapacity);
+            if (IsCoreStateEnabled)
+            {
+                coreState.Reserve(
+                    abilityCapacity,
+                    attributeCapacity,
+                    activeEffectCapacity,
+                    coreModifierCapacity,
+                    corePredictionCapacity);
+            }
         }
 
         private static void EnsureListCapacity<T>(List<T> list, int capacity)
@@ -1376,6 +1490,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void CaptureCoreStateNonAlloc(GASAbilitySystemStateBuffer buffer)
         {
+            if (!IsCoreStateEnabled || buffer == null)
+            {
+                return;
+            }
+
             coreState.CaptureStateNonAlloc(buffer);
         }
 
@@ -1519,6 +1638,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void RegisterGrantedAbilityInCore(GameplayAbilitySpec spec, GameplayAbility ability, int level)
         {
+            if (!IsCoreStateEnabled)
+            {
+                return;
+            }
+
             if (spec == null || ability == null)
             {
                 return;
@@ -1545,6 +1669,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void RemoveGrantedAbilityFromCore(GameplayAbilitySpec spec)
         {
+            if (!IsCoreStateEnabled)
+            {
+                return;
+            }
+
             if (spec == null)
             {
                 return;
@@ -1561,6 +1690,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void RegisterAttributeInCore(GameplayAttribute attribute)
         {
+            if (!IsCoreStateEnabled)
+            {
+                return;
+            }
+
             if (attribute == null)
             {
                 return;
@@ -1575,6 +1709,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void RegisterActiveEffectInCore(ActiveGameplayEffect effect)
         {
+            if (!IsCoreStateEnabled)
+            {
+                return;
+            }
+
             if (effect == null || effect.Spec == null || effect.Spec.Def == null)
             {
                 return;
@@ -1596,6 +1735,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void RemoveActiveEffectFromCore(ActiveGameplayEffect effect)
         {
+            if (!IsCoreStateEnabled)
+            {
+                return;
+            }
+
             if (effect == null)
             {
                 return;
@@ -1616,7 +1760,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             var modifiers = BuildCoreModifiers(spec, out int modifierCount);
             return new GASGameplayEffectSpecData(
                 GetOrCreateCoreDefinitionId(def),
-                spec.Source != null ? spec.Source.CoreState.Entity : default,
+                spec.Source != null ? spec.Source.CoreEntity : default,
                 ConvertPredictionKey(spec.Context?.PredictionKey ?? default),
                 ConvertDurationPolicy(def.DurationPolicy),
                 (ushort)(spec.Level < 0 ? 0 : spec.Level),
@@ -1658,7 +1802,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public bool TryGetCoreSpecHandle(GameplayAbilitySpec spec, out GASSpecHandle handle)
         {
-            if (spec == null)
+            if (!IsCoreStateEnabled || spec == null)
             {
                 handle = default;
                 return false;
@@ -1670,6 +1814,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GASAbilityActivationResult TryActivateAbilityCore(GameplayAbilitySpec spec, GASPredictionKey predictionKey)
         {
             if (!TryGetCoreSpecHandle(spec, out var handle))
+            {
+                return new GASAbilityActivationResult(GASAbilityActivationResultCode.MissingSpec, default, predictionKey);
+            }
+
+            if (!IsCoreStateEnabled)
             {
                 return new GASAbilityActivationResult(GASAbilityActivationResultCode.MissingSpec, default, predictionKey);
             }
@@ -1784,7 +1933,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void AcceptCorePrediction(GASPredictionKey predictionKey)
         {
-            if (predictionKey.IsValid)
+            if (IsCoreStateEnabled && predictionKey.IsValid)
             {
                 core.AcceptPrediction(ConvertPredictionKey(predictionKey));
             }
@@ -1792,7 +1941,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void RejectCorePrediction(GASPredictionKey predictionKey)
         {
-            if (predictionKey.IsValid)
+            if (IsCoreStateEnabled && predictionKey.IsValid)
             {
                 core.RejectPrediction(ConvertPredictionKey(predictionKey));
             }
@@ -1800,7 +1949,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public GASPredictionKey OpenPredictionWindow(GameplayAbilitySpec spec, GASPredictionKey parentPredictionKey = default)
         {
-            var predictionKey = PredictionManager.CreatePredictionKey(coreState.Entity);
+            var predictionKey = PredictionManager.CreatePredictionKey(coreEntity);
             RegisterPredictionWindow(spec, predictionKey, parentPredictionKey);
             if (GASTrace.Enabled)
             {
@@ -2721,8 +2870,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (spec.Def.DurationPolicy == EDurationPolicy.Instant)
             {
-                var coreEffectSpec = BuildCoreEffectSpec(spec);
-                core.ApplyGameplayEffectSpecToSelf(in coreEffectSpec);
+                if (IsCoreStateEnabled)
+                {
+                    var coreEffectSpec = BuildCoreEffectSpec(spec);
+                    core.ApplyGameplayEffectSpecToSelf(in coreEffectSpec);
+                }
+
                 ExecuteInstantEffect(spec);
                 DispatchGameplayCues(spec, EGameplayCueEvent.Executed);
                 if (GASTrace.Enabled)
@@ -3076,7 +3229,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                 var finalValue = hasOverride ? overrideValue : ((baseValue + additive) * multiplicative / division);
 
-                attr.OwningSet.PreAttributeChangeFixed(attr, ref finalValue);
+                attr.OwningSet.PreAttributeChange(attr, ref finalValue);
                 attr.OwningSet.SetCurrentValue(attr, finalValue);
             }
 
@@ -3772,9 +3925,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             grantedTagIndexToEffects.Clear();
             predictedAttributeSnapshots.Clear();
             PredictionManager.Reset();
-            coreSpecHandles.Clear();
-            coreActiveEffectHandles.Clear();
-            coreState.Reset(default);
+            coreSpecHandles?.Clear();
+            coreActiveEffectHandles?.Clear();
+            coreState?.Reset(coreEntity);
             ReturnAllAbilityAppliedEffectLists();
             ClearIdleRuntimeListPools();
             ResetRuntimeListPoolStatistics();

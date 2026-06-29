@@ -51,12 +51,98 @@ namespace CycloneGames.GameplayAbilities.Networking.Unity.Tests.Editor
             asc.Dispose();
         }
 
+        [Test]
+        public void OnAbilityEnded_ResolvesDuplicateDefinitionsBySpecHandle()
+        {
+            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var ability = new TestAbility("SharedAbility");
+            var registry = new DefaultGASNetIdRegistry();
+            registry.RegisterAbilityDefinition(900, ability);
+            var adapter = new GameplayAbilitiesNetworkedASCAdapter(asc, 77u, ownerConnectionId: 1, registry);
+
+            var firstSpec = asc.GrantAbility(ability, level: 1, replicatedHandle: 101);
+            var secondSpec = asc.GrantAbility(ability, level: 1, replicatedHandle: 202);
+            int endedSpecHandle = 0;
+            asc.OnAbilityEndedEvent += endedAbility => endedSpecHandle = endedAbility.Spec.Handle;
+
+            Assert.That(asc.TryActivateAbility(secondSpec), Is.True);
+
+            adapter.OnAbilityEnded(abilityDefinitionId: 900, abilitySpecHandle: secondSpec.Handle);
+
+            Assert.That(endedSpecHandle, Is.EqualTo(secondSpec.Handle));
+            Assert.That(secondSpec.IsActive, Is.False);
+            Assert.That(firstSpec.IsActive, Is.False);
+
+            adapter.Dispose();
+            asc.Dispose();
+        }
+
+        [Test]
+        public void FullStateReplication_PreservesDuplicateDefinitionsBySpecHandle()
+        {
+            var serverAsc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var clientAsc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var ability = new TestAbility("SharedAbility");
+            var registry = new DefaultGASNetIdRegistry();
+            registry.RegisterAbilityDefinition(900, ability);
+            var serverAdapter = new GameplayAbilitiesNetworkedASCAdapter(serverAsc, 77u, ownerConnectionId: 1, registry);
+            var clientAdapter = new GameplayAbilitiesNetworkedASCAdapter(clientAsc, 77u, ownerConnectionId: 1, registry);
+
+            serverAsc.GrantAbility(ability, level: 1, replicatedHandle: 101);
+            serverAsc.GrantAbility(ability, level: 2, replicatedHandle: 202);
+
+            var state = serverAdapter.CaptureFullState();
+            clientAdapter.OnFullState(state);
+            var clientSpecs = clientAsc.GetActivatableAbilities();
+
+            Assert.That(clientSpecs.Count, Is.EqualTo(2));
+            Assert.That(ContainsSpecHandle(clientSpecs, 101), Is.True);
+            Assert.That(ContainsSpecHandle(clientSpecs, 202), Is.True);
+
+            clientAdapter.Dispose();
+            serverAdapter.Dispose();
+            clientAsc.Dispose();
+            serverAsc.Dispose();
+        }
+
+        [Test]
+        public void OnAbilityCancelled_ResolvesDynamicGrantRemovalByDefinitionIdFallback()
+        {
+            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var removedAbility = new TestAbility("RemovedAbility");
+            var targetAbility = new TestAbility("TargetAbility");
+            var registry = new DefaultGASNetIdRegistry();
+            registry.RegisterAbilityDefinition(100, removedAbility);
+            registry.RegisterAbilityDefinition(777, targetAbility);
+            var adapter = new GameplayAbilitiesNetworkedASCAdapter(asc, 77u, ownerConnectionId: 1, registry);
+
+            var removedSpec = asc.GrantAbility(removedAbility);
+            var targetSpec = asc.GrantAbility(targetAbility);
+            asc.ClearAbility(removedSpec);
+            var targetInstance = (TestAbility)targetSpec.GetPrimaryInstance();
+
+            Assert.That(asc.TryActivateAbility(targetSpec), Is.True);
+
+            adapter.OnAbilityCancelled(abilityDefinitionId: 777, abilitySpecHandle: 0);
+
+            Assert.That(targetInstance.CancelCount, Is.EqualTo(1));
+            Assert.That(targetSpec.IsActive, Is.False);
+
+            adapter.Dispose();
+            asc.Dispose();
+        }
+
         private sealed class TestAbility : GameplayAbility
         {
             public TestAbility()
+                : this("TestAbility")
+            {
+            }
+
+            public TestAbility(string name)
             {
                 Initialize(
-                    "TestAbility",
+                    name,
                     EGameplayAbilityInstancingPolicy.InstancedPerActor,
                     ENetExecutionPolicy.LocalOnly,
                     null,
@@ -70,8 +156,33 @@ namespace CycloneGames.GameplayAbilities.Networking.Unity.Tests.Editor
 
             public override GameplayAbility CreatePoolableInstance()
             {
-                return new TestAbility();
+                return new TestAbility(Name);
             }
+
+            public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
+            {
+            }
+
+            public override void CancelAbility()
+            {
+                CancelCount++;
+                base.CancelAbility();
+            }
+
+            public int CancelCount { get; private set; }
+        }
+
+        private static bool ContainsSpecHandle(IReadOnlyList<GameplayAbilitySpec> specs, int handle)
+        {
+            for (int i = 0; i < specs.Count; i++)
+            {
+                if (specs[i].Handle == handle)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private sealed class CapturingNetworkManager : INetworkManager

@@ -213,6 +213,66 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void AbilitySystemComponent_DefaultMirrorMode_SynchronizesCoreState()
+        {
+            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var ability = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
+            var spec = asc.GrantAbility(ability);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(CreateDurationEffect("MirrorEffect"), asc));
+
+            var diagnostics = asc.GetRuntimeDiagnostics(computeChecksum: false);
+
+            Assert.That(asc.CoreStateMode, Is.EqualTo(GASCoreStateMode.MirrorRuntime));
+            Assert.That(asc.IsCoreStateEnabled, Is.True);
+            Assert.That(asc.TryGetCoreState(out var coreState), Is.True);
+            Assert.That(coreState, Is.Not.Null);
+            Assert.That(asc.TryGetCoreSpecHandle(spec, out var coreHandle), Is.True);
+            Assert.That(coreHandle.IsValid, Is.True);
+            Assert.That(diagnostics.IsCoreStateEnabled, Is.True);
+            Assert.That(diagnostics.CoreAbilitySpecCount, Is.EqualTo(1));
+            Assert.That(diagnostics.CoreSpecHandleCount, Is.EqualTo(1));
+            Assert.That(diagnostics.CoreActiveEffectCount, Is.EqualTo(1));
+            Assert.That(diagnostics.CoreActiveEffectHandleCount, Is.EqualTo(1));
+            Assert.That(diagnostics.HasCriticalIssues, Is.False);
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void AbilitySystemComponent_RuntimeOnlyMode_SkipsCoreMirror()
+        {
+            var asc = new AbilitySystemComponent(
+                new GameplayEffectContextFactory(),
+                GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var ability = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
+            var spec = asc.GrantAbility(ability);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(CreateDurationEffect("RuntimeOnlyEffect"), asc));
+
+            var diagnostics = asc.GetRuntimeDiagnostics(computeChecksum: false);
+
+            Assert.That(asc.CoreStateMode, Is.EqualTo(GASCoreStateMode.RuntimeOnly));
+            Assert.That(asc.IsCoreStateEnabled, Is.False);
+            Assert.That(asc.TryGetCoreState(out var coreState), Is.False);
+            Assert.That(coreState, Is.Null);
+            Assert.That(asc.TryGetCoreFacade(out var coreFacade), Is.False);
+            Assert.That(coreFacade, Is.Null);
+            Assert.That(asc.TryGetCoreSpecHandle(spec, out var coreHandle), Is.False);
+            Assert.That(coreHandle.IsValid, Is.False);
+            Assert.That(asc.AbilitySpecs.Count, Is.EqualTo(1));
+            Assert.That(asc.ActiveEffectContainer.Count, Is.EqualTo(1));
+            Assert.That(diagnostics.IsCoreStateEnabled, Is.False);
+            Assert.That(diagnostics.CoreAbilitySpecCount, Is.EqualTo(0));
+            Assert.That(diagnostics.CoreSpecHandleCount, Is.EqualTo(0));
+            Assert.That(diagnostics.CoreActiveEffectCount, Is.EqualTo(0));
+            Assert.That(diagnostics.CoreActiveEffectHandleCount, Is.EqualTo(0));
+            Assert.That(diagnostics.HasCriticalIssues, Is.False);
+
+            asc.Dispose();
+        }
+
+        [Test]
         public void ClearAbility_CallsInstancedAbilityRemoveHook()
         {
             var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());

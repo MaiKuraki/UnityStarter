@@ -40,7 +40,20 @@ namespace CycloneGames.GameplayAbilities.Networking
         public const ushort MsgStateSyncMetadata = MESSAGE_ID_BASE + 42;
         public const ushort MsgManifestHandshake = MESSAGE_ID_BASE + 50;
 
+        /// <summary>
+        /// Current wire protocol version for GameplayAbilities networking messages.
+        /// This value is written into the protocol manifest and therefore participates in the
+        /// protocol fingerprint and connection-time handshake compatibility checks.
+        /// It is not part of gameplay state checksums, attribute math, prediction key math, or
+        /// any combat simulation calculation.
+        /// </summary>
         public const byte PROTOCOL_VERSION = 1;
+
+        /// <summary>
+        /// Oldest GameplayAbilities networking wire protocol version accepted by this package.
+        /// Keep this equal to <see cref="PROTOCOL_VERSION"/> until a publicly shipped protocol
+        /// version must remain compatible with a newer implementation.
+        /// </summary>
         public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
@@ -231,11 +244,12 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// Client calls this to request ability activation from the server.
         /// (LocalPredicted or ServerOnly execution policy)
         /// </summary>
-        public void ClientRequestActivateAbility(int abilityIndex, int predictionKey,
+        public void ClientRequestActivateAbility(int abilityDefinitionId, int predictionKey,
             NetworkVector3 targetPos, NetworkVector3 direction, uint targetNetworkId = 0)
         {
             ClientRequestActivateAbility(
-                abilityIndex,
+                abilityDefinitionId,
+                0,
                 predictionKey,
                 0,
                 0,
@@ -245,7 +259,28 @@ namespace CycloneGames.GameplayAbilities.Networking
         }
 
         public void ClientRequestActivateAbility(
-            int abilityIndex,
+            int abilityDefinitionId,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence,
+            NetworkVector3 targetPos,
+            NetworkVector3 direction,
+            uint targetNetworkId = 0)
+        {
+            ClientRequestActivateAbility(
+                abilityDefinitionId,
+                0,
+                predictionKey,
+                predictionKeyOwner,
+                predictionInputSequence,
+                targetPos,
+                direction,
+                targetNetworkId);
+        }
+
+        public void ClientRequestActivateAbility(
+            int abilityDefinitionId,
+            int abilitySpecHandle,
             int predictionKey,
             int predictionKeyOwner,
             int predictionInputSequence,
@@ -255,7 +290,8 @@ namespace CycloneGames.GameplayAbilities.Networking
         {
             _networkManager.SendToServer(MsgAbilityActivateRequest, new AbilityActivateRequest
             {
-                AbilityIndex = abilityIndex,
+                AbilityDefinitionId = abilityDefinitionId,
+                AbilitySpecHandle = abilitySpecHandle,
                 PredictionKey = predictionKey,
                 PredictionKeyOwner = predictionKeyOwner,
                 PredictionInputSequence = predictionInputSequence,
@@ -268,15 +304,28 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// <summary>
         /// Client notifies server that a locally-ended ability has completed.
         /// </summary>
-        public void ClientNotifyAbilityEnd(int abilityIndex, bool wasCancelled)
+        public void ClientNotifyAbilityEnd(int abilityDefinitionId, bool wasCancelled)
+        {
+            ClientNotifyAbilityEnd(abilityDefinitionId, 0, wasCancelled);
+        }
+
+        public void ClientNotifyAbilityEnd(int abilityDefinitionId, int abilitySpecHandle, bool wasCancelled)
         {
             if (wasCancelled)
             {
-                _networkManager.SendToServer(MsgAbilityCancel, new AbilityCancelMessage { AbilityIndex = abilityIndex });
+                _networkManager.SendToServer(MsgAbilityCancel, new AbilityCancelMessage
+                {
+                    AbilityDefinitionId = abilityDefinitionId,
+                    AbilitySpecHandle = abilitySpecHandle
+                });
                 return;
             }
 
-            _networkManager.SendToServer(MsgAbilityEnd, new AbilityEndMessage { AbilityIndex = abilityIndex });
+            _networkManager.SendToServer(MsgAbilityEnd, new AbilityEndMessage
+            {
+                AbilityDefinitionId = abilityDefinitionId,
+                AbilitySpecHandle = abilitySpecHandle
+            });
         }
 
         // =====================================================
@@ -287,21 +336,39 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// Server confirms predicted ability activation.
         /// Client removes pending prediction and keeps running effects.
         /// </summary>
-        public void ServerConfirmActivation(INetConnection client, int abilityIndex, int predictionKey)
+        public void ServerConfirmActivation(INetConnection client, int abilityDefinitionId, int predictionKey)
         {
-            ServerConfirmActivation(client, abilityIndex, predictionKey, 0, 0);
+            ServerConfirmActivation(client, abilityDefinitionId, 0, predictionKey, 0, 0);
         }
 
         public void ServerConfirmActivation(
             INetConnection client,
-            int abilityIndex,
+            int abilityDefinitionId,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence)
+        {
+            ServerConfirmActivation(
+                client,
+                abilityDefinitionId,
+                0,
+                predictionKey,
+                predictionKeyOwner,
+                predictionInputSequence);
+        }
+
+        public void ServerConfirmActivation(
+            INetConnection client,
+            int abilityDefinitionId,
+            int abilitySpecHandle,
             int predictionKey,
             int predictionKeyOwner,
             int predictionInputSequence)
         {
             _networkManager.SendToClient(client, MsgAbilityActivateConfirm, new AbilityActivateConfirm
             {
-                AbilityIndex = abilityIndex,
+                AbilityDefinitionId = abilityDefinitionId,
+                AbilitySpecHandle = abilitySpecHandle,
                 PredictionKey = predictionKey,
                 PredictionKeyOwner = predictionKeyOwner,
                 PredictionInputSequence = predictionInputSequence
@@ -312,21 +379,39 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// Server rejects predicted ability activation.
         /// Client rolls back all effects tagged with this prediction key.
         /// </summary>
-        public void ServerRejectActivation(INetConnection client, int abilityIndex, int predictionKey)
+        public void ServerRejectActivation(INetConnection client, int abilityDefinitionId, int predictionKey)
         {
-            ServerRejectActivation(client, abilityIndex, predictionKey, 0, 0);
+            ServerRejectActivation(client, abilityDefinitionId, 0, predictionKey, 0, 0);
         }
 
         public void ServerRejectActivation(
             INetConnection client,
-            int abilityIndex,
+            int abilityDefinitionId,
+            int predictionKey,
+            int predictionKeyOwner,
+            int predictionInputSequence)
+        {
+            ServerRejectActivation(
+                client,
+                abilityDefinitionId,
+                0,
+                predictionKey,
+                predictionKeyOwner,
+                predictionInputSequence);
+        }
+
+        public void ServerRejectActivation(
+            INetConnection client,
+            int abilityDefinitionId,
+            int abilitySpecHandle,
             int predictionKey,
             int predictionKeyOwner,
             int predictionInputSequence)
         {
             _networkManager.SendToClient(client, MsgAbilityActivateReject, new AbilityActivateReject
             {
-                AbilityIndex = abilityIndex,
+                AbilityDefinitionId = abilityDefinitionId,
+                AbilitySpecHandle = abilitySpecHandle,
                 PredictionKey = predictionKey,
                 PredictionKeyOwner = predictionKeyOwner,
                 PredictionInputSequence = predictionInputSequence
@@ -471,7 +556,8 @@ namespace CycloneGames.GameplayAbilities.Networking
         {
             if (_ascByConnectionId.TryGetValue(sender.ConnectionId, out var asc))
                 asc.OnServerConfirmActivation(
-                    msg.AbilityIndex,
+                    msg.AbilityDefinitionId,
+                    msg.AbilitySpecHandle,
                     msg.PredictionKey,
                     msg.PredictionKeyOwner,
                     msg.PredictionInputSequence);
@@ -481,7 +567,8 @@ namespace CycloneGames.GameplayAbilities.Networking
         {
             if (_ascByConnectionId.TryGetValue(sender.ConnectionId, out var asc))
                 asc.OnServerRejectActivation(
-                    msg.AbilityIndex,
+                    msg.AbilityDefinitionId,
+                    msg.AbilitySpecHandle,
                     msg.PredictionKey,
                     msg.PredictionKeyOwner,
                     msg.PredictionInputSequence);
@@ -490,13 +577,13 @@ namespace CycloneGames.GameplayAbilities.Networking
         private void OnRecvAbilityEnd(INetConnection sender, AbilityEndMessage msg)
         {
             if (_ascByConnectionId.TryGetValue(sender.ConnectionId, out var asc))
-                asc.OnAbilityEnded(msg.AbilityIndex);
+                asc.OnAbilityEnded(msg.AbilityDefinitionId, msg.AbilitySpecHandle);
         }
 
         private void OnRecvAbilityCancel(INetConnection sender, AbilityCancelMessage msg)
         {
             if (_ascByConnectionId.TryGetValue(sender.ConnectionId, out var asc))
-                asc.OnAbilityCancelled(msg.AbilityIndex);
+                asc.OnAbilityCancelled(msg.AbilityDefinitionId, msg.AbilitySpecHandle);
         }
 
         private void OnRecvEffectApplied(INetConnection sender, EffectReplicationData msg)
