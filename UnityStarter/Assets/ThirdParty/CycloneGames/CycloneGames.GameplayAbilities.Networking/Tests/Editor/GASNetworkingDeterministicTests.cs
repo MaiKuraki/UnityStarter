@@ -1,9 +1,10 @@
-using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using CycloneGames.Networking;
 using CycloneGames.Networking.Buffers;
+using CycloneGames.Networking.Replication;
 using CycloneGames.Networking.Serialization;
+using NUnit.Framework;
 
 namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
 {
@@ -272,6 +273,18 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
         }
 
         [Test]
+        public void NetworkedAbilityBridge_ClientNotifyAbilityEnd_UsesMatchingCancelPayload()
+        {
+            var network = new CapturingNetworkManager();
+            var bridge = new NetworkedAbilityBridge(network, installSerializer: false, serializerOptions: null);
+
+            bridge.ClientNotifyAbilityEnd(3, wasCancelled: true);
+
+            Assert.That(network.LastServerMessageId, Is.EqualTo(NetworkedAbilityBridge.MsgAbilityCancel));
+            Assert.That(network.LastServerMessageType, Is.EqualTo(typeof(AbilityCancelMessage)));
+        }
+
+        [Test]
         public void NetworkedAbilityBridge_FullStateRequest_UsesConnectionScopedState()
         {
             var network = new FullStateCapturingNetworkManager();
@@ -310,9 +323,107 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             Assert.That(catalog.ProtocolFingerprint, Is.Not.EqualTo(0UL));
         }
 
+        [Test]
+        public void GASReplicationPlanner_UsesOwnerAreaLayerAndBudget()
+        {
+            var planner = new GASReplicationPlanner();
+            planner.Reserve(sourceCapacity: 3, selectionCapacity: 3);
+            var observer = new NetworkReplicationObserver(
+                connectionId: 10,
+                playerId: 100UL,
+                teamId: 0,
+                position: new NetworkVector3(0f, 0f, 0f),
+                viewRadius: 10f,
+                interestLayerMask: 0b0011u);
+            var sources = new[]
+            {
+                new GASReplicationSource(
+                    networkId: 1u,
+                    position: new NetworkVector3(100f, 0f, 0f),
+                    policy: NetworkReplicationPolicy.OwnerOnly(priority: 1f),
+                    changeMask: GASReplicationChangeMask.Attributes,
+                    ownerConnectionId: 10,
+                    ownerPlayerId: 100UL,
+                    estimatedPayloadBytes: 40),
+                new GASReplicationSource(
+                    networkId: 2u,
+                    position: new NetworkVector3(2f, 0f, 0f),
+                    policy: NetworkReplicationPolicy.Area(maxDistance: 5f, priority: 1f),
+                    changeMask: GASReplicationChangeMask.ActiveEffects,
+                    ownerConnectionId: 20,
+                    estimatedPayloadBytes: 40),
+                new GASReplicationSource(
+                    networkId: 3u,
+                    position: new NetworkVector3(1f, 0f, 0f),
+                    policy: NetworkReplicationPolicy.Area(maxDistance: 5f, priority: 100f),
+                    changeMask: GASReplicationChangeMask.Tags,
+                    ownerConnectionId: 30,
+                    interestLayerMask: 0b0100u,
+                    estimatedPayloadBytes: 40)
+            };
+            var results = new GASReplicationSelection[3];
+            var budget = new NetworkSendBudget(maxBytes: 40, maxMessages: 1);
+
+            int count = planner.BuildPlan(observer, sources, serverTick: 10, ref budget, results);
+
+            Assert.That(count, Is.EqualTo(1));
+            Assert.That(results[0].NetworkId, Is.EqualTo(1u));
+            Assert.That(results[0].Reason.HasFlag(NetworkInterestReason.Owner), Is.True);
+            Assert.That(budget.RemainingBytes, Is.EqualTo(0));
+            Assert.That(budget.RemainingMessages, Is.EqualTo(0));
+        }
+
+        [Test]
+        public void GASReplicationPlanner_SelectsFullStateEvenWhenSourceIsClean()
+        {
+            var planner = new GASReplicationPlanner();
+            var observer = new NetworkReplicationObserver(
+                connectionId: 10,
+                playerId: 0UL,
+                teamId: 0,
+                position: NetworkVector3.Zero,
+                viewRadius: 0f);
+            var sources = new[]
+            {
+                new GASReplicationSource(
+                    networkId: 1u,
+                    position: NetworkVector3.Zero,
+                    policy: NetworkReplicationPolicy.OwnerOnly(),
+                    changeMask: GASReplicationChangeMask.None,
+                    ownerConnectionId: 10,
+                    requiresFullState: true,
+                    estimatedPayloadBytes: 64,
+                    lastSentTick: 10,
+                    stateVersion: 7UL,
+                    stateChecksum: 1234UL),
+                new GASReplicationSource(
+                    networkId: 2u,
+                    position: NetworkVector3.Zero,
+                    policy: NetworkReplicationPolicy.OwnerOnly(),
+                    changeMask: GASReplicationChangeMask.None,
+                    ownerConnectionId: 10,
+                    requiresFullState: false,
+                    estimatedPayloadBytes: 64,
+                    lastSentTick: 10)
+            };
+            var results = new GASReplicationSelection[2];
+            var budget = new NetworkSendBudget(maxBytes: 1024, maxMessages: 2);
+
+            int count = planner.BuildPlan(observer, sources, serverTick: 10, ref budget, results);
+
+            Assert.That(count, Is.EqualTo(1));
+            Assert.That(results[0].NetworkId, Is.EqualTo(1u));
+            Assert.That(results[0].RequiresFullState, Is.True);
+            Assert.That(results[0].EstimatedPayloadBytes, Is.EqualTo(GASReplicationSource.DEFAULT_FULL_STATE_PAYLOAD_BYTES));
+            Assert.That(results[0].Source.StateVersion, Is.EqualTo(7UL));
+            Assert.That(results[0].Source.StateChecksum, Is.EqualTo(1234UL));
+        }
+
         private sealed class CapturingNetworkManager : INetworkManager
         {
             public AttributeUpdateData LastAttributeData;
+            public ushort LastServerMessageId;
+            public Type LastServerMessageType;
             public INetTransport Transport => null;
             public INetSerializer Serializer => null;
 
@@ -320,6 +431,8 @@ namespace CycloneGames.GameplayAbilities.Networking.Tests.Editor
             public void UnregisterHandler(ushort msgId) { }
             public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
             {
+                LastServerMessageId = msgId;
+                LastServerMessageType = typeof(T);
                 return NetworkSendResult.Accepted(0, 0);
             }
 

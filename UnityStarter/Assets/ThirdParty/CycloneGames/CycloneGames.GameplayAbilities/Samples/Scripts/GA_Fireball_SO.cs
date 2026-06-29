@@ -28,9 +28,6 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             CommitAbility(actorInfo, spec);
 
-            // --- Targeting ---
-            // TODO: should spawn a projectile or use a targeting system.
-            // simulate finding a target in front of the caster.
             var caster = actorInfo.AvatarGameObject;
             var target = FindTarget(caster);
 
@@ -67,29 +64,9 @@ namespace CycloneGames.GameplayAbilities.Sample
             EndAbility();
         }
 
-        // A placeholder for a real targeting system
         private GameObject FindTarget(GameObject caster)
         {
-            //  TODO: get enemies from other way.
-            // GameObject[] enemies = GameObject.FindGameObjectsWithTag("Enemy");
-            // GameObject closest = null;
-            // float minDistance = float.MaxValue;
-
-            // foreach (var enemy in enemies)
-            // {
-            //     if (enemy == caster) continue;
-
-            //     Vector3 toEnemy = enemy.transform.position - caster.transform.position;
-            //     if (Vector3.Dot(caster.transform.forward, toEnemy.normalized) > 0.5f) // Is in front?
-            //     {
-            //         float distance = toEnemy.sqrMagnitude;
-            //         if (distance < minDistance)
-            //         {
-            //             minDistance = distance;
-            //             closest = enemy;
-            //         }
-            //     }
-            // }
+            // Sample scene lookup. Production abilities should use a project targeting service.
             GameObject enemy = GameObject.Find("Enemy");
             return enemy;
         }

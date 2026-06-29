@@ -6,41 +6,15 @@
 
 本包通过 `INetworkManager` 和 Cyclone runtime service 工作。Ability 代码不直接绑定 Mirror、Mirage、Nakama、Steam 或其他后端 SDK。
 
-## 包结构
-
-```text
-CycloneGames.GameplayAbilities.Networking/
-  Core/
-    AttributeSyncManager.cs
-    GASNetworkMessages.cs
-    GASNetworkSerializer.cs
-    GASNetworkStateChecksum.cs
-    NetworkedAbilityBridge.cs
-    INetworkedASC.cs
-    IGASFullStateAuthorizationPolicy.cs
-    OwnerOrObserverWithRateLimitPolicy.cs
-    InMemoryTokenBucketRateLimiter.cs
-    ...
-  Unity.Runtime/
-    DefaultGASNetIdRegistry.cs
-    GameplayAbilitiesNetworkedASCAdapter.cs
-    GASBridgeGameplayAbilitiesExtensions.cs
-    UnityGASNetLogger.cs
-    UnityGASNetTimeProvider.cs
-  Editor/
-    Diagnostics preset, diagnostics window, and inspectors
-  Tests/Editor/
-    Bridge, serializer, checksum, authorization, and adapter tests
-```
-
 ## 程序集边界
 
 | Assembly | 职责 |
 | --- | --- |
-| `CycloneGames.GameplayAbilities.Networking.Core` | 纯 C# bridge、message DTO、serializer、checksum、full-state authorization、rate limiting 和接口。 |
+| `CycloneGames.GameplayAbilities.Networking.Core` | 纯 C# bridge、message DTO、serializer、checksum、full-state authorization、rate limiting、replication planning 和接口。 |
 | `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` | 将 Unity `AbilitySystemComponent` 适配为 `INetworkedASC`。 |
 | `CycloneGames.GameplayAbilities.Networking.Unity.Editor` | Editor diagnostics 和 authoring 支持。 |
-| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | 覆盖 bridge、serializer、security policy 和 runtime adapter 行为的 EditMode 测试。 |
+| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | 不依赖 UnityEngine 的 EditMode 测试，覆盖 bridge、serializer、checksum 和 security policy。 |
+| `CycloneGames.GameplayAbilities.Networking.Unity.Tests.Editor` | 覆盖 Unity-facing adapter 行为的 EditMode 测试。 |
 
 Core 代码依赖 Cyclone Networking 契约和 GameplayAbilities 数据契约。Unity 相关行为隔离在 `Unity.Runtime` 和 `Editor` assembly 中。
 
@@ -57,6 +31,8 @@ Core 代码依赖 Cyclone Networking 契约和 GameplayAbilities 数据契约。
 | `AttributeSyncManager` | Server-side dirty attribute batching，以及 owner/public observer filtering。 |
 | `OwnerOrObserverWithRateLimitPolicy` | Full-state request authorization，支持 owner、observer 和可选 rate limiting。 |
 | `GASNetworkStateChecksum` | Full-state 和 drift validation 使用的 checksum helper。 |
+| `GASReplicationSource` | 将单个 ASC 投影为 transport-neutral network id、owner、team、layer、position、dirty mask、full-state request、checksum 和 send-size 数据。 |
+| `GASReplicationPlanner` | 对 `CycloneGames.Networking.Replication.NetworkReplicationPlanner` 的低分配 GAS facade，用于 owner/team/area/layer 过滤和 send-budget selection。 |
 
 ## Runtime 流程
 
@@ -216,6 +192,55 @@ public static class AbilityReplicationSender
 
 `AttributeSyncManager` 按 network id 保存 dirty attribute，并能区分 owner-only value 和 public observer value。
 
+`GameplayAbilitiesNetworkedASCAdapter.CaptureAndReplicatePendingStateDelta` 要求调用方先解析 observer 再 capture。当 observer list 为 null 或空时，它返回默认 delta，并且不会消费 ASC pending state。这对房间制和 interest management 很重要：某一帧没有相关 observer 时，不能丢掉稍后 observer 仍然需要的 ability grant、effect removal、attribute change、tag change 或 state metadata。
+
+大型房间推荐的服务端顺序：
+
+1. 更新 gameplay，并标记 ASC state dirty。
+2. 解析 room、team、owner、spectator 和 visibility observer。
+3. 只有 observer set 非空时才调用 `CaptureAndReplicatePendingStateDelta`。
+4. 对 late joiner 或错过 delta 后重新变为 relevant 的 observer 使用 full-state recovery。
+
+## Replication Planning 与包集成
+
+`GASReplicationPlanner` 让 GAS networking layer 复用共享的 `CycloneGames.Networking.Replication` interest 和 send-budget pipeline，而不是维护另一套 observer selector。这能让 ability replication 与 movement、perception、gameplay framework actor 和其他 networked module 保持一致。
+
+```csharp
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+using CycloneGames.Networking.Replication;
+
+public static class AbilityReplicationPlanning
+{
+    public static int BuildPlan(
+        GASReplicationPlanner planner,
+        NetworkReplicationObserver observer,
+        GASReplicationSource[] sources,
+        int serverTick,
+        GASReplicationSelection[] results)
+    {
+        var budget = new NetworkSendBudget(maxBytes: 64 * 1024, maxMessages: 256);
+
+        return planner.BuildPlan(
+            observer,
+            sources,
+            serverTick,
+            ref budget,
+            results);
+    }
+}
+```
+
+对于 `CycloneGames.GameplayFramework.Networking`，项目代码可以将 `NetworkedGameplayActor` 字段直接映射到 `GASReplicationSource`：使用 actor network id、owner connection id、owner player id、team id、interest layer mask 和 interest position，然后选择与 gameplay visibility rule 对应的 `NetworkReplicationPolicy`。GAS networking core 不反向引用 `GameplayFramework.Networking`；这样 headless server、纯 C# simulation，以及不使用 GameplayFramework 的项目都不会被可选 framework 依赖污染。
+
+Cyclone package 可以放在 `Assets/ThirdParty` 下使用，也可以作为 UPM package 引入。Integration 代码应遵守以下规则：
+
+- 当 integration assembly 存在且依赖是必需依赖时，直接 asmdef reference 是事实来源。
+- `versionDefines` 适合 UPM package 检测，但本地 `Assets/ThirdParty` package 不会可靠地产生这些符号。
+- 不要用 source-level `#if` 包住 hard integration assembly，避免在本地包模式下 assembly 空编译。
+- 可选 integration 应物理隔离在 integration asmdef 或 integration package 中，并且只在依赖可用时导入。
+- 默认 package interoperability 不要求用户手动添加 PlayerSettings scripting symbol。
+
 ## Full-State Recovery
 
 Full-state message 为 late join、reconnect 和 drift recovery 提供 baseline。Bridge 支持：
@@ -302,8 +327,9 @@ Diagnostics 会检查 bridge support、Ability runtime support、Cyclone network
 
 ```text
 Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Networking.Unity.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
 
-修改 serializer 或 bridge 时，覆盖 capacity bounds、full-state authorization、checksum drift detection、adapter dispose behavior 和 register/unregister lifecycle。
+修改 serializer 或 bridge 时，覆盖 capacity bounds、full-state authorization、checksum drift detection、adapter dispose behavior、observer-empty dispatch behavior 和 register/unregister lifecycle。

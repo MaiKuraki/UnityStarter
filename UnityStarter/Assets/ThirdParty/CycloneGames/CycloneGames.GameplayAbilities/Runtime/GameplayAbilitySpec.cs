@@ -146,7 +146,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (AbilityInstance != null)
             {
-                if (IsActive) AbilityInstance.CancelAbility();
+                if (IsActive)
+                {
+                    AbilityInstance.CancelAbility();
+                }
 
                 if (Ability.InstancingPolicy == EGameplayAbilityInstancingPolicy.InstancedPerExecution)
                 {
@@ -161,21 +164,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         internal void OnRemoveSpec()
         {
-            if (AbilityInstance != null)
-            {
-                if (IsActive)
-                {
-                    AbilityInstance.CancelAbility();
-                }
+            var abilityToRemove = GetPrimaryInstance();
+            abilityToRemove?.OnRemoveAbility();
 
+            if (AbilityInstance != null && Ability.InstancingPolicy != EGameplayAbilityInstancingPolicy.NonInstanced)
+            {
                 var instanceToReturn = AbilityInstance;
-                if (instanceToReturn != null && Ability.InstancingPolicy != EGameplayAbilityInstancingPolicy.NonInstanced)
-                {
-                    PoolManager.ReturnAbility(instanceToReturn);
-                }
                 AbilityInstance = null;
+                PoolManager.ReturnAbility(instanceToReturn);
             }
-            AbilityCDO?.OnRemoveAbility();
         }
 
         internal void ReturnToPool()

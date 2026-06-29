@@ -1,1527 +1,1079 @@
-> **注意：** 本文档由 AI 辅助编写，如果你追求绝对精准，请直接阅读模块源码。**源码**以及**示例**皆由作者编写。
-
-[**English**](README.md) | [**简体中文**]
-
 # CycloneGames.GameplayAbilities
 
-为 Unity 打造的强大、数据驱动的游戏性能力系统 (GAS)，灵感来自虚幻引擎 5 的 GAS 架构。
+[English](./README.md) | 简体中文
 
-无论你正在开发 RPG、MOBA、动作游戏，或是任何包含复杂角色技能、Buff 和属性的项目——本框架都提供了可投入生产的、可扩展的基础设施。
+`CycloneGames.GameplayAbilities` 是一个受 Unreal Engine Gameplay Ability System 设计目标启发的 Unity Gameplay Ability 框架。它提供一套可复用基础能力，用于管理 ability、attribute、gameplay effect、gameplay tag、gameplay cue、prediction、replication state 和 Editor authoring。
 
-<img src="./Documents~/DemoPreview_1.gif" alt="Demo Preview" style="width: 100%; max-width: 800px;" />
+该包面向动作 RPG、多人共斗、Roguelike 地牢刷怪、大型 Boss 战、局域网房间制游戏，以及其他需要数据驱动、可扩展、可观察并能承受较高运行时压力的战斗系统。
 
----
+本文既是模块说明，也是上手教程。它解释什么是 GAS、为什么要使用这种架构、当前包如何组织，以及如何循序渐进地制作一个 gameplay ability。
 
-## 核心特性
+## 示例预览与资源
 
-| 特性               | 说明                                                                |
-| ------------------ | ------------------------------------------------------------------- |
-| **数据驱动的技能** | 在 ScriptableObject 中定义技能——设计师无需修改代码即可迭代          |
-| **GameplayEffect** | 即时 / 持续 / 永久效果，支持叠加、周期性触发和溢出策略              |
-| **标签驱动架构**   | 通过层级化 GameplayTag 解耦所有逻辑——技能、状态、冷却、阵营         |
-| **属性系统**       | 灵活的角色数值，支持验证钩子、派生属性和修改器聚合                  |
-| **AbilityTask**    | 10+ 内置异步任务——延迟、事件等待、属性监听、目标选择、重复执行      |
-| **瞄准系统**       | 球形范围、射线检测、锥形检测、地面选择——或实现自定义 `ITargetActor` |
-| **GameplayCue**    | VFX/SFX 与游戏逻辑完全分离——美术可独立迭代                          |
-| **执行计算**       | 复杂的多属性伤害公式作为可复用的数据资产                            |
-| **对象池**         | 零 GC 运行，三级自适应对象池，平台感知容量，健康监控                |
-| **网络就绪**       | 传输层无关的预测键和执行策略（本地 / 服务器 / 预测）                |
+- 示例项目: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
+  - <img src="./Documents~/DemoPreview_2.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
 
----
+- 包内示例场景: [In-Package Smaple](./Samples)
+  - <img src="./Documents~/DemoPreview_1.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
 
 ## 目录
 
-**一、理解 GAS**
+- [CycloneGames.GameplayAbilities](#cyclonegamesgameplayabilities)
+  - [示例预览与资源](#示例预览与资源)
+  - [目录](#目录)
+  - [GAS 解决的问题](#gas-解决的问题)
+  - [适用场景](#适用场景)
+  - [程序集边界](#程序集边界)
+  - [核心概念](#核心概念)
+  - [运行时架构](#运行时架构)
+  - [Unreal GAS 对照](#unreal-gas-对照)
+  - [激活与 Effect 流程](#激活与-effect-流程)
+  - [教程：制作一个最小 Ability](#教程制作一个最小-ability)
+    - [步骤 1：定义 Tag 词汇](#步骤-1定义-tag-词汇)
+    - [步骤 2：创建 AttributeSet](#步骤-2创建-attributeset)
+    - [步骤 3：创建并持有 ASC](#步骤-3创建并持有-asc)
+    - [步骤 4：定义 Effect](#步骤-4定义-effect)
+    - [步骤 5：实现 Ability](#步骤-5实现-ability)
+    - [步骤 6：授予并激活 Ability](#步骤-6授予并激活-ability)
+  - [GameplayTags 使用指南](#gameplaytags-使用指南)
+  - [ScriptableObject Authoring 工作流](#scriptableobject-authoring-工作流)
+  - [Cost、Cooldown、Buff、Debuff 与 Passive](#costcooldownbuffdebuff-与-passive)
+  - [AbilityTask](#abilitytask)
+  - [Targeting 系统](#targeting-系统)
+  - [Execution Calculation](#execution-calculation)
+  - [DataTable 驱动数值调优](#datatable-驱动数值调优)
+  - [GameplayCue](#gameplaycue)
+  - [示例演练](#示例演练)
+  - [网络](#网络)
+  - [性能模型](#性能模型)
+  - [线程策略](#线程策略)
+  - [Editor 工具](#editor-工具)
+  - [与其他 CycloneGames 模块集成](#与其他-cyclonegames-模块集成)
+  - [持久化](#持久化)
+  - [常见问题与故障排除](#常见问题与故障排除)
+  - [依赖项](#依赖项)
 
-1. [为什么选择 GAS？](#1-为什么选择-gas) — 它解决什么问题
-2. [核心概念](#2-核心概念) — 术语表与各部分如何协作
-3. [架构](#3-架构) — 系统图解
+## GAS 解决的问题
 
-**二、快速上手** 4. [快速入门：构建治疗技能](#4-快速入门构建治疗技能) — 从零开始
+在小型游戏中，一个技能可以写成一个脚本：检查输入、扣 mana、进入 cooldown、播放 VFX、对目标造成伤害、刷新 UI。到了大型项目，这种写法很快会难以维护，因为每个功能都需要知道太多其他功能的细节。
 
-**三、核心系统** 5. [GameplayTag](#5-gameplaytag) — 通用语言 6. [属性与属性集](#6-属性与属性集) — 角色数值 7. [GameplayEffect](#7-gameplayeffect) — 修改器、持续时间、叠加 8. [GameplayAbility](#8-gameplayability) — 技能生命周期
+GAS 将战斗拆成稳定概念：
 
-**四、高级系统** 9. [AbilityTask](#9-abilitytask) — 异步技能逻辑 10. [瞄准系统](#10-瞄准系统) — 查找和选择目标 11. [执行计算](#11-执行计算) — 复杂伤害公式 12. [GameplayCue](#12-gameplaycue) — VFX/SFX 管理 13. [网络](#13-网络) — 预测与同步
+| 概念 | 含义 |
+| --- | --- |
+| Ability | 可被授予、激活、阻塞、取消、预测和复制的玩法动作。例如 fireball、dodge、heal、combo attack、boss slam。 |
+| Attribute | 由 actor 持有的数值型玩法状态。例如 health、mana、attack power、defense、movement speed。 |
+| Gameplay Effect | 应用到 Ability System Component 的数据驱动变化。Effect 处理伤害、治疗、Buff、Debuff、Cooldown、Cost、周期伤害、Stack、Tag 和临时授予 Ability。 |
+| Gameplay Tag | 描述状态和规则的层级标识符。例如 `State.Stunned`、`Ability.Fire.Fireball`、`Cooldown.Fireball`、`Damage.Type.Fire`。 |
+| Gameplay Cue | 与 gameplay state 绑定的表现事件。Cue 驱动 VFX、SFX、camera shake、hit reaction 等表现层行为，但不拥有玩法权威。 |
+| Prediction | 客户端临时执行，用于保持本地操作响应，同时服务端仍保持权威。 |
+| Replication State | 可跨网络发送或用于 full-state recovery 的紧凑 gameplay change 表示。 |
 
-**五、生产就绪** 14. [对象池与性能](#14-对象池与性能) — 零 GC 策略 15. [编辑器工具与调试](#15-编辑器工具与调试) — Inspector、调试窗口、运行时 Overlay 16. [示例演练](#16-示例演练) — 火球术、净化、升级系统 17. [常见问题与故障排除](#17-常见问题与故障排除) 18. [依赖项](#18-依赖项)
+Unreal Engine 的 GAS 将这套模型推广到生产项目中，因为它能让战斗规则保持可组合。Stun effect 可以通过 tag 阻塞 ability。Cooldown 可以表示为一个授予 cooldown tag 的 duration effect。Damage-over-time debuff 可以表示为一个带 period 的 duration effect。Passive aura 可以表示为一个 infinite effect，用来授予 tag 或 ability。这些场景都走同一套 runtime pipeline。
 
----
+CycloneGames 将这些思想适配到 Unity：
 
-# 一、理解 GAS
+- Unity authoring data 使用 `ScriptableObject` asset 表示。
+- Runtime state 存放在由 `AbilitySystemComponent` 拥有的 C# object 中。
+- Core state contract 尽可能保持不依赖 Unity。
+- 可选网络由 `CycloneGames.GameplayAbilities.Networking` 实现。
+- 项目级可选集成应放在 integration assembly 中，不反向污染 core runtime。
 
-## 1. 为什么选择 GAS？
+| 关注点 | 传统 Skill Manager | GAS-style 架构 |
+| --- | --- | --- |
+| Ability 内容 | 常硬编码在 character 或 controller script 中。 | Ability asset 和 runtime definition 可授予任何兼容 ASC。 |
+| 状态管理 | Boolean flag 和手写 timer 分散在多个 script 中。 | Active gameplay effect 自己持有 duration、period、stack count、granted tag 和 removal。 |
+| Ability 阻塞 | 每种状态组合都写自定义 `if` 分支。 | Tag 表达 activation requirement 和 block rule。 |
+| Attribute 变化 | 多个系统直接写数值。 | Gameplay effect 通过统一 attribute pipeline 应用 modifier。 |
+| VFX/SFX | Gameplay code 直接生成表现对象。 | Gameplay cue 将 presentation 与 authority 解耦。 |
+| 多人网络 | 每个技能都需要自定义 replication 和 correction logic。 | Prediction key、effect spec、state delta 和 full-state recovery 共享同一模型。 |
+| 扩展规模 | 新交互会增加系统耦合。 | 新内容通过 tag、effect、attribute 和 cue 组合。 |
 
-### 传统方法的困境
+## 适用场景
 
-游戏中的技能系统往往起初很简单——一个 `UseFireball()` 方法、几个布尔标志位——但很快就会演变为无法维护的复杂度：
+当项目需要以下能力时，适合使用本包：
 
-| 阶段       | 发生了什么                                                                | 问题所在                                              |
-| ---------- | ------------------------------------------------------------------------- | ----------------------------------------------------- |
-| **初期**   | `PlayerController.UseFireball()` 硬编码                                   | 对一个角色没问题，但敌人也需要同样的技能 → 复制粘贴   |
-| **增长期** | 庞大的 `SkillManager`，充满 `isStunned`、`isPoisoned`、`isBurning` 标志位 | 脆弱的状态机；每个新交互都带来指数级的 `if/else` 分支 |
-| **后期**   | 设计师无法在不接触 C# 代码的情况下调整 `damage = 10`                      | 迭代速度下降；数据与逻辑混合在一个文件中导致 Bug      |
+- 大量 ability 共享 cost、cooldown、tag、target、effect 和 cue 规则。
+- Buff 和 Debuff 需要 stack、expire、periodic tick、grant tag 或 grant ability。
+- 清晰分离 gameplay authority 和 presentation。
+- 面向策划的可调数据资产，以及面向程序的扩展点。
+- 面向多人游戏的 state contract 和 deterministic-friendly raw fixed value。
+- 对 Unreal GAS 熟悉的开发者能快速理解的框架风格。
 
-这种轨迹不可持续。N 个技能和 M 个状态效果之间的潜在交互数量以 O(N×M) 增长，产生经典的"意大利面条式代码"问题。
+不建议为了单次脚本事件、简单 UI 动作，或完全不需要 attribute、effect、tag、prediction、replication 的系统引入完整 GAS 层。
 
-### GAS 的解决方案
+## 程序集边界
 
-GAS 将技能和效果视为**数据**而非函数来解决这些问题：
+| Assembly | 职责 |
+| --- | --- |
+| `CycloneGames.GameplayAbilities.Core` | 不依赖 Unity 的 deterministic state、prediction key、replication DTO、definition registry、service interface 和 fixed-value 逻辑。 |
+| `CycloneGames.GameplayAbilities.Runtime` | Unity-facing ability runtime、`AbilitySystemComponent`、ScriptableObject bridge、target data、gameplay cue、object pool、runtime diagnostics 和 runtime debug overlay。 |
+| `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` | 从 `CycloneGames.DataTable` 行数据到 GAS modifier magnitude 和 attribute initialization 的可选桥接层。由 `CYCLONEGAMES_HAS_DATA_TABLE` 启用。 |
+| `CycloneGames.GameplayAbilities.Editor` | Editor inspector、debug window、property drawer、menu item 和 authoring validation。 |
+| `CycloneGames.GameplayAbilities.Tests.Editor` | 面向 deterministic state、runtime lifecycle、pooling 和 regression behavior 的 EditMode 测试。 |
 
-- **技能是数据资产** — 一个 `ScriptableObject` 定义技能是什么（消耗、冷却、标签、效果）。你的角色只是"拥有"一个由标签标识的技能。
-- **状态效果是数据对象** — 角色不再是 `isPoisoned`；而是身上有一个"中毒" `GameplayEffect` 的活动实例，它自带持续时间、周期触发、标签授予和叠加规则。系统自动管理其生命周期。
-- **标签替代布尔值** — 不再是 `if (isCasting && !isStunned)`，系统会问"拥有者是否有 `State.Casting`？"以及"拥有者是否没有 `State.Stunned`？"。标签是层级化的、可查询的，且完全数据驱动。
+Core assembly 必须保持无 `UnityEngine` 和 `UnityEditor` 引用。Unity-facing 行为应放在 Runtime、Editor、Samples 或 integration assembly。
 
-### 对比
+## 核心概念
 
-| 方面           | 传统系统                  | GAS                                        |
-| -------------- | ------------------------- | ------------------------------------------ |
-| **架构**       | 庞大的单体 `SkillManager` | 解耦的 `AbilitySystemComponent` + 数据资产 |
-| **数据与逻辑** | 混合在一个 C# 文件中      | 严格分离——SO 存数据，类写逻辑              |
-| **状态管理**   | 布尔标志位 + 手动计时器   | 自管理的 `GameplayEffect` 实例             |
-| **可扩展性**   | 修改核心类才能添加内容    | 添加新 SO 资产——不改现有代码               |
-| **可复用性**   | 代码绑定特定角色          | 同一技能资产可用于玩家、AI、甚至一个木桶   |
-| **交互复杂度** | O(N×M) 的 if/else 分支    | O(1) 的标签查询                            |
+| 类型 | 职责 |
+| --- | --- |
+| `AbilitySystemComponent` | 运行时 ability state 的主 facade 和 owner。它授予 ability、持有 attribute、应用 effect、追踪 tag、管理 prediction、tick effect，并暴露 replication capture API。 |
+| `GameplayAbility` | 单个动作的 runtime definition 和执行逻辑。通过重写 `ActivateAbility`、`CanActivate`、`InputPressed`、`InputReleased` 和 `CancelAbility` 实现自定义行为。 |
+| `GameplayAbilitySO` | Unity authoring asset，用于创建和初始化 runtime `GameplayAbility`。 |
+| `GameplayAbilitySpec` | 一个 ASC 上已授予的 ability。它保存 level、handle、active state、owning ASC、granted-by-effect 关系，以及需要时的 stateful ability instance。 |
+| `AttributeSet` | 一组相关 `GameplayAttribute`，并承载 clamp、meta attribute 和 post-effect 逻辑。 |
+| `GameplayAttribute` | 带 name 的数值，包含 base value 和 current value。数值也以 raw fixed value 保存，用于 deterministic-friendly 路径。 |
+| `GameplayEffect` | Instant、duration 或 infinite effect 的 runtime definition。它描述 modifier、tag、stacking、granted ability、cue、custom requirement 和 overflow behavior。 |
+| `GameplayEffectSO` | Unity authoring asset，用于创建 runtime `GameplayEffect`。 |
+| `GameplayEffectSpec` | 一次 effect application 的 runtime instance。它捕获 source、target、context、level、duration、modifier magnitude、dynamic tag 和 SetByCaller magnitude。 |
+| `ActiveGameplayEffect` | 当前已经应用在 ASC 上的 live effect。它拥有 remaining time、period、stack count、granted tag 和 runtime bookkeeping。 |
+| `AbilityTask` | 由 active ability 拥有的池化 latent operation。用于等待、targeting、delay 和其他多帧 ability 行为。 |
+| `GameplayCueManager` / `GameplayCueDispatcher` | Service-backed cue routing，用于由 gameplay state 驱动 presentation event。 |
 
----
+## 运行时架构
 
-## 2. 核心概念
+`AbilitySystemComponent` 保持 public entry point，延续 Unreal GAS 熟悉的使用方式。内部状态所有权拆分到专用协作者中，避免所有热路径 bookkeeping 都堆在一个超大类里。
 
-如果你从未使用过虚幻引擎的 GAS，本节将映射每个关键概念，帮助你在阅读任何代码之前建立清晰的认知框架。
-
-### 术语表
-
-| 概念                             | 它是什么                                                                                  | 类比                   |
-| -------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------- |
-| **AbilitySystemComponent (ASC)** | 每个 Actor 上的中央管理器。持有技能、效果、属性和标签。                                   | Actor 的"技能大脑"     |
-| **GameplayAbility**              | Actor 可以执行的离散动作（攻击、治疗、冲刺）。包含激活逻辑。                              | 手中的"技能卡牌"       |
-| **GameplayAbilitySO**            | 定义技能数据的 ScriptableObject（名称、标签、消耗、冷却）。创建运行时 `GameplayAbility`。 | 设计师编辑的"卡牌模板" |
-| **GameplayAbilitySpec**          | 跟踪已授予技能状态的运行时包装器（等级、激活状态）。                                      | Actor 的"装备卡槽"     |
-| **GameplayEffect**               | 不可变的定义——描述应用于 Actor 的事情（修改属性、授予标签、周期触发）。                   | 写在卡片上的"配方"     |
-| **GameplayEffectSO**             | 供设计师在 Inspector 中配置 GameplayEffect 的 ScriptableObject。                          | "配方卡模板"           |
-| **GameplayEffectSpec**           | GameplayEffect 的可变运行时实例，携带上下文信息（来源、等级、SetByCaller 值）。           | 填写好的"配方订单"     |
-| **ActiveGameplayEffect**         | 当前应用于 ASC 的 GameplayEffectSpec——追踪剩余时间、堆叠数、抑制状态。                    | "正在炉子上烹饪的配方" |
-| **GameplayAttribute**            | 单个数值属性（生命值、法力值、攻击力）。由 GameplayEffect 修改的浮点数。                  | 角色属性表上的一行     |
-| **AttributeSet**                 | 相关 GameplayAttribute 的分组集合，带有验证钩子。                                         | 角色属性表上的一页     |
-| **GameplayTag**                  | 层级化的字符串标识符（`Ability.Skill.Fireball`、`Status.Debuff.Poison`）。                | 一张"便签标签"         |
-| **GameplayTagContainer**         | GameplayTag 的集合，用于查询（`HasTag`、`HasAll`、`HasAny`）。                            | 一组"便签标签"         |
-| **AbilityTask**                  | 技能内部的异步操作——等待时间、等待输入、监听标签变化。                                    | 配方中的一个"步骤"     |
-| **ITargetActor**                 | 执行空间查询（球形检测、射线投射）以寻找目标的对象。                                      | "雷达扫描器"           |
-| **TargetData**                   | 瞄准查询的结果——包含命中的 Actor 和物理信息。                                             | "扫描结果"             |
-| **GameplayCue**                  | 由标签触发的 VFX/SFX，与游戏逻辑完全解耦。                                                | 配方上的"特效贴纸"     |
-| **ExecutionCalculation**         | 计算复杂多属性公式的代码类（伤害 = 攻击 × 1.5 − 防御 × 0.5）。                            | "计算子程序"           |
-
-### 各部分如何协作
-
-```mermaid
-flowchart LR
-    subgraph Designer["🎨 设计师创建"]
-        direction TB
-        AbilitySO["GameplayAbilitySO"]
-        EffectSO["GameplayEffectSO"]
-        EffectDef["GameplayEffect<br/>（不可变定义）"]
-        AbilitySO -->|引用| EffectSO
-        EffectSO -->|创建| EffectDef
-    end
-
-    subgraph Runtime["⚙️ 运行时流程"]
-        direction TB
-        Ability["GameplayAbility"]
-        Activate["ActivateAbility()"]
-        Commit["CommitAbility()"]
-        CostCD["应用消耗 + 冷却"]
-        Spec["GameplayEffectSpec"]
-        Apply["ASC.ApplySpecToSelf()"]
-        ActiveGE["ActiveGameplayEffect"]
-        Ability --> Activate --> Commit --> CostCD
-        CostCD --> Spec --> Apply --> ActiveGE
-    end
-
-    subgraph Result["📊 结果"]
-        direction TB
-        ModAttr["修改属性"]
-        GrantTag["授予标签"]
-        TrigCue["触发 GameplayCue"]
-    end
-
-    AbilitySO -->|"CreateAbility()"| Ability
-    EffectDef -->|"Spec.Create()"| Spec
-    ActiveGE --> ModAttr
-    ActiveGE --> GrantTag
-    ActiveGE --> TrigCue
-```
-
----
-
-## 3. 架构
-
-### 系统架构总览
-
-```mermaid
-flowchart TB
-    subgraph Data["📦 数据资产层（ScriptableObjects）"]
-        GAbilitySO["GameplayAbilitySO<br/>― 技能定义"]
-        GEffectSO["GameplayEffectSO<br/>― 效果定义"]
-        GCueSO["GameplayCueSO<br/>― VFX/SFX 定义"]
-        ExecCalcSO["ExecutionCalculationSO<br/>― 公式定义"]
-    end
-
-    subgraph Runtime["⚙️ 运行时核心"]
-        ASC["AbilitySystemComponent<br/>― 中央管理器"]
-        AttrSet["AttributeSet<br/>― 属性容器"]
-        GAbility["GameplayAbility<br/>― 技能逻辑"]
-        GEffect["GameplayEffect<br/>― 不可变定义"]
-    end
-
-    subgraph Active["🔄 活动实例（对象池化）"]
-        GSpec["GameplayAbilitySpec"]
-        GESpec["GameplayEffectSpec"]
-        ActiveGE["ActiveGameplayEffect"]
-    end
-
-    subgraph Async["⏱️ 异步系统"]
-        Task["AbilityTask"]
-        Target["ITargetActor"]
-    end
-
-    subgraph Cue["🎨 表现层"]
-        CueMgr["GameplayCueManager"]
-    end
-
-    GAbilitySO -->|"CreateAbility()"| GAbility
-    GEffectSO -->|"GetGameplayEffect()"| GEffect
-    ExecCalcSO -->|"CreateExecutionCalculation()"| GEffect
-
-    ASC -->|拥有| AttrSet
-    ASC -->|管理| GSpec
-    ASC -->|追踪| ActiveGE
-
-    GSpec -->|包装| GAbility
-    GAbility -->|生成| Task
-    Task -->|使用| Target
-
-    GEffect -->|"Spec.Create()"| GESpec
-    GESpec -->|"ApplyToSelf()"| ActiveGE
-    ActiveGE -->|修改| AttrSet
-    ActiveGE -->|触发| CueMgr
-
-    GCueSO -.->|注册于| CueMgr
-```
-
-### GameplayEffect 生命周期
-
-```mermaid
-flowchart LR
-    subgraph Def["定义阶段"]
-        SO["GameplayEffectSO<br/>📋 数据资产"]
-        GE["GameplayEffect<br/>📝 不可变模板"]
-    end
-
-    subgraph Inst["实例化阶段"]
-        Spec["GameplayEffectSpec<br/>📦 池化实例<br/>• 来源 ASC<br/>• 等级 / SetByCaller<br/>• 动态标签"]
-    end
-
-    subgraph Apply["应用阶段"]
-        Active["ActiveGameplayEffect<br/>⏱️ 目标 ASC 上<br/>• 剩余时间<br/>• 堆叠数<br/>• 是否被抑制"]
-    end
-
-    subgraph Exec["执行类型"]
-        Instant["即时 ✅"]
-        Duration["持续 ⏳"]
-        Infinite["永久 ♾️"]
-    end
-
-    SO -->|"CreateGameplayEffect()"| GE
-    GE -->|"GameplayEffectSpec.Create()"| Spec
-    Spec -->|"ASC.ApplySpecToSelf()"| Active
-
-    Active --> Instant
-    Active --> Duration
-    Active --> Infinite
-
-    Duration -->|"到期"| Pool["🔄 对象池"]
-    Infinite -->|"手动移除"| Pool
-    Spec -->|"使用后"| Pool
-```
-
-### 技能执行流程
+| 协作者 | 职责 |
+| --- | --- |
+| `AbilitySpecContainer` | 已授予的 ability spec、spec handle index、ticking spec，以及由 active effect 授予的 ability。 |
+| `ActiveEffectContainer` | Active gameplay effect、network id lookup、stacking index、granted tag index，以及 ability-applied effect tracking。 |
+| `AttributeAggregator` | Attribute set、registered attribute，以及 dirty attribute aggregation queue。 |
+| `PredictionManager` | Prediction window、window index、pending predicted effect、local input sequence、dependent-window lookup、timeout selection，以及 closed prediction transaction history。 |
+| `ReplicationStateBuilder` | Dirty replicated state、state version、tag delta folding、delta capture lifecycle、removed effect id、removed ability definition 和 scratch array。 |
+| `GameplayCueDispatcher` | Local gameplay cue dispatch、prediction cue accounting，以及 server-side cue broadcast routing。 |
 
 ```mermaid
 flowchart TB
-    subgraph Input["1️⃣ 输入"]
-        Trigger["玩家输入 / AI 决策 / 标签触发"]
-    end
+    ASC["AbilitySystemComponent"]
+    Specs["AbilitySpecContainer"]
+    Effects["ActiveEffectContainer"]
+    Attrs["AttributeAggregator"]
+    Prediction["PredictionManager"]
+    Replication["ReplicationStateBuilder"]
+    Cues["GameplayCueDispatcher"]
+    Tags["CycloneGames.GameplayTags"]
+    Core["GASAbilitySystemState"]
+    Network["GameplayAbilities.Networking"]
 
-    subgraph Check["2️⃣ 激活检查"]
-        Try["TryActivateAbility()"]
-        Tags["标签检查<br/>ActivationRequiredTags ✓<br/>ActivationBlockedTags ✗<br/>Source/Target Tags"]
-        Cost["CheckCost()"]
-        CD["CheckCooldown()"]
-    end
-
-    subgraph Run["3️⃣ 执行"]
-        Activate["ActivateAbility()"]
-        Tasks["AbilityTasks<br/>WaitDelay / WaitTargetData<br/>WaitGameplayEvent / ..."]
-        Commit["CommitAbility()<br/>应用消耗 + 冷却"]
-    end
-
-    subgraph Effects["4️⃣ 效果"]
-        ApplyGE["应用 GameplayEffects"]
-        Cues["触发 GameplayCues"]
-    end
-
-    subgraph End["5️⃣ 清理"]
-        EndAbility["EndAbility()"]
-        ReturnPool["返回对象池"]
-    end
-
-    Trigger --> Try
-    Try --> Tags
-    Tags -->|通过| Cost
-    Tags -->|失败| Blocked["❌ 被阻止"]
-    Cost -->|通过| CD
-    Cost -->|失败| NoCost["❌ 资源不足"]
-    CD -->|通过| Activate
-    CD -->|失败| OnCD["❌ 冷却中"]
-
-    Activate --> Tasks
-    Tasks --> Commit
-    Commit --> ApplyGE
-    ApplyGE --> Cues
-    Cues --> EndAbility
-    EndAbility --> ReturnPool
+    ASC --> Specs
+    ASC --> Effects
+    ASC --> Attrs
+    ASC --> Prediction
+    ASC --> Replication
+    ASC --> Cues
+    ASC --> Tags
+    ASC --> Core
+    Replication --> Network
+    Cues --> Network
 ```
 
----
+当前 collaborator split 已经接管最容易出错的 list、dictionary、prediction 和 replication bookkeeping：ability grant/removal、ticking spec 成员关系、effect swap-back removal、network id lookup、stacking lookup、granted tag lookup、ability-applied effect cleanup、prediction window index、pending predicted effect removal、closed prediction record、replicated dirty flag、removed id tracking、tag edge folding、state version advancement 和 delta capture cleanup。
 
-# 二、快速上手
+`AbilitySystemComponent` 仍然负责协调 gameplay policy、activation decision、rollback side effect、event、高层 network send decision 和 attribute side effect。后续迁移应继续以小步、可验证的方式推进。
 
-## 4. 快速入门：构建治疗技能
+## Unreal GAS 对照
 
-本教程将从零开始创建一个完整的治疗技能。完成后你将理解所有核心概念。
+| Unreal GAS 概念 | CycloneGames 概念 |
+| --- | --- |
+| `UAbilitySystemComponent` | `AbilitySystemComponent` facade |
+| `FGameplayAbilitySpecContainer` | `AbilitySpecContainer` |
+| `FActiveGameplayEffectsContainer` | `ActiveEffectContainer` |
+| `FScopedPredictionWindow` | `GASPredictionScope` 和 `PredictionManager` |
+| `UGameplayAbility` | `GameplayAbility` 和 `GameplayAbilitySO` |
+| `UGameplayEffect` | `GameplayEffect` 和 `GameplayEffectSO` |
+| `FGameplayEffectSpec` | `GameplayEffectSpec` |
+| `FActiveGameplayEffect` | `ActiveGameplayEffect` |
+| `FGameplayTagContainer` | `CycloneGames.GameplayTags.Core.GameplayTagContainer` |
+| Gameplay cue notify routing | `GameplayCueManager` 和 `GameplayCueDispatcher` |
+| Fast array replication 和 RPC state | `ReplicationStateBuilder`、`GASAbilitySystemStateDeltaBuffer` 和 networking package |
 
-### 最简 GAS 流程（无需技能）
+本包保留有助于 Unreal GAS 开发者快速迁移的词汇，但不会复制 Unreal 的 UObject 模型。Unity asset、纯 C# runtime object 和 Unity-free core contract 保持分离。
 
-在构建完整技能之前，先理解最简数据流。你只需 **ASC + AttributeSet + GameplayEffect** 就能修改属性——不需要创建任何技能：
+## 激活与 Effect 流程
+
+```mermaid
+sequenceDiagram
+    participant Input as Input or AI
+    participant ASC as AbilitySystemComponent
+    participant Spec as GameplayAbilitySpec
+    participant Ability as GameplayAbility
+    participant Effect as GameplayEffectSpec
+    participant Attr as AttributeSet
+    participant Cue as GameplayCueDispatcher
+    participant Net as ReplicationStateBuilder
+
+    Input->>ASC: TryActivateAbility(spec)
+    ASC->>Spec: resolve primary ability instance
+    ASC->>Ability: CanActivate(actorInfo, spec)
+    Ability->>ASC: CommitAbility(cost, cooldown)
+    Ability->>Effect: create outgoing effect spec
+    Ability->>ASC: ApplyGameplayEffectSpecToSelf or target
+    ASC->>Attr: execute modifiers and hooks
+    ASC->>Cue: dispatch gameplay cues
+    ASC->>Net: mark replicated state dirty
+    Ability->>ASC: EndAbility
+```
+
+典型 activation sequence：
+
+1. 通过 `AbilitySystemComponent.GrantAbility` 授予 ability。
+2. `AbilitySpecContainer` 保存 `GameplayAbilitySpec`，并按 handle 建立索引。
+3. `TryActivateAbility` 校验 tag、cost、cooldown、prediction policy、authority policy 和 ability block rule。
+4. `GameplayAbility.ActivateAbility` commit cost 和 cooldown，创建 task，并应用 effect。
+5. `ActiveEffectContainer` 追踪 active effect、stacking、granted tag、network id 和 ability-applied effect cleanup。
+6. `AttributeAggregator` 使用 additive、multiplicative、division 和 override aggregation 重算 dirty attribute。
+7. `PredictionManager` 追踪 prediction window 和 predicted side effect。
+8. `GameplayCueDispatcher` 在本地和配置的 network bridge 上发出 cue event。
+9. `ReplicationStateBuilder` 记录 dirty state，并 capture delta 用于 replication 或 full-state recovery。
+
+## 教程：制作一个最小 Ability
+
+本教程使用 runtime C# 示例，因为它更适合在文档中阅读。生产项目通常会把同样的 runtime class 与 `GameplayAbilitySO`、`GameplayEffectSO` asset 组合起来，让策划在 Inspector 中配置数据。
+
+### 步骤 1：定义 Tag 词汇
+
+Gameplay tag 是 GAS 的规则语言。Tag 名称应稳定，并在代码、资产、网络 registry 和调试工具之间保持一致。
+
+推荐命名方式：
+
+```text
+Ability.Fire.Fireball
+Cooldown.Fireball
+Cost.Mana
+Damage.Type.Fire
+GameplayCue.Fireball.Impact
+State.Stunned
+State.Dead
+Data.DamageMultiplier
+Attribute.Health
+Attribute.Mana
+```
+
+Runtime 代码可以从 `CycloneGames.GameplayTags` 请求 tag：
 
 ```csharp
-// 1. 获取 ASC
-var asc = GetComponent<AbilitySystemComponentHolder>().AbilitySystemComponent;
-asc.InitAbilityActorInfo(this, gameObject);
+using CycloneGames.GameplayTags.Core;
 
-// 2. 添加属性
-var attrs = new PlayerAttributeSet();
-asc.AddAttributeSet(attrs);
+public static class CombatTags
+{
+    public static readonly GameplayTag CooldownFireball =
+        GameplayTagManager.RequestTag("Cooldown.Fireball");
 
-// 3. 创建效果并应用——完成！
-var healEffect = new GameplayEffect("Heal", EDurationPolicy.Instant, 0, 0,
-    new() { new ModifierInfo(attrs.Health, EAttributeModifierOperation.Add, 25f) });
-asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(healEffect, asc));
-// 生命值现在 +25。就是这样——3 行核心逻辑。
+    public static readonly GameplayTag DamageTypeFire =
+        GameplayTagManager.RequestTag("Damage.Type.Fire");
+
+    public static readonly GameplayTag DataDamageMultiplier =
+        GameplayTagManager.RequestTag("Data.DamageMultiplier");
+}
 ```
 
-```mermaid
-flowchart LR
-    A["ASC + AttributeSet"] -->|"GameplayEffectSpec.Create()"| B["GameplayEffectSpec"]
-    B -->|"ApplySpecToSelf()"| C["Health += 25"]
-```
+Tag 用来表达规则，不用来保存可变数值。Health、mana、attack power、defense 应放在 attribute 中。
 
-**GameplayAbility 在此流程之上增加了结构**——激活检查、消耗/冷却、异步任务、瞄准——但核心数据路径始终是：**Effect → Spec → Apply → 属性变化**。
+### 步骤 2：创建 AttributeSet
 
-### 前置条件
-
-- Unity 2021.3+
-- 已安装 `CycloneGames.GameplayAbilities` 包
-- 已安装依赖项：`GameplayTags`、`Logger`、`AssetManagement`、`Factory`
-
-### 步骤 1 — 创建属性集
-
-`AttributeSet` 保存角色属性。每个属性都是一个 `GameplayAttribute`——一个可被效果修改的命名浮点数。
+`AttributeSet` 负责组织 attribute，并持有 attribute-specific rule，例如 clamp 和 meta attribute 处理。
 
 ```csharp
 using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
 
-public class PlayerAttributeSet : AttributeSet
+public sealed class CombatAttributeSet : AttributeSet
 {
-    public readonly GameplayAttribute Health    = new("Player.Attribute.Health");
-    public readonly GameplayAttribute MaxHealth = new("Player.Attribute.MaxHealth");
-    public readonly GameplayAttribute Mana      = new("Player.Attribute.Mana");
-    public readonly GameplayAttribute MaxMana   = new("Player.Attribute.MaxMana");
+    public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
+    public GameplayAttribute MaxHealth { get; } = new GameplayAttribute("MaxHealth");
+    public GameplayAttribute Mana { get; } = new GameplayAttribute("Mana");
+    public GameplayAttribute MaxMana { get; } = new GameplayAttribute("MaxMana");
+    public GameplayAttribute Damage { get; } = new GameplayAttribute("Damage");
 
-    // 在值变化之前调用——用于限制范围
-    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
+    public CombatAttributeSet()
     {
-        if (attribute.Name == Health.Name)
-            newValue = Mathf.Clamp(newValue, 0, GetCurrentValue(MaxHealth));
-        if (attribute.Name == Mana.Name)
-            newValue = Mathf.Clamp(newValue, 0, GetCurrentValue(MaxMana));
+        Health.SetBaseValue(100f);
+        Health.SetCurrentValue(100f);
+        MaxHealth.SetBaseValue(100f);
+        MaxHealth.SetCurrentValue(100f);
+        Mana.SetBaseValue(50f);
+        Mana.SetCurrentValue(50f);
+        MaxMana.SetBaseValue(50f);
+        MaxMana.SetCurrentValue(50f);
     }
 
-    // 在值变化之后调用——用于处理副作用
-    public override void PostAttributeChange(GameplayAttribute attribute, float oldValue, float newValue)
+    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
     {
-        if (attribute.Name == Health.Name && newValue <= 0 && oldValue > 0)
-            Debug.Log("角色死亡！");
+        if (attribute == Health)
+        {
+            newValue = System.Math.Clamp(newValue, 0f, MaxHealth.CurrentValue);
+        }
+        else if (attribute == Mana)
+        {
+            newValue = System.Math.Clamp(newValue, 0f, MaxMana.CurrentValue);
+        }
+    }
+
+    protected override bool PreProcessInstantEffect(GameplayEffectModCallbackData data)
+    {
+        GameplayAttribute attribute = GetAttribute(data.Modifier.AttributeName);
+        if (attribute != Damage)
+        {
+            return false;
+        }
+
+        float currentHealth = Health.CurrentValue;
+        float newHealth = System.Math.Max(0f, currentHealth - data.EvaluatedMagnitude);
+
+        SetBaseValue(Health, newHealth);
+        SetCurrentValue(Health, newHealth);
+        return true;
     }
 }
 ```
 
-### 步骤 2 — 设置角色
+`Damage` 这类 meta attribute 适合承载中间值。目标可以在收到 damage 后结合 defense、shield、vulnerability、immunity 等规则换算成最终 health loss。
+
+### 步骤 3：创建并持有 ASC
+
+`AbilitySystemComponent` 是纯 runtime object。Unity `MonoBehaviour` 应只负责生命周期和场景引用，不承载复杂战斗规则。
 
 ```csharp
 using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
 
-[RequireComponent(typeof(AbilitySystemComponentHolder))]
-public class PlayerCharacter : MonoBehaviour
+public sealed class CombatantAbilitySystem : MonoBehaviour
 {
-    [SerializeField] private GameplayAbilitySO healAbilitySO;
+    public AbilitySystemComponent AbilitySystem { get; private set; }
+    public CombatAttributeSet Attributes { get; private set; }
 
-    private AbilitySystemComponentHolder ascHolder;
-    private PlayerAttributeSet attributes;
-
-    void Awake()
+    private void Awake()
     {
-        ascHolder = GetComponent<AbilitySystemComponentHolder>();
+        AbilitySystem = new AbilitySystemComponent(new GameplayEffectContextFactory());
+        AbilitySystem.InitAbilityActorInfo(owner: this, avatar: gameObject);
+
+        AbilitySystem.ReserveRuntimeCapacity(
+            abilityCapacity: 16,
+            attributeCapacity: 16,
+            activeEffectCapacity: 64,
+            predictionWindowCapacity: 8,
+            coreModifierCapacity: 128,
+            maxSetByCallerPerEffect: 8,
+            targetDataObjectCapacity: 16);
+
+        Attributes = new CombatAttributeSet();
+        AbilitySystem.AddAttributeSet(Attributes);
     }
 
-    void Start()
+    private void Update()
     {
-        var asc = ascHolder.AbilitySystemComponent;
-
-        // 1. 初始化 Actor 信息（在任何 ASC 操作之前必须调用）
-        asc.InitAbilityActorInfo(this, gameObject);
-
-        // 2. 添加属性
-        attributes = new PlayerAttributeSet();
-        asc.AddAttributeSet(attributes);
-
-        // 3. 通过即时效果设置初始值
-        var initEffect = new GameplayEffect("GE_Init", EDurationPolicy.Instant, 0, 0,
-            new() {
-                new ModifierInfo(attributes.MaxHealth, EAttributeModifierOperation.Override, 100),
-                new ModifierInfo(attributes.Health,    EAttributeModifierOperation.Override, 100),
-                new ModifierInfo(attributes.MaxMana,   EAttributeModifierOperation.Override, 50),
-                new ModifierInfo(attributes.Mana,      EAttributeModifierOperation.Override, 50),
-            });
-        asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(initEffect, asc));
-
-        // 4. 授予技能
-        if (healAbilitySO != null)
-            asc.GrantAbility(healAbilitySO.CreateAbility());
+        AbilitySystem.Tick(Time.deltaTime, isServer: true);
     }
 
-    void Update()
+    private void OnDestroy()
     {
-        if (Input.GetKeyDown(KeyCode.H))
-        {
-            var asc = ascHolder.AbilitySystemComponent;
-            foreach (var spec in asc.GetActivatableAbilities())
+        AbilitySystem?.Dispose();
+    }
+}
+```
+
+如果项目使用 `CycloneGames.GameplayFramework`，可选 integration extension 可以从 `Actor` 初始化 actor info，同时保持 GameplayFramework core assembly 不依赖 GameplayAbilities。
+
+### 步骤 4：定义 Effect
+
+Effect 是 GAS 数据驱动能力的核心。
+
+```csharp
+using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayTags.Core;
+
+public static class CombatEffects
+{
+    public static GameplayEffect CreateFireballDamage()
+    {
+        return new GameplayEffect(
+            name: "GE_FireballDamage",
+            durationPolicy: EDurationPolicy.Instant,
+            modifiers: new List<ModifierInfo>
             {
-                if (spec.Ability.AbilityTags.HasTag("Ability.Action.Heal"))
+                new ModifierInfo("Damage", EAttributeModifierOperation.Add, new ScalableFloat(35f, 5f))
+            },
+            assetTags: CreateContainer(CombatTags.DamageTypeFire),
+            gameplayCues: CreateContainer(
+                GameplayTagManager.RequestTag("GameplayCue.Fireball.Impact")));
+    }
+
+    public static GameplayEffect CreateFireballCost()
+    {
+        return new GameplayEffect(
+            name: "GE_Cost_Fireball",
+            durationPolicy: EDurationPolicy.Instant,
+            modifiers: new List<ModifierInfo>
+            {
+                new ModifierInfo("Mana", EAttributeModifierOperation.Add, new ScalableFloat(-10f))
+            });
+    }
+
+    public static GameplayEffect CreateFireballCooldown()
+    {
+        return new GameplayEffect(
+            name: "GE_Cooldown_Fireball",
+            durationPolicy: EDurationPolicy.HasDuration,
+            duration: 3f,
+            grantedTags: CreateContainer(CombatTags.CooldownFireball));
+    }
+
+    private static GameplayTagContainer CreateContainer(GameplayTag tag)
+    {
+        var container = new GameplayTagContainer();
+        container.AddTag(tag);
+        return container;
+    }
+}
+```
+
+`Instant` effect 适合 damage、healing 和 cost。`HasDuration` effect 适合 timed buff、debuff 和 cooldown。`Infinite` effect 适合 passive、equipment bonus 和 aura，直到显式移除。
+
+### 步骤 5：实现 Ability
+
+Ability 持有 activation logic。它应通过 ASC pipeline commit cost/cooldown，再通过 effect spec 应用 effect。
+
+```csharp
+using CycloneGames.GameplayAbilities.Runtime;
+
+public sealed class FireballAbility : GameplayAbility
+{
+    private readonly GameplayEffect _damageEffect;
+    private readonly System.Func<AbilitySystemComponent> _targetResolver;
+
+    public FireballAbility(GameplayEffect damageEffect, System.Func<AbilitySystemComponent> targetResolver)
+    {
+        _damageEffect = damageEffect;
+        _targetResolver = targetResolver;
+    }
+
+    public override void ActivateAbility(
+        GameplayAbilityActorInfo actorInfo,
+        GameplayAbilitySpec spec,
+        GameplayAbilityActivationInfo activationInfo)
+    {
+        CommitAbility(actorInfo, spec);
+
+        AbilitySystemComponent target = _targetResolver?.Invoke();
+        if (target != null && CanApplyToTarget(target))
+        {
+            GameplayEffectSpec damageSpec = MakeOutgoingGameplayEffectSpec(_damageEffect, spec.Level);
+            damageSpec.SetSetByCallerMagnitude(CombatTags.DataDamageMultiplier, 1.0f);
+            ApplyGameplayEffectSpecToTarget(damageSpec, target);
+        }
+
+        EndAbility();
+    }
+
+    public override GameplayAbility CreatePoolableInstance()
+    {
+        var ability = new FireballAbility(_damageEffect, _targetResolver);
+        ability.Initialize(
+            Name,
+            InstancingPolicy,
+            NetExecutionPolicy,
+            CostEffectDefinition,
+            CooldownEffectDefinition,
+            AbilityTags,
+            ActivationBlockedTags,
+            ActivationRequiredTags,
+            CancelAbilitiesWithTag,
+            BlockAbilitiesWithTag);
+        return ability;
+    }
+}
+```
+
+面向数据驱动 authoring 时，用 `GameplayAbilitySO` 包装 ability：
+
+```csharp
+using CycloneGames.GameplayAbilities.Runtime;
+using UnityEngine;
+
+[CreateAssetMenu(
+    fileName = "GA_Fireball",
+    menuName = "CycloneGames/GameplayAbilities/Ability/Fireball")]
+public sealed class FireballAbilitySO : GameplayAbilitySO
+{
+    public GameplayEffectSO DamageEffect;
+
+    public override GameplayAbility CreateAbility()
+    {
+        GameplayEffect damage = DamageEffect != null ? DamageEffect.GetGameplayEffect() : null;
+        var ability = new FireballAbility(damage, targetResolver: null);
+        InitializeAbility(ability);
+        return ability;
+    }
+}
+```
+
+项目通常通过 ability task、targeting service、combat query，或项目专用 ability subclass 提供 target resolution。
+
+### 步骤 6：授予并激活 Ability
+
+```csharp
+using CycloneGames.GameplayAbilities.Runtime;
+
+public sealed class FireballGrantExample
+{
+    private readonly AbilitySystemComponent _asc;
+    private readonly GameplayAbilitySO _fireballAsset;
+
+    public FireballGrantExample(AbilitySystemComponent asc, GameplayAbilitySO fireballAsset)
+    {
+        _asc = asc;
+        _fireballAsset = fireballAsset;
+    }
+
+    public GameplayAbilitySpec Grant()
+    {
+        GameplayAbility ability = _fireballAsset.CreateAbility();
+        return _asc.GrantAbility(ability, level: 1);
+    }
+
+    public bool Activate(GameplayAbilitySpec spec)
+    {
+        return _asc.TryActivateAbility(spec);
+    }
+}
+```
+
+不要每帧创建新的 ability definition。应在 setup 阶段创建或加载 ability asset，然后在角色初始化、装备变化、passive effect 或 gameplay reward 中授予 ability。
+
+## GameplayTags 使用指南
+
+Tag 是独立系统之间通信的规则语言，可以避免硬引用。
+
+| 用途 | 推荐 Tag 模式 |
+| --- | --- |
+| Ability identity | `Ability.Mage.Fireball`、`Ability.Hunter.Dash` |
+| Cooldown ownership | `Cooldown.Fireball`、`Cooldown.Dash` |
+| State blocking | `State.Stunned`、`State.Silenced`、`State.Rooted` |
+| Damage typing | `Damage.Type.Fire`、`Damage.Type.Poison` |
+| Cue routing | `GameplayCue.Fireball.Cast`、`GameplayCue.Fireball.Impact` |
+| SetByCaller data | `Data.DamageMultiplier`、`Data.ChargeTime` |
+| Gameplay event | `Event.Hit.Critical`、`Event.Kill`、`Event.Combo.WindowOpened` |
+
+推荐规则：
+
+- Boolean 和 categorical state 放在 tag 中。
+- Numeric state 放在 attribute 或 SetByCaller magnitude 中。
+- 使用 cooldown tag，不要自造 cooldown bool。
+- 使用 `ActivationBlockedTags` 表达 stun、silence 等通用阻塞。
+- 使用 `ActivationRequiredTags` 表达 form、weapon、stance 或 phase 要求。
+- 使用 `TargetRequiredTags` 和 `TargetBlockedTags` 表达 target legality。
+- 网络游戏中保持 tag 名称在不同 peer 上稳定。
+
+## ScriptableObject Authoring 工作流
+
+典型 authoring workflow：
+
+1. 在项目使用的 `CycloneGames.GameplayTags` workflow 中创建或注册 gameplay tag。
+2. 创建 `GameplayEffectSO` asset，用于 cost、cooldown、damage、healing、buff、debuff 和 passive。
+3. 创建 `GameplayAbilitySO` asset，并引用这些 effect。
+4. 为 presentation tag 创建 cue asset 或 cue handler。
+5. 为 character、pawn、monster、boss 或 player state runtime object 添加 `AbilitySystemComponent` owner。
+6. 添加一个或多个 `AttributeSet`。
+7. 在 spawn、possession、equipment change 或 passive effect application 中授予 ability asset。
+8. 通过 input、AI、gameplay event、tag change 或 scripted encounter 激活 ability。
+
+需要行为逻辑时使用 runtime C# subclass。需要策划调参的数据放在 asset 中：name、tag、cost effect、cooldown effect、duration、stack limit、magnitude、cue tag 和 application requirement。
+
+## Cost、Cooldown、Buff、Debuff 与 Passive
+
+| 功能 | GAS 表示方式 |
+| --- | --- |
+| Mana 或 stamina cost | 带负资源 modifier 的 instant gameplay effect。 |
+| Cooldown | 授予 `Cooldown.*` tag 的 duration gameplay effect。 |
+| 临时 Buff | 带 modifier 和 granted tag 的 duration gameplay effect。 |
+| 永久 Passive | Infinite gameplay effect；如果需要逻辑运行，也可以使用 `ActivateAbilityOnGranted` 的 ability。 |
+| Damage over time | `Period > 0` 的 duration gameplay effect。 |
+| Stun | 授予 `State.Stunned` 的 duration gameplay effect，然后 ability asset 使用 `ActivationBlockedTags`。 |
+| 装备属性加成 | 装备时应用、卸下时移除的 infinite gameplay effect。 |
+| 可叠加 Poison | 带 `GameplayEffectStacking` 的 duration gameplay effect。 |
+| 临时授予技能 | 带 `GrantedAbilities` 的 duration 或 infinite effect。 |
+
+这种统一表示是 GAS 能扩展的核心原因。Cooldown、poison、aura、equipment bonus 和 temporary skill grant 本质上都是不同数据配置的 effect。
+
+## AbilityTask
+
+`AbilityTask` 是本包的 latent ability operation 模型。当 ability 不能在一个方法调用中结束时使用 task：等待 target data、等待 input release、延迟 hit frame、追踪 channel duration，或监听 gameplay event。
+
+当前 task 规则：
+
+- 从 active ability 通过 `NewAbilityTask<T>()` 或 task-specific static factory 创建 task。
+- 配置 delegate 和必需数据后调用 `Activate()`。
+- 完成时调用 `EndTask()`。
+- Owning ability 被取消时调用 `CancelTask()`。
+- 重写 `OnDestroy()` 时清理 delegate 和 transient reference，然后调用 `base.OnDestroy()`。
+- 只有确实需要每帧更新时才实现 `IAbilityTaskTick`。
+
+使用 `AbilityTask_WaitTargetData` 的示例：
+
+```csharp
+using CycloneGames.GameplayAbilities.Runtime;
+
+public sealed class TargetedStrikeAbility : GameplayAbility
+{
+    private readonly ITargetActor _targetActor;
+    private readonly GameplayEffect _damageEffect;
+
+    public TargetedStrikeAbility(ITargetActor targetActor, GameplayEffect damageEffect)
+    {
+        _targetActor = targetActor;
+        _damageEffect = damageEffect;
+    }
+
+    public override void ActivateAbility(
+        GameplayAbilityActorInfo actorInfo,
+        GameplayAbilitySpec spec,
+        GameplayAbilityActivationInfo activationInfo)
+    {
+        CommitAbility(actorInfo, spec);
+
+        AbilityTask_WaitTargetData task =
+            AbilityTask_WaitTargetData.WaitTargetData(this, _targetActor);
+
+        task.OnValidData += data =>
+        {
+            if (data is not GameplayAbilityTargetData_ActorArray actorData)
+            {
+                EndAbility();
+                return;
+            }
+
+            for (int i = 0; i < actorData.Actors.Count; i++)
+            {
+                if (actorData.Actors[i].TryGetComponent(out CombatantAbilitySystem target))
                 {
-                    asc.TryActivateAbility(spec);
-                    break;
+                    ApplyGameplayEffectToTarget(_damageEffect, target.AbilitySystem, spec.Level);
                 }
             }
-        }
+
+            EndAbility();
+        };
+
+        task.OnCancelled += CancelAbility;
+        task.Activate();
     }
-}
-```
 
-### 步骤 3 — 创建技能（运行时逻辑）
-
-```csharp
-using CycloneGames.GameplayAbilities.Runtime;
-
-public class HealAbility : GameplayAbility
-{
-    public override void ActivateAbility(
-        GameplayAbilityActorInfo actorInfo,
-        GameplayAbilitySpec spec,
-        GameplayAbilityActivationInfo activationInfo)
+    public override GameplayAbility CreatePoolableInstance()
     {
-        // CommitAbility 应用消耗、冷却和提交效果
-        CommitAbility(actorInfo, spec);
-        EndAbility();
+        var ability = new TargetedStrikeAbility(_targetActor, _damageEffect);
+        ability.Initialize(
+            Name,
+            InstancingPolicy,
+            NetExecutionPolicy,
+            CostEffectDefinition,
+            CooldownEffectDefinition,
+            AbilityTags,
+            ActivationBlockedTags,
+            ActivationRequiredTags,
+            CancelAbilitiesWithTag,
+            BlockAbilitiesWithTag);
+        return ability;
     }
-
-    public override GameplayAbility CreatePoolableInstance() => new HealAbility();
 }
 ```
 
-### 步骤 4 — 创建技能（ScriptableObject）
+Task 是池化对象。Task 结束后不要继续保留它的引用。
+
+## Targeting 系统
+
+Targeting 与 ability execution 明确分离。Ability 向 target actor 或 targeting service 请求 `TargetData`，不需要知道目标来自 raycast、sphere overlap、cone query、lock-on target、ground select，还是 server-side validation pass。
+
+核心 targeting 类型：
+
+| 类型 | 作用 |
+| --- | --- |
+| `ITargetActor` | Target acquisition contract。它配置 ability、开始 targeting、confirm、cancel，并清理自身。 |
+| `AbilityTask_WaitTargetData` | 等待 `ITargetActor` 产出 `TargetData` 的 ability task。 |
+| `TargetData` | Runtime target data base object，带 prediction 和 ability-spec stamp。 |
+| `TargetDataNetworkData` | Target-data replication bridge 使用的 network-safe projection。 |
+| `IGASTargetDataNetworkBridge` | Predicted target-data RPC 的可选 bridge contract。 |
+
+`Samples/Scripts/TargetActor/` 下提供 line trace、sphere overlap 和 cone trace 示例。生产项目应替换为自己的 targeting service，用于处理 team、layer、server authority、lag compensation、hit validation 和项目碰撞规则。
+
+## Execution Calculation
+
+简单 effect 使用带 `ScalableFloat` 的 `ModifierInfo`。复杂战斗公式应放在 `GameplayEffectExecutionCalculation`。
+
+以下情况适合使用 execution calculation：
+
+- 最终伤害依赖 attack power、defense、elemental resistance、level 和 critical state。
+- Boss shield damage 随 phase 缩放。
+- Healing 被 debuff 削弱。
+- Poison damage snapshot source attack，但 live 读取 target resistance。
+
+Execution asset 通过 `GameplayEffectExecutionCalculationSO` 作为 Unity authoring bridge：
 
 ```csharp
+using System.Collections.Generic;
+using CycloneGames.GameplayAbilities.Runtime;
 using UnityEngine;
+
+[CreateAssetMenu(
+    fileName = "Exec_Damage",
+    menuName = "CycloneGames/GameplayAbilities/Execution/Damage")]
+public sealed class DamageExecutionSO : GameplayEffectExecutionCalculationSO
+{
+    public override GameplayEffectExecutionCalculation CreateExecution()
+    {
+        return new DamageExecution();
+    }
+}
+
+public sealed class DamageExecution : GameplayEffectExecutionCalculation
+{
+    public override void Execute(GameplayEffectSpec spec, ref List<ModifierInfo> executionOutput)
+    {
+        float damage = spec.GetSetByCallerMagnitude(
+            CombatTags.DataDamageMultiplier,
+            warnIfNotFound: false,
+            defaultValue: 1f) * 25f;
+
+        executionOutput.Add(
+            new ModifierInfo("Damage", EAttributeModifierOperation.Add, new ScalableFloat(damage)));
+    }
+}
+```
+
+多人游戏中，复杂 execution calculation 应在 authority path 上运行，除非每个 peer 都能获得完全相同的输入和 deterministic math。
+
+## DataTable 驱动数值调优
+
+当大量数值由策划维护时，使用 `CycloneGames.DataTable`：level curve、ability damage table、monster stat、Boss phase value、resistance table、upgrade cost、职业初始 attribute 等。`GameplayAbilitySO`、`GameplayEffectSO`、tag 和 cue 继续负责 Unity 内可发现的玩法身份、规则和表现绑定。这样可以让 Excel/Luban 管理批量平衡数据，同时保留 GAS asset 的 authoring 入口。
+
+集成程序集位于：
+
+```text
+Runtime/Integrations/DataTable/
+CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
+```
+
+编译条件：
+
+| 导入模式 | 行为 |
+| --- | --- |
+| 只导入 `GameplayAbilities`，不导入 `DataTable` | GameplayAbilities core assembly 正常编译；DataTable integration assembly 和专项测试被跳过。 |
+| 两个包都通过 UPM 导入 | integration asmdef 通过 `com.cyclone-games.data-table` 的 `versionDefines` 自动定义 `CYCLONEGAMES_HAS_DATA_TABLE`。 |
+| 两个包都放在 `Assets/ThirdParty` 下 | Unity 不读取嵌套 `package.json` 的 dependency metadata。若本地 DataTable 包需要启用该集成，项目必须通过可见 build configuration 定义 `CYCLONEGAMES_HAS_DATA_TABLE`。 |
+
+不要把 DataTable reference 加进 core runtime。所有 DataTable 相关代码必须留在 integration assembly，或放在显式同时依赖两个模块的项目 assembly 中。
+
+核心类型：
+
+| 类型 | 作用 |
+| --- | --- |
+| `DataTableLevelValueProvider<TRow>` | 将 `IDataTable<TRow>` 或 `TryGet` delegate 转换为带 level 的 GAS 数值。 |
+| `DataTableMagnitudeCalculation` | 基于 `IGASLevelValueProvider` 的 `GameplayModMagnitudeCalculation`。 |
+| `DataTableModifierFactory` | 从表格行创建 `ModifierInfo`，避免 ability class 直接感知表格代码。 |
+| `DataTableAttributeInitializer<TRow>` | 将策划配置的初始 attribute value 应用到 `AttributeSet`。 |
+
+非生成表的示例行类型：
+
+```csharp
+using CycloneGames.DataTable;
+
+public sealed class SkillMagnitudeRow : IDataRow
+{
+    public int Id { get; set; }
+    public float BaseValue { get; set; }
+    public float ScalePerLevel { get; set; }
+}
+
+public sealed class AttributeInitRow : IDataRow
+{
+    public int Id { get; set; }
+    public string AttributeName { get; set; }
+    public float BaseValue { get; set; }
+    public float CurrentValue { get; set; }
+}
+```
+
+从表格创建 level-scaled modifier：
+
+```csharp
+using CycloneGames.DataTable;
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable;
 
-[CreateAssetMenu(fileName = "GA_Heal", menuName = "GAS/Abilities/Heal")]
-public class HealAbilitySO : GameplayAbilitySO
+IDataTable<SkillMagnitudeRow> skillValues = DataTableRegistry.Get<DataTable<SkillMagnitudeRow>>();
+
+ModifierInfo damageModifier = DataTableModifierFactory.CreateLinearModifier(
+    skillValues,
+    rowId: 1001,
+    attributeName: "Damage",
+    operation: EAttributeModifierOperation.Add,
+    baseValueAccessor: row => row.BaseValue,
+    scalingFactorAccessor: row => row.ScalePerLevel);
+```
+
+从策划表初始化 attribute：
+
+```csharp
+IDataTable<AttributeInitRow> startingAttributes = DataTableRegistry.Get<DataTable<AttributeInitRow>>();
+
+var initializer = DataTableAttributeInitializer<AttributeInitRow>.FromTable(
+    startingAttributes,
+    attributeNameAccessor: row => row.AttributeName,
+    baseValueAccessor: row => row.BaseValue,
+    currentValueAccessor: row => row.CurrentValue);
+
+initializer.ApplyAll(characterAttributes);
+```
+
+如果 Luban 生成表或项目自定义表没有实现 `IDataTable<TRow>`，把生成表的查询 API 包成同形状的 delegate：
+
+```csharp
+GASDataTableTryGetRow<SkillMagnitudeRow> tryGetSkillRow = projectSkillLookup.TryGetValue;
+
+ModifierInfo bossPhaseDamage = DataTableModifierFactory.CreateEvaluatedModifier<SkillMagnitudeRow>(
+    tryGetRow: tryGetSkillRow,
+    rowId: 3007,
+    attributeName: "Damage",
+    operation: EAttributeModifierOperation.Add,
+    valueEvaluator: (row, level, spec) => row.BaseValue * level + row.ScalePerLevel);
+```
+
+生产规则：
+
+- 启动阶段加载并注册 DataTable 内容，然后缓存 table 或 provider 到 ability/effect factory。不要在每帧 ability 逻辑里调用 `DataTableRegistry.Get<T>()`。
+- 表格注册后应视为 immutable。Runtime buff、cooldown、stack、prediction window 和临时战斗值属于 GAS runtime state，不应写回表格行。
+- 多人游戏中，所有需要计算相同预测值的 peer 必须使用同一份表格构建。服务端权威路径应在进入房间时校验 table version、table hash 或 content bundle version。
+- 网络复制稳定 id、level、SetByCaller value 和 authority state delta。不要信任客户端提交的 DataTable 派生 magnitude。
+- 少量简单常量用 `ScalableFloat`；大规模策划数值矩阵用 DataTable；依赖多个 runtime attribute 或战斗规则的结果用 `GameplayEffectExecutionCalculation`。
+
+## GameplayCue
+
+Gameplay cue 是由 gameplay state 驱动的表现事件。Gameplay effect 表示“某个 cue 发生了”，cue system 决定播放什么视觉或音频反馈。
+
+Cue 适合用于：
+
+- Impact VFX 和 hit sound。
+- Casting start 和 casting end presentation。
+- Persistent aura loop。
+- Buff 或 Debuff 的屏幕效果。
+- Camera shake 和 controller feedback。
+
+不要把 damage、healing、tag grant 或 authority decision 放入 cue code。Cue 应该可以在低端客户端上被 suppress、replay 或 skip，而不改变 gameplay result。
+
+Cue 相关 runtime 类型：
+
+| 类型 | 作用 |
+| --- | --- |
+| `GameplayCueSO` | Cue asset 的 ScriptableObject base。可重写 `OnExecutedAsync`、`OnActiveAsync` 或 `OnRemovedAsync`。 |
+| `GameplayCueParameters` | Cue handler 使用的 runtime presentation context。 |
+| `IGameplayCueHandler` | 可以按 tag 处理 cue event 的 runtime object。 |
+| `IPersistentGameplayCue` | 创建并追踪 persistent instance 的可选 cue contract。 |
+| `GameplayCueManager` | 将 cue tag 解析为 cue behavior 的 service。 |
+| `GameplayCueDispatcher` | 负责 cue dispatch 和 prediction accounting 的 ASC collaborator。 |
+
+One-shot cue 示例：
+
+```csharp
+using Cysharp.Threading.Tasks;
+using CycloneGames.GameplayAbilities.Runtime;
+using UnityEngine;
+
+[CreateAssetMenu(
+    fileName = "GC_FireballImpact",
+    menuName = "CycloneGames/GameplayAbilities/Cue/Fireball Impact")]
+public sealed class FireballImpactCueSO : GameplayCueSO
 {
-    public override GameplayAbility CreateAbility()
+    public GameObject Prefab;
+
+    public override UniTask OnExecutedAsync(
+        GameplayCueParameters parameters,
+        IGameObjectPoolManager poolManager)
     {
-        var ability = new HealAbility();
-        InitializeAbility(ability); // 将 Inspector 中的所有数据复制到运行时实例
-        return ability;
-    }
-}
-```
-
-### 步骤 5 — 创建 GameplayEffect 资产
-
-在 Unity 编辑器中，创建三个 `GameplayEffectSO` 资产：
-
-| 资产名称           | 持续策略          | 修改器     | 授予标签              |
-| ------------------ | ----------------- | ---------- | --------------------- |
-| `GE_Heal`          | Instant           | Health +25 | —                     |
-| `GE_Heal_Cost`     | Instant           | Mana −10   | —                     |
-| `GE_Heal_Cooldown` | HasDuration (5秒) | —          | `Cooldown.Skill.Heal` |
-
-### 步骤 6 — 配置技能资产
-
-创建 `GA_Heal` 资产并在 Inspector 中配置：
-
-- **Ability Tags**：`Ability.Action.Heal`
-- **Cost Effect**：`GE_Heal_Cost`
-- **Cooldown Effect**：`GE_Heal_Cooldown`
-- **Commit Gameplay Effects**：`GE_Heal`
-
-### 步骤 7 — 在场景中连接
-
-1. 创建一个 GameObject，添加 `AbilitySystemComponentHolder` 和 `PlayerCharacter` 组件
-2. 将 `GA_Heal` 拖到 `healAbilitySO` 字段
-3. 按 Play，按 **H** 键——角色治疗、消耗法力、进入冷却
-
----
-
-# 三、核心系统
-
-## 5. GameplayTag
-
-GameplayTag 是 GAS 的**通用语言**。所有交互——激活规则、免疫、冷却、瞄准过滤——都通过标签而非直接代码引用来表达。
-
-### 标签命名规范
-
-```
-Ability.Skill.Fireball          ← 标识技能
-Ability.Passive.Regeneration    ← 被动技能
-Cooldown.Skill.Fireball         ← 冷却期间应用
-Status.Debuff.Poison            ← 负面状态
-Status.Buff.Shield              ← 增益状态
-State.Casting                   ← 临时状态
-State.Dead                      ← 持久状态
-Damage.Type.Fire                ← 伤害分类
-Faction.Player                  ← 阵营归属
-GameplayCue.Impact.Fireball     ← VFX/SFX 触发
-Event.Character.LeveledUp       ← 游戏事件
-```
-
-### 使用标签
-
-```csharp
-// 检查角色是否有标签
-if (asc.CombinedTags.HasTag("Status.Debuff.Poison"))
-{
-    // 角色已中毒
-}
-
-// 通过授予标签移除所有中毒效果
-var poisonTag = GameplayTagContainer.FromTag("Status.Debuff.Poison");
-targetASC.RemoveActiveEffectsWithGrantedTags(poisonTag);
-```
-
-### 不同对象上的标签容器
-
-| 容器                              | 位于            | 用途                                              |
-| --------------------------------- | --------------- | ------------------------------------------------- |
-| **AbilityTags**                   | GameplayAbility | 标识技能（`Ability.Skill.Fireball`）              |
-| **AssetTags**                     | GameplayEffect  | 描述效果的元数据（`Damage.Type.Fire`）            |
-| **GrantedTags**                   | GameplayEffect  | 效果激活期间应用于目标的标签（`Status.Burning`）  |
-| **ActivationBlockedTags**         | GameplayAbility | 拥有者有这些标签中的任何一个 → 无法激活           |
-| **ActivationRequiredTags**        | GameplayAbility | 拥有者必须有所有这些标签 → 否则被阻止             |
-| **ActivationOwnedTags**           | GameplayAbility | 技能激活期间授予拥有者的标签                      |
-| **CancelAbilitiesWithTag**        | GameplayAbility | 取消带有这些标签的激活中技能                      |
-| **BlockAbilitiesWithTag**         | GameplayAbility | 带有这些标签的技能无法激活                        |
-| **SourceRequiredTags**            | GameplayAbility | 施法者（ASC）必须有所有这些标签                   |
-| **SourceBlockedTags**             | GameplayAbility | 施法者不能有这些标签中的任何一个                  |
-| **TargetRequiredTags**            | GameplayAbility | 目标的 ASC 必须有所有这些标签                     |
-| **TargetBlockedTags**             | GameplayAbility | 目标不能有这些标签中的任何一个                    |
-| **ApplicationTagRequirements**    | GameplayEffect  | 目标必须满足标签要求才能应用效果                  |
-| **OngoingTagRequirements**        | GameplayEffect  | 如果条件不再满足，效果会被抑制                    |
-| **RemoveGameplayEffectsWithTags** | GameplayEffect  | 应用时，移除 GrantedTags 匹配的效果               |
-| **ImmunityTags**                  | ASC             | 传入的效果如果 Asset/GrantedTags 匹配则被完全阻止 |
-| **GameplayCues**                  | GameplayEffect  | 通过 GameplayCueManager 触发 VFX/SFX 的标签       |
-
-### 标签事件
-
-你可以响应任何 ASC 上的标签变化：
-
-```csharp
-asc.RegisterTagEventCallback("Status.Debuff.Poison", (tag, newCount) =>
-{
-    if (newCount > 0) ShowPoisonIcon();
-    else              HidePoisonIcon();
-});
-```
-
----
-
-## 6. 属性与属性集
-
-### GameplayAttribute
-
-`GameplayAttribute` 是一个带有两层数值的命名浮点数：
-
-- **BaseValue** — 永久值，由即时效果或直接赋值设置
-- **CurrentValue** — BaseValue 加上所有来自 Duration/Infinite 效果的活动修改器
-
-```csharp
-// 监听值变化
-attribute.OnCurrentValueChanged += (oldVal, newVal) => UpdateHealthBar(newVal);
-attribute.OnBaseValueChanged    += (oldVal, newVal) => { /* ... */ };
-```
-
-### AttributeSet
-
-分组相关属性并添加验证逻辑：
-
-```csharp
-public class CharacterAttributeSet : AttributeSet
-{
-    public readonly GameplayAttribute Health      = new("Character.Health");
-    public readonly GameplayAttribute MaxHealth   = new("Character.MaxHealth");
-    public readonly GameplayAttribute AttackPower = new("Character.AttackPower");
-    public readonly GameplayAttribute Defense     = new("Character.Defense");
-
-    // 变化前限制
-    public override void PreAttributeChange(GameplayAttribute attribute, ref float newValue)
-    {
-        if (attribute.Name == Health.Name)
-            newValue = Mathf.Clamp(newValue, 0, GetCurrentValue(MaxHealth));
-    }
-
-    // 变化后响应
-    public override void PostAttributeChange(GameplayAttribute attr, float oldVal, float newVal) { }
-
-    // 拦截即时效果（例如：对伤害应用护甲减免）
-    public override void PreProcessInstantEffect(GameplayEffectSpec spec) { }
-    public override void PostGameplayEffectExecute(GameplayEffectModCallbackData data) { }
-
-    // 派生属性示例
-    public override float GetCurrentValue(GameplayAttribute attribute)
-    {
-        if (attribute.Name == "Character.HealthPercent")
+        if (Prefab != null && parameters.TargetObject != null)
         {
-            float max = GetCurrentValue(MaxHealth);
-            return max > 0 ? GetCurrentValue(Health) / max : 0f;
+            UnityEngine.Object.Instantiate(
+                Prefab,
+                parameters.TargetObject.transform.position,
+                Quaternion.identity);
         }
-        return base.GetCurrentValue(attribute);
+
+        return UniTask.CompletedTask;
     }
 }
 ```
 
-### 访问属性
+生产 cue code 应使用项目 pooling 和 asset loading service，不要在热路径直接实例化。
+
+## 示例演练
+
+本包在 `Samples/` 下提供可运行 sample project。该目录在当前仓库中保持可见，以支持直接 `Assets/ThirdParty` 使用；`package.json` 也通过 `samples` entry 暴露该目录，供 package workflow 使用。
+
+打开 `Samples/SampleScene.unity`，点击 Play，并按照 `Samples/README.SCH.md` 中的按键说明运行。示例场景使用 Player 和 Enemy prefab、预配置 ability/effect asset、sample tag、target actor、GameplayCue 示例和一个小型 UI logger。
+
+| Sample | 演示内容 |
+| --- | --- |
+| `CharacterAttributeSet` | Primary、secondary 和 meta attribute；clamping；damage conversion；experience hook。 |
+| `GA_Fireball_SO` | 应用 instant damage 和 burn debuff 的 ability asset。 |
+| `GA_PoisonBlade_SO` | Ability-driven debuff application。 |
+| `GA_ShieldOfLight_SO` | Defensive buff pattern。 |
+| `GA_Berserk_SO` | Self-buff style ability。 |
+| `GA_Purify_SO` | 按 tag 移除 effect。 |
+| `GA_ArmorStack_SO` | Stack behavior 和 stack debugging。 |
+| `ExecCalc_Burn` 和 `ExecCalcSO_Burn` | Runtime execution calculation 和 ScriptableObject execution bridge。 |
+| `AbilityTask_WaitTargetData_SpawnedActor` | Target actor 与 target-data task 集成。 |
+| `TargetActor/*` | Line trace、sphere overlap 和 cone trace targeting 示例。 |
+| `GASPoolInitializer` | Sample scene 的 pool setup。 |
+| `GASSampleTags` | Sample tag constant 和命名风格。 |
+| `Integrate/Setup/GASManualSetup` | Manual non-DI cue manager startup pattern。 |
+| `Integrate/Setup/GASServerSetup` | 使用 `NullGameplayCueManager` 的 server/headless startup pattern。 |
+| `Integrate/DI/VContainer/GASLifetimeScope` | 可选 VContainer composition pattern，仅在 VContainer 存在时编译。 |
+
+应将 sample 作为框架使用模式来阅读。进入生产前，把项目专用逻辑移动到自己的 assembly。
+
+## 网络
+
+本包拥有 transport-neutral state 和 runtime hook。独立的 `CycloneGames.GameplayAbilities.Networking` 包负责把这些 contract 接到 `CycloneGames.Networking`。
+
+推荐多人模型：
+
+- Effect、attribute、tag、ability grant 和 state delta 由服务端权威。
+- 客户端 prediction 只用于本地响应。
+- Full-state sync 用于 late join、reconnect 和 drift recovery。
+- 私有 attribute 默认只发 owner，除非显式注册为 public observer attribute。
+- Ability definition、effect definition、attribute、gameplay tag 和 ASC network id 必须来自稳定 registry。
+- Interest management 放在 ASC 外部，让 room、team、owner、spectator 和 visibility system 先选择 observer，再 capture state。
+
+对于高压力共斗游戏，GAS 只复制 gameplay state。Movement、animation state、monster AI perception、physics、room discovery 和 matchmaking 应由独立系统负责。
+
+## 性能模型
+
+运行时代码以预分配后的 low-GC 为目标。进入战斗前应显式 reserve capacity：
 
 ```csharp
-var healthAttr = asc.GetAttribute("Character.Health");
-float current  = healthAttr.CurrentValue;
-float baseVal  = healthAttr.BaseValue;
+asc.ReserveRuntimeCapacity(
+    abilityCapacity: 64,
+    attributeCapacity: 128,
+    activeEffectCapacity: 512,
+    predictionWindowCapacity: 64,
+    coreModifierCapacity: 1024,
+    maxSetByCallerPerEffect: 16,
+    targetDataObjectCapacity: 128);
+
+asc.PrewarmRuntimePools(
+    grantedAbilitySpecLists: 32,
+    abilityAppliedEffectLists: 32);
 ```
 
----
+共享服务器模拟、大型 Boss 战和大量怪物房间应使用更高 capacity。容量 miss 可通过 `GetRuntimeDiagnostics()` 和 `GetRuntimeListPoolStatistics()` 观察。
 
-## 7. GameplayEffect
+热路径规则：
 
-GameplayEffect 是 GAS 的**构建块**。它们修改属性、授予标签、触发 Cue，并管理自身的生命周期。
+- 战斗前预分配 ability、effect、attribute、prediction、SetByCaller、target data 和 pool capacity。
+- 避免在战斗峰值中临时创建 ability、effect、target actor 和 cue asset。
+- 变量幅度优先使用 `GameplayEffectSpec` SetByCaller value，而不是临时 runtime object。
+- 领域计算放在 Core 或纯 runtime class 中，不放在 `MonoBehaviour` update loop。
+- 需要确定性时，network payload 使用 id 和 raw fixed-value。
+- 大型房间中使用 central tick owner 管理大量 ASC，不要把重逻辑散落到许多 behaviour 中。
 
-### 持续策略
+## 线程策略
 
-| 策略            | 行为                           | 使用场景                |
-| --------------- | ------------------------------ | ----------------------- |
-| **Instant**     | 立即应用修改器，一次性消费     | 伤害、治疗、法力消耗    |
-| **HasDuration** | 在固定时间内激活，然后自动移除 | Buff、Debuff、冷却、DoT |
-| **Infinite**    | 激活直到手动移除               | 装备属性、光环、被动    |
-
-### 修改器
-
-每个修改器针对一个属性执行一种操作：
-
-| 操作         | 效果                        |
-| ------------ | --------------------------- |
-| **Add**      | `CurrentValue += Magnitude` |
-| **Multiply** | `CurrentValue *= Magnitude` |
-| **Division** | `CurrentValue /= Magnitude` |
-| **Override** | `CurrentValue = Magnitude`  |
-
-> **Duration/Infinite 修改器**会被聚合——它们修改 `CurrentValue` 而 `BaseValue` 保持不变。当效果移除时，修改器自动撤销。
->
-> **Instant 修改器**会永久改变 `BaseValue`。
-
-### 在代码中创建效果
+`AbilitySystemComponent` 由运行时线程拥有。模拟线程启动时调用 `BindRuntimeThreadToCurrent()`，并通过 `RuntimeThreadPolicy` 配置诊断：
 
 ```csharp
-// 中毒 DoT: 每1秒 -5 HP，持续10秒
-var poison = new GameplayEffect(
-    name: "Poison DoT",
-    durationPolicy: EDurationPolicy.HasDuration,
-    duration: 10f,
-    period: 1f,
-    modifiers: new() { new ModifierInfo(healthAttr, EAttributeModifierOperation.Add, -5f) },
-    grantedTags: new GameplayTagContainer { "Status.Debuff.Poison" }
-);
+asc.RuntimeThreadPolicy = GASRuntimeThreadPolicy.Throw;
+asc.BindRuntimeThreadToCurrent();
 ```
 
-### 叠加
+Unity-facing Runtime 代码默认应运行在 Unity 主线程。若纯 C# server simulation 拥有 ASC，必须避免 Unity object，并提供 deterministic time、random 和 registry service。
 
-配置同一效果多次应用时的交互方式：
+不要从多个线程同时修改同一个 ASC。如果 input、AI、networking 和 presentation 运行在不同线程，应使用 command queue 或明确的 simulation ownership。
 
-| 属性                 | 选项                                                                           | 说明                   |
-| -------------------- | ------------------------------------------------------------------------------ | ---------------------- |
-| **StackingType**     | `None` / `AggregateBySource` / `AggregateByTarget`                             | 分组轴                 |
-| **StackLimit**       | int                                                                            | 最大叠加数             |
-| **DurationPolicy**   | `RefreshOnSuccessfulApplication` / `NeverRefresh`                              | 新叠加是否重置持续时间 |
-| **ExpirationPolicy** | `ClearEntireStack` / `RemoveSingleStackAndRefreshDuration` / `RefreshDuration` | 叠加到期时的行为       |
+## Editor 工具
 
-### 溢出效果
+该包包含 custom inspector、property drawer、debugger window、runtime overlay 和 validation-oriented UI，用于 ability/effect authoring 与 debugging。
 
-当效果要应用但目标已达到 `StackLimit` 时：
+推荐校验目标：
 
-- **OverflowEffects** — 一组替代应用的次要 GameplayEffect
-- **DenyOverflowApplication** — 如果为 `true`，原始效果不应用（仅触发溢出效果）
+- 缺失 effect definition 或 ability definition。
+- 一个 ASC 中重复注册 attribute。
+- 无效 stack policy、duration、period、overflow effect 或 periodic setting。
+- Gameplay cue tag 没有注册 cue handler。
+- Runtime capacity 低于目标 combat profile。
+- Network id 或 registry id 在不同 peer 上不稳定。
+- Ability asset 引用了未在 tag database 中注册的 cost、cooldown 或 target tag。
 
-### OngoingTagRequirements 与抑制
+可用的 Editor 入口：
 
-Duration/Infinite 效果可以被临时**抑制**（暂停）而非移除：
-
-- 在效果上定义 `OngoingTagRequirements`
-- 如果目标的标签不再满足要求，效果的修改器被暂停
-- 当重新满足要求时，修改器恢复
-- `ActiveGameplayEffect.IsInhibited` 属性和 `OnInhibitionChanged` 事件暴露此状态
-
-### ExecutePeriodicEffectOnApplication
-
-设为 `true` 可在效果应用时立即触发第一次周期性触发，而不是等待一个完整的周期。
-
-### SetByCaller 数值
-
-在运行时向效果传递动态值：
-
-```csharp
-var spec = GameplayEffectSpec.Create(damageEffect, sourceASC);
-spec.SetByCallerMagnitude("Damage.Base", 50f);
-asc.ApplyGameplayEffectSpecToSelf(spec);
+```text
+Tools > CycloneGames > GameplayAbilities > Debugger
+Tools > CycloneGames > GameplayAbilities > Networking > Diagnostics
+Tools > CycloneGames > GameplayAbilities > Networking > Run Diagnostics Check
 ```
 
-### DynamicGrantedTags 与 DynamicAssetTags
+菜单是否可见取决于当前项目导入了哪些 assembly。
 
-在运行时向特定的 `GameplayEffectSpec` 实例添加额外标签，超出基础定义的范围：
+## 与其他 CycloneGames 模块集成
 
-```csharp
-spec.DynamicGrantedTags.AddTag("Status.Buff.Empowered");
-spec.DynamicAssetTags.AddTag("Source.Player");
-```
+| 模块 | 集成作用 |
+| --- | --- |
+| `CycloneGames.GameplayTags` | 为 tag container、tag requirement、cue tag、cooldown tag、state tag 和 event tag 提供基础能力。 |
+| `CycloneGames.DataTable` | 可选 integration source，用于 Excel/Luban 驱动的 magnitude、attribute initialization 和大型数值平衡表。 |
+| `CycloneGames.DeterministicMath` | 用于 deterministic-friendly fixed value 和 raw value conversion path。 |
+| `CycloneGames.Hash` | 在 networking integration 中用于 stable checksum 和 network identity path。 |
+| `CycloneGames.Factory` | 适合生成 cue presentation object、target actor、pooled projectile 和项目专用 gameplay object。 |
+| `CycloneGames.GameplayFramework` | 可选 integration 将 framework actor 映射到 ability actor info，同时保持 core framework 独立。 |
+| `CycloneGames.GameplayFramework.Networking` | 可将 actor 投影为 network id、owner、team、layer 和 interest position，用于 GAS replication planning。 |
+| `CycloneGames.Networking` | 为 networking package 提供 transport-neutral messaging、replication planning、send budget、serializer 和 network diagnostics。 |
 
-### 自定义应用需求
+Cyclone package 可以放在 `Assets/ThirdParty` 下使用，也可以作为 UPM package 引入。必需依赖应通过 asmdef reference 表达。可选 integration 应隔离在 integration assembly 或 integration package 中；当 assembly 必须在缺依赖时自然消失时，使用正向 capability symbol。
 
-实现 `ICustomApplicationRequirement` 以添加任意逻辑门控：
+DataTable bridge 使用 `CYCLONEGAMES_HAS_DATA_TABLE` 作为 capability symbol。UPM 导入时，如果安装了 `com.cyclone-games.data-table`，asmdef 的 `versionDefines` 会自动定义该 symbol。`Assets/ThirdParty` 本地包导入时，Unity 无法自动检测兄弟目录中的 `package.json`；希望启用本地 DataTable bridge 的项目必须在可见的项目构建配置中定义同名 symbol。若 symbol 不存在，该 bridge 和对应测试不会参与编译。
 
-```csharp
-public class RequireMinHealth : ICustomApplicationRequirement
-{
-    public bool CanApplyGameplayEffect(GameplayEffectSpec spec, AbilitySystemComponent target)
-    {
-        var health = target.GetAttribute("Character.Health");
-        return health != null && health.CurrentValue > 10f;
-    }
-}
-```
+## 持久化
 
-### 属性快照
+本包不会主动写 runtime save data。Runtime state、pool、prediction window 和 replication builder 都是创建方拥有的内存数据。
 
-修改器可以在不同时间点捕获属性值：
+Authoring data 存在 Unity asset 中：
 
-- **Snapshot** — 在效果创建时捕获来源的属性值
-- **NotSnapshot** — 重新计算时实时读取来源的属性值
+| 数据 | 位置 | 是否纳入版本控制 |
+| --- | --- | --- |
+| Ability definition | `GameplayAbilitySO` asset | 是 |
+| Effect definition | `GameplayEffectSO` asset | 是 |
+| Cue definition | `GameplayCueSO` asset | 是 |
+| Editor diagnostics preset | 用户显式创建的 asset | 由项目决定 |
 
-通过 `ModifierInfo` 上的 `EGameplayEffectAttributeCaptureSnapshot` 配置。
+Runtime save game 应由单独 save service 实现，并包含 schema version、migration、integrity check、atomic write、corruption recovery 和平台存储策略。
 
----
+## 常见问题与故障排除
 
-## 8. GameplayAbility
+| 现象 | 常见原因 | 修复方式 |
+| --- | --- | --- |
+| Ability 无法激活 | Blocked tag、缺少 required tag、cost 不足、cooldown 生效，或其他 active ability 通过 tag 阻塞。 | 检查 `CanActivate`、ability tag、cooldown granted tag 和 debugger output。 |
+| Cost 没有扣除 | 未调用 `CommitAbility`，或 cost effect 没有有效 modifier。 | 在 ability outcome 被接受后调用一次 `CommitAbility`。确认 cost effect 修改的 attribute name 正确。 |
+| Cooldown 永不结束 | Cooldown effect duration 或 tick ownership 配置错误。 | 使用 `EDurationPolicy.HasDuration`，设置正 duration，并在 authority simulation tick ASC。 |
+| Damage 没有改变 Health | Effect 写入 meta attribute，但目标 `AttributeSet` 没有处理它。 | 为 meta attribute 实现 `PreProcessInstantEffect` 或 `PostGameplayEffectExecute`。 |
+| Gameplay cue 不播放 | Cue tag 未注册、cue manager 未初始化，或 effect suppress cues。 | 检查 cue tag、cue manager setup 和 `SuppressGameplayCues`。 |
+| Buff 没有叠加 | Stacking policy 为 `None`，或 source/target aggregation mode 与预期不符。 | 在 effect 上配置 `GameplayEffectStacking`。 |
+| Late join 缺失状态 | Observer 存在前 delta capture 已被消费，或没有发送 full-state request。 | Capture 前先解析 observer，并对 late join 或 relevance 变化使用 full-state recovery。 |
+| 战斗中产生分配 | 没有 reserve capacity、pool 未 warm，或 asset 按需创建。 | 调用 `ReserveRuntimeCapacity`、`PrewarmRuntimePools`，并在战斗前加载 asset。 |
 
-### 生命周期
+## 依赖项
 
-```
-GrantAbility()          → 技能被添加到 ASC
-  └─ OnGiveAbility()    → （可选）授予时调用一次
+必需依赖由当前 asmdef 和 package metadata 表达。在当前分支中，GameplayAbilities runtime 使用：
 
-TryActivateAbility()    → 运行所有检查
-  ├─ 标签要求           → ActivationRequired/Blocked/Source/Target Tags
-  ├─ CheckCost()        → 资源是否足够？
-  └─ CheckCooldown()    → 是否没有冷却标签？
+| 依赖 | 作用 |
+| --- | --- |
+| `CycloneGames.GameplayTags` | Tag container、requirement、ability tag、effect tag、cue tag、cooldown tag 和 state tag。 |
+| `CycloneGames.DeterministicMath` | Fixed-value 和 deterministic-friendly numeric path。 |
+| `CycloneGames.Hash` | 相关 networking workflow 使用的 stable hash/checksum path。 |
+| `CycloneGames.Factory` | 周边 Cyclone module 和 sample 使用的 factory contract 与 object creation support。 |
+| `Cysharp UniTask` | Async cue 和 Unity-facing async operation。 |
+| Unity Editor assemblies | Editor inspector、debug window、property drawer 和 asset authoring tool。 |
 
-ActivateAbility()       → 你的逻辑在这里运行
-  ├─ AbilityTasks       → 异步操作（延迟、瞄准等）
-  └─ CommitAbility()    → 应用消耗 + 冷却效果
+Optional integration 应放在 integration assembly 中。将 package 放在 `Assets/ThirdParty` 下的项目，不应只依赖 UPM `versionDefines`；通过 UPM 引入 package 的项目，可以使用 integration package 或 asmdef-level condition 表达 optional relationship。
 
-EndAbility()            → 清理，返回对象池
-  └─ ASC 触发 OnAbilityEndedEvent
-```
+可选 integration 依赖：
 
-### 创建技能
-
-每个技能需要两个类：
-
-**1. 运行时逻辑** — 继承 `GameplayAbility`：
-
-```csharp
-public class GA_Fireball : GameplayAbility
-{
-    private GameplayEffect damageEffect;
-    private float damageMultiplier;
-
-    public void SetupData(GameplayEffect damage, float multiplier)
-    {
-        damageEffect = damage;
-        damageMultiplier = multiplier;
-    }
-
-    public override void ActivateAbility(
-        GameplayAbilityActorInfo actorInfo,
-        GameplayAbilitySpec spec,
-        GameplayAbilityActivationInfo activationInfo)
-    {
-        CommitAbility(actorInfo, spec);
-
-        // 创建 spec 并传递动态数据
-        var dmgSpec = MakeOutgoingGameplayEffectSpec(damageEffect, spec.Level);
-        dmgSpec.SetByCallerMagnitude("Damage.Multiplier", damageMultiplier);
-
-        // 应用到目标
-        var targetASC = FindTarget();
-        ApplyGameplayEffectToTarget(dmgSpec, targetASC);
-
-        EndAbility();
-    }
-
-    public override GameplayAbility CreatePoolableInstance() => new GA_Fireball();
-}
-```
-
-**2. ScriptableObject** — 继承 `GameplayAbilitySO`：
-
-```csharp
-[CreateAssetMenu(menuName = "GAS/Abilities/Fireball")]
-public class GA_Fireball_SO : GameplayAbilitySO
-{
-    [SerializeField] private GameplayEffectSO damageEffectSO;
-    [SerializeField] private float damageMultiplier = 1.5f;
-
-    public override GameplayAbility CreateAbility()
-    {
-        var ability = new GA_Fireball();
-        InitializeAbility(ability); // 从 Inspector 复制标签、消耗、冷却
-        ability.SetupData(damageEffectSO.GetGameplayEffect(), damageMultiplier);
-        return ability;
-    }
-}
-```
-
-### 技能触发
-
-技能可以在响应事件或标签变化时自动激活：
-
-```csharp
-// 在 GameplayAbilitySO Inspector 中添加 AbilityTriggerData：
-// TriggerTag: "Event.Character.Hit"
-// TriggerSource: GameplayEvent
-
-// 或通过代码配置：
-ability.AbilityTriggers = new List<AbilityTriggerData>
-{
-    new() { TriggerTag = "Event.Character.Hit", TriggerSource = EAbilityTriggerSource.GameplayEvent },
-    new() { TriggerTag = "Status.Debuff.Poison", TriggerSource = EAbilityTriggerSource.OwnedTagAdded },
-};
-```
-
-| TriggerSource     | 触发时机                                        |
-| ----------------- | ----------------------------------------------- |
-| `GameplayEvent`   | 当以匹配标签调用 `ASC.HandleGameplayEvent()` 时 |
-| `OwnedTagAdded`   | 当触发标签被添加到 ASC 的组合标签时             |
-| `OwnedTagRemoved` | 当触发标签从 ASC 被移除时                       |
-
-### Source/Target Tags
-
-除了标准的 `ActivationRequired/BlockedTags`（检查**拥有者**的标签），技能还支持四个额外的标签容器：
-
-| 容器                   | 检查对象     | 用途                                                |
-| ---------------------- | ------------ | --------------------------------------------------- |
-| **SourceRequiredTags** | 施法者的 ASC | 施法者必须有所有这些标签才能激活                    |
-| **SourceBlockedTags**  | 施法者的 ASC | 施法者不能有这些标签中的任何一个                    |
-| **TargetRequiredTags** | 目标的 ASC   | 目标必须有所有这些标签（通过 `CanApplyToTarget()`） |
-| **TargetBlockedTags**  | 目标的 ASC   | 目标不能有这些标签中的任何一个                      |
-
-**使用案例**：治疗技能可能要求 `SourceRequiredTags = State.InHealingStance`（施法者检查）和 `TargetBlockedTags = State.Dead`（不能治疗已死目标）。
-
-### InputPressed / InputReleased
-
-用于输入驱动技能（如蓄力攻击、持续引导）的虚拟钩子：
-
-```csharp
-public override void InputPressed(GameplayAbilitySpec spec)
-{
-    // 技能激活时按下绑定的输入动作时调用
-    StartCharging();
-}
-
-public override void InputReleased(GameplayAbilitySpec spec)
-{
-    // 释放时调用
-    ReleaseCharge();
-    EndAbility();
-}
-```
-
-这些方法刻意**输入系统无关**——它们不引用任何特定的输入系统。你的输入层（Unity Input System、CycloneGames.InputSystem 的 R3 Observables 等）负责调用它们。
-
-### ASC 上的生命周期事件
-
-```csharp
-asc.OnAbilityActivated += (ability) => { /* 激活时触发 */ };
-asc.OnAbilityCommitted += (ability) => { /* 提交时触发 */ };
-asc.OnAbilityEndedEvent += (ability) => { /* 结束时触发 */ };
-```
-
-### 实例化策略
-
-| 策略                    | 行为                          | 使用场景         |
-| ----------------------- | ----------------------------- | ---------------- |
-| `NonInstanced`          | 共享实例，无每 Actor 状态     | 简单即时技能     |
-| `InstancedPerActor`     | 每个 ASC 一个实例，跨激活复用 | 大多数技能       |
-| `InstancedPerExecution` | 每次激活新实例                | 有重叠执行的技能 |
-
----
-
-# 四、高级系统
-
-## 9. AbilityTask
-
-AbilityTask 实现**异步、多步骤的技能逻辑**。没有它们，所有逻辑都会在 `ActivateAbility()` 中同步运行。
-
-### 内置任务
-
-| 任务                              | 用途                          |
-| --------------------------------- | ----------------------------- |
-| `AbilityTask_WaitDelay`           | 等待一段时间                  |
-| `AbilityTask_WaitTargetData`      | 等待瞄准系统提供目标数据      |
-| `AbilityTask_WaitGameplayEvent`   | 等待带有特定标签的游戏事件    |
-| `AbilityTask_WaitGameplayTag`     | 等待标签在 ASC 上被添加或移除 |
-| `AbilityTask_WaitGameplayEffect`  | 等待效果被应用或移除          |
-| `AbilityTask_WaitAttributeChange` | 等待属性值变化                |
-| `AbilityTask_WaitConfirmCancel`   | 等待外部确认/取消信号         |
-| `AbilityTask_WaitAbilityActivate` | 等待另一个技能被激活          |
-| `AbilityTask_WaitAbilityEnd`      | 等待另一个技能结束            |
-| `AbilityTask_Repeat`              | 按间隔重复执行逻辑            |
-
-### 使用模式
-
-**回调风格：**
-
-```csharp
-public override void ActivateAbility(...)
-{
-    CommitAbility(actorInfo, spec);
-
-    var waitTask = NewAbilityTask<AbilityTask_WaitDelay>();
-    waitTask.WaitTime = 2.0f;
-    waitTask.OnFinished = () =>
-    {
-        ApplyDamage();
-        EndAbility();
-    };
-    waitTask.Activate();
-}
-```
-
-**Async/Await 风格：**
-
-```csharp
-public override async void ActivateAbility(...)
-{
-    CommitAbility(actorInfo, spec);
-
-    // 步骤 1: 蓄力
-    var chargeTask = NewAbilityTask<AbilityTask_WaitDelay>();
-    chargeTask.WaitTime = 2.0f;
-    await chargeTask.ActivateAsync();
-
-    // 步骤 2: 选择目标
-    var targetTask = NewAbilityTask<AbilityTask_WaitTargetData>();
-    // ... 配置目标 Actor ...
-    var targetData = await targetTask.ActivateAsync();
-
-    // 步骤 3: 应用
-    ApplyDamageToTargets(targetData);
-    EndAbility();
-}
-```
-
-**任务链式调用：**
-
-```csharp
-taskA.OnFinished = () =>
-{
-    var taskB = NewAbilityTask<NextTask>();
-    taskB.OnFinished = () => EndAbility();
-    taskB.Activate();
-};
-taskA.Activate();
-```
-
-**超时模式：**
-
-```csharp
-var targetTask = NewAbilityTask<AbilityTask_WaitTargetData>();
-var timeoutTask = NewAbilityTask<AbilityTask_WaitDelay>();
-timeoutTask.WaitTime = 5.0f;
-timeoutTask.OnFinished = () =>
-{
-    targetTask.Cancel();
-    EndAbility();
-};
-timeoutTask.Activate();
-targetTask.Activate();
-```
-
-### 创建自定义任务
-
-```csharp
-public class AbilityTask_WaitForInput : AbilityTask, IAbilityTaskTick
-{
-    public Action OnJumpPressed;
-
-    protected override void OnActivate() { /* 订阅 */ }
-
-    public void Tick(float deltaTime)
-    {
-        if (!IsActive) return;
-        if (Input.GetKeyDown(KeyCode.Space))
-        {
-            OnJumpPressed?.Invoke();
-            EndTask();
-        }
-    }
-
-    protected override void OnDestroy()
-    {
-        OnJumpPressed = null;
-    }
-}
-```
-
-### 规则
-
-1. **始终**通过 `NewAbilityTask<T>()` 创建任务（永远不要用 `new`——会绕过对象池）
-2. 在 `OnDestroy()` 中清理事件订阅
-3. 完成时调用 `EndTask()`
-4. 执行逻辑前检查 `IsActive`
-5. 技能结束时所有活动的任务都会被强制结束
-
----
-
-## 10. 瞄准系统
-
-瞄准系统将"如何寻找目标"与"对目标做什么"解耦。
-
-### ITargetActor 接口
-
-```csharp
-public interface ITargetActor
-{
-    event Action<TargetData> OnTargetDataReady;
-    event Action OnCanceled;
-
-    void Configure(GameplayAbility ability, Action<TargetData> onReady, Action onCancelled);
-    void StartTargeting();
-    void ConfirmTargeting();
-    void CancelTargeting();
-    void Destroy();
-}
-```
-
-### 内置目标 Actor
-
-| Actor                                        | 行为                                   |
-| -------------------------------------------- | -------------------------------------- |
-| `GameplayAbilityTargetActor_SphereOverlap`   | 在球形范围内查找所有目标，支持标签过滤 |
-| `GameplayAbilityTargetActor_SingleLineTrace` | 单条射线检测第一个命中                 |
-| `GameplayAbilityTargetActor_ConeTrace`       | 锥形/扇形检测                          |
-| `GameplayAbilityTargetActor_GroundSelect`    | 交互式地面放置，带视觉指示器           |
-
-### 目标数据类型
-
-| 类型                                        | 说明                         |
-| ------------------------------------------- | ---------------------------- |
-| `GameplayAbilityTargetData_ActorArray`      | 目标 Actor 列表              |
-| `GameplayAbilityTargetData_SingleTargetHit` | 单个目标带 `RaycastHit` 详情 |
-| `GameplayAbilityTargetData_MultiTarget`     | 来自批量物理查询的多个目标   |
-
-### 示例：技能中的球形检测
-
-```csharp
-public override void ActivateAbility(...)
-{
-    CommitAbility(actorInfo, spec);
-
-    var targetActor = new GameplayAbilityTargetActor_SphereOverlap(
-        radius: 5f,
-        requiredTags: GameplayTagContainer.FromTag("Faction.Player")
-    );
-
-    var task = AbilityTask_WaitTargetData.WaitTargetData(this, targetActor);
-    task.OnValidData = (targetData) =>
-    {
-        // 处理每个目标
-        // 应用效果、移除减益等
-        EndAbility();
-    };
-    task.OnCancelled = () => EndAbility();
-    task.Activate();
-}
-```
-
----
-
-## 11. 执行计算
-
-对于涉及来源和目标多个属性的公式，使用 `GameplayEffectExecutionCalculation`。
-
-### 何时使用
-
-| 场景                             | 使用       |
-| -------------------------------- | ---------- |
-| 治疗 50 HP                       | 简单修改器 |
-| 伤害 = 攻击 × 1.5 − 防御 × 0.5   | 执行计算   |
-| 治疗 = 基础治疗 + 法术强度 × 0.3 | 执行计算   |
-
-### 示例
-
-```csharp
-public class ExecCalc_Damage : GameplayEffectExecutionCalculation
-{
-    public override void Execute(GameplayEffectExecutionCalculationContext context)
-    {
-        var source = context.Spec.Source;
-        var target = context.Target;
-
-        float atk = source.GetAttribute("Character.AttackPower")?.CurrentValue ?? 0;
-        float def = target.GetAttribute("Character.Defense")?.CurrentValue ?? 0;
-        float dmg = Mathf.Max(0, atk * 1.5f - def * 0.5f);
-
-        var healthAttr = target.GetAttribute("Character.Health");
-        if (healthAttr != null)
-        {
-            context.AddOutputModifier(new ModifierInfo(
-                healthAttr, EAttributeModifierOperation.Add, -dmg
-            ));
-        }
-    }
-}
-```
-
-创建 `GameplayEffectExecutionCalculationSO` 包装器并将其分配给 `GameplayEffectSO` 的 Execution 字段。
-
----
-
-## 12. GameplayCue
-
-GameplayCue 将**表现**（VFX、SFX、屏幕震动）与**游戏逻辑**完全分离。
-
-### 为什么？
-
-```csharp
-// ❌ 耦合：VFX 与逻辑混合
-void DealDamage(float dmg) {
-    target.Health -= dmg;
-    Instantiate(explosionVFX, target.Position);
-}
-
-// ✅ 解耦：VFX 由标签触发
-var spec = GameplayEffectSpec.Create(damageEffect, sourceASC);
-// damageEffect 的 GameplayCues 标签为 "GameplayCue.Impact.Fire"
-targetASC.ApplyGameplayEffectSpecToSelf(spec);
-// GameplayCueManager 自动处理 VFX
-```
-
-### Cue 事件类型
-
-| 事件          | 触发时机                       | 示例                |
-| ------------- | ------------------------------ | ------------------- |
-| `Executed`    | 即时效果应用，或周期性触发     | 冲击 VFX、命中音效  |
-| `OnActive`    | Duration/Infinite 效果首次应用 | Buff 光晕、状态图标 |
-| `WhileActive` | 效果激活期间持续               | 循环燃烧粒子        |
-| `Removed`     | 效果到期或被移除               | 淡出 VFX            |
-
-### 创建 Cue
-
-```csharp
-[CreateAssetMenu(menuName = "GAS/Cues/Fireball Impact")]
-public class GC_Fireball_Impact : GameplayCueSO
-{
-    public string ImpactVFXPrefab;
-    public string ImpactSound;
-
-    public override async UniTask OnExecutedAsync(
-        GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
-    {
-        if (parameters.TargetObject == null) return;
-
-        var vfx = await poolManager.GetAsync(
-            ImpactVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
-
-        // 生命期后返回对象池
-        ReturnToPoolAfterDelay(poolManager, vfx, 2f).Forget();
-    }
-}
-```
-
-### 持久 Cue
-
-用于循环效果（燃烧粒子、护盾光晕），实现 `IPersistentGameplayCue`：
-
-```csharp
-public class GC_Burn_Loop : GameplayCueSO, IPersistentGameplayCue
-{
-    public string BurnVFXPrefab;
-
-    public async UniTask<GameObject> OnActiveAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager)
-    {
-        var vfx = await poolManager.GetAsync(BurnVFXPrefab, parameters.TargetObject.transform.position, Quaternion.identity);
-        vfx.transform.SetParent(parameters.TargetObject.transform);
-        return vfx; // 由管理器追踪
-    }
-
-    public async UniTask OnRemovedAsync(GameObject instance, GameplayCueParameters parameters)
-    {
-        poolManager.Release(instance); // 自动清理
-    }
-}
-```
-
-### 注册与调试
-
-```csharp
-// 游戏启动时
-GameplayCueManager.Instance.Initialize(resourceLocator, poolManager);
-GameplayCueManager.Instance.RegisterStaticCue("GameplayCue.Impact.Fireball", cueAsset);
-```
-
-**Cue 没有播放？** 检查：(1) 标签在效果的 `GameplayCues` 容器中，(2) Cue 已在管理器中注册，(3) `Initialize()` 已调用，(4) 有效的 `TargetObject`。
-
----
-
-## 13. 网络
-
-系统采用**网络架构化**但**传输层无关**的设计——提供预测基础设施但不绑定你到特定的网络库。
-
-> **需要集成：** 你必须使用你选择的网络方案（Mirror、Netcode、Photon 等）桥接 `ServerTryActivateAbility` 和 `ClientActivateAbilitySucceed/Failed`。
-
-### 执行策略
-
-| 策略             | 行为                                           |
-| ---------------- | ---------------------------------------------- |
-| `LocalOnly`      | 仅客户端；无服务器参与（UI 技能、装饰效果）    |
-| `ServerOnly`     | 客户端请求，服务器运行；安全但有延迟           |
-| `LocalPredicted` | 客户端立即运行（预测），服务器验证；拒绝时回滚 |
-
-### 预测键
-
-每次预测激活生成一个 `PredictionKey`。在该键下应用的效果会被追踪。如果服务器拒绝激活，与该键关联的所有效果都会自动回滚。
-
----
-
-# 五、生产就绪
-
-## 14. 对象池与性能
-
-### 零 GC 设计
-
-每个主要运行时对象都被池化：
-
-| 类型                    | 池化                                               |
-| ----------------------- | -------------------------------------------------- |
-| `GameplayAbilitySpec`   | 自动                                               |
-| `GameplayEffectSpec`    | `GameplayEffectSpec.Create()` / 自动返回           |
-| `ActiveGameplayEffect`  | `ActiveGameplayEffect.Create()` / 自动返回         |
-| `AbilityTask`           | `NewAbilityTask<T>()` / 自动返回                   |
-| `GameplayEffectContext` | `GameplayEffectContextFactory.Create()` / 自动返回 |
-
-**关键规则：** 永远不要用 `new` 创建这些对象——始终使用工厂/池化 API。
-
-### 池配置
-
-```csharp
-// 选择与游戏规模匹配的预设
-GASPoolUtility.ConfigureUltra();     // 弹幕游戏（2000+ 实体）
-GASPoolUtility.ConfigureHigh();      // 吸血鬼幸存者 / RTS
-GASPoolUtility.ConfigureMedium();    // 动作 RPG（默认）
-GASPoolUtility.ConfigureLow();       // 冒险 / 休闲
-GASPoolUtility.ConfigureMinimal();   // 极简内存
-GASPoolUtility.ConfigureMobile();    // 移动端优化
-
-// 在加载界面预热
-GASPoolUtility.WarmAllPools();
-
-// 场景切换
-GASPoolUtility.AggressiveShrinkAll();
-```
-
-### GameObject 池集成（W-TinyLFU）
-
-`GameObjectPoolManager` 与资源管理缓存深度集成：
-
-- **`IdleExpirationTime > 0`** — 池在完全空闲 N 秒后自动销毁，将资源句柄交还给 W-TinyLFU 缓存供逐出
-- **`IdleExpirationTime <= 0`** — 永生池，永不自动衰减（用于核心技能如主武器 VFX）
-
-### 性能建议
-
-```csharp
-// ✅ 缓存标签容器
-private static readonly GameplayTagContainer PoisonTag =
-    GameplayTagContainer.FromTag("Debuff.Poison");
-
-// ❌ 每次调用创建新容器（产生分配！）
-target.RemoveActiveEffectsWithGrantedTags(GameplayTagContainer.FromTag("Debuff.Poison"));
-```
-
-- 属性仅在标记为脏时重新计算（每帧批处理一次）
-- 标签查找是 O(1) 基于哈希
-- 池健康监控：`GASPoolUtility.CheckPoolHealth(out string report)` — 目标 >80% 命中率
-
----
-
-## 15. 编辑器工具与调试
-
-框架内置了一套编辑器扩展和运行时调试 Overlay，帮助在开发过程中快速定位问题。
-
-### 工具总览
-
-| 工具 | 类型 | 访问方式 | 用途 |
-|---|---|---|---|
-| **GAS Debugger** | 编辑器窗口 | `Tools > CycloneGames > GameplayAbilities > GAS Debugger` | 深度检查选定的 ASC — 效果、属性、技能、标签、免疫、对象池、事件日志 |
-| **GAS Debug Overlay** | 运行时 IMGUI | `Tools > CycloneGames > GameplayAbilities > GAS Overlay (Play Mode)` 或 `GASDebugOverlay.Toggle()` | 实时浮动面板 — 自动发现场景中所有 ASC，世界坐标追踪，可折叠面板 |
-| **GAS Overlay Config** | ScriptableObject | `Tools > CycloneGames > GameplayAbilities > GAS Overlay Config` | 配置 Overlay 外观 — 标签颜色、效果颜色、面板设置、主属性优先级 |
-| **GameplayEffectSO Inspector** | 自定义 Editor | 自动（选中任意 `GameplayEffectSO` 资产） | 分组布局、验证警告、摘要文本、条件字段显隐、子类字段自动分组 |
-| **GameplayAbilitySO Inspector** | 自定义 Editor | 自动（选中任意 `GameplayAbilitySO` 资产） | 结构化标签视图、激活规则摘要、消耗/冷却验证 |
-| **Stacking Drawer** | Property Drawer | 自动（在 `GameplayEffectSO` Inspector 中） | 叠加类型为 `None` 时自动隐藏 Limit / DurationPolicy / ExpirationPolicy 字段 |
-| **AttributeNameSelector** | Property Drawer | 在 `string` 字段上添加 `[AttributeNameSelector]` 特性 | 下拉菜单从常量类自动填充 — 替代手动输入标签字符串 |
-
-### GAS Debugger（编辑器窗口）
-
-在 Play Mode 下实时检查任意 `AbilitySystemComponent` 的综合编辑器窗口。
-
-**打开方式：** `Tools > CycloneGames > GameplayAbilities > GAS Debugger`
-
-**功能：**
-
-- **ASC 选择器** — 下拉列表展示场景中所有 ASC，自动刷新
-- **工具栏** — 暂停/恢复、可配置刷新频率、[选中 GameObject] 按钮
-- **活动效果** — 可展开行显示持续时间进度条、叠加数、修改器、授予标签、抑制状态
-- **属性** — 迷你血条可视化，显示基础值/当前值
-- **技能** — 激活中、冷却中、就绪状态，附带冷却进度条
-- **标签** — 所有组合标签带颜色标记和引用计数
-- **免疫标签** — 阻止传入效果的标签
-- **对象池统计** — 池大小 / 活跃数 / 命中率（Spec、Effect、Task、Context）
-- **事件日志** — 滚动日志记录技能激活、提交、结束事件（上限 64 条）
-
-### GAS Debug Overlay（运行时）
-
-零依赖的运行时 IMGUI 调试覆盖层，直接在 Game 视图中为所有发现的 ASC 渲染浮动调试面板。
-
-**在 Play Mode 中切换：**
-
-```csharp
-// 代码方式
-GASDebugOverlay.Toggle();
-
-// 菜单方式
-// Tools > CycloneGames > GameplayAbilities > GAS Overlay (Play Mode)
-```
-
-**功能：**
-
-- **自动发现** — 通过反射扫描所有 `MonoBehaviour` 实例查找 `AbilitySystemComponent` 属性/字段；反射结果按类型缓存，后续扫描零 GC
-- **世界坐标追踪** — 面板跟随拥有者的屏幕投影位置移动，并绘制连接线
-- **可折叠面板** — 点击面板标题切换展开（属性、效果、技能、标签）和折叠（单行摘要）视图
-- **运行时控制** — 覆盖层内置配置面板，可调整透明度、缩放、各区段可见性、最小优先级过滤、全部折叠/展开
-- **DPI 自适应** — 双缩放架构：`baseScale`（DPI/分辨率）用于配置 UI，`scale`（baseScale × runtimeScale）用于数据面板
-- **零 GC 设计** — `StringBuilder` 复用、`AppendInt` / `AppendFloat1` 字符运算格式化、字典缓存颜色十六进制和短名称、反射元数据缓存
-
-**优先级系统：**
-
-```csharp
-// 为重要 ASC 设置优先级（数值越高越靠前显示）
-GASDebugOverlay.SetPriority(playerASC, 100);
-GASDebugOverlay.SetPriority(bossASC, 50);
-
-// 运行时通过 Overlay 的 MinPriority 滑块过滤低优先级 ASC
-```
-
-### GAS Overlay Config
-
-控制 Overlay 外观和行为的 `ScriptableObject`。
-
-**设置方法：** 通过 `Assets > Create > CycloneGames > GAS Overlay Config` 创建，命名为 `GASOverlayConfig`，放入 `Resources` 文件夹。
-
-| 设置 | 默认值 | 说明 |
-|---|---|---|
-| **SemanticTagClassifications** | 4 个分类 (Buff, Debuff, CC, Status) | 标签语义分类。定义关键词并为每个分类分配颜色。标签根据关键词匹配来确定语义含义和显示颜色。 |
-| **DebuffTagSubstrings** | （空） | 标识减益效果的子串（如 `"Debuff"`） |
-| **PrimaryAttributeSubstrings** | Health, HP, Shield, Mana, MP, Stamina, SP, Energy | 折叠面板摘要中优先显示的属性名关键词列表 |
-| **PanelAlpha** | 0.8 | 背景透明度（运行时可调） |
-| **MaxPanels** | 8 | 同时显示的最大面板数 |
-| **PanelWidthRatio** | 0.20 | 面板宽度占屏幕宽度比例 |
-| **TrackWorldPosition** | true | 面板跟随拥有者世界坐标 |
-
-### 自定义 Inspector
-
-**GameplayEffectSO** — 自定义 Inspector 将效果属性组织为可折叠区段：
-
-- **核心** — 名称、持续策略、持续时间/周期（无关时自动隐藏）
-- **修改器** — 修改器列表，附带验证警告
-- **标签** — 所有标签容器集中在专属区段
-- **表现** — GameplayCue 引用
-- **高级** — 溢出效果、应用时触发周期开关
-- **摘要** — 自动生成的完整效果定义文本摘要
-- **派生字段** — 子类添加的属性自动归入独立分组
-
-**GameplayAbilitySO** — 技能配置的结构化视图：
-
-- **基础** — 名称、实例化策略、网络执行策略、消耗/冷却效果引用
-- **激活** — 授予时激活开关、触发数据
-- **标签** — 身份标签、激活需求、交互规则、来源/目标过滤
-- **摘要** — 一览所有已配置标签容器的标签总览
-
----
-
-## 16. 示例演练
-
-`Samples` 文件夹提供了包含**玩家**和**敌人**的完整战斗场景。
-
-**操作：**
-
-- **[1]** — 火球术（伤害 + 燃烧 DoT）
-- **[2]** — 净化（AoE 驱散）
-- **[空格]** — 获得 50 XP
-- **[E]** — 敌人淬毒之刃攻击
-
-### 火球术
-
-演示：数据驱动设计、通过 `PreProcessInstantEffect` 进行复杂属性交互、通过 `SetByCallerMagnitude` 的属性快照。
-
-### 淬毒之刃
-
-演示：依次应用多个效果（武器命中 + 持续中毒减益）。
-
-### 净化
-
-演示：使用 `AbilityTask_WaitTargetData` 的异步技能、`SphereOverlap` 的阵营过滤瞄准、通过标签移除效果（`RemoveActiveEffectsWithGrantedTags`）。
-
-### 升级系统
-
-演示：属性驱动的事件、在代码中动态创建效果、多修改器即时效果。
-
-### 示例技能参考
-
-| 技能     | 类型 | 关键特性                      |
-| -------- | ---- | ----------------------------- |
-| 火球术   | 攻击 | DoT、快照、执行计算           |
-| 淬毒之刃 | 攻击 | 多效果、周期伤害              |
-| 净化     | 防御 | AoE 瞄准、标签驱动驱散        |
-| 流星     | 攻击 | 区域效果、ActivationOwnedTags |
-| 闪电链   | 攻击 | 多目标链式传递                |
-| 光之盾   | 防御 | 持续 Buff                     |
-| 狂暴     | Buff | 自我增益并承担代价            |
-| 护甲叠加 | 防御 | 可叠加效果                    |
-| 猛击     | 攻击 | 近战 AoE                      |
-| 处决     | 攻击 | 条件触发处决                  |
-| 冲击波   | 攻击 | 击退 AoE                      |
-
-- 演示：[https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
-- <img src="./Documents~/DemoPreview_2.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
-- <img src="./Documents~/DemoPreview_1.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
-
----
-
-## 17. 常见问题与故障排除
-
-### 常见问题
-
-**问：Instant vs Duration vs Infinite——何时使用哪个？**
-
-| 类型        | 使用场景                                            |
-| ----------- | --------------------------------------------------- |
-| Instant     | 一次性：伤害、治疗、消耗、即时属性设置              |
-| HasDuration | 临时的：速度 Buff（10秒）、眩晕（2秒）、冷却（5秒） |
-| Infinite    | 永久直到移除：装备属性、光环、被动                  |
-
-**问：AbilityTags、AssetTags 和 GrantedTags 有什么区别？**
-
-- **AbilityTags** — 技能的身份标识（`Ability.Skill.Fireball`）
-- **AssetTags** — GameplayEffect 的元数据（`Damage.Type.Fire`）
-- **GrantedTags** — 效果激活期间应用于目标的标签（`Status.Burning`）
-
-**问：冷却是如何工作的？**
-冷却只是一个授予冷却标签的 `HasDuration` GameplayEffect（例如 `Cooldown.Skill.Fireball`）。技能的 `CheckCooldown()` 检查拥有者是否有该标签。
-
-**问：为什么用标签而不是直接引用？**
-标签提供松耦合——技能不需要知道具体类型。新内容可以无需修改现有代码即可添加。设计师在 Inspector 中配置交互。
-
-**问：如何创建 DoT？**
-创建一个 `HasDuration` 效果，设置 `Period` 和一个对 Health 的负值 `Add` 修改器。
-
-### 故障排除清单
-
-**技能不激活：**
-
-- [ ] `InitAbilityActorInfo()` 已调用？
-- [ ] 技能通过 `GrantAbility()` 授予？
-- [ ] 标签要求满足？（打印 `CanActivate()` 各项检查）
-- [ ] 消耗资源足够？
-- [ ] 不在冷却中？
-- [ ] `ActivateAbility()` 中调用了 `CommitAbility()`？
-
-**效果未应用：**
-
-- [ ] `ApplicationTagRequirements` 满足？
-- [ ] 目标 ASC 已初始化？
-- [ ] `RemoveGameplayEffectsWithTags` 没有立即移除它？
-- [ ] `ICustomApplicationRequirement` 返回 `true`？
-
-**标签不工作：**
-
-- [ ] 标签在项目设置或代码中定义？
-- [ ] 检查的是 `ASC.CombinedTags`（而非单个效果标签）？
-- [ ] 效果确实激活？检查活动效果列表
-
-**Cue 没有播放：**
-
-- [ ] 标签在效果的 `GameplayCues` 容器中（不是 `AssetTags`）？
-- [ ] Cue 在 `GameplayCueManager` 中注册？
-- [ ] `GameplayCueManager.Initialize()` 已调用？
-- [ ] `parameters.TargetObject` 有效？
-
----
-
-## 18. 依赖项
-
-| 包                                  | 用途             |
-| ----------------------------------- | ---------------- |
-| `com.cysharp.unitask`               | 异步操作         |
-| `com.cyclone-games.gameplay-tags`   | GameplayTag 系统 |
-| `com.cyclone-games.asset-management` | 资源加载         |
-| `com.cyclone-games.deterministic-math` | 定点确定性数学 |
-| `com.cyclone-games.hash`            | 确定性状态哈希与校验和 |
-| `com.cyclone-games.logger`          | 调试日志         |
-| `com.cyclone-games.factory`         | 对象创建与池化   |
+| 依赖 | Capability Symbol | Assembly |
+| --- | --- | --- |
+| `CycloneGames.DataTable` | `CYCLONEGAMES_HAS_DATA_TABLE` | `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` |

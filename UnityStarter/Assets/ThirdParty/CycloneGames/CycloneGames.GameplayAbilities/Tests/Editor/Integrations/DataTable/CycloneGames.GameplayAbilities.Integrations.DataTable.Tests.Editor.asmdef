@@ -1,0 +1,32 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Integrations.DataTable.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Tests.Editor.Integrations.DataTable",
+    "references": [
+        "CycloneGames.GameplayAbilities.Core",
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_DATA_TABLE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.data-table",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_DATA_TABLE"
+        }
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

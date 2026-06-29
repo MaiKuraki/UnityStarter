@@ -6,41 +6,15 @@ English | [Simplified Chinese](./README.SCH.md)
 
 The package talks to `INetworkManager` and Cyclone runtime services. It does not bind ability code directly to Mirror, Mirage, Nakama, Steam, or another backend SDK.
 
-## Package Layout
-
-```text
-CycloneGames.GameplayAbilities.Networking/
-  Core/
-    AttributeSyncManager.cs
-    GASNetworkMessages.cs
-    GASNetworkSerializer.cs
-    GASNetworkStateChecksum.cs
-    NetworkedAbilityBridge.cs
-    INetworkedASC.cs
-    IGASFullStateAuthorizationPolicy.cs
-    OwnerOrObserverWithRateLimitPolicy.cs
-    InMemoryTokenBucketRateLimiter.cs
-    ...
-  Unity.Runtime/
-    DefaultGASNetIdRegistry.cs
-    GameplayAbilitiesNetworkedASCAdapter.cs
-    GASBridgeGameplayAbilitiesExtensions.cs
-    UnityGASNetLogger.cs
-    UnityGASNetTimeProvider.cs
-  Editor/
-    Diagnostics preset, diagnostics window, and inspectors
-  Tests/Editor/
-    Bridge, serializer, checksum, authorization, and adapter tests
-```
-
 ## Assembly Boundary
 
 | Assembly | Role |
 | --- | --- |
-| `CycloneGames.GameplayAbilities.Networking.Core` | Pure C# bridge, message DTOs, serializer, checksums, full-state authorization, rate limiting, and interfaces. |
+| `CycloneGames.GameplayAbilities.Networking.Core` | Pure C# bridge, message DTOs, serializer, checksums, full-state authorization, rate limiting, replication planning, and interfaces. |
 | `CycloneGames.GameplayAbilities.Networking.Unity.Runtime` | Adapter from Unity `AbilitySystemComponent` to `INetworkedASC`. |
 | `CycloneGames.GameplayAbilities.Networking.Unity.Editor` | Editor diagnostics and authoring support. |
-| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | EditMode tests for the bridge, serializer, security policies, and runtime adapter behavior. |
+| `CycloneGames.GameplayAbilities.Networking.Tests.Editor` | No-engine EditMode tests for the bridge, serializer, checksums, and security policies. |
+| `CycloneGames.GameplayAbilities.Networking.Unity.Tests.Editor` | EditMode tests for Unity-facing adapter behavior. |
 
 Core code depends on Cyclone Networking contracts and GameplayAbilities data contracts. Unity-specific behavior is isolated in `Unity.Runtime` and `Editor` assemblies.
 
@@ -57,6 +31,8 @@ Core code depends on Cyclone Networking contracts and GameplayAbilities data con
 | `AttributeSyncManager` | Server-side dirty attribute batching and owner/public observer filtering. |
 | `OwnerOrObserverWithRateLimitPolicy` | Full-state request authorization for owners and observers with optional rate limiting. |
 | `GASNetworkStateChecksum` | Checksum helper for full-state and drift validation. |
+| `GASReplicationSource` | Transport-neutral projection of one ASC into network id, owner, team, layer, position, dirty mask, full-state request, checksum, and send-size data. |
+| `GASReplicationPlanner` | Low-allocation facade over `CycloneGames.Networking.Replication.NetworkReplicationPlanner` for owner/team/area/layer filtering and send-budget selection. |
 
 ## Runtime Flow
 
@@ -216,6 +192,55 @@ public static class AbilityReplicationSender
 
 `AttributeSyncManager` stores dirty attributes by network id and can send owner-only values separately from public observer values.
 
+`GameplayAbilitiesNetworkedASCAdapter.CaptureAndReplicatePendingStateDelta` expects the caller to resolve observers before capture. When the observer list is null or empty, it returns a default delta and does not consume pending ASC state. This is important for room-based games and interest management: a frame with no relevant observers must not drop ability grants, effect removals, attribute changes, tag changes, or state metadata that a later observer still needs.
+
+Recommended server order for large rooms:
+
+1. Update gameplay and mark ASC state dirty.
+2. Resolve room, team, owner, spectator, and visibility observers.
+3. Call `CaptureAndReplicatePendingStateDelta` only when the observer set is non-empty.
+4. Use full-state recovery for late joiners or observers that become relevant after missing deltas.
+
+## Replication Planning and Package Integration
+
+`GASReplicationPlanner` lets the GAS networking layer reuse the shared `CycloneGames.Networking.Replication` interest and send-budget pipeline instead of maintaining a separate observer selector. This keeps ability replication aligned with movement, perception, gameplay framework actors, and other networked modules.
+
+```csharp
+using CycloneGames.GameplayAbilities.Networking;
+using CycloneGames.Networking;
+using CycloneGames.Networking.Replication;
+
+public static class AbilityReplicationPlanning
+{
+    public static int BuildPlan(
+        GASReplicationPlanner planner,
+        NetworkReplicationObserver observer,
+        GASReplicationSource[] sources,
+        int serverTick,
+        GASReplicationSelection[] results)
+    {
+        var budget = new NetworkSendBudget(maxBytes: 64 * 1024, maxMessages: 256);
+
+        return planner.BuildPlan(
+            observer,
+            sources,
+            serverTick,
+            ref budget,
+            results);
+    }
+}
+```
+
+For `CycloneGames.GameplayFramework.Networking`, project code can map `NetworkedGameplayActor` fields directly into `GASReplicationSource`: use the actor network id, owner connection id, owner player id, team id, interest layer mask, and interest position, then choose a `NetworkReplicationPolicy` matching the gameplay visibility rule. The GAS networking core intentionally does not reference `GameplayFramework.Networking`; that keeps headless servers, pure C# simulations, and projects that do not use GameplayFramework free from optional framework dependencies.
+
+Cyclone packages can be used either under `Assets/ThirdParty` or as UPM packages. Integration code should follow these rules:
+
+- Direct asmdef references are the source of truth when an integration assembly is present and the dependency is required.
+- `versionDefines` are useful for UPM package detection, but local `Assets/ThirdParty` packages do not reliably produce those symbols.
+- Do not wrap a hard integration assembly in source-level `#if` symbols that can make the assembly compile empty in local package mode.
+- Optional integrations should be physically isolated in an integration asmdef or integration package that is only imported when its dependencies are available.
+- Do not require users to add PlayerSettings scripting symbols for default package interoperability.
+
 ## Full-State Recovery
 
 Full-state messages provide a baseline for late join, reconnect, and drift recovery. The bridge supports:
@@ -302,8 +327,9 @@ Run these checks after changing the package:
 
 ```text
 Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Networking.Tests.Editor
+Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Networking.Unity.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.GameplayAbilities.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
 
-For serializer or bridge changes, include tests that cover capacity bounds, full-state authorization, checksum drift detection, adapter dispose behavior, and register/unregister lifecycle.
+For serializer or bridge changes, include tests that cover capacity bounds, full-state authorization, checksum drift detection, adapter dispose behavior, observer-empty dispatch behavior, and register/unregister lifecycle.
