@@ -1,36 +1,33 @@
-#if CYCLONE_GAMES_ASSET_MANAGEMENT_PRESENT
-
+using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
 
 namespace CycloneGames.GameplayAbilities.Integrate.Setup
 {
     /// <summary>
-    /// Manual (non-DI) initialization utilities.
-    /// Use this when not using a DI container.
-    /// 
-    /// 
-    /// NOTE: This class just sample for AssetManagement initialize, you must implement your own GAS initialize
+    /// Example manual startup utility for projects that use CycloneGames.AssetManagement without a DI container.
     /// </summary>
     public static class GASManualSetup
     {
         /// <summary>
-        /// Initializes GAS without DI. Call once at game startup.
+        /// Initializes GAS cue loading without DI. Call once from the project's composition root.
         /// </summary>
-        public static void Initialize(object assetPackage)
+        public static void Initialize(IAssetPackage assetPackage)
         {
-            // Access Instance to create default GameplayCueManager
+            if (assetPackage == null)
+            {
+                return;
+            }
+
             var cueManager = GameplayCueManager.Instance;
-            
-            // Initialize with asset package
             if (cueManager is GameplayCueManager unityManager)
             {
-                unityManager.Initialize((CycloneGames.AssetManagement.Runtime.IAssetPackage)assetPackage);
+                unityManager.Initialize(assetPackage);
             }
         }
         
         /// <summary>
-        /// Shuts down GAS. Call on application quit.
+        /// Shuts down sample GAS services. Call from the same owner that initialized the sample.
         /// </summary>
         public static void Shutdown()
         {
@@ -42,4 +39,3 @@ namespace CycloneGames.GameplayAbilities.Integrate.Setup
         }
     }
 }
-#endif

@@ -877,9 +877,10 @@ namespace CycloneGames.GameplayAbilities.Networking
             if (bridge == null)
                 throw new ArgumentNullException(nameof(bridge));
 
-            var delta = CapturePendingReplicatedStateDelta();
             if (observers == null || observers.Count == 0)
-                return delta;
+                return default;
+
+            var delta = CapturePendingReplicatedStateDelta();
 
             for (int i = 0; i < delta.AddedActiveEffectCount; i++)
             {

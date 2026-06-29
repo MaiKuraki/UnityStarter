@@ -99,8 +99,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         protected override void OnActivate()
         {
-            // TODO: In a real game, you would subscribe to an event on your CharacterMovementComponent.
-            // For this sample, we'll simulate it with a simple delay to represent falling time.
+            // The sample simulates a landing event with a delay. Production code should bind to movement state.
             var delayTask = AbilityTask_WaitDelay.WaitDelay(this.Ability, 0.5f);
             delayTask.OnFinishDelay += () =>
             {

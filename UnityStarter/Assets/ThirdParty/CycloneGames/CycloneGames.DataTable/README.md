@@ -38,6 +38,7 @@ A modular, backend-agnostic data table pipeline for Unity. Designers edit Excel 
       - [YooAsset / Raw File (recommended for production)](#yooasset--raw-file-recommended-for-production)
       - [Addressables / TextAsset (compatible with all providers)](#addressables--textasset-compatible-with-all-providers)
       - [Bootstrapping the full pipeline](#bootstrapping-the-full-pipeline)
+    - [Integration with CycloneGames.GameplayAbilities](#integration-with-cyclonegamesgameplayabilities)
   - [Editor Tools](#editor-tools)
     - [Luban Build](#luban-build)
       - [Configuration](#configuration)
@@ -747,6 +748,24 @@ private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
 ```
 
 The shared loader only owns asset loading and bytes lifetime. Format parsing still belongs to Luban, MessagePack, or your project-specific factory.
+
+---
+
+### Integration with CycloneGames.GameplayAbilities
+
+`CycloneGames.GameplayAbilities` includes an optional DataTable integration assembly for GAS-style combat data. Use DataTable for large designer-owned numeric surfaces such as level curves, ability magnitudes, monster attributes, resistance tables, boss phase values, and starting attribute rows. Keep gameplay identity, tags, cues, activation policy, and effect behavior in GameplayAbilities authoring assets.
+
+The bridge lives in `CycloneGames.GameplayAbilities/Runtime/Integrations/DataTable/` and provides:
+
+| Type | Purpose |
+| --- | --- |
+| `DataTableModifierFactory` | Creates GAS `ModifierInfo` values from table rows. |
+| `DataTableMagnitudeCalculation` | Lets effect modifiers read table-backed magnitudes through the normal GAS calculation path. |
+| `DataTableAttributeInitializer<TRow>` | Applies table-authored base/current values to an `AttributeSet`. |
+
+The bridge is guarded by `CYCLONEGAMES_HAS_DATA_TABLE`. UPM imports define it automatically through `versionDefines` when `com.cyclone-games.data-table` is installed. `Assets/ThirdParty` local package imports need the same symbol in a visible project build configuration because Unity does not read nested package dependencies from sibling folders.
+
+Read the GameplayAbilities guide for the full workflow: [DataTable-Driven Tuning](../CycloneGames.GameplayAbilities/README.md#datatable-driven-tuning).
 
 ---
 

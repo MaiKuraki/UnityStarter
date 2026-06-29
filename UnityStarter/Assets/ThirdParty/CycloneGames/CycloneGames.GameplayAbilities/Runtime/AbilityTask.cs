@@ -90,15 +90,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void EndTask()
         {
-            if (IsActive)
+            if (!IsActive && Ability == null)
             {
-                IsActive = false;
-                Ability?.OnTaskEnded(this);
-
-                OnDestroy();
-
-                PoolManager.ReturnTask(this);
+                return;
             }
+
+            IsActive = false;
+            Ability?.OnTaskEnded(this);
+
+            OnDestroy();
+
+            PoolManager.ReturnTask(this);
         }
 
         /// <summary>
@@ -106,7 +108,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual void CancelTask()
         {
-            if (IsActive)
+            if (IsActive || Ability != null)
             {
                 IsCancelled = true;
                 EndTask();

@@ -1,143 +1,140 @@
-[**English**] | [**简体中文**](README.SCH.md)
+[English] | [Simplified Chinese](README.SCH.md)
 
 # GameplayAbilities Samples
 
-This folder contains working examples demonstrating the core features of the Gameplay Ability System.
+This folder contains a playable sample scene and authoring assets for `CycloneGames.GameplayAbilities`. The samples demonstrate how to connect an `AbilitySystemComponent`, attributes, GameplayTags, GameplayEffects, GameplayAbilities, GameplayCues, target actors, pooling, and startup helpers.
 
-## 🎮 Quick Start
+The sample project is learning material. Production projects should copy the relevant patterns into their own assemblies, replace scene lookups with project services, and add authority, validation, asset registry, and pooling rules that match the game.
 
-1. Open `SampleScene.unity`
-2. Press Play
-3. Use the following controls:
-   - `1` - Cast Fireball (damage + burn)
-   - `2` - Cast Purify (remove debuffs)
-   - `E` - Enemy casts Poison Blade
-   - `Space` - Grant debug XP
+## Asset Locations
 
----
+| Content | Path | Purpose |
+| --- | --- | --- |
+| Scene | `Samples/SampleScene.unity` | Playable end-to-end scene with Player, Enemy, input, combat log, and configured sample assets. |
+| Prefabs | `Samples/Prefabs/Player.prefab`, `Samples/Prefabs/Enemy.prefab` | Minimal actors that host sample character and ASC components. |
+| Materials | `Samples/Materials/` | Simple visual material used by sample actors. |
+| Ability and effect assets | `Samples/ScriptableObjects/` | Preconfigured ability, effect, cue, execution, DoT, poison, purify, passive, bounty, and level data assets. |
+| Runtime sample scripts | `Samples/Scripts/` | Ability, attribute, target actor, setup, pooling, and UI logger examples. |
+| Editor sample scripts | `Samples/Editor/` | Sample property drawer support for attribute name selection. |
+| Preview media | `../Documents~/DemoPreview_1.gif`, `../Documents~/DemoPreview_2.gif` | README preview images for onboarding and documentation. |
 
-## 📂 Directory Structure
+## Quick Start
 
-```
-Samples/
-├── Scripts/           # All sample code
-├── ScriptableObjects/ # Pre-configured abilities & effects
-├── Prefabs/           # Character prefabs
-├── Materials/         # Visual materials
-└── SampleScene.unity  # Demo scene
-```
+1. Open `UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/Samples/SampleScene.unity`.
+2. Press Play in the Unity Editor.
+3. Use the sample controls.
 
----
+| Input | Action |
+| --- | --- |
+| `1` | Player casts Fireball, applying instant damage and burn. |
+| `2` | Player casts Purify, removing poison-style debuffs from valid targets. |
+| `E` | Enemy casts Poison Blade. |
+| `Space` | Grants debug experience to exercise attribute and level-up hooks. |
 
-## 📚 Sample Scripts by Complexity
+Expected result: the UI log reports ability activation, effect application, damage, debuff removal, and level-up events. Console output should remain free of compile errors and missing script warnings.
 
-### 🟢 Beginner
+## Learning Path
 
-| Script                            | Description                                      |
-| --------------------------------- | ------------------------------------------------ |
-| `Character.cs`                    | Basic character setup with ASC initialization    |
-| `CharacterAttributeSet.cs`        | Defines Health, Mana, Attack, Defense attributes |
-| `GASSampleTags.cs`                | Centralized tag definitions using constants      |
-| `AbilitySystemComponentHolder.cs` | MonoBehaviour wrapper for ASC                    |
-| `GASPoolInitializer.cs`           | Pool configuration and prewarming setup          |
+### Character And ASC Setup
 
-### 🟡 Intermediate
+Start with these scripts:
 
-| Script                   | Description                                           |
-| ------------------------ | ----------------------------------------------------- |
-| `GA_Fireball_SO.cs`      | Complete ability: cost, cooldown, damage, DoT         |
-| `GA_Purify_SO.cs`        | Removes debuffs using tag queries                     |
-| `GA_ArmorStack_SO.cs`    | Stacking buff demonstration                           |
-| `SampleCombatManager.cs` | Input handling, UI updates, ability activation by tag |
-| `GC_Fireball_Impact.cs`  | GameplayCue for VFX/SFX on impact                     |
+| Script | What To Learn |
+| --- | --- |
+| `Scripts/AbilitySystemComponentHolder.cs` | Hosting a pure C# `AbilitySystemComponent` from a `MonoBehaviour`. |
+| `Scripts/Character.cs` | Actor initialization, initial attributes, initial passives, ability grants, bounty effect, and ASC ticking. |
+| `Scripts/CharacterAttributeSet.cs` | Primary, secondary, and meta attributes; clamping; damage conversion; death and bounty hooks. |
+| `Scripts/GASSampleTags.cs` | Centralized tag constants and runtime tag registration. |
 
-### 🔴 Advanced
+### Effects And Attributes
 
-| Script                                       | Description                               |
-| -------------------------------------------- | ----------------------------------------- |
-| `GA_ChainLightning_SO.cs`                    | Multi-target ability with damage falloff  |
-| `GA_Meteor_SO.cs`                            | Targeting system with ground selection    |
-| `GA_Berserk_SO.cs`                           | GrantedAbility demo (grants Execute)      |
-| `GA_Execute_SO.cs`                           | Ability granted temporarily by buff       |
-| `GA_ShieldOfLight_SO.cs`                     | OngoingTagRequirements conditional effect |
-| `ExecCalc_Burn.cs`                           | Custom execution calculation for DoT      |
-| `GameplayAbilityTargetActor_GroundSelect.cs` | Interactive targeting actor               |
+Inspect these assets:
 
----
+| Asset | What To Learn |
+| --- | --- |
+| `ScriptableObjects/GE_BaseAttributes_Hero.asset` | Initial player attributes through a GameplayEffect. |
+| `ScriptableObjects/GE_BaseAttributes_Enemy.asset` | Initial enemy attributes through a GameplayEffect. |
+| `ScriptableObjects/Fireball/GE_Fireball_Impact.asset` | Instant damage effect driven by Fireball. |
+| `ScriptableObjects/DoT/GE_DoT_Burn.asset` | Periodic burn damage. |
+| `ScriptableObjects/DoT/GE_DoT_Poison.asset` | Periodic poison damage. |
+| `ScriptableObjects/GE_Passive_IncreaseDamage_10Percent.asset` | Passive attribute modifier pattern. |
 
-## 🏷️ Tag Organization (GASSampleTags.cs)
+### Ability Authoring
 
-Tags are the universal language of GAS. This sample uses a well-organized hierarchy:
+Read the ability scripts in this order:
+
+| Script | What To Learn |
+| --- | --- |
+| `Scripts/GA_Fireball_SO.cs` | Cost, cooldown, instant damage, burn, SetByCaller magnitude, and sample target lookup. |
+| `Scripts/GA_PoisonBlade_SO.cs` | Applying a debuff from an ability. |
+| `Scripts/GA_Purify_SO.cs` | Removing active effects by tag and filtering targets. |
+| `Scripts/GA_ArmorStack_SO.cs` | Stack behavior and stack debugging. |
+| `Scripts/GA_Berserk_SO.cs` and `Scripts/GA_Execute_SO.cs` | Granted ability pattern. |
+| `Scripts/GA_ShieldOfLight_SO.cs` | Defensive buff pattern using ongoing requirements. |
+| `Scripts/GA_ChainLightning_SO.cs` | Multi-target ability flow with falloff. |
+| `Scripts/GA_Meteor_SO.cs` | Target actor workflow and ground selection. |
+
+### Targeting And AbilityTasks
+
+| Script | What To Learn |
+| --- | --- |
+| `Scripts/AbilityTask_WaitTargetData_SpawnedActor.cs` | Spawning and binding a target actor from an ability task. |
+| `Scripts/GameplayAbilityTargetActor_GroundSelect.cs` | Interactive ground targeting. |
+| `Scripts/TargetActor/GameplayAbilityTargetActor_SingleLineTrace.cs` | Single line trace targeting. |
+| `Scripts/TargetActor/GameplayAbilityTargetActor_SphereOverlap.cs` | Area targeting. |
+| `Scripts/TargetActor/GameplayAbilityTargetActor_ConeTrace.cs` | Cone targeting. |
+
+### Startup And Integration
+
+| Script Or Assembly | What To Learn |
+| --- | --- |
+| `Scripts/GASPoolInitializer.cs` | Pool configuration and warmup before combat. |
+| `Scripts/Integrate/Setup/GASManualSetup.cs` | Manual non-DI cue manager startup using `CycloneGames.AssetManagement`. |
+| `Scripts/Integrate/Setup/GASServerSetup.cs` | Server/headless startup with `NullGameplayCueManager`. |
+| `Scripts/Integrate/DI/VContainer/GASLifetimeScope.cs` | Optional VContainer composition. This file is isolated in `CycloneGames.GameplayAbilities.Sample.Integrations.VContainer` and compiles only when the VContainer package is present. |
+
+## GameplayTag Layout
+
+The sample tags are centralized in `Scripts/GASSampleTags.cs` and registered through `[RegisterGameplayTagsFrom]`.
 
 ```csharp
-// Attributes
 "Attribute.Primary.Attack"
 "Attribute.Secondary.Health"
-
-// States
-"State.Dead"
 "State.Burning"
-
-// Debuffs
-"Debuff.Burn"
+"Buff.ArmorStack"
 "Debuff.Poison"
-
-// Cooldowns
 "Cooldown.Skill.Fireball"
-
-// Abilities
 "Ability.Fireball"
-
-// GameplayCues
 "GameplayCue.Fireball.Impact"
+"Faction.Player"
+"Faction.NPC.Enemy"
 ```
 
-> **Tip**: Use the `[RegisterGameplayTagsFrom]` assembly attribute for automatic tag registration.
+Use the same hierarchy style for production content, but define project-owned tags in the project package or game assembly rather than editing sample tags.
 
----
+## Package And UPM Notes
 
-## 🎯 Key Learning Paths
+The repository keeps samples in `Samples/` so they are visible and runnable when CycloneGames modules are used directly under `Assets/ThirdParty`. The package manifest exposes the same folder through the `samples` entry:
 
-### Path 1: Understanding Effects
+```json
+{
+  "displayName": "Gameplay Ability Samples",
+  "path": "Samples"
+}
+```
 
-1. View `GE_BaseAttributes_Hero.asset` (initial stats)
-2. View `Fireball/GE_Fireball_Damage.asset` (instant damage)
-3. View `DoT/GE_Burn_DoT.asset` (periodic damage)
+When building a distribution pipeline that requires hidden UPM sample folders, mirror this source folder into the release package's sample layout without changing the source scene, prefab, ScriptableObject, or `.meta` GUID ownership in this repository.
 
-### Path 2: Building Abilities
+## Persistence
 
-1. Read `GA_Fireball_SO.cs` (simple ability)
-2. Read `GA_Purify_SO.cs` (effect removal)
-3. Read `GA_ChainLightning_SO.cs` (complex targeting)
+The samples do not write persistent player data, project settings, editor preferences, or runtime save files. Runtime objects created while the scene is playing are temporary and are destroyed when Play Mode exits. Preview media under `Documents~/` is documentation-only content.
 
-### Path 3: Character Setup
+## Validation
 
-1. Read `Character.cs` (ASC initialization)
-2. Read `CharacterAttributeSet.cs` (attribute definition)
-3. Read `SampleCombatManager.cs` (ability activation)
+Use these checks after changing sample assets, scripts, asmdefs, or documentation:
 
-### Path 4: Advanced Mechanics
-
-1. Read `GA_ArmorStack_SO.cs` (effect stacking)
-2. Read `GA_Berserk_SO.cs` + `GA_Execute_SO.cs` (granted abilities)
-3. Read `GA_ShieldOfLight_SO.cs` (conditional effects via OngoingTagRequirements)
-
-### Path 5: Performance Optimization
-
-1. Read `GASPoolInitializer.cs` (pool tier configuration)
-2. Use `GASPoolUtility.ConfigureXXX()` during initialization
-3. Call `WarmAllPools()` during loading screens
-
----
-
-## 💡 Best Practices Demonstrated
-
-- **Tag-based ability lookup**: `TryActivateAbilityByTag()`
-- **Data-driven effects**: All values in ScriptableObjects
-- **Proper pooling**: `CreatePoolableInstance()` pattern
-- **Damage mitigation**: `PreProcessInstantEffect()` override
-- **Level-up system**: XP tracking with `PostGameplayEffectExecute()`
-- **Effect stacking**: `EGameplayEffectStackingType.AggregateByTarget`
-- **Granted abilities**: Temporary abilities via GameplayEffect
-- **Conditional effects**: `OngoingTagRequirements` for state-based buffs
-- **Pool prewarming**: `GASPoolUtility.WarmAllPools()` for 0-GC runtime
+1. Open `Samples/SampleScene.unity` and confirm there are no missing script warnings.
+2. Press Play and exercise `1`, `2`, `E`, and `Space`.
+3. Confirm the Console has no compile errors, missing assembly references, or missing asset references.
+4. Run the GameplayAbilities EditMode tests from the Unity Test Runner.
+5. For package distribution, verify `package.json` still exposes the sample path and the preview images still render from the root README.

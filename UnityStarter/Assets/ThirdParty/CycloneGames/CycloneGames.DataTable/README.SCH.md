@@ -36,6 +36,7 @@
       - [YooAsset / Raw File（生产环境推荐）](#yooasset--raw-file生产环境推荐)
       - [Addressables / TextAsset（与所有 Provider 兼容）](#addressables--textasset与所有-provider-兼容)
       - [完整启动管线示例](#完整启动管线示例)
+    - [与 CycloneGames.GameplayAbilities 集成](#与-cyclonegamesgameplayabilities-集成)
   - [编辑器工具](#编辑器工具)
     - [Luban 构建](#luban-构建)
       - [配置](#配置)
@@ -739,6 +740,24 @@ private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
 ```
 
 通用 loader 只负责资产加载和 bytes 生命周期，具体格式解析仍由 Luban、MessagePack 或项目自定义 factory 负责。
+
+---
+
+### 与 CycloneGames.GameplayAbilities 集成
+
+`CycloneGames.GameplayAbilities` 内置可选的 DataTable 集成程序集，用于 GAS 风格战斗数据。大型策划数值面应放在 DataTable 中，例如 level curve、ability magnitude、monster attribute、resistance table、Boss phase value 和 starting attribute row。Gameplay identity、tag、cue、activation policy 和 effect behavior 仍应保留在 GameplayAbilities authoring asset 中。
+
+桥接层位于 `CycloneGames.GameplayAbilities/Runtime/Integrations/DataTable/`，提供：
+
+| 类型 | 作用 |
+| --- | --- |
+| `DataTableModifierFactory` | 从表格行创建 GAS `ModifierInfo`。 |
+| `DataTableMagnitudeCalculation` | 让 effect modifier 通过标准 GAS calculation path 读取 table-backed magnitude。 |
+| `DataTableAttributeInitializer<TRow>` | 将表格配置的 base/current value 应用到 `AttributeSet`。 |
+
+该 bridge 由 `CYCLONEGAMES_HAS_DATA_TABLE` 守卫。UPM 导入时，如果安装了 `com.cyclone-games.data-table`，asmdef 的 `versionDefines` 会自动定义该 symbol。`Assets/ThirdParty` 本地包导入时，需要在可见的项目构建配置中定义同名 symbol，因为 Unity 不会读取兄弟目录中的嵌套 package dependency。
+
+完整流程见 GameplayAbilities 文档：[DataTable 驱动数值调优](../CycloneGames.GameplayAbilities/README.SCH.md#datatable-驱动数值调优)。
 
 ---
 

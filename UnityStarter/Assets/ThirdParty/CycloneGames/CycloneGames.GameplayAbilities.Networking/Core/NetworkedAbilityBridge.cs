@@ -270,8 +270,13 @@ namespace CycloneGames.GameplayAbilities.Networking
         /// </summary>
         public void ClientNotifyAbilityEnd(int abilityIndex, bool wasCancelled)
         {
-            _networkManager.SendToServer(wasCancelled ? MsgAbilityCancel : MsgAbilityEnd,
-                new AbilityEndMessage { AbilityIndex = abilityIndex });
+            if (wasCancelled)
+            {
+                _networkManager.SendToServer(MsgAbilityCancel, new AbilityCancelMessage { AbilityIndex = abilityIndex });
+                return;
+            }
+
+            _networkManager.SendToServer(MsgAbilityEnd, new AbilityEndMessage { AbilityIndex = abilityIndex });
         }
 
         // =====================================================

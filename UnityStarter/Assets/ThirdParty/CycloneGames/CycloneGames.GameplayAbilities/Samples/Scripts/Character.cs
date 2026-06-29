@@ -28,7 +28,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         [Header("Bounty")]
         [Tooltip("The GameplayEffect to grant to the killer when this character dies.")]
-        public GameplayEffectSO BountyEffect;   // TODO: maybe create a new class for EnemyCharacter?
+        public GameplayEffectSO BountyEffect;
 
         void Awake()
         {

@@ -111,7 +111,8 @@ CycloneGames.GameplayFramework 通过定义稳定的 Gameplay 内核来解决这
 - **DI 友好**：所有对象生成通过 `IUnityObjectSpawner` 进行 — 可无缝替换为任何 DI 容器或对象池，无需修改框架代码。
 - **稳定的 Gameplay 内核**：核心语义定义在 `Actor`、`Pawn`、`Controller`、`PlayerController`、`GameMode`、`PlayerState` 这些基类上，它们决定默认使用习惯与命名风格。
 - **分层扩展**：Gameplay 角色用继承和虚方法扩展；可选规则用策略对象扩展；基础设施与外部系统通过接口接入。
-- **零强制依赖**：框架对 GameplayAbilities、GameplayTags、Networking 或其他 CycloneGames 包 **没有任何** 编译时依赖。集成通过接口和不透明上下文字段完成。
+- **核心零强制依赖**：核心 runtime assembly 对 GameplayAbilities、GameplayTags、Networking 或其他可选 CycloneGames 包 **没有任何** 编译时依赖。可选 integration assembly 位于 `Runtime/Scripts/Integrations/`，当导入该集成时可以直接引用双方。
+- **包形态兼容**：Cyclone package 可以放在 `Assets/ThirdParty` 下使用，也可以作为 UPM package 引入。Integration source 不应只依赖 UPM `versionDefines`；本地包模式必须通过明确的 asmdef 边界和直接引用保持有效。
 
 ### 这个包统一了什么
 
