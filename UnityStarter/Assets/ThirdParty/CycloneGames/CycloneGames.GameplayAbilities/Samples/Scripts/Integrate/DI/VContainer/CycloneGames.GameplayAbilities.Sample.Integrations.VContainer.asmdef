@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Sample.Integrations.VContainer",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Integrate.VContainer",
+    "references": [
+        "VContainer",
+        "CycloneGames.GameplayAbilities.Core",
+        "CycloneGames.GameplayAbilities.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "VCONTAINER_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

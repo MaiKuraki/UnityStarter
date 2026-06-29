@@ -104,7 +104,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (s_Default != null) return s_Default;
                 lock (s_DefaultLock)
                 {
-                    s_Default ??= new GASPool<T>();
+                    if (s_Default == null)
+                    {
+                        s_Default = new GASPool<T>();
+                        GASPoolRegistry.Register(s_Default);
+                    }
                 }
                 return s_Default;
             }
@@ -118,6 +122,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             lock (s_DefaultLock)
             {
                 s_Default = instance;
+                if (instance != null)
+                {
+                    GASPoolRegistry.Register(instance);
+                }
             }
         }
 

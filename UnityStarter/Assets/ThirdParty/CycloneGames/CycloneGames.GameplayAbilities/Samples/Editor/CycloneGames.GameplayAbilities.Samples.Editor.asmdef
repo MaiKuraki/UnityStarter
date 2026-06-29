@@ -5,7 +5,6 @@
         "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime",
         "CycloneGames.GameplayAbilities.Editor",
-        "CycloneGames.GameplayAbilities.Samples",
         "CycloneGames.GameplayAbilities.Sample"
     ],
     "includePlatforms": [

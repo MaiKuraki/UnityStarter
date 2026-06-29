@@ -1,151 +1,140 @@
-[**English**](README.md) | [**简体中文**]
+[English](README.md) | [Simplified Chinese]
 
 # GameplayAbilities 示例
 
-本文件夹包含 Gameplay Ability System 核心功能的完整示例。
+本目录包含 `CycloneGames.GameplayAbilities` 的可运行示例场景和 authoring asset。示例展示如何连接 `AbilitySystemComponent`、attribute、GameplayTag、GameplayEffect、GameplayAbility、GameplayCue、target actor、pooling 和 startup helper。
 
-## 🎮 快速开始
+示例项目用于学习。生产项目应把需要的模式复制到自己的 assembly 中，替换 scene lookup 为项目服务，并加入符合游戏需求的 authority、validation、asset registry 和 pooling 规则。
 
-1. 打开 `SampleScene.unity`
-2. 点击 Play
-3. 使用以下按键：
-   - `1` - 释放火球术（伤害 + 灼烧）
-   - `2` - 净化（移除负面效果）
-   - `E` - 敌人释放毒刃
-   - `Space` - 获得调试经验值
+## 资源位置
 
----
+| 内容 | 路径 | 用途 |
+| --- | --- | --- |
+| 场景 | `Samples/SampleScene.unity` | 可运行端到端场景，包含 Player、Enemy、input、combat log 和已配置 sample asset。 |
+| Prefab | `Samples/Prefabs/Player.prefab`, `Samples/Prefabs/Enemy.prefab` | 承载 sample character 和 ASC component 的最小 actor。 |
+| Material | `Samples/Materials/` | Sample actor 使用的简单视觉材质。 |
+| Ability 和 effect asset | `Samples/ScriptableObjects/` | 已配置的 ability、effect、cue、execution、DoT、poison、purify、passive、bounty 和 level data asset。 |
+| Runtime sample script | `Samples/Scripts/` | Ability、attribute、target actor、setup、pooling 和 UI logger 示例。 |
+| Editor sample script | `Samples/Editor/` | Attribute name selection 的 sample property drawer 支持。 |
+| 预览媒体 | `../Documents~/DemoPreview_1.gif`, `../Documents~/DemoPreview_2.gif` | 用于入门和文档的 README 预览图。 |
 
-## 📂 目录结构
+## 快速开始
 
-```
-Samples/
-├── Scripts/           # 所有示例代码
-├── ScriptableObjects/ # 预配置的技能和效果
-├── Prefabs/           # 角色预制件
-├── Materials/         # 视觉材质
-└── SampleScene.unity  # 演示场景
-```
+1. 打开 `UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/Samples/SampleScene.unity`。
+2. 在 Unity Editor 中点击 Play。
+3. 使用 sample 控制按键。
 
----
+| 输入 | 行为 |
+| --- | --- |
+| `1` | Player 释放 Fireball，造成 instant damage 并附加 burn。 |
+| `2` | Player 释放 Purify，从合法目标身上移除 poison 类 debuff。 |
+| `E` | Enemy 释放 Poison Blade。 |
+| `Space` | 授予调试经验，用于触发 attribute 和 level-up hook。 |
 
-## 📚 示例脚本（按复杂度分类）
+预期结果：UI log 会报告 ability activation、effect application、damage、debuff removal 和 level-up event。Console 不应出现 compile error 或 missing script warning。
 
-### 🟢 入门级
+## 学习路径
 
-| 脚本                              | 说明                           |
-| --------------------------------- | ------------------------------ |
-| `Character.cs`                    | 基础角色设置，ASC 初始化       |
-| `CharacterAttributeSet.cs`        | 定义生命、法力、攻击、防御属性 |
-| `GASSampleTags.cs`                | 使用常量集中定义 GameplayTag   |
-| `AbilitySystemComponentHolder.cs` | ASC 的 MonoBehaviour 包装器    |
-| `GASPoolInitializer.cs`           | 对象池配置与预热组件           |
+### Character 与 ASC 设置
 
-### 🟡 中级
+先阅读这些脚本：
 
-| 脚本                     | 说明                                 |
-| ------------------------ | ------------------------------------ |
-| `GA_Fireball_SO.cs`      | 完整技能：消耗、冷却、伤害、持续伤害 |
-| `GA_Purify_SO.cs`        | 通过 Tag 查询移除负面效果            |
-| `GA_ArmorStack_SO.cs`    | 可堆叠护甲 Buff 演示                 |
-| `SampleCombatManager.cs` | 输入处理、UI 更新、按 Tag 激活技能   |
-| `GC_Fireball_Impact.cs`  | 用于冲击 VFX/SFX 的 GameplayCue      |
+| 脚本 | 学习重点 |
+| --- | --- |
+| `Scripts/AbilitySystemComponentHolder.cs` | 如何从 `MonoBehaviour` 承载纯 C# `AbilitySystemComponent`。 |
+| `Scripts/Character.cs` | Actor initialization、initial attributes、initial passives、ability grant、bounty effect 和 ASC tick。 |
+| `Scripts/CharacterAttributeSet.cs` | Primary、secondary 和 meta attribute；clamping；damage conversion；death 和 bounty hook。 |
+| `Scripts/GASSampleTags.cs` | 集中式 tag constant 和 runtime tag registration。 |
 
-### 🔴 高级
+### Effect 与 Attribute
 
-| 脚本                                         | 说明                                      |
-| -------------------------------------------- | ----------------------------------------- |
-| `GA_ChainLightning_SO.cs`                    | 多目标技能，伤害递减                      |
-| `GA_Meteor_SO.cs`                            | 带地面选择的瞄准系统                      |
-| `GA_Berserk_SO.cs`                           | GrantedAbility 演示（狂暴时授予处决技能） |
-| `GA_Execute_SO.cs`                           | 被 Buff 临时授予的技能                    |
-| `GA_ShieldOfLight_SO.cs`                     | OngoingTagRequirements 条件激活效果       |
-| `ExecCalc_Burn.cs`                           | DoT 的自定义执行计算                      |
-| `GameplayAbilityTargetActor_GroundSelect.cs` | 交互式瞄准 Actor                          |
+检查这些 asset：
 
----
+| Asset | 学习重点 |
+| --- | --- |
+| `ScriptableObjects/GE_BaseAttributes_Hero.asset` | 通过 GameplayEffect 配置玩家初始 attribute。 |
+| `ScriptableObjects/GE_BaseAttributes_Enemy.asset` | 通过 GameplayEffect 配置敌人初始 attribute。 |
+| `ScriptableObjects/Fireball/GE_Fireball_Impact.asset` | Fireball 驱动的 instant damage effect。 |
+| `ScriptableObjects/DoT/GE_DoT_Burn.asset` | 周期性 burn damage。 |
+| `ScriptableObjects/DoT/GE_DoT_Poison.asset` | 周期性 poison damage。 |
+| `ScriptableObjects/GE_Passive_IncreaseDamage_10Percent.asset` | Passive attribute modifier pattern。 |
 
-## 🏷️ Tag 组织（GASSampleTags.cs）
+### Ability Authoring
 
-Tag 是 GAS 的通用语言。本示例使用了良好的层级组织：
+按以下顺序阅读 ability script：
+
+| 脚本 | 学习重点 |
+| --- | --- |
+| `Scripts/GA_Fireball_SO.cs` | Cost、cooldown、instant damage、burn、SetByCaller magnitude 和 sample target lookup。 |
+| `Scripts/GA_PoisonBlade_SO.cs` | 从 ability 应用 debuff。 |
+| `Scripts/GA_Purify_SO.cs` | 按 tag 移除 active effect 并过滤 target。 |
+| `Scripts/GA_ArmorStack_SO.cs` | Stack behavior 和 stack debugging。 |
+| `Scripts/GA_Berserk_SO.cs` 与 `Scripts/GA_Execute_SO.cs` | Granted ability pattern。 |
+| `Scripts/GA_ShieldOfLight_SO.cs` | 使用 ongoing requirement 的 defensive buff pattern。 |
+| `Scripts/GA_ChainLightning_SO.cs` | 带 falloff 的 multi-target ability flow。 |
+| `Scripts/GA_Meteor_SO.cs` | Target actor workflow 和 ground selection。 |
+
+### Targeting 与 AbilityTask
+
+| 脚本 | 学习重点 |
+| --- | --- |
+| `Scripts/AbilityTask_WaitTargetData_SpawnedActor.cs` | 从 ability task 创建并绑定 target actor。 |
+| `Scripts/GameplayAbilityTargetActor_GroundSelect.cs` | 交互式 ground targeting。 |
+| `Scripts/TargetActor/GameplayAbilityTargetActor_SingleLineTrace.cs` | Single line trace targeting。 |
+| `Scripts/TargetActor/GameplayAbilityTargetActor_SphereOverlap.cs` | Area targeting。 |
+| `Scripts/TargetActor/GameplayAbilityTargetActor_ConeTrace.cs` | Cone targeting。 |
+
+### Startup 与 Integration
+
+| 脚本或 Assembly | 学习重点 |
+| --- | --- |
+| `Scripts/GASPoolInitializer.cs` | 战斗前 pool configuration 和 warmup。 |
+| `Scripts/Integrate/Setup/GASManualSetup.cs` | 使用 `CycloneGames.AssetManagement` 的 manual non-DI cue manager startup。 |
+| `Scripts/Integrate/Setup/GASServerSetup.cs` | 使用 `NullGameplayCueManager` 的 server/headless startup。 |
+| `Scripts/Integrate/DI/VContainer/GASLifetimeScope.cs` | 可选 VContainer composition。该文件隔离在 `CycloneGames.GameplayAbilities.Sample.Integrations.VContainer` 中，仅在 VContainer package 存在时编译。 |
+
+## GameplayTag 布局
+
+Sample tag 集中在 `Scripts/GASSampleTags.cs`，并通过 `[RegisterGameplayTagsFrom]` 注册。
 
 ```csharp
-// 属性
 "Attribute.Primary.Attack"
 "Attribute.Secondary.Health"
-
-// 状态
-"State.Dead"
 "State.Burning"
-"State.Berserk"
-
-// Buff
 "Buff.ArmorStack"
-"Buff.Berserk"
-"Buff.ShieldOfLight"
-
-// 负面效果
-"Debuff.Burn"
 "Debuff.Poison"
-
-// 冷却
 "Cooldown.Skill.Fireball"
-
-// 技能
 "Ability.Fireball"
-"Ability.ArmorStack"
-"Ability.Berserk"
-
-// GameplayCue
 "GameplayCue.Fireball.Impact"
+"Faction.Player"
+"Faction.NPC.Enemy"
 ```
 
-> **提示**：使用 `[RegisterGameplayTagsFrom]` 程序集特性实现自动 Tag 注册。
+生产内容可以沿用相同层级风格，但项目自有 tag 应放在项目 package 或游戏 assembly 中，不要修改 sample tag 作为生产事实来源。
 
----
+## Package 与 UPM 说明
 
-## 🎯 学习路径
+当前仓库把 samples 保留在 `Samples/`，因此 CycloneGames 模块直接放在 `Assets/ThirdParty` 下时也能清晰可见并直接运行。Package manifest 通过 `samples` entry 暴露同一目录：
 
-### 路径 1：理解 GameplayEffect
+```json
+{
+  "displayName": "Gameplay Ability Samples",
+  "path": "Samples"
+}
+```
 
-1. 查看 `GE_BaseAttributes_Hero.asset`（初始属性）
-2. 查看 `Fireball/GE_Fireball_Damage.asset`（即时伤害）
-3. 查看 `DoT/GE_Burn_DoT.asset`（周期性伤害）
+如果发布流水线要求隐藏的 UPM sample folder，应在发布包中镜像该源目录；本仓库中 scene、prefab、ScriptableObject 和 `.meta` GUID 的 source of truth 仍保持在 `Samples/`。
 
-### 路径 2：构建 GameplayAbility
+## 持久化
 
-1. 阅读 `GA_Fireball_SO.cs`（简单技能）
-2. 阅读 `GA_Purify_SO.cs`（效果移除）
-3. 阅读 `GA_ChainLightning_SO.cs`（复杂瞄准）
+Samples 不写入持久化 player data、project settings、editor preference 或 runtime save file。Play Mode 中创建的 runtime object 是临时对象，会在退出 Play Mode 时销毁。`Documents~/` 下的预览媒体只用于文档。
 
-### 路径 3：角色设置
+## 验证
 
-1. 阅读 `Character.cs`（ASC 初始化）
-2. 阅读 `CharacterAttributeSet.cs`（属性定义）
-3. 阅读 `SampleCombatManager.cs`（技能激活）
+修改 sample asset、script、asmdef 或文档后执行以下检查：
 
-### 路径 4：高级机制
-
-1. 阅读 `GA_ArmorStack_SO.cs`（效果堆叠）
-2. 阅读 `GA_Berserk_SO.cs` + `GA_Execute_SO.cs`（授予技能）
-3. 阅读 `GA_ShieldOfLight_SO.cs`（通过 OngoingTagRequirements 实现条件效果）
-
-### 路径 5：性能优化
-
-1. 阅读 `GASPoolInitializer.cs`（配置池化层级）
-2. 使用 `GASPoolUtility.ConfigureXXX()` 进行初始化
-3. 在加载界面调用 `WarmAllPools()` 预热
-
----
-
-## 💡 最佳实践演示
-
-- **基于 Tag 的技能查找**：`TryActivateAbilityByTag()`
-- **数据驱动效果**：所有数值在 ScriptableObject 中配置
-- **正确的对象池**：`CreatePoolableInstance()` 模式
-- **伤害减免**：`PreProcessInstantEffect()` 重写
-- **升级系统**：使用 `PostGameplayEffectExecute()` 追踪经验值
-- **效果堆叠**：`EGameplayEffectStackingType.AggregateByTarget`
-- **授予技能**：通过 GameplayEffect 临时授予能力
-- **条件效果**：`OngoingTagRequirements` 实现状态相关 Buff
-- **池预热**：`GASPoolUtility.WarmAllPools()` 实现零 GC 运行时
+1. 打开 `Samples/SampleScene.unity`，确认没有 missing script warning。
+2. 点击 Play，测试 `1`、`2`、`E` 和 `Space`。
+3. 确认 Console 没有 compile error、missing assembly reference 或 missing asset reference。
+4. 在 Unity Test Runner 中运行 GameplayAbilities EditMode tests。
+5. 发布 package 前，确认 `package.json` 仍暴露 sample path，根 README 的预览图仍能渲染。

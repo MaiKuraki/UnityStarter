@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.gameplay-abilities",
   "version": "1.0.0",
   "displayName": "CycloneGames.GameplayAbilities",
-  "description": "A simple gameplay abilities module similiar with UnrealEngine's Gameplay Abilities.",
+  "description": "A Unity gameplay ability framework inspired by Unreal Engine's Gameplay Ability System.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
@@ -26,7 +26,7 @@
   "samples": [
     {
       "displayName": "Gameplay Ability Samples",
-      "description": "Gameplay Ability Samples",
+      "description": "Playable sample scene and authoring assets for fireball, poison, purify, buffs, targeting, pooling, manual setup, and optional DI setup patterns.",
       "path": "Samples"
     }
   ]

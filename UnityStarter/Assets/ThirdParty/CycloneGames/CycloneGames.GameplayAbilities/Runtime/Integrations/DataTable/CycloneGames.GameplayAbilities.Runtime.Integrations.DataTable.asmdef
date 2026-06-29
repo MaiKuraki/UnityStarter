@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable",
+    "references": [
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.GameplayAbilities.Core",
+        "CycloneGames.GameplayAbilities.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_DATA_TABLE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.data-table",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_DATA_TABLE"
+        }
+    ],
+    "noEngineReferences": false
+}
