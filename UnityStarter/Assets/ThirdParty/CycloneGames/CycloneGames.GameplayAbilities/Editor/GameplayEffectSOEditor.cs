@@ -71,11 +71,21 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (s_BasePropertiesInitialized) return;
 
             var baseType = typeof(Runtime.GameplayEffectSO);
-            foreach (var field in baseType.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            foreach (var field in baseType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             {
-                s_BasePropertyNames.Add(field.Name);
+                if (IsUnitySerializedField(field))
+                {
+                    s_BasePropertyNames.Add(field.Name);
+                }
             }
             s_BasePropertiesInitialized = true;
+        }
+
+        private static bool IsUnitySerializedField(FieldInfo field)
+        {
+            return !field.IsStatic
+                && !field.IsNotSerialized
+                && (field.IsPublic || field.GetCustomAttribute<SerializeField>() != null);
         }
 
         private void CacheProperties()
@@ -442,5 +452,139 @@ namespace CycloneGames.GameplayAbilities.Editor
         }
 
         #endregion
+    }
+
+    [CustomPropertyDrawer(typeof(Runtime.ModifierInfoSerializable))]
+    public sealed class ModifierInfoSerializableDrawer : PropertyDrawer
+    {
+        private const float VERTICAL_SPACING = 2f;
+
+        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
+        {
+            EditorGUI.BeginProperty(position, label, property);
+
+            var line = new Rect(position.x, position.y, position.width, EditorGUIUtility.singleLineHeight);
+            property.isExpanded = EditorGUI.Foldout(line, property.isExpanded, label, true);
+            if (!property.isExpanded)
+            {
+                EditorGUI.EndProperty();
+                return;
+            }
+
+            EditorGUI.indentLevel++;
+            Advance(ref line);
+
+            DrawRelativeProperty(ref line, property, "AttributeName", "Target Attribute");
+            DrawRelativeProperty(ref line, property, "Operation", "Operation");
+            DrawRelativeProperty(ref line, property, "EvaluationChannel", "Evaluation Channel");
+
+            var magnitudeTypeProp = property.FindPropertyRelative("MagnitudeCalculationType");
+            EditorGUI.PropertyField(line, magnitudeTypeProp, new GUIContent("Magnitude Type"));
+            Advance(ref line);
+
+            var magnitudeType = (Runtime.EGameplayEffectMagnitudeCalculation)magnitudeTypeProp.enumValueIndex;
+            switch (magnitudeType)
+            {
+                case Runtime.EGameplayEffectMagnitudeCalculation.AttributeBased:
+                    DrawRelativeProperty(ref line, property, "BackingAttributeName", "Backing Attribute");
+                    DrawRelativeProperty(ref line, property, "AttributeCaptureSource", "Capture Source");
+                    DrawRelativeProperty(ref line, property, "AttributeCalculationType", "Attribute Value");
+                    DrawRelativeProperty(ref line, property, "AttributeSnapshotPolicy", "Capture Timing");
+                    DrawRelativeProperty(ref line, property, "AttributeCoefficient", "Coefficient", true);
+                    DrawRelativeProperty(ref line, property, "AttributePreMultiplyAdditiveValue", "Pre Add", true);
+                    DrawRelativeProperty(ref line, property, "AttributePostMultiplyAdditiveValue", "Post Add", true);
+                    break;
+                case Runtime.EGameplayEffectMagnitudeCalculation.SetByCaller:
+                    DrawRelativeProperty(ref line, property, "SetByCallerDataTag", "Data Tag");
+                    DrawRelativeProperty(ref line, property, "SetByCallerDataName", "Data Name");
+                    DrawRelativeProperty(ref line, property, "SetByCallerDefaultValue", "Default Value");
+                    DrawRelativeProperty(ref line, property, "WarnIfSetByCallerMissing", "Warn If Missing");
+                    break;
+                case Runtime.EGameplayEffectMagnitudeCalculation.CustomCalculation:
+                    line.height = EditorGUIUtility.singleLineHeight * 2.2f;
+                    EditorGUI.HelpBox(
+                        line,
+                        "ScriptableObject modifiers cannot serialize custom calculation instances. Use ScalableFloat, AttributeBased, SetByCaller, or C# runtime construction.",
+                        MessageType.Warning);
+                    Advance(ref line);
+                    break;
+                default:
+                    DrawRelativeProperty(ref line, property, "Magnitude", "Magnitude", true);
+                    break;
+            }
+
+            EditorGUI.indentLevel--;
+            EditorGUI.EndProperty();
+        }
+
+        public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
+        {
+            float height = EditorGUIUtility.singleLineHeight;
+            if (property.isExpanded)
+            {
+                AddRelativePropertyHeight(ref height, property, "AttributeName");
+                AddRelativePropertyHeight(ref height, property, "Operation");
+                AddRelativePropertyHeight(ref height, property, "EvaluationChannel");
+                AddRelativePropertyHeight(ref height, property, "MagnitudeCalculationType");
+
+                var magnitudeTypeProp = property.FindPropertyRelative("MagnitudeCalculationType");
+                var magnitudeType = (Runtime.EGameplayEffectMagnitudeCalculation)magnitudeTypeProp.enumValueIndex;
+                switch (magnitudeType)
+                {
+                    case Runtime.EGameplayEffectMagnitudeCalculation.AttributeBased:
+                        AddRelativePropertyHeight(ref height, property, "BackingAttributeName");
+                        AddRelativePropertyHeight(ref height, property, "AttributeCaptureSource");
+                        AddRelativePropertyHeight(ref height, property, "AttributeCalculationType");
+                        AddRelativePropertyHeight(ref height, property, "AttributeSnapshotPolicy");
+                        AddRelativePropertyHeight(ref height, property, "AttributeCoefficient", true);
+                        AddRelativePropertyHeight(ref height, property, "AttributePreMultiplyAdditiveValue", true);
+                        AddRelativePropertyHeight(ref height, property, "AttributePostMultiplyAdditiveValue", true);
+                        break;
+                    case Runtime.EGameplayEffectMagnitudeCalculation.SetByCaller:
+                        AddRelativePropertyHeight(ref height, property, "SetByCallerDataTag");
+                        AddRelativePropertyHeight(ref height, property, "SetByCallerDataName");
+                        AddRelativePropertyHeight(ref height, property, "SetByCallerDefaultValue");
+                        AddRelativePropertyHeight(ref height, property, "WarnIfSetByCallerMissing");
+                        break;
+                    case Runtime.EGameplayEffectMagnitudeCalculation.CustomCalculation:
+                        height += VERTICAL_SPACING + (EditorGUIUtility.singleLineHeight * 2.2f);
+                        break;
+                    default:
+                        AddRelativePropertyHeight(ref height, property, "Magnitude", true);
+                        break;
+                }
+            }
+
+            return height;
+        }
+
+        private static void DrawRelativeProperty(
+            ref Rect line,
+            SerializedProperty property,
+            string relativePropertyName,
+            string label,
+            bool includeChildren = false)
+        {
+            var relativeProperty = property.FindPropertyRelative(relativePropertyName);
+            line.height = EditorGUI.GetPropertyHeight(relativeProperty, includeChildren);
+            EditorGUI.PropertyField(line, relativeProperty, new GUIContent(label), includeChildren);
+            Advance(ref line);
+        }
+
+        private static void AddRelativePropertyHeight(
+            ref float height,
+            SerializedProperty property,
+            string relativePropertyName,
+            bool includeChildren = false)
+        {
+            var relativeProperty = property.FindPropertyRelative(relativePropertyName);
+            height += VERTICAL_SPACING + EditorGUI.GetPropertyHeight(relativeProperty, includeChildren);
+        }
+
+        private static void Advance(ref Rect line)
+        {
+            line.y += line.height + VERTICAL_SPACING;
+            line.height = EditorGUIUtility.singleLineHeight;
+        }
     }
 }

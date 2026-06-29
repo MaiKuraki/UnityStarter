@@ -72,11 +72,21 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             if (s_BasePropertiesInitialized) return;
             var baseType = typeof(Runtime.GameplayAbilitySO);
-            foreach (var field in baseType.GetFields(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+            foreach (var field in baseType.GetFields(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.DeclaredOnly))
             {
-                s_BasePropertyNames.Add(field.Name);
+                if (IsUnitySerializedField(field))
+                {
+                    s_BasePropertyNames.Add(field.Name);
+                }
             }
             s_BasePropertiesInitialized = true;
+        }
+
+        private static bool IsUnitySerializedField(FieldInfo field)
+        {
+            return !field.IsStatic
+                && !field.IsNotSerialized
+                && (field.IsPublic || field.GetCustomAttribute<SerializeField>() != null);
         }
 
         private void CacheProperties()

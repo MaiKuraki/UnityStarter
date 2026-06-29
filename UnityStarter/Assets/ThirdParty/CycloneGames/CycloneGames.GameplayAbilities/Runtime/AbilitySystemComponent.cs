@@ -1191,16 +1191,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void MarkAttributeDirty(GameplayAttribute attribute)
         {
             AssertRuntimeThread();
+            bool newlyDirty = false;
             if (attribute != null && !attribute.IsDirty)
             {
                 attribute.IsDirty = true;
                 dirtyAttributes.Add(attribute);
                 MarkAttributeValueDirty(attribute);
+                newlyDirty = true;
             }
 
             if (attribute != null)
             {
                 RegisterAttributeInCore(attribute);
+                if (newlyDirty)
+                {
+                    MarkLiveAttributeDependentsDirty(attribute);
+                }
             }
         }
 
@@ -1794,7 +1800,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 coreModifierBuffer[i] = new GASModifierData(
                     GetOrCreateCoreAttributeId(modifier.AttributeName),
                     ConvertModifierOp(modifier.Operation),
-                    spec.GetCalculatedMagnitudeRaw(i));
+                    spec.GetCalculatedMagnitudeRaw(i),
+                    modifier.EvaluationChannel);
             }
 
             return coreModifierBuffer;
@@ -3009,7 +3016,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     var attribute = GetAttribute(modInfo.AttributeName);
                     if (attribute != null)
                     {
-                        ApplyModifier(spec, attribute, modInfo, GASFixedValue.FromFloat(modInfo.Magnitude.GetValueAtLevel(spec.Level)).RawValue, true);
+                        ApplyModifier(spec, attribute, modInfo, modInfo.CalculateMagnitudeRaw(spec, spec.Level), true);
                     }
                 }
             }
@@ -3190,12 +3197,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     {
                         if (effect.Spec.TargetAttributes[m] != attr) continue;
 
-                        // For non-snapshotted custom calculations, recalculate magnitude live
+                        // For non-snapshotted dynamic magnitudes, recalculate live.
                         long baseMagnitudeRaw;
                         var mod = modifiers[m];
-                        if (mod.SnapshotPolicy == EGameplayEffectAttributeCaptureSnapshot.NotSnapshot && mod.CustomCalculation != null)
+                        if (mod.ShouldRecalculateLiveMagnitude)
                         {
-                            effect.Spec.SetCalculatedMagnitude(m, mod.CustomCalculation.CalculateMagnitude(effect.Spec));
+                            effect.Spec.SetCalculatedMagnitudeRaw(m, mod.CalculateMagnitudeRaw(effect.Spec, effect.Spec.Level));
                             baseMagnitudeRaw = effect.Spec.GetCalculatedMagnitudeRaw(m);
                         }
                         else
@@ -4075,6 +4082,50 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (attribute != null)
                 {
                     MarkAttributeDirty(attribute);
+                }
+            }
+        }
+
+        private void MarkLiveAttributeDependentsDirty(GameplayAttribute changedAttribute)
+        {
+            if (changedAttribute == null || activeEffects.Count == 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < activeEffects.Count; i++)
+            {
+                var effect = activeEffects[i];
+                var spec = effect?.Spec;
+                var modifiers = spec?.Def?.Modifiers;
+                if (modifiers == null)
+                {
+                    continue;
+                }
+
+                for (int m = 0; m < modifiers.Count; m++)
+                {
+                    var mod = modifiers[m];
+                    if (!mod.DependsOnLiveAttribute(changedAttribute, spec))
+                    {
+                        continue;
+                    }
+
+                    GameplayAttribute targetAttribute = null;
+                    if (m < spec.TargetAttributes.Length)
+                    {
+                        targetAttribute = spec.TargetAttributes[m];
+                    }
+
+                    if (targetAttribute == null)
+                    {
+                        targetAttribute = GetAttribute(mod.AttributeName);
+                    }
+
+                    if (targetAttribute != null && !ReferenceEquals(targetAttribute, changedAttribute))
+                    {
+                        MarkAttributeDirty(targetAttribute);
+                    }
                 }
             }
         }

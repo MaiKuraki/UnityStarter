@@ -56,18 +56,38 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASAttributeId AttributeId;
         public readonly GASModifierOp Op;
         public readonly long MagnitudeRaw;
+        public readonly GASModifierEvaluationChannel EvaluationChannel;
         public GASFixedValue Magnitude => GASFixedValue.FromRaw(MagnitudeRaw);
 
         public GASModifierData(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude)
-            : this(attributeId, op, magnitude.RawValue)
+            : this(attributeId, op, magnitude.RawValue, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public GASModifierData(
+            GASAttributeId attributeId,
+            GASModifierOp op,
+            GASFixedValue magnitude,
+            GASModifierEvaluationChannel evaluationChannel)
+            : this(attributeId, op, magnitude.RawValue, evaluationChannel)
         {
         }
 
         public GASModifierData(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw)
+            : this(attributeId, op, magnitudeRaw, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public GASModifierData(
+            GASAttributeId attributeId,
+            GASModifierOp op,
+            long magnitudeRaw,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeId = attributeId;
             Op = op;
             MagnitudeRaw = magnitudeRaw;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
         }
     }
 

@@ -169,12 +169,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             for (int i = 0; i < modCount; i++)
             {
                 var mod = def.Modifiers[i];
-                float magnitude = mod.CustomCalculation != null
-                    ? mod.CustomCalculation.CalculateMagnitude(this)
-                    : mod.Magnitude.GetValueAtLevel(level);
-
-                ModifierMagnitudes[i] = magnitude;
-                ModifierMagnitudeRawValues[i] = GASFixedValue.FromFloat(magnitude).RawValue;
+                StoreCalculatedMagnitudeRaw(i, mod.CalculateMagnitudeRaw(this, level));
                 TargetAttributes[i] = null;
             }
         }
@@ -222,21 +217,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (dataTag.IsNone) return;
             GetOrCreateTagMagnitudes()[dataTag] = magnitudeRaw;
+            RecalculateSetByCallerMagnitudes();
         }
 
         public float GetSetByCallerMagnitude(GameplayTag dataTag, bool warnIfNotFound = true, float defaultValue = 0f)
         {
+            return GASFixedValue.FromRaw(GetSetByCallerMagnitudeRaw(
+                dataTag,
+                warnIfNotFound,
+                GASFixedValue.FromFloat(defaultValue).RawValue)).ToFloat();
+        }
+
+        public long GetSetByCallerMagnitudeRaw(GameplayTag dataTag, bool warnIfNotFound = true, long defaultValueRaw = 0L)
+        {
             if (setByCallerMagnitudes != null && setByCallerMagnitudes.TryGetValue(dataTag, out long magnitudeRaw))
             {
-                return GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
+                return magnitudeRaw;
             }
 
             if (warnIfNotFound)
             {
-                GASLog.Warning(sb => sb.Append("GetSetByCallerMagnitude: Tag '").Append(dataTag.Name)
+                string tagName = dataTag.IsNone ? "<None>" : dataTag.Name;
+                GASLog.Warning(sb => sb.Append("GetSetByCallerMagnitude: Tag '").Append(tagName)
                     .Append("' not found in spec for effect '").Append(Def?.Name).Append("'."));
             }
-            return defaultValue;
+            return defaultValueRaw;
         }
 
         public void SetSetByCallerMagnitude(string dataName, float magnitude)
@@ -262,13 +267,22 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
             GetOrCreateNameMagnitudes()[dataName] = magnitudeRaw;
+            RecalculateSetByCallerMagnitudes();
         }
 
         public float GetSetByCallerMagnitude(string dataName, bool warnIfNotFound = true, float defaultValue = 0f)
         {
+            return GASFixedValue.FromRaw(GetSetByCallerMagnitudeRaw(
+                dataName,
+                warnIfNotFound,
+                GASFixedValue.FromFloat(defaultValue).RawValue)).ToFloat();
+        }
+
+        public long GetSetByCallerMagnitudeRaw(string dataName, bool warnIfNotFound = true, long defaultValueRaw = 0L)
+        {
             if (setByCallerMagnitudesByName != null && setByCallerMagnitudesByName.TryGetValue(dataName, out long magnitudeRaw))
             {
-                return GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
+                return magnitudeRaw;
             }
 
             if (warnIfNotFound)
@@ -276,7 +290,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 GASLog.Warning(sb => sb.Append("GetSetByCallerMagnitude: Name '").Append(dataName)
                     .Append("' not found in spec for effect '").Append(Def?.Name).Append("'."));
             }
-            return defaultValue;
+            return defaultValueRaw;
         }
 
         public bool HasSetByCallerMagnitude(string dataName)
@@ -474,8 +488,23 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            ModifierMagnitudes[index] = magnitude;
-            ModifierMagnitudeRawValues[index] = GASFixedValue.FromFloat(magnitude).RawValue;
+            StoreCalculatedMagnitudeRaw(index, GASFixedValue.FromFloat(magnitude).RawValue);
+        }
+
+        public void SetCalculatedMagnitudeRaw(int index, long magnitudeRaw)
+        {
+            if (index < 0 || index >= ModifierMagnitudes.Length || index >= ModifierMagnitudeRawValues.Length)
+            {
+                return;
+            }
+
+            StoreCalculatedMagnitudeRaw(index, magnitudeRaw);
+        }
+
+        private void StoreCalculatedMagnitudeRaw(int index, long magnitudeRaw)
+        {
+            ModifierMagnitudeRawValues[index] = magnitudeRaw;
+            ModifierMagnitudes[index] = GASFixedValue.FromRaw(magnitudeRaw).ToFloat();
         }
 
         #endregion
@@ -492,9 +521,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     if (i < TargetAttributes.Length)
                     {
-                        TargetAttributes[i] = target.GetAttribute(Def.Modifiers[i].AttributeName);
+                        TargetAttributes[i] = target != null ? target.GetAttribute(Def.Modifiers[i].AttributeName) : null;
                     }
                 }
+
+                RecalculateTargetDependentMagnitudes();
             }
         }
 
@@ -511,16 +542,50 @@ namespace CycloneGames.GameplayAbilities.Runtime
             for (int i = 0; i < modCount; i++)
             {
                 var mod = Def.Modifiers[i];
-                float magnitude = mod.CustomCalculation != null
-                    ? mod.CustomCalculation.CalculateMagnitude(this)
-                    : mod.Magnitude.GetValueAtLevel(Level);
-
-                ModifierMagnitudes[i] = magnitude;
-                ModifierMagnitudeRawValues[i] = GASFixedValue.FromFloat(magnitude).RawValue;
+                StoreCalculatedMagnitudeRaw(i, mod.CalculateMagnitudeRaw(this, Level));
 
                 if (Target != null)
                 {
                     TargetAttributes[i] = Target.GetAttribute(mod.AttributeName);
+                }
+            }
+        }
+
+        private void RecalculateTargetDependentMagnitudes()
+        {
+            if (Def == null)
+            {
+                return;
+            }
+
+            int modCount = Def.Modifiers.Count;
+            EnsureCapacity(modCount);
+
+            for (int i = 0; i < modCount; i++)
+            {
+                var mod = Def.Modifiers[i];
+                if (mod.ShouldRecalculateWhenTargetAssigned)
+                {
+                    StoreCalculatedMagnitudeRaw(i, mod.CalculateMagnitudeRaw(this, Level));
+                }
+            }
+        }
+
+        private void RecalculateSetByCallerMagnitudes()
+        {
+            if (Def == null)
+            {
+                return;
+            }
+
+            int modCount = Def.Modifiers.Count;
+            EnsureCapacity(modCount);
+            for (int i = 0; i < modCount; i++)
+            {
+                var mod = Def.Modifiers[i];
+                if (mod.MagnitudeCalculationType == EGameplayEffectMagnitudeCalculation.SetByCaller)
+                {
+                    StoreCalculatedMagnitudeRaw(i, mod.CalculateMagnitudeRaw(this, Level));
                 }
             }
         }
