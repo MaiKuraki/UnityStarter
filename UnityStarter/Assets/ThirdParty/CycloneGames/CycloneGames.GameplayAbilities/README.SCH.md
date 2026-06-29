@@ -13,7 +13,7 @@
 - 示例项目: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
   - <img src="./Documents~/DemoPreview_2.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
 
-- 包内示例场景: [In-Package Smaple](./Samples)
+- 包内示例场景: [In-Package Sample](./Samples)
   - <img src="./Documents~/DemoPreview_1.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
 
 ## 目录
@@ -39,6 +39,7 @@
   - [ScriptableObject Authoring 工作流](#scriptableobject-authoring-工作流)
   - [Cost、Cooldown、Buff、Debuff 与 Passive](#costcooldownbuffdebuff-与-passive)
   - [Modifier 聚合与 Channel](#modifier-聚合与-channel)
+  - [Modifier Magnitude 类型](#modifier-magnitude-类型)
   - [AbilityTask](#abilitytask)
   - [Targeting 系统](#targeting-系统)
   - [Execution Calculation](#execution-calculation)
@@ -640,6 +641,62 @@ var modifiers = new List<ModifierInfo>
 ```
 
 `GameplayEffectSO` 的 serialized modifier 暴露相同 channel。`DataTableModifierFactory` 也提供可选 `evaluationChannel` 参数，因此 Excel/Luban 驱动的数值可以进入同一套 deterministic pipeline。
+
+## Modifier Magnitude 类型
+
+`ModifierInfo` 使用一等 magnitude 模型，对应 Unreal GAS 的 `FGameplayEffectModifierMagnitude` 设计。Target attribute、operation 和 evaluation channel 描述 modifier 应用于哪里；magnitude type 描述数值从哪里来。
+
+| Magnitude 类型 | Unreal GAS 对应概念 | 适用场景 | 说明 |
+| --- | --- | --- | --- |
+| `ScalableFloat` | `ScalableFloatMagnitude` | 常量或随 level 线性增长的数值，例如基础 cooldown、固定消耗、固定 buff 数值。 | Cyclone 使用 `BaseValue + ScalingFactorPerLevel * (Level - 1)`。Unreal 还可以绑定 curve table；当策划需要大型外部表格时，使用 DataTable 集成。 |
+| `AttributeBased` | `FAttributeBasedFloat` | 由 source 或 target attribute 推导出的数值，例如 attack power 驱动伤害，max health 驱动护盾值。 | 支持 source/target capture、base/current/bonus attribute value、snapshot/live capture timing，以及 Unreal 风格 coefficient/pre-add/post-add 公式。 |
+| `CustomCalculation` | `FCustomCalculationBasedFloat` / `UGameplayModMagnitudeCalculation` | 需要自定义 runtime 逻辑的程序计算。 | Runtime C# 可以直接构造。`GameplayEffectSO` serialized modifier 不能保存任意 custom calculation instance；资产化自定义逻辑应使用 `GameplayEffectExecutionCalculationSO` 或由 C# 构造。 |
+| `SetByCaller` | `FSetByCallerFloat` | Ability 代码在 `GameplayEffectSpec` 上写入数值，例如蓄力时间、连击倍率、外部随机出的伤害。 | 网络 effect 优先使用 GameplayTag key。Name key 只作为本地或旧代码路径的便利方式。 |
+
+Attribute-based magnitude 使用与 Unreal GAS 相同的核心公式：
+
+```text
+Magnitude = Coefficient * (AttributeValue + PreMultiplyAdditiveValue) + PostMultiplyAdditiveValue
+```
+
+`AttributeValue` 可以是捕获 attribute 的 current magnitude、base value 或 bonus magnitude (`Current - Base`)。Cyclone 当前没有实现 Unreal `FAttributeBasedFloat` 中的 attribute curve lookup、source/target tag filter，以及 `AttributeMagnitudeEvaluatedUpToChannel`；这些场景可以使用 modifier channel、tag requirement 或 execution calculation 表达。
+
+示例：source attack power 驱动 target damage。
+
+```csharp
+var damageModifier = new ModifierInfo(
+    "Damage",
+    EAttributeModifierOperation.Add,
+    new AttributeBasedMagnitude(
+        "AttackPower",
+        EGameplayEffectAttributeCaptureSource.Source,
+        EAttributeBasedFloatCalculationType.AttributeMagnitude,
+        coefficient: new ScalableFloat(1.5f),
+        preMultiplyAdditiveValue: new ScalableFloat(0f),
+        postMultiplyAdditiveValue: new ScalableFloat(10f)));
+```
+
+示例：ability 代码在 application 前写入可复制的 SetByCaller magnitude。
+
+```csharp
+var damageModifier = new ModifierInfo(
+    "Damage",
+    EAttributeModifierOperation.Add,
+    new SetByCallerMagnitude(CombatTags.DataDamage));
+
+GameplayEffectSpec spec = GameplayEffectSpec.Create(damageEffect, sourceAsc, level: 1);
+spec.SetSetByCallerMagnitude(CombatTags.DataDamage, 42f);
+targetAsc.ApplyGameplayEffectSpecToSelf(spec);
+```
+
+Snapshot 行为是显式规则：
+
+- Source-captured snapshot value 在 spec 创建时计算。
+- Target-captured snapshot value 在 application 绑定 target ASC 时重新计算。
+- `NotSnapshot` attribute-based 和 custom magnitude 会在 dirty attribute evaluation 中实时重算。
+- 同一个 ASC 内的 live attribute dependency 会自动标记 dependent target attribute 为 dirty。对于生存在另一个 ASC 上、但 live 读取 source attribute 的 outgoing effect，优先使用 snapshot capture，或在 source attribute 改变时提供项目级 invalidation。
+
+网络不会复制 modifier formula。Peer 通过 stable id 解析相同 effect definition，然后复制权威 state、level、stack count、duration 和 SetByCaller GameplayTag value。外部传入的 SetByCaller value 应由服务器保持权威。
 
 ## AbilityTask
 

@@ -7,6 +7,136 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Editor
 {
+    [CustomPropertyDrawer(typeof(Runtime.AttributeNameSelectorAttribute))]
+    public sealed class AttributeNameSelectorDrawer : PropertyDrawer
+    {
+        private const float BUTTON_WIDTH = 24f;
+        private static readonly List<string> s_DisplayOptions = new List<string>(64);
+        private static readonly List<string> s_ValueOptions = new List<string>(64);
+        private static readonly HashSet<string> s_UniqueValues = new HashSet<string>(StringComparer.Ordinal);
+
+        public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
+        {
+            if (property.propertyType != SerializedPropertyType.String)
+            {
+                EditorGUI.LabelField(position, label.text, "Use [AttributeNameSelector] with string fields only.");
+                return;
+            }
+
+            Type constantsType = (attribute as Runtime.AttributeNameSelectorAttribute)?.ConstantsType;
+            if (constantsType == null)
+            {
+                EditorGUI.PropertyField(position, property, label);
+                return;
+            }
+
+            EditorGUI.BeginProperty(position, label, property);
+
+            Rect fieldRect = position;
+            fieldRect.width -= BUTTON_WIDTH + 2f;
+            Rect buttonRect = position;
+            buttonRect.x = fieldRect.xMax + 2f;
+            buttonRect.width = BUTTON_WIDTH;
+
+            EditorGUI.PropertyField(fieldRect, property, label);
+
+            if (EditorGUI.DropdownButton(buttonRect, GUIContent.none, FocusType.Keyboard))
+            {
+                RebuildOptions(constantsType);
+                ShowMenu(buttonRect, property);
+            }
+
+            EditorGUI.EndProperty();
+        }
+
+        private static void ShowMenu(Rect position, SerializedProperty property)
+        {
+            var menu = new GenericMenu();
+            string currentValue = property.stringValue;
+
+            menu.AddItem(new GUIContent("None"), string.IsNullOrEmpty(currentValue), () =>
+            {
+                property.stringValue = string.Empty;
+                property.serializedObject.ApplyModifiedProperties();
+            });
+
+            if (s_ValueOptions.Count == 0)
+            {
+                menu.AddDisabledItem(new GUIContent("No attribute constants found"));
+            }
+            else
+            {
+                menu.AddSeparator("");
+                for (int i = 0; i < s_ValueOptions.Count; i++)
+                {
+                    string value = s_ValueOptions[i];
+                    string display = s_DisplayOptions[i];
+                    menu.AddItem(new GUIContent(display), string.Equals(currentValue, value, StringComparison.Ordinal), () =>
+                    {
+                        property.stringValue = value;
+                        property.serializedObject.ApplyModifiedProperties();
+                    });
+                }
+            }
+
+            menu.DropDown(position);
+        }
+
+        private static void RebuildOptions(Type constantsType)
+        {
+            s_DisplayOptions.Clear();
+            s_ValueOptions.Clear();
+            s_UniqueValues.Clear();
+
+            AddConstantsFromType(constantsType);
+            SortOptions();
+        }
+
+        private static void AddConstantsFromType(Type type)
+        {
+            var fields = type.GetFields(BindingFlags.Public | BindingFlags.Static | BindingFlags.FlattenHierarchy);
+            for (int i = 0; i < fields.Length; i++)
+            {
+                var field = fields[i];
+                if (!field.IsLiteral || field.IsInitOnly || field.FieldType != typeof(string))
+                {
+                    continue;
+                }
+
+                string value = field.GetRawConstantValue() as string;
+                if (string.IsNullOrEmpty(value))
+                {
+                    continue;
+                }
+
+                if (s_UniqueValues.Add(value))
+                {
+                    s_ValueOptions.Add(value);
+                    s_DisplayOptions.Add(value.Replace('.', '/'));
+                }
+            }
+        }
+
+        private static void SortOptions()
+        {
+            for (int i = 1; i < s_ValueOptions.Count; i++)
+            {
+                string value = s_ValueOptions[i];
+                string display = s_DisplayOptions[i];
+                int j = i - 1;
+                while (j >= 0 && string.CompareOrdinal(s_DisplayOptions[j], display) > 0)
+                {
+                    s_ValueOptions[j + 1] = s_ValueOptions[j];
+                    s_DisplayOptions[j + 1] = s_DisplayOptions[j];
+                    j--;
+                }
+
+                s_ValueOptions[j + 1] = value;
+                s_DisplayOptions[j + 1] = display;
+            }
+        }
+    }
+
     /// <summary>
     /// An abstract base PropertyDrawer for string fields marked with [AttributeNameSelector].
     /// It renders a dropdown menu populated with public constant string values from a specified Type.

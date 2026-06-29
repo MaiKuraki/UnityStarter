@@ -29,11 +29,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var serializableMod in SerializableModifiers)
                 {
-                    runtimeModifiers.Add(new ModifierInfo(
-                        serializableMod.AttributeName,
-                        serializableMod.Operation,
-                        serializableMod.Magnitude,
-                        serializableMod.EvaluationChannel));
+                    runtimeModifiers.Add(CreateRuntimeModifier(serializableMod));
                 }
             }
 
@@ -75,6 +71,52 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 overflowEffects: runtimeOverflowEffects,
                 denyOverflowApplication: DenyOverflowApplication
             );
+        }
+
+        private static ModifierInfo CreateRuntimeModifier(ModifierInfoSerializable serializableMod)
+        {
+            switch (serializableMod.MagnitudeCalculationType)
+            {
+                case EGameplayEffectMagnitudeCalculation.AttributeBased:
+                    return new ModifierInfo(
+                        serializableMod.AttributeName,
+                        serializableMod.Operation,
+                        new AttributeBasedMagnitude(
+                            serializableMod.BackingAttributeName,
+                            serializableMod.AttributeCaptureSource,
+                            serializableMod.AttributeCalculationType,
+                            serializableMod.AttributeCoefficient,
+                            serializableMod.AttributePreMultiplyAdditiveValue,
+                            serializableMod.AttributePostMultiplyAdditiveValue,
+                            serializableMod.AttributeSnapshotPolicy),
+                        serializableMod.EvaluationChannel);
+                case EGameplayEffectMagnitudeCalculation.SetByCaller:
+                    return new ModifierInfo(
+                        serializableMod.AttributeName,
+                        serializableMod.Operation,
+                        !serializableMod.SetByCallerDataTag.IsNone
+                            ? new SetByCallerMagnitude(
+                                serializableMod.SetByCallerDataTag,
+                                serializableMod.SetByCallerDefaultValue,
+                                serializableMod.WarnIfSetByCallerMissing)
+                            : new SetByCallerMagnitude(
+                                serializableMod.SetByCallerDataName,
+                                serializableMod.SetByCallerDefaultValue,
+                                serializableMod.WarnIfSetByCallerMissing),
+                        serializableMod.EvaluationChannel);
+                case EGameplayEffectMagnitudeCalculation.CustomCalculation:
+                    GASLog.Warning(sb => sb.Append("Modifier on effect asset uses CustomCalculation magnitude, ")
+                        .Append("but ScriptableObject modifiers cannot serialize custom calculation instances. ")
+                        .Append("Falling back to ScalableFloat for attribute '")
+                        .Append(serializableMod.AttributeName).Append("'."));
+                    break;
+            }
+
+            return new ModifierInfo(
+                serializableMod.AttributeName,
+                serializableMod.Operation,
+                serializableMod.Magnitude,
+                serializableMod.EvaluationChannel);
         }
     }
 }
