@@ -493,11 +493,9 @@ namespace CycloneGames.GameplayAbilities.Core
 
         /// <summary>
         /// Computes a deterministic state fingerprint using FNV-1a hashing.
-        /// 
         /// Magic numbers: 2166136261 is the FNV-1a 32-bit offset basis;
         /// 16777619 is the FNV-1a prime. Both are standard constants chosen
         /// for their avalanche properties in hash mixing.
-        /// 
         /// Each domain (abilities, attributes, effects) is hashed independently
         /// so the network layer can detect which subsystem changed without
         /// reading the full state snapshot.
@@ -538,6 +536,17 @@ namespace CycloneGames.GameplayAbilities.Core
                 effects = HashInt(effects, effect.StackCount);
                 effects = HashInt(effects, effect.StartTick);
                 effects = HashInt(effects, effect.DurationTicks);
+
+                int modifierStart = (int)effect.ModifierStartIndex;
+                int modifierEnd = modifierStart + effect.ModifierCount;
+                for (int modifierIndex = modifierStart; modifierIndex < modifierEnd; modifierIndex++)
+                {
+                    var modifier = modifiers[modifierIndex];
+                    effects = HashInt(effects, modifier.AttributeId.Value);
+                    effects = HashInt(effects, (int)modifier.Op);
+                    effects = HashInt(effects, (int)modifier.EvaluationChannel);
+                    effects = HashLong(effects, modifier.MagnitudeRaw);
+                }
             }
 
             return new GASStateChecksum(abilities, attrs, effects, 2166136261u);
@@ -604,25 +613,38 @@ namespace CycloneGames.GameplayAbilities.Core
 
         /// <summary>
         /// Aggregates all active duration/infinite modifiers for a given attribute.
-        /// 
-        /// Modifier stacking order (matching UE GAS semantics):
-        /// 1. Accumulate all Add modifiers (scaled by stack count).
-        /// 2. Accumulate all Multiply/Division modifiers as a single multiplicative factor.
-        /// 3. If any Override modifier is present, it wins — all other modifiers are ignored
-        ///    and the attribute's current value is set to the last Override's magnitude.
-        /// 4. Otherwise: (BaseValue + ΣAdd) × ΠMultiply.
-        /// 
-        /// Stack count scaling: each modifier's magnitude is multiplied by its parent
-        /// active effect's StackCount before being applied. This is why Add uses
-        /// magnitude * stackCount but Multiply/Division use the raw magnitude
-        /// (they compound multiplicatively across stacks).
+        /// Evaluation channels are processed from Channel0 to Channel9. Each channel
+        /// receives the value produced by the previous channel, so projects can express
+        /// layered modifier domains without hard-coded gameplay branches.
         /// </summary>
         private long EvaluateCurrentValueRaw(GASAttributeId attributeId, long baseValueRaw)
+        {
+            long valueRaw = baseValueRaw;
+            for (int channelIndex = 0; channelIndex < GASModifierEvaluationChannels.MAX_CHANNEL_COUNT; channelIndex++)
+            {
+                valueRaw = EvaluateCurrentValueRawForChannel(
+                    attributeId,
+                    valueRaw,
+                    (GASModifierEvaluationChannel)channelIndex);
+            }
+
+            return valueRaw;
+        }
+
+        /// <summary>
+        /// Evaluates a single modifier channel. Later channels receive the value produced by
+        /// earlier channels, matching Unreal GAS' evaluation channel layering model.
+        /// </summary>
+        private long EvaluateCurrentValueRawForChannel(
+            GASAttributeId attributeId,
+            long inputValueRaw,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             var add = FPInt64.Zero;
             var multiply = FPInt64.OneValue;
             var overrideValue = FPInt64.Zero;
             bool hasOverride = false;
+            bool hasModifierInChannel = false;
 
             for (int i = 0; i < activeEffectCount; i++)
             {
@@ -637,6 +659,12 @@ namespace CycloneGames.GameplayAbilities.Core
                         continue;
                     }
 
+                    if (modifier.EvaluationChannel != evaluationChannel)
+                    {
+                        continue;
+                    }
+
+                    hasModifierInChannel = true;
                     var magnitude = FPInt64.FromRaw(modifier.MagnitudeRaw) * FPInt64.FromInt(effect.StackCount);
                     switch (modifier.Op)
                     {
@@ -660,8 +688,13 @@ namespace CycloneGames.GameplayAbilities.Core
                 }
             }
 
-            var baseValue = FPInt64.FromRaw(baseValueRaw);
-            return (hasOverride ? overrideValue : (baseValue + add) * multiply).RawValue;
+            if (!hasModifierInChannel)
+            {
+                return inputValueRaw;
+            }
+
+            var inputValue = FPInt64.FromRaw(inputValueRaw);
+            return (hasOverride ? overrideValue : (inputValue + add) * multiply).RawValue;
         }
 
         /// <summary>

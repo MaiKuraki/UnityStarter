@@ -1,14 +1,15 @@
 using System;
-using UnityEditor;
 using CycloneGames.GameplayAbilities.Editor;
-using CycloneGames.GameplayAbilities.Runtime;
 
+using UnityEditor;
+using CycloneGames.GameplayAbilities.Runtime;
 namespace CycloneGames.GameplayAbilities.Sample.Editor
 {
     /// <summary>
-    /// specific implementation of AttributeNameSelectorDrawer_Base for GASSampleTags.
+    /// Sample implementation of AttributeNameSelectorDrawer_Base for GASSampleTags.
+    /// Projects can copy this pattern when they want an attribute selector bound to a specific constants type.
     /// </summary>
-    [CustomPropertyDrawer(typeof(AttributeNameSelectorAttribute))]
+    // [CustomPropertyDrawer(typeof(AttributeNameSelectorAttribute))]
     public class SampleAttributeNameSelectorDrawer : AttributeNameSelectorDrawer_Base
     {
         /// <summary>

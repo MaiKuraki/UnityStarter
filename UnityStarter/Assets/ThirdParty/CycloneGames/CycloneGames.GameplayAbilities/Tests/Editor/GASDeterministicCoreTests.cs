@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+
 using NUnit.Framework;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
@@ -70,6 +72,188 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(state.TryGetAttribute(health, out var attribute), Is.True);
             Assert.That(attribute.BaseValueRaw, Is.EqualTo(GASFixedValue.FromFloat(87.5f).RawValue));
             Assert.That(attribute.CurrentValueRaw, Is.EqualTo(attribute.BaseValueRaw));
+        }
+
+        [Test]
+        public void ModifierData_DefaultsToChannel0()
+        {
+            var health = new GASAttributeId(100);
+            var modifier = new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(5));
+
+            Assert.That(modifier.EvaluationChannel, Is.EqualTo(GASModifierEvaluationChannel.Channel0));
+        }
+
+        [Test]
+        public void ActiveEffectModifiers_EvaluateChannelsInOrder()
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            var health = new GASAttributeId(100);
+            state.SetAttributeBase(health, GASFixedValue.FromInt(10));
+
+            var modifiers = new[]
+            {
+                new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(5), GASModifierEvaluationChannel.Channel0),
+                new GASModifierData(health, GASModifierOp.Multiply, GASFixedValue.FromInt(2), GASModifierEvaluationChannel.Channel1),
+                new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(3), GASModifierEvaluationChannel.Channel2)
+            };
+
+            state.ApplyGameplayEffectSpecToSelf(new GASGameplayEffectSpecData(
+                new GASDefinitionId(1),
+                new GASEntityId(2),
+                default,
+                GASEffectDurationPolicy.Duration,
+                1,
+                1,
+                0,
+                100,
+                modifiers,
+                0,
+                modifiers.Length));
+
+            Assert.That(state.TryGetAttribute(health, out var attribute), Is.True);
+            Assert.That(attribute.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(33).RawValue));
+        }
+
+        [Test]
+        public void CoreChecksum_IncludesModifierEvaluationChannel()
+        {
+            var channel0State = BuildSingleModifierState(GASModifierEvaluationChannel.Channel0);
+            var channel1State = BuildSingleModifierState(GASModifierEvaluationChannel.Channel1);
+
+            Assert.That(channel0State.TryGetAttribute(new GASAttributeId(100), out var channel0Attribute), Is.True);
+            Assert.That(channel1State.TryGetAttribute(new GASAttributeId(100), out var channel1Attribute), Is.True);
+            Assert.That(channel0Attribute.CurrentValueRaw, Is.EqualTo(channel1Attribute.CurrentValueRaw));
+            Assert.That(channel0State.ComputeChecksum().Effects, Is.Not.EqualTo(channel1State.ComputeChecksum().Effects));
+        }
+
+        [Test]
+        public void AttributeBasedMagnitude_UsesUnrealStyleFormula()
+        {
+            var source = CreateMagnitudeTestAsc(out var sourceAttributes);
+            var target = CreateMagnitudeTestAsc(out _);
+            sourceAttributes.SetBaseValue(sourceAttributes.Power, GASFixedValue.FromInt(10));
+            sourceAttributes.SetCurrentValue(sourceAttributes.Power, GASFixedValue.FromInt(15));
+
+            var modifiers = new List<ModifierInfo>
+            {
+                new ModifierInfo(
+                    "Health",
+                    EAttributeModifierOperation.Add,
+                    new AttributeBasedMagnitude(
+                        "Power",
+                        EGameplayEffectAttributeCaptureSource.Source,
+                        EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                        new ScalableFloat(2f),
+                        new ScalableFloat(1f),
+                        new ScalableFloat(3f)))
+            };
+            var effect = new GameplayEffect("FormulaCheck", EDurationPolicy.Instant, modifiers: modifiers);
+            var spec = GameplayEffectSpec.Create(effect, source);
+
+            spec.SetTarget(target);
+
+            Assert.That(spec.GetCalculatedMagnitudeRaw(0), Is.EqualTo(GASFixedValue.FromInt(35).RawValue));
+
+            spec.ReturnToPool();
+            source.Dispose();
+            target.Dispose();
+        }
+
+        [Test]
+        public void AttributeBasedMagnitude_TargetCapture_RecalculatesWhenTargetAssigned()
+        {
+            var source = CreateMagnitudeTestAsc(out _);
+            var target = CreateMagnitudeTestAsc(out var targetAttributes);
+            targetAttributes.SetBaseValue(targetAttributes.Armor, GASFixedValue.FromInt(4));
+            targetAttributes.SetCurrentValue(targetAttributes.Armor, GASFixedValue.FromInt(8));
+
+            var modifiers = new List<ModifierInfo>
+            {
+                new ModifierInfo(
+                    "Health",
+                    EAttributeModifierOperation.Add,
+                    new AttributeBasedMagnitude(
+                        "Armor",
+                        EGameplayEffectAttributeCaptureSource.Target,
+                        EAttributeBasedFloatCalculationType.AttributeMagnitude))
+            };
+            var effect = new GameplayEffect("TargetCapture", EDurationPolicy.Instant, modifiers: modifiers);
+            var spec = GameplayEffectSpec.Create(effect, source);
+
+            Assert.That(spec.GetCalculatedMagnitudeRaw(0), Is.EqualTo(0L));
+
+            spec.SetTarget(target);
+
+            Assert.That(spec.GetCalculatedMagnitudeRaw(0), Is.EqualTo(GASFixedValue.FromInt(8).RawValue));
+
+            spec.ReturnToPool();
+            source.Dispose();
+            target.Dispose();
+        }
+
+        [Test]
+        public void SetByCallerMagnitude_UsesSpecTagValue()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Magnitude.SetByCaller", "SetByCaller magnitude test tag");
+            GameplayTagManager.InitializeIfNeeded();
+            var dataTag = GameplayTagManager.RequestTag("Test.GAS.Magnitude.SetByCaller");
+            var source = CreateMagnitudeTestAsc(out _);
+            var target = CreateMagnitudeTestAsc(out _);
+            var modifiers = new List<ModifierInfo>
+            {
+                new ModifierInfo(
+                    "Health",
+                    EAttributeModifierOperation.Add,
+                    new SetByCallerMagnitude(dataTag))
+            };
+            var effect = new GameplayEffect("SetByCallerCheck", EDurationPolicy.Instant, modifiers: modifiers);
+            var spec = GameplayEffectSpec.Create(effect, source);
+
+            spec.SetSetByCallerMagnitude(dataTag, GASFixedValue.FromFloat(12.5f));
+            spec.SetTarget(target);
+
+            Assert.That(spec.GetCalculatedMagnitudeRaw(0), Is.EqualTo(GASFixedValue.FromFloat(12.5f).RawValue));
+
+            spec.ReturnToPool();
+            source.Dispose();
+            target.Dispose();
+        }
+
+        [Test]
+        public void NotSnapshotAttributeBasedMagnitude_RecalculatesDependentTargetAttribute()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            attributes.SetBaseValue(attributes.Power, GASFixedValue.FromInt(10));
+            asc.Tick(0f, true);
+
+            var modifiers = new List<ModifierInfo>
+            {
+                new ModifierInfo(
+                    "Health",
+                    EAttributeModifierOperation.Add,
+                    new AttributeBasedMagnitude(
+                        "Power",
+                        EGameplayEffectAttributeCaptureSource.Target,
+                        EAttributeBasedFloatCalculationType.AttributeMagnitude,
+                        new ScalableFloat(1f),
+                        new ScalableFloat(0f),
+                        new ScalableFloat(0f),
+                        EGameplayEffectAttributeCaptureSnapshot.NotSnapshot))
+            };
+            var effect = new GameplayEffect("LivePowerBuff", EDurationPolicy.Infinite, modifiers: modifiers);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+
+            attributes.SetBaseValue(attributes.Power, GASFixedValue.FromInt(20));
+            asc.Tick(0f, true);
+
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(120).RawValue));
+
+            asc.Dispose();
         }
 
         [Test]
@@ -618,6 +802,14 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             return ActiveGameplayEffect.Create(spec);
         }
 
+        private static AbilitySystemComponent CreateMagnitudeTestAsc(out MagnitudeTestAttributeSet attributes)
+        {
+            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory(), GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            attributes = new MagnitudeTestAttributeSet();
+            asc.AddAttributeSet(attributes);
+            return asc;
+        }
+
         private static GASAbilitySystemState BuildState()
         {
             var state = new GASAbilitySystemState(new GASEntityId(1));
@@ -625,6 +817,39 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             state.SetAttributeBase(health, GASFixedValue.FromInt(100));
             state.ApplyInstantModifier(new GASModifierData(health, GASModifierOp.Division, GASFixedValue.FromInt(4)));
             return state;
+        }
+
+        private static GASAbilitySystemState BuildSingleModifierState(GASModifierEvaluationChannel evaluationChannel)
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            var health = new GASAttributeId(100);
+            state.SetAttributeBase(health, GASFixedValue.FromInt(10));
+            var modifiers = new[]
+            {
+                new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(5), evaluationChannel)
+            };
+
+            state.ApplyGameplayEffectSpecToSelf(new GASGameplayEffectSpecData(
+                new GASDefinitionId(1),
+                new GASEntityId(2),
+                default,
+                GASEffectDurationPolicy.Duration,
+                1,
+                1,
+                0,
+                100,
+                modifiers,
+                0,
+                modifiers.Length));
+
+            return state;
+        }
+
+        private sealed class MagnitudeTestAttributeSet : AttributeSet
+        {
+            public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
+            public GameplayAttribute Power { get; } = new GameplayAttribute("Power");
+            public GameplayAttribute Armor { get; } = new GameplayAttribute("Armor");
         }
 
         private sealed class TrackingAbility : GameplayAbility
