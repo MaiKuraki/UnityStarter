@@ -1,6 +1,7 @@
 using System;
 
 using CycloneGames.DataTable;
+using CycloneGames.GameplayAbilities.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
 {
@@ -13,7 +14,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
             EAttributeModifierOperation operation,
             float fallbackValue = 0f,
             bool throwWhenMissing = false,
-            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot,
+            GASModifierEvaluationChannel evaluationChannel = GASModifierEvaluationChannel.Channel0)
         {
             if (string.IsNullOrEmpty(attributeName))
             {
@@ -24,7 +26,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
                 attributeName,
                 operation,
                 new DataTableMagnitudeCalculation(valueProvider, rowId, fallbackValue, throwWhenMissing),
-                snapshotPolicy);
+                snapshotPolicy,
+                evaluationChannel);
         }
 
         public static ModifierInfo CreateLinearModifier<TRow>(
@@ -36,7 +39,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
             Func<TRow, float> scalingFactorAccessor = null,
             float fallbackValue = 0f,
             bool throwWhenMissing = false,
-            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot,
+            GASModifierEvaluationChannel evaluationChannel = GASModifierEvaluationChannel.Channel0)
             where TRow : IDataRow
         {
             var provider = DataTableLevelValueProvider<TRow>.FromTable(
@@ -51,7 +55,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
                 operation,
                 fallbackValue,
                 throwWhenMissing,
-                snapshotPolicy);
+                snapshotPolicy,
+                evaluationChannel);
         }
 
         public static ModifierInfo CreateLinearModifier<TRow>(
@@ -63,7 +68,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
             Func<TRow, float> scalingFactorAccessor = null,
             float fallbackValue = 0f,
             bool throwWhenMissing = false,
-            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot,
+            GASModifierEvaluationChannel evaluationChannel = GASModifierEvaluationChannel.Channel0)
             where TRow : IDataRow
         {
             var provider = DataTableLevelValueProvider<TRow>.FromLookup(
@@ -78,7 +84,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
                 operation,
                 fallbackValue,
                 throwWhenMissing,
-                snapshotPolicy);
+                snapshotPolicy,
+                evaluationChannel);
         }
 
         public static ModifierInfo CreateEvaluatedModifier<TRow>(
@@ -89,7 +96,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
             GASDataTableValueEvaluator<TRow> valueEvaluator,
             float fallbackValue = 0f,
             bool throwWhenMissing = false,
-            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot,
+            GASModifierEvaluationChannel evaluationChannel = GASModifierEvaluationChannel.Channel0)
             where TRow : IDataRow
         {
             var provider = DataTableLevelValueProvider<TRow>.FromLookup(
@@ -103,7 +111,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
                 operation,
                 fallbackValue,
                 throwWhenMissing,
-                snapshotPolicy);
+                snapshotPolicy,
+                evaluationChannel);
         }
     }
 }

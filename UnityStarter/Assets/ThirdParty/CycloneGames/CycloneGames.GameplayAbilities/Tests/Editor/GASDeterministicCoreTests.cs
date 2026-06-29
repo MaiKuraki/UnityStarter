@@ -73,6 +73,58 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void ModifierData_DefaultsToChannel0()
+        {
+            var health = new GASAttributeId(100);
+            var modifier = new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(5));
+
+            Assert.That(modifier.EvaluationChannel, Is.EqualTo(GASModifierEvaluationChannel.Channel0));
+        }
+
+        [Test]
+        public void ActiveEffectModifiers_EvaluateChannelsInOrder()
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            var health = new GASAttributeId(100);
+            state.SetAttributeBase(health, GASFixedValue.FromInt(10));
+
+            var modifiers = new[]
+            {
+                new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(5), GASModifierEvaluationChannel.Channel0),
+                new GASModifierData(health, GASModifierOp.Multiply, GASFixedValue.FromInt(2), GASModifierEvaluationChannel.Channel1),
+                new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(3), GASModifierEvaluationChannel.Channel2)
+            };
+
+            state.ApplyGameplayEffectSpecToSelf(new GASGameplayEffectSpecData(
+                new GASDefinitionId(1),
+                new GASEntityId(2),
+                default,
+                GASEffectDurationPolicy.Duration,
+                1,
+                1,
+                0,
+                100,
+                modifiers,
+                0,
+                modifiers.Length));
+
+            Assert.That(state.TryGetAttribute(health, out var attribute), Is.True);
+            Assert.That(attribute.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(33).RawValue));
+        }
+
+        [Test]
+        public void CoreChecksum_IncludesModifierEvaluationChannel()
+        {
+            var channel0State = BuildSingleModifierState(GASModifierEvaluationChannel.Channel0);
+            var channel1State = BuildSingleModifierState(GASModifierEvaluationChannel.Channel1);
+
+            Assert.That(channel0State.TryGetAttribute(new GASAttributeId(100), out var channel0Attribute), Is.True);
+            Assert.That(channel1State.TryGetAttribute(new GASAttributeId(100), out var channel1Attribute), Is.True);
+            Assert.That(channel0Attribute.CurrentValueRaw, Is.EqualTo(channel1Attribute.CurrentValueRaw));
+            Assert.That(channel0State.ComputeChecksum().Effects, Is.Not.EqualTo(channel1State.ComputeChecksum().Effects));
+        }
+
+        [Test]
         public void Facade_FixedValueApi_UsesRawCorePath()
         {
             var state = new GASAbilitySystemState(new GASEntityId(1));
@@ -624,6 +676,32 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             var health = new GASAttributeId(100);
             state.SetAttributeBase(health, GASFixedValue.FromInt(100));
             state.ApplyInstantModifier(new GASModifierData(health, GASModifierOp.Division, GASFixedValue.FromInt(4)));
+            return state;
+        }
+
+        private static GASAbilitySystemState BuildSingleModifierState(GASModifierEvaluationChannel evaluationChannel)
+        {
+            var state = new GASAbilitySystemState(new GASEntityId(1));
+            var health = new GASAttributeId(100);
+            state.SetAttributeBase(health, GASFixedValue.FromInt(10));
+            var modifiers = new[]
+            {
+                new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(5), evaluationChannel)
+            };
+
+            state.ApplyGameplayEffectSpecToSelf(new GASGameplayEffectSpecData(
+                new GASDefinitionId(1),
+                new GASEntityId(2),
+                default,
+                GASEffectDurationPolicy.Duration,
+                1,
+                1,
+                0,
+                100,
+                modifiers,
+                0,
+                modifiers.Length));
+
             return state;
         }
 

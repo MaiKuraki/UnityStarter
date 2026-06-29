@@ -1794,7 +1794,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 coreModifierBuffer[i] = new GASModifierData(
                     GetOrCreateCoreAttributeId(modifier.AttributeName),
                     ConvertModifierOp(modifier.Operation),
-                    spec.GetCalculatedMagnitudeRaw(i));
+                    spec.GetCalculatedMagnitudeRaw(i),
+                    modifier.EvaluationChannel);
             }
 
             return coreModifierBuffer;

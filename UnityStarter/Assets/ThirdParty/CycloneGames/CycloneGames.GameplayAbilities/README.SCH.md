@@ -38,6 +38,7 @@
   - [GameplayTags 使用指南](#gameplaytags-使用指南)
   - [ScriptableObject Authoring 工作流](#scriptableobject-authoring-工作流)
   - [Cost、Cooldown、Buff、Debuff 与 Passive](#costcooldownbuffdebuff-与-passive)
+  - [Modifier 聚合与 Channel](#modifier-聚合与-channel)
   - [AbilityTask](#abilitytask)
   - [Targeting 系统](#targeting-系统)
   - [Execution Calculation](#execution-calculation)
@@ -612,6 +613,33 @@ Tag 是独立系统之间通信的规则语言，可以避免硬引用。
 | 临时授予技能 | 带 `GrantedAbilities` 的 duration 或 infinite effect。 |
 
 这种统一表示是 GAS 能扩展的核心原因。Cooldown、poison、aura、equipment bonus 和 temporary skill grant 本质上都是不同数据配置的 effect。
+
+## Modifier 聚合与 Channel
+
+Attribute modifier 会经过受 Unreal GAS 启发的 aggregator-style pipeline 计算。`Channel0` 是默认路径，不需要额外配置。高级项目可以把 modifier 放入 `GASModifierEvaluationChannel.Channel1` 到 `Channel9`，用于表达“后一个 modifier domain 必须在前一个 domain 之后计算”的规则。
+
+Core evaluation 顺序如下：
+
+1. 从 attribute base value 开始。
+2. 计算 `Channel0` 中所有符合条件的 modifier。
+3. 将结果传给 `Channel1`，再继续到 `Channel9`。
+4. 每个 channel 内部仍按 Core state 的 Add、Multiply、Division 和 Override 规则计算。
+
+Channel 应用于规则分层，而不是普通内容分类。典型用途包括把基础/装备 modifier、passive rule、临时 buff，或最终环境/规则集修正分到不同层。若计算顺序不重要，让 modifier 保持在 `Channel0` 即可。
+
+```csharp
+var modifiers = new List<ModifierInfo>
+{
+    new ModifierInfo("AttackPower", EAttributeModifierOperation.Add, 10f),
+    new ModifierInfo(
+        "AttackPower",
+        EAttributeModifierOperation.Multiply,
+        1.25f,
+        GASModifierEvaluationChannel.Channel1)
+};
+```
+
+`GameplayEffectSO` 的 serialized modifier 暴露相同 channel。`DataTableModifierFactory` 也提供可选 `evaluationChannel` 参数，因此 Excel/Luban 驱动的数值可以进入同一套 deterministic pipeline。
 
 ## AbilityTask
 

@@ -60,6 +60,40 @@ namespace CycloneGames.GameplayAbilities.Core
     }
 
     /// <summary>
+    /// Ordered modifier evaluation layers for attribute aggregators.
+    /// Channel0 is the default path and is enough for most effects. Additional channels let advanced
+    /// systems express "evaluate these modifiers after the previous layer" without hard-coded rules.
+    /// </summary>
+    public enum GASModifierEvaluationChannel : byte
+    {
+        Channel0,
+        Channel1,
+        Channel2,
+        Channel3,
+        Channel4,
+        Channel5,
+        Channel6,
+        Channel7,
+        Channel8,
+        Channel9
+    }
+
+    public static class GASModifierEvaluationChannels
+    {
+        public const int MAX_CHANNEL_COUNT = 10;
+
+        public static bool IsValid(GASModifierEvaluationChannel channel)
+        {
+            return (byte)channel < MAX_CHANNEL_COUNT;
+        }
+
+        public static GASModifierEvaluationChannel Normalize(GASModifierEvaluationChannel channel)
+        {
+            return IsValid(channel) ? channel : GASModifierEvaluationChannel.Channel0;
+        }
+    }
+
+    /// <summary>
     /// Controls an effect's lifecycle.
     /// Instant: applied once and immediately consumed (damage, cost).
     /// Duration: active for a fixed number of ticks, then auto-removed (buffs, debuffs, DoTs).

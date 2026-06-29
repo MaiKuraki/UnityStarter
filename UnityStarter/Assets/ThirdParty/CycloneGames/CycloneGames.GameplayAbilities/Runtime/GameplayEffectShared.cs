@@ -1,3 +1,4 @@
+using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -216,6 +217,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         public readonly string AttributeName;
         public readonly EAttributeModifierOperation Operation;
+        public readonly GASModifierEvaluationChannel EvaluationChannel;
 
         // One of these two will be used for calculation.
         public readonly ScalableFloat Magnitude;
@@ -232,9 +234,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Constructor for data-driven, scalable float modifiers.
         /// </summary>
         public ModifierInfo(string attributeName, EAttributeModifierOperation operation, ScalableFloat magnitude)
+            : this(attributeName, operation, magnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            ScalableFloat magnitude,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attributeName;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
             Magnitude = magnitude;
             CustomCalculation = null;
             SnapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot;
@@ -244,9 +256,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Constructor for creating modifiers directly in C# code.
         /// </summary>
         public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, ScalableFloat magnitude)
+            : this(attribute, operation, magnitude, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            ScalableFloat magnitude,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attribute.Name;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
             Magnitude = magnitude;
             CustomCalculation = null;
             SnapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot;
@@ -254,9 +276,30 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public ModifierInfo(string attributeName, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation,
             EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attributeName, operation, customCalculation, snapshotPolicy, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            GASModifierEvaluationChannel evaluationChannel,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attributeName, operation, customCalculation, snapshotPolicy, evaluationChannel)
+        {
+        }
+
+        public ModifierInfo(
+            string attributeName,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attributeName;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
             Magnitude = default;
             CustomCalculation = customCalculation;
             SnapshotPolicy = snapshotPolicy;
@@ -264,9 +307,30 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public ModifierInfo(GameplayAttribute attribute, EAttributeModifierOperation operation, GameplayModMagnitudeCalculation customCalculation,
             EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attribute, operation, customCalculation, snapshotPolicy, GASModifierEvaluationChannel.Channel0)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            GASModifierEvaluationChannel evaluationChannel,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy = EGameplayEffectAttributeCaptureSnapshot.Snapshot)
+            : this(attribute, operation, customCalculation, snapshotPolicy, evaluationChannel)
+        {
+        }
+
+        public ModifierInfo(
+            GameplayAttribute attribute,
+            EAttributeModifierOperation operation,
+            GameplayModMagnitudeCalculation customCalculation,
+            EGameplayEffectAttributeCaptureSnapshot snapshotPolicy,
+            GASModifierEvaluationChannel evaluationChannel)
         {
             AttributeName = attribute.Name;
             Operation = operation;
+            EvaluationChannel = GASModifierEvaluationChannels.Normalize(evaluationChannel);
             Magnitude = default;
             CustomCalculation = customCalculation;
             SnapshotPolicy = snapshotPolicy;

@@ -38,6 +38,7 @@ This document is both a module reference and an onboarding guide. It explains wh
   - [GameplayTags Usage Guide](#gameplaytags-usage-guide)
   - [ScriptableObject Authoring Workflow](#scriptableobject-authoring-workflow)
   - [Cost, Cooldown, Buffs, Debuffs, And Passives](#cost-cooldown-buffs-debuffs-and-passives)
+  - [Modifier Aggregation And Channels](#modifier-aggregation-and-channels)
   - [AbilityTasks](#abilitytasks)
   - [Targeting System](#targeting-system)
   - [Execution Calculations](#execution-calculations)
@@ -612,6 +613,33 @@ Use runtime C# subclasses for behavior that requires logic. Use assets for data 
 | Temporary granted skill | Duration or infinite effect with `GrantedAbilities`. |
 
 This uniform representation is the main reason GAS scales. A cooldown, poison, aura, equipment bonus, and temporary skill grant are all effects with different data.
+
+## Modifier Aggregation And Channels
+
+Attribute modifiers are evaluated through an aggregator-style pipeline inspired by Unreal GAS. `Channel0` is the default path and requires no special setup. Advanced projects can place modifiers into `GASModifierEvaluationChannel.Channel1` through `Channel9` when a later modifier domain must evaluate after an earlier one.
+
+Core evaluation is ordered:
+
+1. Start from the attribute base value.
+2. Evaluate all qualified modifiers in `Channel0`.
+3. Feed that result into `Channel1`, then continue through `Channel9`.
+4. Inside each channel, Add, Multiply, Division, and Override follow the same modifier operation rules used by the Core state.
+
+Use channels for rule layering, not for content grouping. Typical examples include separating base/equipment modifiers from passive rules, temporary buffs, or final environment/ruleset adjustments. If ordering does not matter, leave modifiers on `Channel0`.
+
+```csharp
+var modifiers = new List<ModifierInfo>
+{
+    new ModifierInfo("AttackPower", EAttributeModifierOperation.Add, 10f),
+    new ModifierInfo(
+        "AttackPower",
+        EAttributeModifierOperation.Multiply,
+        1.25f,
+        GASModifierEvaluationChannel.Channel1)
+};
+```
+
+`GameplayEffectSO` exposes the same channel on serialized modifiers. `DataTableModifierFactory` also accepts an optional `evaluationChannel` parameter so Excel/Luban-driven values can participate in the same deterministic pipeline.
 
 ## AbilityTasks
 

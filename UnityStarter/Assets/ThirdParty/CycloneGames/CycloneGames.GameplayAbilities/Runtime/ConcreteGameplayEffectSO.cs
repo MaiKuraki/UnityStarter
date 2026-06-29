@@ -29,7 +29,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var serializableMod in SerializableModifiers)
                 {
-                    runtimeModifiers.Add(new ModifierInfo(serializableMod.AttributeName, serializableMod.Operation, serializableMod.Magnitude));
+                    runtimeModifiers.Add(new ModifierInfo(
+                        serializableMod.AttributeName,
+                        serializableMod.Operation,
+                        serializableMod.Magnitude,
+                        serializableMod.EvaluationChannel));
                 }
             }
 
