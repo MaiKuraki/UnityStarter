@@ -633,6 +633,267 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
+        public void GameplayEffectStacking_RefreshesDurationAndAggregatesModifierMagnitude()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "StackingHealthBuff",
+                EDurationPolicy.HasDuration,
+                5f,
+                "Health",
+                10f,
+                new GameplayEffectStacking(
+                    EGameplayEffectStackingType.AggregateByTarget,
+                    3,
+                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication));
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+            Assert.That(asc.ActiveEffectContainer.Count, Is.EqualTo(1));
+
+            var activeEffect = asc.ActiveEffects[0];
+            asc.Tick(3f, true);
+            Assert.That(activeEffect.TimeRemainingRaw, Is.EqualTo(GASFixedValue.FromInt(2).RawValue));
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            Assert.That(asc.ActiveEffectContainer.Count, Is.EqualTo(1));
+            Assert.That(activeEffect.StackCount, Is.EqualTo(2));
+            Assert.That(activeEffect.TimeRemainingRaw, Is.EqualTo(GASFixedValue.FromInt(5).RawValue));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(120).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GameplayEffectStacking_OverflowAppliesOverflowEffectAtLimit()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            attributes.SetBaseValue(attributes.Armor, GASFixedValue.Zero);
+            asc.Tick(0f, true);
+
+            var overflowEffect = CreateAttributeModifierEffect(
+                "OverflowArmorReward",
+                EDurationPolicy.Instant,
+                0f,
+                "Armor",
+                25f);
+            var stackEffect = CreateAttributeModifierEffect(
+                "LimitedStackingHealthBuff",
+                EDurationPolicy.HasDuration,
+                5f,
+                "Health",
+                10f,
+                new GameplayEffectStacking(
+                    EGameplayEffectStackingType.AggregateByTarget,
+                    1,
+                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication),
+                overflowEffects: new List<GameplayEffect> { overflowEffect },
+                denyOverflowApplication: true);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(stackEffect, asc));
+            asc.Tick(0f, true);
+
+            var activeEffect = asc.ActiveEffects[0];
+            activeEffect.SetRemainingDuration(2f);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(stackEffect, asc));
+            asc.Tick(0f, true);
+
+            Assert.That(asc.ActiveEffectContainer.Count, Is.EqualTo(1));
+            Assert.That(activeEffect.StackCount, Is.EqualTo(1));
+            Assert.That(activeEffect.TimeRemainingRaw, Is.EqualTo(GASFixedValue.FromInt(2).RawValue));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+            Assert.That(attributes.Armor.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(25).RawValue));
+            Assert.That(attributes.Armor.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(25).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GameplayEffectExpiration_RemovesDurationEffectAndRestoresModifier()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "ExpiringHealthBuff",
+                EDurationPolicy.HasDuration,
+                1f,
+                "Health",
+                10f);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+
+            asc.Tick(1.1f, true);
+            asc.Tick(0f, true);
+
+            Assert.That(asc.ActiveEffectContainer.Count, Is.EqualTo(0));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+            Assert.That(asc.ValidateRuntimeIndexes(), Is.True);
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GameplayEffectExpiration_RemoveSingleStackRefreshesDuration()
+        {
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "SingleStackExpirationBuff",
+                EDurationPolicy.HasDuration,
+                1f,
+                "Health",
+                10f,
+                new GameplayEffectStacking(
+                    EGameplayEffectStackingType.AggregateByTarget,
+                    3,
+                    EGameplayEffectStackingDurationPolicy.RefreshOnSuccessfulApplication,
+                    EGameplayEffectStackingExpirationPolicy.RemoveSingleStackAndRefreshDuration));
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            var activeEffect = asc.ActiveEffects[0];
+            Assert.That(activeEffect.StackCount, Is.EqualTo(3));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(130).RawValue));
+
+            asc.Tick(1.1f, true);
+            asc.Tick(0f, true);
+
+            Assert.That(asc.ActiveEffectContainer.Count, Is.EqualTo(1));
+            Assert.That(activeEffect.StackCount, Is.EqualTo(2));
+            Assert.That(activeEffect.TimeRemainingRaw, Is.EqualTo(GASFixedValue.FromInt(1).RawValue));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(120).RawValue));
+            Assert.That(asc.ValidateRuntimeIndexes(), Is.True);
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GameplayEffectOngoingRequirements_InhibitsAndRestoresModifier()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Effect.Powered", "Ongoing requirement test tag");
+            GameplayTagManager.InitializeIfNeeded();
+            var requiredTag = GameplayTagManager.RequestTag("Test.GAS.Effect.Powered");
+            var requiredTags = new GameplayTagContainer();
+            requiredTags.AddTag(requiredTag);
+            var ongoingRequirements = new GameplayTagRequirements(new GameplayTagContainer(), requiredTags);
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "ConditionalHealthBuff",
+                EDurationPolicy.Infinite,
+                0f,
+                "Health",
+                10f,
+                ongoingTagRequirements: ongoingRequirements);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            var activeEffect = asc.ActiveEffects[0];
+            Assert.That(activeEffect.IsInhibited, Is.True);
+
+            int inhibitionChangeCount = 0;
+            bool lastInhibitionState = false;
+            activeEffect.OnInhibitionChanged += inhibited =>
+            {
+                inhibitionChangeCount++;
+                lastInhibitionState = inhibited;
+            };
+
+            asc.Tick(0f, true);
+
+            Assert.That(activeEffect.IsInhibited, Is.True);
+            Assert.That(lastInhibitionState, Is.False);
+            Assert.That(inhibitionChangeCount, Is.EqualTo(0));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
+            asc.AddLooseGameplayTag(requiredTag);
+            asc.Tick(0f, true);
+
+            Assert.That(activeEffect.IsInhibited, Is.False);
+            Assert.That(lastInhibitionState, Is.False);
+            Assert.That(inhibitionChangeCount, Is.EqualTo(1));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(110).RawValue));
+
+            asc.RemoveLooseGameplayTag(requiredTag);
+            asc.Tick(0f, true);
+
+            Assert.That(activeEffect.IsInhibited, Is.True);
+            Assert.That(lastInhibitionState, Is.True);
+            Assert.That(inhibitionChangeCount, Is.EqualTo(2));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
+        public void GameplayEffectOngoingRequirements_InhibitsPeriodicExecution()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Effect.PeriodicEnabled", "Periodic inhibition test tag");
+            GameplayTagManager.InitializeIfNeeded();
+            var requiredTag = GameplayTagManager.RequestTag("Test.GAS.Effect.PeriodicEnabled");
+            var requiredTags = new GameplayTagContainer();
+            requiredTags.AddTag(requiredTag);
+            var ongoingRequirements = new GameplayTagRequirements(new GameplayTagContainer(), requiredTags);
+            var asc = CreateMagnitudeTestAsc(out var attributes);
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+
+            var effect = CreateAttributeModifierEffect(
+                "ConditionalPeriodicDamage",
+                EDurationPolicy.Infinite,
+                0f,
+                "Health",
+                -5f,
+                ongoingTagRequirements: ongoingRequirements,
+                period: 1f);
+
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            var activeEffect = asc.ActiveEffects[0];
+
+            asc.Tick(0f, true);
+
+            Assert.That(activeEffect.IsInhibited, Is.True);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+
+            asc.AddLooseGameplayTag(requiredTag);
+            asc.Tick(0f, true);
+
+            Assert.That(activeEffect.IsInhibited, Is.False);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+
+            asc.RemoveLooseGameplayTag(requiredTag);
+            asc.Tick(1f, true);
+
+            Assert.That(activeEffect.IsInhibited, Is.True);
+            Assert.That(attributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+            Assert.That(attributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(95).RawValue));
+
+            asc.Dispose();
+        }
+
+        [Test]
         public void PredictionManager_RemoveMiddleWindow_PreservesIndexes()
         {
             var manager = new PredictionManager();
@@ -788,6 +1049,33 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 EDurationPolicy.HasDuration,
                 5f,
                 stacking: stacking);
+        }
+
+        private static GameplayEffect CreateAttributeModifierEffect(
+            string name,
+            EDurationPolicy durationPolicy,
+            float duration,
+            string attributeName,
+            float magnitude,
+            GameplayEffectStacking stacking = default,
+            GameplayTagRequirements ongoingTagRequirements = default,
+            List<GameplayEffect> overflowEffects = null,
+            bool denyOverflowApplication = false,
+            float period = 0f)
+        {
+            return new GameplayEffect(
+                name,
+                durationPolicy,
+                duration,
+                period,
+                modifiers: new List<ModifierInfo>
+                {
+                    new ModifierInfo(attributeName, EAttributeModifierOperation.Add, new ScalableFloat(magnitude))
+                },
+                stacking: stacking,
+                ongoingTagRequirements: ongoingTagRequirements,
+                overflowEffects: overflowEffects,
+                denyOverflowApplication: denyOverflowApplication);
         }
 
         private static GASPredictionWindowData CreatePredictionWindow(GASPredictionKey key)

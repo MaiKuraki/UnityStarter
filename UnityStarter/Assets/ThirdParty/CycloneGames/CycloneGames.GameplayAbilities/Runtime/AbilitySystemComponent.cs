@@ -231,6 +231,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<GameplayAbilitySpec, int> tickingAbilityIndexBySpec;
 
         private readonly List<GameplayAttribute> dirtyAttributes;
+        private bool dirtyOngoingEffectInhibition;
 
         //  Tracks effects applied by abilities for RemoveGameplayEffectsAfterAbilityEnds
         private readonly Dictionary<GameplayAbility, List<ActiveGameplayEffect>> abilityAppliedEffects;
@@ -2923,7 +2924,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             MarkActiveEffectsDirty();
 
-            if (spec.Def.Period <= 0)
+            if (spec.Def.Period <= 0 || !spec.Def.OngoingTagRequirements.IsEmpty)
             {
                 MarkAttributesDirtyFromEffect(newActiveEffect);
             }
@@ -3058,6 +3059,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             // Tag changes during ability tasks (above) may have marked attributes dirty.
             // Running RecalculateDirtyAttributes here ensures IsInhibited is current before
             // any periodic effect execution fires via ActiveGameplayEffect.Tick().
+            if (dirtyOngoingEffectInhibition)
+            {
+                RefreshDirtyOngoingEffectInhibition();
+            }
+
             if (dirtyAttributes.Count > 0)
             {
                 RecalculateDirtyAttributes();
@@ -3149,8 +3155,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Multiplicative uses bias-based summation: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
         /// Division uses same bias formula: 1 + (Mod1 - 1) + (Mod2 - 1) + ...
         /// 
-        /// P0 Optimization: OngoingTagRequirements check is cached per-effect (once per effect,
-        /// not once per modifier), and periodic-only effects are skipped early.
+        /// P0 Optimization: OngoingTagRequirements check is refreshed once per effect scan,
+        /// then periodic-only effects are skipped before continuous modifier aggregation.
         /// </summary>
         private void RecalculateDirtyAttributes()
         {
@@ -3173,20 +3179,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     var effect = affectingEffects[i];
                     var def = effect.Spec.Def;
 
-                    // Skip periodic-only effects (they execute instant effects on tick, not continuous modifiers)
-                    if (def.Period > 0) continue;
-
-                    //  Cache OngoingTagRequirements check per-effect, not per-modifier
-                    bool isInhibited = !def.OngoingTagRequirements.IsEmpty && !MeetsTagRequirements(def.OngoingRequiredTagsSnapshot, def.OngoingForbiddenTagsSnapshot);
-
-                    // UE5: Track inhibition state changes and fire OnInhibitionChanged
-                    if (isInhibited != effect.IsInhibited)
-                    {
-                        effect.IsInhibited = isInhibited;
-                        effect.NotifyInhibitionChanged(isInhibited);
-                    }
-
-                    if (isInhibited)
+                    bool isInhibited = RefreshInhibitionState(effect);
+                    if (def.Period > 0 || isInhibited)
                     {
                         continue;
                     }
@@ -3256,6 +3250,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 fromEffectsTags.AddTags(effect.Spec.DynamicGrantedTags);
                 CombinedTags.AddTags(effect.Spec.DynamicGrantedTags);
+            }
+
+            if (!effect.Spec.Def.OngoingTagRequirements.IsEmpty)
+            {
+                RefreshInhibitionState(effect);
             }
 
             // Update the attribute's internal effect list directly
@@ -3926,6 +3925,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             fromEffectsTags.Clear();
             CombinedTags.Clear();
             dirtyAttributes.Clear();
+            dirtyOngoingEffectInhibition = false;
             eventDelegates.Clear();
             stackingIndexByTarget.Clear();
             stackingIndexBySource.Clear();
@@ -4084,6 +4084,38 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     MarkAttributeDirty(attribute);
                 }
             }
+        }
+
+        private void MarkOngoingEffectInhibitionDirty()
+        {
+            dirtyOngoingEffectInhibition = true;
+        }
+
+        private void RefreshDirtyOngoingEffectInhibition()
+        {
+            dirtyOngoingEffectInhibition = false;
+            for (int i = 0; i < activeEffects.Count; i++)
+            {
+                RefreshInhibitionState(activeEffects[i]);
+            }
+        }
+
+        private bool RefreshInhibitionState(ActiveGameplayEffect effect)
+        {
+            var def = effect?.Spec?.Def;
+            if (def == null || def.OngoingTagRequirements.IsEmpty)
+            {
+                return false;
+            }
+
+            bool isInhibited = !MeetsTagRequirements(def.OngoingRequiredTagsSnapshot, def.OngoingForbiddenTagsSnapshot);
+            if (isInhibited != effect.IsInhibited)
+            {
+                effect.IsInhibited = isInhibited;
+                effect.NotifyInhibitionChanged(isInhibited);
+            }
+
+            return isInhibited;
         }
 
         private void MarkLiveAttributeDependentsDirty(GameplayAttribute changedAttribute)
@@ -4389,10 +4421,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            // Bug fix: when a tag actually appears or disappears, any active effect whose
-            // OngoingTagRequirements reference this tag may change inhibition state.
-            // Mark those effects' attributes dirty so RecalculateDirtyAttributes() (which
-            // updates IsInhibited) runs at the start of the next Tick().
+            // A tag edge may change OngoingTagRequirements. Refresh effect-level inhibition
+            // before ticking periodic effects, then dirty affected attributes for aggregation.
+            MarkOngoingEffectInhibitionDirty();
             MarkAttributesDirtyForEffectsWithOngoingRequirements();
         }
 
