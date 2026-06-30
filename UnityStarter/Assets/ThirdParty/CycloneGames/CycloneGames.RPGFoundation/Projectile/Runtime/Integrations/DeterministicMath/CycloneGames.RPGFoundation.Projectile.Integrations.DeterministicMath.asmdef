@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.RPGFoundation.Projectile.Integrations.DeterministicMath",
+    "rootNamespace": "CycloneGames.RPGFoundation.Projectile.Integrations.DeterministicMath",
+    "references": [
+        "CycloneGames.RPGFoundation.Projectile.Core",
+        "CycloneGames.DeterministicMath.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

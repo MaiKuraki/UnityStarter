@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.RPGFoundation.Projectile.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Projectile.Tests.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Projectile.Core",
+        "CycloneGames.RPGFoundation.Projectile.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

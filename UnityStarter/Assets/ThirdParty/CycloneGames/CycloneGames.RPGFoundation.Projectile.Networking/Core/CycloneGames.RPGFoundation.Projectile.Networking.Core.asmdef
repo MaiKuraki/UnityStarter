@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.RPGFoundation.Projectile.Networking.Core",
+    "rootNamespace": "CycloneGames.RPGFoundation.Projectile.Networking",
+    "references": [
+        "CycloneGames.Networking.Core",
+        "CycloneGames.RPGFoundation.Projectile.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

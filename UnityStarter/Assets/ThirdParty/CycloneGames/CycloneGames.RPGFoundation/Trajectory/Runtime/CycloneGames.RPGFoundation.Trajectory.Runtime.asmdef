@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.RPGFoundation.Trajectory.Runtime",
+    "rootNamespace": "CycloneGames.RPGFoundation.Trajectory.Runtime",
+    "references": [
+        "CycloneGames.RPGFoundation.Trajectory.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
