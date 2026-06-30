@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor",
+    "references": [
+        "CycloneGames.Networking.Core",
+        "CycloneGames.RPGFoundation.Projectile.Core",
+        "CycloneGames.RPGFoundation.Projectile.Networking.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Networking;
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayTags.Core;
 using CycloneGames.Networking;
 using CycloneGames.Networking.Serialization;
 
@@ -130,6 +131,144 @@ namespace CycloneGames.GameplayAbilities.Networking.Unity.Tests.Editor
 
             adapter.Dispose();
             asc.Dispose();
+        }
+
+        [Test]
+        public void FullStateReplication_AppliesEffectsAttributesAndTagsThenRemovesStaleState()
+        {
+            GameplayTagManager.RegisterDynamicTag("Test.GAS.Networking.FullState.Powered", "Full state replication test tag");
+            GameplayTagManager.InitializeIfNeeded();
+            var tag = GameplayTagManager.RequestTag("Test.GAS.Networking.FullState.Powered");
+            var effect = CreateHealthBuffEffect("NetworkFullStateBuff", 15f);
+            var registry = new DefaultGASNetIdRegistry();
+            registry.RegisterEffectDefinition(7001, effect);
+            var serverAsc = CreateNetworkTestAsc(out var serverAttributes);
+            var clientAsc = CreateNetworkTestAsc(out var clientAttributes);
+            var serverAdapter = new GameplayAbilitiesNetworkedASCAdapter(serverAsc, 77u, ownerConnectionId: 1, registry);
+            var clientAdapter = new GameplayAbilitiesNetworkedASCAdapter(clientAsc, 77u, ownerConnectionId: 1, registry);
+
+            serverAttributes.SetBaseValue(serverAttributes.Health, GASFixedValue.FromInt(100));
+            serverAsc.Tick(0f, true);
+            serverAsc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, serverAsc));
+            serverAsc.AddLooseGameplayTag(tag);
+            serverAsc.Tick(0f, true);
+
+            clientAdapter.OnFullState(serverAdapter.CaptureFullState());
+
+            Assert.That(clientAsc.ActiveEffects.Count, Is.EqualTo(1));
+            Assert.That(clientAsc.ActiveEffects[0].StackCount, Is.EqualTo(1));
+            Assert.That(clientAttributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+            Assert.That(clientAttributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(115).RawValue));
+            Assert.That(clientAsc.HasMatchingGameplayTag(tag), Is.True);
+
+            Assert.That(serverAsc.TryRemoveActiveEffect(serverAsc.ActiveEffects[0]), Is.True);
+            serverAsc.RemoveLooseGameplayTag(tag);
+            serverAsc.Tick(0f, true);
+
+            clientAdapter.OnFullState(serverAdapter.CaptureFullState());
+
+            Assert.That(clientAsc.ActiveEffects.Count, Is.EqualTo(0));
+            Assert.That(clientAttributes.Health.BaseValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+            Assert.That(clientAttributes.Health.CurrentValueRaw, Is.EqualTo(GASFixedValue.FromInt(100).RawValue));
+            Assert.That(clientAsc.HasMatchingGameplayTag(tag), Is.False);
+
+            clientAdapter.Dispose();
+            serverAdapter.Dispose();
+            clientAsc.Dispose();
+            serverAsc.Dispose();
+        }
+
+        [Test]
+        public void PendingStateDelta_ClassifiesActiveEffectAddedStackUpdateAndRemoval()
+        {
+            var effect = CreateHealthBuffEffect("NetworkDeltaBuff", 10f);
+            var registry = new DefaultGASNetIdRegistry();
+            registry.RegisterEffectDefinition(7002, effect);
+            var asc = CreateNetworkTestAsc(out var attributes);
+            var adapter = new GameplayAbilitiesNetworkedASCAdapter(asc, 88u, ownerConnectionId: 1, registry);
+
+            attributes.SetBaseValue(attributes.Health, GASFixedValue.FromInt(100));
+            asc.Tick(0f, true);
+            asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(effect, asc));
+            asc.Tick(0f, true);
+
+            var addedDelta = adapter.CapturePendingReplicatedStateDelta();
+
+            Assert.That(addedDelta.AddedActiveEffectCount, Is.EqualTo(1));
+            Assert.That(addedDelta.UpdatedActiveEffectCount, Is.EqualTo(0));
+            Assert.That(addedDelta.StackChangedEffectCount, Is.EqualTo(0));
+            Assert.That(addedDelta.RemovedEffectInstanceIdCount, Is.EqualTo(0));
+            int effectInstanceId = addedDelta.AddedActiveEffects[0].EffectInstanceId;
+            Assert.That(effectInstanceId, Is.Not.EqualTo(0));
+
+            var activeEffect = asc.ActiveEffects[0];
+            Assert.That(asc.TryApplyActiveEffectStackChange(activeEffect, 2), Is.True);
+
+            var stackDelta = adapter.CapturePendingReplicatedStateDelta();
+
+            Assert.That(stackDelta.AddedActiveEffectCount, Is.EqualTo(0));
+            Assert.That(stackDelta.UpdatedActiveEffectCount, Is.EqualTo(0));
+            Assert.That(stackDelta.StackChangedEffectCount, Is.EqualTo(1));
+            Assert.That(stackDelta.StackChangedEffects[0].EffectInstanceId, Is.EqualTo(effectInstanceId));
+            Assert.That(stackDelta.StackChangedEffects[0].NewStackCount, Is.EqualTo(2));
+
+            Assert.That(asc.TryApplyReplicatedEffectUpdateRaw(
+                activeEffect,
+                level: 2,
+                stackCount: 2,
+                durationRaw: GASNetFixed.FromFloat(30f),
+                timeRemainingRaw: GASNetFixed.FromFloat(12.5f),
+                periodTimeRemainingRaw: 0L,
+                setByCallerTags: Array.Empty<GameplayTag>(),
+                setByCallerValuesRaw: Array.Empty<long>(),
+                setByCallerCount: 0), Is.True);
+
+            var updateDelta = adapter.CapturePendingReplicatedStateDelta();
+
+            Assert.That(updateDelta.AddedActiveEffectCount, Is.EqualTo(0));
+            Assert.That(updateDelta.StackChangedEffectCount, Is.EqualTo(0));
+            Assert.That(updateDelta.UpdatedActiveEffectCount, Is.EqualTo(1));
+            Assert.That(updateDelta.UpdatedActiveEffects[0].EffectInstanceId, Is.EqualTo(effectInstanceId));
+            Assert.That(updateDelta.UpdatedActiveEffects[0].Level, Is.EqualTo(2));
+            Assert.That(updateDelta.UpdatedActiveEffects[0].TimeRemainingRaw, Is.EqualTo(GASNetFixed.FromFloat(12.5f)));
+
+            Assert.That(asc.TryRemoveActiveEffect(activeEffect), Is.True);
+
+            var removeDelta = adapter.CapturePendingReplicatedStateDelta();
+
+            Assert.That(removeDelta.AddedActiveEffectCount, Is.EqualTo(0));
+            Assert.That(removeDelta.UpdatedActiveEffectCount, Is.EqualTo(0));
+            Assert.That(removeDelta.StackChangedEffectCount, Is.EqualTo(0));
+            Assert.That(removeDelta.RemovedEffectInstanceIdCount, Is.EqualTo(1));
+            Assert.That(removeDelta.RemovedEffectInstanceIds[0], Is.EqualTo(effectInstanceId));
+
+            adapter.Dispose();
+            asc.Dispose();
+        }
+
+        private static AbilitySystemComponent CreateNetworkTestAsc(out NetworkTestAttributeSet attributes)
+        {
+            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory(), GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            attributes = new NetworkTestAttributeSet();
+            asc.AddAttributeSet(attributes);
+            return asc;
+        }
+
+        private static GameplayEffect CreateHealthBuffEffect(string name, float magnitude)
+        {
+            return new GameplayEffect(
+                name,
+                EDurationPolicy.HasDuration,
+                30f,
+                modifiers: new List<ModifierInfo>
+                {
+                    new ModifierInfo("Health", EAttributeModifierOperation.Add, new ScalableFloat(magnitude))
+                });
+        }
+
+        private sealed class NetworkTestAttributeSet : AttributeSet
+        {
+            public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
         }
 
         private sealed class TestAbility : GameplayAbility
