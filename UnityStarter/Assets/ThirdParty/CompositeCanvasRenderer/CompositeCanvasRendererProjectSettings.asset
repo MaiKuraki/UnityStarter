@@ -1,5 +1,293 @@
 %YAML 1.1
 %TAG !u! tag:unity3d.com,2011:
+--- !u!200 &-3631750299821210046
+ShaderVariantCollection:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_Name: ShaderVariants
+  m_Shaders:
+  - first: {fileID: 4800000, guid: 9a9c5583f6b4e48608974061880dfa13, type: 3}
+    second:
+      variants:
+      - keywords: 
+        passType: 0
+  - first: {fileID: 4800000, guid: b0bf655e949c44179be80f397d04532d, type: 3}
+    second:
+      variants:
+      - keywords: 
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+          UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+          UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_DETAIL UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_ADDITIVE UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_DETAIL UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_FILL UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_FILL UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+          UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+          UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_DETAIL UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: COLOR_MODE_SUBTRACT UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+          UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: ENABLE_DETAIL UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_DETAIL UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_MASK
+        passType: 0
+      - keywords: ENABLE_MASK ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_MASK ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_MASK UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: ENABLE_MASK UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_MASK UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_UV_ANIMATION
+        passType: 0
+      - keywords: ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: ENABLE_UV_ANIMATION UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: ENABLE_UV_ANIMATION UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: UNITY_UI_ALPHACLIP
+        passType: 0
+      - keywords: UNITY_UI_ALPHACLIP UNITY_UI_CLIP_RECT
+        passType: 0
+      - keywords: UNITY_UI_CLIP_RECT
+        passType: 0
 --- !u!114 &11400000
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -12,7 +300,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 8b894cfc7d9884b4d9a048119fbfde1e, type: 3}
   m_Name: CompositeCanvasRendererProjectSettings
   m_EditorClassIdentifier: 
+  m_PreLoadSettingsInBuild: 1
   m_TransformSensitivity: 1
   m_EnableCullingInPlayMode: 1
   m_EnableCullingInEditMode: 1
-  m_AutoIncludeShaders: 1
+  m_ShaderVariantRegistry:
+    m_OptionalShaders: []
+    m_Asset: {fileID: -3631750299821210046}
+    m_RegisteredShaders:
+    - {fileID: 4800000, guid: 9a9c5583f6b4e48608974061880dfa13, type: 3}
+    - {fileID: 4800000, guid: b0bf655e949c44179be80f397d04532d, type: 3}
+    m_ErrorOnUnregisteredVariant: 0
+    m_UnregisteredVariants: []
