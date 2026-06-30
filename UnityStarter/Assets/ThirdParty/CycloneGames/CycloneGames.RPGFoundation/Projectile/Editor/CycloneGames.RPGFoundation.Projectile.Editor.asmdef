@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.RPGFoundation.Projectile.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Projectile.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Editor",
+        "CycloneGames.RPGFoundation.Projectile.Core",
+        "CycloneGames.RPGFoundation.Projectile.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

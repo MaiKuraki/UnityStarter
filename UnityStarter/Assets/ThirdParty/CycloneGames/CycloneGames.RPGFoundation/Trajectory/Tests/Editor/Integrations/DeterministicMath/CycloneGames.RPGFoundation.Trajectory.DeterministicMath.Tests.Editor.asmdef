@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.RPGFoundation.Trajectory.DeterministicMath.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Trajectory.Tests.Editor.Integrations.DeterministicMath",
+    "references": [
+        "CycloneGames.DeterministicMath.Core",
+        "CycloneGames.RPGFoundation.Trajectory.Core",
+        "CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

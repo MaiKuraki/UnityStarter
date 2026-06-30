@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.RPGFoundation.Projectile.Runtime",
+    "rootNamespace": "CycloneGames.RPGFoundation.Projectile.Runtime",
+    "references": [
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.RPGFoundation.Projectile.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
