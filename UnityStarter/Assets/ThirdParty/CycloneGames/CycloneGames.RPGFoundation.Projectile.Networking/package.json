@@ -1,0 +1,24 @@
+{
+  "name": "com.cyclone-games.rpg-foundation-projectile-networking",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.RPGFoundation.Projectile.Networking",
+  "description": "Optional CycloneGames.Networking integration for CycloneGames.RPGFoundation Projectile. Provides transport-neutral projectile spawn, snapshot, correction, hit, despawn, full-state, and manifest handshake contracts.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.rpg-foundation": "1.0.0",
+    "com.cyclone-games.networking": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "RPGFoundation",
+    "Projectile",
+    "Networking"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

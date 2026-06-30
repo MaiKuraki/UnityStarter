@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.RPGFoundation.Trajectory.Tests.Editor",
+    "rootNamespace": "CycloneGames.RPGFoundation.Trajectory.Tests.Editor",
+    "references": [
+        "CycloneGames.RPGFoundation.Trajectory.Core",
+        "CycloneGames.RPGFoundation.Trajectory.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
