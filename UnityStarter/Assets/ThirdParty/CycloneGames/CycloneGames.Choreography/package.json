@@ -1,0 +1,29 @@
+{
+  "name": "com.cyclone-games.choreography",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Choreography",
+  "description": "A reusable skill/ability choreography system for describing, playing, and scheduling presentation timelines (animation, audio, VFX, gameplay events, resource preload) with pluggable playback strategies and backend adapters. The engine-free Core runs in CLI tests and headless servers; the Unity interaction layer binds it to ScriptableObject authoring, MonoBehaviour lifecycles, and CycloneGames.AssetManagement.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.5.0",
+    "com.cyclone-games.asset-management": "1.0.0",
+    "com.cyclone-games.logger": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Choreography",
+    "Ability",
+    "Animation",
+    "Audio",
+    "VFX",
+    "Timeline",
+    "Scheduler"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}
