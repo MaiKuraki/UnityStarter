@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.Choreography.Interaction",
+    "rootNamespace": "CycloneGames.Choreography",
+    "references": [
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.Logger",
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
