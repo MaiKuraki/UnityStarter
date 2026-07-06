@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.Choreography.GameplayAbilities",
+    "rootNamespace": "CycloneGames.Choreography.GameplayAbilities",
+    "references": [
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.GameplayTags.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_GAMEPLAY_ABILITIES"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.gameplay-abilities",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_GAMEPLAY_ABILITIES"
+        }
+    ],
+    "noEngineReferences": false
+}

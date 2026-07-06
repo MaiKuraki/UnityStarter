@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.Choreography.Tests.Editor",
+    "rootNamespace": "CycloneGames.Choreography.Tests",
+    "references": [
+        "CycloneGames.Choreography.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
