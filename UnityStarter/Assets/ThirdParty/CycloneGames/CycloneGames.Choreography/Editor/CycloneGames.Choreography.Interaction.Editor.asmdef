@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.Choreography.Interaction.Editor",
+    "rootNamespace": "CycloneGames.Choreography.Editor",
+    "references": [
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.Choreography.Interaction"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

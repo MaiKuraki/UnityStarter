@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.Choreography.Audio",
+    "rootNamespace": "CycloneGames.Choreography.Audio",
+    "references": [
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.Choreography.Interaction"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

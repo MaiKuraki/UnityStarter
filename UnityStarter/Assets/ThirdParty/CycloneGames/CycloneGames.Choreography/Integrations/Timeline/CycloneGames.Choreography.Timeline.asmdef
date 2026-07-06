@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.Choreography.Timeline",
+    "rootNamespace": "CycloneGames.Choreography.Timeline",
+    "references": [
+        "CycloneGames.Choreography.Core",
+        "Unity.Timeline"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_TIMELINE"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.timeline",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_TIMELINE"
+        }
+    ],
+    "noEngineReferences": false
+}
