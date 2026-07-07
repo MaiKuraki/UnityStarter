@@ -136,7 +136,7 @@ flowchart LR
 `CycloneGames.BehaviorTree.Integrations.DeterministicMath` 同样通过 asmdef `versionDefines` 和 `defineConstraints` 守卫：
 
 - UPM 使用方式：安装 `com.cyclone-games.deterministic-math` 后会自动生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`。
-- 本地 `Assets/ThirdParty` 使用方式：Unity 不能自动识别 sibling package manifest，因此需要在可见项目配置中定义 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`，例如 `Assets/csc.rsp`。
+- 本地 `Assets/ThirdParty` sibling package 不会自动发出 package `versionDefines`；在这种嵌入模式下，该 integration 保持禁用，除非项目自己拥有独立、显式的集成策略。
 - 缺失依赖时：该 symbol 不存在，Unity 会跳过 integration assembly，BehaviorTree 核心仍可编译。
 
 ### 安装方式

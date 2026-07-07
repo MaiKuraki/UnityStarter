@@ -136,7 +136,7 @@ flowchart LR
 `CycloneGames.BehaviorTree.Integrations.DeterministicMath` is also guarded by asmdef `versionDefines` and `defineConstraints`:
 
 - UPM usage: installing `com.cyclone-games.deterministic-math` automatically emits `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`.
-- Local `Assets/ThirdParty` usage: Unity cannot auto-detect sibling package manifests, so define `CYCLONEGAMES_HAS_DETERMINISTIC_MATH` in a visible project configuration such as `Assets/csc.rsp`.
+- Local `Assets/ThirdParty` sibling packages do not automatically emit package `versionDefines`; in that embedded mode the integration remains disabled unless the project owns a separate explicit integration strategy.
 - Missing dependency: when the symbol is absent, Unity skips the integration assembly and BehaviorTree core still compiles.
 
 ### Setup

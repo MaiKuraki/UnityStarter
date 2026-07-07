@@ -1,9 +1,10 @@
 {
-    "name": "CycloneGames.Choreography.Interaction",
-    "rootNamespace": "CycloneGames.Choreography",
+    "name": "CycloneGames.Choreography.AssetManagement",
+    "rootNamespace": "CycloneGames.Choreography.AssetManagement",
     "references": [
         "CycloneGames.Choreography.Core",
-        "CycloneGames.Logger"
+        "CycloneGames.Choreography.Interaction",
+        "CycloneGames.AssetManagement.Runtime"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

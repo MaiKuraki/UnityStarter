@@ -11,6 +11,7 @@ namespace CycloneGames.Choreography.Core
     {
         private static readonly ChoreographyTrack[] EmptyTracks = Array.Empty<ChoreographyTrack>();
         private static readonly ChoreographyEvent[] EmptyEvents = Array.Empty<ChoreographyEvent>();
+        private static readonly ChoreographyEventState[] EmptyEventStates = Array.Empty<ChoreographyEventState>();
 
         /// <summary>Stable identifier, unique within its owning asset.</summary>
         public string Id { get; }
@@ -27,11 +28,17 @@ namespace CycloneGames.Choreography.Core
         /// <summary>Default competition strategy applied while this section is the active dominant section on a channel.</summary>
         public ChoreographyPlaybackMode PreferredMode { get; }
 
+        /// <summary>Preferred time authority for this section. The active clock driver decides whether it can satisfy it.</summary>
+        public ChoreographySectionClock Clock { get; }
+
         /// <summary>Tracks owned by this section. Never null.</summary>
         public ChoreographyTrack[] Tracks { get; }
 
         /// <summary>Events owned by this section, expected in ascending <see cref="ChoreographyEvent.Time"/> order. Never null.</summary>
         public ChoreographyEvent[] Events { get; }
+
+        /// <summary>Duration-spanning event states owned by this section. Never null.</summary>
+        public ChoreographyEventState[] EventStates { get; }
 
         public ChoreographySection(
             string id,
@@ -39,7 +46,9 @@ namespace CycloneGames.Choreography.Core
             ChoreographyTrack[] tracks,
             ChoreographyEvent[] events = null,
             bool interruptible = true,
-            ChoreographyPlaybackMode preferredMode = ChoreographyPlaybackMode.Inherit)
+            ChoreographyPlaybackMode preferredMode = ChoreographyPlaybackMode.Inherit,
+            ChoreographyEventState[] eventStates = null,
+            ChoreographySectionClock clock = default)
         {
             Id = id;
             Duration = duration < 0d ? 0d : duration;
@@ -47,6 +56,12 @@ namespace CycloneGames.Choreography.Core
             Events = events ?? EmptyEvents;
             Interruptible = interruptible;
             PreferredMode = preferredMode;
+            EventStates = eventStates ?? EmptyEventStates;
+            Clock = clock.Source == ChoreographySectionClockSource.Inherit
+                && clock.ExternalEndPolicy == 0
+                && clock.FrameRate == 0d
+                    ? ChoreographySectionClock.Default
+                    : clock;
         }
     }
 }

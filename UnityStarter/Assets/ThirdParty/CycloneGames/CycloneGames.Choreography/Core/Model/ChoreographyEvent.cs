@@ -31,4 +31,53 @@ namespace CycloneGames.Choreography.Core
             StringPayload = stringPayload;
         }
     }
+
+    /// <summary>
+    /// Duration-spanning authored gameplay state, equivalent to an AnimNotifyState.
+    /// The state owns a section-relative time span and dispatches Begin/Update/End phases during playback.
+    /// </summary>
+    public sealed class ChoreographyEventState
+    {
+        /// <summary>Stable identifier, unique within its owning section.</summary>
+        public string Id { get; }
+
+        /// <summary>Semantic event identifier consumed by gameplay systems.</summary>
+        public string EventId { get; }
+
+        /// <summary>Start offset from the owning section start, in seconds.</summary>
+        public double StartTime { get; }
+
+        /// <summary>End offset from the owning section start, in seconds.</summary>
+        public double EndTime { get; }
+
+        /// <summary>Duration in seconds.</summary>
+        public double Duration => EndTime - StartTime;
+
+        /// <summary>Optional scalar payload.</summary>
+        public float Magnitude { get; }
+
+        /// <summary>Optional integer payload.</summary>
+        public int IntPayload { get; }
+
+        /// <summary>Optional string payload. May be null.</summary>
+        public string StringPayload { get; }
+
+        public ChoreographyEventState(
+            string id,
+            string eventId,
+            double startTime,
+            double endTime,
+            float magnitude = 0f,
+            int intPayload = 0,
+            string stringPayload = null)
+        {
+            StartTime = startTime < 0d ? 0d : startTime;
+            EndTime = endTime < StartTime ? StartTime : endTime;
+            Id = id;
+            EventId = eventId;
+            Magnitude = magnitude;
+            IntPayload = intPayload;
+            StringPayload = stringPayload;
+        }
+    }
 }

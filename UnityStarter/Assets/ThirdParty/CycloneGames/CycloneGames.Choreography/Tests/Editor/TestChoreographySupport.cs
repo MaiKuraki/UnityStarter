@@ -183,9 +183,17 @@ namespace CycloneGames.Choreography.Tests
             return new ChoreographyTrack("track", kind, clips);
         }
 
-        public static ChoreographySection Section(string id, double duration, ChoreographyTrack[] tracks, ChoreographyEvent[] events = null, bool interruptible = true, ChoreographyPlaybackMode mode = ChoreographyPlaybackMode.Inherit)
+        public static ChoreographySection Section(
+            string id,
+            double duration,
+            ChoreographyTrack[] tracks,
+            ChoreographyEvent[] events = null,
+            bool interruptible = true,
+            ChoreographyPlaybackMode mode = ChoreographyPlaybackMode.Inherit,
+            ChoreographyEventState[] eventStates = null,
+            ChoreographySectionClock clock = default)
         {
-            return new ChoreographySection(id, duration, tracks, events, interruptible, mode);
+            return new ChoreographySection(id, duration, tracks, events, interruptible, mode, eventStates, clock);
         }
     }
 }

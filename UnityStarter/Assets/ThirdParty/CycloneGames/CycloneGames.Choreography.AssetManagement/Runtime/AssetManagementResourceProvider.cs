@@ -3,17 +3,12 @@ using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Choreography.Core;
 using UnityEngine;
 
-namespace CycloneGames.Choreography
+namespace CycloneGames.Choreography.AssetManagement
 {
     /// <summary>
-    /// Bridges the engine-free <see cref="IResourceProvider"/> contract to a CycloneGames.AssetManagement
-    /// <see cref="IAssetPackage"/>. All choreography resources (animation, audio, VFX, external banks) load through
-    /// this single path so nothing bypasses the project's asset-management ownership and caching.
-    ///
-    /// Ownership: each distinct reference maps to one retained <see cref="IAssetHandle{T}"/> with a reference count.
-    /// <see cref="Load"/> increments the count and returns a shared handle wrapper; the wrapper's
-    /// <see cref="IChoreographyResourceHandle.Release"/> decrements it and disposes the underlying handle at zero.
-    /// Assets load as the base <see cref="Object"/> type; adapters downcast via <see cref="TryGetAsset{TAsset}"/>.
+    /// Optional bridge from Choreography's engine-agnostic resource contract to CycloneGames.AssetManagement.
+    /// It loads Unity Object resources by <see cref="ChoreographyResourceReference.Address"/> and keeps a retained
+    /// handle per distinct reference until the choreography preload owner releases it.
     /// </summary>
     public sealed class AssetManagementResourceProvider : IResourceProvider, IUnityChoreographyResourceResolver
     {
@@ -40,7 +35,10 @@ namespace CycloneGames.Choreography
 
             public string Error => Handle != null ? Handle.Error : null;
 
-            public void Release() => _owner.ReleaseEntry(this);
+            public void Release()
+            {
+                _owner.ReleaseEntry(this);
+            }
         }
 
         private readonly IAssetPackage _package;
@@ -78,6 +76,7 @@ namespace CycloneGames.Choreography
                 handle = entry;
                 return true;
             }
+
             handle = null;
             return false;
         }
@@ -97,17 +96,18 @@ namespace CycloneGames.Choreography
                 asset = typed;
                 return true;
             }
+
             asset = null;
             return false;
         }
 
-        /// <summary>Disposes every retained handle and clears the table. Call on shutdown or scene teardown.</summary>
         public void ReleaseAll()
         {
             foreach (KeyValuePair<ChoreographyResourceReference, ResourceEntry> pair in _entries)
             {
                 pair.Value.Handle?.Dispose();
             }
+
             _entries.Clear();
         }
 

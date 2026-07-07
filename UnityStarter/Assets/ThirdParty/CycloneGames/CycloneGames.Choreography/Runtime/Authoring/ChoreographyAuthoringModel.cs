@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Choreography.Core;
 using UnityEngine;
 
@@ -12,14 +11,19 @@ namespace CycloneGames.Choreography
     public enum ChoreographyResourceSource
     {
         /// <summary>
-        /// Raw provider location string for external banks, custom loaders, or legacy assets.
+        /// Raw provider location string for external banks, custom loaders, or non-Unity resources.
         /// </summary>
         Location = 0,
 
         /// <summary>
-        /// <see cref="AssetRef"/> value resolved through CycloneGames.AssetManagement.
+        /// Loader-agnostic asset key built from a runtime location and an editor GUID.
         /// </summary>
-        AssetReference = 1
+        AssetKey = 1,
+
+        /// <summary>
+        /// Backend-owned cue such as a Wwise event, CycloneGames.Audio event, or other non-Unity-object handle.
+        /// </summary>
+        BackendCue = 2
     }
 
     /// <summary>
@@ -29,14 +33,23 @@ namespace CycloneGames.Choreography
     [Serializable]
     public sealed class ChoreographyResourceReferenceAuthoring
     {
-        [Tooltip("Active resource authoring source. Location keeps legacy string keys; Asset Reference uses CycloneGames.AssetManagement.")]
+        [Tooltip("Active resource authoring source. Location uses provider keys; Asset Key stores a loader-agnostic Location/Guid pair; Backend Cue stores non-Unity-object event data.")]
         [SerializeField] private ChoreographyResourceSource Source = ChoreographyResourceSource.Location;
 
-        [Tooltip("AssetManagement-backed asset reference. When set, its location is used before the address fallback.")]
-        [SerializeField] private AssetRef Asset;
+        [Tooltip("Loader-agnostic asset key. Resource integrations can use this location without coupling the base package to a concrete asset system.")]
+        [SerializeField] private ChoreographyAssetKey Asset;
 
-        [Tooltip("Fallback provider location key for manual addresses, external banks, or non-Unity resources.")]
+        [Tooltip("Provider location key for manual addresses, external banks, or non-Unity resources.")]
         [SerializeField] private string Address;
+
+        [Tooltip("Backend id for event-style resources, e.g. CycloneGames.Audio, Wwise, UnityAudioClip, or a project-specific provider.")]
+        [SerializeField] private string Backend;
+
+        [Tooltip("Optional bank, collection, or package id used by event-style resources.")]
+        [SerializeField] private string Bank;
+
+        [Tooltip("Event or cue id resolved by the selected backend.")]
+        [SerializeField] private string Cue;
 
         [Tooltip("Resource classification used for preload routing and provider selection.")]
         [SerializeField] private ChoreographyResourceKind Kind = ChoreographyResourceKind.Generic;
@@ -46,15 +59,26 @@ namespace CycloneGames.Choreography
 
         public ChoreographyResourceSource SourceMode => Source;
 
-        public AssetRef AssetReference => Source == ChoreographyResourceSource.AssetReference ? Asset : default;
+        public ChoreographyAssetKey AssetKey => Source == ChoreographyResourceSource.AssetKey ? Asset : default;
+
+        public string BackendId => Source == ChoreographyResourceSource.BackendCue ? Backend : null;
+
+        public string BankId => Source == ChoreographyResourceSource.BackendCue ? Bank : null;
+
+        public string CueId => Source == ChoreographyResourceSource.BackendCue ? Cue : null;
 
         public string EffectiveLocation
         {
             get
             {
-                if (Source == ChoreographyResourceSource.AssetReference)
+                if (Source == ChoreographyResourceSource.AssetKey)
                 {
                     return Asset.IsValid ? Asset.Location : (Address ?? string.Empty);
+                }
+
+                if (Source == ChoreographyResourceSource.BackendCue)
+                {
+                    return Cue ?? string.Empty;
                 }
 
                 return Address ?? string.Empty;
@@ -65,9 +89,14 @@ namespace CycloneGames.Choreography
         {
             get
             {
-                if (Source == ChoreographyResourceSource.AssetReference)
+                if (Source == ChoreographyResourceSource.AssetKey)
                 {
                     return Asset.IsValid;
+                }
+
+                if (Source == ChoreographyResourceSource.BackendCue)
+                {
+                    return !string.IsNullOrEmpty(Backend) && !string.IsNullOrEmpty(Cue);
                 }
 
                 return !string.IsNullOrEmpty(Address);
@@ -76,7 +105,12 @@ namespace CycloneGames.Choreography
 
         public ChoreographyResourceReference ToRuntime()
         {
-            return new ChoreographyResourceReference(EffectiveLocation, Kind, string.IsNullOrEmpty(Tag) ? null : Tag);
+            return new ChoreographyResourceReference(
+                EffectiveLocation,
+                Kind,
+                string.IsNullOrEmpty(Tag) ? null : Tag,
+                Source == ChoreographyResourceSource.BackendCue && !string.IsNullOrEmpty(Backend) ? Backend : null,
+                Source == ChoreographyResourceSource.BackendCue && !string.IsNullOrEmpty(Bank) ? Bank : null);
         }
     }
 
@@ -124,6 +158,36 @@ namespace CycloneGames.Choreography
         }
     }
 
+    /// <summary>Serializable authoring record for a duration-spanning event state.</summary>
+    [Serializable]
+    public sealed class ChoreographyEventStateAuthoring
+    {
+        [SerializeField] private string Id;
+        [SerializeField] private string EventId;
+
+        [Tooltip("Start offset from the owning section start, in seconds.")]
+        [SerializeField] private double StartTime;
+
+        [Tooltip("End offset from the owning section start, in seconds.")]
+        [SerializeField] private double EndTime;
+
+        [SerializeField] private float Magnitude;
+        [SerializeField] private int IntPayload;
+        [SerializeField] private string StringPayload;
+
+        public ChoreographyEventState ToRuntime()
+        {
+            return new ChoreographyEventState(
+                Id,
+                EventId,
+                StartTime,
+                EndTime,
+                Magnitude,
+                IntPayload,
+                string.IsNullOrEmpty(StringPayload) ? null : StringPayload);
+        }
+    }
+
     /// <summary>Serializable authoring record for a track (a lane of clips of one kind).</summary>
     [Serializable]
     public sealed class ChoreographyTrackAuthoring
@@ -154,8 +218,15 @@ namespace CycloneGames.Choreography
         [SerializeField] private bool Interruptible = true;
         [Tooltip("Default competition strategy while this section is dominant on its channel.")]
         [SerializeField] private ChoreographyPlaybackMode PreferredMode = ChoreographyPlaybackMode.Inherit;
+        [Tooltip("Preferred time authority for this section. Inherit uses the active request driver. Internal Timeline uses choreography time. Fixed Frame quantizes samples.")]
+        [SerializeField] private ChoreographySectionClockSource ClockSource = ChoreographySectionClockSource.Inherit;
+        [Tooltip("Behavior when an external section source has no more samples before the section ends.")]
+        [SerializeField] private ChoreographyExternalClockEndPolicy ExternalEndPolicy = ChoreographyExternalClockEndPolicy.ContinueInternal;
+        [Tooltip("Frame rate used when this section is driven by Fixed Frame mode.")]
+        [SerializeField] private double FrameRate = 60d;
         [SerializeField] private List<ChoreographyTrackAuthoring> Tracks = new List<ChoreographyTrackAuthoring>();
         [SerializeField] private List<ChoreographyEventAuthoring> Events = new List<ChoreographyEventAuthoring>();
+        [SerializeField] private List<ChoreographyEventStateAuthoring> EventStates = new List<ChoreographyEventStateAuthoring>();
 
         public ChoreographySection ToRuntime()
         {
@@ -173,7 +244,17 @@ namespace CycloneGames.Choreography
                 runtimeEvents[i] = Events[i].ToRuntime();
             }
 
-            return new ChoreographySection(Id, Duration, runtimeTracks, runtimeEvents, Interruptible, PreferredMode);
+            int eventStateCount = EventStates != null ? EventStates.Count : 0;
+            ChoreographyEventState[] runtimeEventStates = eventStateCount == 0
+                ? Array.Empty<ChoreographyEventState>()
+                : new ChoreographyEventState[eventStateCount];
+            for (int i = 0; i < eventStateCount; i++)
+            {
+                runtimeEventStates[i] = EventStates[i].ToRuntime();
+            }
+
+            ChoreographySectionClock clock = new ChoreographySectionClock(ClockSource, ExternalEndPolicy, FrameRate);
+            return new ChoreographySection(Id, Duration, runtimeTracks, runtimeEvents, Interruptible, PreferredMode, runtimeEventStates, clock);
         }
     }
 }

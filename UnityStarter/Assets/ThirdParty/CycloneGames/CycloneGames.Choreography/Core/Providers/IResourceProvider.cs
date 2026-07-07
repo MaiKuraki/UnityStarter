@@ -2,8 +2,7 @@ namespace CycloneGames.Choreography.Core
 {
     /// <summary>
     /// Poll-based, engine-agnostic handle to an in-flight or completed resource load. Mirrors the operation
-    /// model used across CycloneGames asset systems (IsDone/Progress/Error) so a Unity bridge can wrap a
-    /// UniTask-based handle without leaking engine or third-party async types into the Core.
+    /// model used across common asset, audio-bank, and middleware systems without leaking backend types into the Core.
     /// </summary>
     public interface IChoreographyResourceHandle
     {
@@ -27,7 +26,7 @@ namespace CycloneGames.Choreography.Core
 
     /// <summary>
     /// Abstraction over the host asset system. The Core defines only load/query/release; the concrete
-    /// implementation (e.g. an AssetManagement bridge) owns the real backend and reference counting.
+    /// implementation owns the real backend and reference counting.
     /// Implementations must be safe to call from a single logical owner and should reuse handles for
     /// identical references while they remain loaded.
     /// </summary>
