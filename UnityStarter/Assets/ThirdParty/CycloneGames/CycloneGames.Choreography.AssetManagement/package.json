@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.choreography.asset-management",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Choreography.AssetManagement",
+  "description": "Optional bridge between CycloneGames.Choreography and CycloneGames.AssetManagement. It resolves Choreography asset keys and locations through IAssetPackage without making AssetManagement a dependency of the base Choreography package.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.choreography": "1.0.0",
+    "com.cyclone-games.asset-management": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Choreography",
+    "AssetManagement",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

@@ -1,6 +1,6 @@
 # CycloneGames.BehaviorTree
 
-面向生产环境的零 GC 行为树框架 —— 双层架构、三级扩容（1 到 10,000+ 智能体）、多人网络同步、Burst/DOD 大规模模拟、专业 GraphView 编辑器实时可视化。
+面向生产环境的零 GC 行为树框架 —— 双层架构、纯代码运行时构建、四级扩容（1 到 10,000+ 智能体）、多人网络同步、可选 Burst/DOD 大规模模拟、专业 GraphView 编辑器实时可视化。
 
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
@@ -12,6 +12,7 @@
 - [架构设计](#架构设计)
 - [安装](#安装)
 - [快速上手 — 最小 Demo](#快速上手--最小-demo)
+- [纯代码运行时树](#纯代码运行时树)
 - [核心概念](#核心概念)
   - [BTRunnerComponent](#btrunnercomponent)
   - [黑板 (BlackBoard)](#黑板-blackboard)
@@ -39,8 +40,8 @@
 
 | 分类         | 特性                                                                                                       |
 | ------------ | ---------------------------------------------------------------------------------------------------------- |
-| **架构**     | 双层设计（SO 编辑层 → 纯 C# 运行层），一次编译零 GC 执行                                                   |
-| **节点库**   | 30+ 内置节点：Sequence、Selector、Parallel、Reactive、Utility AI、Service、SubTree、Switch、Probability 等 |
+| **架构**     | 双层设计（SO 编辑层 → 纯 C# 运行层），并提供 `RuntimeBehaviorTreeBuilder` 纯代码构建路径                   |
+| **节点库**   | 35+ 内置节点：Sequence、Selector、SelectorRandom、Parallel、Reactive、Utility AI、Service、SubTree、RandomChance 等 |
 | **扩容**     | Self Tick → BTTickManager（百级）→ BTPriorityTickManager + LOD（千级）→ Burst DOD Jobs（万级+）            |
 | **网络**     | 服务端权威快照、客户端预测哈希比对、增量黑板同步                                                           |
 | **黑板**     | 5 类型字典（int/float/bool/Vector3/object）、int 键哈希、父链继承、观察者推送、时间戳、线程安全            |
@@ -81,10 +82,10 @@ flowchart TB
 | -------------- | ---------------------------------------- | -------------------------------- |
 | **用途**       | 编辑、序列化、编辑器 UI                  | 游戏执行                         |
 | **GC**         | 可接受（仅编辑时）                       | **零分配**                       |
-| **Unity 依赖** | 需要（ScriptableObject, SerializeField） | 极少（仅 Animator.StringToHash） |
+| **Unity 依赖** | 需要（ScriptableObject, SerializeField） | 很小的桥接面（`Animator.StringToHash`、`Vector3`、Time/Random 回退） |
 | **时机**       | 设计时 + Compile() 调用                  | 每一帧                           |
 
-### 三级扩容体系
+### 四级扩容体系
 
 ```mermaid
 flowchart LR
@@ -96,15 +97,20 @@ flowchart LR
         A2["100–1,000 智能体<br>BTTickManager<br>轮询 + 预算"]
     end
 
-    subgraph Tier3["第三级：Burst DOD"]
-        A3["10,000+ 智能体<br>BTTickJob<br>IJobParallelFor<br>NativeArray SoA"]
+    subgraph Tier3["第三级：Priority Managed"]
+        A3["1,000–10,000 智能体<br>BTPriorityTickManager<br>LOD + 优先级桶"]
     end
 
-    Tier1 --> Tier2 --> Tier3
+    subgraph Tier4["第四级：Burst DOD"]
+        A4["10,000+ 智能体<br>BTTickJob<br>IJobParallelFor<br>NativeArray SoA"]
+    end
+
+    Tier1 --> Tier2 --> Tier3 --> Tier4
 
     style Tier1 fill:#2a3a2a,stroke:#4a4
     style Tier2 fill:#2a2a3a,stroke:#66a
     style Tier3 fill:#3a2a2a,stroke:#a44
+    style Tier4 fill:#3a2a2a,stroke:#a44
 ```
 
 ---
@@ -123,6 +129,15 @@ flowchart LR
 | ------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | [Burst](https://docs.unity3d.com/Packages/com.unity.burst@latest) + [Collections](https://docs.unity3d.com/Packages/com.unity.collections@latest) | DOD 万级模拟   |
 | [Mathematics](https://docs.unity3d.com/Packages/com.unity.mathematics@latest)                                                                     | Burst Job 调度 |
+| `com.cyclone-games.deterministic-math`                                                                                                            | 可选固定点黑板集成 |
+
+`CycloneGames.BehaviorTree.Runtime.DOD` 通过 asmdef `versionDefines` 和 `defineConstraints` 保护，仅在 Burst、Collections 与 Mathematics 均存在时编译。核心 Runtime 包不要求 UniTask。
+
+`CycloneGames.BehaviorTree.Integrations.DeterministicMath` 同样通过 asmdef `versionDefines` 和 `defineConstraints` 守卫：
+
+- UPM 使用方式：安装 `com.cyclone-games.deterministic-math` 后会自动生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`。
+- 本地 `Assets/ThirdParty` sibling package 不会自动发出 package `versionDefines`；在这种嵌入模式下，该 integration 保持禁用，除非项目自己拥有独立、显式的集成策略。
+- 缺失依赖时：该 symbol 不存在，Unity 会跳过 integration assembly，BehaviorTree 核心仍可编译。
 
 ### 安装方式
 
@@ -188,6 +203,70 @@ flowchart TB
 - **红色边框** = 节点失败 (Failure)
 - **流动粒子** 沿边线 = 数据流方向
 - **进度条** 在 WaitNode 上 = 倒计时
+
+---
+
+## 纯代码运行时树
+
+当行为树需要由代码生成、用于测试、从数据装配，或运行在没有序列化 `BehaviorTree` 资产的环境中时，使用 `RuntimeBehaviorTreeBuilder`。Builder 是运行时工厂：它创建 `RuntimeRootNode`、封闭组合节点子节点、连接 `RuntimeBlackboard`，并返回可直接 Tick 的 `RuntimeBehaviorTree`。
+
+```csharp
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+static readonly int HasTargetKey = UnityEngine.Animator.StringToHash("HasTarget");
+static readonly int AttackCountKey = UnityEngine.Animator.StringToHash("AttackCount");
+
+RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder(ownerGameObject)
+    .WithServiceResolver(new RuntimeBTContext.ServiceProviderResolver(serviceProvider))
+    .WithTickInterval(1)
+    .Selector()
+        .Sequence()
+            .Condition(bb => bb.GetBool(HasTargetKey), "HasTarget")
+            .CoolDown(0.75f)
+                .Action(bb =>
+                {
+                    bb.SetInt(AttackCountKey, bb.GetInt(AttackCountKey) + 1);
+                    return RuntimeState.Success;
+                }, "Attack")
+            .End()
+        .End()
+        .Action(bb => RuntimeState.Success, "Idle")
+    .End()
+    .Build();
+
+tree.Play();
+tree.Tick();
+```
+
+对于可复用的玩法规则，优先使用 command 和 strategy 对象，而不是把大型逻辑全部写成内联 lambda：
+
+```csharp
+public sealed class AttackCommand : IRuntimeBTCommand
+{
+    public RuntimeState Execute(RuntimeBlackboard blackboard)
+    {
+        // 调用领域服务、更新黑板状态，或排入动画请求。
+        return RuntimeState.Success;
+    }
+}
+
+public sealed class HasTargetCondition : IRuntimeBTConditionStrategy
+{
+    public bool Evaluate(RuntimeBlackboard blackboard)
+    {
+        return blackboard.GetBool(HasTargetKey);
+    }
+}
+
+RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
+    .Sequence()
+        .Condition(new HasTargetCondition(), "HasTarget")
+        .Command(new AttackCommand(), "Attack")
+    .End()
+    .Build();
+```
+
+纯代码路径与资产编译路径共享同一套 runtime nodes。测试、程序化装配、server/headless 流程和数据驱动 factory 适合使用纯代码路径；当策划需要 GraphView authoring、序列化引用和运行时可视化检查时，使用 `BehaviorTree` 资产。
 
 ---
 
@@ -269,6 +348,55 @@ static readonly int k_Health = Animator.StringToHash("Health");
 blackboard.SetInt(k_Health, 100);
 int health = blackboard.GetInt(k_Health);
 ```
+
+**Schema-first 黑板**（生产环境推荐）：
+
+```csharp
+RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+    .AddInt("Health", 100, RuntimeBlackboardSyncFlags.Networked)
+    .AddBool("HasTarget", RuntimeBlackboardSyncFlags.Delta)
+    .AddVector3("SpawnPoint", RuntimeBlackboardSyncFlags.Snapshot)
+    .AddObject("Target") // object key 永远是 local-only
+    .Build();
+
+var tree = new RuntimeBehaviorTreeBuilder()
+    .WithBlackboardSchema(schema)
+    .Action(blackboard =>
+    {
+        int healthKey = RuntimeBlackboard.DefaultStringHashFunc("Health");
+        blackboard.SetInt(healthKey, blackboard.GetInt(healthKey) - 1);
+        return RuntimeState.Success;
+    })
+    .Build();
+
+BTBlackboardDelta delta = BTBlackboardDelta.CreateForSchema(schema);
+delta.Attach(tree.Blackboard);
+```
+
+对于网络确定性数据，核心黑板提供原始 `long`、`RuntimeBlackboardLong2` 和 `RuntimeBlackboardLong3` 槽位。这些槽位会参与序列化、delta 同步和 hash 校验，并且不会产生装箱，适合固定点数、tick 量化值或外部确定性数值。
+
+当项目中存在 `CycloneGames.DeterministicMath` 时，使用可选的 `CycloneGames.BehaviorTree.Integrations.DeterministicMath` assembly：
+
+```csharp
+using CycloneGames.BehaviorTree.Integrations.DeterministicMath;
+using CycloneGames.DeterministicMath;
+
+RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+    .AddFPInt64("Cooldown", FPInt64.FromString("1.25"))
+    .AddFPVector3("Position", RuntimeBlackboardSyncFlags.Networked)
+    .Build();
+
+blackboard.SetFPVector3("Position", new FPVector3(
+    FPInt64.FromInt(10),
+    FPInt64.Zero,
+    FPInt64.FromString("3.5")));
+```
+
+该 integration 会把 `FPInt64`、`FPVector2` 和 `FPVector3` 存为 raw long 槽位，因此 BehaviorTree 核心不依赖确定性数学包，同时网络 payload 保持 bit-stable。
+
+如果该 define 未启用，这个 namespace 和 assembly 会有意缺席。需要确定性 payload 但不接入固定点包时，可以直接使用核心的 `SetLong`、`SetLong2` 和 `SetLong3` API。
+
+绑定 schema 后，未知 key 和错误值类型会 fail-fast。`Snapshot` key 进入全量快照，`Delta` key 会被 schema 创建的 delta tracker 自动追踪，local-only key 不参与网络序列化和哈希校验。
 
 **观察者系统**（推送式变更通知）：
 
@@ -432,6 +560,12 @@ flowchart TB
 
 **适用场景：** "尝试攻击 OR 逃跑 OR 待命" → 回退链。
 
+#### SelectorRandomNode（随机选择节点）
+
+在执行 selector 回退链之前随机打乱子节点顺序。多个等价行为需要分散选择，但不需要独立权重表时使用。可提供 seed 以支持确定性回放或联网流程。
+
+**适用场景：** "从多个巡逻点中随机尝试一个；若第一个不可用，则继续尝试下一个可用点。"
+
 #### SequenceWithMemoryNode（记忆顺序节点）
 
 类似 Sequencer，但**记住**上次处于 Running 状态的子节点，从该位置恢复执行而不是从第 0 个重新开始。
@@ -560,6 +694,7 @@ flowchart TB
 | ---------------------- | ----------------------------------------------- |
 | **OnOffNode**          | 返回固定的 `Success` 或 `Failure`（可配置开关） |
 | **MessageReceiveNode** | 检查黑板键是否等于特定字符串                    |
+| **RandomChanceNode**   | 按 `chance / outOf` 概率返回 `Success`          |
 
 ---
 
@@ -571,30 +706,26 @@ flowchart TB
 using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
+using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using UnityEngine;
 
-// === SO 层（编辑器） ===
-[BTInfo("Custom/Movement", "向目标位置移动")]
+// === ScriptableObject authoring layer ===
+[BTInfo("Custom/Movement", "Moves agent toward target position")]
 public class MoveToTargetNode : ActionNode
 {
     [SerializeField] private string _targetKey = "TargetPosition";
     [SerializeField] private float _arrivalRadius = 0.5f;
-
-    protected override BTState OnRun(IBlackBoard bb)
-    {
-        return BTState.SUCCESS; // SO 层回退 → Compile 时创建 RuntimeNode
-    }
 
     public override RuntimeNode CreateRuntimeNode()
     {
         return new RuntimeMoveToTarget(
             Animator.StringToHash(_targetKey),
             _arrivalRadius
-        ) { GUID = this.GUID };
+        ) { GUID = GUID };
     }
 }
 
-// === Runtime 层（0GC 执行） ===
+// === Pure C# runtime execution layer ===
 public class RuntimeMoveToTarget : RuntimeStatefulActionNode
 {
     private readonly int _targetKey;
@@ -606,9 +737,9 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
         _arrivalRadiusSqr = arrivalRadius * arrivalRadius;
     }
 
-    protected override void OnActionStart(RuntimeBlackboard bb)
+    protected override RuntimeState OnActionStart(RuntimeBlackboard bb)
     {
-        // 节点开始运行时的一次性初始化
+        return RuntimeState.Running;
     }
 
     protected override RuntimeState OnActionRunning(RuntimeBlackboard bb)
@@ -630,7 +761,7 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
 
     protected override void OnActionHalted(RuntimeBlackboard bb)
     {
-        // 节点被中止时的清理
+        // Cleanup when node is aborted.
     }
 }
 ```
@@ -638,24 +769,47 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
 ### 自定义条件节点
 
 ```csharp
-[BTInfo("Custom/Checks", "血量是否高于阈值")]
+using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Conditions;
+using CycloneGames.BehaviorTree.Runtime.Nodes;
+using UnityEngine;
+
+[BTInfo("Custom/Checks", "Is health above threshold")]
 public class CheckHealthNode : ConditionNode
 {
     [SerializeField] private string _healthKey = "Health";
     [SerializeField] private int _threshold = 30;
 
-    public override BTState Evaluate(IBlackBoard bb)
-    {
-        return bb.GetInt(_healthKey) >= _threshold
-            ? BTState.SUCCESS
-            : BTState.FAILURE;
-    }
-
     public override RuntimeNode CreateRuntimeNode()
     {
         return new RuntimeCheckHealth(
             Animator.StringToHash(_healthKey), _threshold
-        ) { GUID = this.GUID };
+        ) { GUID = GUID };
+    }
+}
+
+public sealed class RuntimeCheckHealth : RuntimeNode
+{
+    private readonly int _healthKey;
+    private readonly int _threshold;
+
+    public RuntimeCheckHealth(int healthKey, int threshold)
+    {
+        _healthKey = healthKey;
+        _threshold = threshold;
+    }
+
+    public override bool CanEvaluate => true;
+
+    public override bool Evaluate(RuntimeBlackboard blackboard)
+    {
+        return blackboard.GetInt(_healthKey) >= _threshold;
+    }
+
+    protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
+    {
+        return Evaluate(blackboard) ? RuntimeState.Success : RuntimeState.Failure;
     }
 }
 ```
@@ -952,6 +1106,8 @@ flatTree.Dispose();
 
 系统提供三种多人同步模式。
 
+传入 snapshot 和 delta 读取都带有上限保护。`BTNetworkSync.DeserializeSnapshot`、`RuntimeBlackboard.ReadFrom`、`BTBlackboardDelta.Apply` 与 `BehaviorTreeNetworkSyncBridge.ApplyPayload` 会在修改运行时状态前拒绝过大的或格式错误的 payload。黑板中的 `object` 值刻意保持为本地数据，不参与序列化、哈希或复制。
+
 ### 架构
 
 ```mermaid
@@ -1017,7 +1173,7 @@ if (BTNetworkSync.CheckDesync(clientTree, serverHash))
 
 ### 模式 3：增量黑板同步
 
-仅传输发生变化的键。使用池化 `MemoryStream` 实现稳态零分配。
+仅传输发生变化的键。先用 `Attach` 将 tracker 绑定到源 blackboard，通过 blackboard observer 捕获脏 key；热路径使用 `TryFlush`。返回的 patch 是指向 tracker 自有池化 buffer 的 `ArraySegment<byte>`，在下一次 flush 前有效。写入相同值不会推进 blackboard stamp，也不会产生 patch。
 
 ```csharp
 // 初始化：注册需要追踪的键（仅一次）
@@ -1025,11 +1181,13 @@ var delta = new BTBlackboardDelta();
 delta.TrackKey("Health");
 delta.TrackKey("Position");
 delta.TrackKey("AlertLevel");
+delta.Attach(serverBlackboard);
 
 // 服务端：刷新自上次同步以来的变化
-byte[] patch = delta.Flush(serverBlackboard);
-if (patch != null && patch.Length > 0)
+if (delta.TryFlush(serverBlackboard, out ArraySegment<byte> patch))
+{
     SendToClients(patch);
+}
 
 // 客户端：应用增量
 BTBlackboardDelta.Apply(clientBlackboard, patch);
@@ -1044,7 +1202,15 @@ var rng = new BTDeterministic.DeterministicRNG(seed: 42);
 int index = rng.NextInt(0, 5); // 相同种子在服务端和客户端产生相同结果
 ```
 
-消费随机值的 runtime 节点（`RuntimeWaitNode`、`RuntimeWaitSuccessNode`、`RuntimeRepeatNode`、`RuntimeServiceNode`，以及带权重的 `RuntimeProbabilityBranch` 回退路径）会从黑板的 service registry 解析可选的 `IRuntimeBTRandomProvider`。在联网或回放的树中注册确定性 provider；若未注册，则回退到 `UnityEngine.Random`（非确定性，Editor/Standalone 默认行为）。
+消费随机值的 runtime 节点（`RuntimeWaitNode`、`RuntimeWaitSuccessNode`、`RuntimeRepeatNode`、`RuntimeServiceNode`、`RuntimeSelectorRandom`、`RuntimeRandomChanceNode`，以及带权重的 `RuntimeProbabilityBranch` 回退路径）会从黑板的 service registry 解析可选的 `IRuntimeBTRandomProvider`。在联网或回放的树中注册确定性 provider；若未注册，则回退到 `UnityEngine.Random`（非确定性，Editor/Standalone 默认行为）。
+
+如果项目中存在 `CycloneGames.DeterministicMath`，可以把 `DeterministicMathRandomProvider` 注册为该服务，并在 rollback 中保存/恢复随机状态：
+
+```csharp
+var randomProvider = new DeterministicMathRandomProvider(seed: 12345UL);
+DeterministicRandomState checkpoint = randomProvider.SaveState();
+randomProvider.RestoreState(checkpoint);
+```
 
 ---
 
@@ -1243,7 +1409,7 @@ public class SquadGroupProvider : MonoBehaviour, IBTAgentGroupProvider
 - `RuntimeBlackboard.EnableThreadSafety()` → 按需启用 `ReaderWriterLockSlim` 多线程访问
 - 观察者通知在写锁**外部**触发 → 回调可安全读写黑板
 - `BTTickJob` 使用 Burst `IJobParallelFor` → NativeArray 保证线程隔离
-- `RuntimeBehaviorTree` 中的 `volatile _wakeUpRequested` → 支持跨线程安全唤醒
+- `RuntimeBehaviorTree` 使用 `Interlocked` 与 `Volatile` 管理唤醒标记和增强 Tick 预算 → 支持跨线程安全唤醒
 
 ---
 
@@ -1299,6 +1465,40 @@ public class RuntimeBehaviorTree : IRuntimeBTContext
     void WakeUp(int boostedTicks = 1);
     bool ConsumeWakeUp();
     bool ShouldTick();
+}
+```
+
+### 纯代码运行时构建
+
+```csharp
+public sealed class RuntimeBehaviorTreeBuilder
+{
+    RuntimeBehaviorTreeBuilder WithContext(RuntimeBTContext context);
+    RuntimeBehaviorTreeBuilder WithOwner(GameObject owner);
+    RuntimeBehaviorTreeBuilder WithServiceResolver(IRuntimeBTServiceResolver resolver);
+    RuntimeBehaviorTreeBuilder WithBlackboard(RuntimeBlackboard blackboard);
+    RuntimeBehaviorTreeBuilder WithTickInterval(int tickInterval);
+
+    RuntimeBehaviorTreeBuilder Sequence(Action<RuntimeSequencer> configure = null);
+    RuntimeBehaviorTreeBuilder Selector(Action<RuntimeSelector> configure = null);
+    RuntimeBehaviorTreeBuilder SelectorRandom(uint seed = 0u, Action<RuntimeSelectorRandom> configure = null);
+    RuntimeBehaviorTreeBuilder Action(Func<RuntimeBlackboard, RuntimeState> run, string name = null);
+    RuntimeBehaviorTreeBuilder Command(IRuntimeBTCommand command, string name = null);
+    RuntimeBehaviorTreeBuilder Condition(Func<RuntimeBlackboard, bool> predicate, string name = null);
+    RuntimeBehaviorTreeBuilder Condition(IRuntimeBTConditionStrategy strategy, string name = null);
+    RuntimeBehaviorTreeBuilder RandomChance(float chance, float outOf = 1f, uint seed = 0u, string name = null);
+    RuntimeBehaviorTreeBuilder End();
+    RuntimeBehaviorTree Build();
+}
+
+public interface IRuntimeBTCommand
+{
+    RuntimeState Execute(RuntimeBlackboard blackboard);
+}
+
+public interface IRuntimeBTConditionStrategy
+{
+    bool Evaluate(RuntimeBlackboard blackboard);
 }
 ```
 
@@ -1360,6 +1560,7 @@ public class RuntimeBlackboard : IDisposable
     // 序列化（网络）
     void WriteTo(BinaryWriter writer);
     void ReadFrom(BinaryReader reader);
+    void ReadFrom(BinaryReader reader, RuntimeBlackboardSerializationLimits limits);
     ulong ComputeHash();
 
     // 层级

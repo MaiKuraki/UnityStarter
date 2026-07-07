@@ -33,6 +33,13 @@ namespace CycloneGames.Choreography.Core
             public double AbsTime;
         }
 
+        private struct RuntimeEventState
+        {
+            public ChoreographyEventState State;
+            public double AbsStart;
+            public double AbsEnd;
+        }
+
         private sealed class RuntimeClipComparer : IComparer<RuntimeClip>
         {
             public int Compare(RuntimeClip x, RuntimeClip y) => x.AbsStart.CompareTo(y.AbsStart);
@@ -41,6 +48,13 @@ namespace CycloneGames.Choreography.Core
         private sealed class RuntimeEventComparer : IComparer<RuntimeEvent>
         {
             public int Compare(RuntimeEvent x, RuntimeEvent y) => x.AbsTime.CompareTo(y.AbsTime);
+        }
+
+        private sealed class RuntimeEventStateComparer : IComparer<RuntimeEventState>
+        {
+            public static readonly RuntimeEventStateComparer Instance = new RuntimeEventStateComparer();
+
+            public int Compare(RuntimeEventState x, RuntimeEventState y) => x.AbsStart.CompareTo(y.AbsStart);
         }
 
         private static readonly RuntimeClipComparer ClipComparer = new RuntimeClipComparer();
@@ -54,12 +68,16 @@ namespace CycloneGames.Choreography.Core
         private int _clipCount;
         private RuntimeEvent[] _events = Array.Empty<RuntimeEvent>();
         private int _eventCount;
+        private RuntimeEventState[] _eventStates = Array.Empty<RuntimeEventState>();
+        private int _eventStateCount;
         private double[] _sectionStart = Array.Empty<double>();
         private int _sectionCount;
 
         private readonly List<int> _active = new List<int>(16);
+        private readonly List<int> _activeEventStates = new List<int>(8);
         private int _startCursor;
         private int _eventCursor;
+        private int _eventStateCursor;
         private int _currentSection;
         private double _time;
         private bool _hasTicked;
@@ -75,6 +93,8 @@ namespace CycloneGames.Choreography.Core
 
         public int CurrentSectionIndex => _currentSection;
 
+        public ChoreographyClockState ClockState => BuildClockState();
+
         public bool CurrentSectionInterruptible
         {
             get
@@ -84,6 +104,18 @@ namespace CycloneGames.Choreography.Core
                     return true;
                 }
                 return Asset.Sections[_currentSection].Interruptible;
+            }
+        }
+
+        public ChoreographySectionClock CurrentSectionClock
+        {
+            get
+            {
+                if (Asset == null || _currentSection < 0 || _currentSection >= Asset.Sections.Count)
+                {
+                    return ChoreographySectionClock.Default;
+                }
+                return Asset.Sections[_currentSection].Clock;
             }
         }
 
@@ -125,10 +157,12 @@ namespace CycloneGames.Choreography.Core
             _time = 0d;
             _startCursor = 0;
             _eventCursor = 0;
+            _eventStateCursor = 0;
             _currentSection = 0;
             _hasTicked = false;
             _currentStep = ChoreographyTimelineStep.FromDelta(0d);
             _active.Clear();
+            _activeEventStates.Clear();
             Status = PlaybackStatus.Idle;
         }
 
@@ -170,6 +204,7 @@ namespace CycloneGames.Choreography.Core
                 Status = PlaybackStatus.Stopped;
                 return;
             }
+            StopAllActiveEventStates(true);
             StopAllActive(false);
             Status = PlaybackStatus.Stopped;
         }
@@ -181,6 +216,26 @@ namespace CycloneGames.Choreography.Core
         public void Tick(double deltaTime)
         {
             Tick(ChoreographyTimelineStep.FromDelta(deltaTime));
+        }
+
+        public void Tick(IChoreographyClockDriver clockDriver, in ChoreographyTimelineStep outerStep)
+        {
+            if (clockDriver == null)
+            {
+                Tick(outerStep);
+                return;
+            }
+
+            if (Status != PlaybackStatus.Playing)
+            {
+                return;
+            }
+
+            ChoreographyClockState state = BuildClockState();
+            if (clockDriver.TryEvaluate(in state, in outerStep, out ChoreographyTimelineStep resolvedStep))
+            {
+                Tick(resolvedStep);
+            }
         }
 
         /// <summary>
@@ -205,9 +260,11 @@ namespace CycloneGames.Choreography.Core
 
             if (targetTime < _time)
             {
+                StopAllActiveEventStates(true);
                 StopAllActive(false);
                 _startCursor = 0;
                 _eventCursor = 0;
+                _eventStateCursor = 0;
                 _currentSection = 0;
                 previousTime = -1d;
             }
@@ -219,6 +276,9 @@ namespace CycloneGames.Choreography.Core
 
             UpdateCurrentSection(sampleTime);
             DispatchEvents(previousTime, sampleTime);
+            int activeStateCountBeforeActivate = _activeEventStates.Count;
+            ActivateEventStates(sampleTime);
+            UpdateActiveEventStates(sampleTime, activeStateCountBeforeActivate);
             int activeCountBeforeActivate = _active.Count;
             ActivateClips(sampleTime);
             UpdateActiveClips(sampleTime, activeCountBeforeActivate);
@@ -238,6 +298,7 @@ namespace CycloneGames.Choreography.Core
 
         private void Complete()
         {
+            StopAllActiveEventStates(false);
             StopAllActive(true);
             Status = PlaybackStatus.Completed;
             _sink.OnPlaybackCompleted(_context.InstanceId);
@@ -246,14 +307,19 @@ namespace CycloneGames.Choreography.Core
         private void LoopReset()
         {
             double remainder = _time - TotalDuration;
+            StopAllActiveEventStates(false);
             StopAllActive(true);
             _startCursor = 0;
             _eventCursor = 0;
+            _eventStateCursor = 0;
             _currentSection = 0;
             _time = remainder < 0d ? 0d : remainder;
 
             UpdateCurrentSection(_time);
             DispatchEvents(-1d, _time);
+            int activeStateCountBeforeActivate = _activeEventStates.Count;
+            ActivateEventStates(_time);
+            UpdateActiveEventStates(_time, activeStateCountBeforeActivate);
             int activeCountBeforeActivate = _active.Count;
             ActivateClips(_time);
             UpdateActiveClips(_time, activeCountBeforeActivate);
@@ -276,6 +342,54 @@ namespace CycloneGames.Choreography.Core
                 }
                 _eventCursor++;
             }
+        }
+
+        private void ActivateEventStates(double time)
+        {
+            while (_eventStateCursor < _eventStateCount && _eventStates[_eventStateCursor].AbsStart <= time)
+            {
+                int index = _eventStateCursor;
+                _eventStateCursor++;
+
+                ref RuntimeEventState runtimeState = ref _eventStates[index];
+                EmitEventState(index, EventStatePhase.Begin, time, false);
+
+                if (time >= runtimeState.AbsEnd)
+                {
+                    EmitEventState(index, EventStatePhase.End, time, false);
+                    continue;
+                }
+
+                _activeEventStates.Add(index);
+            }
+        }
+
+        private void UpdateActiveEventStates(double time, int activeCountBeforeActivate)
+        {
+            int updateCount = activeCountBeforeActivate < _activeEventStates.Count ? activeCountBeforeActivate : _activeEventStates.Count;
+            for (int i = updateCount - 1; i >= 0; i--)
+            {
+                int index = _activeEventStates[i];
+                ref RuntimeEventState runtimeState = ref _eventStates[index];
+
+                if (time >= runtimeState.AbsEnd)
+                {
+                    _activeEventStates.RemoveAt(i);
+                    EmitEventState(index, EventStatePhase.End, time, false);
+                    continue;
+                }
+
+                EmitEventState(index, EventStatePhase.Update, time, false);
+            }
+        }
+
+        private void StopAllActiveEventStates(bool interrupted)
+        {
+            for (int i = _activeEventStates.Count - 1; i >= 0; i--)
+            {
+                EmitEventState(_activeEventStates[i], EventStatePhase.End, _time, interrupted);
+            }
+            _activeEventStates.Clear();
         }
 
         private void ActivateClips(double time)
@@ -388,6 +502,35 @@ namespace CycloneGames.Choreography.Core
                 _currentStep.TickIndex));
         }
 
+        private void EmitEventState(int index, EventStatePhase phase, double time, bool interrupted)
+        {
+            ref RuntimeEventState runtimeState = ref _eventStates[index];
+            ComputeEventStateTime(in runtimeState, time, out double localTime, out double normalizedTime);
+            ChoreographyEventStateSignal signal = new ChoreographyEventStateSignal(
+                _context.InstanceId,
+                runtimeState.State,
+                phase,
+                time,
+                localTime,
+                normalizedTime,
+                _currentStep.ClockKind,
+                _currentStep.TickIndex,
+                interrupted);
+
+            switch (phase)
+            {
+                case EventStatePhase.Begin:
+                    _sink.OnEventStateBegin(in signal);
+                    break;
+                case EventStatePhase.Update:
+                    _sink.OnEventStateUpdate(in signal);
+                    break;
+                case EventStatePhase.End:
+                    _sink.OnEventStateEnd(in signal);
+                    break;
+            }
+        }
+
         private static void ComputeLocalTime(in RuntimeClip runtimeClip, double time, out double localTime, out double normalizedTime)
         {
             double raw = time - runtimeClip.AbsStart;
@@ -412,12 +555,50 @@ namespace CycloneGames.Choreography.Core
             }
         }
 
+        private static void ComputeEventStateTime(in RuntimeEventState runtimeState, double time, out double localTime, out double normalizedTime)
+        {
+            double duration = runtimeState.AbsEnd - runtimeState.AbsStart;
+            localTime = time - runtimeState.AbsStart;
+            if (localTime < 0d)
+            {
+                localTime = 0d;
+            }
+            if (duration > 0d && localTime > duration)
+            {
+                localTime = duration;
+            }
+
+            normalizedTime = duration > 0d ? localTime / duration : 1d;
+            if (normalizedTime > 1d)
+            {
+                normalizedTime = 1d;
+            }
+        }
+
         private void UpdateCurrentSection(double time)
         {
             while (_currentSection + 1 < _sectionCount && _sectionStart[_currentSection + 1] <= time)
             {
                 _currentSection++;
             }
+        }
+
+        private ChoreographyClockState BuildClockState()
+        {
+            if (Asset == null || _sectionCount == 0 || _currentSection < 0 || _currentSection >= Asset.Sections.Count)
+            {
+                return new ChoreographyClockState(0d, 0d, -1, 0d, 0d, _context.Speed, ChoreographySectionClock.Default);
+            }
+
+            ChoreographySection section = Asset.Sections[_currentSection];
+            return new ChoreographyClockState(
+                _time,
+                TotalDuration,
+                _currentSection,
+                _sectionStart[_currentSection],
+                section.Duration,
+                _context.Speed,
+                section.Clock);
         }
 
         private void Flatten(IChoreographyAsset asset)
@@ -428,6 +609,7 @@ namespace CycloneGames.Choreography.Core
 
             int clipTotal = 0;
             int eventTotal = 0;
+            int eventStateTotal = 0;
             double cursor = 0d;
             for (int s = 0; s < _sectionCount; s++)
             {
@@ -441,14 +623,17 @@ namespace CycloneGames.Choreography.Core
                     clipTotal += tracks[t].Clips.Length;
                 }
                 eventTotal += section.Events.Length;
+                eventStateTotal += section.EventStates.Length;
             }
             TotalDuration = cursor;
 
             EnsureClipCapacity(clipTotal);
             EnsureEventCapacity(eventTotal);
+            EnsureEventStateCapacity(eventStateTotal);
 
             _clipCount = 0;
             _eventCount = 0;
+            _eventStateCount = 0;
             for (int s = 0; s < _sectionCount; s++)
             {
                 ChoreographySection section = sections[s];
@@ -473,6 +658,12 @@ namespace CycloneGames.Choreography.Core
                     _events[_eventCount].AbsTime = sectionStart + events[e].Time;
                     _eventCount++;
                 }
+
+                ChoreographyEventState[] eventStates = section.EventStates;
+                for (int e = 0; e < eventStates.Length; e++)
+                {
+                    AddRuntimeEventState(eventStates[e], sectionStart, sectionEnd);
+                }
             }
 
             if (_clipCount > 1)
@@ -482,6 +673,10 @@ namespace CycloneGames.Choreography.Core
             if (_eventCount > 1)
             {
                 Array.Sort(_events, 0, _eventCount, EventComparer);
+            }
+            if (_eventStateCount > 1)
+            {
+                Array.Sort(_eventStates, 0, _eventStateCount, RuntimeEventStateComparer.Instance);
             }
         }
 
@@ -522,6 +717,25 @@ namespace CycloneGames.Choreography.Core
             _clipCount++;
         }
 
+        private void AddRuntimeEventState(ChoreographyEventState state, double sectionStart, double sectionEnd)
+        {
+            double absStart = sectionStart + state.StartTime;
+            double absEnd = sectionStart + state.EndTime;
+            if (absEnd > sectionEnd)
+            {
+                absEnd = sectionEnd;
+            }
+            if (absEnd < absStart)
+            {
+                absEnd = absStart;
+            }
+
+            _eventStates[_eventStateCount].State = state;
+            _eventStates[_eventStateCount].AbsStart = absStart;
+            _eventStates[_eventStateCount].AbsEnd = absEnd;
+            _eventStateCount++;
+        }
+
         private void EnsureClipCapacity(int required)
         {
             if (_clips.Length < required)
@@ -535,6 +749,14 @@ namespace CycloneGames.Choreography.Core
             if (_events.Length < required)
             {
                 _events = new RuntimeEvent[NextCapacity(_events.Length, required)];
+            }
+        }
+
+        private void EnsureEventStateCapacity(int required)
+        {
+            if (_eventStates.Length < required)
+            {
+                _eventStates = new RuntimeEventState[NextCapacity(_eventStates.Length, required)];
             }
         }
 

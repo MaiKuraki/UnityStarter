@@ -1,6 +1,4 @@
 using CycloneGames.BehaviorTree.Runtime.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -9,25 +7,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     public class RetryNode : DecoratorNode
     {
         [SerializeField] private int _maxAttempts = 3;
-        private int _currentAttempt;
-
-        protected override void OnStart(IBlackBoard blackBoard)
-        {
-            _currentAttempt = 0;
-        }
-
-        protected override BTState OnRun(IBlackBoard blackBoard)
-        {
-            var state = Child.Run(blackBoard);
-            if (state == BTState.FAILURE)
-            {
-                _currentAttempt++;
-                if (_currentAttempt >= _maxAttempts) return BTState.FAILURE;
-                return BTState.RUNNING;
-            }
-            if (state == BTState.SUCCESS) return BTState.SUCCESS;
-            return BTState.RUNNING;
-        }
 
         public override BTNode Clone()
         {
@@ -41,7 +20,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRetryNode();
             node.GUID = GUID;
             node.MaxAttempts = _maxAttempts;
-            if (Child != null) node.Child = Child.CreateRuntimeNode();
+            SetRuntimeChild(node);
             return node;
         }
     }

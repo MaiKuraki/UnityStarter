@@ -7,7 +7,8 @@ namespace CycloneGames.Choreography.Audio
 {
     /// <summary>
     /// Reference <see cref="IAudioProvider"/> built on Unity's built-in <see cref="AudioSource"/>/<see cref="AudioClip"/>.
-    /// It has no third-party dependency, so it doubles as the template for other backends (Wwise, CriWare, ...).
+    /// It is intended for demos, small projects, or direct AudioClip playback; event-based audio middleware should
+    /// use a dedicated provider instead.
     ///
     /// Behavior:
     /// - Clips are resolved through <see cref="IUnityChoreographyResourceResolver"/> (typically preloaded). A missing
@@ -65,6 +66,7 @@ namespace CycloneGames.Choreography.Audio
         private readonly Dictionary<VoiceKey, AudioSource> _voices = new Dictionary<VoiceKey, AudioSource>();
         private readonly List<AudioSource> _oneShots = new List<AudioSource>(8);
         private bool _warnedMissingResource;
+        private bool _warnedUnsupportedKind;
 
         public UnityAudioProvider(
             Transform poolRoot,
@@ -87,6 +89,12 @@ namespace CycloneGames.Choreography.Audio
 
             ChoreographyClip clip = sample.Clip;
             ChoreographyResourceReference reference = clip.Resource;
+            if (reference.Kind != ChoreographyResourceKind.AudioClip && reference.Kind != ChoreographyResourceKind.Generic)
+            {
+                WarnUnsupportedKind(clip.Id, reference.Kind);
+                return;
+            }
+
             if (!_resolver.TryGetAsset(in reference, out AudioClip audioClip) || audioClip == null)
             {
                 WarnMissing(clip.Id, reference.Address);
@@ -170,6 +178,16 @@ namespace CycloneGames.Choreography.Audio
                 _warnedMissingResource = true;
                 _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.Audio",
                     "Audio clip '" + clipId + "' skipped: resource '" + address + "' is not loaded (preload it first). Further audio resource warnings are suppressed.");
+            }
+        }
+
+        private void WarnUnsupportedKind(string clipId, ChoreographyResourceKind kind)
+        {
+            if (!_warnedUnsupportedKind && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            {
+                _warnedUnsupportedKind = true;
+                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.Audio",
+                    "Audio clip '" + clipId + "' skipped: UnityAudioProvider only supports AudioClip resources, but received '" + kind + "'. Further audio kind warnings are suppressed.");
             }
         }
 

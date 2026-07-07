@@ -1,14 +1,13 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
+using CycloneGames.BehaviorTree.Runtime.Core;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes
 {
     public abstract class BTNode : ScriptableObject
     {
-        [HideInInspector] public BTState State { get; set; } = BTState.NOT_ENTERED;
         [HideInInspector] public string GUID;
+
         public Vector2 Position
         {
             get => _position;
@@ -29,90 +28,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             set => _tree = value;
         }
 
-        public bool IsStarted
-        {
-            get => _isStarted;
-            set => _isStarted = value;
-        }
-        /// <summary>
-        /// Indicates whether the node can be re-evaluated during execution.
-        /// </summary>
-        public virtual bool CanReEvaluate => false;
-        public virtual bool EnableHijack => false;
         [HideInInspector][SerializeField] private BehaviorTree _tree;
         [HideInInspector][SerializeField] private Vector2 _position;
-        private bool _isInitialized = false;
-        private bool _isStarted = false;
 
-        private void Awake() { }
-
-        /// <summary>
-        /// Executes the node and returns its state.
-        /// </summary>
-        public BTState Run(IBlackBoard blackBoard)
-        {
-            if (!_isStarted)
-            {
-                BTStart(blackBoard);
-                State = BTState.RUNNING;
-            }
-            State = OnRun(blackBoard);
-            if (State == BTState.FAILURE || State == BTState.SUCCESS)
-            {
-                BTStop(blackBoard);
-            }
-            return State;
-        }
-        private void BTStart(IBlackBoard blackBoard)
-        {
-            Initialize(blackBoard);
-            OnStart(blackBoard);
-            _isStarted = true;
-        }
-
-        /// <summary>
-        /// Stops the node execution and calls OnStop.
-        /// </summary>
-        public void BTStop(IBlackBoard blackBoard)
-        {
-            if (!_isStarted) return;
-            OnStop(blackBoard);
-            _isStarted = false;
-        }
-
-        private void Initialize(IBlackBoard blackBoard)
-        {
-            if (_isInitialized) return;
-            _isInitialized = true;
-            OnInitialize(blackBoard);
-        }
-
-        /// <summary>
-        /// Called when the node starts execution.
-        /// </summary>
-        protected virtual void OnStart(IBlackBoard blackBoard) { }
-
-        /// <summary>
-        /// Called every frame while the node is running. Must return the current node state.
-        /// </summary>
-        protected virtual BTState OnRun(IBlackBoard blackBoard) { return BTState.SUCCESS; }
-
-        /// <summary>
-        /// Called when the node stops execution.
-        /// </summary>
-        protected virtual void OnStop(IBlackBoard blackBoard) { }
-
-        /// <summary>
-        /// Called once when the behavior tree is initialized.
-        /// </summary>
-        protected virtual void OnInitialize(IBlackBoard blackBoard) { }
-        /// <summary>
-        /// Evaluates the node's condition or logic without executing it.
-        /// Used for conditional abort and re-evaluation checks.
-        /// </summary>
-        /// <param name="blackBoard">The blackboard instance</param>
-        /// <returns>The evaluation result state</returns>
-        public abstract BTState Evaluate(IBlackBoard blackBoard);
         public void OnValidate()
         {
             try
@@ -150,12 +68,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         public virtual void OnDrawGizmos() { }
 
         /// <summary>
-        /// Factory method to create the optimized runtime node execution instance.
+        /// Creates the pure C# runtime node used by the execution layer.
         /// </summary>
-        /// <returns>A new instance of RuntimeNode</returns>
-        public virtual CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        public abstract RuntimeNode CreateRuntimeNode();
+
+        protected RuntimeNode CreateRequiredRuntimeNode(BTNode child, string role)
         {
-            return null; // Base implementation returns null or throws 
+            if (child == null)
+            {
+                throw new InvalidOperationException($"{GetType().Name} requires {role}.");
+            }
+
+            RuntimeNode runtimeNode = child.CreateRuntimeNode();
+            if (runtimeNode == null)
+            {
+                throw new InvalidOperationException($"{GetType().Name} {role} node {child.GetType().Name} returned null runtime node.");
+            }
+
+            return runtimeNode;
         }
     }
 }

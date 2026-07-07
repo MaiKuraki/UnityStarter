@@ -2,7 +2,7 @@ namespace CycloneGames.Choreography.Core
 {
     /// <summary>
     /// Classifies the kind of content carried by a <see cref="ChoreographyTrack"/>.
-    /// Providers are dispatched by track kind, so this value must stay stable across versions.
+    /// Providers are dispatched by track kind, so this value is part of the authored data contract.
     /// </summary>
     public enum ChoreographyTrackKind : byte
     {
@@ -20,9 +20,13 @@ namespace CycloneGames.Choreography.Core
     {
         Generic = 0,
         Animation = 1,
-        Audio = 2,
-        Vfx = 3,
-        ExternalBank = 4
+        AudioClip = 2,
+        AudioEvent = 3,
+        AudioBank = 4,
+        Vfx = 5,
+        ExternalBank = 6,
+        WwiseEvent = 7,
+        BackendCue = 8
     }
 
     /// <summary>
@@ -39,6 +43,16 @@ namespace CycloneGames.Choreography.Core
 
         /// <summary>Use the owning play request's default mode for this section.</summary>
         Inherit = 255
+    }
+
+    /// <summary>
+    /// Lifecycle phase of a duration-spanning event state.
+    /// </summary>
+    public enum EventStatePhase : byte
+    {
+        Begin = 0,
+        Update = 1,
+        End = 2
     }
 
     /// <summary>

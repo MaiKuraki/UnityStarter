@@ -6,6 +6,8 @@ English | [Simplified Chinese](./README.SCH.md)
 
 The base BehaviorTree package remains usable without `CycloneGames.Networking`. This bridge is only required when behavior tree state crosses a Cyclone network boundary.
 
+Incoming payloads are validated against the active `BehaviorTreeNetworkProfile` before deserialization. Oversized full snapshots, oversized deltas, malformed snapshot buffers, and malformed delta buffers are rejected by `BehaviorTreeNetworkSyncBridge.ApplyPayload` with a `false` return value instead of partially mutating the target tree.
+
 ## Package Layout
 
 ```text
@@ -136,6 +138,8 @@ public sealed class BehaviorTreeSnapshotEndpoint
 
 For blackboard delta replication, maintain a `BTBlackboardDelta` tracker next to the runtime blackboard and call `TryCreateBlackboardDelta`.
 
+`ApplyPayload` is designed to sit at the adapter boundary. Callers should treat `false` as an invalid or unsupported remote payload and keep the local runtime state unchanged.
+
 ## Profile Configuration
 
 Use `BehaviorTreeNetworkProfileBuilder` when the built-in profiles need adjusted intervals, limits, or channels:
@@ -175,3 +179,5 @@ Unity Test Runner > EditMode > CycloneGames.BehaviorTree.Networking.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.BehaviorTree.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
+
+The networking EditMode suite includes oversized and malformed incoming snapshot rejection coverage for the runtime bridge.

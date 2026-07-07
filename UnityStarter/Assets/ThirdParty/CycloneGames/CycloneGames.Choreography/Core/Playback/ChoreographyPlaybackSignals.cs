@@ -146,9 +146,6 @@ namespace CycloneGames.Choreography.Core
         /// <summary>Authority source time, such as Unity DSP time, when available.</summary>
         public readonly double SourceTime;
 
-        /// <summary>Competition channel this sample belongs to. Kept for source compatibility.</summary>
-        public int Channel => PlaybackChannel;
-
         public ChoreographyPlaybackSample(
             int instanceId,
             ChoreographyTrackKind trackKind,
@@ -193,9 +190,6 @@ namespace CycloneGames.Choreography.Core
         public readonly double TimelineTime;
         public readonly ChoreographyClockKind ClockKind;
         public readonly long TickIndex;
-
-        /// <summary>Competition channel this stopped clip belongs to. Kept for source compatibility.</summary>
-        public int Channel => PlaybackChannel;
 
         public ChoreographyClipStop(
             int instanceId,
@@ -252,6 +246,44 @@ namespace CycloneGames.Choreography.Core
     }
 
     /// <summary>
+    /// Dispatched signal for a duration-spanning event state lifecycle transition.
+    /// </summary>
+    public readonly struct ChoreographyEventStateSignal
+    {
+        public readonly int InstanceId;
+        public readonly ChoreographyEventState State;
+        public readonly EventStatePhase Phase;
+        public readonly double TimelineTime;
+        public readonly double StateLocalTime;
+        public readonly double StateNormalizedTime;
+        public readonly ChoreographyClockKind ClockKind;
+        public readonly long TickIndex;
+        public readonly bool Interrupted;
+
+        public ChoreographyEventStateSignal(
+            int instanceId,
+            ChoreographyEventState state,
+            EventStatePhase phase,
+            double timelineTime,
+            double stateLocalTime,
+            double stateNormalizedTime,
+            ChoreographyClockKind clockKind,
+            long tickIndex,
+            bool interrupted = false)
+        {
+            InstanceId = instanceId;
+            State = state;
+            Phase = phase;
+            TimelineTime = timelineTime;
+            StateLocalTime = stateLocalTime;
+            StateNormalizedTime = stateNormalizedTime;
+            ClockKind = clockKind;
+            TickIndex = tickIndex;
+            Interrupted = interrupted;
+        }
+    }
+
+    /// <summary>
     /// Callback surface a <see cref="ChoreographyPlayer"/> drives during <see cref="ChoreographyPlayer.Tick"/>.
     /// The scheduler implements this to buffer samples for cross-instance strategy resolution; a standalone
     /// player can be pointed at a direct provider dispatcher. All methods run on the tick thread and must not block.
@@ -267,5 +299,11 @@ namespace CycloneGames.Choreography.Core
         void OnEvent(in ChoreographyEventInvocation invocation);
 
         void OnPlaybackCompleted(int instanceId);
+
+        void OnEventStateBegin(in ChoreographyEventStateSignal signal);
+
+        void OnEventStateUpdate(in ChoreographyEventStateSignal signal);
+
+        void OnEventStateEnd(in ChoreographyEventStateSignal signal);
     }
 }

@@ -16,8 +16,6 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Framework
                 Child = child
             };
 
-            root.OnAwake();
-
             var blackboard = new RuntimeBlackboard
             {
                 Context = context

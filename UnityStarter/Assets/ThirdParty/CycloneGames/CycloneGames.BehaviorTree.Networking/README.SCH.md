@@ -6,6 +6,8 @@
 
 基础 BehaviorTree 包不依赖 `CycloneGames.Networking`。只有当 behavior tree state 需要跨 Cyclone 网络边界传递时，才需要引用本桥接包。
 
+传入 payload 会先按照当前 `BehaviorTreeNetworkProfile` 校验后再反序列化。过大的 full snapshot、过大的 delta、格式错误的 snapshot buffer 和格式错误的 delta buffer 会被 `BehaviorTreeNetworkSyncBridge.ApplyPayload` 以 `false` 返回值拒绝，不会部分修改目标树。
+
 ## 包结构
 
 ```text
@@ -136,6 +138,8 @@ public sealed class BehaviorTreeSnapshotEndpoint
 
 对于 blackboard delta replication，在 runtime blackboard 旁维护 `BTBlackboardDelta` tracker，并调用 `TryCreateBlackboardDelta`。
 
+`ApplyPayload` 设计为 adapter 边界 API。调用方应把 `false` 视为无效或不支持的远端 payload，并保持本地 runtime state 不变。
+
 ## Profile 配置
 
 当内置 profile 的 interval、limit 或 channel 需要调整时，使用 `BehaviorTreeNetworkProfileBuilder`：
@@ -175,3 +179,5 @@ Unity Test Runner > EditMode > CycloneGames.BehaviorTree.Networking.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.BehaviorTree.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
+
+Networking EditMode 测试包含 runtime bridge 对超大和格式错误 incoming snapshot 的拒绝覆盖。

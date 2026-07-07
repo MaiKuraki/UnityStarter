@@ -80,6 +80,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                     delta.TrackKey(baseKey + i);
                 }
 
+                delta.Attach(tree.Blackboard);
                 _deltas.Add(delta);
             }
 
@@ -187,6 +188,11 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             for (int i = 0; i < _trees.Count; i++)
             {
                 _trees[i]?.Dispose();
+            }
+
+            for (int i = 0; i < _deltas.Count; i++)
+            {
+                _deltas[i]?.Dispose();
             }
 
             _trees.Clear();
@@ -463,7 +469,6 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
 
             RuntimeNode rootChild = BuildBalancedParallelTree(leaves);
             var root = new RuntimeRootNode { Child = rootChild };
-            root.OnAwake();
 
             return new RuntimeBehaviorTree(root, new RuntimeBlackboard(), new RuntimeBTContext());
         }

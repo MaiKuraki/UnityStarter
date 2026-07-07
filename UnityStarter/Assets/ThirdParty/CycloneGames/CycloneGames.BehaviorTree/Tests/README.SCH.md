@@ -6,8 +6,16 @@
 
 - `Editor` 测试
   - 运行时语义一致性检查
+  - 纯代码 builder 结构与 fail-fast 检查
+  - authoring graph 编译器校验
+  - composite / decorator 边界语义检查
+  - blackboard 类型槽、observer 和序列化限制检查
+  - blackboard schema fail-fast 与网络过滤检查
   - blackboard / snapshot 确定性检查
+  - transactional blackboard delta 校验
+  - 畸形 network snapshot / delta 拒绝检查
   - DOD 编译 fail-fast 检查
+  - observer-backed delta flush 零分配守卫
   - 编辑器侧 benchmark 基准测试
 - `PlayMode` 测试
   - runtime benchmark runner 冒烟验证
@@ -81,7 +89,11 @@
 主要文件：
 
 - `Consistency/BehaviorTreeConsistencyTests.cs`
+- `Consistency/BehaviorTreeCodeFirstTests.cs`
+- `Consistency/BehaviorTreeAuthoringCompilerTests.cs`
 - `Performance/BehaviorTreeBenchmarkTests.cs`
+
+Editor 测试同时覆盖成功路径和失败路径。远端 payload 相关测试必须断言畸形输入会在修改本地 runtime state 之前被拒绝。
 
 ## 如何运行 PlayMode 测试
 

@@ -6,8 +6,16 @@ This folder contains the formal validation and benchmarking workflow for `Cyclon
 
 - `Editor` tests
   - semantic consistency checks
+  - code-first builder structure and fail-fast checks
+  - authoring graph compiler validation
+  - composite/decorator edge-case checks
+  - blackboard type-slot, observer, and serialization limit checks
+  - blackboard schema fail-fast and network filtering checks
   - deterministic blackboard and snapshot checks
+  - transactional blackboard delta validation
+  - malformed network snapshot and delta rejection checks
   - DOD compiler fail-fast checks
+  - observer-backed zero-allocation delta flush guard
   - editor-side benchmark baselines
 - `PlayMode` tests
   - runtime benchmark runner smoke coverage
@@ -86,7 +94,11 @@ The benchmark surface now measures three dimensions:
 Main files:
 
 - `Consistency/BehaviorTreeConsistencyTests.cs`
+- `Consistency/BehaviorTreeCodeFirstTests.cs`
+- `Consistency/BehaviorTreeAuthoringCompilerTests.cs`
 - `Performance/BehaviorTreeBenchmarkTests.cs`
+
+Editor tests intentionally cover both success paths and failure paths. Any remote payload test should assert that malformed input is rejected before mutating local runtime state.
 
 ## How to run PlayMode tests
 

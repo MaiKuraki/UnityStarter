@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.choreography.cyclone-audio",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Choreography.CycloneAudio",
+  "description": "Optional provider that drives CycloneGames.Audio AudioEvent playback from Choreography Backend Cue or AudioEvent resources.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.choreography": "1.0.0",
+    "com.cyclone-games.audio": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Choreography",
+    "Audio",
+    "Integration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}
