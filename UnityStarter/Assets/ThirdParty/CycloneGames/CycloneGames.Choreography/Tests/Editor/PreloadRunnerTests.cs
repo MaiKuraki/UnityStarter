@@ -16,7 +16,7 @@ namespace CycloneGames.Choreography.Tests
         public void Preload_CompletesWhenAllHandlesSucceed()
         {
             FakeResourceProvider provider = new FakeResourceProvider();
-            ChoreographyResourceReference r1 = new ChoreographyResourceReference("r1", ChoreographyResourceKind.Audio);
+            ChoreographyResourceReference r1 = new ChoreographyResourceReference("r1", ChoreographyResourceKind.AudioEvent);
             ChoreographyResourceReference r2 = new ChoreographyResourceReference("r2", ChoreographyResourceKind.Vfx);
 
             PreloadRunner runner = new PreloadRunner(provider);
@@ -42,7 +42,7 @@ namespace CycloneGames.Choreography.Tests
         public void Preload_ContinuePolicyReportsFailuresButCompletes()
         {
             FakeResourceProvider provider = new FakeResourceProvider();
-            ChoreographyResourceReference r1 = new ChoreographyResourceReference("r1", ChoreographyResourceKind.Audio);
+            ChoreographyResourceReference r1 = new ChoreographyResourceReference("r1", ChoreographyResourceKind.AudioEvent);
             ChoreographyResourceReference r2 = new ChoreographyResourceReference("r2", ChoreographyResourceKind.Vfx);
 
             PreloadRunner runner = new PreloadRunner(provider);
@@ -63,7 +63,7 @@ namespace CycloneGames.Choreography.Tests
         public void Preload_AbortPolicyFailsFast()
         {
             FakeResourceProvider provider = new FakeResourceProvider();
-            ChoreographyResourceReference r1 = new ChoreographyResourceReference("r1", ChoreographyResourceKind.Audio);
+            ChoreographyResourceReference r1 = new ChoreographyResourceReference("r1", ChoreographyResourceKind.AudioEvent);
             ChoreographyResourceReference r2 = new ChoreographyResourceReference("r2", ChoreographyResourceKind.Vfx);
 
             PreloadRunner runner = new PreloadRunner(provider);
@@ -88,6 +88,29 @@ namespace CycloneGames.Choreography.Tests
 
             Assert.AreEqual(PreloadStatus.Completed, runner.Status);
             Assert.AreEqual(1f, runner.Progress, 0.0001f);
+        }
+
+        [Test]
+        public void ResourceReference_ProviderAndGroupParticipateInIdentity()
+        {
+            ChoreographyResourceReference left = new ChoreographyResourceReference(
+                "Attack",
+                ChoreographyResourceKind.BackendCue,
+                provider: "CycloneGames.Audio",
+                group: "Combat");
+            ChoreographyResourceReference differentProvider = new ChoreographyResourceReference(
+                "Attack",
+                ChoreographyResourceKind.BackendCue,
+                provider: "Wwise",
+                group: "Combat");
+            ChoreographyResourceReference differentGroup = new ChoreographyResourceReference(
+                "Attack",
+                ChoreographyResourceKind.BackendCue,
+                provider: "CycloneGames.Audio",
+                group: "UI");
+
+            Assert.AreNotEqual(left, differentProvider);
+            Assert.AreNotEqual(left, differentGroup);
         }
     }
 }

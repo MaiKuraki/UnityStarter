@@ -17,6 +17,9 @@ namespace CycloneGames.Choreography.Core
         /// <summary>Raised when a timeline event is crossed.</summary>
         public event Action<ChoreographyEventInvocation> EventRaised;
 
+        /// <summary>Raised when a duration-spanning event state changes phase.</summary>
+        public event Action<ChoreographyEventStateSignal> EventStateRaised;
+
         /// <summary>Raised when the driven player reaches the end of its timeline.</summary>
         public event Action<int> PlaybackCompleted;
 
@@ -49,6 +52,21 @@ namespace CycloneGames.Choreography.Core
         public void OnPlaybackCompleted(int instanceId)
         {
             PlaybackCompleted?.Invoke(instanceId);
+        }
+
+        public void OnEventStateBegin(in ChoreographyEventStateSignal signal)
+        {
+            EventStateRaised?.Invoke(signal);
+        }
+
+        public void OnEventStateUpdate(in ChoreographyEventStateSignal signal)
+        {
+            EventStateRaised?.Invoke(signal);
+        }
+
+        public void OnEventStateEnd(in ChoreographyEventStateSignal signal)
+        {
+            EventStateRaised?.Invoke(signal);
         }
     }
 }

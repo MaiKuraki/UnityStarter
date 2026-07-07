@@ -1,5 +1,3 @@
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -7,33 +5,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     public class WaitSuccessNode : DecoratorNode
     {
         public bool UseRandomBetweenTwoConstants => _useRandomBetweenTwoConstants;
+
         [SerializeField] private bool _useRandomBetweenTwoConstants = false;
         [SerializeField] private Vector2 _waitTimeRange = new Vector2(1f, 2f);
         [SerializeField] private float _waitTime = 1f;
         [SerializeField] private bool _useUnscaledTime = false;
-        private double _startTime;
-        private float _actualWaitTime;
-
-        protected override void OnStart(IBlackBoard blackBoard)
-        {
-            _startTime = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
-            _actualWaitTime = _waitTime;
-            if (_useRandomBetweenTwoConstants)
-            {
-                _actualWaitTime = Random.Range(_waitTimeRange.x, _waitTimeRange.y);
-            }
-        }
-        protected override BTState OnRun(IBlackBoard blackBoard)
-        {
-            double elapsed = Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime) - _startTime;
-            if (elapsed >= _actualWaitTime)
-            {
-                return BTState.FAILURE;
-            }
-            var result = Child.Run(blackBoard);
-            //Debug.Log("WaitSuccessNode: " + result);
-            return result == BTState.SUCCESS ? BTState.SUCCESS : BTState.RUNNING;
-        }
 
         public override BTNode Clone()
         {
@@ -54,10 +30,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             node.RangeMin = _waitTimeRange.x;
             node.RangeMax = _waitTimeRange.y;
             node.UseUnscaledTime = _useUnscaledTime;
-            if (Child != null)
-            {
-                node.Child = Child.CreateRuntimeNode();
-            }
+            SetRuntimeChild(node);
             return node;
         }
     }

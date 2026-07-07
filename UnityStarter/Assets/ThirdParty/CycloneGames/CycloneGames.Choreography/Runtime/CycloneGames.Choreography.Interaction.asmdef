@@ -3,9 +3,7 @@
     "rootNamespace": "CycloneGames.Choreography",
     "references": [
         "CycloneGames.Choreography.Core",
-        "CycloneGames.Logger",
-        "CycloneGames.AssetManagement.Runtime",
-        "UniTask"
+        "CycloneGames.Logger"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

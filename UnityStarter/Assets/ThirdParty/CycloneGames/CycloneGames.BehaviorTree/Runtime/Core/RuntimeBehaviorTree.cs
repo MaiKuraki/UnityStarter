@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Threading;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
@@ -19,10 +20,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private int _tickCounter = 0;
 
         // Event-driven execution support
-        private volatile bool _wakeUpRequested;
+        private int _wakeUpRequested;
         private int _wakeUpTickBudget;
-        public bool HasWakeUpRequest => _wakeUpRequested;
-        public int WakeUpTickBudget => _wakeUpTickBudget;
+        public bool HasWakeUpRequest => Volatile.Read(ref _wakeUpRequested) != 0;
+        public int WakeUpTickBudget => Volatile.Read(ref _wakeUpTickBudget);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public BTStatusLogger StatusLogger { get; set; }
@@ -39,6 +40,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 Blackboard.Context = Context;
             }
 
+            Root?.OnAwake();
             PropagateOwnerTree(Root);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -87,11 +89,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// </summary>
         internal void RequestWakeUp(int boostedTicks = 1)
         {
-            _wakeUpRequested = true;
-            if (boostedTicks > _wakeUpTickBudget)
+            if (boostedTicks < 1)
             {
-                _wakeUpTickBudget = boostedTicks;
+                boostedTicks = 1;
             }
+
+            Volatile.Write(ref _wakeUpRequested, 1);
+            SetMaxWakeUpTickBudget(boostedTicks);
         }
 
         /// <summary>
@@ -108,9 +112,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         /// </summary>
         public bool ConsumeWakeUp()
         {
-            if (!_wakeUpRequested) return false;
-            _wakeUpRequested = false;
-            return true;
+            return Interlocked.Exchange(ref _wakeUpRequested, 0) != 0;
         }
 
         public bool ShouldTick()
@@ -120,14 +122,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 return false;
             }
 
-            if (_wakeUpRequested || _wakeUpTickBudget > 0)
+            bool wakeUpRequested = ConsumeWakeUp();
+            bool hasWakeUpBudget = ConsumeWakeUpBudget();
+            if (wakeUpRequested || hasWakeUpBudget)
             {
-                _wakeUpRequested = false;
                 _tickCounter = 0;
-                if (_wakeUpTickBudget > 0)
-                {
-                    _wakeUpTickBudget--;
-                }
                 return true;
             }
 
@@ -205,8 +204,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 Root.Abort(Blackboard);
             }
 
-            _wakeUpRequested = false;
-            _wakeUpTickBudget = 0;
+            Interlocked.Exchange(ref _wakeUpRequested, 0);
+            Interlocked.Exchange(ref _wakeUpTickBudget, 0);
             _tickCounter = 0;
             State = RuntimeState.NotEntered;
             IsStopped = true;
@@ -214,11 +213,45 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public void Play()
         {
-            _wakeUpRequested = false;
-            _wakeUpTickBudget = 0;
+            Interlocked.Exchange(ref _wakeUpRequested, 0);
+            Interlocked.Exchange(ref _wakeUpTickBudget, 0);
             _tickCounter = 0;
             State = RuntimeState.NotEntered;
             IsStopped = false;
+        }
+
+        private void SetMaxWakeUpTickBudget(int boostedTicks)
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref _wakeUpTickBudget);
+                if (boostedTicks <= current)
+                {
+                    return;
+                }
+
+                if (Interlocked.CompareExchange(ref _wakeUpTickBudget, boostedTicks, current) == current)
+                {
+                    return;
+                }
+            }
+        }
+
+        private bool ConsumeWakeUpBudget()
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref _wakeUpTickBudget);
+                if (current <= 0)
+                {
+                    return false;
+                }
+
+                if (Interlocked.CompareExchange(ref _wakeUpTickBudget, current - 1, current) == current)
+                {
+                    return true;
+                }
+            }
         }
 
         public void Dispose()

@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.BehaviorTree.Integrations.DeterministicMath",
+    "rootNamespace": "CycloneGames.BehaviorTree.Integrations.DeterministicMath",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.DeterministicMath.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.deterministic-math",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
+        }
+    ],
+    "noEngineReferences": false
+}

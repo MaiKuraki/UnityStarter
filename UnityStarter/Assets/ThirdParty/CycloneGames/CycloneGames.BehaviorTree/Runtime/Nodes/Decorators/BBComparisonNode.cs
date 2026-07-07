@@ -1,7 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -27,18 +25,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 
         [Header("Float Comparison")]
         [SerializeField] private float _floatEpsilon = 0.0001f;
-
-        protected override BTState OnRun(IBlackBoard blackBoard)
-        {
-            // Legacy SO path — basic fallback
-            if (_operator == BBComparisonOp.IsNotSet)
-                return !blackBoard.Contains(_key) ? Child.Run(blackBoard) : BTState.FAILURE;
-
-            if (!blackBoard.Contains(_key))
-                return BTState.FAILURE;
-
-            return Child.Run(blackBoard);
-        }
 
         public override BTNode Clone()
         {
@@ -66,11 +52,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             node.RefBool = _refBool;
             node.RefKeyHash = string.IsNullOrEmpty(_refKey) ? 0 : Animator.StringToHash(_refKey);
             node.FloatEpsilon = _floatEpsilon;
-
-            if (Child != null)
-            {
-                node.Child = Child.CreateRuntimeNode();
-            }
+            SetRuntimeChild(node);
             return node;
         }
     }

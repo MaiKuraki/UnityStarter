@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Networking;
@@ -118,6 +119,146 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Performance
             finally
             {
                 blackboard.Dispose();
+            }
+        }
+
+        [Test]
+        public void BlackboardDelta_TryFlush_DoesNotAllocateAfterWarmup()
+        {
+            var blackboard = new RuntimeBlackboard(initialCapacity: 1);
+            var delta = new BTBlackboardDelta(1);
+
+            try
+            {
+                delta.TrackKey(1);
+                blackboard.SetInt(1, 1);
+                delta.TryFlush(blackboard, out _);
+
+                for (int i = 0; i < 32; i++)
+                {
+                    blackboard.SetInt(1, i + 2);
+                    delta.TryFlush(blackboard, out _);
+                }
+
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                bool allFlushed = true;
+                for (int i = 0; i < 512; i++)
+                {
+                    blackboard.SetInt(1, i + 1000);
+                    allFlushed &= delta.TryFlush(blackboard, out _);
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.IsTrue(allFlushed);
+                Assert.AreEqual(0L, allocated);
+            }
+            finally
+            {
+                blackboard.Dispose();
+            }
+        }
+
+        [Test]
+        public void BlackboardDelta_AttachedFlush_OnlyEmitsObservedTrackedMutations()
+        {
+            var source = new RuntimeBlackboard(initialCapacity: 2);
+            var target = new RuntimeBlackboard(initialCapacity: 2);
+            var delta = new BTBlackboardDelta(2);
+
+            try
+            {
+                delta.TrackKey(1);
+                delta.TrackKey(2);
+                source.SetInt(1, 10);
+                delta.Attach(source);
+
+                Assert.IsTrue(delta.TryFlush(source, out ArraySegment<byte> firstPatch));
+                BTBlackboardDelta.Apply(target, firstPatch);
+                Assert.AreEqual(10, target.GetInt(1));
+
+                Assert.IsFalse(delta.TryFlush(source, out _));
+
+                source.SetInt(2, 20);
+                Assert.IsTrue(delta.TryFlush(source, out ArraySegment<byte> secondPatch));
+                BTBlackboardDelta.Apply(target, secondPatch);
+                Assert.AreEqual(20, target.GetInt(2));
+            }
+            finally
+            {
+                delta.Dispose();
+                source.Dispose();
+                target.Dispose();
+            }
+        }
+
+        [Test]
+        public void BlackboardDelta_AttachedTryFlush_DoesNotAllocateAfterWarmup()
+        {
+            var blackboard = new RuntimeBlackboard(initialCapacity: 1);
+            var delta = new BTBlackboardDelta(1);
+
+            try
+            {
+                delta.TrackKey(1);
+                delta.Attach(blackboard);
+
+                for (int i = 0; i < 64; i++)
+                {
+                    blackboard.SetInt(1, i + 1);
+                    delta.TryFlush(blackboard, out _);
+                }
+
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                bool allFlushed = true;
+                for (int i = 0; i < 512; i++)
+                {
+                    blackboard.SetInt(1, i + 1000);
+                    allFlushed &= delta.TryFlush(blackboard, out _);
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.IsTrue(allFlushed);
+                Assert.AreEqual(0L, allocated);
+            }
+            finally
+            {
+                delta.Dispose();
+                blackboard.Dispose();
+            }
+        }
+
+        [Test]
+        public void BlackboardDelta_Apply_DoesNotAllocateAfterWarmup()
+        {
+            var source = new RuntimeBlackboard(initialCapacity: 1);
+            var target = new RuntimeBlackboard(initialCapacity: 1);
+            var delta = new BTBlackboardDelta(1);
+
+            try
+            {
+                delta.TrackKey(1);
+                source.SetInt(1, 1);
+                Assert.IsTrue(delta.TryFlush(source, out ArraySegment<byte> patch));
+
+                for (int i = 0; i < 64; i++)
+                {
+                    BTBlackboardDelta.Apply(target, patch);
+                }
+
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 512; i++)
+                {
+                    BTBlackboardDelta.Apply(target, patch);
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.AreEqual(0L, allocated);
+                Assert.AreEqual(1, target.GetInt(1));
+            }
+            finally
+            {
+                source.Dispose();
+                target.Dispose();
             }
         }
     }

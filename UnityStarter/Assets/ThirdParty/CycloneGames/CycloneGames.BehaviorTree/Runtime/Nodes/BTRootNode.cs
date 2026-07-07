@@ -1,5 +1,5 @@
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes
@@ -7,23 +7,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
     public class BTRootNode : BTNode
     {
         [HideInInspector] public BTNode Child;
-
-        protected override BTState OnRun(IBlackBoard blackBoard)
-        {
-            if (Child == null) return BTState.FAILURE;
-            return Child.Run(blackBoard);
-        }
-
-        protected override void OnStop(IBlackBoard blackBoard)
-        {
-            Child?.BTStop(blackBoard);
-        }
-
-        public override BTState Evaluate(IBlackBoard blackBoard)
-        {
-            if (Child == null) return BTState.FAILURE;
-            return Child.Evaluate(blackBoard);
-        }
 
         public override BTNode Clone()
         {
@@ -35,14 +18,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
+        public override RuntimeNode CreateRuntimeNode()
         {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.RuntimeRootNode();
+            var node = new RuntimeRootNode();
             node.GUID = GUID;
-            if (Child != null)
-            {
-                node.Child = Child.CreateRuntimeNode();
-            }
+            node.Child = CreateRequiredRuntimeNode(Child, "root child");
             return node;
         }
     }

@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor",
+    "rootNamespace": "CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Integrations.DeterministicMath",
+        "CycloneGames.DeterministicMath.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.deterministic-math",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

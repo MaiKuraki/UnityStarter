@@ -1,6 +1,4 @@
 using CycloneGames.BehaviorTree.Runtime.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -10,13 +8,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     {
         [SerializeField] private BehaviorTree _subTreeAsset;
 
-        protected override void OnStart(IBlackBoard blackBoard) { }
-
-        protected override BTState OnRun(IBlackBoard blackBoard)
-        {
-            if (Child == null) return BTState.FAILURE;
-            return Child.Run(blackBoard);
-        }
+        public BehaviorTree SubTreeAsset => _subTreeAsset;
 
         public override BTNode Clone()
         {
@@ -29,7 +21,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         {
             var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeSubTreeNode();
             node.GUID = GUID;
-            if (Child != null) node.Child = Child.CreateRuntimeNode();
+            if (Child != null)
+            {
+                node.Child = CreateRequiredRuntimeNode(Child, "inline subtree child");
+            }
+            else if (_subTreeAsset != null && _subTreeAsset.Root != null)
+            {
+                node.Child = CreateRequiredRuntimeNode(_subTreeAsset.Root, "subtree asset root");
+            }
+            else
+            {
+                throw new System.InvalidOperationException("SubTreeNode requires an inline child or a subtree asset root.");
+            }
+
             return node;
         }
     }
