@@ -18,7 +18,7 @@ namespace CycloneGames.Choreography.Audio
         private IChoreographyDiagnostics _diagnostics;
         private bool _warnedUninitialized;
 
-        /// <summary>Wires the resource resolver (typically the AssetManagement bridge) and builds the provider.</summary>
+        /// <summary>Wires a Unity Object resource resolver and builds the direct AudioClip provider.</summary>
         public void Initialize(IUnityChoreographyResourceResolver resolver, IChoreographyDiagnostics diagnostics = null)
         {
             _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;

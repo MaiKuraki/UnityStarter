@@ -3,9 +3,8 @@ using System;
 namespace CycloneGames.Choreography.Core
 {
     /// <summary>
-    /// Provider-agnostic, immutable description of a resource required by a choreography.
-    /// The <see cref="Address"/> is an opaque location key resolved by an <see cref="IResourceProvider"/>;
-    /// the Core layer never assumes a concrete asset system or Unity type.
+    /// Provider-agnostic, immutable description of a resource or backend cue required by a choreography.
+    /// The Core layer never assumes a concrete asset system, Unity type, audio middleware, or VFX runtime.
     /// </summary>
     public readonly struct ChoreographyResourceReference : IEquatable<ChoreographyResourceReference>
     {
@@ -18,11 +17,24 @@ namespace CycloneGames.Choreography.Core
         /// <summary>Optional grouping tag (e.g. a lifetime bucket). May be null.</summary>
         public readonly string Tag;
 
-        public ChoreographyResourceReference(string address, ChoreographyResourceKind kind, string tag = null)
+        /// <summary>Optional backend id such as UnityAudioClip, CycloneGames.Audio, Wwise, or a project-specific provider.</summary>
+        public readonly string Provider;
+
+        /// <summary>Optional backend group such as an audio bank, package, bundle, or collection id.</summary>
+        public readonly string Group;
+
+        public ChoreographyResourceReference(
+            string address,
+            ChoreographyResourceKind kind,
+            string tag = null,
+            string provider = null,
+            string group = null)
         {
             Address = address;
             Kind = kind;
             Tag = tag;
+            Provider = provider;
+            Group = group;
         }
 
         public bool IsValid => !string.IsNullOrEmpty(Address);
@@ -31,7 +43,9 @@ namespace CycloneGames.Choreography.Core
         {
             return Kind == other.Kind
                 && string.Equals(Address, other.Address, StringComparison.Ordinal)
-                && string.Equals(Tag, other.Tag, StringComparison.Ordinal);
+                && string.Equals(Tag, other.Tag, StringComparison.Ordinal)
+                && string.Equals(Provider, other.Provider, StringComparison.Ordinal)
+                && string.Equals(Group, other.Group, StringComparison.Ordinal);
         }
 
         public override bool Equals(object obj)
@@ -47,6 +61,8 @@ namespace CycloneGames.Choreography.Core
                 hash = (hash * 16777619) ^ (Address != null ? Address.GetHashCode() : 0);
                 hash = (hash * 16777619) ^ (int)Kind;
                 hash = (hash * 16777619) ^ (Tag != null ? Tag.GetHashCode() : 0);
+                hash = (hash * 16777619) ^ (Provider != null ? Provider.GetHashCode() : 0);
+                hash = (hash * 16777619) ^ (Group != null ? Group.GetHashCode() : 0);
                 return hash;
             }
         }

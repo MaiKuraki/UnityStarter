@@ -28,6 +28,8 @@ namespace CycloneGames.Choreography.Core
             public double Speed;
             public bool Loop;
             public bool PendingRemove;
+            public IChoreographyClockDriver ClockDriver;
+            public SectionClockDriver DefaultClockDriver;
         }
 
         private struct QueuedRequest
@@ -39,6 +41,7 @@ namespace CycloneGames.Choreography.Core
             public ChoreographyPlaybackMode Mode;
             public double Speed;
             public bool Loop;
+            public IChoreographyClockDriver ClockDriver;
         }
 
         private struct BufferedSample
@@ -53,7 +56,7 @@ namespace CycloneGames.Choreography.Core
         {
             public int Compare(BufferedSample x, BufferedSample y)
             {
-                int channelCompare = x.Sample.Channel.CompareTo(y.Sample.Channel);
+                int channelCompare = x.Sample.PlaybackChannel.CompareTo(y.Sample.PlaybackChannel);
                 if (channelCompare != 0)
                 {
                     return channelCompare;
@@ -81,6 +84,9 @@ namespace CycloneGames.Choreography.Core
 
         /// <summary>Raised for every timeline event crossed by any instance during <see cref="Tick"/>.</summary>
         public event Action<ChoreographyEventInvocation> EventRaised;
+
+        /// <summary>Raised when a duration-spanning event state changes phase.</summary>
+        public event Action<ChoreographyEventStateSignal> EventStateRaised;
 
         /// <summary>Raised when an instance completes (reaches the end without looping) or is stopped.</summary>
         public event Action<int> InstanceEnded;
@@ -146,12 +152,12 @@ namespace CycloneGames.Choreography.Core
             switch (admission)
             {
                 case ChoreographyAdmission.Admit:
-                    StartInstance(id, asset, request.Channel, request.Priority, request.Mode, request.Speed, request.Loop);
+                    StartInstance(id, asset, request.Channel, request.Priority, request.Mode, request.Speed, request.Loop, request.ClockDriver);
                     return id;
 
                 case ChoreographyAdmission.Replace:
                     StopChannelInternal(request.Channel, false);
-                    StartInstance(id, asset, request.Channel, request.Priority, request.Mode, request.Speed, request.Loop);
+                    StartInstance(id, asset, request.Channel, request.Priority, request.Mode, request.Speed, request.Loop, request.ClockDriver);
                     return id;
 
                 case ChoreographyAdmission.Queue:
@@ -163,7 +169,8 @@ namespace CycloneGames.Choreography.Core
                         Priority = request.Priority,
                         Mode = request.Mode,
                         Speed = request.Speed,
-                        Loop = request.Loop
+                        Loop = request.Loop,
+                        ClockDriver = request.ClockDriver
                     });
                     return id;
 
@@ -254,7 +261,7 @@ namespace CycloneGames.Choreography.Core
                     continue;
                 }
                 _currentTickInstance = instance;
-                instance.Player.Tick(step);
+                instance.Player.Tick(instance.ClockDriver, in step);
             }
             _currentTickInstance = null;
 
@@ -335,7 +342,15 @@ namespace CycloneGames.Choreography.Core
             }
         }
 
-        private void StartInstance(int id, IChoreographyAsset asset, int channel, int priority, ChoreographyPlaybackMode mode, double speed, bool loop)
+        private void StartInstance(
+            int id,
+            IChoreographyAsset asset,
+            int channel,
+            int priority,
+            ChoreographyPlaybackMode mode,
+            double speed,
+            bool loop,
+            IChoreographyClockDriver clockDriver)
         {
             Instance instance = _instancePool.Count > 0 ? _instancePool.Pop() : new Instance();
             ChoreographyPlayer player = instance.Player ?? (_playerPool.Count > 0 ? _playerPool.Pop() : new ChoreographyPlayer());
@@ -349,8 +364,21 @@ namespace CycloneGames.Choreography.Core
             instance.Speed = speed;
             instance.Loop = loop;
             instance.PendingRemove = false;
+            if (clockDriver == null)
+            {
+                if (instance.DefaultClockDriver == null)
+                {
+                    instance.DefaultClockDriver = new SectionClockDriver();
+                }
+                instance.ClockDriver = instance.DefaultClockDriver;
+            }
+            else
+            {
+                instance.ClockDriver = clockDriver;
+            }
 
             player.Load(asset, new ChoreographyPlaybackContext(id, channel, speed, loop, mode), this);
+            instance.ClockDriver.Reset(player.ClockState);
             player.Play();
             _instances.Add(instance);
         }
@@ -423,7 +451,7 @@ namespace CycloneGames.Choreography.Core
                     RemovePending();
                 }
 
-                StartInstance(queued.Id, queued.Asset, queued.Channel, queued.Priority, queued.Mode, queued.Speed, queued.Loop);
+                StartInstance(queued.Id, queued.Asset, queued.Channel, queued.Priority, queued.Mode, queued.Speed, queued.Loop, queued.ClockDriver);
             }
         }
 
@@ -496,6 +524,12 @@ namespace CycloneGames.Choreography.Core
         void IChoreographyPlaybackSink.OnClipStopped(in ChoreographyClipStop stop) => ProviderDispatch.End(_providers, in stop);
 
         void IChoreographyPlaybackSink.OnEvent(in ChoreographyEventInvocation invocation) => EventRaised?.Invoke(invocation);
+
+        void IChoreographyPlaybackSink.OnEventStateBegin(in ChoreographyEventStateSignal signal) => EventStateRaised?.Invoke(signal);
+
+        void IChoreographyPlaybackSink.OnEventStateUpdate(in ChoreographyEventStateSignal signal) => EventStateRaised?.Invoke(signal);
+
+        void IChoreographyPlaybackSink.OnEventStateEnd(in ChoreographyEventStateSignal signal) => EventStateRaised?.Invoke(signal);
 
         void IChoreographyPlaybackSink.OnPlaybackCompleted(int instanceId)
         {

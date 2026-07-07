@@ -13,7 +13,8 @@ namespace CycloneGames.Choreography.Editor
         Section = 1,
         Track = 2,
         Clip = 3,
-        Event = 4
+        Event = 4,
+        EventState = 5
     }
 
     internal struct ChoreographyTimelineSelection
@@ -23,6 +24,7 @@ namespace CycloneGames.Choreography.Editor
         public int TrackIndex;
         public int ClipIndex;
         public int EventIndex;
+        public int EventStateIndex;
 
         public bool IsValid => Kind != ChoreographyTimelineElementKind.None && SectionIndex >= 0;
 
@@ -34,7 +36,8 @@ namespace CycloneGames.Choreography.Editor
                 SectionIndex = -1,
                 TrackIndex = -1,
                 ClipIndex = -1,
-                EventIndex = -1
+                EventIndex = -1,
+                EventStateIndex = -1
             };
         }
 
@@ -46,7 +49,8 @@ namespace CycloneGames.Choreography.Editor
                 SectionIndex = sectionIndex,
                 TrackIndex = -1,
                 ClipIndex = -1,
-                EventIndex = -1
+                EventIndex = -1,
+                EventStateIndex = -1
             };
         }
 
@@ -58,7 +62,8 @@ namespace CycloneGames.Choreography.Editor
                 SectionIndex = sectionIndex,
                 TrackIndex = trackIndex,
                 ClipIndex = -1,
-                EventIndex = -1
+                EventIndex = -1,
+                EventStateIndex = -1
             };
         }
 
@@ -70,7 +75,8 @@ namespace CycloneGames.Choreography.Editor
                 SectionIndex = sectionIndex,
                 TrackIndex = trackIndex,
                 ClipIndex = clipIndex,
-                EventIndex = -1
+                EventIndex = -1,
+                EventStateIndex = -1
             };
         }
 
@@ -82,7 +88,21 @@ namespace CycloneGames.Choreography.Editor
                 SectionIndex = sectionIndex,
                 TrackIndex = -1,
                 ClipIndex = -1,
-                EventIndex = eventIndex
+                EventIndex = eventIndex,
+                EventStateIndex = -1
+            };
+        }
+
+        public static ChoreographyTimelineSelection EventState(int sectionIndex, int eventStateIndex)
+        {
+            return new ChoreographyTimelineSelection
+            {
+                Kind = ChoreographyTimelineElementKind.EventState,
+                SectionIndex = sectionIndex,
+                TrackIndex = -1,
+                ClipIndex = -1,
+                EventIndex = -1,
+                EventStateIndex = eventStateIndex
             };
         }
     }
@@ -101,6 +121,11 @@ namespace CycloneGames.Choreography.Editor
         private const float RulerHeight = 20f;
         private const float SectionRowHeight = 26f;
         private const float LaneHeight = 40f;
+        private const int StateWindowLaneCount = 2;
+        private const float StateWindowTop = 4f;
+        private const float StateWindowHeight = 16f;
+        private const float StateWindowGap = 3f;
+        private const float StateRowHeight = StateWindowTop + StateWindowLaneCount * StateWindowHeight + (StateWindowLaneCount - 1) * StateWindowGap + 5f;
         private const float ScrollbarHeight = 14f;
         private const float MinClipWidth = 6f;
         private const float FitPadding = 12f;
@@ -127,6 +152,8 @@ namespace CycloneGames.Choreography.Editor
         private static readonly Color CustomColor = new Color(0.560f, 0.560f, 0.560f, 1f);
         private static readonly Color SectionColor = new Color(0.514f, 0.376f, 0.922f, 1f);
         private static readonly Color EventMarkerColor = new Color(0.925f, 0.251f, 0.478f, 1f);
+        private static readonly Color EventStateColor = new Color(0.925f, 0.388f, 0.631f, 1f);
+        private static readonly Color PlayheadColor = new Color(1f, 0.282f, 0.239f, 1f);
         private static readonly Color SelectionColor = new Color(1f, 0.820f, 0.349f, 1f);
         private static readonly Vector3[] TimingDiamondPoints = new Vector3[4];
 
@@ -137,7 +164,9 @@ namespace CycloneGames.Choreography.Editor
 
         private readonly List<LaneInfo> _lanes = new List<LaneInfo>(8);
         private readonly List<TimingMarkerLayout> _timingMarkers = new List<TimingMarkerLayout>(24);
+        private readonly List<EventStateLayout> _eventStateLayouts = new List<EventStateLayout>(16);
         private readonly float[] _timingLaneRights = new float[TimingMarkerLaneCount];
+        private readonly float[] _stateLaneRights = new float[StateWindowLaneCount];
         private readonly GUIContent _label = new GUIContent();
 
         private GUIStyle _clipLabelStyle;
@@ -153,6 +182,11 @@ namespace CycloneGames.Choreography.Editor
         private bool _fitRequested;
         private float _totalDuration;
         private float _lastViewWidth;
+        private double _previewTime;
+        private bool _showPreviewTime;
+        private bool _previewTimeRequested;
+        private double _requestedPreviewTime;
+        private bool _draggingPreviewTime;
         private ChoreographyTimelineSelection _selection = ChoreographyTimelineSelection.None();
 
         public ChoreographyTimelineSelection Selection => _selection;
@@ -165,6 +199,25 @@ namespace CycloneGames.Choreography.Editor
         public void ClearSelection()
         {
             _selection = ChoreographyTimelineSelection.None();
+        }
+
+        public void SetPreviewTime(double time, bool visible)
+        {
+            _previewTime = time;
+            _showPreviewTime = visible;
+        }
+
+        public bool TryConsumePreviewTimeRequest(out double time)
+        {
+            if (_previewTimeRequested)
+            {
+                time = _requestedPreviewTime;
+                _previewTimeRequested = false;
+                return true;
+            }
+
+            time = 0d;
+            return false;
         }
 
         public void Draw(SerializedProperty sections)
@@ -186,7 +239,7 @@ namespace CycloneGames.Choreography.Editor
             }
 
             int laneCount = _lanes.Count;
-            float totalHeight = RulerHeight + SectionRowHeight + laneCount * LaneHeight + TimingRowHeight + ScrollbarHeight + 2f;
+            float totalHeight = RulerHeight + SectionRowHeight + laneCount * LaneHeight + StateRowHeight + TimingRowHeight + ScrollbarHeight + 2f;
             Rect area = GUILayoutUtility.GetRect(1f, totalHeight, GUILayout.ExpandWidth(true));
             float viewWidth = Mathf.Max(48f, area.width - LabelColumnWidth);
 
@@ -209,7 +262,7 @@ namespace CycloneGames.Choreography.Editor
             _scroll.x = Mathf.Clamp(_scroll.x, 0f, maxScroll);
 
             Rect timeRect = new Rect(area.x + LabelColumnWidth, area.y, viewWidth, area.height - ScrollbarHeight);
-            HandleMouseDown(sections, area, timeRect);
+            HandleMouseInput(sections, area, timeRect);
 
             if (Event.current.type == EventType.Repaint)
             {
@@ -221,7 +274,9 @@ namespace CycloneGames.Choreography.Editor
                 DrawRuler(viewWidth, timeRect.height);
                 DrawSections(sections, viewWidth);
                 DrawTrackLanes(sections, viewWidth);
+                DrawEventStateRow(sections, viewWidth);
                 DrawTimingRow(sections, viewWidth);
+                DrawPreviewPlayhead(viewWidth, timeRect.height);
                 GUI.EndClip();
             }
 
@@ -283,7 +338,11 @@ namespace CycloneGames.Choreography.Editor
                 GUI.Label(new Rect(rowRect.x + 12f, rowRect.y, rowRect.width - 16f, rowRect.height), _label, _laneLabelStyle);
             }
 
-            Rect timingLabel = new Rect(area.x + 5f, lanesTop + _lanes.Count * LaneHeight, LabelColumnWidth - 10f, TimingRowHeight);
+            Rect stateLabel = new Rect(area.x + 5f, lanesTop + _lanes.Count * LaneHeight, LabelColumnWidth - 10f, StateRowHeight);
+            _label.text = "State Windows";
+            GUI.Label(stateLabel, _label, _laneLabelStyle);
+
+            Rect timingLabel = new Rect(area.x + 5f, lanesTop + _lanes.Count * LaneHeight + StateRowHeight, LabelColumnWidth - 10f, TimingRowHeight);
             _label.text = "Timing Markers";
             GUI.Label(timingLabel, _label, _laneLabelStyle);
         }
@@ -300,7 +359,11 @@ namespace CycloneGames.Choreography.Editor
                 EditorGUI.DrawRect(new Rect(0f, lanesTop + i * LaneHeight, viewWidth, LaneHeight), tint);
             }
 
-            float timingTop = lanesTop + _lanes.Count * LaneHeight;
+            float stateTop = lanesTop + _lanes.Count * LaneHeight;
+            EditorGUI.DrawRect(new Rect(0f, stateTop, viewWidth, StateRowHeight), new Color(EventStateColor.r, EventStateColor.g, EventStateColor.b, 0.055f));
+            EditorGUI.DrawRect(new Rect(0f, stateTop + StateRowHeight - 1f, viewWidth, 1f), new Color(1f, 1f, 1f, 0.065f));
+
+            float timingTop = stateTop + StateRowHeight;
             EditorGUI.DrawRect(new Rect(0f, timingTop, viewWidth, TimingRowHeight), new Color(0f, 0f, 0f, 0.16f));
             EditorGUI.DrawRect(new Rect(0f, timingTop + TimingSectionTop - 4f, viewWidth, 1f), new Color(1f, 1f, 1f, 0.08f));
             EditorGUI.DrawRect(new Rect(0f, viewHeight - 1f, viewWidth, 1f), new Color(0f, 0f, 0f, 0.30f));
@@ -333,7 +396,7 @@ namespace CycloneGames.Choreography.Editor
         {
             float cursor = 0f;
             int count = sections.arraySize;
-            float sectionBottom = RulerHeight + SectionRowHeight + _lanes.Count * LaneHeight + TimingRowHeight;
+            float sectionBottom = RulerHeight + SectionRowHeight + _lanes.Count * LaneHeight + StateRowHeight + TimingRowHeight;
 
             for (int i = 0; i < count; i++)
             {
@@ -533,9 +596,124 @@ namespace CycloneGames.Choreography.Editor
             }
         }
 
+        private void DrawEventStateRow(SerializedProperty sections, float viewWidth)
+        {
+            float stateTop = RulerHeight + SectionRowHeight + _lanes.Count * LaneHeight;
+            BuildEventStateLayouts(sections, viewWidth);
+
+            for (int i = 0; i < _eventStateLayouts.Count; i++)
+            {
+                EventStateLayout layout = _eventStateLayouts[i];
+                bool selected = _selection.Kind == ChoreographyTimelineElementKind.EventState
+                    && _selection.SectionIndex == layout.SectionIndex
+                    && _selection.EventStateIndex == layout.EventStateIndex;
+
+                Rect rect = new Rect(layout.Rect.x, stateTop + layout.Rect.y, layout.Rect.width, layout.Rect.height);
+                Color body = EventStateColor;
+                body.a = selected ? 0.92f : 0.62f;
+                EditorGUI.DrawRect(rect, body);
+                EditorGUI.DrawRect(new Rect(layout.AnchorX - 1f, rect.y, 2f, rect.height), new Color(1f, 1f, 1f, selected ? 0.48f : 0.22f));
+                DrawOutline(rect, selected ? SelectionColor : new Color(0f, 0f, 0f, 0.35f), selected ? 2f : 1f);
+
+                if (rect.width > 26f)
+                {
+                    _label.text = layout.Text;
+                    GUI.Label(new Rect(rect.x + 5f, rect.y, rect.width - 8f, rect.height), _label, _clipLabelStyle);
+                }
+            }
+        }
+
+        private void BuildEventStateLayouts(SerializedProperty sections, float viewWidth)
+        {
+            _eventStateLayouts.Clear();
+            for (int i = 0; i < _stateLaneRights.Length; i++)
+            {
+                _stateLaneRights[i] = float.NegativeInfinity;
+            }
+
+            float sectionStart = 0f;
+            for (int s = 0; s < sections.arraySize; s++)
+            {
+                SerializedProperty section = sections.GetArrayElementAtIndex(s);
+                float sectionDuration = Mathf.Max(0f, GetFloat(section, "Duration"));
+                SerializedProperty states = section.FindPropertyRelative("EventStates");
+                if (states != null)
+                {
+                    for (int i = 0; i < states.arraySize; i++)
+                    {
+                        SerializedProperty state = states.GetArrayElementAtIndex(i);
+                        float start = Mathf.Clamp(GetFloat(state, "StartTime"), 0f, sectionDuration);
+                        float end = Mathf.Clamp(GetFloat(state, "EndTime"), start, sectionDuration);
+                        float x = (sectionStart + start) * _pixelsPerSecond - _scroll.x;
+                        float width = Mathf.Max(MinClipWidth, (end - start) * _pixelsPerSecond);
+                        if (x > viewWidth + 24f || x + width < -24f)
+                        {
+                            continue;
+                        }
+
+                        int lane = FindAvailableStateLane(x);
+                        if (lane < 0)
+                        {
+                            lane = FindEarliestStateLane();
+                        }
+
+                        Rect rect = new Rect(
+                            x,
+                            StateWindowTop + lane * (StateWindowHeight + StateWindowGap),
+                            width,
+                            StateWindowHeight);
+                        _stateLaneRights[lane] = rect.xMax + StateWindowGap;
+
+                        string id = GetString(state, "Id");
+                        if (string.IsNullOrEmpty(id))
+                        {
+                            id = GetString(state, "EventId");
+                        }
+                        if (string.IsNullOrEmpty(id))
+                        {
+                            id = "State " + i;
+                        }
+
+                        _eventStateLayouts.Add(new EventStateLayout(s, i, sectionStart + start, x, rect, id));
+                    }
+                }
+
+                sectionStart += sectionDuration;
+            }
+        }
+
+        private int FindAvailableStateLane(float x)
+        {
+            for (int i = 0; i < _stateLaneRights.Length; i++)
+            {
+                if (x >= _stateLaneRights[i])
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private int FindEarliestStateLane()
+        {
+            int lane = 0;
+            float bestRight = _stateLaneRights[0];
+            for (int i = 1; i < _stateLaneRights.Length; i++)
+            {
+                if (_stateLaneRights[i] < bestRight)
+                {
+                    bestRight = _stateLaneRights[i];
+                    lane = i;
+                }
+            }
+
+            return lane;
+        }
+
         private void DrawTimingRow(SerializedProperty sections, float viewWidth)
         {
-            float timingTop = RulerHeight + SectionRowHeight + _lanes.Count * LaneHeight;
+            float timingTop = RulerHeight + SectionRowHeight + _lanes.Count * LaneHeight + StateRowHeight;
             float sectionStart = 0f;
             int sectionCount = sections.arraySize;
             BuildTimingMarkers(sections, viewWidth);
@@ -764,7 +942,7 @@ namespace CycloneGames.Choreography.Editor
                 marker.AnchorX - thickness * 0.5f,
                 RulerHeight + SectionRowHeight,
                 thickness,
-                _lanes.Count * LaneHeight + TimingRowHeight),
+                _lanes.Count * LaneHeight + StateRowHeight + TimingRowHeight),
                 color);
         }
 
@@ -807,6 +985,27 @@ namespace CycloneGames.Choreography.Editor
             DrawDiamond(new Vector2(anchorX, connectorY), selected ? TimingAnchorPinSize + 1f : TimingAnchorPinSize, anchorColor);
         }
 
+        private void DrawPreviewPlayhead(float viewWidth, float viewHeight)
+        {
+            if (!_showPreviewTime || _totalDuration <= 0f)
+            {
+                return;
+            }
+
+            float x = (float)_previewTime * _pixelsPerSecond - _scroll.x;
+            if (x < -1f || x > viewWidth + 1f)
+            {
+                return;
+            }
+
+            float clampedX = Mathf.Clamp(x, 0f, viewWidth - 1f);
+            EditorGUI.DrawRect(new Rect(clampedX - 1f, 0f, 2f, viewHeight), new Color(PlayheadColor.r, PlayheadColor.g, PlayheadColor.b, 0.92f));
+            EditorGUI.DrawRect(new Rect(clampedX - 5f, 0f, 10f, RulerHeight), new Color(PlayheadColor.r, PlayheadColor.g, PlayheadColor.b, 0.55f));
+
+            _label.text = _previewTime.ToString("0.###", CultureInfo.InvariantCulture) + "s";
+            GUI.Label(new Rect(clampedX + 4f, 2f, 58f, RulerHeight - 2f), _label, _rulerLabelStyle);
+        }
+
         private static void DrawDiamond(Vector2 center, float size, Color color)
         {
             TimingDiamondPoints[0] = new Vector3(center.x, center.y - size);
@@ -831,17 +1030,29 @@ namespace CycloneGames.Choreography.Editor
                 TimingMarkerHeight);
         }
 
-        private void HandleMouseDown(SerializedProperty sections, Rect area, Rect timeRect)
+        private void HandleMouseInput(SerializedProperty sections, Rect area, Rect timeRect)
         {
             Event evt = Event.current;
-            if (evt.type != EventType.MouseDown || evt.button != 0 || !area.Contains(evt.mousePosition))
+            if ((evt.type != EventType.MouseDown && evt.type != EventType.MouseDrag && evt.type != EventType.MouseUp) || evt.button != 0)
+            {
+                return;
+            }
+
+            if (evt.type == EventType.MouseUp)
+            {
+                _draggingPreviewTime = false;
+                return;
+            }
+
+            if (!area.Contains(evt.mousePosition) && !_draggingPreviewTime)
             {
                 return;
             }
 
             Vector2 position = evt.mousePosition;
             float lanesTop = area.y + RulerHeight + SectionRowHeight;
-            float timingTop = lanesTop + _lanes.Count * LaneHeight;
+            float stateTop = lanesTop + _lanes.Count * LaneHeight;
+            float timingTop = stateTop + StateRowHeight;
 
             if (position.x < area.x + LabelColumnWidth)
             {
@@ -867,6 +1078,20 @@ namespace CycloneGames.Choreography.Editor
             float localY = position.y - timeRect.y;
             float time = (localX + _scroll.x) / _pixelsPerSecond;
 
+            if ((evt.type == EventType.MouseDown || evt.type == EventType.MouseDrag)
+                && (localY >= 0f && localY < RulerHeight || _draggingPreviewTime))
+            {
+                RequestPreviewTime(time);
+                _draggingPreviewTime = true;
+                evt.Use();
+                return;
+            }
+
+            if (evt.type != EventType.MouseDown)
+            {
+                return;
+            }
+
             if (localY >= RulerHeight && localY < RulerHeight + SectionRowHeight)
             {
                 int sectionIndex = FindSectionAtTime(sections, time);
@@ -875,6 +1100,21 @@ namespace CycloneGames.Choreography.Editor
                     _selection = ChoreographyTimelineSelection.Section(sectionIndex);
                     evt.Use();
                 }
+                return;
+            }
+
+            if (localY >= stateTop - timeRect.y && localY < stateTop - timeRect.y + StateRowHeight)
+            {
+                float stateLocalY = localY - (stateTop - timeRect.y);
+                if (!TryPickEventState(sections, timeRect.width, localX, stateLocalY, out _selection))
+                {
+                    int sectionIndex = FindSectionAtTime(sections, time);
+                    if (sectionIndex >= 0)
+                    {
+                        _selection = ChoreographyTimelineSelection.Section(sectionIndex);
+                    }
+                }
+                evt.Use();
                 return;
             }
 
@@ -906,6 +1146,12 @@ namespace CycloneGames.Choreography.Editor
                     evt.Use();
                 }
             }
+        }
+
+        private void RequestPreviewTime(float time)
+        {
+            _requestedPreviewTime = Mathf.Clamp(time, 0f, Mathf.Max(0f, _totalDuration));
+            _previewTimeRequested = true;
         }
 
         private bool TryPickTimingMarker(SerializedProperty sections, float viewWidth, float localX, float localY, out ChoreographyTimelineSelection selection)
@@ -942,6 +1188,28 @@ namespace CycloneGames.Choreography.Editor
 
                 selection = ChoreographyTimelineSelection.Section(marker.SectionIndex);
                 return true;
+            }
+
+            selection = ChoreographyTimelineSelection.None();
+            return false;
+        }
+
+        private bool TryPickEventState(SerializedProperty sections, float viewWidth, float localX, float localY, out ChoreographyTimelineSelection selection)
+        {
+            BuildEventStateLayouts(sections, viewWidth);
+            for (int i = _eventStateLayouts.Count - 1; i >= 0; i--)
+            {
+                EventStateLayout layout = _eventStateLayouts[i];
+                Rect rect = layout.Rect;
+                rect.xMin -= MarkerHitPadding;
+                rect.xMax += MarkerHitPadding;
+                rect.yMin -= MarkerHitPadding;
+                rect.yMax += MarkerHitPadding;
+                if (rect.Contains(new Vector2(localX, localY)))
+                {
+                    selection = ChoreographyTimelineSelection.EventState(layout.SectionIndex, layout.EventStateIndex);
+                    return true;
+                }
             }
 
             selection = ChoreographyTimelineSelection.None();
@@ -1212,7 +1480,7 @@ namespace CycloneGames.Choreography.Editor
                 return 0f;
             }
 
-            if (relative == "StartTime" || relative == "Duration" || relative == "Time")
+            if (relative == "StartTime" || relative == "EndTime" || relative == "Duration" || relative == "Time")
             {
                 return (float)property.doubleValue;
             }
@@ -1257,7 +1525,19 @@ namespace CycloneGames.Choreography.Editor
             }
 
             SerializedProperty source = resource.FindPropertyRelative("Source");
-            if (source != null && source.enumValueIndex == (int)ChoreographyResourceSource.AssetReference)
+            if (source != null && source.enumValueIndex == (int)ChoreographyResourceSource.BackendCue)
+            {
+                string bank = GetString(resource, "Bank");
+                string cue = GetString(resource, "Cue");
+                if (string.IsNullOrEmpty(cue))
+                {
+                    return bank;
+                }
+
+                return string.IsNullOrEmpty(bank) ? cue : bank + "/" + cue;
+            }
+
+            if (source != null && source.enumValueIndex == (int)ChoreographyResourceSource.AssetKey)
             {
                 SerializedProperty asset = resource.FindPropertyRelative("Asset");
                 string assetLocation = asset != null ? GetString(asset, "m_Location") : string.Empty;
@@ -1273,7 +1553,7 @@ namespace CycloneGames.Choreography.Editor
                 return location;
             }
 
-            if (source == null || source.enumValueIndex != (int)ChoreographyResourceSource.AssetReference)
+            if (source == null || source.enumValueIndex != (int)ChoreographyResourceSource.AssetKey)
             {
                 return string.Empty;
             }
@@ -1395,6 +1675,26 @@ namespace CycloneGames.Choreography.Editor
                 Text = text;
                 Color = color;
                 Rect = default;
+            }
+        }
+
+        private struct EventStateLayout
+        {
+            public readonly int SectionIndex;
+            public readonly int EventStateIndex;
+            public readonly float AbsoluteStart;
+            public readonly float AnchorX;
+            public readonly Rect Rect;
+            public readonly string Text;
+
+            public EventStateLayout(int sectionIndex, int eventStateIndex, float absoluteStart, float anchorX, Rect rect, string text)
+            {
+                SectionIndex = sectionIndex;
+                EventStateIndex = eventStateIndex;
+                AbsoluteStart = absoluteStart;
+                AnchorX = anchorX;
+                Rect = rect;
+                Text = text;
             }
         }
     }

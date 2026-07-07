@@ -193,6 +193,163 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
             }
         }
 
+        [Test]
+        public void SyncBridge_RejectsOversizedIncomingSnapshotPayload()
+        {
+            var profile = BehaviorTreeNetworkProfiles.CreateServerAuthoritativeBuilder();
+            profile.MaxSnapshotPayloadBytes = 4;
+            var bridge = new BehaviorTreeNetworkSyncBridge(profile.Build());
+            var target = CreateTree(RuntimeState.Running);
+            var message = new BehaviorTreeStatePayloadMessage(
+                1u,
+                sequence: 1,
+                tick: 1,
+                BehaviorTreeNetworkPayloadKind.FullSnapshot,
+                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
+                treeTemplateHash: 0UL,
+                blackboardHash: 0UL,
+                treeStateHash: 0UL,
+                payload: new byte[5]);
+
+            try
+            {
+                Assert.That(bridge.ApplyPayload(target, message), Is.False);
+            }
+            finally
+            {
+                target.Dispose();
+            }
+        }
+
+        [Test]
+        public void SyncBridge_RejectsMalformedIncomingSnapshotPayload()
+        {
+            var profile = BehaviorTreeNetworkProfiles.CreateServerAuthoritativeBuilder();
+            profile.MaxSnapshotPayloadBytes = 64;
+            var bridge = new BehaviorTreeNetworkSyncBridge(profile.Build());
+            var target = CreateTree(RuntimeState.Running);
+            var message = new BehaviorTreeStatePayloadMessage(
+                1u,
+                sequence: 1,
+                tick: 1,
+                BehaviorTreeNetworkPayloadKind.FullSnapshot,
+                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
+                treeTemplateHash: 0UL,
+                blackboardHash: 0UL,
+                treeStateHash: 0UL,
+                payload: new byte[] { 1, 2, 3 });
+
+            try
+            {
+                Assert.That(bridge.ApplyPayload(target, message), Is.False);
+            }
+            finally
+            {
+                target.Dispose();
+            }
+        }
+
+        [Test]
+        public void SyncBridge_RejectsOversizedIncomingDeltaPayload()
+        {
+            var profile = BehaviorTreeNetworkProfiles.CreateBlackboardReplicatedBuilder();
+            profile.MaxDeltaPayloadBytes = 4;
+            var bridge = new BehaviorTreeNetworkSyncBridge(profile.Build());
+            var target = CreateTree(RuntimeState.Running);
+            var message = new BehaviorTreeStatePayloadMessage(
+                1u,
+                sequence: 1,
+                tick: 1,
+                BehaviorTreeNetworkPayloadKind.BlackboardDelta,
+                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
+                treeTemplateHash: 0UL,
+                blackboardHash: 0UL,
+                treeStateHash: 0UL,
+                payload: new byte[5]);
+
+            try
+            {
+                Assert.That(bridge.ApplyPayload(target, message), Is.False);
+            }
+            finally
+            {
+                target.Dispose();
+            }
+        }
+
+        [Test]
+        public void SyncBridge_RejectsMalformedIncomingDeltaPayload()
+        {
+            var bridge = new BehaviorTreeNetworkSyncBridge(BehaviorTreeNetworkProfiles.BlackboardReplicated);
+            var target = CreateTree(RuntimeState.Running);
+            var message = new BehaviorTreeStatePayloadMessage(
+                1u,
+                sequence: 1,
+                tick: 1,
+                BehaviorTreeNetworkPayloadKind.BlackboardDelta,
+                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
+                treeTemplateHash: 0UL,
+                blackboardHash: 0UL,
+                treeStateHash: 0UL,
+                payload: new byte[] { 1, 0, 0 });
+
+            try
+            {
+                Assert.That(bridge.ApplyPayload(target, message), Is.False);
+            }
+            finally
+            {
+                target.Dispose();
+            }
+        }
+
+        [Test]
+        public void SyncBridge_RejectsPartiallyValidDeltaWithoutMutation()
+        {
+            const int HealthKey = 101;
+            const int OtherKey = 202;
+            var bridge = new BehaviorTreeNetworkSyncBridge(BehaviorTreeNetworkProfiles.BlackboardReplicated);
+            var target = CreateTree(RuntimeState.Running);
+
+            byte[] payload;
+            using (var stream = new System.IO.MemoryStream())
+            using (var writer = new System.IO.BinaryWriter(stream))
+            {
+                writer.Write(2);
+                writer.Write(HealthKey);
+                writer.Write((byte)0);
+                writer.Write(99);
+                writer.Write(OtherKey);
+                writer.Write((byte)99);
+                writer.Flush();
+                payload = stream.ToArray();
+            }
+
+            var message = new BehaviorTreeStatePayloadMessage(
+                1u,
+                sequence: 1,
+                tick: 1,
+                BehaviorTreeNetworkPayloadKind.BlackboardDelta,
+                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
+                treeTemplateHash: 0UL,
+                blackboardHash: 0UL,
+                treeStateHash: 0UL,
+                payload);
+
+            try
+            {
+                target.Blackboard.SetInt(HealthKey, 7);
+
+                Assert.That(bridge.ApplyPayload(target, message), Is.False);
+                Assert.That(target.Blackboard.GetInt(HealthKey), Is.EqualTo(7));
+                Assert.That(target.Blackboard.HasKey(OtherKey), Is.False);
+            }
+            finally
+            {
+                target.Dispose();
+            }
+        }
+
         private static RuntimeBehaviorTree CreateTree(RuntimeState state)
         {
             return new RuntimeBehaviorTree(new FixedStateNode(state), new RuntimeBlackboard());

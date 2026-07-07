@@ -21,18 +21,25 @@ namespace CycloneGames.Choreography.Core
         /// <summary>Whether the choreography loops instead of completing.</summary>
         public readonly bool Loop;
 
+        /// <summary>
+        /// Optional per-instance clock driver. Null uses the scheduler's default section-aware internal/fixed-frame driver.
+        /// </summary>
+        public readonly IChoreographyClockDriver ClockDriver;
+
         public ChoreographyPlayRequest(
             int channel = 0,
             int priority = 0,
             ChoreographyPlaybackMode mode = ChoreographyPlaybackMode.Priority,
             double speed = 1d,
-            bool loop = false)
+            bool loop = false,
+            IChoreographyClockDriver clockDriver = null)
         {
             Channel = channel;
             Priority = priority;
             Mode = mode == ChoreographyPlaybackMode.Inherit ? ChoreographyPlaybackMode.Priority : mode;
             Speed = speed <= 0d ? 1d : speed;
             Loop = loop;
+            ClockDriver = clockDriver;
         }
     }
 }

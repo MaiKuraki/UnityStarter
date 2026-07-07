@@ -29,6 +29,36 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
     /// </summary>
     public static class BTNetworkSync
     {
+        public readonly struct Limits
+        {
+            public const int DEFAULT_MAX_SNAPSHOT_BYTES = 1024 * 1024;
+            public const int DEFAULT_MAX_NODE_COUNT = 65536;
+            public const int DEFAULT_MAX_BLACKBOARD_BYTES = 512 * 1024;
+
+            public Limits(
+                int maxSnapshotBytes,
+                int maxNodeCount,
+                int maxBlackboardBytes,
+                RuntimeBlackboardSerializationLimits blackboardLimits)
+            {
+                MaxSnapshotBytes = maxSnapshotBytes > 0 ? maxSnapshotBytes : DEFAULT_MAX_SNAPSHOT_BYTES;
+                MaxNodeCount = maxNodeCount > 0 ? maxNodeCount : DEFAULT_MAX_NODE_COUNT;
+                MaxBlackboardBytes = maxBlackboardBytes > 0 ? maxBlackboardBytes : DEFAULT_MAX_BLACKBOARD_BYTES;
+                BlackboardLimits = blackboardLimits;
+            }
+
+            public int MaxSnapshotBytes { get; }
+            public int MaxNodeCount { get; }
+            public int MaxBlackboardBytes { get; }
+            public RuntimeBlackboardSerializationLimits BlackboardLimits { get; }
+
+            public static Limits Default => new Limits(
+                DEFAULT_MAX_SNAPSHOT_BYTES,
+                DEFAULT_MAX_NODE_COUNT,
+                DEFAULT_MAX_BLACKBOARD_BYTES,
+                RuntimeBlackboardSerializationLimits.Default);
+        }
+
         /// <summary>
         /// Capture a lightweight snapshot of a tree's execution state.
         /// Contains: all node states + blackboard primitives + tree hash.
@@ -76,14 +106,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         /// </summary>
         public static void ApplyBlackboardSnapshot(RuntimeBehaviorTree tree, BTStateSnapshot snapshot)
         {
+            ApplyBlackboardSnapshot(tree, snapshot, Limits.Default);
+        }
+
+        public static void ApplyBlackboardSnapshot(RuntimeBehaviorTree tree, BTStateSnapshot snapshot, Limits limits)
+        {
             if (!snapshot.IsValid || tree?.Blackboard == null) return;
 
             if (snapshot.BlackboardData != null)
             {
+                if (snapshot.BlackboardData.Length > limits.MaxBlackboardBytes)
+                {
+                    throw new InvalidDataException(
+                        $"Blackboard snapshot payload size {snapshot.BlackboardData.Length} exceeds max blackboard bytes {limits.MaxBlackboardBytes}.");
+                }
+
                 using (var ms = new MemoryStream(snapshot.BlackboardData))
                 using (var reader = new BinaryReader(ms))
                 {
-                    tree.Blackboard.ReadFrom(reader);
+                    tree.Blackboard.ReadFrom(reader, limits.BlackboardLimits);
                 }
             }
         }
@@ -132,6 +173,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         /// </summary>
         public static BTStateSnapshot DeserializeSnapshot(byte[] data)
         {
+            return DeserializeSnapshot(data, Limits.Default);
+        }
+
+        public static BTStateSnapshot DeserializeSnapshot(byte[] data, Limits limits)
+        {
+            if (data == null || data.Length == 0)
+            {
+                return default;
+            }
+
+            if (data.Length > limits.MaxSnapshotBytes)
+            {
+                throw new InvalidDataException(
+                    $"Behavior tree snapshot size {data.Length} exceeds max snapshot bytes {limits.MaxSnapshotBytes}.");
+            }
+
             var snapshot = new BTStateSnapshot();
             using (var ms = new MemoryStream(data))
             using (var reader = new BinaryReader(ms))
@@ -142,19 +199,60 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 snapshot.BlackboardHash = reader.ReadUInt64();
 
                 int nodeCount = reader.ReadInt32();
+                if (nodeCount < 0)
+                {
+                    throw new InvalidDataException("Behavior tree snapshot node count cannot be negative.");
+                }
+
+                if (nodeCount > limits.MaxNodeCount)
+                {
+                    throw new InvalidDataException(
+                        $"Behavior tree snapshot node count {nodeCount} exceeds max node count {limits.MaxNodeCount}.");
+                }
+
                 if (nodeCount > 0)
                 {
-                    snapshot.NodeStates = reader.ReadBytes(nodeCount);
+                    snapshot.NodeStates = ReadExactBytes(reader, nodeCount);
                     snapshot.NodeAuxInts = new int[nodeCount];
                     for (int i = 0; i < nodeCount; i++)
                         snapshot.NodeAuxInts[i] = reader.ReadInt32();
                 }
 
                 int bbLen = reader.ReadInt32();
+                if (bbLen < 0)
+                {
+                    throw new InvalidDataException("Behavior tree snapshot blackboard payload length cannot be negative.");
+                }
+
+                if (bbLen > limits.MaxBlackboardBytes)
+                {
+                    throw new InvalidDataException(
+                        $"Behavior tree snapshot blackboard payload length {bbLen} exceeds max blackboard bytes {limits.MaxBlackboardBytes}.");
+                }
+
                 if (bbLen > 0)
-                    snapshot.BlackboardData = reader.ReadBytes(bbLen);
+                {
+                    snapshot.BlackboardData = ReadExactBytes(reader, bbLen);
+                }
+
+                if (ms.Position != ms.Length)
+                {
+                    throw new InvalidDataException("Behavior tree snapshot payload contains trailing bytes.");
+                }
             }
             return snapshot;
+        }
+
+        private static byte[] ReadExactBytes(BinaryReader reader, int length)
+        {
+            byte[] bytes = reader.ReadBytes(length);
+            if (bytes.Length != length)
+            {
+                throw new EndOfStreamException(
+                    $"Expected {length} bytes but only read {bytes.Length} bytes from behavior tree snapshot.");
+            }
+
+            return bytes;
         }
 
         // Node counting for snapshot sizing

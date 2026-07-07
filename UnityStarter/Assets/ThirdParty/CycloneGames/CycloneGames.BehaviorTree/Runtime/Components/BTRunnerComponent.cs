@@ -1,8 +1,10 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Nodes;
 using UnityEngine;
+using UnityEngine.Serialization;
 using Object = UnityEngine.Object;
+
 using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Nodes;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
@@ -27,8 +29,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         [Serializable]
         private class BlackBoardPassObject
         {
-            public string Key;
-            public Object Value;
+            [FormerlySerializedAs("Key")]
+            [SerializeField] private string KeyField;
+            [FormerlySerializedAs("Value")]
+            [SerializeField] private Object ValueField;
+
+            public string Key
+            {
+                get => KeyField;
+                set => KeyField = value;
+            }
+
+            public Object Value => ValueField;
         }
 
         public BehaviorTree Tree => behaviorTree;

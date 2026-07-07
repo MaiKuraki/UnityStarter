@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.Globalization;
 using CycloneGames.Choreography.Core;
 using UnityEditor;
 using UnityEngine;
@@ -25,37 +26,107 @@ namespace CycloneGames.Choreography.Editor
             "Add Clip", "Adds a new clip to the selected track.");
         private static readonly GUIContent AddEventButton = new GUIContent(
             "Add Event", "Adds a new timing event to the selected section.");
+        private static readonly GUIContent AddEventStateButton = new GUIContent(
+            "Add State", "Adds a duration-spanning event state to the selected section.");
         private static readonly GUIContent DeleteButton = new GUIContent(
             "Delete", "Deletes the selected element.");
         private static readonly GUIContent AdvancedFoldout = new GUIContent(
             "Advanced", "Fallback tools for inspecting or bulk-editing the serialized authoring model.");
-        private static readonly GUIContent ResourceAssetRefMode = new GUIContent(
-            "Asset Ref", "Use CycloneGames.AssetManagement AssetRef for runtime loading.");
+        private static readonly GUIContent ResourceAssetKeyMode = new GUIContent(
+            "Asset Key", "Use a loader-agnostic Location/Guid key compatible with AssetManagement-style references.");
         private static readonly GUIContent ResourceLocationMode = new GUIContent(
             "Location", "Use a raw provider location string for custom loaders or external banks.");
+        private static readonly GUIContent ResourceBackendCueMode = new GUIContent(
+            "Backend Cue", "Use a backend-owned cue such as a Wwise event or CycloneGames.Audio event.");
         private static readonly GUIContent ResourceAssetLabel = new GUIContent(
-            "Asset", "Drag an asset here. AssetRef stores its GUID and location path.");
+            "Asset", "Drag an asset here. The asset key stores its GUID and location path.");
         private static readonly GUIContent ResourceLocationLabel = new GUIContent(
-            "Location", "Provider location key used when AssetRef is not active.");
+            "Location", "Provider location key used when Asset Key is not active.");
+        private const float PreviewTimelineHeight = 50f;
+        private const float PreviewRulerHeight = 19f;
+        private const float PreviewSectionStripHeight = 24f;
+        private const float PreviewButtonWidth = 28f;
+        private const float PreviewButtonHeight = 22f;
+
+        private static readonly float[] PreviewTimeSteps =
+        {
+            0.05f, 0.1f, 0.2f, 0.25f, 0.5f, 1f, 2f, 5f, 10f, 15f, 30f, 60f, 120f, 300f
+        };
+
+        private static readonly int[] PreviewFrameSteps =
+        {
+            1, 2, 5, 10, 15, 30, 60, 120, 240, 600, 1200, 2400, 6000
+        };
+
+        private static readonly Vector3[] PreviewPlayheadTriangle = new Vector3[3];
+
+        private static GUIContent _previewPlayButton;
+        private static GUIContent _previewPauseButton;
+        private static GUIContent _previewStopButton;
+        private static GUIContent _previewStepBackButton;
+        private static GUIContent _previewStepForwardButton;
+        private static GUIStyle _previewRulerLabelStyle;
+        private static GUIStyle _previewSectionLabelStyle;
+        private static GUIStyle _previewReadoutStyle;
+        private static bool _previewUiReady;
 
         private readonly List<string> _diagnostics = new List<string>(16);
         private readonly HashSet<string> _sectionIds = new HashSet<string>();
         private readonly HashSet<string> _trackIds = new HashSet<string>();
         private readonly HashSet<string> _clipIds = new HashSet<string>();
+        private readonly List<IChoreographyPreviewTargetFactory> _previewFactories = new List<IChoreographyPreviewTargetFactory>(8);
+        private readonly GUIContent _previewLabel = new GUIContent();
 
         private SerializedProperty _assetId;
         private SerializedProperty _sections;
         private ChoreographyTimelineView _timeline;
+        private ChoreographyPreviewSession _previewSession;
+        private Object _previewContext;
+        private string[] _previewFactoryLabels = new string[0];
+        private int _previewFactoryIndex;
         private bool _showAdvanced;
         private bool _showRawData;
         private bool _showDiagnostics = true;
         private bool _showSectionOrder = true;
+        private bool _draggingPreviewTimeline;
 
         private void OnEnable()
         {
             _assetId = serializedObject.FindProperty("AssetId");
             _sections = serializedObject.FindProperty("Sections");
             _timeline = new ChoreographyTimelineView();
+            _previewSession = new ChoreographyPreviewSession();
+            EditorApplication.update += OnEditorUpdate;
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.update -= OnEditorUpdate;
+            if (_previewSession != null)
+            {
+                _previewSession.Dispose();
+                _previewSession = null;
+            }
+        }
+
+        private void OnEditorUpdate()
+        {
+            if (_previewSession == null || !_previewSession.IsPlaying)
+            {
+                return;
+            }
+
+            bool wasPlaying = _previewSession.IsPlaying;
+            bool changed = _previewSession.Tick(EditorApplication.timeSinceStartup);
+            if (_previewSession.IsPlaying)
+            {
+                EditorApplication.QueuePlayerLoopUpdate();
+            }
+
+            if (changed || wasPlaying != _previewSession.IsPlaying)
+            {
+                Repaint();
+            }
         }
 
         public override void OnInspectorGUI()
@@ -73,7 +144,8 @@ namespace CycloneGames.Choreography.Editor
             AuthoringStats stats = BuildStatsAndDiagnostics();
             DrawAssetHeader(stats);
             DrawSectionOrder();
-            DrawWorkspace();
+            DrawPreviewTransport(stats);
+            DrawWorkspace(stats);
             DrawSelectedDetails();
             DrawDiagnostics();
             DrawAdvanced();
@@ -99,6 +171,7 @@ namespace CycloneGames.Choreography.Editor
                     DrawStat("Tracks", stats.TrackCount.ToString(), InspectorUi.BlueAccent);
                     DrawStat("Clips", stats.ClipCount.ToString(), InspectorUi.GreenAccent);
                     DrawStat("Events", stats.EventCount.ToString(), InspectorUi.WarningAccent);
+                    DrawStat("States", stats.EventStateCount.ToString(), InspectorUi.RedAccent);
                     DrawStat("Duration", stats.TotalDuration.ToString("0.###") + "s", InspectorUi.NeutralAccent);
                 }
 
@@ -179,7 +252,596 @@ namespace CycloneGames.Choreography.Editor
             }
         }
 
-        private void DrawWorkspace()
+        private void DrawPreviewTransport(AuthoringStats stats)
+        {
+            EnsurePreviewUi();
+
+            ChoreographyAsset asset = target as ChoreographyAsset;
+            RefreshPreviewFactories(asset);
+            IChoreographyPreviewTargetFactory factory = _previewFactories.Count > 0
+                ? _previewFactories[Mathf.Clamp(_previewFactoryIndex, 0, _previewFactories.Count - 1)]
+                : null;
+            _previewSession.Bind(asset, factory, _previewContext);
+            double duration = Mathf.Max(0f, (float)stats.TotalDuration);
+            HandlePreviewKeyboardShortcuts(duration);
+
+            InspectorUi.DrawPanelHeader(
+                "Preview",
+                "Backend-neutral preview transport for time or frame driven playback.",
+                InspectorUi.WarningAccent);
+
+            using (InspectorUi.PanelScope())
+            {
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    using (new EditorGUI.DisabledScope(duration <= 0d))
+                    {
+                        if (!_previewSession.IsPlaying)
+                        {
+                            if (GUILayout.Button(_previewPlayButton, EditorStyles.miniButtonLeft, GUILayout.Width(PreviewButtonWidth), GUILayout.Height(PreviewButtonHeight)))
+                            {
+                                TogglePreviewPlayback();
+                            }
+                        }
+                        else if (GUILayout.Button(_previewPauseButton, EditorStyles.miniButtonLeft, GUILayout.Width(PreviewButtonWidth), GUILayout.Height(PreviewButtonHeight)))
+                        {
+                            TogglePreviewPlayback();
+                        }
+
+                        if (GUILayout.Button(_previewStopButton, EditorStyles.miniButtonMid, GUILayout.Width(PreviewButtonWidth), GUILayout.Height(PreviewButtonHeight)))
+                        {
+                            _previewSession.Stop();
+                            RequestPreviewEditorUpdate();
+                        }
+
+                        if (GUILayout.Button(_previewStepBackButton, EditorStyles.miniButtonMid, GUILayout.Width(PreviewButtonWidth), GUILayout.Height(PreviewButtonHeight)))
+                        {
+                            _previewSession.Step(-1);
+                            RequestPreviewEditorUpdate();
+                        }
+
+                        if (GUILayout.Button(_previewStepForwardButton, EditorStyles.miniButtonRight, GUILayout.Width(PreviewButtonWidth), GUILayout.Height(PreviewButtonHeight)))
+                        {
+                            _previewSession.Step(1);
+                            RequestPreviewEditorUpdate();
+                        }
+                    }
+
+                    GUILayout.Space(4f);
+                    EditorGUI.BeginChangeCheck();
+                    ChoreographyPreviewDriverMode mode = (ChoreographyPreviewDriverMode)EditorGUILayout.EnumPopup(
+                        _previewSession.DriverMode,
+                        GUILayout.Width(88f));
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        _previewSession.DriverMode = mode;
+                        _previewSession.SetTime(_previewSession.CurrentTime);
+                        RequestPreviewEditorUpdate();
+                    }
+
+                    if (_previewSession.DriverMode == ChoreographyPreviewDriverMode.Frames)
+                    {
+                        GUILayout.Label("FPS", EditorStyles.miniLabel, GUILayout.Width(24f));
+                        EditorGUI.BeginChangeCheck();
+                        double frameRate = Mathf.Max(1f, EditorGUILayout.FloatField((float)_previewSession.FrameRate, GUILayout.Width(48f)));
+                        if (EditorGUI.EndChangeCheck())
+                        {
+                            _previewSession.FrameRate = frameRate;
+                            _previewSession.SetTime(_previewSession.CurrentTime);
+                            RequestPreviewEditorUpdate();
+                        }
+                    }
+
+                    GUILayout.Label("Speed", EditorStyles.miniLabel, GUILayout.Width(38f));
+                    EditorGUI.BeginChangeCheck();
+                    float speed = EditorGUILayout.Slider(_previewSession.Speed, 0.05f, 3f, GUILayout.MinWidth(110f));
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        _previewSession.Speed = speed;
+                        RequestPreviewEditorUpdate();
+                    }
+
+                    GUILayout.Label(FormatPreviewReadout(duration), _previewReadoutStyle, GUILayout.Width(132f));
+                }
+
+                Rect timelineRect = EditorGUILayout.GetControlRect(false, PreviewTimelineHeight);
+                DrawPreviewTimeline(timelineRect, _sections, duration);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    EditorGUILayout.LabelField("Backend", GUILayout.Width(58f));
+                    EditorGUI.BeginChangeCheck();
+                    _previewFactoryIndex = EditorGUILayout.Popup(_previewFactoryIndex, _previewFactoryLabels, GUILayout.MinWidth(110f));
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        IChoreographyPreviewTargetFactory nextFactory = _previewFactories.Count > 0
+                            ? _previewFactories[Mathf.Clamp(_previewFactoryIndex, 0, _previewFactories.Count - 1)]
+                            : null;
+                        _previewSession.Bind(asset, nextFactory, _previewContext);
+                        RequestPreviewEditorUpdate();
+                    }
+
+                    EditorGUILayout.LabelField("Target", GUILayout.Width(44f));
+                    EditorGUI.BeginChangeCheck();
+                    _previewContext = EditorGUILayout.ObjectField(_previewContext, typeof(Object), true, GUILayout.MinWidth(120f));
+                    if (EditorGUI.EndChangeCheck())
+                    {
+                        RefreshPreviewFactories(asset);
+                        IChoreographyPreviewTargetFactory nextFactory = _previewFactories.Count > 0
+                            ? _previewFactories[Mathf.Clamp(_previewFactoryIndex, 0, _previewFactories.Count - 1)]
+                            : null;
+                        _previewSession.Bind(asset, nextFactory, _previewContext);
+                        RequestPreviewEditorUpdate();
+                    }
+
+                    GUILayout.Label(_previewSession.TargetName, EditorStyles.miniLabel, GUILayout.Width(84f));
+                }
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (_previewSession.DriverMode == ChoreographyPreviewDriverMode.Frames)
+                    {
+                        int maxFrame = Mathf.Max(0, _previewSession.GetMaxFrame());
+                        int frame = Mathf.Clamp(_previewSession.GetCurrentFrame(), 0, maxFrame);
+                        EditorGUI.BeginChangeCheck();
+                        frame = EditorGUILayout.IntField("Frame", frame);
+                        if (EditorGUI.EndChangeCheck())
+                        {
+                            _previewSession.SetTime(Mathf.Clamp(frame, 0, maxFrame) / Mathf.Max(1f, (float)_previewSession.FrameRate));
+                            RequestPreviewEditorUpdate();
+                        }
+                    }
+                    else
+                    {
+                        EditorGUI.BeginChangeCheck();
+                        float time = EditorGUILayout.FloatField("Time", (float)_previewSession.CurrentTime);
+                        if (EditorGUI.EndChangeCheck())
+                        {
+                            _previewSession.SetTime(Mathf.Clamp(time, 0f, (float)duration));
+                            RequestPreviewEditorUpdate();
+                        }
+                    }
+
+                    GUILayout.FlexibleSpace();
+                }
+            }
+        }
+
+        private void HandlePreviewKeyboardShortcuts(double duration)
+        {
+            Event evt = Event.current;
+            if (evt == null
+                || evt.type != EventType.KeyDown
+                || evt.keyCode != KeyCode.Space
+                || duration <= 0d
+                || _previewSession == null
+                || serializedObject.isEditingMultipleObjects
+                || EditorGUIUtility.editingTextField
+                || GUIUtility.hotControl != 0
+                || evt.alt
+                || evt.control
+                || evt.command)
+            {
+                return;
+            }
+
+            TogglePreviewPlayback();
+            evt.Use();
+        }
+
+        private void TogglePreviewPlayback()
+        {
+            if (_previewSession == null)
+            {
+                return;
+            }
+
+            if (_previewSession.IsPlaying)
+            {
+                _previewSession.Pause();
+            }
+            else
+            {
+                double duration = _previewSession.GetDuration();
+                if (duration > 0d && _previewSession.CurrentTime >= duration - 0.000001d)
+                {
+                    _previewSession.SetTime(0d);
+                }
+
+                _previewSession.Play(EditorApplication.timeSinceStartup);
+            }
+
+            RequestPreviewEditorUpdate();
+        }
+
+        private void RequestPreviewEditorUpdate()
+        {
+            EditorApplication.QueuePlayerLoopUpdate();
+            Repaint();
+        }
+
+        private void DrawPreviewTimeline(Rect rect, SerializedProperty sections, double duration)
+        {
+            Color background = EditorGUIUtility.isProSkin
+                ? new Color(0.105f, 0.105f, 0.105f, 1f)
+                : new Color(0.695f, 0.695f, 0.695f, 1f);
+            Color rulerBackground = EditorGUIUtility.isProSkin
+                ? new Color(0.070f, 0.070f, 0.070f, 1f)
+                : new Color(0.560f, 0.560f, 0.560f, 1f);
+            Color stripBackground = EditorGUIUtility.isProSkin
+                ? new Color(0.145f, 0.145f, 0.145f, 1f)
+                : new Color(0.760f, 0.760f, 0.760f, 1f);
+
+            EditorGUI.DrawRect(rect, background);
+            Rect rulerRect = new Rect(rect.x, rect.y, rect.width, PreviewRulerHeight);
+            Rect sectionRect = new Rect(rect.x, rulerRect.yMax, rect.width, PreviewSectionStripHeight);
+            EditorGUI.DrawRect(rulerRect, rulerBackground);
+            EditorGUI.DrawRect(sectionRect, stripBackground);
+
+            if (duration <= 0d)
+            {
+                _previewLabel.text = "No preview duration";
+                GUI.Label(new Rect(rect.x + 6f, rect.y + 17f, rect.width - 12f, 16f), _previewLabel, _previewReadoutStyle);
+                DrawPreviewOutline(rect, new Color(0f, 0f, 0f, 0.42f), 1f);
+                return;
+            }
+
+            HandlePreviewTimelineInput(rect, duration);
+            DrawPreviewSections(sectionRect, sections, duration);
+            DrawPreviewTicks(rect, duration);
+            DrawPreviewPlayhead(rect, duration);
+            DrawPreviewOutline(rect, new Color(0f, 0f, 0f, 0.42f), 1f);
+        }
+
+        private void HandlePreviewTimelineInput(Rect rect, double duration)
+        {
+            Event evt = Event.current;
+            if (evt.type == EventType.MouseDown && evt.button == 0 && rect.Contains(evt.mousePosition))
+            {
+                _draggingPreviewTimeline = true;
+                SetPreviewTimeFromMouse(rect, evt.mousePosition.x, duration);
+                evt.Use();
+            }
+            else if (evt.type == EventType.MouseDrag && _draggingPreviewTimeline)
+            {
+                SetPreviewTimeFromMouse(rect, evt.mousePosition.x, duration);
+                evt.Use();
+            }
+            else if (evt.type == EventType.MouseUp && _draggingPreviewTimeline)
+            {
+                _draggingPreviewTimeline = false;
+                evt.Use();
+            }
+        }
+
+        private void SetPreviewTimeFromMouse(Rect rect, float mouseX, double duration)
+        {
+            float normalized = Mathf.InverseLerp(rect.x, rect.xMax, Mathf.Clamp(mouseX, rect.x, rect.xMax));
+            double nextTime = duration * normalized;
+            if (_previewSession.DriverMode == ChoreographyPreviewDriverMode.Frames)
+            {
+                double frameRate = System.Math.Max(1d, _previewSession.FrameRate);
+                nextTime = System.Math.Round(nextTime * frameRate) / frameRate;
+            }
+
+            _previewSession.SetTime(nextTime);
+            RequestPreviewEditorUpdate();
+        }
+
+        private void DrawPreviewSections(Rect rect, SerializedProperty sections, double duration)
+        {
+            if (sections == null || sections.arraySize == 0)
+            {
+                return;
+            }
+
+            double cursor = 0d;
+            for (int i = 0; i < sections.arraySize; i++)
+            {
+                SerializedProperty section = sections.GetArrayElementAtIndex(i);
+                double sectionDuration = System.Math.Max(0d, GetFloat(section, "Duration"));
+                if (sectionDuration <= 0d)
+                {
+                    continue;
+                }
+
+                float x = PreviewTimeToX(rect, cursor, duration);
+                float width = PreviewTimeToX(rect, cursor + sectionDuration, duration) - x;
+                Rect bandRect = new Rect(x, rect.y + 3f, Mathf.Max(1f, width), rect.height - 6f);
+                Color bandColor = Color.Lerp(InspectorUi.MainAccent, InspectorUi.BlueAccent, i % 2 == 0 ? 0f : 0.45f);
+                bandColor.a = 0.36f;
+                EditorGUI.DrawRect(bandRect, bandColor);
+                EditorGUI.DrawRect(new Rect(x, rect.y, 1f, rect.height), new Color(1f, 1f, 1f, 0.18f));
+
+                if (width > 54f)
+                {
+                    string id = GetString(section, "Id");
+                    _previewLabel.text = string.IsNullOrEmpty(id) ? "Section " + i : id;
+                    GUI.Label(new Rect(bandRect.x + 6f, bandRect.y + 3f, bandRect.width - 12f, 16f), _previewLabel, _previewSectionLabelStyle);
+                }
+
+                cursor += sectionDuration;
+            }
+        }
+
+        private void DrawPreviewTicks(Rect rect, double duration)
+        {
+            if (_previewSession.DriverMode == ChoreographyPreviewDriverMode.Frames)
+            {
+                DrawPreviewFrameTicks(rect, duration);
+            }
+            else
+            {
+                DrawPreviewTimeTicks(rect, duration);
+            }
+        }
+
+        private void DrawPreviewTimeTicks(Rect rect, double duration)
+        {
+            float step = PickPreviewTimeStep(duration, rect.width);
+            float minorStep = Mathf.Max(0.001f, step / 5f);
+            int tickCount = Mathf.Min(4096, Mathf.CeilToInt((float)(duration / minorStep)) + 1);
+            int decimals = step < 1f ? 2 : (step < 10f ? 1 : 0);
+
+            for (int i = 0; i <= tickCount; i++)
+            {
+                double time = i * minorStep;
+                if (time > duration + 0.0001d)
+                {
+                    break;
+                }
+
+                bool major = i % 5 == 0;
+                DrawPreviewTick(rect, time, duration, major);
+                if (major)
+                {
+                    _previewLabel.text = FormatPreviewSeconds(time, decimals);
+                    GUI.Label(new Rect(PreviewTimeToX(rect, time, duration) + 4f, rect.y + 2f, 58f, 15f), _previewLabel, _previewRulerLabelStyle);
+                }
+            }
+        }
+
+        private void DrawPreviewFrameTicks(Rect rect, double duration)
+        {
+            double frameRate = System.Math.Max(1d, _previewSession.FrameRate);
+            int maxFrame = Mathf.Max(0, _previewSession.GetMaxFrame());
+            int majorStep = PickPreviewFrameStep(maxFrame, rect.width);
+            int minorStep = Mathf.Max(1, majorStep / 5);
+
+            for (int frame = 0; frame <= maxFrame; frame += minorStep)
+            {
+                double time = frame / frameRate;
+                bool major = frame % majorStep == 0;
+                DrawPreviewTick(rect, time, duration, major);
+                if (major)
+                {
+                    _previewLabel.text = frame.ToString(CultureInfo.InvariantCulture) + "f";
+                    GUI.Label(new Rect(PreviewTimeToX(rect, time, duration) + 4f, rect.y + 2f, 58f, 15f), _previewLabel, _previewRulerLabelStyle);
+                }
+            }
+        }
+
+        private void DrawPreviewTick(Rect rect, double time, double duration, bool major)
+        {
+            float x = PreviewTimeToX(rect, time, duration);
+            float height = major ? 14f : 7f;
+            Color tickColor = major ? new Color(1f, 1f, 1f, 0.32f) : new Color(1f, 1f, 1f, 0.14f);
+            Color gridColor = major ? new Color(1f, 1f, 1f, 0.085f) : new Color(1f, 1f, 1f, 0.040f);
+            EditorGUI.DrawRect(new Rect(x, rect.y + PreviewRulerHeight - height, 1f, height), tickColor);
+            EditorGUI.DrawRect(new Rect(x, rect.y + PreviewRulerHeight, 1f, rect.height - PreviewRulerHeight), gridColor);
+        }
+
+        private void DrawPreviewPlayhead(Rect rect, double duration)
+        {
+            float x = PreviewTimeToX(rect, _previewSession.CurrentTime, duration);
+            Color playheadColor = new Color(1f, 0.282f, 0.239f, 1f);
+            Color progressColor = InspectorUi.WarningAccent;
+            progressColor.a = 0.36f;
+
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 4f, Mathf.Max(0f, x - rect.x), 3f), progressColor);
+            EditorGUI.DrawRect(new Rect(x - 1f, rect.y, 2f, rect.height), playheadColor);
+
+            PreviewPlayheadTriangle[0] = new Vector3(x, rect.y + 1f, 0f);
+            PreviewPlayheadTriangle[1] = new Vector3(x - 5f, rect.y + 9f, 0f);
+            PreviewPlayheadTriangle[2] = new Vector3(x + 5f, rect.y + 9f, 0f);
+            Color oldHandlesColor = Handles.color;
+            Handles.color = playheadColor;
+            Handles.DrawAAConvexPolygon(PreviewPlayheadTriangle);
+            Handles.color = oldHandlesColor;
+
+            string readout = FormatPreviewCurrentValue();
+            float labelWidth = Mathf.Min(84f, Mathf.Max(50f, readout.Length * 7f));
+            float labelX = Mathf.Clamp(x + 6f, rect.x + 4f, rect.xMax - labelWidth - 4f);
+            Rect labelRect = new Rect(labelX, rect.y + 2f, labelWidth, 15f);
+            EditorGUI.DrawRect(labelRect, new Color(0f, 0f, 0f, 0.52f));
+            _previewLabel.text = readout;
+            GUI.Label(labelRect, _previewLabel, _previewReadoutStyle);
+        }
+
+        private float PreviewTimeToX(Rect rect, double time, double duration)
+        {
+            if (duration <= 0d)
+            {
+                return rect.x;
+            }
+
+            return rect.x + Mathf.Clamp01((float)(time / duration)) * rect.width;
+        }
+
+        private string FormatPreviewReadout(double duration)
+        {
+            if (_previewSession.DriverMode == ChoreographyPreviewDriverMode.Frames)
+            {
+                return "Frame " + _previewSession.GetCurrentFrame().ToString(CultureInfo.InvariantCulture)
+                    + " / " + _previewSession.GetMaxFrame().ToString(CultureInfo.InvariantCulture);
+            }
+
+            return FormatPreviewSeconds(_previewSession.CurrentTime, 3)
+                + " / " + FormatPreviewSeconds(duration, 3);
+        }
+
+        private string FormatPreviewCurrentValue()
+        {
+            if (_previewSession.DriverMode == ChoreographyPreviewDriverMode.Frames)
+            {
+                return _previewSession.GetCurrentFrame().ToString(CultureInfo.InvariantCulture) + "f";
+            }
+
+            return FormatPreviewSeconds(_previewSession.CurrentTime, 3);
+        }
+
+        private static string FormatPreviewSeconds(double value, int decimals)
+        {
+            string format = decimals <= 0 ? "0" : "0." + new string('0', decimals);
+            return value.ToString(format, CultureInfo.InvariantCulture) + "s";
+        }
+
+        private static float PickPreviewTimeStep(double duration, float width)
+        {
+            float target = (float)(duration / Mathf.Max(1f, width / 84f));
+            for (int i = 0; i < PreviewTimeSteps.Length; i++)
+            {
+                if (PreviewTimeSteps[i] >= target)
+                {
+                    return PreviewTimeSteps[i];
+                }
+            }
+
+            return PreviewTimeSteps[PreviewTimeSteps.Length - 1];
+        }
+
+        private static int PickPreviewFrameStep(int maxFrame, float width)
+        {
+            float target = maxFrame / Mathf.Max(1f, width / 84f);
+            for (int i = 0; i < PreviewFrameSteps.Length; i++)
+            {
+                if (PreviewFrameSteps[i] >= target)
+                {
+                    return PreviewFrameSteps[i];
+                }
+            }
+
+            return PreviewFrameSteps[PreviewFrameSteps.Length - 1];
+        }
+
+        private static void DrawPreviewOutline(Rect rect, Color color, float thickness)
+        {
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, thickness), color);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - thickness, rect.width, thickness), color);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, thickness, rect.height), color);
+            EditorGUI.DrawRect(new Rect(rect.xMax - thickness, rect.y, thickness, rect.height), color);
+        }
+
+        private static void EnsurePreviewUi()
+        {
+            if (_previewUiReady)
+            {
+                return;
+            }
+
+            _previewPlayButton = CreatePreviewIconContent(
+                "Play",
+                "Starts preview playback using the selected preview driver.",
+                "PlayButton",
+                "d_PlayButton",
+                "Animation.Play",
+                "d_Animation.Play");
+            _previewPauseButton = CreatePreviewIconContent(
+                "Pause",
+                "Pauses preview playback.",
+                "PauseButton",
+                "d_PauseButton",
+                "Animation.Pause",
+                "d_Animation.Pause");
+            _previewStopButton = CreatePreviewIconContent(
+                "Stop",
+                "Stops preview playback and rewinds to the beginning.",
+                "PreMatQuad",
+                "d_PreMatQuad",
+                "Grid.BoxTool",
+                "d_Grid.BoxTool",
+                "Animation.Stop",
+                "d_Animation.Stop",
+                "Profiler.StopRecord",
+                "d_Profiler.StopRecord");
+            _previewStepBackButton = CreatePreviewIconContent(
+                "Prev",
+                "Steps one preview frame backward.",
+                "Animation.PrevKey",
+                "d_Animation.PrevKey",
+                "Animation.FirstKey",
+                "d_Animation.FirstKey");
+            _previewStepForwardButton = CreatePreviewIconContent(
+                "Next",
+                "Steps one preview frame forward.",
+                "StepButton",
+                "d_StepButton",
+                "Animation.NextKey",
+                "d_Animation.NextKey");
+
+            _previewRulerLabelStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                alignment = TextAnchor.MiddleLeft,
+                clipping = TextClipping.Clip,
+                normal = { textColor = EditorGUIUtility.isProSkin ? new Color(0.82f, 0.82f, 0.82f, 1f) : new Color(0.20f, 0.20f, 0.20f, 1f) }
+            };
+            _previewSectionLabelStyle = new GUIStyle(EditorStyles.miniBoldLabel)
+            {
+                alignment = TextAnchor.MiddleLeft,
+                clipping = TextClipping.Clip,
+                normal = { textColor = Color.white }
+            };
+            _previewReadoutStyle = new GUIStyle(EditorStyles.miniBoldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                clipping = TextClipping.Clip,
+                normal = { textColor = EditorGUIUtility.isProSkin ? Color.white : new Color(0.14f, 0.14f, 0.14f, 1f) }
+            };
+
+            _previewUiReady = true;
+        }
+
+        private static GUIContent CreatePreviewIconContent(string fallbackText, string tooltip, params string[] iconNames)
+        {
+            for (int i = 0; i < iconNames.Length; i++)
+            {
+                GUIContent content = EditorGUIUtility.IconContent(iconNames[i]);
+                if (content != null && content.image != null)
+                {
+                    return new GUIContent(content.image, tooltip);
+                }
+            }
+
+            return new GUIContent(fallbackText, tooltip);
+        }
+
+        private void RefreshPreviewFactories(ChoreographyAsset asset)
+        {
+            ChoreographyPreviewRegistry.CollectFactories(asset, _previewContext, _previewFactories);
+            if (_previewFactories.Count == 0)
+            {
+                _previewFactoryLabels = new string[] { "None" };
+                _previewFactoryIndex = 0;
+                return;
+            }
+
+            if (_previewFactoryLabels.Length != _previewFactories.Count)
+            {
+                _previewFactoryLabels = new string[_previewFactories.Count];
+            }
+
+            for (int i = 0; i < _previewFactories.Count; i++)
+            {
+                _previewFactoryLabels[i] = _previewFactories[i].DisplayName;
+            }
+
+            if (_previewFactoryIndex < 0 || _previewFactoryIndex >= _previewFactories.Count)
+            {
+                _previewFactoryIndex = 0;
+            }
+        }
+
+        private void DrawWorkspace(AuthoringStats stats)
         {
             InspectorUi.DrawPanelHeader(
                 "Choreography Workspace",
@@ -188,7 +850,14 @@ namespace CycloneGames.Choreography.Editor
 
             using (InspectorUi.PanelScope())
             {
+                _timeline.SetPreviewTime(_previewSession != null ? _previewSession.CurrentTime : 0d, stats.TotalDuration > 0d);
                 _timeline.Draw(_sections);
+                double scrubTime;
+                if (_previewSession != null && _timeline.TryConsumePreviewTimeRequest(out scrubTime))
+                {
+                    _previewSession.SetTime(scrubTime);
+                    Repaint();
+                }
             }
         }
 
@@ -204,7 +873,7 @@ namespace CycloneGames.Choreography.Editor
             {
                 using (InspectorUi.PanelScope())
                 {
-                    EditorGUILayout.HelpBox("Select a section, track, clip, or event in the workspace.", MessageType.None);
+                    EditorGUILayout.HelpBox("Select a section, track, clip, event, or state in the workspace.", MessageType.None);
                 }
                 return;
             }
@@ -222,6 +891,9 @@ namespace CycloneGames.Choreography.Editor
                     break;
                 case ChoreographyTimelineElementKind.Event:
                     DrawEventDetails(selection.SectionIndex, selection.EventIndex);
+                    break;
+                case ChoreographyTimelineElementKind.EventState:
+                    DrawEventStateDetails(selection.SectionIndex, selection.EventStateIndex);
                     break;
             }
         }
@@ -241,6 +913,24 @@ namespace CycloneGames.Choreography.Editor
                 EditorGUILayout.PropertyField(section.FindPropertyRelative("Duration"));
                 EditorGUILayout.PropertyField(section.FindPropertyRelative("Interruptible"));
                 EditorGUILayout.PropertyField(section.FindPropertyRelative("PreferredMode"));
+                EditorGUILayout.PropertyField(section.FindPropertyRelative("ClockSource"));
+                SerializedProperty clockSource = section.FindPropertyRelative("ClockSource");
+                ChoreographySectionClockSource source = clockSource != null
+                    ? (ChoreographySectionClockSource)clockSource.enumValueIndex
+                    : ChoreographySectionClockSource.Inherit;
+                if (source == ChoreographySectionClockSource.FixedFrame)
+                {
+                    EditorGUILayout.PropertyField(section.FindPropertyRelative("FrameRate"));
+                }
+                if (source == ChoreographySectionClockSource.Audio
+                    || source == ChoreographySectionClockSource.Animation
+                    || source == ChoreographySectionClockSource.Timeline
+                    || source == ChoreographySectionClockSource.External)
+                {
+                    EditorGUILayout.PropertyField(section.FindPropertyRelative("ExternalEndPolicy"));
+                }
+                SerializedProperty states = section.FindPropertyRelative("EventStates");
+                EditorGUILayout.LabelField("Event States", states != null ? states.arraySize.ToString() : "0");
 
                 using (new EditorGUILayout.HorizontalScope())
                 {
@@ -251,6 +941,10 @@ namespace CycloneGames.Choreography.Editor
                     if (GUILayout.Button(AddEventButton, EditorStyles.miniButtonMid))
                     {
                         AddEvent(sectionIndex);
+                    }
+                    if (GUILayout.Button(AddEventStateButton, EditorStyles.miniButtonMid))
+                    {
+                        AddEventState(sectionIndex);
                     }
                     if (GUILayout.Button(DeleteButton, EditorStyles.miniButtonRight, GUILayout.Width(64f)))
                     {
@@ -336,16 +1030,23 @@ namespace CycloneGames.Choreography.Editor
             SerializedProperty source = resource.FindPropertyRelative("Source");
             SerializedProperty asset = resource.FindPropertyRelative("Asset");
             SerializedProperty address = resource.FindPropertyRelative("Address");
+            SerializedProperty backend = resource.FindPropertyRelative("Backend");
+            SerializedProperty bank = resource.FindPropertyRelative("Bank");
+            SerializedProperty cue = resource.FindPropertyRelative("Cue");
             SerializedProperty kind = resource.FindPropertyRelative("Kind");
             SerializedProperty tag = resource.FindPropertyRelative("Tag");
 
             ChoreographyResourceSource currentSource = GetResourceSource(source);
-            DrawResourceSourceButtons(source, asset, address, currentSource);
+            DrawResourceSourceButtons(source, asset, address, cue, currentSource);
 
             currentSource = GetResourceSource(source);
-            if (currentSource == ChoreographyResourceSource.AssetReference)
+            if (currentSource == ChoreographyResourceSource.AssetKey)
             {
-                DrawAssetRefResourceField(asset);
+                DrawAssetKeyResourceField(asset);
+            }
+            else if (currentSource == ChoreographyResourceSource.BackendCue)
+            {
+                DrawBackendCueResourceField(backend, bank, cue);
             }
             else
             {
@@ -360,33 +1061,42 @@ namespace CycloneGames.Choreography.Editor
             SerializedProperty source,
             SerializedProperty asset,
             SerializedProperty address,
+            SerializedProperty cue,
             ChoreographyResourceSource currentSource)
         {
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("Source", GUILayout.Width(72f));
 
             Color previous = GUI.backgroundColor;
-            GUI.backgroundColor = currentSource == ChoreographyResourceSource.AssetReference
+            GUI.backgroundColor = currentSource == ChoreographyResourceSource.AssetKey
                 ? InspectorUi.BlueAccent
                 : new Color(0.50f, 0.50f, 0.50f, 0.70f);
-            if (GUILayout.Button(ResourceAssetRefMode, EditorStyles.miniButtonLeft))
+            if (GUILayout.Button(ResourceAssetKeyMode, EditorStyles.miniButtonLeft))
             {
-                SwitchResourceSource(source, asset, address, ChoreographyResourceSource.AssetReference);
+                SwitchResourceSource(source, asset, address, cue, ChoreographyResourceSource.AssetKey);
             }
 
             GUI.backgroundColor = currentSource == ChoreographyResourceSource.Location
                 ? InspectorUi.WarningAccent
                 : new Color(0.50f, 0.50f, 0.50f, 0.70f);
-            if (GUILayout.Button(ResourceLocationMode, EditorStyles.miniButtonRight))
+            if (GUILayout.Button(ResourceLocationMode, EditorStyles.miniButtonMid))
             {
-                SwitchResourceSource(source, asset, address, ChoreographyResourceSource.Location);
+                SwitchResourceSource(source, asset, address, cue, ChoreographyResourceSource.Location);
+            }
+
+            GUI.backgroundColor = currentSource == ChoreographyResourceSource.BackendCue
+                ? InspectorUi.CyanAccent
+                : new Color(0.50f, 0.50f, 0.50f, 0.70f);
+            if (GUILayout.Button(ResourceBackendCueMode, EditorStyles.miniButtonRight))
+            {
+                SwitchResourceSource(source, asset, address, cue, ChoreographyResourceSource.BackendCue);
             }
 
             GUI.backgroundColor = previous;
             EditorGUILayout.EndHorizontal();
         }
 
-        private void DrawAssetRefResourceField(SerializedProperty asset)
+        private void DrawAssetKeyResourceField(SerializedProperty asset)
         {
             Rect row = EditorGUILayout.GetControlRect();
             Rect labelRect = new Rect(row.x, row.y, 72f, row.height);
@@ -394,20 +1104,33 @@ namespace CycloneGames.Choreography.Editor
             Rect pingRect = new Rect(row.xMax - 66f, row.y, 66f, row.height);
 
             EditorGUI.LabelField(labelRect, ResourceAssetLabel);
-            EditorGUI.PropertyField(fieldRect, asset, GUIContent.none);
+            Object currentAsset = ResolveAssetKeyObject(asset);
+            EditorGUI.BeginChangeCheck();
+            Object selectedAsset = EditorGUI.ObjectField(fieldRect, GUIContent.none, currentAsset, typeof(Object), false);
+            if (EditorGUI.EndChangeCheck())
+            {
+                if (selectedAsset == null)
+                {
+                    ClearAssetKey(asset);
+                }
+                else
+                {
+                    SetAssetKeyFromObject(asset, selectedAsset);
+                }
+            }
 
-            string location = GetAssetRefLocation(asset);
+            string location = GetAssetKeyLocation(asset);
             EditorGUI.BeginDisabledGroup(string.IsNullOrEmpty(location));
             if (GUI.Button(pingRect, "Ping", EditorStyles.miniButton))
             {
-                PingAssetRef(asset);
+                PingAssetKey(asset);
             }
             EditorGUI.EndDisabledGroup();
 
             if (string.IsNullOrEmpty(location))
             {
                 EditorGUILayout.HelpBox(
-                    "Drag an asset into the Asset field. AssetRef stores GUID and path, then runtime loading goes through CycloneGames.AssetManagement.",
+                    "Drag an asset into the Asset field. The asset key stores GUID and path; a resource provider decides how to load it.",
                     MessageType.Warning);
                 return;
             }
@@ -427,6 +1150,23 @@ namespace CycloneGames.Choreography.Editor
             {
                 EditorGUILayout.HelpBox(
                     "Location is empty. Leave it empty only for pure marker clips; otherwise enter the provider key used by your resource loader.",
+                    MessageType.Info);
+            }
+        }
+
+        private static void DrawBackendCueResourceField(
+            SerializedProperty backend,
+            SerializedProperty bank,
+            SerializedProperty cue)
+        {
+            EditorGUILayout.PropertyField(backend);
+            EditorGUILayout.PropertyField(bank);
+            EditorGUILayout.PropertyField(cue);
+
+            if (backend == null || string.IsNullOrEmpty(backend.stringValue) || cue == null || string.IsNullOrEmpty(cue.stringValue))
+            {
+                EditorGUILayout.HelpBox(
+                    "Backend Cue requires at least Backend and Cue. Use it for Wwise events, CycloneGames.Audio event names, audio bank events, or other non-Unity-object handles.",
                     MessageType.Info);
             }
         }
@@ -451,6 +1191,32 @@ namespace CycloneGames.Choreography.Editor
                 if (GUILayout.Button(DeleteButton, EditorStyles.miniButton, GUILayout.Width(64f)))
                 {
                     DeleteEvent(sectionIndex, eventIndex);
+                }
+            }
+        }
+
+        private void DrawEventStateDetails(int sectionIndex, int eventStateIndex)
+        {
+            SerializedProperty state = GetEventState(sectionIndex, eventStateIndex);
+            if (state == null)
+            {
+                _timeline.ClearSelection();
+                return;
+            }
+
+            using (InspectorUi.PanelScope())
+            {
+                EditorGUILayout.PropertyField(state.FindPropertyRelative("Id"));
+                EditorGUILayout.PropertyField(state.FindPropertyRelative("EventId"));
+                EditorGUILayout.PropertyField(state.FindPropertyRelative("StartTime"));
+                EditorGUILayout.PropertyField(state.FindPropertyRelative("EndTime"));
+                EditorGUILayout.PropertyField(state.FindPropertyRelative("Magnitude"));
+                EditorGUILayout.PropertyField(state.FindPropertyRelative("IntPayload"));
+                EditorGUILayout.PropertyField(state.FindPropertyRelative("StringPayload"));
+
+                if (GUILayout.Button(DeleteButton, EditorStyles.miniButton, GUILayout.Width(64f)))
+                {
+                    DeleteEventState(sectionIndex, eventStateIndex);
                 }
             }
         }
@@ -551,6 +1317,7 @@ namespace CycloneGames.Choreography.Editor
 
                 ValidateTracks(section, s, sectionId, sectionDuration, ref stats);
                 ValidateEvents(section, s, sectionId, sectionDuration, ref stats);
+                ValidateEventStates(section, s, sectionId, sectionDuration, ref stats);
             }
 
             return stats;
@@ -636,6 +1403,40 @@ namespace CycloneGames.Choreography.Editor
                 {
                     AddDiagnostic("Clip '" + DisplayId(clipId, c) + "' extends past section '" + DisplayId(sectionId, sectionIndex) + "'.");
                 }
+
+                ValidateClipResource(clip, c, clipId);
+            }
+        }
+
+        private void ValidateClipResource(SerializedProperty clip, int clipIndex, string clipId)
+        {
+            SerializedProperty resource = clip.FindPropertyRelative("Resource");
+            if (resource == null)
+            {
+                return;
+            }
+
+            ChoreographyResourceSource source = GetResourceSource(resource.FindPropertyRelative("Source"));
+            ChoreographyResourceKind kind = GetResourceKind(resource.FindPropertyRelative("Kind"));
+            string displayId = DisplayId(clipId, clipIndex);
+
+            if (source == ChoreographyResourceSource.BackendCue)
+            {
+                string backend = GetString(resource, "Backend");
+                string cue = GetString(resource, "Cue");
+                if (string.IsNullOrEmpty(backend) || string.IsNullOrEmpty(cue))
+                {
+                    AddDiagnostic("Clip '" + displayId + "' uses Backend Cue but is missing Backend or Cue.");
+                }
+
+                if (kind == ChoreographyResourceKind.AudioClip)
+                {
+                    AddDiagnostic("Clip '" + displayId + "' uses Backend Cue with AudioClip kind. Use AudioEvent, BackendCue, or Generic for event-style audio.");
+                }
+            }
+            else if (kind == ChoreographyResourceKind.BackendCue)
+            {
+                AddDiagnostic("Clip '" + displayId + "' has BackendCue kind but does not use the Backend Cue source mode.");
             }
         }
 
@@ -661,6 +1462,50 @@ namespace CycloneGames.Choreography.Editor
                 if (time < 0f || (sectionDuration > 0f && time > sectionDuration))
                 {
                     AddDiagnostic("Event '" + DisplayId(eventId, e) + "' is outside section '" + DisplayId(sectionId, sectionIndex) + "'.");
+                }
+            }
+        }
+
+        private void ValidateEventStates(SerializedProperty section, int sectionIndex, string sectionId, float sectionDuration, ref AuthoringStats stats)
+        {
+            SerializedProperty states = section.FindPropertyRelative("EventStates");
+            if (states == null)
+            {
+                return;
+            }
+
+            stats.EventStateCount += states.arraySize;
+            for (int i = 0; i < states.arraySize; i++)
+            {
+                SerializedProperty state = states.GetArrayElementAtIndex(i);
+                string id = GetString(state, "Id");
+                string eventId = GetString(state, "EventId");
+                float start = GetFloat(state, "StartTime");
+                float end = GetFloat(state, "EndTime");
+
+                if (string.IsNullOrEmpty(id))
+                {
+                    AddDiagnostic("Event state " + i + " in section '" + DisplayId(sectionId, sectionIndex) + "' has no id.");
+                }
+
+                if (string.IsNullOrEmpty(eventId))
+                {
+                    AddDiagnostic("Event state '" + DisplayId(id, i) + "' has no event id.");
+                }
+
+                if (end <= start)
+                {
+                    AddDiagnostic("Event state '" + DisplayId(id, i) + "' has a non-positive duration.");
+                }
+
+                if (start < 0f || (sectionDuration > 0f && start > sectionDuration))
+                {
+                    AddDiagnostic("Event state '" + DisplayId(id, i) + "' starts outside section '" + DisplayId(sectionId, sectionIndex) + "'.");
+                }
+
+                if (end < 0f || (sectionDuration > 0f && end > sectionDuration))
+                {
+                    AddDiagnostic("Event state '" + DisplayId(id, i) + "' ends outside section '" + DisplayId(sectionId, sectionIndex) + "'.");
                 }
             }
         }
@@ -727,6 +1572,27 @@ namespace CycloneGames.Choreography.Editor
             _timeline.SetSelection(ChoreographyTimelineSelection.Event(sectionIndex, index));
         }
 
+        private void AddEventState(int sectionIndex)
+        {
+            SerializedProperty section = GetSection(sectionIndex);
+            if (section == null)
+            {
+                return;
+            }
+
+            SerializedProperty states = section.FindPropertyRelative("EventStates");
+            if (states == null)
+            {
+                return;
+            }
+
+            int index = states.arraySize;
+            states.InsertArrayElementAtIndex(index);
+            SerializedProperty state = states.GetArrayElementAtIndex(index);
+            InitializeEventState(state, index);
+            _timeline.SetSelection(ChoreographyTimelineSelection.EventState(sectionIndex, index));
+        }
+
         private void DeleteSection(int sectionIndex)
         {
             _sections.DeleteArrayElementAtIndex(sectionIndex);
@@ -769,6 +1635,18 @@ namespace CycloneGames.Choreography.Editor
             _timeline.ClearSelection();
         }
 
+        private void DeleteEventState(int sectionIndex, int eventStateIndex)
+        {
+            SerializedProperty section = GetSection(sectionIndex);
+            if (section == null)
+            {
+                return;
+            }
+
+            section.FindPropertyRelative("EventStates").DeleteArrayElementAtIndex(eventStateIndex);
+            _timeline.ClearSelection();
+        }
+
         private void RebuildRuntimeModel()
         {
             serializedObject.ApplyModifiedProperties();
@@ -792,6 +1670,7 @@ namespace CycloneGames.Choreography.Editor
             SetEnumByName(section.FindPropertyRelative("PreferredMode"), nameof(ChoreographyPlaybackMode.Inherit));
             section.FindPropertyRelative("Tracks").ClearArray();
             section.FindPropertyRelative("Events").ClearArray();
+            section.FindPropertyRelative("EventStates").ClearArray();
         }
 
         private static void InitializeTrack(SerializedProperty track, int index)
@@ -805,11 +1684,14 @@ namespace CycloneGames.Choreography.Editor
         {
             clip.FindPropertyRelative("Id").stringValue = "Clip_" + index;
             SerializedProperty resource = clip.FindPropertyRelative("Resource");
-            resource.FindPropertyRelative("Source").enumValueIndex = (int)ChoreographyResourceSource.AssetReference;
+            resource.FindPropertyRelative("Source").enumValueIndex = (int)ChoreographyResourceSource.AssetKey;
             SerializedProperty asset = resource.FindPropertyRelative("Asset");
             asset.FindPropertyRelative("m_GUID").stringValue = string.Empty;
             asset.FindPropertyRelative("m_Location").stringValue = string.Empty;
             resource.FindPropertyRelative("Address").stringValue = string.Empty;
+            resource.FindPropertyRelative("Backend").stringValue = string.Empty;
+            resource.FindPropertyRelative("Bank").stringValue = string.Empty;
+            resource.FindPropertyRelative("Cue").stringValue = string.Empty;
             resource.FindPropertyRelative("Kind").enumValueIndex = (int)ChoreographyResourceKind.Generic;
             resource.FindPropertyRelative("Tag").stringValue = string.Empty;
             clip.FindPropertyRelative("StartTime").doubleValue = 0d;
@@ -826,6 +1708,17 @@ namespace CycloneGames.Choreography.Editor
             evt.FindPropertyRelative("Magnitude").floatValue = 0f;
             evt.FindPropertyRelative("IntPayload").intValue = 0;
             evt.FindPropertyRelative("StringPayload").stringValue = string.Empty;
+        }
+
+        private static void InitializeEventState(SerializedProperty state, int index)
+        {
+            state.FindPropertyRelative("Id").stringValue = "State_" + index;
+            state.FindPropertyRelative("EventId").stringValue = "StateEvent_" + index;
+            state.FindPropertyRelative("StartTime").doubleValue = 0d;
+            state.FindPropertyRelative("EndTime").doubleValue = 0.25d;
+            state.FindPropertyRelative("Magnitude").floatValue = 0f;
+            state.FindPropertyRelative("IntPayload").intValue = 0;
+            state.FindPropertyRelative("StringPayload").stringValue = string.Empty;
         }
 
         private SerializedProperty GetSection(int sectionIndex)
@@ -885,6 +1778,22 @@ namespace CycloneGames.Choreography.Editor
             return events.GetArrayElementAtIndex(eventIndex);
         }
 
+        private SerializedProperty GetEventState(int sectionIndex, int eventStateIndex)
+        {
+            SerializedProperty section = GetSection(sectionIndex);
+            if (section == null)
+            {
+                return null;
+            }
+
+            SerializedProperty states = section.FindPropertyRelative("EventStates");
+            if (states == null || eventStateIndex < 0 || eventStateIndex >= states.arraySize)
+            {
+                return null;
+            }
+            return states.GetArrayElementAtIndex(eventStateIndex);
+        }
+
         private static string DisplayId(string id, int fallbackIndex)
         {
             return string.IsNullOrEmpty(id) ? ("#" + fallbackIndex) : id;
@@ -897,15 +1806,33 @@ namespace CycloneGames.Choreography.Editor
                 return ChoreographyResourceSource.Location;
             }
 
-            return source.enumValueIndex == (int)ChoreographyResourceSource.AssetReference
-                ? ChoreographyResourceSource.AssetReference
+            if (source.enumValueIndex == (int)ChoreographyResourceSource.AssetKey)
+            {
+                return ChoreographyResourceSource.AssetKey;
+            }
+
+            return source.enumValueIndex == (int)ChoreographyResourceSource.BackendCue
+                ? ChoreographyResourceSource.BackendCue
                 : ChoreographyResourceSource.Location;
+        }
+
+        private static ChoreographyResourceKind GetResourceKind(SerializedProperty kind)
+        {
+            if (kind == null || kind.enumValueIndex < 0)
+            {
+                return ChoreographyResourceKind.Generic;
+            }
+
+            return kind.enumValueIndex <= (int)ChoreographyResourceKind.BackendCue
+                ? (ChoreographyResourceKind)kind.enumValueIndex
+                : ChoreographyResourceKind.Generic;
         }
 
         private static void SwitchResourceSource(
             SerializedProperty source,
             SerializedProperty asset,
             SerializedProperty address,
+            SerializedProperty cue,
             ChoreographyResourceSource targetSource)
         {
             if (source == null)
@@ -919,23 +1846,34 @@ namespace CycloneGames.Choreography.Editor
                 return;
             }
 
-            if (targetSource == ChoreographyResourceSource.AssetReference)
+            if (targetSource == ChoreographyResourceSource.AssetKey)
             {
-                TrySetAssetRefFromLocation(asset, address != null ? address.stringValue : string.Empty);
+                TrySetAssetKeyFromLocation(asset, address != null ? address.stringValue : string.Empty);
             }
-            else
+            else if (targetSource == ChoreographyResourceSource.Location)
             {
-                string location = GetAssetRefLocation(asset);
+                string location = GetAssetKeyLocation(asset);
                 if (!string.IsNullOrEmpty(location) && address != null)
                 {
                     address.stringValue = location;
                 }
+                else if (cue != null && !string.IsNullOrEmpty(cue.stringValue) && address != null)
+                {
+                    address.stringValue = cue.stringValue;
+                }
+            }
+            else if (targetSource == ChoreographyResourceSource.BackendCue && cue != null && string.IsNullOrEmpty(cue.stringValue))
+            {
+                string location = GetAssetKeyLocation(asset);
+                cue.stringValue = !string.IsNullOrEmpty(location)
+                    ? location
+                    : address != null ? address.stringValue : string.Empty;
             }
 
             source.enumValueIndex = (int)targetSource;
         }
 
-        private static bool TrySetAssetRefFromLocation(SerializedProperty asset, string location)
+        private static bool TrySetAssetKeyFromLocation(SerializedProperty asset, string location)
         {
             if (asset == null || string.IsNullOrEmpty(location))
             {
@@ -948,19 +1886,55 @@ namespace CycloneGames.Choreography.Editor
                 return false;
             }
 
+            SetAssetKeyFromObject(asset, resolved);
+            return true;
+        }
+
+        private static void SetAssetKeyFromObject(SerializedProperty asset, Object value)
+        {
+            if (asset == null || value == null)
+            {
+                return;
+            }
+
+            string path = AssetDatabase.GetAssetPath(value);
+            if (string.IsNullOrEmpty(path))
+            {
+                return;
+            }
+
             SerializedProperty guid = asset.FindPropertyRelative("m_GUID");
             SerializedProperty assetLocation = asset.FindPropertyRelative("m_Location");
             if (guid == null || assetLocation == null)
             {
-                return false;
+                return;
             }
 
-            guid.stringValue = AssetDatabase.AssetPathToGUID(location);
-            assetLocation.stringValue = location;
-            return true;
+            guid.stringValue = AssetDatabase.AssetPathToGUID(path);
+            assetLocation.stringValue = path;
         }
 
-        private static string GetAssetRefLocation(SerializedProperty asset)
+        private static void ClearAssetKey(SerializedProperty asset)
+        {
+            if (asset == null)
+            {
+                return;
+            }
+
+            SerializedProperty guid = asset.FindPropertyRelative("m_GUID");
+            SerializedProperty assetLocation = asset.FindPropertyRelative("m_Location");
+            if (guid != null)
+            {
+                guid.stringValue = string.Empty;
+            }
+
+            if (assetLocation != null)
+            {
+                assetLocation.stringValue = string.Empty;
+            }
+        }
+
+        private static string GetAssetKeyLocation(SerializedProperty asset)
         {
             if (asset == null)
             {
@@ -971,7 +1945,28 @@ namespace CycloneGames.Choreography.Editor
             return location != null ? location.stringValue : string.Empty;
         }
 
-        private static void PingAssetRef(SerializedProperty asset)
+        private static Object ResolveAssetKeyObject(SerializedProperty asset)
+        {
+            if (asset == null)
+            {
+                return null;
+            }
+
+            SerializedProperty guid = asset.FindPropertyRelative("m_GUID");
+            SerializedProperty location = asset.FindPropertyRelative("m_Location");
+            string path = guid != null && !string.IsNullOrEmpty(guid.stringValue)
+                ? AssetDatabase.GUIDToAssetPath(guid.stringValue)
+                : string.Empty;
+
+            if (string.IsNullOrEmpty(path) && location != null)
+            {
+                path = location.stringValue;
+            }
+
+            return string.IsNullOrEmpty(path) ? null : AssetDatabase.LoadAssetAtPath<Object>(path);
+        }
+
+        private static void PingAssetKey(SerializedProperty asset)
         {
             if (asset == null)
             {
@@ -1054,6 +2049,7 @@ namespace CycloneGames.Choreography.Editor
             public int TrackCount;
             public int ClipCount;
             public int EventCount;
+            public int EventStateCount;
             public double TotalDuration;
         }
 
@@ -1076,8 +2072,10 @@ namespace CycloneGames.Choreography.Editor
 
             public static Color MainAccent => new Color(0.514f, 0.376f, 0.922f, 1f);
             public static Color BlueAccent => new Color(0.231f, 0.553f, 0.851f, 1f);
+            public static Color CyanAccent => new Color(0.188f, 0.737f, 0.788f, 1f);
             public static Color GreenAccent => new Color(0.188f, 0.690f, 0.741f, 1f);
             public static Color WarningAccent => new Color(0.925f, 0.576f, 0.251f, 1f);
+            public static Color RedAccent => new Color(0.925f, 0.251f, 0.478f, 1f);
             public static Color NeutralAccent => new Color(0.560f, 0.560f, 0.560f, 1f);
 
             public static void DrawHeroHeader(string title, string subtitle, Color accent)

@@ -1,5 +1,3 @@
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -13,28 +11,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private bool _useRandomRepeatCount = false;
         [SerializeField] private int _repeatCount = 1;
         [SerializeField] private Vector2 _randomRepeatCountRange = new Vector2(1, 3);
-        private int _currentRepeatCount = 0;
-
-        protected override void OnStart(IBlackBoard blackBoard)
-        {
-            if (_repeatForever) return;
-            _repeatCount = _useRandomRepeatCount ? Random.Range((int)_randomRepeatCountRange.x, (int)_randomRepeatCountRange.y) : _repeatCount;
-            _currentRepeatCount = 0;
-        }
-
-        protected override BTState OnRun(IBlackBoard blackBoard)
-        {
-            var state = Child.Run(blackBoard);
-            if (_repeatForever)
-            {
-                return BTState.RUNNING;
-            }
-            if (state is BTState.SUCCESS or BTState.FAILURE)
-            {
-                _currentRepeatCount++;
-            }
-            return _currentRepeatCount >= _repeatCount ? BTState.SUCCESS : BTState.RUNNING;
-        }
 
         protected override void CheckIntegrity()
         {
@@ -44,7 +20,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
                 _useRandomRepeatCount = false;
             }
 
-            // Validate random range
             if (_useRandomRepeatCount && _randomRepeatCountRange.x > _randomRepeatCountRange.y)
             {
                 float temp = _randomRepeatCountRange.x;
@@ -62,6 +37,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             clone._randomRepeatCountRange = _randomRepeatCountRange;
             return clone;
         }
+
         public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
         {
             var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeRepeatNode();
@@ -71,11 +47,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             node.UseRandomRepeatCount = _useRandomRepeatCount;
             node.RandomRangeMin = (int)_randomRepeatCountRange.x;
             node.RandomRangeMax = (int)_randomRepeatCountRange.y;
-
-            if (Child != null)
-            {
-                node.Child = Child.CreateRuntimeNode();
-            }
+            SetRuntimeChild(node);
             return node;
         }
     }

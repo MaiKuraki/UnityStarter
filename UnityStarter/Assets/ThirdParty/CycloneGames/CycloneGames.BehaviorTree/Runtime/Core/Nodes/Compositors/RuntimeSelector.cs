@@ -17,6 +17,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
             var children = Children;
+            if (children == null || children.Length == 0)
+            {
+                return RuntimeState.Failure;
+            }
 
             // LowerPriority / Both: check if a higher-priority sibling should take over
             if (_current > 0 && (AbortType == RuntimeAbortType.LowerPriority || AbortType == RuntimeAbortType.Both))

@@ -1,4 +1,6 @@
 using System.Collections.Generic;
+using CycloneGames.BehaviorTree.Runtime.Compilation;
+using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
@@ -83,85 +85,31 @@ namespace CycloneGames.BehaviorTree.Runtime
         /// This method is 0GC at runtime after the initial compilation.
         /// </summary>
         /// <returns>A new RuntimeBehaviorTree instance</returns>
-        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile()
+        public RuntimeBehaviorTree Compile()
         {
-            return Compile(new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext());
+            return Compile(new RuntimeBTContext());
         }
 
         /// <summary>
         /// Compiles using a strongly-typed runtime context (owner + services).
         /// </summary>
-        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile(CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext context)
+        public RuntimeBehaviorTree Compile(RuntimeBTContext context)
         {
-            if (Root == null)
+            try
             {
-                Debug.LogError("[BehaviorTree] Cannot compile: Root is null.");
+                return BehaviorTreeCompiler.Compile(this, context);
+            }
+            catch (BehaviorTreeCompileException exception)
+            {
+                Debug.LogError("[BehaviorTree] " + exception.Message, this);
                 return null;
             }
-
-            var validationErrors = new List<string>(4);
-            ValidateRuntimeSupport(Root, "Root", validationErrors);
-            if (validationErrors.Count > 0)
-            {
-                Debug.LogError("[BehaviorTree] Runtime compile failed:\n" + string.Join("\n", validationErrors));
-                return null;
-            }
-
-            context ??= new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext();
-
-            // Create optimized runtime blackboard
-            var blackboard = new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBlackboard
-            {
-                Context = context
-            };
-
-            // Generate runtime node hierarchy
-            var runtimeRoot = Root.CreateRuntimeNode();
-            if (runtimeRoot == null)
-            {
-                // Fallback or error if root doesn't support runtime creation yet
-                Debug.LogError($"[BehaviorTree] Root node {Root.GetType().Name} returned null for runtime creation. Ensure CreateRuntimeNode is implemented.");
-                return null;
-            }
-
-            runtimeRoot.OnAwake();
-
-            // Create runtime tree container
-            return new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree(runtimeRoot, blackboard, context);
         }
 
         // Convenience overload: compile with a GameObject owner and no service resolver.
-        public CycloneGames.BehaviorTree.Runtime.Core.RuntimeBehaviorTree Compile(UnityEngine.GameObject owner)
+        public RuntimeBehaviorTree Compile(UnityEngine.GameObject owner)
         {
-            return Compile(new CycloneGames.BehaviorTree.Runtime.Core.RuntimeBTContext(owner));
-        }
-
-        private void ValidateRuntimeSupport(BTNode node, string path, List<string> errors)
-        {
-            if (node == null)
-            {
-                errors.Add($"- {path}: null node reference.");
-                return;
-            }
-
-            var createRuntimeMethod = node.GetType().GetMethod(nameof(BTNode.CreateRuntimeNode));
-            if (createRuntimeMethod == null || createRuntimeMethod.DeclaringType == typeof(BTNode))
-            {
-                errors.Add($"- {path}: {node.GetType().Name} has no runtime implementation.");
-            }
-
-            // Snapshot children because GetChildren() returns a shared cache list.
-            var children = GetChildren(node);
-            var childSnapshot = new List<BTNode>(children.Count);
-            for (int i = 0; i < children.Count; i++)
-            {
-                childSnapshot.Add(children[i]);
-            }
-
-            for (int i = 0; i < childSnapshot.Count; i++)
-            {
-                ValidateRuntimeSupport(childSnapshot[i], $"{path}/{childSnapshot[i]?.GetType().Name ?? "NullChild"}[{i}]", errors);
-            }
+            return Compile(new RuntimeBTContext(owner));
         }
 
         #region Editor Methods
