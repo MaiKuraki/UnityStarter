@@ -1,6 +1,6 @@
 # CycloneGames.BehaviorTree
 
-A production-grade, zero-GC behavior tree framework for Unity — featuring dual-layer architecture, triple-tier scaling (1 to 10,000+ agents), multiplayer networking, Burst/DOD mass simulation, and a professional GraphView editor with animated runtime visualization.
+A production-grade, zero-GC behavior tree framework for Unity — featuring dual-layer authoring/runtime architecture, code-first runtime building, four-tier scaling (1 to 10,000+ agents), multiplayer networking, optional Burst/DOD mass simulation, and a professional GraphView editor with animated runtime visualization.
 
 <p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
 
@@ -12,6 +12,7 @@ A production-grade, zero-GC behavior tree framework for Unity — featuring dual
 - [Architecture](#architecture)
 - [Installation](#installation)
 - [Quick Start — Minimal Demo](#quick-start--minimal-demo)
+- [Code-First Runtime Trees](#code-first-runtime-trees)
 - [Core Concepts](#core-concepts)
   - [BTRunnerComponent](#btrunnercomponent)
   - [BlackBoard](#blackboard)
@@ -39,8 +40,8 @@ A production-grade, zero-GC behavior tree framework for Unity — featuring dual
 
 | Category         | Features                                                                                                                    |
 | ---------------- | --------------------------------------------------------------------------------------------------------------------------- |
-| **Architecture** | Dual-layer (SO authoring → Pure C# runtime), compile-once 0GC execution                                                     |
-| **Node Library** | 30+ built-in nodes: Sequence, Selector, Parallel, Reactive, Utility AI, Service, SubTree, Switch, Probability, etc.         |
+| **Architecture** | Dual-layer (SO authoring → Pure C# runtime), plus `RuntimeBehaviorTreeBuilder` for code-first trees                         |
+| **Node Library** | 35+ built-in nodes: Sequence, Selector, SelectorRandom, Parallel, Reactive, Utility AI, Service, SubTree, RandomChance, etc. |
 | **Scaling**      | Self Tick → BTTickManager (100s) → BTPriorityTickManager with LOD (1,000s) → Burst DOD Jobs (10,000+)                       |
 | **Networking**   | Server-authoritative snapshots, client-predicted hash comparison, delta blackboard sync                                     |
 | **BlackBoard**   | 5 typed dictionaries (int/float/bool/Vector3/object), int-key hashing, parent chain, observer system, stamps, thread safety |
@@ -81,10 +82,10 @@ flowchart TB
 | -------------------- | ------------------------------------------- | ------------------------------------ |
 | **Purpose**          | Authoring, serialization, editor UI         | Game execution                       |
 | **GC**               | Acceptable (editor only)                    | **Zero**                             |
-| **Unity Dependency** | Required (ScriptableObject, SerializeField) | Minimal (Animator.StringToHash only) |
+| **Unity Dependency** | Required (ScriptableObject, SerializeField) | Small bridge (`Animator.StringToHash`, `Vector3`, Time/Random fallback) |
 | **When**             | Design time + Compile() call                | Every frame                          |
 
-### Triple-Tier Scaling
+### Four-Tier Scaling
 
 ```mermaid
 flowchart LR
@@ -96,15 +97,20 @@ flowchart LR
         A2["100–1,000 agents<br>BTTickManager<br>Round-robin + budget"]
     end
 
-    subgraph Tier3["Tier 3: Burst DOD"]
-        A3["10,000+ agents<br>BTTickJob<br>IJobParallelFor<br>NativeArray SoA"]
+    subgraph Tier3["Tier 3: Priority Managed"]
+        A3["1,000+ agents<br>BTPriorityTickManager<br>LOD + priority buckets"]
     end
 
-    Tier1 --> Tier2 --> Tier3
+    subgraph Tier4["Tier 4: Burst DOD"]
+        A4["10,000+ agents<br>BTTickJob<br>IJobParallelFor<br>NativeArray SoA"]
+    end
+
+    Tier1 --> Tier2 --> Tier3 --> Tier4
 
     style Tier1 fill:#2a3a2a,stroke:#4a4
     style Tier2 fill:#2a2a3a,stroke:#66a
-    style Tier3 fill:#3a2a2a,stroke:#a44
+    style Tier3 fill:#2a332f,stroke:#4aa
+    style Tier4 fill:#3a2a2a,stroke:#a44
 ```
 
 ---
@@ -123,6 +129,15 @@ flowchart LR
 | ------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
 | [Burst](https://docs.unity3d.com/Packages/com.unity.burst@latest) + [Collections](https://docs.unity3d.com/Packages/com.unity.collections@latest) | DOD mass simulation (10,000+ agents) |
 | [Mathematics](https://docs.unity3d.com/Packages/com.unity.mathematics@latest)                                                                     | Burst job tick scheduling            |
+| `com.cyclone-games.deterministic-math`                                                                                                            | Optional fixed-point blackboard integration |
+
+`CycloneGames.BehaviorTree.Runtime.DOD` is guarded by asmdef `versionDefines` and `defineConstraints`. It compiles only when Burst, Collections, and Mathematics are present. The core runtime package does not require UniTask.
+
+`CycloneGames.BehaviorTree.Integrations.DeterministicMath` is also guarded by asmdef `versionDefines` and `defineConstraints`:
+
+- UPM usage: installing `com.cyclone-games.deterministic-math` automatically emits `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`.
+- Local `Assets/ThirdParty` usage: Unity cannot auto-detect sibling package manifests, so define `CYCLONEGAMES_HAS_DETERMINISTIC_MATH` in a visible project configuration such as `Assets/csc.rsp`.
+- Missing dependency: when the symbol is absent, Unity skips the integration assembly and BehaviorTree core still compiles.
 
 ### Setup
 
@@ -188,6 +203,70 @@ With the `PatrolTree` asset selected and the Behavior Tree Editor open:
 - **Red border** = node Failed
 - **Flowing dots** along edges = data flow direction
 - **Progress bar** on WaitNode = countdown timer
+
+---
+
+## Code-First Runtime Trees
+
+Use `RuntimeBehaviorTreeBuilder` when a tree should be generated by code, created in tests, assembled from data, or hosted outside a serialized `BehaviorTree` asset. The builder is a runtime factory: it creates a `RuntimeRootNode`, seals composite children, wires the `RuntimeBlackboard`, and returns a ready-to-tick `RuntimeBehaviorTree`.
+
+```csharp
+using CycloneGames.BehaviorTree.Runtime.Core;
+
+static readonly int HasTargetKey = UnityEngine.Animator.StringToHash("HasTarget");
+static readonly int AttackCountKey = UnityEngine.Animator.StringToHash("AttackCount");
+
+RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder(ownerGameObject)
+    .WithServiceResolver(new RuntimeBTContext.ServiceProviderResolver(serviceProvider))
+    .WithTickInterval(1)
+    .Selector()
+        .Sequence()
+            .Condition(bb => bb.GetBool(HasTargetKey), "HasTarget")
+            .CoolDown(0.75f)
+                .Action(bb =>
+                {
+                    bb.SetInt(AttackCountKey, bb.GetInt(AttackCountKey) + 1);
+                    return RuntimeState.Success;
+                }, "Attack")
+            .End()
+        .End()
+        .Action(bb => RuntimeState.Success, "Idle")
+    .End()
+    .Build();
+
+tree.Play();
+tree.Tick();
+```
+
+For reusable gameplay rules, prefer command and strategy objects over large inline lambdas:
+
+```csharp
+public sealed class AttackCommand : IRuntimeBTCommand
+{
+    public RuntimeState Execute(RuntimeBlackboard blackboard)
+    {
+        // Call a domain service, update blackboard state, or enqueue an animation request.
+        return RuntimeState.Success;
+    }
+}
+
+public sealed class HasTargetCondition : IRuntimeBTConditionStrategy
+{
+    public bool Evaluate(RuntimeBlackboard blackboard)
+    {
+        return blackboard.GetBool(HasTargetKey);
+    }
+}
+
+RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
+    .Sequence()
+        .Condition(new HasTargetCondition(), "HasTarget")
+        .Command(new AttackCommand(), "Attack")
+    .End()
+    .Build();
+```
+
+The code-first path shares the same runtime nodes as compiled assets. Use it for tests, procedural assembly, server/headless flows, and data-driven factories. Use `BehaviorTree` assets when designers need GraphView authoring, serialized references, and visual runtime inspection.
 
 ---
 
@@ -269,6 +348,55 @@ static readonly int k_Health = Animator.StringToHash("Health");
 blackboard.SetInt(k_Health, 100);
 int health = blackboard.GetInt(k_Health);
 ```
+
+**Schema-first blackboards** (recommended for production):
+
+```csharp
+RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+    .AddInt("Health", 100, RuntimeBlackboardSyncFlags.Networked)
+    .AddBool("HasTarget", RuntimeBlackboardSyncFlags.Delta)
+    .AddVector3("SpawnPoint", RuntimeBlackboardSyncFlags.Snapshot)
+    .AddObject("Target") // object keys are always local-only
+    .Build();
+
+var tree = new RuntimeBehaviorTreeBuilder()
+    .WithBlackboardSchema(schema)
+    .Action(blackboard =>
+    {
+        int healthKey = RuntimeBlackboard.DefaultStringHashFunc("Health");
+        blackboard.SetInt(healthKey, blackboard.GetInt(healthKey) - 1);
+        return RuntimeState.Success;
+    })
+    .Build();
+
+BTBlackboardDelta delta = BTBlackboardDelta.CreateForSchema(schema);
+delta.Attach(tree.Blackboard);
+```
+
+When a schema is bound, unknown keys and wrong value types fail fast. `Snapshot` keys are included in full snapshots, `Delta` keys are tracked by schema-created delta trackers, and local-only keys are excluded from network serialization and hash checks.
+
+For deterministic network data, the core blackboard exposes raw `long`, `RuntimeBlackboardLong2`, and `RuntimeBlackboardLong3` slots. These slots are serialized, delta-synced, and hashed without boxing, and are intended for fixed-point, tick-quantized, or externally deterministic values.
+
+When `CycloneGames.DeterministicMath` is present, use the optional `CycloneGames.BehaviorTree.Integrations.DeterministicMath` assembly:
+
+```csharp
+using CycloneGames.BehaviorTree.Integrations.DeterministicMath;
+using CycloneGames.DeterministicMath;
+
+RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+    .AddFPInt64("Cooldown", FPInt64.FromString("1.25"))
+    .AddFPVector3("Position", RuntimeBlackboardSyncFlags.Networked)
+    .Build();
+
+blackboard.SetFPVector3("Position", new FPVector3(
+    FPInt64.FromInt(10),
+    FPInt64.Zero,
+    FPInt64.FromString("3.5")));
+```
+
+The integration stores `FPInt64`, `FPVector2`, and `FPVector3` as raw long slots, so BehaviorTree core remains independent of the deterministic math package while network payloads remain bit-stable.
+
+If the define is not active, this namespace and assembly are intentionally absent. Use the raw `SetLong`, `SetLong2`, and `SetLong3` APIs from core when you need deterministic payloads without the fixed-point package.
 
 **Observer system** (push-based change notifications):
 
@@ -441,6 +569,12 @@ flowchart TB
 
 **Use case:** "Try attack OR flee OR idle" — fallback chain.
 
+#### SelectorRandomNode
+
+Randomizes child order before trying the selector fallback chain. It is useful when several equivalent behaviors should be distributed without building a separate probability table. A seed can be supplied for deterministic replay or networked flows.
+
+**Use case:** "Try one of several patrol points, but fall back to the next available point if the first choice fails."
+
 #### SequenceWithMemoryNode
 
 Like Sequencer, but **remembers** which child was last Running and resumes from there instead of restarting from child 0.
@@ -569,6 +703,7 @@ Condition nodes **evaluate** and return `Success` or `Failure` (never `Running`)
 | ---------------------- | ------------------------------------------------------------ |
 | **OnOffNode**          | Returns a fixed `Success` or `Failure` (configurable toggle) |
 | **MessageReceiveNode** | Checks if a blackboard key equals a specific string          |
+| **RandomChanceNode**   | Returns `Success` with `chance / outOf` probability          |
 
 ---
 
@@ -580,30 +715,26 @@ Condition nodes **evaluate** and return `Success` or `Failure` (never `Running`)
 using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
+using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using UnityEngine;
 
-// === SO Layer (Editor) ===
+// === ScriptableObject authoring layer ===
 [BTInfo("Custom/Movement", "Moves agent toward target position")]
 public class MoveToTargetNode : ActionNode
 {
     [SerializeField] private string _targetKey = "TargetPosition";
     [SerializeField] private float _arrivalRadius = 0.5f;
 
-    protected override BTState OnRun(IBlackBoard bb)
-    {
-        return BTState.SUCCESS; // SO-layer fallback — compile creates RuntimeNode
-    }
-
     public override RuntimeNode CreateRuntimeNode()
     {
         return new RuntimeMoveToTarget(
             Animator.StringToHash(_targetKey),
             _arrivalRadius
-        ) { GUID = this.GUID };
+        ) { GUID = GUID };
     }
 }
 
-// === Runtime Layer (0GC execution) ===
+// === Pure C# runtime execution layer ===
 public class RuntimeMoveToTarget : RuntimeStatefulActionNode
 {
     private readonly int _targetKey;
@@ -615,9 +746,9 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
         _arrivalRadiusSqr = arrivalRadius * arrivalRadius;
     }
 
-    protected override void OnActionStart(RuntimeBlackboard bb)
+    protected override RuntimeState OnActionStart(RuntimeBlackboard bb)
     {
-        // One-time setup when node starts running
+        return RuntimeState.Running;
     }
 
     protected override RuntimeState OnActionRunning(RuntimeBlackboard bb)
@@ -639,7 +770,7 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
 
     protected override void OnActionHalted(RuntimeBlackboard bb)
     {
-        // Cleanup when node is aborted
+        // Cleanup when node is aborted.
     }
 }
 ```
@@ -647,24 +778,47 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
 ### Custom Condition Node
 
 ```csharp
+using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Conditions;
+using CycloneGames.BehaviorTree.Runtime.Nodes;
+using UnityEngine;
+
 [BTInfo("Custom/Checks", "Is health above threshold")]
 public class CheckHealthNode : ConditionNode
 {
     [SerializeField] private string _healthKey = "Health";
     [SerializeField] private int _threshold = 30;
 
-    public override BTState Evaluate(IBlackBoard bb)
-    {
-        return bb.GetInt(_healthKey) >= _threshold
-            ? BTState.SUCCESS
-            : BTState.FAILURE;
-    }
-
     public override RuntimeNode CreateRuntimeNode()
     {
         return new RuntimeCheckHealth(
             Animator.StringToHash(_healthKey), _threshold
-        ) { GUID = this.GUID };
+        ) { GUID = GUID };
+    }
+}
+
+public sealed class RuntimeCheckHealth : RuntimeNode
+{
+    private readonly int _healthKey;
+    private readonly int _threshold;
+
+    public RuntimeCheckHealth(int healthKey, int threshold)
+    {
+        _healthKey = healthKey;
+        _threshold = threshold;
+    }
+
+    public override bool CanEvaluate => true;
+
+    public override bool Evaluate(RuntimeBlackboard blackboard)
+    {
+        return blackboard.GetInt(_healthKey) >= _threshold;
+    }
+
+    protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
+    {
+        return Evaluate(blackboard) ? RuntimeState.Success : RuntimeState.Failure;
     }
 }
 ```
@@ -961,6 +1115,8 @@ flatTree.Dispose();
 
 The system provides three synchronization patterns for multiplayer.
 
+Incoming snapshot and delta reads are bounded. `BTNetworkSync.DeserializeSnapshot`, `RuntimeBlackboard.ReadFrom`, `BTBlackboardDelta.Apply`, and `BehaviorTreeNetworkSyncBridge.ApplyPayload` reject oversized or malformed payloads before mutating runtime state. Blackboard `object` values are intentionally local-only and are not serialized, hashed, or replicated.
+
 ### Architecture
 
 ```mermaid
@@ -1026,7 +1182,7 @@ if (BTNetworkSync.CheckDesync(clientTree, serverHash))
 
 ### Pattern 3: Delta Blackboard Sync
 
-Only changed keys are transmitted. Uses a pooled `MemoryStream` for zero steady-state allocation.
+Only changed keys are transmitted. Bind the tracker to the source blackboard with `Attach` so dirty keys are captured through blackboard observers, then use `TryFlush` in hot paths. The returned patch is an `ArraySegment<byte>` over the tracker-owned pooled buffer and stays valid until the next flush. Writing the same value does not advance the blackboard stamp and does not emit a patch.
 
 ```csharp
 // Setup: register keys to track (once)
@@ -1034,11 +1190,13 @@ var delta = new BTBlackboardDelta();
 delta.TrackKey("Health");
 delta.TrackKey("Position");
 delta.TrackKey("AlertLevel");
+delta.Attach(serverBlackboard);
 
 // Server: flush changes since last sync
-byte[] patch = delta.Flush(serverBlackboard);
-if (patch != null && patch.Length > 0)
+if (delta.TryFlush(serverBlackboard, out ArraySegment<byte> patch))
+{
     SendToClients(patch);
+}
 
 // Client: apply delta
 BTBlackboardDelta.Apply(clientBlackboard, patch);
@@ -1053,7 +1211,15 @@ var rng = new BTDeterministic.DeterministicRNG(seed: 42);
 int index = rng.NextInt(0, 5); // same result on server and client with same seed
 ```
 
-Runtime nodes that consume random values (`RuntimeWaitNode`, `RuntimeWaitSuccessNode`, `RuntimeRepeatNode`, `RuntimeServiceNode`, and the weighted `RuntimeProbabilityBranch` fallback path) resolve an optional `IRuntimeBTRandomProvider` from the blackboard service registry. Register a deterministic provider for networked or replayed trees; when none is registered they fall back to `UnityEngine.Random` (non-deterministic, editor/standalone default).
+Runtime nodes that consume random values (`RuntimeWaitNode`, `RuntimeWaitSuccessNode`, `RuntimeRepeatNode`, `RuntimeServiceNode`, `RuntimeSelectorRandom`, `RuntimeRandomChanceNode`, and the weighted `RuntimeProbabilityBranch` fallback path) resolve an optional `IRuntimeBTRandomProvider` from the blackboard service registry. Register a deterministic provider for networked or replayed trees; when none is registered they fall back to `UnityEngine.Random` (non-deterministic, editor/standalone default).
+
+If `CycloneGames.DeterministicMath` is available, `DeterministicMathRandomProvider` can be registered as that service and can save/restore its random state for rollback:
+
+```csharp
+var randomProvider = new DeterministicMathRandomProvider(seed: 12345UL);
+DeterministicRandomState checkpoint = randomProvider.SaveState();
+randomProvider.RestoreState(checkpoint);
+```
 
 ---
 
@@ -1252,7 +1418,7 @@ public class SquadGroupProvider : MonoBehaviour, IBTAgentGroupProvider
 - `RuntimeBlackboard.EnableThreadSafety()` — opt-in `ReaderWriterLockSlim` for multi-threaded access
 - Observer notifications fire **outside** the write lock — callbacks can safely read/write the blackboard
 - `BTTickJob` uses Burst `IJobParallelFor` — NativeArray guarantees thread isolation
-- `volatile _wakeUpRequested` in `RuntimeBehaviorTree` — safe for cross-thread wake-up signals
+- `RuntimeBehaviorTree` uses `Interlocked` and `Volatile` for wake-up flags and boosted tick budget — safe for cross-thread wake-up signals
 
 ---
 
@@ -1308,6 +1474,40 @@ public class RuntimeBehaviorTree : IRuntimeBTContext
     void WakeUp(int boostedTicks = 1);
     bool ConsumeWakeUp();
     bool ShouldTick();
+}
+```
+
+### Code-First Runtime Construction
+
+```csharp
+public sealed class RuntimeBehaviorTreeBuilder
+{
+    RuntimeBehaviorTreeBuilder WithContext(RuntimeBTContext context);
+    RuntimeBehaviorTreeBuilder WithOwner(GameObject owner);
+    RuntimeBehaviorTreeBuilder WithServiceResolver(IRuntimeBTServiceResolver resolver);
+    RuntimeBehaviorTreeBuilder WithBlackboard(RuntimeBlackboard blackboard);
+    RuntimeBehaviorTreeBuilder WithTickInterval(int tickInterval);
+
+    RuntimeBehaviorTreeBuilder Sequence(Action<RuntimeSequencer> configure = null);
+    RuntimeBehaviorTreeBuilder Selector(Action<RuntimeSelector> configure = null);
+    RuntimeBehaviorTreeBuilder SelectorRandom(uint seed = 0u, Action<RuntimeSelectorRandom> configure = null);
+    RuntimeBehaviorTreeBuilder Action(Func<RuntimeBlackboard, RuntimeState> run, string name = null);
+    RuntimeBehaviorTreeBuilder Command(IRuntimeBTCommand command, string name = null);
+    RuntimeBehaviorTreeBuilder Condition(Func<RuntimeBlackboard, bool> predicate, string name = null);
+    RuntimeBehaviorTreeBuilder Condition(IRuntimeBTConditionStrategy strategy, string name = null);
+    RuntimeBehaviorTreeBuilder RandomChance(float chance, float outOf = 1f, uint seed = 0u, string name = null);
+    RuntimeBehaviorTreeBuilder End();
+    RuntimeBehaviorTree Build();
+}
+
+public interface IRuntimeBTCommand
+{
+    RuntimeState Execute(RuntimeBlackboard blackboard);
+}
+
+public interface IRuntimeBTConditionStrategy
+{
+    bool Evaluate(RuntimeBlackboard blackboard);
 }
 ```
 
@@ -1369,6 +1569,7 @@ public class RuntimeBlackboard : IDisposable
     // Serialization (network)
     void WriteTo(BinaryWriter writer);
     void ReadFrom(BinaryReader reader);
+    void ReadFrom(BinaryReader reader, RuntimeBlackboardSerializationLimits limits);
     ulong ComputeHash();
 
     // Hierarchy

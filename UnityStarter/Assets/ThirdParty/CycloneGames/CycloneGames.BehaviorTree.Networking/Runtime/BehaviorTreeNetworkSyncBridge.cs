@@ -1,4 +1,5 @@
 using System;
+using System.IO;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Networking;
 
@@ -124,10 +125,28 @@ namespace CycloneGames.BehaviorTree.Networking
                 return false;
             }
 
+            if (!ValidateIncomingPayload(message))
+            {
+                return false;
+            }
+
             if (message.PayloadKind == BehaviorTreeNetworkPayloadKind.FullSnapshot)
             {
-                BTStateSnapshot snapshot = BTNetworkSync.DeserializeSnapshot(message.Payload);
-                BTNetworkSync.ApplyBlackboardSnapshot(tree, snapshot);
+                try
+                {
+                    BTNetworkSync.Limits limits = CreateSnapshotLimits(_profile.MaxSnapshotPayloadBytes);
+                    BTStateSnapshot snapshot = BTNetworkSync.DeserializeSnapshot(message.Payload, limits);
+                    BTNetworkSync.ApplyBlackboardSnapshot(tree, snapshot, limits);
+                }
+                catch (InvalidDataException)
+                {
+                    return false;
+                }
+                catch (EndOfStreamException)
+                {
+                    return false;
+                }
+
                 if (_profile.WakeTreeOnRemoteDelta)
                 {
                     tree.WakeUp();
@@ -138,7 +157,19 @@ namespace CycloneGames.BehaviorTree.Networking
 
             if (message.PayloadKind == BehaviorTreeNetworkPayloadKind.BlackboardDelta)
             {
-                BTBlackboardDelta.Apply(tree.Blackboard, message.Payload);
+                try
+                {
+                    BTBlackboardDelta.Apply(tree.Blackboard, message.Payload);
+                }
+                catch (InvalidDataException)
+                {
+                    return false;
+                }
+                catch (EndOfStreamException)
+                {
+                    return false;
+                }
+
                 if (_profile.WakeTreeOnRemoteDelta)
                 {
                     tree.WakeUp();
@@ -222,6 +253,34 @@ namespace CycloneGames.BehaviorTree.Networking
             {
                 throw new InvalidOperationException($"{operationName} payload size {payloadSize} exceeds max payload size {maxPayloadSize}.");
             }
+        }
+
+        private bool ValidateIncomingPayload(in BehaviorTreeStatePayloadMessage message)
+        {
+            if (message.PayloadKind == BehaviorTreeNetworkPayloadKind.HashOnly)
+            {
+                return true;
+            }
+
+            if (message.Payload == null || message.Payload.Length == 0)
+            {
+                return false;
+            }
+
+            int maxPayloadSize = message.PayloadKind == BehaviorTreeNetworkPayloadKind.FullSnapshot
+                ? _profile.MaxSnapshotPayloadBytes
+                : _profile.MaxDeltaPayloadBytes;
+
+            return message.Payload.Length <= maxPayloadSize;
+        }
+
+        private static BTNetworkSync.Limits CreateSnapshotLimits(int maxSnapshotPayloadBytes)
+        {
+            return new BTNetworkSync.Limits(
+                maxSnapshotPayloadBytes,
+                BTNetworkSync.Limits.DEFAULT_MAX_NODE_COUNT,
+                maxSnapshotPayloadBytes,
+                RuntimeBlackboardSerializationLimits.Default);
         }
     }
 }

@@ -1,13 +1,10 @@
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 {
     public abstract class DecoratorNode : BTNode
     {
-        public override bool CanReEvaluate => Child != null && Child.CanReEvaluate;
-        public override bool EnableHijack => Child != null && Child.EnableHijack;
         [HideInInspector] public BTNode Child;
 
         public override BTNode Clone()
@@ -19,16 +16,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             }
             return clone;
         }
-        public override BTState Evaluate(IBlackBoard blackBoard)
+
+        protected void SetRuntimeChild(RuntimeDecoratorNode runtimeNode)
         {
-            if (Child == null) return BTState.SUCCESS;
-            if (!Child.CanReEvaluate) return BTState.SUCCESS;
-            return OnEvaluate(blackBoard);
-        }
-        protected virtual BTState OnEvaluate(IBlackBoard blackBoard) => Child.Evaluate(blackBoard);
-        protected override void OnStop(IBlackBoard blackBoard)
-        {
-            Child?.BTStop(blackBoard);
+            runtimeNode.Child = CreateRequiredRuntimeNode(Child, "decorator child");
         }
     }
 }

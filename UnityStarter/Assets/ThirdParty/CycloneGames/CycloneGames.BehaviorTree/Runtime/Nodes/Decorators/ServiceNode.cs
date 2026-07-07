@@ -1,6 +1,4 @@
 using CycloneGames.BehaviorTree.Runtime.Attributes;
-using CycloneGames.BehaviorTree.Runtime.Data;
-using CycloneGames.BehaviorTree.Runtime.Interfaces;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -16,31 +14,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private float _interval = 0.5f;
         [SerializeField] private float _randomDeviation = 0f;
         [SerializeField] private bool _useUnscaledTime = false;
-
-        private double _lastServiceTime;
-
-        protected override void OnStart(IBlackBoard blackBoard)
-        {
-            _lastServiceTime = GetTime();
-        }
-
-        protected override BTState OnRun(IBlackBoard blackBoard)
-        {
-            if (Child == null) return BTState.FAILURE;
-
-            double now = GetTime();
-            if (now - _lastServiceTime >= _interval)
-            {
-                _lastServiceTime = now;
-            }
-
-            return Child.Run(blackBoard);
-        }
-
-        private double GetTime()
-        {
-            return Core.RuntimeBTTime.GetUnityTime(_useUnscaledTime);
-        }
 
         public override BTNode Clone()
         {
@@ -58,10 +31,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             node.Interval = _interval;
             node.RandomDeviation = _randomDeviation;
             node.UseUnscaledTime = _useUnscaledTime;
-            if (Child != null)
-            {
-                node.Child = Child.CreateRuntimeNode();
-            }
+            SetRuntimeChild(node);
             return node;
         }
     }

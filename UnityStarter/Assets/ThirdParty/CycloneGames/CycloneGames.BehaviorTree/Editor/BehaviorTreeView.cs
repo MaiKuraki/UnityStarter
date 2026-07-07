@@ -464,82 +464,28 @@ namespace CycloneGames.BehaviorTree.Editor
             var nodeList = _cachedNodeList;
             int nodeCount = nodeList.Count;
 
-            if (treeCompleted && _tree.Nodes != null)
+            if (treeCompleted)
             {
-                int treeNodeCount = _tree.Nodes.Count;
-
-                for (int pass = 0; pass < 3; pass++)
-                {
-                    for (int i = 0; i < treeNodeCount; i++)
-                    {
-                        var treeNode = _tree.Nodes[i];
-                        if (treeNode == null) continue;
-
-                        BTState nodeState = treeNode.State;
-                        bool isStarted = treeNode.IsStarted;
-
-                        for (int j = 0; j < nodeCount; j++)
-                        {
-                            if (nodeList[j] is BTNodeView nodeView && nodeView.Node != null)
-                            {
-                                var runtimeNode = nodeView.Node;
-                                if (runtimeNode != null && runtimeNode.GUID == treeNode.GUID)
-                                {
-                                    BTState cachedState = nodeView.GetLastKnownState();
-
-                                    if (nodeState == BTState.SUCCESS || nodeState == BTState.FAILURE)
-                                    {
-                                        nodeView.RestoreLastKnownState(nodeState);
-                                    }
-                                    else if (nodeState == BTState.NOT_ENTERED && !isStarted)
-                                    {
-                                        if (treeNode is BTRootNode)
-                                        {
-                                            nodeView.RestoreLastKnownState(currentTreeState);
-                                        }
-                                        else if (treeNode is CompositeNode composite)
-                                        {
-                                            BTState inferredState = InferCompositeNodeState(composite, currentTreeState, nodeList, nodeCount);
-                                            if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
-                                            {
-                                                nodeView.RestoreLastKnownState(inferredState);
-                                            }
-                                        }
-                                        else if (cachedState == BTState.NOT_ENTERED || cachedState == BTState.RUNNING)
-                                        {
-                                            BTState inferredState = InferLeafNodeState(treeNode, currentTreeState, nodeList, nodeCount);
-                                            if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
-                                            {
-                                                nodeView.RestoreLastKnownState(inferredState);
-                                            }
-                                        }
-                                    }
-                                    break;
-                                }
-                            }
-                        }
-                    }
-                }
-
                 for (int i = 0; i < nodeCount; i++)
                 {
                     if (nodeList[i] is BTNodeView nodeView && nodeView.Node != null)
                     {
-                        var runtimeNode = nodeView.Node;
+                        var authoringNode = nodeView.Node;
+                        var runtimeNode = nodeView.RuntimeNode;
                         if (runtimeNode == null) continue;
 
-                        BTState currentState = runtimeNode.State;
+                        BTState currentState = ToBTState(runtimeNode.State);
                         if (currentState == BTState.SUCCESS || currentState == BTState.FAILURE)
                         {
                             nodeView.RestoreLastKnownState(currentState);
                         }
                         else if (currentState == BTState.NOT_ENTERED && !runtimeNode.IsStarted)
                         {
-                            if (runtimeNode is BTRootNode)
+                            if (authoringNode is BTRootNode)
                             {
                                 nodeView.RestoreLastKnownState(currentTreeState);
                             }
-                            else if (runtimeNode is CompositeNode composite)
+                            else if (authoringNode is CompositeNode composite)
                             {
                                 BTState inferredState = InferCompositeNodeState(composite, currentTreeState, nodeList, nodeCount);
                                 if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
@@ -552,7 +498,7 @@ namespace CycloneGames.BehaviorTree.Editor
                                 BTState cachedState = nodeView.GetLastKnownState();
                                 if (cachedState == BTState.NOT_ENTERED || cachedState == BTState.RUNNING)
                                 {
-                                    BTState inferredState = InferLeafNodeState(runtimeNode, currentTreeState, nodeList, nodeCount);
+                                    BTState inferredState = InferLeafNodeState(authoringNode, currentTreeState, nodeList, nodeCount);
                                     if (inferredState == BTState.SUCCESS || inferredState == BTState.FAILURE)
                                     {
                                         nodeView.RestoreLastKnownState(inferredState);
@@ -621,14 +567,24 @@ namespace CycloneGames.BehaviorTree.Editor
             var runtimeNode = nodeView.RuntimeNode;
             if (runtimeNode != null)
             {
-                switch (runtimeNode.State)
-                {
-                    case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Running: return BTState.RUNNING;
-                    case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Success: return BTState.SUCCESS;
-                    case CycloneGames.BehaviorTree.Runtime.Core.RuntimeState.Failure: return BTState.FAILURE;
-                }
+                return ToBTState(runtimeNode.State);
             }
             return nodeView.GetLastKnownState();
+        }
+
+        private static BTState ToBTState(Runtime.Core.RuntimeState state)
+        {
+            switch (state)
+            {
+                case Runtime.Core.RuntimeState.Success:
+                    return BTState.SUCCESS;
+                case Runtime.Core.RuntimeState.Failure:
+                    return BTState.FAILURE;
+                case Runtime.Core.RuntimeState.Running:
+                    return BTState.RUNNING;
+                default:
+                    return BTState.NOT_ENTERED;
+            }
         }
 
         /// <summary>Applies visual styling to an edge based on BTState.</summary>
@@ -698,7 +654,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     if (child == null) continue;
                     hasChildren = true;
 
-                    BTState childState = child.State;
+                    BTState childState = GetRuntimeStateForAuthoringNode(child);
                     BTState childLastKnown = GetChildLastKnownState(child, nodeList, nodeCount);
 
                     if (childState == BTState.FAILURE || childLastKnown == BTState.FAILURE)
@@ -734,7 +690,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     var child = composite.Children[i];
                     if (child == null) continue;
 
-                    BTState childState = child.State;
+                    BTState childState = GetRuntimeStateForAuthoringNode(child);
                     BTState childLastKnown = GetChildLastKnownState(child, nodeList, nodeCount);
 
                     if (childState == BTState.SUCCESS || childLastKnown == BTState.SUCCESS)
@@ -774,7 +730,7 @@ namespace CycloneGames.BehaviorTree.Editor
                         var child = composite.Children[j];
                         if (child != null && child.GUID == leafNode.GUID)
                         {
-                            BTState parentState = treeNode.State;
+                            BTState parentState = GetRuntimeStateForAuthoringNode(treeNode);
                             BTState parentLastKnown = GetChildLastKnownState(treeNode, nodeList, nodeCount);
 
                             if (composite is SequencerNode)
@@ -808,15 +764,26 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (nodeList[i] is BTNodeView nodeView && nodeView.Node != null)
                 {
-                    var runtimeNode = nodeView.Node;
-                    if (runtimeNode != null && runtimeNode.GUID == childNode.GUID)
+                    BTNode authoringNode = nodeView.Node;
+                    if (authoringNode != null && authoringNode.GUID == childNode.GUID)
                     {
                         return nodeView.GetLastKnownState();
                     }
                 }
             }
 
-            return childNode.State;
+            return GetRuntimeStateForAuthoringNode(childNode);
+        }
+
+        private BTState GetRuntimeStateForAuthoringNode(BTNode authoringNode)
+        {
+            if (authoringNode == null)
+            {
+                return BTState.NOT_ENTERED;
+            }
+
+            var runtimeNode = GetRuntimeNodeByGuid(authoringNode.GUID);
+            return runtimeNode != null ? ToBTState(runtimeNode.State) : BTState.NOT_ENTERED;
         }
 
         /// <summary>
