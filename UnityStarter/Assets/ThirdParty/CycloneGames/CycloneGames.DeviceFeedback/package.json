@@ -1,7 +1,7 @@
 {
   "name": "com.cyclone-games.device-feedback",
   "displayName": "CycloneGames.DeviceFeedback",
-  "description": "Multi-platform device feedback (haptics, vibration, lighting) for Unity. Supports Android/iOS/WebGL mobile vibration, gamepad rumble, and light bar control with DI and static facade patterns.",
+  "description": "Multi-platform device feedback for Unity. Includes Android/iOS/WebGL mobile vibration plus backend-ready gamepad rumble and device light interfaces with safe no-op defaults.",
   "unity": "2019.3",
   "version": "1.0.0",
   "keywords": [

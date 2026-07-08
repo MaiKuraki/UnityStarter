@@ -492,12 +492,13 @@ stateDiagram-v2
 
 ### 关键能力
 
-- Runner 模式：`Single`、`RecommendedMatrix`、`FullMatrix`、`PriorityComparison`
+- Runner 模式：`Single`、`RecommendedMatrix`、`FullMatrix`、`PriorityComparison`、`CertificationMatrix`
 - 预设规模：从 `AiBattle500` 到 `AiExtreme10000`，并包含网络与 soak 场景
 - 调度策略：`FullRate`、`LodCrowd`、`PriorityLod`、`NetworkMixed`、`FarCrowd`、`UltraLod`、`PriorityManaged`
 - 通过 `BehaviorTreeBenchmarkExportUtility` 自动导出 CSV/JSON
 - 内存与 GC 指标（`ManagedMemoryDeltaBytes`、`PeakManagedMemoryBytes`、`Gen0/1/2Collections`）
 - Tick 效率指标（`EffectiveTickRatio`、`AverageActiveAgentsPerFrame`、`TicksPerSecond`）
+- 生产预算门禁：平均帧耗时、最大帧耗时、按负载规模估算的托管内存容量、GC 次数和有效 tick 比例
 
 ### 主要 API
 
@@ -507,7 +508,7 @@ BehaviorTreeBenchmarkResult result = BehaviorTreeBenchmarkSession.RunImmediate(c
 
 // 场景内 Runner（支持矩阵与优先级对比模式）
 BehaviorTreeBenchmarkRunner runner = gameObject.AddComponent<BehaviorTreeBenchmarkRunner>();
-runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.FullMatrix;
+runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.CertificationMatrix;
 runner.SetConfig(config);
 runner.BeginBenchmark();
 ```
@@ -700,10 +701,15 @@ flowchart TB
 
 ## 自定义节点开发
 
+自定义节点应保持 authoring data 和 runtime execution 分离。`ScriptableObject` 节点只保存 GraphView 与 Inspector 需要的序列化配置；纯 runtime 节点负责热路径执行；`BehaviorTreeNodeEmitterRegistry` 在编译阶段把 authoring 节点映射为 runtime 节点。
+
+不要把 runtime 构建逻辑放进 authoring 节点类。项目应在 composition root、模块 installer 或测试 setup 中注册 emitter。`BehaviorTreeNodeEmitterRegistry.BuiltIn` 是只读表；添加项目自定义节点时，使用带内置 fallback 的扩展 registry。
+
 ### 自定义行为节点（双层架构）
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Compilation;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
@@ -711,30 +717,27 @@ using UnityEngine;
 
 // === ScriptableObject authoring layer ===
 [BTInfo("Custom/Movement", "Moves agent toward target position")]
-public class MoveToTargetNode : ActionNode
+public sealed class MoveToTargetNode : ActionNode
 {
     [SerializeField] private string _targetKey = "TargetPosition";
     [SerializeField] private float _arrivalRadius = 0.5f;
 
-    public override RuntimeNode CreateRuntimeNode()
-    {
-        return new RuntimeMoveToTarget(
-            Animator.StringToHash(_targetKey),
-            _arrivalRadius
-        ) { GUID = GUID };
-    }
+    public string TargetKey => _targetKey;
+    public float ArrivalRadius => _arrivalRadius;
 }
 
 // === Pure C# runtime execution layer ===
-public class RuntimeMoveToTarget : RuntimeStatefulActionNode
+public sealed class RuntimeMoveToTarget : RuntimeStatefulActionNode
 {
     private readonly int _targetKey;
     private readonly float _arrivalRadiusSqr;
+    private readonly int _speedKey;
 
     public RuntimeMoveToTarget(int targetKey, float arrivalRadius)
     {
         _targetKey = targetKey;
         _arrivalRadiusSqr = arrivalRadius * arrivalRadius;
+        _speedKey = RuntimeBlackboard.DefaultStringHashFunc("Speed");
     }
 
     protected override RuntimeState OnActionStart(RuntimeBlackboard bb)
@@ -745,17 +748,18 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
     protected override RuntimeState OnActionRunning(RuntimeBlackboard bb)
     {
         var target = bb.GetVector3(_targetKey);
-        var go = bb.GetContextOwner<GameObject>();
-        if (go == null) return RuntimeState.Failure;
+        var agent = bb.GetService<IMovementAgent>();
+        if (agent == null)
+        {
+            return RuntimeState.Failure;
+        }
 
-        var pos = go.transform.position;
-        if ((target - pos).sqrMagnitude <= _arrivalRadiusSqr)
+        float speed = bb.GetFloat(_speedKey, 5f);
+        if (agent.MoveToward(target, _arrivalRadiusSqr, speed))
+        {
             return RuntimeState.Success;
+        }
 
-        var dir = (target - pos).normalized;
-        go.transform.position = pos + dir
-            * bb.GetFloat(Animator.StringToHash("Speed"), 5f)
-            * Time.deltaTime;
         return RuntimeState.Running;
     }
 
@@ -764,29 +768,46 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
         // Cleanup when node is aborted.
     }
 }
+
+public interface IMovementAgent
+{
+    bool MoveToward(Vector3 target, float arrivalRadiusSqr, float speed);
+}
+
+var emitters = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
+emitters.Register<MoveToTargetNode>((source, context) =>
+{
+    int targetKey = RuntimeBlackboard.DefaultStringHashFunc(source.TargetKey);
+    return context.WithGuid(source, new RuntimeMoveToTarget(targetKey, source.ArrivalRadius));
+});
+
+RuntimeBehaviorTree runtimeTree = BehaviorTreeCompiler.Compile(
+    behaviorTreeAsset,
+    runtimeContext,
+    new BehaviorTreeCompileOptions
+    {
+        Emitters = emitters
+    });
 ```
 
 ### 自定义条件节点
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Compilation;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Conditions;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using UnityEngine;
 
 [BTInfo("Custom/Checks", "Is health above threshold")]
-public class CheckHealthNode : ConditionNode
+public sealed class CheckHealthNode : ConditionNode
 {
     [SerializeField] private string _healthKey = "Health";
     [SerializeField] private int _threshold = 30;
 
-    public override RuntimeNode CreateRuntimeNode()
-    {
-        return new RuntimeCheckHealth(
-            Animator.StringToHash(_healthKey), _threshold
-        ) { GUID = GUID };
-    }
+    public string HealthKey => _healthKey;
+    public int Threshold => _threshold;
 }
 
 public sealed class RuntimeCheckHealth : RuntimeNode
@@ -812,6 +833,13 @@ public sealed class RuntimeCheckHealth : RuntimeNode
         return Evaluate(blackboard) ? RuntimeState.Success : RuntimeState.Failure;
     }
 }
+
+var emitters = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
+emitters.Register<CheckHealthNode>((source, context) =>
+{
+    int healthKey = RuntimeBlackboard.DefaultStringHashFunc(source.HealthKey);
+    return context.WithGuid(source, new RuntimeCheckHealth(healthKey, source.Threshold));
+});
 ```
 
 ---
@@ -1195,10 +1223,10 @@ BTBlackboardDelta.Apply(clientBlackboard, patch);
 
 ### 确定性随机
 
-为保证网络可复现性，使用 `BTDeterministic.DeterministicRNG`：
+为保证网络可复现性，使用 `RuntimeDeterministicRandom`：
 
 ```csharp
-var rng = new BTDeterministic.DeterministicRNG(seed: 42);
+var rng = new RuntimeDeterministicRandom(seed: 42);
 int index = rng.NextInt(0, 5); // 相同种子在服务端和客户端产生相同结果
 ```
 

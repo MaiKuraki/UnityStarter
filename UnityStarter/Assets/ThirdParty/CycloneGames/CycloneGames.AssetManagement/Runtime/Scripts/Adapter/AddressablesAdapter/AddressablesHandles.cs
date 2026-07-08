@@ -1,4 +1,4 @@
-#if ADDRESSABLES_PRESENT
+#if CYCLONEGAMES_HAS_ADDRESSABLES
 using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;

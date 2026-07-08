@@ -128,9 +128,13 @@ namespace CycloneGames.Choreography.Tests
 
         private readonly Dictionary<ChoreographyResourceReference, FakeHandle> _handles =
             new Dictionary<ChoreographyResourceReference, FakeHandle>();
+        private int _loadCount;
+
+        public int LoadCount => _loadCount;
 
         public IChoreographyResourceHandle Load(in ChoreographyResourceReference reference)
         {
+            _loadCount++;
             if (!_handles.TryGetValue(reference, out FakeHandle handle))
             {
                 handle = new FakeHandle { Reference = reference };
@@ -167,6 +171,24 @@ namespace CycloneGames.Choreography.Tests
                 handle.Progress = 1f;
                 handle.Error = error;
             }
+        }
+    }
+
+    internal sealed class NullResourceProvider : IResourceProvider
+    {
+        public IChoreographyResourceHandle Load(in ChoreographyResourceReference reference)
+        {
+            return null;
+        }
+
+        public bool TryGet(in ChoreographyResourceReference reference, out IChoreographyResourceHandle handle)
+        {
+            handle = null;
+            return false;
+        }
+
+        public void Release(in ChoreographyResourceReference reference)
+        {
         }
     }
 

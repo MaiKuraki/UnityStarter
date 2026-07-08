@@ -28,20 +28,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeProbabilityBranch();
-            node.GUID = GUID;
-
-            var weights = new float[_probabilities.Count];
-            for (int i = 0; i < _probabilities.Count; i++)
-            {
-                weights[i] = _probabilities[i];
-            }
-
-            node.SetWeights(weights);
-            AddRuntimeChildren(node);
-            return node;
-        }
     }
 }

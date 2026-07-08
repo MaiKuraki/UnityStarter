@@ -1,4 +1,4 @@
-#if NAVIGATHENA_PRESENT
+#if CYCLONEGAMES_HAS_NAVIGATHENA
 using MackySoft.Navigathena.SceneManagement;
 using UnityEngine.SceneManagement;
 

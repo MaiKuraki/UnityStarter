@@ -312,7 +312,7 @@ namespace CycloneGames.Choreography.Core
                 return _fixedFrameDriver.TryEvaluate(in state, in outerStep, out resolvedStep);
             }
 
-            if (IsExternalSection(state.SectionClock.Source))
+            if (SectionClockUtility.IsExternalSection(state.SectionClock.Source))
             {
                 return ResolveExternalEndPolicy(in state, in outerStep, out resolvedStep);
             }
@@ -356,13 +356,6 @@ namespace CycloneGames.Choreography.Core
             }
         }
 
-        private static bool IsExternalSection(ChoreographySectionClockSource source)
-        {
-            return source == ChoreographySectionClockSource.Audio
-                || source == ChoreographySectionClockSource.Animation
-                || source == ChoreographySectionClockSource.Timeline
-                || source == ChoreographySectionClockSource.External;
-        }
     }
 
     /// <summary>
@@ -396,7 +389,7 @@ namespace CycloneGames.Choreography.Core
                 return _fixedFrameDriver.TryEvaluate(in state, in outerStep, out resolvedStep);
             }
 
-            if (!IsExternalSection(state.SectionClock.Source))
+            if (!SectionClockUtility.IsExternalSection(state.SectionClock.Source))
             {
                 resolvedStep = ResolveInternalStep(in state, in outerStep);
                 return true;
@@ -479,12 +472,5 @@ namespace CycloneGames.Choreography.Core
                 outerStep.SourceTime);
         }
 
-        private static bool IsExternalSection(ChoreographySectionClockSource source)
-        {
-            return source == ChoreographySectionClockSource.Audio
-                || source == ChoreographySectionClockSource.Animation
-                || source == ChoreographySectionClockSource.Timeline
-                || source == ChoreographySectionClockSource.External;
-        }
     }
 }

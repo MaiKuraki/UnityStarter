@@ -40,20 +40,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new RuntimeBBComparisonNode();
-            node.GUID = GUID;
-            node.KeyHash = Animator.StringToHash(_key);
-            node.Operator = _operator;
-            node.ValueType = _valueType;
-            node.RefInt = _refInt;
-            node.RefFloat = _refFloat;
-            node.RefBool = _refBool;
-            node.RefKeyHash = string.IsNullOrEmpty(_refKey) ? 0 : Animator.StringToHash(_refKey);
-            node.FloatEpsilon = _floatEpsilon;
-            SetRuntimeChild(node);
-            return node;
-        }
     }
 }

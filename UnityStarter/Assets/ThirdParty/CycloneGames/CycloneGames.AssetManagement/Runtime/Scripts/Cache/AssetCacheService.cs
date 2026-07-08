@@ -809,6 +809,24 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         /// <summary>Number of active (RefCount &gt; 0) handles currently pinned and never evictable. Thread-safe.</summary>
         public int ActiveCount { get { lock (_gate) { return _activeMap.Count; } } }
 
+        /// <summary>
+        /// Creates a compact runtime snapshot without enumerating cache entries.
+        /// Intended for telemetry, stress HUDs, and automatic memory governance.
+        /// </summary>
+        internal CycloneGames.AssetManagement.Runtime.AssetRuntimeCacheSnapshot CreateRuntimeSnapshot(string packageName, string providerName)
+        {
+            lock (_gate)
+            {
+                return new CycloneGames.AssetManagement.Runtime.AssetRuntimeCacheSnapshot(
+                    packageName,
+                    providerName,
+                    _activeMap.Count,
+                    _trialCount + _mainCount,
+                    _idleBytes,
+                    _maxIdleBytes);
+            }
+        }
+
         public void Dispose()
         {
             if (Interlocked.Exchange(ref _disposed, 1) != 0) return;

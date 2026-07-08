@@ -1,5 +1,3 @@
-using CycloneGames.BehaviorTree.Runtime.Core;
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes
@@ -18,12 +16,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             return clone;
         }
 
-        public override RuntimeNode CreateRuntimeNode()
-        {
-            var node = new RuntimeRootNode();
-            node.GUID = GUID;
-            node.Child = CreateRequiredRuntimeNode(Child, "root child");
-            return node;
-        }
     }
 }

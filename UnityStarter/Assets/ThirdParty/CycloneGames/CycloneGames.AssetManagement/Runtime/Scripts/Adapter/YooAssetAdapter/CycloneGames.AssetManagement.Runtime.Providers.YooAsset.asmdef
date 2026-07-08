@@ -13,15 +13,15 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [
-        "YOOASSET_PRESENT"
+        "CYCLONEGAMES_HAS_YOOASSET"
     ],
     "versionDefines": [
         {
             "name": "com.tuyoogame.yooasset",
             "expression": "",
-            "define": "YOOASSET_PRESENT"
+            "define": "CYCLONEGAMES_HAS_YOOASSET"
         }
     ],
     "noEngineReferences": false

@@ -109,6 +109,18 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public int LastPriority;
         public int InitializeCallCount;
         public AssetCacheRetentionPolicy LastRetentionPolicy;
+        public string RequestPackageVersionValue = "1.0.0";
+        public readonly List<string> UpdatedPackageVersions = new List<string>();
+        public IDownloader DownloaderForAll;
+        public IDownloader DownloaderForLocations;
+        public int CreateDownloaderForAllCallCount;
+        public int CreateDownloaderForLocationsCallCount;
+        public int LastDownloadingMaxNumber;
+        public int LastFailedTryAgain;
+        public bool LastRecursiveDownload;
+        public string[] LastLocations;
+        public int ClearCacheFilesCallCount;
+        public ClearCacheMode LastClearCacheMode;
 
         public string Name => NameValue;
 
@@ -119,12 +131,39 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         public UniTask DestroyAsync() => UniTask.CompletedTask;
-        public UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default) => UniTask.FromResult("1.0.0");
-        public UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default) => UniTask.FromResult(true);
-        public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.All, object clearParam = null, CancellationToken cancellationToken = default) => UniTask.FromResult(true);
-        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain) => null;
+        public UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default) => UniTask.FromResult(RequestPackageVersionValue);
+        public UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        {
+            UpdatedPackageVersions.Add(packageVersion);
+            return UniTask.FromResult(true);
+        }
+
+        public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.All, object clearParam = null, CancellationToken cancellationToken = default)
+        {
+            ClearCacheFilesCallCount++;
+            LastClearCacheMode = clearMode;
+            return UniTask.FromResult(true);
+        }
+
+        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
+        {
+            CreateDownloaderForAllCallCount++;
+            LastDownloadingMaxNumber = downloadingMaxNumber;
+            LastFailedTryAgain = failedTryAgain;
+            return DownloaderForAll;
+        }
+
         public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain) => null;
-        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain) => null;
+
+        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain)
+        {
+            CreateDownloaderForLocationsCallCount++;
+            LastLocations = locations;
+            LastRecursiveDownload = recursiveDownload;
+            LastDownloadingMaxNumber = downloadingMaxNumber;
+            LastFailedTryAgain = failedTryAgain;
+            return DownloaderForLocations;
+        }
         public UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default) => UniTask.FromResult<IDownloader>(null);
         public UniTask<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default) => UniTask.FromResult<IDownloader>(null);
         public UniTask<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default) => UniTask.FromResult<IDownloader>(null);

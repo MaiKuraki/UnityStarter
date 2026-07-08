@@ -90,6 +90,9 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 case BehaviorTreeBenchmarkRunnerMode.PriorityComparison:
                     yield return RunPriorityComparisonCoroutine();
                     break;
+                case BehaviorTreeBenchmarkRunnerMode.CertificationMatrix:
+                    yield return RunCertificationMatrixCoroutine();
+                    break;
                 default:
                     yield return RunSingleBenchmarkCoroutine(_config.Clone(), assignAsLastResult: true);
                     ExportSingleResultIfNeeded();
@@ -153,6 +156,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 BatchName = string.IsNullOrWhiteSpace(batchName) ? $"Scale Matrix [{complexity}]" : batchName,
                 Results = results
             };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(LastBatchResult);
 
             if (assignLastResult && results.Length > 0)
             {
@@ -188,6 +192,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 BatchName = "Full Matrix",
                 Results = results
             };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(LastBatchResult);
 
             if (results.Length > 0)
             {
@@ -213,6 +218,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             {
                 var config = _config.Clone();
                 BehaviorTreeBenchmarkPresetCatalog.ApplySchedulingProfile(config, profiles[i]);
+                BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(config);
                 config.BenchmarkName = $"{config.BenchmarkName} [{profiles[i]}]";
                 config.Sanitize();
                 yield return RunSingleBenchmarkCoroutine(config, assignAsLastResult: false);
@@ -226,6 +232,36 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 BatchName = string.IsNullOrWhiteSpace(_matrixBatchName) ? "Priority Comparison" : _matrixBatchName,
                 Results = results
             };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(LastBatchResult);
+
+            if (results.Length > 0)
+            {
+                LastResult = results[results.Length - 1];
+            }
+
+            ExportBatchResultIfNeeded();
+            BenchmarkMatrixCompleted?.Invoke(LastBatchResult);
+        }
+
+        private IEnumerator RunCertificationMatrixCoroutine()
+        {
+            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateCertificationMatrixConfigs();
+            var results = new BehaviorTreeBenchmarkResult[configs.Length];
+
+            for (int i = 0; i < configs.Length; i++)
+            {
+                yield return RunSingleBenchmarkCoroutine(configs[i], assignAsLastResult: false);
+                results[i] = _currentRunResult;
+                yield return null;
+            }
+
+            LastBatchResult = new BehaviorTreeBenchmarkBatchResult
+            {
+                GeneratedAtUtc = DateTime.UtcNow.ToString("O"),
+                BatchName = "Production Certification Matrix",
+                Results = results
+            };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(LastBatchResult);
 
             if (results.Length > 0)
             {

@@ -111,7 +111,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             _managedMemoryAfterBytes = GC.GetTotalMemory(false);
             _peakManagedMemoryBytes = Math.Max(_peakManagedMemoryBytes, _managedMemoryAfterBytes);
 
-            return new BehaviorTreeBenchmarkResult
+            var result = new BehaviorTreeBenchmarkResult
             {
                 IsValid = true,
                 BenchmarkName = _config.BenchmarkName,
@@ -156,8 +156,16 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 SoakManagedMemoryDeltaBytes = _peakManagedMemoryBytes - _soakMemoryAtStartBytes,
                 Gen0Collections = GC.CollectionCount(0) - _gen0Before,
                 Gen1Collections = GC.CollectionCount(1) - _gen1Before,
-                Gen2Collections = GC.CollectionCount(2) - _gen2Before
+                Gen2Collections = GC.CollectionCount(2) - _gen2Before,
+                TargetAverageFrameMilliseconds = _config.TargetAverageFrameMilliseconds,
+                TargetMaxFrameMilliseconds = _config.TargetMaxFrameMilliseconds,
+                MaxManagedMemoryDeltaBytes = _config.MaxManagedMemoryDeltaBytes,
+                MaxGcCollections = _config.MaxGcCollections,
+                MinimumEffectiveTickRatio = _config.MinimumEffectiveTickRatio
             };
+
+            BehaviorTreeBenchmarkAssessmentUtility.Evaluate(result);
+            return result;
         }
 
         public static BehaviorTreeBenchmarkResult RunImmediate(BehaviorTreeBenchmarkConfig config)

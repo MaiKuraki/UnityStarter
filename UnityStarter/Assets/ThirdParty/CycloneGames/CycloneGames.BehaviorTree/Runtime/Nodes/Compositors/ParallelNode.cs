@@ -1,4 +1,3 @@
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
@@ -15,13 +14,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 
         [SerializeField] private ParallelMode _mode = ParallelMode.Default;
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new RuntimeParallelNode();
-            node.GUID = GUID;
-            node.Mode = (RuntimeParallelMode)_mode;
-            AddRuntimeChildren(node);
-            return node;
-        }
+        internal int ModeValue => (int)_mode;
     }
 }

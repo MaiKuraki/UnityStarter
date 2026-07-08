@@ -59,20 +59,50 @@ namespace CycloneGames.Choreography.Core
                 throw new ArgumentNullException(nameof(references));
             }
 
+            PrepareBegin(options);
+            for (int i = 0; i < references.Count; i++)
+            {
+                ChoreographyResourceReference reference = references[i];
+                if (!ContainsReference(_references, in reference))
+                {
+                    _references.Add(reference);
+                }
+            }
+
+            StartPreparedBatch();
+        }
+
+        /// <summary>
+        /// Collects resource references from an asset and begins loading them without requiring a caller-owned
+        /// temporary list. References are deduplicated before any backend load is requested.
+        /// </summary>
+        public void Begin(IChoreographyAsset asset, PreloadOptions options)
+        {
+            if (asset == null)
+            {
+                throw new ArgumentNullException(nameof(asset));
+            }
+
+            PrepareBegin(options);
+            asset.CollectResourceReferences(_references);
+            DeduplicateReferencesInPlace();
+            StartPreparedBatch();
+        }
+
+        private void PrepareBegin(PreloadOptions options)
+        {
             ReleaseAll();
 
             _options = options;
             _references.Clear();
-            for (int i = 0; i < references.Count; i++)
-            {
-                _references.Add(references[i]);
-            }
-
             _failed.Clear();
             _nextToStart = 0;
             _succeededCount = 0;
             _progress = 0f;
+        }
 
+        private void StartPreparedBatch()
+        {
             if (_references.Count == 0)
             {
                 _progress = 1f;
@@ -176,7 +206,7 @@ namespace CycloneGames.Choreography.Core
 
                 if (!reference.IsValid)
                 {
-                    _failed.Add(reference);
+                    FailReference(in reference, "invalid reference");
                     if (_options.FailurePolicy == PreloadFailurePolicy.Abort)
                     {
                         Abort();
@@ -186,8 +216,29 @@ namespace CycloneGames.Choreography.Core
                 }
 
                 IChoreographyResourceHandle handle = _provider.Load(in reference);
+                if (handle == null)
+                {
+                    FailReference(in reference, "provider returned null handle");
+                    if (_options.FailurePolicy == PreloadFailurePolicy.Abort)
+                    {
+                        Abort();
+                        return;
+                    }
+                    continue;
+                }
+
                 _active.Add(handle);
                 started++;
+            }
+        }
+
+        private void FailReference(in ChoreographyResourceReference reference, string error)
+        {
+            _failed.Add(reference);
+            if (_diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            {
+                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography",
+                    "Preload failed for '" + reference.Address + "': " + error);
             }
         }
 
@@ -243,6 +294,34 @@ namespace CycloneGames.Choreography.Core
         private void RaiseCompleted()
         {
             Completed?.Invoke(new PreloadResult(_status, _references.Count, _succeededCount, _failed.Count, _failed));
+        }
+
+        private static bool ContainsReference(List<ChoreographyResourceReference> references, in ChoreographyResourceReference reference)
+        {
+            for (int i = 0; i < references.Count; i++)
+            {
+                if (references[i].Equals(reference))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void DeduplicateReferencesInPlace()
+        {
+            for (int i = 0; i < _references.Count; i++)
+            {
+                ChoreographyResourceReference current = _references[i];
+                for (int j = _references.Count - 1; j > i; j--)
+                {
+                    if (_references[j].Equals(current))
+                    {
+                        _references.RemoveAt(j);
+                    }
+                }
+            }
         }
     }
 }

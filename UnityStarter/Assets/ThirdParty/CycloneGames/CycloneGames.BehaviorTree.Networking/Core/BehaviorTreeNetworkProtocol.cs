@@ -5,8 +5,6 @@ namespace CycloneGames.BehaviorTree.Networking
     public static class BehaviorTreeNetworkProtocol
     {
         public const string MessageOwner = "CycloneGames.BehaviorTree";
-        public const byte PROTOCOL_VERSION = 1;
-        public const byte MIN_SUPPORTED_PROTOCOL_VERSION = 1;
 
         public const ushort MESSAGE_ID_BASE = 14000;
         public const ushort MESSAGE_ID_MAX = 14999;
@@ -37,11 +35,6 @@ namespace CycloneGames.BehaviorTree.Networking
             return messageId >= MSG_MANIFEST_HANDSHAKE && messageId <= MSG_AUTHORITY_TRANSFER;
         }
 
-        public static bool IsSupportedProtocolVersion(byte protocolVersion)
-        {
-            return Module.IsSupportedProtocolVersion(protocolVersion);
-        }
-
         public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
         {
             return Module.TryRegister(networkManager);
@@ -60,9 +53,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 MESSAGE_ID_MAX,
                 NetworkMessageKind.Module)
             {
-                ProtocolId = "CycloneGames.BehaviorTree.Networking",
-                CurrentVersion = PROTOCOL_VERSION,
-                MinimumSupportedVersion = MIN_SUPPORTED_PROTOCOL_VERSION
+                ProtocolId = "CycloneGames.BehaviorTree.Networking"
             };
 
             builder
