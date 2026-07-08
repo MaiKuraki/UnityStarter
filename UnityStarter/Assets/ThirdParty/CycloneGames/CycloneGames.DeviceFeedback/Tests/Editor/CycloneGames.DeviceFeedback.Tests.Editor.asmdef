@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.DeviceFeedback.Tests.Editor",
+    "rootNamespace": "CycloneGames.DeviceFeedback.Tests.Editor",
+    "references": [
+        "CycloneGames.DeviceFeedback.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

@@ -1,4 +1,4 @@
-#if ADDRESSABLES_PRESENT
+#if CYCLONEGAMES_HAS_ADDRESSABLES
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -14,7 +14,7 @@ using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetCatalogQuery
+    internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetCatalogQuery, IAssetRuntimeDiagnostics
     {
         private readonly string packageName;
         private int nextId = 1;
@@ -588,6 +588,11 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             return _cacheService.Contains(cacheKey);
+        }
+
+        public AssetRuntimeCacheSnapshot GetRuntimeCacheSnapshot()
+        {
+            return _cacheService.CreateRuntimeSnapshot(packageName, "Addressables");
         }
 
         public async UniTask<bool> TryGetAssetLocationsByTagAsync(string tag, List<string> results, CancellationToken cancellationToken = default)

@@ -3,9 +3,9 @@
 <p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
 
 Unity 多平台硬件反馈库。  
-为 **手机触觉振动**（Android / iOS / WebGL）、**手柄马达震动** 和 **设备灯光控制** 提供统一 API，同时兼容依赖注入（DI）和静态调用两种模式。
+为 **Android / iOS / WebGL** 提供生产级手机触觉振动实现，并为 **手柄马达震动** 和 **设备灯光控制** 提供可接入后端的稳定接口。运行时 API 同时兼容依赖注入（DI）和静态调用两种模式。
 
-无论你需要简单的一行振动调用，还是精确到采样级别的 Core Haptics 编著加实时参数调制，此库均通过相同接口跨平台提供，并自动回退到设备可用的最优硬件 API。
+无论你需要简单的一行振动调用，还是精确到采样级别的 Core Haptics 编排加实时参数调制，手机触觉栈都会通过统一接口提供平台特定回退。手柄震动和设备灯光默认使用明确的 no-op 后端；真实硬件输出需要接入对应平台 backend 或 integration assembly。
 
 ---
 
@@ -22,8 +22,8 @@ Unity 多平台硬件反馈库。
 - **通用触觉预设** — `HapticPreset` 枚举，按设备映射到原生 API 并附带合适的锐度值
 - **零 GC 热路径** — 所有波形采样使用预分配静态缓冲区；缓存 JNI 数组；预缓存枚举名称字符串用于原生交互 — 无逐次调用堆分配
 - **低延迟优化 iOS** — 预分配并预热的 `UIFeedbackGenerator` 实例；即发即忘的瞬态事件播放器，不阻塞持续触觉
-- **手柄震动接口** — 双马达控制（占位接口，可扩展）
-- **设备灯光控制** — 灯条颜色、渐变、亮度曲线，适用于 DualSense / DualShock（占位接口，可扩展）
+- **手柄震动接口** — 双马达控制 API，支持注入 `IGamepadRumbleBackend`；默认运行时行为是明确 no-op，直到安装平台后端
+- **设备灯光控制** — 灯条颜色、渐变、亮度曲线 API，支持注入 `IDeviceLightBackend`；默认运行时行为是明确 no-op，直到安装平台后端
 - **DI 友好架构** — 面向接口编程（`IHapticFeedbackService`、`IMobileVibrationService` 等）
 
 ---
@@ -156,14 +156,16 @@ public class GameManager
 
 将 `IMobileVibrationService` 的所有方法以 `static` 形式暴露。
 
-### `IGamepadRumbleService` — 手柄震动（占位）
+### `IGamepadRumbleService` — 手柄震动
 
 | 成员                                            | 说明                          |
 | ----------------------------------------------- | ----------------------------- |
 | `SetMotorSpeeds(float low, float high)`         | 直接设置双马达转速（0.0–1.0） |
 | `Rumble(float low, float high, float duration)` | 定时震动，到期自动停止        |
 
-### `IDeviceLightService` — 设备灯光（占位）
+`GamepadRumbleService` 是 `IGamepadRumbleBackend` 之上的高层包装。默认构造函数使用 `NoopGamepadRumbleBackend`，因此不支持的硬件平台或未安装硬件 backend 的项目会保持确定性的空操作，而不是执行半实现逻辑。真实手柄支持应由独立平台 integration assembly 提供，并由该 assembly 负责设备发现、计时、player loop hook 和原生/Input System 调用。
+
+### `IDeviceLightService` — 设备灯光
 
 | 成员                                                    | 说明             |
 | ------------------------------------------------------- | ---------------- |
@@ -173,6 +175,8 @@ public class GameManager
 | `PlayIntensityCurve(Color, AnimationCurve, float, int)` | 脉动亮度         |
 | `CancelAnimation()`                                     | 停止灯光动画     |
 | `Reset()`                                               | 恢复默认         |
+
+`GamepadLightService` 是 `IDeviceLightBackend` 之上的高层包装。默认构造函数使用 `NoopDeviceLightBackend`；真实 DualSense、DualShock、键盘 RGB 或平台专用灯光支持应位于专用 backend/integration assembly。
 
 ---
 
@@ -191,6 +195,8 @@ public class GameManager
 | API 30+ 触觉基元    | ✅ (CLICK/TICK/THUD) | —            | —                   | —            | ⬜     |
 | 实时调制            | ⬜                   | ⬜           | ✅                  | ⬜           | ⬜     |
 | 取消振动            | ✅                   | ⬜           | ✅                  | ✅           | ⬜     |
+| 手柄震动            | 需要 backend         | 需要 backend | 需要 backend        | 需要 backend | 默认 no-op |
+| 设备灯光            | 需要 backend         | 需要 backend | 需要 backend        | 需要 backend | 默认 no-op |
 
 ---
 
@@ -251,6 +257,8 @@ s_intensityBuf, s_sharpnessBuf, s_typeBuf, s_durationBuf
 ```
 
 `EnsureBuffers(count)` 每次调用仅检查一次；后续等量或更小量的调用不产生任何分配。JNI 对象（`AndroidJavaClass`、`AndroidJavaObject`）在服务生命周期内缓存，通过 `IDisposable` 释放。原生交互所用的枚举名称字符串预缓存在静态 readonly 数组中，避免 `ToString()` 堆分配。
+
+手柄震动和设备灯光服务包装层在稳定状态的 guarded path 上不产生分配。真实 backend 的分配行为取决于所选 integration，必须针对目标硬件和平台 API 单独验证。
 
 ---
 

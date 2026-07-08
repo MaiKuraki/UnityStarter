@@ -137,6 +137,18 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
+        public void RuntimeDeterministicRandom_ReplaysSameSequence()
+        {
+            var left = new RuntimeDeterministicRandom(123u);
+            var right = new RuntimeDeterministicRandom(123u);
+
+            for (int i = 0; i < 32; i++)
+            {
+                Assert.AreEqual(left.Next(), right.Next());
+            }
+        }
+
+        [Test]
         public void SelectorRandom_UsesSelectorFallbackSemantics()
         {
             RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()

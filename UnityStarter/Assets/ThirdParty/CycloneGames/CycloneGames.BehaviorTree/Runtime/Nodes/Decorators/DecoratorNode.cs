@@ -1,4 +1,3 @@
-using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
@@ -17,9 +16,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             return clone;
         }
 
-        protected void SetRuntimeChild(RuntimeDecoratorNode runtimeNode)
-        {
-            runtimeNode.Child = CreateRequiredRuntimeNode(Child, "decorator child");
-        }
     }
 }

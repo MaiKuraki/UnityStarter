@@ -31,20 +31,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             }
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeUtilitySelector();
-            node.GUID = GUID;
-
-            var keyHashes = new int[_scoreKeys.Count];
-            for (int i = 0; i < _scoreKeys.Count; i++)
-            {
-                keyHashes[i] = string.IsNullOrEmpty(_scoreKeys[i]) ? 0 : Animator.StringToHash(_scoreKeys[i]);
-            }
-
-            node.SetScoreKeys(keyHashes);
-            AddRuntimeChildren(node);
-            return node;
-        }
     }
 }

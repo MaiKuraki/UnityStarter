@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Reflection;
 using CycloneGames.BehaviorTree.Runtime;
@@ -61,18 +62,77 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
-        public void Compiler_WrapsNullRuntimeNodeCreationFailure()
+        public void Compiler_RejectsUnregisteredAuthoringNodeEmitter()
         {
             var tree = ScriptableObject.CreateInstance<Runtime.BehaviorTree>();
             var root = ScriptableObject.CreateInstance<BTRootNode>();
-            root.Child = ScriptableObject.CreateInstance<NullRuntimeNodeAuthoringNode>();
+            root.Child = ScriptableObject.CreateInstance<UnregisteredAuthoringNode>();
             tree.Root = root;
 
             BehaviorTreeCompileException exception = Assert.Throws<BehaviorTreeCompileException>(
                 () => BehaviorTreeCompiler.Compile(tree));
 
             Assert.That(exception.InnerException, Is.Not.Null);
-            Assert.That(exception.InnerException.Message, Does.Contain("returned null runtime node"));
+            Assert.That(exception.InnerException.Message, Does.Contain("No behavior tree runtime emitter is registered"));
+        }
+
+        [Test]
+        public void Compiler_UsesCustomEmitterRegistry()
+        {
+            var tree = ScriptableObject.CreateInstance<Runtime.BehaviorTree>();
+            var root = ScriptableObject.CreateInstance<BTRootNode>();
+            root.Child = ScriptableObject.CreateInstance<UnregisteredAuthoringNode>();
+            tree.Root = root;
+
+            var registry = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
+            registry.Register<UnregisteredAuthoringNode>((source, context) => context.WithGuid(source, new CountingNode()));
+
+            RuntimeBehaviorTree runtimeTree = BehaviorTreeCompiler.Compile(
+                tree,
+                null,
+                new BehaviorTreeCompileOptions
+                {
+                    Emitters = registry,
+                    UseCache = false
+                });
+
+            Assert.That(runtimeTree.Tick(), Is.EqualTo(RuntimeState.Success));
+        }
+
+        [Test]
+        public void BuiltInEmitterRegistry_IsReadOnly()
+        {
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BehaviorTreeNodeEmitterRegistry.BuiltIn.Register<UnregisteredAuthoringNode>(
+                    (source, context) => context.WithGuid(source, new CountingNode())));
+
+            Assert.That(exception.Message, Does.Contain("read-only"));
+        }
+
+        [Test]
+        public void CompileOptions_DefaultIsNotSharedMutableState()
+        {
+            BehaviorTreeCompileOptions first = BehaviorTreeCompileOptions.Default;
+            BehaviorTreeCompileOptions second = BehaviorTreeCompileOptions.Default;
+
+            first.UseCache = false;
+
+            Assert.That(second.UseCache, Is.True);
+            Assert.That(second, Is.Not.SameAs(first));
+        }
+
+        [Test]
+        public void CompileArtifact_ErrorsAreReadOnly()
+        {
+            var tree = ScriptableObject.CreateInstance<Runtime.BehaviorTree>();
+
+            BehaviorTreeCompileArtifact artifact = BehaviorTreeCompiler.Analyze(tree, new BehaviorTreeCompileOptions
+            {
+                UseCache = false
+            });
+
+            Assert.That(artifact.IsValid, Is.False);
+            Assert.Throws<NotSupportedException>(() => ((IList<string>)artifact.Errors).Add("mutated"));
         }
 
         [Test]
@@ -90,6 +150,55 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
             Assert.That(runtimeTree, Is.Not.Null);
             Assert.That(runtimeTree.Tick(), Is.EqualTo(RuntimeState.Success));
+        }
+
+        [Test]
+        public void Compiler_AnalyzeUsesCacheForUnchangedFingerprint()
+        {
+            BehaviorTreeCompileCache.Shared.Clear();
+            var tree = CreateOneNodeTree(true);
+
+            BehaviorTreeCompileArtifact first = BehaviorTreeCompiler.Analyze(tree);
+            BehaviorTreeCompileArtifact second = BehaviorTreeCompiler.Analyze(tree);
+
+            Assert.That(first.IsValid, Is.True);
+            Assert.That(second, Is.SameAs(first));
+        }
+
+        [Test]
+        public void Compiler_FingerprintChangesWhenSerializedNodeConfigurationChanges()
+        {
+            BehaviorTreeCompileCache.Shared.Clear();
+            var tree = CreateOneNodeTree(true);
+            var condition = ((BTRootNode)tree.Root).Child as OnOffNode;
+
+            BehaviorTreeCompileArtifact first = BehaviorTreeCompiler.Analyze(tree);
+            SetOnOff(condition, false);
+            BehaviorTreeCompileArtifact second = BehaviorTreeCompiler.Analyze(tree);
+
+            Assert.That(first.Fingerprint, Is.Not.EqualTo(second.Fingerprint));
+            Assert.That(second.IsValid, Is.True);
+        }
+
+        [Test]
+        public void Compiler_FingerprintIncludesSubTreeAssetContent()
+        {
+            BehaviorTreeCompileCache.Shared.Clear();
+            var subTree = CreateOneNodeTree(true);
+            var subTreeCondition = ((BTRootNode)subTree.Root).Child as OnOffNode;
+            var tree = ScriptableObject.CreateInstance<Runtime.BehaviorTree>();
+            var root = ScriptableObject.CreateInstance<BTRootNode>();
+            var subTreeNode = ScriptableObject.CreateInstance<SubTreeNode>();
+            SetSubTreeAsset(subTreeNode, subTree);
+            root.Child = subTreeNode;
+            tree.Root = root;
+
+            BehaviorTreeCompileArtifact first = BehaviorTreeCompiler.Analyze(tree);
+            SetOnOff(subTreeCondition, false);
+            BehaviorTreeCompileArtifact second = BehaviorTreeCompiler.Analyze(tree);
+
+            Assert.That(first.Fingerprint, Is.Not.EqualTo(second.Fingerprint));
+            Assert.That(second.IsValid, Is.True);
         }
 
         [Test]
@@ -146,12 +255,8 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             }
         }
 
-        private sealed class NullRuntimeNodeAuthoringNode : BTNode
+        private sealed class UnregisteredAuthoringNode : BTNode
         {
-            public override RuntimeNode CreateRuntimeNode()
-            {
-                return null;
-            }
         }
     }
 }

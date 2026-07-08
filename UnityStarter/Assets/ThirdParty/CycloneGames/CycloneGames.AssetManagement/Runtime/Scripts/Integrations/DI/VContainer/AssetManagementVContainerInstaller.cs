@@ -1,4 +1,4 @@
-#if VCONTAINER_PRESENT
+#if CYCLONEGAMES_HAS_VCONTAINER
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
@@ -111,7 +111,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
 
         private static IAssetModule CreateDefaultModule()
         {
-#if YOOASSET_PRESENT
+#if CYCLONEGAMES_HAS_YOOASSET
             var yooAssetModule = TryCreateModule("CycloneGames.AssetManagement.Runtime.YooAssetModule, CycloneGames.AssetManagement.Runtime.Providers.YooAsset");
             if (yooAssetModule != null)
             {
@@ -119,7 +119,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
             }
 #endif
 
-#if ADDRESSABLES_PRESENT
+#if CYCLONEGAMES_HAS_ADDRESSABLES
             var addressablesModule = TryCreateModule("CycloneGames.AssetManagement.Runtime.AddressablesModule, CycloneGames.AssetManagement.Runtime.Providers.Addressables");
             if (addressablesModule != null)
             {
@@ -153,7 +153,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
         }
 
         public async
-#if VCONTAINER_UNITASK_INTEGRATION
+#if CYCLONEGAMES_HAS_VCONTAINER_UNITASK
             UniTask
 #elif UNITY_2023_1_OR_NEWER
             UnityEngine.Awaitable

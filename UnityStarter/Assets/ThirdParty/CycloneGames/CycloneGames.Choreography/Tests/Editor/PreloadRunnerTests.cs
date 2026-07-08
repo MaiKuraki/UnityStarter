@@ -91,6 +91,74 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
+        public void Preload_DeduplicatesReferencesBeforeLoading()
+        {
+            FakeResourceProvider provider = new FakeResourceProvider();
+            ChoreographyResourceReference r1 = new ChoreographyResourceReference("r1", ChoreographyResourceKind.AudioEvent);
+            ChoreographyResourceReference r2 = new ChoreographyResourceReference("r2", ChoreographyResourceKind.Vfx);
+            PreloadRunner runner = new PreloadRunner(provider);
+            PreloadResult result = default;
+            runner.Completed += r => result = r;
+
+            runner.Begin(Refs(r1, r1, r2, r2), PreloadOptions.Default);
+            provider.Complete(r1, true);
+            provider.Complete(r2, true);
+            runner.Update();
+
+            Assert.AreEqual(2, provider.LoadCount);
+            Assert.AreEqual(2, runner.TotalCount);
+            Assert.AreEqual(2, result.TotalCount);
+            Assert.AreEqual(2, result.SucceededCount);
+        }
+
+        [Test]
+        public void Preload_NullProviderHandleReportsFailure()
+        {
+            ChoreographyResourceReference reference = new ChoreographyResourceReference("missing", ChoreographyResourceKind.Vfx);
+            PreloadRunner runner = new PreloadRunner(new NullResourceProvider());
+            PreloadResult result = default;
+            runner.Completed += r => result = r;
+
+            runner.Begin(Refs(reference), PreloadOptions.Default);
+            runner.Update();
+
+            Assert.AreEqual(PreloadStatus.Completed, result.Status);
+            Assert.AreEqual(1, result.FailedCount);
+            Assert.AreEqual(0, result.SucceededCount);
+        }
+
+        [Test]
+        public void Preload_BeginsFromAssetWithoutCallerOwnedList()
+        {
+            FakeResourceProvider provider = new FakeResourceProvider();
+            ChoreographyResourceReference resource = new ChoreographyResourceReference("shared", ChoreographyResourceKind.Animation);
+            ChoreographySection section = TestFactory.Section(
+                "s0",
+                1d,
+                new[]
+                {
+                    new ChoreographyTrack(
+                        "body",
+                        ChoreographyTrackKind.Animation,
+                        new[]
+                        {
+                            new ChoreographyClip("a", resource, 0d, 0.5d),
+                            new ChoreographyClip("b", resource, 0.5d, 0.5d)
+                        })
+                });
+            TestChoreographyAsset asset = new TestChoreographyAsset("asset", section);
+            PreloadRunner runner = new PreloadRunner(provider);
+
+            runner.Begin(asset, PreloadOptions.Default);
+            provider.Complete(resource, true);
+            runner.Update();
+
+            Assert.AreEqual(1, provider.LoadCount);
+            Assert.AreEqual(1, runner.TotalCount);
+            Assert.AreEqual(PreloadStatus.Completed, runner.Status);
+        }
+
+        [Test]
         public void ResourceReference_ProviderAndGroupParticipateInIdentity()
         {
             ChoreographyResourceReference left = new ChoreographyResourceReference(

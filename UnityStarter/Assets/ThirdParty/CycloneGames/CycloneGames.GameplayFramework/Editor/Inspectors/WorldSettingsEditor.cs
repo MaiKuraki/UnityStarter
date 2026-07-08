@@ -83,13 +83,13 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         {
             serializedObject.Update();
             var ws = (WorldSettings)target;
-            bool assetManagementAvailable = WorldSettingsAssetManagementBridge.IsAvailable;
+            bool assetReferenceResolverAvailable = WorldSettingsReferenceResolverRegistry.HasResolver(WorldSettingsReferenceSource.AssetReference);
 
             showValidation = InspectorUiUtility.DrawFoldoutHeader("Validation Overview", showValidation, validationHeaderColor);
             if (showValidation)
             {
                 EditorGUILayout.BeginVertical(GUI.skin.box);
-                InspectorUiUtility.DrawSectionHeader("Configuration Status", "Direct references remain supported. Asset reference mode stores location strings and resolves them at runtime through CycloneGames.AssetManagement when available.", new Color(0.42f, 0.78f, 1f, 1f));
+                InspectorUiUtility.DrawSectionHeader("Configuration Status", "Direct references remain supported. Asset reference mode stores location strings and resolves them through a registered IWorldSettingsReferenceResolver.", new Color(0.42f, 0.78f, 1f, 1f));
                 DrawRequirementLegend();
                 DrawValidationStatus("GameMode", ws.HasConfiguredGameMode, true, ws.GameModeSource);
                 DrawValidationStatus("PlayerController", ws.HasConfiguredPlayerController, true, ws.PlayerControllerSource);
@@ -99,10 +99,10 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 DrawValidationStatus("SpectatorPawn", ws.HasConfiguredSpectatorPawn, false, ws.SpectatorPawnSource);
                 EditorGUILayout.Space(4f);
                 EditorGUILayout.HelpBox(
-                    assetManagementAvailable
-                        ? "CycloneGames.AssetManagement was detected. Asset Reference mode will resolve via AssetManagementLocator.DefaultPackage during startup. Path mode can be resolved by a custom IWorldSettingsReferenceResolver."
-                        : "CycloneGames.AssetManagement was not detected. Asset Reference mode remains editable but unresolved until the package is installed. Path mode can still work through a custom IWorldSettingsReferenceResolver.",
-                    assetManagementAvailable ? MessageType.Info : MessageType.Warning);
+                    assetReferenceResolverAvailable
+                        ? "An Asset Reference resolver is registered. Path mode can be resolved by a custom IWorldSettingsReferenceResolver."
+                        : "Asset Reference mode requires a registered IWorldSettingsReferenceResolver. The AssetManagement integration registers one at runtime when that assembly is present.",
+                    assetReferenceResolverAvailable ? MessageType.Info : MessageType.Warning);
                 EditorGUILayout.EndVertical();
             }
 
@@ -113,12 +113,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             {
                 EditorGUILayout.BeginVertical(GUI.skin.box);
                 InspectorUiUtility.DrawSectionHeader("Reference Strategy", "Choose Direct Reference for legacy drag-and-drop, Asset Reference for CycloneGames.AssetManagement-backed loading, or Path for any custom address-based resource manager.", new Color(1f, 0.76f, 0.38f, 1f));
-                DrawReferenceEntry<GameMode>("GameMode", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, gameModeAssetGuidProp, true, assetManagementAvailable);
-                DrawReferenceEntry<PlayerController>("PlayerController", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, playerControllerAssetGuidProp, true, assetManagementAvailable);
-                DrawReferenceEntry<Pawn>("Pawn", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, pawnAssetGuidProp, true, assetManagementAvailable);
-                DrawReferenceEntry<PlayerState>("PlayerState", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, playerStateAssetGuidProp, false, assetManagementAvailable);
-                DrawReferenceEntry<CameraManager>("CameraManager", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, cameraManagerAssetGuidProp, false, assetManagementAvailable);
-                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, spectatorPawnAssetGuidProp, false, assetManagementAvailable);
+                DrawReferenceEntry<GameMode>("GameMode", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, gameModeAssetGuidProp, true, assetReferenceResolverAvailable);
+                DrawReferenceEntry<PlayerController>("PlayerController", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, playerControllerAssetGuidProp, true, assetReferenceResolverAvailable);
+                DrawReferenceEntry<Pawn>("Pawn", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, pawnAssetGuidProp, true, assetReferenceResolverAvailable);
+                DrawReferenceEntry<PlayerState>("PlayerState", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, playerStateAssetGuidProp, false, assetReferenceResolverAvailable);
+                DrawReferenceEntry<CameraManager>("CameraManager", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, cameraManagerAssetGuidProp, false, assetReferenceResolverAvailable);
+                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, spectatorPawnAssetGuidProp, false, assetReferenceResolverAvailable);
                 EditorGUILayout.EndVertical();
             }
 
@@ -165,7 +165,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             SerializedProperty assetLocationProp,
             SerializedProperty assetGuidProp,
             bool required,
-            bool assetManagementAvailable) where T : Object
+            bool assetReferenceResolverAvailable) where T : Object
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
@@ -205,7 +205,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
             else if (source == WorldSettingsReferenceSource.AssetReference)
             {
-                DrawAssetReferenceField<T>(assetLocationProp, assetGuidProp, assetManagementAvailable);
+                DrawAssetReferenceField<T>(assetLocationProp, assetGuidProp, assetReferenceResolverAvailable);
             }
             else
             {
@@ -226,7 +226,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             EditorGUILayout.HelpBox("Legend: Required entries must be configured to boot the gameplay loop. Optional entries may be omitted depending on your project architecture.", MessageType.None);
         }
 
-        private void DrawAssetReferenceField<T>(SerializedProperty assetLocationProp, SerializedProperty assetGuidProp, bool assetManagementAvailable) where T : Object
+        private void DrawAssetReferenceField<T>(SerializedProperty assetLocationProp, SerializedProperty assetGuidProp, bool assetReferenceResolverAvailable) where T : Object
         {
             T currentAsset = LoadAssetAtPath<T>(assetLocationProp.stringValue);
             T selectedAsset = (T)EditorGUILayout.ObjectField("Asset", currentAsset, typeof(T), false);
@@ -246,9 +246,9 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 EditorGUILayout.HelpBox("The stored asset location is set, but the asset could not be found in the AssetDatabase. Runtime loading may still work if the provider resolves this address virtually.", MessageType.Warning);
             }
 
-            if (!assetManagementAvailable)
+            if (!assetReferenceResolverAvailable)
             {
-                EditorGUILayout.HelpBox("Asset Reference mode is configured, but CycloneGames.AssetManagement is not currently available in this project.", MessageType.Warning);
+                EditorGUILayout.HelpBox("Asset Reference mode is configured, but no Asset Reference resolver is currently registered.", MessageType.Warning);
             }
         }
 

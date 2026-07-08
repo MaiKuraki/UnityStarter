@@ -15,12 +15,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSelectorRandom((uint)_seed);
-            node.GUID = GUID;
-            AddRuntimeChildren(node);
-            return node;
-        }
     }
 }

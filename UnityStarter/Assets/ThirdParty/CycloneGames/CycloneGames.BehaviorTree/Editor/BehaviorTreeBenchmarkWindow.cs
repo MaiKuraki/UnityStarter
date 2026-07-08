@@ -15,14 +15,16 @@ namespace CycloneGames.BehaviorTree.Editor
         private BehaviorTreeBenchmarkConfig _config = new BehaviorTreeBenchmarkConfig();
         private BehaviorTreeBenchmarkResult _lastResult;
         private BehaviorTreeBenchmarkBatchResult _lastBatchResult;
+        private string _lastExportPath;
         private Vector2 _scrollPosition;
+        private GUIStyle _wordWrappedLabelStyle;
 
         [MenuItem("Tools/CycloneGames/Behavior Tree/Behavior Tree Benchmark")]
         public static void OpenWindow()
         {
             var window = GetWindow<BehaviorTreeBenchmarkWindow>();
             window.titleContent = new GUIContent("BT Benchmark");
-            window.minSize = new Vector2(460f, 560f);
+            window.minSize = new Vector2(640f, 620f);
         }
 
         private void OnGUI()
@@ -32,11 +34,18 @@ namespace CycloneGames.BehaviorTree.Editor
             bool createScaleMatrixSceneRequested = false;
             bool createFullMatrixSceneRequested = false;
             bool createPriorityComparisonSceneRequested = false;
+            bool createCertificationSceneRequested = false;
             bool runScaleMatrixRequested = false;
             bool runFullMatrixRequested = false;
             bool runPriorityComparisonRequested = false;
+            bool runCertificationRequested = false;
 
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
+            float previousLabelWidth = EditorGUIUtility.labelWidth;
+            bool previousWideMode = EditorGUIUtility.wideMode;
+            EditorGUIUtility.wideMode = true;
+            EditorGUIUtility.labelWidth = GetResponsiveLabelWidth(position.width);
+
             try
             {
                 EditorGUILayout.LabelField("Benchmark Configuration", EditorStyles.boldLabel);
@@ -75,6 +84,23 @@ namespace CycloneGames.BehaviorTree.Editor
                 _config.HashCheckIntervalFrames = EditorGUILayout.IntField("Hash Check Interval", _config.HashCheckIntervalFrames);
                 _config.SoakFrames = EditorGUILayout.IntField("Soak Frames", _config.SoakFrames);
                 _config.SoakSampleIntervalFrames = EditorGUILayout.IntField("Soak Sample Interval", _config.SoakSampleIntervalFrames);
+                EditorGUILayout.Space(6f);
+                EditorGUILayout.LabelField("Production Budgets", EditorStyles.boldLabel);
+                _config.TargetAverageFrameMilliseconds = EditorGUILayout.DoubleField("Target Average Frame (ms)", _config.TargetAverageFrameMilliseconds);
+                _config.TargetMaxFrameMilliseconds = EditorGUILayout.DoubleField("Target Max Frame (ms)", _config.TargetMaxFrameMilliseconds);
+                _config.MaxManagedMemoryDeltaBytes = EditorGUILayout.LongField("Max Memory Delta (bytes)", _config.MaxManagedMemoryDeltaBytes);
+                _config.MaxGcCollections = EditorGUILayout.IntField("Max GC Collections", _config.MaxGcCollections);
+                _config.MinimumEffectiveTickRatio = EditorGUILayout.Slider("Min Effective Tick Ratio", (float)_config.MinimumEffectiveTickRatio, 0f, 1f);
+                _config.Sanitize();
+
+                long recommendedMemoryBudgetBytes = BehaviorTreeBenchmarkPresetCatalog.EstimateManagedMemoryDeltaBudgetBytes(_config);
+                EditorGUILayout.LabelField("Memory Budget Display", FormatBytes(_config.MaxManagedMemoryDeltaBytes));
+                EditorGUILayout.LabelField("Recommended Memory Budget", FormatBytes(recommendedMemoryBudgetBytes));
+                if (GUILayout.Button("Apply Recommended Production Budgets", GUILayout.Height(24f)))
+                {
+                    BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(_config);
+                }
+
                 _config.Sanitize();
 
                 EditorGUILayout.Space(12f);
@@ -113,6 +139,11 @@ namespace CycloneGames.BehaviorTree.Editor
                     runPriorityComparisonRequested = true;
                 }
 
+                if (GUILayout.Button("Run Production Certification Matrix", GUILayout.Height(28f)))
+                {
+                    runCertificationRequested = true;
+                }
+
                 if (GUILayout.Button("Create Scale Matrix Scene", GUILayout.Height(28f)))
                 {
                     createScaleMatrixSceneRequested = true;
@@ -128,6 +159,11 @@ namespace CycloneGames.BehaviorTree.Editor
                     createPriorityComparisonSceneRequested = true;
                 }
 
+                if (GUILayout.Button("Create Production Certification Scene", GUILayout.Height(28f)))
+                {
+                    createCertificationSceneRequested = true;
+                }
+
                 using (new EditorGUI.DisabledScope(_lastResult == null || !_lastResult.IsValid))
                 {
                     if (GUILayout.Button("Export Last Result as CSV", GUILayout.Height(26f)))
@@ -138,6 +174,11 @@ namespace CycloneGames.BehaviorTree.Editor
                     if (GUILayout.Button("Export Last Result as JSON", GUILayout.Height(26f)))
                     {
                         ExportLastResult("json");
+                    }
+
+                    if (GUILayout.Button("Export Last Result to Default Folder", GUILayout.Height(26f)))
+                    {
+                        ExportLastResultToDefaultFolder();
                     }
                 }
 
@@ -152,6 +193,17 @@ namespace CycloneGames.BehaviorTree.Editor
                     {
                         ExportLastBatchResult("json");
                     }
+
+                    if (GUILayout.Button("Export Last Matrix to Default Folder", GUILayout.Height(26f)))
+                    {
+                        ExportLastBatchToDefaultFolder();
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(_lastExportPath))
+                {
+                    EditorGUILayout.Space(6f);
+                    DrawWrappedMetric("Last Export", _lastExportPath);
                 }
 
                 if (_lastResult != null && _lastResult.IsValid)
@@ -165,18 +217,18 @@ namespace CycloneGames.BehaviorTree.Editor
                 {
                     EditorGUILayout.Space(12f);
                     EditorGUILayout.LabelField("Last Matrix", EditorStyles.boldLabel);
-                    EditorGUILayout.LabelField("Batch Name", _lastBatchResult.BatchName);
-                    EditorGUILayout.LabelField("Cases", _lastBatchResult.Results.Length.ToString());
+                    DrawBatchSummary(_lastBatchResult);
                     for (int i = 0; i < _lastBatchResult.Results.Length; i++)
                     {
                         var result = _lastBatchResult.Results[i];
-                        EditorGUILayout.LabelField(result.BenchmarkName,
-                            $"{result.Complexity} | {result.SchedulingProfile} | {result.AverageFrameMilliseconds:F4} ms avg | {result.EffectiveTickRatio:P0} effective");
+                        DrawMatrixResultRow(result);
                     }
                 }
             }
             finally
             {
+                EditorGUIUtility.labelWidth = previousLabelWidth;
+                EditorGUIUtility.wideMode = previousWideMode;
                 EditorGUILayout.EndScrollView();
             }
 
@@ -210,6 +262,12 @@ namespace CycloneGames.BehaviorTree.Editor
                 GUIUtility.ExitGUI();
             }
 
+            if (createCertificationSceneRequested)
+            {
+                EditorApplication.delayCall += CreateCertificationScene;
+                GUIUtility.ExitGUI();
+            }
+
             if (runScaleMatrixRequested)
             {
                 EditorApplication.delayCall += RunScaleMatrix;
@@ -227,12 +285,19 @@ namespace CycloneGames.BehaviorTree.Editor
                 EditorApplication.delayCall += RunPriorityComparison;
                 GUIUtility.ExitGUI();
             }
+
+            if (runCertificationRequested)
+            {
+                EditorApplication.delayCall += RunCertificationMatrix;
+                GUIUtility.ExitGUI();
+            }
         }
 
         private void RunEditorBenchmark()
         {
             _config.Sanitize();
             _lastResult = BehaviorTreeBenchmarkSession.RunImmediate(_config);
+            _lastBatchResult = null;
             Repaint();
         }
 
@@ -253,6 +318,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 BatchName = $"Scale Matrix [{_config.Complexity}]",
                 Results = results
             };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(_lastBatchResult);
 
             if (results.Length > 0)
             {
@@ -284,6 +350,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 BatchName = "Full Matrix",
                 Results = results
             };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(_lastBatchResult);
 
             if (results.Length > 0)
             {
@@ -308,6 +375,7 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 var config = _config.Clone();
                 BehaviorTreeBenchmarkPresetCatalog.ApplySchedulingProfile(config, profiles[i]);
+                BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(config);
                 config.BenchmarkName = $"{config.BenchmarkName} [{profiles[i]}]";
                 config.Sanitize();
                 results[i] = BehaviorTreeBenchmarkSession.RunImmediate(config);
@@ -319,6 +387,33 @@ namespace CycloneGames.BehaviorTree.Editor
                 BatchName = $"Priority Comparison [{_config.Complexity}]",
                 Results = results
             };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(_lastBatchResult);
+
+            if (results.Length > 0)
+            {
+                _lastResult = results[results.Length - 1];
+            }
+
+            Repaint();
+        }
+
+        private void RunCertificationMatrix()
+        {
+            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateCertificationMatrixConfigs();
+            var results = new BehaviorTreeBenchmarkResult[configs.Length];
+
+            for (int i = 0; i < configs.Length; i++)
+            {
+                results[i] = BehaviorTreeBenchmarkSession.RunImmediate(configs[i]);
+            }
+
+            _lastBatchResult = new BehaviorTreeBenchmarkBatchResult
+            {
+                GeneratedAtUtc = System.DateTime.UtcNow.ToString("O"),
+                BatchName = "Production Certification Matrix",
+                Results = results
+            };
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(_lastBatchResult);
 
             if (results.Length > 0)
             {
@@ -337,6 +432,19 @@ namespace CycloneGames.BehaviorTree.Editor
             var runner = runnerObject.AddComponent<BehaviorTreeBenchmarkRunner>();
             runner.AutoRunOnStart = true;
             runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.Single;
+            runner.SetConfig(_config);
+
+            Selection.activeGameObject = runnerObject;
+            EditorSceneManager.MarkSceneDirty(scene);
+        }
+
+        private void CreateCertificationScene()
+        {
+            var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+            var runnerObject = new GameObject("BehaviorTree Benchmark Certification Runner");
+            var runner = runnerObject.AddComponent<BehaviorTreeBenchmarkRunner>();
+            runner.AutoRunOnStart = true;
+            runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.CertificationMatrix;
             runner.SetConfig(_config);
 
             Selection.activeGameObject = runnerObject;
@@ -414,7 +522,19 @@ namespace CycloneGames.BehaviorTree.Editor
                 : BehaviorTreeBenchmarkExportUtility.ToCsv(_lastResult);
 
             File.WriteAllText(path, content);
+            _lastExportPath = path;
             EditorUtility.RevealInFinder(path);
+        }
+
+        private void ExportLastResultToDefaultFolder()
+        {
+            if (_lastResult == null || !_lastResult.IsValid)
+            {
+                return;
+            }
+
+            _lastExportPath = BehaviorTreeBenchmarkExportUtility.WriteResultFiles(GetDefaultExportDirectory(), _lastResult, writeCsv: true, writeJson: true);
+            RevealLastExport();
         }
 
         private void ExportLastBatchResult(string format)
@@ -437,14 +557,33 @@ namespace CycloneGames.BehaviorTree.Editor
                 : BehaviorTreeBenchmarkExportUtility.ToCsv(_lastBatchResult);
 
             File.WriteAllText(path, content);
+            _lastExportPath = path;
             EditorUtility.RevealInFinder(path);
+        }
+
+        private void ExportLastBatchToDefaultFolder()
+        {
+            if (_lastBatchResult == null || _lastBatchResult.Results == null || _lastBatchResult.Results.Length == 0)
+            {
+                return;
+            }
+
+            _lastExportPath = BehaviorTreeBenchmarkExportUtility.WriteBatchFiles(GetDefaultExportDirectory(), _lastBatchResult, writeCsv: true, writeJson: true);
+            RevealLastExport();
         }
 
         private void DrawResultSummary(BehaviorTreeBenchmarkResult result)
         {
+            EditorGUILayout.HelpBox(result.BudgetSummary, result.ProductionBudgetPassed ? MessageType.Info : MessageType.Warning);
             EditorGUILayout.LabelField("Generated (UTC)", result.GeneratedAtUtc);
             EditorGUILayout.LabelField("Complexity", result.Complexity);
             EditorGUILayout.LabelField("Scheduling", result.SchedulingProfile);
+            EditorGUILayout.LabelField("Production Budget", result.ProductionBudgetPassed ? "PASS" : "FAIL");
+            EditorGUILayout.LabelField("Average Budget (ms)", $"{result.AverageFrameMilliseconds:F4} / {result.TargetAverageFrameMilliseconds:F4}");
+            EditorGUILayout.LabelField("Max Budget (ms)", $"{result.MaxFrameMilliseconds:F4} / {result.TargetMaxFrameMilliseconds:F4}");
+            EditorGUILayout.LabelField("Memory Delta Budget", $"{FormatBytes(result.ManagedMemoryDeltaBytes)} / {FormatBytes(result.MaxManagedMemoryDeltaBytes)}");
+            EditorGUILayout.LabelField("GC Budget", $"{result.Gen0Collections + result.Gen1Collections + result.Gen2Collections} / {result.MaxGcCollections}");
+            EditorGUILayout.LabelField("Effective Ratio Budget", $"{result.EffectiveTickRatio:P2} / {result.MinimumEffectiveTickRatio:P2}");
             EditorGUILayout.LabelField("Leaf Nodes", result.LeafNodesPerTree.ToString());
             EditorGUILayout.LabelField("Reads/Writes", $"{result.BlackboardReadsPerLeafPerTick}/{result.WritesPerLeafPerTick}");
             EditorGUILayout.LabelField("Decorator Layers", result.DecoratorLayersPerLeaf.ToString());
@@ -460,10 +599,61 @@ namespace CycloneGames.BehaviorTree.Editor
             EditorGUILayout.LabelField("Average Frame (ms)", result.AverageFrameMilliseconds.ToString("F4"));
             EditorGUILayout.LabelField("Max Frame (ms)", result.MaxFrameMilliseconds.ToString("F4"));
             EditorGUILayout.LabelField("Ticks / Second", result.TicksPerSecond.ToString("F2"));
-            EditorGUILayout.LabelField("Managed Memory Delta", result.ManagedMemoryDeltaBytes.ToString());
-            EditorGUILayout.LabelField("Peak Managed Memory", result.PeakManagedMemoryBytes.ToString());
+            EditorGUILayout.LabelField("Managed Memory Delta", FormatBytes(result.ManagedMemoryDeltaBytes));
+            EditorGUILayout.LabelField("Peak Managed Memory", FormatBytes(result.PeakManagedMemoryBytes));
             EditorGUILayout.LabelField("Soak Frames / Samples", $"{result.SoakFrames} / {result.SoakSampleCount}");
             EditorGUILayout.LabelField("GC Collections", $"Gen0={result.Gen0Collections}, Gen1={result.Gen1Collections}, Gen2={result.Gen2Collections}");
+        }
+
+        private void DrawBatchSummary(BehaviorTreeBenchmarkBatchResult batch)
+        {
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(batch);
+            EditorGUILayout.HelpBox(batch.Summary, batch.FailedCount == 0 ? MessageType.Info : MessageType.Warning);
+            EditorGUILayout.LabelField("Batch Name", batch.BatchName);
+            EditorGUILayout.LabelField("Cases", batch.CaseCount.ToString());
+            EditorGUILayout.LabelField("Passed / Failed", $"{batch.PassedCount} / {batch.FailedCount}");
+            EditorGUILayout.LabelField("Slowest Average (ms)", batch.SlowestAverageFrameMilliseconds.ToString("F4"));
+            EditorGUILayout.LabelField("Slowest Max (ms)", batch.SlowestMaxFrameMilliseconds.ToString("F4"));
+            EditorGUILayout.LabelField("Peak Managed Memory", FormatBytes(batch.PeakManagedMemoryBytes));
+        }
+
+        private void DrawMatrixResultRow(BehaviorTreeBenchmarkResult result)
+        {
+            string status = result.ProductionBudgetPassed ? "PASS" : "FAIL";
+            string row = $"{status} | {result.BenchmarkName} | {result.Complexity} | {result.SchedulingProfile} | {result.AverageFrameMilliseconds:F4} ms avg | {result.MaxFrameMilliseconds:F4} ms max | {result.EffectiveTickRatio:P0} effective";
+            EditorGUILayout.LabelField(row, WordWrappedLabelStyle);
+        }
+
+        private void DrawWrappedMetric(string label, string value)
+        {
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(label, GUILayout.Width(EditorGUIUtility.labelWidth));
+            EditorGUILayout.LabelField(value ?? string.Empty, WordWrappedLabelStyle);
+            EditorGUILayout.EndHorizontal();
+        }
+
+        private GUIStyle WordWrappedLabelStyle
+        {
+            get
+            {
+                _wordWrappedLabelStyle ??= new GUIStyle(EditorStyles.wordWrappedLabel)
+                {
+                    wordWrap = true
+                };
+
+                return _wordWrappedLabelStyle;
+            }
+        }
+
+        private static float GetResponsiveLabelWidth(float windowWidth)
+        {
+            return Mathf.Clamp(windowWidth * 0.38f, 220f, 300f);
+        }
+
+        private static string FormatBytes(long value)
+        {
+            const double bytesPerMib = 1024d * 1024d;
+            return $"{value / bytesPerMib:F2} MiB ({value})";
         }
 
         private void ApplyPreset(BehaviorTreeBenchmarkPreset preset)
@@ -497,7 +687,22 @@ namespace CycloneGames.BehaviorTree.Editor
         private void ApplyScheduling(BehaviorTreeBenchmarkSchedulingProfile schedulingProfile)
         {
             BehaviorTreeBenchmarkPresetCatalog.ApplySchedulingProfile(_config, schedulingProfile);
+            BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(_config);
             Repaint();
+        }
+
+        private static string GetDefaultExportDirectory()
+        {
+            return Path.Combine(Application.persistentDataPath, "BehaviorTreeBenchmarkResults");
+        }
+
+        private void RevealLastExport()
+        {
+            if (!string.IsNullOrEmpty(_lastExportPath))
+            {
+                EditorUtility.RevealInFinder(_lastExportPath);
+                Repaint();
+            }
         }
 
         private static string SanitizeFileName(string input)
