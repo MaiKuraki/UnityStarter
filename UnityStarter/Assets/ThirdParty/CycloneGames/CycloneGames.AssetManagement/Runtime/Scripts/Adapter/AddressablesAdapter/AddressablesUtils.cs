@@ -1,4 +1,4 @@
-#if ADDRESSABLES_PRESENT
+#if CYCLONEGAMES_HAS_ADDRESSABLES
 using System;
 using System.Collections.Generic;
 using System.Reflection;

@@ -1,4 +1,4 @@
-#if YOOASSET_PRESENT
+#if CYCLONEGAMES_HAS_YOOASSET
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -10,7 +10,7 @@ using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    public sealed class YooAssetPackage : IAssetPackage, IAssetCatalogQuery
+    public sealed class YooAssetPackage : IAssetPackage, IAssetCatalogQuery, IAssetRuntimeDiagnostics
     {
         private readonly ResourcePackage _rawPackage;
         public string Name => _rawPackage.PackageName;
@@ -315,6 +315,11 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             return _cacheService.Contains(cacheKey);
+        }
+
+        public AssetRuntimeCacheSnapshot GetRuntimeCacheSnapshot()
+        {
+            return _cacheService.CreateRuntimeSnapshot(Name, "YooAsset");
         }
 
         public UniTask<bool> TryGetAssetLocationsByTagAsync(string tag, List<string> results, CancellationToken cancellationToken = default)

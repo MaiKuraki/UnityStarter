@@ -12,30 +12,30 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [
-        "VCONTAINER_PRESENT"
+        "CYCLONEGAMES_HAS_VCONTAINER"
     ],
     "versionDefines": [
         {
             "name": "jp.hadashikick.vcontainer",
             "expression": "",
-            "define": "VCONTAINER_PRESENT"
+            "define": "CYCLONEGAMES_HAS_VCONTAINER"
         },
         {
             "name": "com.unity.addressables",
             "expression": "",
-            "define": "ADDRESSABLES_PRESENT"
+            "define": "CYCLONEGAMES_HAS_ADDRESSABLES"
         },
         {
             "name": "com.tuyoogame.yooasset",
             "expression": "",
-            "define": "YOOASSET_PRESENT"
+            "define": "CYCLONEGAMES_HAS_YOOASSET"
         },
         {
             "name": "com.cysharp.unitask",
             "expression": "",
-            "define": "VCONTAINER_UNITASK_INTEGRATION"
+            "define": "CYCLONEGAMES_HAS_VCONTAINER_UNITASK"
         }
     ],
     "noEngineReferences": false

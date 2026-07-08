@@ -100,8 +100,8 @@ namespace CycloneGames.AssetManagement.Runtime
             _activeHandles.Clear();
         }
 
-        // ── Persistent (intentionally long-lived) registry ───────────────────────
-        // Locations marked persistent are excluded from leak heuristics — e.g. DontDestroyOnLoad
+        // Persistent (intentionally long-lived) registry.
+        // Locations marked persistent are excluded from leak heuristics, e.g. DontDestroyOnLoad
         // infrastructure, bootstrap UI, and the main scene's always-resident assets. The registry is
         // independent of <see cref="Enabled"/> and is safe to call from any thread.
         private static readonly HashSet<string> _persistentLocations = new HashSet<string>(System.StringComparer.Ordinal);

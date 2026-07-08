@@ -1,6 +1,7 @@
-using Cysharp.Threading.Tasks;
 using System;
 using System.Threading;
+
+using Cysharp.Threading.Tasks;
 using R3;
 
 namespace CycloneGames.AssetManagement.Runtime
@@ -10,6 +11,9 @@ namespace CycloneGames.AssetManagement.Runtime
         PatchStatesChanged,
         FoundNewVersion,
         DownloadProgress,
+        ContentTrustVerified,
+        ContentRepairCompleted,
+        RollbackCompleted,
         PatchDone,
         PatchFailed
     }

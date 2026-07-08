@@ -2,9 +2,9 @@
 
 English | [简体中文](./README.SCH.md)
 
-A DI-first, interface-driven, unified asset management abstraction layer for Unity. It decouples your game logic from the underlying asset system (YooAsset, Addressables, or Resources), enabling cleaner, more portable, and high-performance code.
+A DI-first, interface-driven, unified asset management abstraction layer for Unity. Gameplay code talks to `IAssetModule` and `IAssetPackage`; concrete providers such as Resources, YooAsset, Addressables, or future provider adapters live behind assembly boundaries.
 
-Built on a **W-TinyLFU** inspired caching architecture, it provides deterministic memory management, fine-grained resource tracking (via Tag/Owner metadata), and comes with powerful editor debugging tools (Cache Debugger, Handle Tracker, Scene Tracker, and Runtime Governance) to guarantee leak-free memory operations.
+Built on a **W-TinyLFU** inspired cache, it provides deterministic idle-handle eviction, Tag/Owner tracking metadata, content trust verification for downloaded files, and editor diagnostics for inspecting cache pressure, handles, scenes, and runtime governance.
 
 ## Table of Contents
 
@@ -30,20 +30,25 @@ Built on a **W-TinyLFU** inspired caching architecture, it provides deterministi
 | ------------ | -------- | ----------------------------------------------- |
 | Unity        | 2022.3+  | Minimum Unity version                           |
 | UniTask      | Yes      | `com.cysharp.unitask` - Async/await support     |
-| YooAsset     | Optional | `com.tuyoogame.yooasset` - Recommended provider |
-| Addressables | Optional | `com.unity.addressables` - Alternative provider |
-| VContainer   | Optional | `jp.hadashikick.vcontainer` - DI integration    |
 | R3           | Yes      | `com.cysharp.r3` - For `IPatchService` events   |
+| CycloneGames.Hash | Yes | `com.cyclone-games.hash` - Deterministic fingerprints and content hashes |
+| CycloneGames.IO | Yes | `com.cyclone-games.io` - File hashing and path-safety helpers |
+| CycloneGames.Logger | Yes | `com.cyclone-games.logger` - Runtime diagnostics |
+| YooAsset     | Optional | `com.tuyoogame.yooasset` - Optional provider |
+| Addressables | Optional | `com.unity.addressables` - Optional provider |
+| Navigathena  | Optional | `com.mackysoft.navigathena` - Optional scene navigation bridge |
+| VContainer   | Optional | `jp.hadashikick.vcontainer` - Optional DI integration |
 
 ## Installation
 
 1. Import the package into your Unity project
-2. Provider assemblies are enabled through asmdef `versionDefines` and `defineConstraints`
-3. No manual scripting define symbols configuration required
+2. Install the required core dependencies listed above when the package is not imported through UPM dependency resolution
+3. Provider assemblies are enabled through asmdef `versionDefines` and `defineConstraints`
+4. Do not add PlayerSettings scripting define symbols manually
 
 ### Assembly Layout
 
-The core runtime assembly only depends on UniTask, R3, and CycloneGames.Logger. Provider and integration code lives in separate assemblies:
+The core runtime assembly depends on UniTask, R3, CycloneGames.Hash, CycloneGames.IO, and CycloneGames.Logger. Provider and integration code lives in separate assemblies. Optional assemblies use `versionDefines` to generate `CYCLONEGAMES_HAS_*` capability symbols, then `defineConstraints` to compile only when the package exists. Optional provider/integration assemblies are not auto-referenced; host assemblies should explicitly reference only the provider or bridge they use.
 
 | Assembly | Purpose | Optional dependency |
 | --- | --- | --- |
@@ -65,7 +70,6 @@ This section walks you through loading your first asset in just a few steps.
 ```csharp
 using CycloneGames.AssetManagement.Runtime;
 using Cysharp.Threading.Tasks;
-using YooAsset;
 
 public class GameBootstrap
 {
@@ -75,7 +79,7 @@ public class GameBootstrap
     public async UniTask Initialize()
     {
         // Create and initialize the module (do this once)
-        AssetModule = new YooAssetModule();
+        AssetModule = new ResourcesModule();
         await AssetModule.InitializeAsync();
 
         // Create and initialize a package (do this once per package)
@@ -83,7 +87,7 @@ public class GameBootstrap
 
         var initOptions = new AssetPackageInitOptions(
             AssetPlayMode.Offline,
-            new OfflinePlayModeParameters()
+            providerOptions: null
         );
 
         await package.InitializeAsync(initOptions);
@@ -94,6 +98,7 @@ public class GameBootstrap
 ### Step 2: Load Assets (Anywhere in Your Game)
 
 ```csharp
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 public class PlayerSpawner
@@ -135,7 +140,7 @@ Game Logic
     v
 IAssetModule (Interface)
     |
-    +-- YooAssetModule (Recommended)
+    +-- YooAssetModule
     +-- AddressablesModule
     +-- ResourcesModule
     |
@@ -186,7 +191,7 @@ handle.Dispose(); // Don't forget this!
 | Hot Update       | Yes        | Limited           | No          |
 | Scene Loading    | Yes        | Yes               | No          |
 | Raw File Loading | Yes        | No                | No          |
-| Recommended For  | Production | Existing Projects | Prototyping |
+| Common Fit       | Patch-heavy products | Existing Addressables projects | Built-in prototypes and small tools |
 
 ---
 
@@ -194,7 +199,7 @@ handle.Dispose(); // Don't forget this!
 
 ### YooAsset Provider
 
-YooAsset is the recommended provider with full feature support.
+YooAsset is an optional provider for projects that explicitly adopt its package and patch workflow.
 
 #### Offline Mode (Single-player Games)
 
@@ -341,7 +346,10 @@ public async UniTask RunPatchFlow()
 
             case PatchEvent.DownloadProgress:
                 var progressArgs = (DownloadProgressEventArgs)args;
-                Debug.Log($"Progress: {progressArgs.Progress:P0}");
+                float progress = progressArgs.TotalDownloadSizeBytes <= 0
+                    ? 0f
+                    : (float)progressArgs.CurrentDownloadSizeBytes / progressArgs.TotalDownloadSizeBytes;
+                Debug.Log($"Progress: {progress:P0}");
                 break;
 
             case PatchEvent.PatchDone:
@@ -374,6 +382,121 @@ await patchService.RunAsync(
     });
 ```
 
+#### Transactional Patch With Content Trust
+
+Patch services that implement `IAssetPatchTransactionService` expose a stricter transaction API. It keeps the legacy event stream, but returns a `PatchRunResult` and can verify a provider-neutral `ContentTrustManifest` after downloads finish:
+
+```csharp
+using CycloneGames.AssetManagement.Runtime.Trust;
+
+var manifest = new ContentTrustManifest(
+    version: "2026.07.09",
+    entries: bundleEntries,
+    rollbackVersion: "2026.07.08");
+
+var trustOptions = new PatchContentTrustOptions(
+    rootDirectory: downloadRoot,
+    manifest: manifest,
+    signatureVerifier: signatureVerifier,
+    failurePolicy: PatchTrustFailurePolicy.RollbackManifestThenFail,
+    clearUnusedCacheAfterRollback: true,
+    failureBuffer: reusableFailureList);
+
+var runOptions = new PatchRunOptions(
+    autoDownloadOnFoundNewVersion: true,
+    downloadOptions: PatchDownloadOptions.Default,
+    trustOptions: trustOptions,
+    appendTimeTicks: false);
+
+if (patchService is IAssetPatchTransactionService transaction)
+{
+    PatchRunResult result = await transaction.RunAsync(runOptions, cancellationToken);
+    if (result.Succeeded)
+    {
+        Debug.Log($"Patch applied: {result.PackageVersion}");
+    }
+}
+```
+
+The transaction state machine reports public `PatchWorkflowState` values through `PatchEvent.PatchStatesChanged`. Content trust failures throw `PatchTrustVerificationException`; depending on `PatchTrustFailurePolicy`, the service can fail fast, clear unused cache, clear all cache, repair corrupted locations, or update the active manifest back to the rollback version and then fail. The rollback step is intentionally explicit and provider-neutral: it calls `UpdatePackageManifestAsync(rollbackVersion)` and optionally `ClearCacheFilesAsync(ClearCacheMode.Unused)`.
+
+#### Manifest Documents and Signing Payloads
+
+`ContentTrustManifestBuilder` creates provider-neutral manifests from build outputs or downloaded files. It normalizes relative locations to forward slashes, validates duplicate locations after deterministic sorting, and can compute SHA-256 or XxHash64 entries through `CycloneGames.IO`.
+
+`ContentTrustManifestCodec` writes and reads a compact JSON document for transport and inspection. The JSON document is not the signing boundary. Signatures should be calculated over `ContentTrustManifestCanonicalPayload` bytes, which use a deterministic schema version, length-prefixed UTF-8 strings, little-endian numeric fields, sorted entries, and no `Signature` field. This prevents JSON whitespace, property order, escaping, or parser behavior from changing signature semantics.
+
+```csharp
+ContentTrustManifest unsignedManifest = new ContentTrustManifestBuilder()
+    .WithVersion("2026.07.09")
+    .WithRollbackVersion("2026.07.08")
+    .AddFile(contentRoot, "bundles/ui.bundle")
+    .Build();
+
+ContentTrustManifest signedManifest =
+    ContentTrustManifestSignatureUtility.Sign(unsignedManifest, manifestSigner);
+
+string json = ContentTrustManifestCodec.ToJson(signedManifest);
+byte[] canonicalPayload = ContentTrustManifestCodec.ToCanonicalPayloadBytes(signedManifest);
+```
+
+#### Content Repair and Self-Healing
+
+Content repair is provider-neutral. `AssetRepairPlanner` converts content trust failures into a deterministic `AssetRepairPlan`; `AssetRepairService` executes the plan by clearing unused cache, downloading the failed locations through `CreateDownloaderForLocations`, and optionally running content trust verification again. The service does not know Addressables, YooAsset, or any future provider SDK type.
+
+```csharp
+var repairService = new AssetRepairService(package);
+var repairOptions = new AssetRepairOptions(
+    downloadOptions: PatchDownloadOptions.Default,
+    trustOptions: trustOptions,
+    clearUnusedCacheBeforeDownload: true,
+    recursiveDownloadLocations: true,
+    verifyAfterRepair: true);
+
+AssetRepairRunResult repair = await repairService.RepairAsync(
+    manifest,
+    reusableFailureList,
+    repairOptions,
+    cancellationToken);
+```
+
+Only location-based content failures are repairable: missing file, size mismatch, hash mismatch, hash computation failure, and I/O error. Manifest-level failures such as invalid manifest data, rejected signatures, unsupported hash algorithms, or paths escaping the trust root remain non-repairable and should fail fast or roll back. For patch transactions, `PatchTrustFailurePolicy.RepairLocationsThenReverify` repairs location failures and allows the patch to succeed only when the post-repair verification passes. `RepairLocationsThenFail` performs the same repair attempt but still fails the transaction so the caller can decide when to retry or restart.
+
+#### Patch Profiles and Product Policy
+
+Long-lived product policy should be configured through a profile instead of being hard-coded into gameplay code. `AssetPatchProfileAsset` is the Unity authoring bridge; it builds an `AssetPatchRuntimeProfile` for the current platform or a specified platform. The runtime profile then creates `PatchRunOptions` once the product has supplied the current trust manifest, signature verifier, and reusable failure buffer.
+
+```csharp
+AssetPatchRuntimeProfile profile = patchProfileAsset.BuildRuntimeProfile();
+
+PatchRunOptions runOptions = profile.CreateRunOptions(
+    manifest: signedManifest,
+    signatureVerifier: signatureVerifier,
+    failureBuffer: reusableFailureList);
+
+IPatchService patchService = assetModule.CreatePatchService(profile.PackageName);
+PatchRunResult result = await ((IAssetPatchTransactionService)patchService)
+    .RunAsync(runOptions, cancellationToken);
+```
+
+Server, headless, or DI composition code can bypass Unity assets and use the builder directly:
+
+```csharp
+AssetPatchRuntimeProfile profile = new AssetPatchRuntimeProfileBuilder()
+    .WithPackageName("Main")
+    .WithPlatform(AssetPatchPlatform.Android)
+    .WithDownloadPolicy(new AssetPatchDownloadPolicy(8, 3, 60))
+    .WithTrustPolicy(new AssetPatchTrustPolicy(
+        enabled: true,
+        rootDirectory: contentRoot,
+        PatchTrustFailurePolicy.RollbackManifestThenFail,
+        rollbackVersionOverride: null,
+        clearUnusedCacheAfterRollback: true))
+    .Build();
+```
+
+The profile owns policy only: package name, platform override, download concurrency/retry/timeout, append-time behavior, content trust root, trust failure policy, rollback override, and post-rollback cache cleanup. It does not own CDN routing, login state, regional rollout rules, UI decisions, or account-specific entitlement logic; inject those from the product layer before creating `PatchRunOptions`.
+
 ### Low-Level API (Fine-grained Control)
 
 For custom update flows:
@@ -402,6 +525,83 @@ await package.ClearCacheFilesAsync(ClearCacheMode.Unused);
 ---
 
 ## Advanced Features
+
+### Content Trust Verification
+
+`CycloneGames.AssetManagement.Runtime.Trust` provides provider-neutral verification for downloaded bundles, raw files, and external catalog payloads before they enter a runtime cache. It is intended for update and patch boundaries, not gameplay hot paths.
+
+```csharp
+using CycloneGames.AssetManagement.Runtime.Trust;
+
+var entry = new ContentTrustFileEntry(
+    "bundles/ui.bundle",
+    sizeBytes: 1048576,
+    ContentTrustHashAlgorithm.Sha256,
+    expectedHashHex: "...");
+
+ContentTrustVerificationResult result =
+    ContentTrustVerifier.Shared.VerifyFile(downloadRoot, entry);
+
+if (!result.Succeeded)
+{
+    // Reject the update, quarantine the file, or trigger a redownload.
+}
+```
+
+Supported checks include manifest root containment, per-file path traversal defense, file size, SHA-256, XxHash64, and optional signature policy via `IContentTrustSignatureVerifier`. The verifier uses `CycloneGames.IO` for file hashing and path containment, and `CycloneGames.Hash` for deterministic manifest fingerprints. It does not write files or keep persistent state.
+
+### Runtime Cache Diagnostics
+
+Packages that implement `IAssetRuntimeDiagnostics` expose an allocation-free aggregate cache snapshot for telemetry, stress HUDs, and automatic memory governance:
+
+```csharp
+if (package is IAssetRuntimeDiagnostics diagnostics)
+{
+    AssetRuntimeCacheSnapshot snapshot = diagnostics.GetRuntimeCacheSnapshot();
+    if (snapshot.IdleBudgetUsage > 0.8f)
+    {
+        package.TrimIdleCache(AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(30)));
+    }
+}
+```
+
+The snapshot reports package name, provider name, active handle count, idle handle count, approximate idle bytes, idle byte budget, and budget usage. It intentionally does not enumerate individual cache entries; use the Editor cache debugger for per-entry analysis.
+
+### Runtime Telemetry Recorder
+
+`AssetRuntimeTelemetryRecorder` records a bounded in-memory window of `AssetRuntimeCacheSnapshot` samples. It is caller-owned, has no background thread, and does not write files by itself. Use it in players, stress builds, QA builds, or in-game debug panels when the game needs a small local record of asset pressure:
+
+```csharp
+var recorder = new AssetRuntimeTelemetryRecorder(
+    new AssetRuntimeTelemetryOptions(
+        capacity: 512,
+        minimumSampleInterval: TimeSpan.FromSeconds(1),
+        includeZeroActivitySamples: false));
+
+if (package is IAssetRuntimeDiagnostics diagnostics)
+{
+    recorder.TryRecord(diagnostics);
+}
+```
+
+To persist the current bounded window in a packaged build, use `AssetRuntimeTelemetryFileSink` with caller-owned scratch buffers:
+
+```csharp
+string path = AssetRuntimeTelemetryPaths.GetDefaultPersistentJsonLinesPath();
+var sink = new AssetRuntimeTelemetryFileSink();
+var samples = new AssetRuntimeTelemetrySample[recorder.Capacity];
+var text = new StringBuilder(64 * 1024);
+
+await sink.WriteJsonLinesAsync(path, recorder, samples, text, cancellationToken);
+```
+
+The default path is:
+
+```text
+Application.persistentDataPath/CycloneGames/AssetManagement/Diagnostics/asset-runtime-telemetry.jsonl
+```
+
+The file is JSON Lines and is atomically replaced on each flush. This is intentional: the module stores a bounded diagnostic window instead of an unbounded log stream. Delete the file to reset diagnostics; it is not a source of truth, should not be checked into Git, and can be rebuilt by recording again. Repeated flushes allocate for JSON serialization and UTF-8 encoding, so flush on a product-defined cadence rather than every frame.
 
 ### Raw File Loading
 
@@ -487,7 +687,7 @@ async UniTask TrackProgress(GroupOperation op)
 
 ### High-Performance Asset Cache (W-TinyLFU inspired)
 
-The asset management system features a zero-GC, three-tier caching architecture (Active, Trial, and Main pools) to maximize cache hit rates and deterministic memory management without adding runtime overhead:
+The asset management system uses a low-allocation, three-tier caching architecture (Active, Trial, and Main pools) to improve cache hit rates and keep idle-memory eviction deterministic. Hot cache paths avoid avoidable allocations where the current API shape permits; project-specific zero-GC claims must be verified with Unity Profiler or allocation tests.
 
 - **Active Pool**: Assets currently explicitly referenced by game logic (Refs > 0).
 - **Trial Pool (LRU)**: A probation area for recently released assets.
@@ -516,7 +716,7 @@ Bucket names support a **hierarchical dot-separated** convention (e.g. `"UI.Scen
 ```csharp
 using CycloneGames.AssetManagement.Runtime;
 
-// Compose hierarchical bucket names (zero-alloc when segments are non-empty)
+// Compose hierarchical bucket names with a stable dot-separated convention.
 string bucket = AssetBucketPath.Combine("UI", "Scene");           // → "UI.Scene"
 string sub    = AssetBucketPath.Combine("UI", "Scene", "MainCity"); // → "UI.Scene.MainCity"
 
@@ -678,7 +878,7 @@ For Inspector-driven setups, drop `AssetCacheRetentionBehaviour` on a persistent
 
 #### Option C: Apply retention on scene transitions (Navigathena)
 
-When the Navigathena integration is present (`NAVIGATHENA_PRESENT`), pass `ApplyPackageCacheRetentionOperation` as the transition `interruptOperation`. It complements `UnloadPackageAssetsOperation`, which clears on-disk bundle files.
+When the Navigathena integration is present (`CYCLONEGAMES_HAS_NAVIGATHENA`), pass `ApplyPackageCacheRetentionOperation` as the transition `interruptOperation`. It complements `UnloadPackageAssetsOperation`, which clears on-disk bundle files.
 
 ```csharp
 var policy = new AssetCacheRetentionPolicy(
@@ -720,7 +920,7 @@ await package.InitializeAsync(new AssetPackageInitOptions(
 
 ### Resource Tracking & Metadata
 
-To make runtime resource tracking effortless, loading APIs support zero-GC `tag` and `owner` metadata parameters. This enables fine-grained tracking of exactly _who_ loaded an asset and _what_ it is used for.
+To make runtime resource tracking easier, loading APIs accept `tag` and `owner` metadata parameters. Passing existing string constants or cached identifiers keeps this path allocation-free while enabling fine-grained tracking of exactly _who_ loaded an asset and _what_ it is used for.
 
 ```csharp
 // Load an asset with tracing metadata
@@ -798,7 +998,7 @@ Live view of every tracked scene handle: provider, package, bucket, activation s
 
 A single dashboard combining handles, scenes, and cache tiers — overview metric cards, top buckets, longest-lived active handles, and a scene-lifecycle snapshot. The fastest place to assess overall asset health during stress tests.
 
-> All four windows repaint with **zero per-frame GC** (data is pre-built on a throttled snapshot) and adapt to both the Pro (dark) and Light editor skins.
+> All four windows build throttled snapshots before repainting so normal editor repaint paths stay low-allocation and responsive in large projects. Use the Unity Profiler when validating allocation budgets for a specific editor layout.
 
 #### Marking Persistent Handles
 
@@ -836,14 +1036,14 @@ In a real project, referencing assets by raw strings like `"Prefabs/Enemy"` is f
 - **No Inspector support** — designers must type paths manually and can't drag-and-drop.
 - **Direct `UnityEngine.Object` references** in prefab/SO fields pull assets into the same bundle, bloating memory and preventing per-language/per-patch splitting.
 
-`AssetRef<T>` and `SceneRef` solve all of these while remaining **zero-cost at runtime** (they are `struct` types that store only two strings).
+`AssetRef<T>` and `SceneRef` solve all of these while staying lightweight at runtime. They are `struct` values that store only `location` and `guid`; they do not load assets or hold handles by themselves.
 
 ### Design Principles
 
 | Principle                     | How                                                                                                                                                 |
 | ----------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Pure data key**             | `AssetRef` stores `location` + `guid`. It never loads, never caches, never holds a handle.                                                          |
-| **Zero GC**                   | `struct`, not `class`. 100k references = zero heap objects.                                                                                         |
+| **Low allocation**            | `struct`, not `class`; arrays and serialized owners still allocate normally, but each reference value does not allocate a separate object.           |
 | **Loading via IAssetPackage** | `package.LoadAsync(assetRef)` returns `IAssetHandle<T>` — reusing the existing ARC + W-TinyLFU cache.                                               |
 | **GUID auto-heal**            | Editor PropertyDrawer resolves GUID → path on every frame. If the asset was moved/renamed, the stored location is updated automatically.            |
 | **SceneRef separation**       | `SceneAsset` is editor-only, and scenes use `LoadSceneAsync` instead of `LoadAssetAsync`. A separate `SceneRef` type carries the correct semantics. |
@@ -986,7 +1186,45 @@ Use `AssetRefValidator.ValidateAllReportOnly()` for CI/reporting flows that must
 | `CreatePackage(name)`      | Create a new asset package             |
 | `GetPackage(name)`         | Get an existing package                |
 | `RemovePackageAsync(name)` | Remove and destroy a package           |
-| `CreatePatchService(name)` | Create a patch service (YooAsset only) |
+| `CreatePatchService(name)` | Create a provider-backed patch service |
+
+### IPatchService / IAssetPatchTransactionService
+
+| Member | Description |
+| --- | --- |
+| `RunAsync(autoDownload, downloadOptions)` | Legacy event-driven patch flow. |
+| `Download()` | Starts a pending download through the legacy fire-and-forget path. |
+| `Cancel()` | Cancels the active provider downloader. |
+| `RunAsync(PatchRunOptions)` | Transactional patch flow with result reporting and optional content trust verification. |
+| `DownloadAsync()` | Completes a pending transaction and returns a `PatchRunResult`. |
+
+### AssetPatchProfileAsset / AssetPatchRuntimeProfile
+
+| Member | Description |
+| --- | --- |
+| `BuildRuntimeProfile()` | Builds a platform-resolved runtime patch profile from a Unity authoring asset. |
+| `BuildRuntimeProfile(platform)` | Builds a runtime patch profile for a specific platform. |
+| `CreateRunOptions(manifest, verifier, signatureVerifier, failureBuffer)` | Converts a runtime profile plus product-provided trust data into `PatchRunOptions`. |
+| `AssetPatchRuntimeProfileBuilder` | Creates the same runtime profile without a Unity asset, suitable for DI/headless/server composition. |
+
+### ContentTrustManifestBuilder / Codec
+
+| Member | Description |
+| --- | --- |
+| `ContentTrustManifestBuilder.AddFile(root, location, algorithm)` | Adds a relative file entry and computes its content hash. |
+| `ContentTrustManifestBuilder.Build()` | Produces a sorted provider-neutral trust manifest. |
+| `ContentTrustManifestCodec.ToJson(manifest)` | Writes the manifest document for storage or transport. |
+| `ContentTrustManifestCodec.FromJson(json)` | Reads a manifest document from JSON. |
+| `ContentTrustManifestCodec.ToCanonicalPayloadBytes(manifest)` | Produces deterministic signing bytes that exclude the signature field. |
+| `ContentTrustManifestSignatureUtility.Sign(manifest, signer)` | Signs canonical bytes through an injected product/platform signer. |
+
+### IAssetRepairService
+
+| Member | Description |
+| --- | --- |
+| `RepairAsync(manifest, failures, options)` | Builds a repair plan from content trust failures and executes location repair. |
+| `RepairAsync(plan, options)` | Executes a precomputed provider-neutral repair plan. |
+| `RepairEvents` | Reports stage changes, plan creation, download progress, completion, and failure. |
 
 ### IAssetPackage
 
@@ -999,7 +1237,7 @@ Use `AssetRefValidator.ValidateAllReportOnly()` for CI/reporting flows that must
 | `LoadAllAssetsAsync<T>(...)`   | Load all assets at location (supports `bucket`/`tag`/`owner`)       |
 | `IsAssetCached<T>(location)`   | Non-allocating residency check (Active or idle Trial/Main pool)     |
 | `InstantiateAsync(handle)`     | Instantiate a loaded prefab                                         |
-| `InstantiateSync(handle)`      | Sync instantiate (zero-GC)                                          |
+| `InstantiateSync(handle)`      | Sync instantiate                                                    |
 | `LoadSceneAsync(location)`     | Load a scene                                                        |
 | `UnloadSceneAsync(handle)`     | Unload a scene                                                      |
 | `LoadRawFileAsync(location)`   | Load a raw file                                                     |
@@ -1019,16 +1257,38 @@ Use `AssetRefValidator.ValidateAllReportOnly()` for CI/reporting flows that must
 | `UnmarkPersistent(location)` / `ClearPersistent()` | Remove persistent markings. |
 | `IsPersistent(location)` | Query whether a location is marked persistent. |
 
+### IAssetRuntimeDiagnostics
+
+| Member | Description |
+| --- | --- |
+| `GetRuntimeCacheSnapshot()` | Returns aggregate runtime cache counters without per-entry enumeration. |
+
+### AssetRuntimeTelemetryRecorder
+
+| Member | Description |
+| --- | --- |
+| `TryRecord(snapshot)` / `TryRecord(diagnostics)` | Records a sample when interval and zero-activity filters allow it. |
+| `CopyTo(buffer)` | Copies the newest bounded window from oldest to newest into a caller-owned buffer. |
+| `TryGetLatest(out sample)` | Reads the latest recorded sample without allocation. |
+| `Clear()` | Clears all in-memory telemetry samples and resets sequence counters. |
+
+### AssetRuntimeTelemetryFileSink
+
+| Member | Description |
+| --- | --- |
+| `WriteJsonLinesAsync(path, recorder, samples, text, token)` | Atomically writes the recorder's current bounded window as JSON Lines using caller-owned scratch buffers. |
+
 ### Scripting Define Symbols
 
 These symbols are automatically defined based on installed packages:
 
 | Symbol                 | When Defined                      |
 | ---------------------- | --------------------------------- |
-| `YOOASSET_PRESENT`     | YooAsset package is installed     |
-| `ADDRESSABLES_PRESENT` | Addressables package is installed |
-| `VCONTAINER_PRESENT`   | VContainer package is installed   |
-| `NAVIGATHENA_PRESENT`  | Navigathena package is installed  |
+| `CYCLONEGAMES_HAS_YOOASSET`     | YooAsset package is installed through UPM |
+| `CYCLONEGAMES_HAS_ADDRESSABLES` | Addressables package is installed through UPM |
+| `CYCLONEGAMES_HAS_VCONTAINER`   | VContainer package is installed through UPM |
+| `CYCLONEGAMES_HAS_NAVIGATHENA`  | Navigathena package is installed through UPM |
+| `CYCLONEGAMES_HAS_VCONTAINER_UNITASK` | UniTask is available in the VContainer integration assembly |
 
 ---
 
@@ -1036,7 +1296,8 @@ These symbols are automatically defined based on installed packages:
 
 1. **Always dispose handles** - Use `using` statements or call `Dispose()` manually
 2. **Use async loading** - Sync loading blocks the main thread
-3. **Choose the right provider** - YooAsset for production, Resources for prototyping
+3. **Choose the provider per product** - Resources for built-in prototypes, Addressables for projects already using Unity's catalog pipeline, YooAsset for projects that explicitly adopt its patch workflow
 4. **Enable handle tracking in development** - Helps find memory leaks early
 5. **Use DI containers** - Register `IAssetModule` as a singleton for clean architecture
 6. **Mark persistent assets** - Declare DontDestroyOnLoad / bootstrap / main-scene assets via `HandleTracker.MarkPersistent` so the leak detector stays signal-rich
+7. **Record bounded player telemetry** - Use `AssetRuntimeTelemetryRecorder` for packaged-build cache pressure records; choose an explicit flush cadence and storage path per product

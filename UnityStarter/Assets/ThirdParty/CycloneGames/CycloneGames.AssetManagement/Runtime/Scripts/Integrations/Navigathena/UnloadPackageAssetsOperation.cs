@@ -1,4 +1,4 @@
-#if NAVIGATHENA_PRESENT
+#if CYCLONEGAMES_HAS_NAVIGATHENA
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
