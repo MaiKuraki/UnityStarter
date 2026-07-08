@@ -52,16 +52,28 @@ namespace CycloneGames.Choreography.Core
         {
             Id = id;
             Duration = duration < 0d ? 0d : duration;
-            Tracks = tracks ?? EmptyTracks;
-            Events = events ?? EmptyEvents;
+            Tracks = CopyOrEmpty(tracks, EmptyTracks);
+            Events = CopyOrEmpty(events, EmptyEvents);
             Interruptible = interruptible;
             PreferredMode = preferredMode;
-            EventStates = eventStates ?? EmptyEventStates;
+            EventStates = CopyOrEmpty(eventStates, EmptyEventStates);
             Clock = clock.Source == ChoreographySectionClockSource.Inherit
                 && clock.ExternalEndPolicy == 0
                 && clock.FrameRate == 0d
                     ? ChoreographySectionClock.Default
                     : clock;
+        }
+
+        private static T[] CopyOrEmpty<T>(T[] source, T[] empty)
+        {
+            if (source == null || source.Length == 0)
+            {
+                return empty;
+            }
+
+            T[] copy = new T[source.Length];
+            Array.Copy(source, copy, source.Length);
+            return copy;
         }
     }
 }

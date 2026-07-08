@@ -56,18 +56,22 @@ namespace CycloneGames.Choreography.CycloneAudio
         private readonly IAudioService _audioService;
         private readonly GameObject _defaultEmitter;
         private readonly IChoreographyDiagnostics _diagnostics;
+        private readonly ICycloneAudioBankState _bankState;
         private readonly Dictionary<VoiceKey, ActiveEvent> _voices = new Dictionary<VoiceKey, ActiveEvent>(16);
         private bool _warnedMissingEvent;
+        private bool _warnedMissingBank;
         private bool _warnedUnsupportedKind;
 
         public CycloneAudioProvider(
             IAudioService audioService,
             GameObject defaultEmitter,
-            IChoreographyDiagnostics diagnostics = null)
+            IChoreographyDiagnostics diagnostics = null,
+            ICycloneAudioBankState bankState = null)
         {
             _audioService = audioService ?? throw new ArgumentNullException(nameof(audioService));
             _defaultEmitter = defaultEmitter;
             _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _bankState = bankState;
         }
 
         public void BeginClip(in ChoreographyPlaybackSample sample)
@@ -86,6 +90,11 @@ namespace CycloneGames.Choreography.CycloneAudio
             if (string.IsNullOrEmpty(eventName))
             {
                 WarnMissingEvent(clip.Id, reference.Group, eventName);
+                return;
+            }
+
+            if (!IsBankReady(reference.Group, clip.Id, eventName))
+            {
                 return;
             }
 
@@ -141,6 +150,27 @@ namespace CycloneGames.Choreography.CycloneAudio
             }
 
             return clip.Id;
+        }
+
+        private bool IsBankReady(string bankId, string clipId, string eventName)
+        {
+            if (string.IsNullOrEmpty(bankId) || _bankState == null || _bankState.IsBankLoaded(bankId))
+            {
+                return true;
+            }
+
+            WarnMissingBank(clipId, bankId, eventName);
+            return false;
+        }
+
+        private void WarnMissingBank(string clipId, string bank, string eventName)
+        {
+            if (!_warnedMissingBank && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            {
+                _warnedMissingBank = true;
+                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.CycloneAudio",
+                    "Audio event '" + eventName + "' for clip '" + clipId + "' skipped because bank '" + bank + "' is not loaded. Preload and load the bank before playback. Further bank warnings are suppressed.");
+            }
         }
 
         private void WarnMissingEvent(string clipId, string bank, string eventName)
