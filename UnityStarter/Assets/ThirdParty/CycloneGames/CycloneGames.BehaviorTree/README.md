@@ -501,12 +501,13 @@ The module includes a full benchmark pipeline for editor and PlayMode scenarios.
 
 ### Key capabilities
 
-- Runner modes: `Single`, `RecommendedMatrix`, `FullMatrix`, `PriorityComparison`
+- Runner modes: `Single`, `RecommendedMatrix`, `FullMatrix`, `PriorityComparison`, `CertificationMatrix`
 - Presets: from `AiBattle500` up to `AiExtreme10000`, plus network and soak presets
 - Scheduling profiles: `FullRate`, `LodCrowd`, `PriorityLod`, `NetworkMixed`, `FarCrowd`, `UltraLod`, `PriorityManaged`
 - Automatic CSV/JSON export via `BehaviorTreeBenchmarkExportUtility`
 - Memory and GC metrics (`ManagedMemoryDeltaBytes`, `PeakManagedMemoryBytes`, `Gen0/1/2Collections`)
 - Tick efficiency metrics (`EffectiveTickRatio`, `AverageActiveAgentsPerFrame`, `TicksPerSecond`)
+- Production budget gates for average frame time, max frame time, workload-scaled managed memory capacity, GC collections, and effective tick ratio
 
 ### Main APIs
 
@@ -516,7 +517,7 @@ BehaviorTreeBenchmarkResult result = BehaviorTreeBenchmarkSession.RunImmediate(c
 
 // Scene runner (supports matrix and priority comparison modes)
 BehaviorTreeBenchmarkRunner runner = gameObject.AddComponent<BehaviorTreeBenchmarkRunner>();
-runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.FullMatrix;
+runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.CertificationMatrix;
 runner.SetConfig(config);
 runner.BeginBenchmark();
 ```
@@ -709,10 +710,15 @@ Condition nodes **evaluate** and return `Success` or `Failure` (never `Running`)
 
 ## Creating Custom Nodes
 
+Custom nodes keep authoring data and runtime execution separate. A `ScriptableObject` node stores serialized configuration for GraphView and Inspector workflows. A pure runtime node performs the hot-path work. A `BehaviorTreeNodeEmitterRegistry` maps authoring nodes to runtime nodes during compilation.
+
+Do not put runtime construction logic inside authoring node classes. Use a registry at the composition root, in a module installer, or in test setup. `BehaviorTreeNodeEmitterRegistry.BuiltIn` is read-only; create an extension registry with built-in fallback when adding project-specific nodes.
+
 ### Custom Action Node (Dual-Layer)
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Compilation;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
@@ -720,30 +726,27 @@ using UnityEngine;
 
 // === ScriptableObject authoring layer ===
 [BTInfo("Custom/Movement", "Moves agent toward target position")]
-public class MoveToTargetNode : ActionNode
+public sealed class MoveToTargetNode : ActionNode
 {
     [SerializeField] private string _targetKey = "TargetPosition";
     [SerializeField] private float _arrivalRadius = 0.5f;
 
-    public override RuntimeNode CreateRuntimeNode()
-    {
-        return new RuntimeMoveToTarget(
-            Animator.StringToHash(_targetKey),
-            _arrivalRadius
-        ) { GUID = GUID };
-    }
+    public string TargetKey => _targetKey;
+    public float ArrivalRadius => _arrivalRadius;
 }
 
 // === Pure C# runtime execution layer ===
-public class RuntimeMoveToTarget : RuntimeStatefulActionNode
+public sealed class RuntimeMoveToTarget : RuntimeStatefulActionNode
 {
     private readonly int _targetKey;
     private readonly float _arrivalRadiusSqr;
+    private readonly int _speedKey;
 
     public RuntimeMoveToTarget(int targetKey, float arrivalRadius)
     {
         _targetKey = targetKey;
         _arrivalRadiusSqr = arrivalRadius * arrivalRadius;
+        _speedKey = RuntimeBlackboard.DefaultStringHashFunc("Speed");
     }
 
     protected override RuntimeState OnActionStart(RuntimeBlackboard bb)
@@ -754,17 +757,18 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
     protected override RuntimeState OnActionRunning(RuntimeBlackboard bb)
     {
         var target = bb.GetVector3(_targetKey);
-        var go = bb.GetContextOwner<GameObject>();
-        if (go == null) return RuntimeState.Failure;
+        var agent = bb.GetService<IMovementAgent>();
+        if (agent == null)
+        {
+            return RuntimeState.Failure;
+        }
 
-        var pos = go.transform.position;
-        if ((target - pos).sqrMagnitude <= _arrivalRadiusSqr)
+        float speed = bb.GetFloat(_speedKey, 5f);
+        if (agent.MoveToward(target, _arrivalRadiusSqr, speed))
+        {
             return RuntimeState.Success;
+        }
 
-        var dir = (target - pos).normalized;
-        go.transform.position = pos + dir
-            * bb.GetFloat(Animator.StringToHash("Speed"), 5f)
-            * Time.deltaTime;
         return RuntimeState.Running;
     }
 
@@ -773,29 +777,46 @@ public class RuntimeMoveToTarget : RuntimeStatefulActionNode
         // Cleanup when node is aborted.
     }
 }
+
+public interface IMovementAgent
+{
+    bool MoveToward(Vector3 target, float arrivalRadiusSqr, float speed);
+}
+
+var emitters = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
+emitters.Register<MoveToTargetNode>((source, context) =>
+{
+    int targetKey = RuntimeBlackboard.DefaultStringHashFunc(source.TargetKey);
+    return context.WithGuid(source, new RuntimeMoveToTarget(targetKey, source.ArrivalRadius));
+});
+
+RuntimeBehaviorTree runtimeTree = BehaviorTreeCompiler.Compile(
+    behaviorTreeAsset,
+    runtimeContext,
+    new BehaviorTreeCompileOptions
+    {
+        Emitters = emitters
+    });
 ```
 
 ### Custom Condition Node
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Compilation;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Conditions;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using UnityEngine;
 
 [BTInfo("Custom/Checks", "Is health above threshold")]
-public class CheckHealthNode : ConditionNode
+public sealed class CheckHealthNode : ConditionNode
 {
     [SerializeField] private string _healthKey = "Health";
     [SerializeField] private int _threshold = 30;
 
-    public override RuntimeNode CreateRuntimeNode()
-    {
-        return new RuntimeCheckHealth(
-            Animator.StringToHash(_healthKey), _threshold
-        ) { GUID = GUID };
-    }
+    public string HealthKey => _healthKey;
+    public int Threshold => _threshold;
 }
 
 public sealed class RuntimeCheckHealth : RuntimeNode
@@ -821,6 +842,13 @@ public sealed class RuntimeCheckHealth : RuntimeNode
         return Evaluate(blackboard) ? RuntimeState.Success : RuntimeState.Failure;
     }
 }
+
+var emitters = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
+emitters.Register<CheckHealthNode>((source, context) =>
+{
+    int healthKey = RuntimeBlackboard.DefaultStringHashFunc(source.HealthKey);
+    return context.WithGuid(source, new RuntimeCheckHealth(healthKey, source.Threshold));
+});
 ```
 
 ---
@@ -1204,10 +1232,10 @@ BTBlackboardDelta.Apply(clientBlackboard, patch);
 
 ### Deterministic RNG
 
-For network reproducibility, use `BTDeterministic.DeterministicRNG`:
+For network reproducibility, use `RuntimeDeterministicRandom`:
 
 ```csharp
-var rng = new BTDeterministic.DeterministicRNG(seed: 42);
+var rng = new RuntimeDeterministicRandom(seed: 42);
 int index = rng.NextInt(0, 5); // same result on server and client with same seed
 ```
 

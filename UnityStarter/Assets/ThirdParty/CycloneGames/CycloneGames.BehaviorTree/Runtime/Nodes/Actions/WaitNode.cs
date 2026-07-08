@@ -10,25 +10,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
         [SerializeField] private float _duration = 1f;
         [SerializeField] private bool _useUnscaledTime = false;
 
+        internal Vector2 Range => _range;
+        internal bool UseUnscaledTime => _useUnscaledTime;
+
         public float Duration { get => _duration; set => _duration = value; }
 
         public override BTNode Clone()
         {
             WaitNode node = (WaitNode)base.Clone();
             node.Duration = Duration;
+            node._useRandomBetweenTwoConstants = _useRandomBetweenTwoConstants;
+            node._range = _range;
+            node._useUnscaledTime = _useUnscaledTime;
             return node;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeWaitNode();
-            node.GUID = GUID;
-            node.Duration = _duration;
-            node.UseUnscaledTime = _useUnscaledTime;
-            node.UseRandomRange = _useRandomBetweenTwoConstants;
-            node.RangeMin = _range.x;
-            node.RangeMax = _range.y;
-            return node;
-        }
     }
 }

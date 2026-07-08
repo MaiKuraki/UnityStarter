@@ -12,7 +12,8 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         Single = 0,
         RecommendedMatrix = 1,
         FullMatrix = 2,
-        PriorityComparison = 3
+        PriorityComparison = 3,
+        CertificationMatrix = 4
     }
 
     [Serializable]
@@ -69,6 +70,11 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         public int HashCheckIntervalFrames = 30;
         public int SoakFrames = 0;
         public int SoakSampleIntervalFrames = 60;
+        public double TargetAverageFrameMilliseconds = 16.6667d;
+        public double TargetMaxFrameMilliseconds = 33.3334d;
+        public long MaxManagedMemoryDeltaBytes = 8L * 1024L * 1024L;
+        public int MaxGcCollections = 0;
+        public double MinimumEffectiveTickRatio = 1d;
 
         public BehaviorTreeBenchmarkConfig Clone()
         {
@@ -92,7 +98,12 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 EnableDeterministicHashCheck = EnableDeterministicHashCheck,
                 HashCheckIntervalFrames = HashCheckIntervalFrames,
                 SoakFrames = SoakFrames,
-                SoakSampleIntervalFrames = SoakSampleIntervalFrames
+                SoakSampleIntervalFrames = SoakSampleIntervalFrames,
+                TargetAverageFrameMilliseconds = TargetAverageFrameMilliseconds,
+                TargetMaxFrameMilliseconds = TargetMaxFrameMilliseconds,
+                MaxManagedMemoryDeltaBytes = MaxManagedMemoryDeltaBytes,
+                MaxGcCollections = MaxGcCollections,
+                MinimumEffectiveTickRatio = MinimumEffectiveTickRatio
             };
         }
 
@@ -112,6 +123,11 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             HashCheckIntervalFrames = Mathf.Max(1, HashCheckIntervalFrames);
             SoakFrames = Mathf.Max(0, SoakFrames);
             SoakSampleIntervalFrames = Mathf.Max(1, SoakSampleIntervalFrames);
+            TargetAverageFrameMilliseconds = Math.Max(0.0001d, TargetAverageFrameMilliseconds);
+            TargetMaxFrameMilliseconds = Math.Max(TargetAverageFrameMilliseconds, TargetMaxFrameMilliseconds);
+            MaxManagedMemoryDeltaBytes = Math.Max(0L, MaxManagedMemoryDeltaBytes);
+            MaxGcCollections = Mathf.Max(0, MaxGcCollections);
+            MinimumEffectiveTickRatio = Math.Max(0d, Math.Min(1d, MinimumEffectiveTickRatio));
         }
     }
 
@@ -162,6 +178,18 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         public int Gen0Collections;
         public int Gen1Collections;
         public int Gen2Collections;
+        public double TargetAverageFrameMilliseconds;
+        public double TargetMaxFrameMilliseconds;
+        public long MaxManagedMemoryDeltaBytes;
+        public int MaxGcCollections;
+        public double MinimumEffectiveTickRatio;
+        public bool AverageFrameBudgetPassed;
+        public bool MaxFrameBudgetPassed;
+        public bool ManagedMemoryBudgetPassed;
+        public bool GcBudgetPassed;
+        public bool EffectiveTickRatioBudgetPassed;
+        public bool ProductionBudgetPassed;
+        public string BudgetSummary;
     }
 
     [Serializable]
@@ -170,10 +198,26 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         public string GeneratedAtUtc;
         public string BatchName;
         public BehaviorTreeBenchmarkResult[] Results;
+        public int CaseCount;
+        public int PassedCount;
+        public int FailedCount;
+        public double SlowestAverageFrameMilliseconds;
+        public double SlowestMaxFrameMilliseconds;
+        public long PeakManagedMemoryBytes;
+        public string Summary;
     }
 
     public static class BehaviorTreeBenchmarkPresetCatalog
     {
+        private const long BYTES_PER_MIB = 1024L * 1024L;
+        private const long BASE_MANAGED_MEMORY_BUDGET_BYTES = 8L * BYTES_PER_MIB;
+        private const long PER_AGENT_STATE_BUDGET_BYTES = 2048L;
+        private const long PER_LEAF_NODE_BUDGET_BYTES = 256L;
+        private const long PER_DECORATOR_LAYER_BUDGET_BYTES = 128L;
+        private const long PER_BLACKBOARD_KEY_BUDGET_BYTES = 128L;
+        private const long PER_DELTA_TRACKER_BUDGET_BYTES = 1024L;
+        private const long PER_DELTA_TRACKED_KEY_BUDGET_BYTES = 64L;
+
         private static readonly BehaviorTreeBenchmarkPreset[] RecommendedPresets =
         {
             BehaviorTreeBenchmarkPreset.AiBattle500,
@@ -181,6 +225,16 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             BehaviorTreeBenchmarkPreset.AiStress5000,
             BehaviorTreeBenchmarkPreset.AiExtreme10000,
             BehaviorTreeBenchmarkPreset.Network100Players500Ai
+        };
+
+        private static readonly BehaviorTreeBenchmarkPreset[] CertificationPresets =
+        {
+            BehaviorTreeBenchmarkPreset.AiBattle500,
+            BehaviorTreeBenchmarkPreset.AiCrowd1000,
+            BehaviorTreeBenchmarkPreset.AiStress5000,
+            BehaviorTreeBenchmarkPreset.AiExtreme10000,
+            BehaviorTreeBenchmarkPreset.Network100Players500Ai,
+            BehaviorTreeBenchmarkPreset.LongSoak1000
         };
 
         private static readonly BehaviorTreeBenchmarkComplexity[] ComplexityTiers =
@@ -205,6 +259,13 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         {
             var copy = new BehaviorTreeBenchmarkPreset[RecommendedPresets.Length];
             Array.Copy(RecommendedPresets, copy, RecommendedPresets.Length);
+            return copy;
+        }
+
+        public static BehaviorTreeBenchmarkPreset[] GetCertificationPresets()
+        {
+            var copy = new BehaviorTreeBenchmarkPreset[CertificationPresets.Length];
+            Array.Copy(CertificationPresets, copy, CertificationPresets.Length);
             return copy;
         }
 
@@ -294,8 +355,32 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
 
             ApplyComplexity(config, complexity);
             ApplySchedulingProfile(config, GetRecommendedSchedulingProfile(preset));
+            ApplyProductionBudgets(config);
             config.Sanitize();
             return config;
+        }
+
+        public static BehaviorTreeBenchmarkConfig[] CreateCertificationMatrixConfigs()
+        {
+            var configs = new BehaviorTreeBenchmarkConfig[CertificationPresets.Length];
+            for (int i = 0; i < CertificationPresets.Length; i++)
+            {
+                BehaviorTreeBenchmarkPreset preset = CertificationPresets[i];
+                BehaviorTreeBenchmarkComplexity complexity = preset switch
+                {
+                    BehaviorTreeBenchmarkPreset.AiBattle500 => BehaviorTreeBenchmarkComplexity.Heavy,
+                    BehaviorTreeBenchmarkPreset.AiCrowd1000 => BehaviorTreeBenchmarkComplexity.Heavy,
+                    BehaviorTreeBenchmarkPreset.AiStress5000 => BehaviorTreeBenchmarkComplexity.Heavy,
+                    BehaviorTreeBenchmarkPreset.AiExtreme10000 => BehaviorTreeBenchmarkComplexity.Heavy,
+                    BehaviorTreeBenchmarkPreset.Network100Players500Ai => BehaviorTreeBenchmarkComplexity.Heavy,
+                    BehaviorTreeBenchmarkPreset.LongSoak1000 => BehaviorTreeBenchmarkComplexity.Medium,
+                    _ => BehaviorTreeBenchmarkComplexity.Medium
+                };
+
+                configs[i] = CreateConfig(preset, complexity);
+            }
+
+            return configs;
         }
 
         public static void ApplyComplexity(BehaviorTreeBenchmarkConfig config, BehaviorTreeBenchmarkComplexity complexity)
@@ -371,6 +456,95 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                     config.HashCheckIntervalFrames = 60;
                     break;
             }
+
+            config.MinimumEffectiveTickRatio = GetExpectedEffectiveTickRatio(schedulingProfile) * 0.9d;
+        }
+
+        public static void ApplyProductionBudgets(BehaviorTreeBenchmarkConfig config)
+        {
+            if (config == null)
+            {
+                return;
+            }
+
+            double averageBudget = config.Preset switch
+            {
+                BehaviorTreeBenchmarkPreset.AiBattle500 => 8.3334d,
+                BehaviorTreeBenchmarkPreset.AiCrowd1000 => 12.5d,
+                BehaviorTreeBenchmarkPreset.AiStress5000 => 16.6667d,
+                BehaviorTreeBenchmarkPreset.AiExtreme10000 => 33.3334d,
+                BehaviorTreeBenchmarkPreset.Network100Players500Ai => 16.6667d,
+                BehaviorTreeBenchmarkPreset.LongSoak1000 => 16.6667d,
+                _ => 16.6667d
+            };
+
+            if (config.Complexity == BehaviorTreeBenchmarkComplexity.Heavy)
+            {
+                averageBudget *= config.Preset == BehaviorTreeBenchmarkPreset.AiExtreme10000 ? 1d : 1.25d;
+            }
+            else if (config.Complexity == BehaviorTreeBenchmarkComplexity.Light)
+            {
+                averageBudget *= 0.75d;
+            }
+
+            config.TargetAverageFrameMilliseconds = averageBudget;
+            config.TargetMaxFrameMilliseconds = averageBudget * 2d;
+            config.MaxManagedMemoryDeltaBytes = EstimateManagedMemoryDeltaBudgetBytes(config);
+            config.MaxGcCollections = 0;
+            config.MinimumEffectiveTickRatio = GetExpectedEffectiveTickRatio(config.SchedulingProfile) * 0.9d;
+            config.Sanitize();
+        }
+
+        public static long EstimateManagedMemoryDeltaBudgetBytes(BehaviorTreeBenchmarkConfig config)
+        {
+            if (config == null)
+            {
+                return BASE_MANAGED_MEMORY_BUDGET_BYTES;
+            }
+
+            int agentCount = Math.Max(1, config.AgentCount);
+            int leafCount = Math.Max(1, config.LeafNodesPerTree);
+            int decoratorLayers = Math.Max(0, config.DecoratorLayersPerLeaf);
+            int writeCount = Math.Max(1, config.WritesPerLeafPerTick);
+            int trackedKeys = Math.Max(config.TrackedKeysPerAgent, leafCount * writeCount);
+
+            long agentStateBudget = agentCount * PER_AGENT_STATE_BUDGET_BYTES;
+            long nodeBudget = agentCount
+                              * leafCount
+                              * (PER_LEAF_NODE_BUDGET_BYTES + (decoratorLayers * PER_DECORATOR_LAYER_BUDGET_BYTES));
+            long blackboardBudget = agentCount * trackedKeys * PER_BLACKBOARD_KEY_BUDGET_BYTES;
+            long deltaBudget = agentCount * (PER_DELTA_TRACKER_BUDGET_BYTES + (trackedKeys * PER_DELTA_TRACKED_KEY_BUDGET_BYTES));
+
+            long networkBudget = config.SchedulingProfile == BehaviorTreeBenchmarkSchedulingProfile.NetworkMixed
+                                 || config.EnableDeterministicHashCheck
+                ? BYTES_PER_MIB + (agentCount * 512L)
+                : 0L;
+
+            long soakBudget = config.SoakFrames > 0
+                ? (2L * BYTES_PER_MIB) + (agentCount * 512L)
+                : 0L;
+
+            return BASE_MANAGED_MEMORY_BUDGET_BYTES
+                   + agentStateBudget
+                   + nodeBudget
+                   + blackboardBudget
+                   + deltaBudget
+                   + networkBudget
+                   + soakBudget;
+        }
+
+        public static double GetExpectedEffectiveTickRatio(BehaviorTreeBenchmarkSchedulingProfile schedulingProfile)
+        {
+            return schedulingProfile switch
+            {
+                BehaviorTreeBenchmarkSchedulingProfile.LodCrowd => 0.45d,
+                BehaviorTreeBenchmarkSchedulingProfile.FarCrowd => 0.2083d,
+                BehaviorTreeBenchmarkSchedulingProfile.PriorityLod => 0.5167d,
+                BehaviorTreeBenchmarkSchedulingProfile.UltraLod => 0.1438d,
+                BehaviorTreeBenchmarkSchedulingProfile.PriorityManaged => 0.325d,
+                BehaviorTreeBenchmarkSchedulingProfile.NetworkMixed => 0.6354d,
+                _ => 1d
+            };
         }
 
         public static BehaviorTreeBenchmarkSchedulingProfile GetRecommendedSchedulingProfile(BehaviorTreeBenchmarkPreset preset)
@@ -402,10 +576,129 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         }
     }
 
+    public static class BehaviorTreeBenchmarkAssessmentUtility
+    {
+        public static void Evaluate(BehaviorTreeBenchmarkResult result)
+        {
+            if (result == null)
+            {
+                return;
+            }
+
+            result.AverageFrameBudgetPassed = result.AverageFrameMilliseconds <= result.TargetAverageFrameMilliseconds;
+            result.MaxFrameBudgetPassed = result.MaxFrameMilliseconds <= result.TargetMaxFrameMilliseconds;
+            long maxMemoryDeltaBytes = Math.Max(0L, result.MaxManagedMemoryDeltaBytes);
+            result.ManagedMemoryBudgetPassed =
+                result.ManagedMemoryDeltaBytes >= -maxMemoryDeltaBytes
+                && result.ManagedMemoryDeltaBytes <= maxMemoryDeltaBytes;
+            result.GcBudgetPassed = result.Gen0Collections + result.Gen1Collections + result.Gen2Collections <= result.MaxGcCollections;
+            result.EffectiveTickRatioBudgetPassed = result.EffectiveTickRatio + 0.000001d >= result.MinimumEffectiveTickRatio;
+            result.ProductionBudgetPassed =
+                result.IsValid
+                && result.AverageFrameBudgetPassed
+                && result.MaxFrameBudgetPassed
+                && result.ManagedMemoryBudgetPassed
+                && result.GcBudgetPassed
+                && result.EffectiveTickRatioBudgetPassed;
+
+            result.BudgetSummary = CreateSummary(result);
+        }
+
+        public static void PopulateBatchSummary(BehaviorTreeBenchmarkBatchResult batch)
+        {
+            if (batch == null || batch.Results == null)
+            {
+                return;
+            }
+
+            int passed = 0;
+            int failed = 0;
+            double slowestAverage = 0d;
+            double slowestMax = 0d;
+            long peakMemory = 0L;
+
+            for (int i = 0; i < batch.Results.Length; i++)
+            {
+                BehaviorTreeBenchmarkResult result = batch.Results[i];
+                if (result == null)
+                {
+                    failed++;
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(result.BudgetSummary))
+                {
+                    Evaluate(result);
+                }
+
+                if (result.ProductionBudgetPassed)
+                {
+                    passed++;
+                }
+                else
+                {
+                    failed++;
+                }
+
+                slowestAverage = Math.Max(slowestAverage, result.AverageFrameMilliseconds);
+                slowestMax = Math.Max(slowestMax, result.MaxFrameMilliseconds);
+                peakMemory = Math.Max(peakMemory, result.PeakManagedMemoryBytes);
+            }
+
+            batch.CaseCount = batch.Results.Length;
+            batch.PassedCount = passed;
+            batch.FailedCount = failed;
+            batch.SlowestAverageFrameMilliseconds = slowestAverage;
+            batch.SlowestMaxFrameMilliseconds = slowestMax;
+            batch.PeakManagedMemoryBytes = peakMemory;
+            batch.Summary = failed == 0
+                ? $"PASS: {passed}/{batch.CaseCount} cases within production budgets."
+                : $"FAIL: {failed}/{batch.CaseCount} cases exceeded production budgets.";
+        }
+
+        private static string CreateSummary(BehaviorTreeBenchmarkResult result)
+        {
+            if (result.ProductionBudgetPassed)
+            {
+                return "PASS: all production budgets satisfied.";
+            }
+
+            var builder = new StringBuilder(160);
+            builder.Append("FAIL:");
+            AppendFailure(builder, result.IsValid, " invalid result");
+            AppendFailure(builder, result.AverageFrameBudgetPassed, " average frame");
+            AppendFailure(builder, result.MaxFrameBudgetPassed, " max frame");
+            AppendFailure(builder, result.ManagedMemoryBudgetPassed, " managed memory delta");
+            AppendFailure(builder, result.GcBudgetPassed, " GC collections");
+            AppendFailure(builder, result.EffectiveTickRatioBudgetPassed, " effective tick ratio");
+            return builder.ToString();
+        }
+
+        private static void AppendFailure(StringBuilder builder, bool passed, string label)
+        {
+            if (passed)
+            {
+                return;
+            }
+
+            if (builder.Length > "FAIL:".Length)
+            {
+                builder.Append(',');
+            }
+
+            builder.Append(label);
+        }
+    }
+
     public static class BehaviorTreeBenchmarkExportUtility
     {
         public static string ToJson(BehaviorTreeBenchmarkResult result)
         {
+            if (result != null && string.IsNullOrEmpty(result.BudgetSummary))
+            {
+                BehaviorTreeBenchmarkAssessmentUtility.Evaluate(result);
+            }
+
             var builder = new StringBuilder(2048);
             builder.AppendLine("{");
             AppendJson(builder, "IsValid", result.IsValid ? "true" : "false", false);
@@ -451,17 +744,37 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             AppendJson(builder, "SoakManagedMemoryDeltaBytes", result.SoakManagedMemoryDeltaBytes.ToString(CultureInfo.InvariantCulture), false);
             AppendJson(builder, "Gen0Collections", result.Gen0Collections.ToString(CultureInfo.InvariantCulture), false);
             AppendJson(builder, "Gen1Collections", result.Gen1Collections.ToString(CultureInfo.InvariantCulture), false);
-            AppendJson(builder, "Gen2Collections", result.Gen2Collections.ToString(CultureInfo.InvariantCulture), false, true);
+            AppendJson(builder, "Gen2Collections", result.Gen2Collections.ToString(CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "TargetAverageFrameMilliseconds", result.TargetAverageFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "TargetMaxFrameMilliseconds", result.TargetMaxFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "MaxManagedMemoryDeltaBytes", result.MaxManagedMemoryDeltaBytes.ToString(CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "MaxGcCollections", result.MaxGcCollections.ToString(CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "MinimumEffectiveTickRatio", result.MinimumEffectiveTickRatio.ToString("F4", CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "AverageFrameBudgetPassed", result.AverageFrameBudgetPassed ? "true" : "false", false);
+            AppendJson(builder, "MaxFrameBudgetPassed", result.MaxFrameBudgetPassed ? "true" : "false", false);
+            AppendJson(builder, "ManagedMemoryBudgetPassed", result.ManagedMemoryBudgetPassed ? "true" : "false", false);
+            AppendJson(builder, "GcBudgetPassed", result.GcBudgetPassed ? "true" : "false", false);
+            AppendJson(builder, "EffectiveTickRatioBudgetPassed", result.EffectiveTickRatioBudgetPassed ? "true" : "false", false);
+            AppendJson(builder, "ProductionBudgetPassed", result.ProductionBudgetPassed ? "true" : "false", false);
+            AppendJson(builder, "BudgetSummary", result.BudgetSummary, true, true);
             builder.Append('}');
             return builder.ToString();
         }
 
         public static string ToJson(BehaviorTreeBenchmarkBatchResult batch)
         {
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(batch);
             var builder = new StringBuilder(8192);
             builder.AppendLine("{");
             AppendJson(builder, "GeneratedAtUtc", batch.GeneratedAtUtc);
             AppendJson(builder, "BatchName", batch.BatchName);
+            AppendJson(builder, "CaseCount", batch.CaseCount.ToString(CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "PassedCount", batch.PassedCount.ToString(CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "FailedCount", batch.FailedCount.ToString(CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "SlowestAverageFrameMilliseconds", batch.SlowestAverageFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "SlowestMaxFrameMilliseconds", batch.SlowestMaxFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "PeakManagedMemoryBytes", batch.PeakManagedMemoryBytes.ToString(CultureInfo.InvariantCulture), false);
+            AppendJson(builder, "Summary", batch.Summary);
             builder.AppendLine("  \"Results\": [");
             if (batch.Results != null)
             {
@@ -483,8 +796,13 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
 
         public static string ToCsv(BehaviorTreeBenchmarkResult result)
         {
+            if (result != null && string.IsNullOrEmpty(result.BudgetSummary))
+            {
+                BehaviorTreeBenchmarkAssessmentUtility.Evaluate(result);
+            }
+
             var builder = new StringBuilder(1536);
-            builder.AppendLine("BenchmarkName,GeneratedAtUtc,Complexity,SchedulingProfile,AgentCount,LeafNodesPerTree,BlackboardReadsPerLeafPerTick,WritesPerLeafPerTick,DecoratorLayersPerLeaf,SimulatedWorkIterationsPerLeaf,TrackedKeysPerAgent,WarmupFrames,MeasurementFrames,TicksPerFrame,EnableDeltaFlush,EnableDeterministicHashCheck,HashCheckIntervalFrames,SoakFrames,SoakSampleIntervalFrames,MeasuredFrameCount,PotentialTicks,TotalTicks,ExecutedTicks,EffectiveTickRatio,AverageActiveAgentsPerFrame,PeakActiveAgentsPerFrame,TotalDeltaFlushes,WarmupDeltaFlushes,MeasuredDeltaFlushes,TotalHashChecks,SoakSampleCount,TotalElapsedMilliseconds,AverageFrameMilliseconds,MaxFrameMilliseconds,TicksPerSecond,ManagedMemoryBeforeBytes,ManagedMemoryAfterBytes,ManagedMemoryDeltaBytes,PeakManagedMemoryBytes,SoakManagedMemoryDeltaBytes,Gen0Collections,Gen1Collections,Gen2Collections");
+            builder.AppendLine("BenchmarkName,GeneratedAtUtc,Complexity,SchedulingProfile,AgentCount,LeafNodesPerTree,BlackboardReadsPerLeafPerTick,WritesPerLeafPerTick,DecoratorLayersPerLeaf,SimulatedWorkIterationsPerLeaf,TrackedKeysPerAgent,WarmupFrames,MeasurementFrames,TicksPerFrame,EnableDeltaFlush,EnableDeterministicHashCheck,HashCheckIntervalFrames,SoakFrames,SoakSampleIntervalFrames,MeasuredFrameCount,PotentialTicks,TotalTicks,ExecutedTicks,EffectiveTickRatio,AverageActiveAgentsPerFrame,PeakActiveAgentsPerFrame,TotalDeltaFlushes,WarmupDeltaFlushes,MeasuredDeltaFlushes,TotalHashChecks,SoakSampleCount,TotalElapsedMilliseconds,AverageFrameMilliseconds,MaxFrameMilliseconds,TicksPerSecond,ManagedMemoryBeforeBytes,ManagedMemoryAfterBytes,ManagedMemoryDeltaBytes,PeakManagedMemoryBytes,SoakManagedMemoryDeltaBytes,Gen0Collections,Gen1Collections,Gen2Collections,TargetAverageFrameMilliseconds,TargetMaxFrameMilliseconds,MaxManagedMemoryDeltaBytes,MaxGcCollections,MinimumEffectiveTickRatio,AverageFrameBudgetPassed,MaxFrameBudgetPassed,ManagedMemoryBudgetPassed,GcBudgetPassed,EffectiveTickRatioBudgetPassed,ProductionBudgetPassed,BudgetSummary");
             builder.Append(Escape(result.BenchmarkName)).Append(',')
                 .Append(Escape(result.GeneratedAtUtc)).Append(',')
                 .Append(result.Complexity).Append(',')
@@ -527,15 +845,28 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 .Append(result.SoakManagedMemoryDeltaBytes).Append(',')
                 .Append(result.Gen0Collections).Append(',')
                 .Append(result.Gen1Collections).Append(',')
-                .Append(result.Gen2Collections)
+                .Append(result.Gen2Collections).Append(',')
+                .Append(result.TargetAverageFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture)).Append(',')
+                .Append(result.TargetMaxFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture)).Append(',')
+                .Append(result.MaxManagedMemoryDeltaBytes).Append(',')
+                .Append(result.MaxGcCollections).Append(',')
+                .Append(result.MinimumEffectiveTickRatio.ToString("F4", CultureInfo.InvariantCulture)).Append(',')
+                .Append(result.AverageFrameBudgetPassed ? "true" : "false").Append(',')
+                .Append(result.MaxFrameBudgetPassed ? "true" : "false").Append(',')
+                .Append(result.ManagedMemoryBudgetPassed ? "true" : "false").Append(',')
+                .Append(result.GcBudgetPassed ? "true" : "false").Append(',')
+                .Append(result.EffectiveTickRatioBudgetPassed ? "true" : "false").Append(',')
+                .Append(result.ProductionBudgetPassed ? "true" : "false").Append(',')
+                .Append(Escape(result.BudgetSummary))
                 .AppendLine();
             return builder.ToString();
         }
 
         public static string ToCsv(BehaviorTreeBenchmarkBatchResult batch)
         {
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(batch);
             var builder = new StringBuilder(8192);
-            builder.AppendLine("BatchName,BenchmarkName,GeneratedAtUtc,Complexity,SchedulingProfile,AgentCount,LeafNodesPerTree,BlackboardReadsPerLeafPerTick,WritesPerLeafPerTick,DecoratorLayersPerLeaf,SimulatedWorkIterationsPerLeaf,TrackedKeysPerAgent,WarmupFrames,MeasurementFrames,TicksPerFrame,EnableDeltaFlush,EnableDeterministicHashCheck,HashCheckIntervalFrames,SoakFrames,SoakSampleIntervalFrames,MeasuredFrameCount,PotentialTicks,TotalTicks,ExecutedTicks,EffectiveTickRatio,AverageActiveAgentsPerFrame,PeakActiveAgentsPerFrame,TotalDeltaFlushes,WarmupDeltaFlushes,MeasuredDeltaFlushes,TotalHashChecks,SoakSampleCount,TotalElapsedMilliseconds,AverageFrameMilliseconds,MaxFrameMilliseconds,TicksPerSecond,ManagedMemoryBeforeBytes,ManagedMemoryAfterBytes,ManagedMemoryDeltaBytes,PeakManagedMemoryBytes,SoakManagedMemoryDeltaBytes,Gen0Collections,Gen1Collections,Gen2Collections");
+            builder.AppendLine("BatchName,BatchSummary,CaseCount,PassedCount,FailedCount,BenchmarkName,GeneratedAtUtc,Complexity,SchedulingProfile,AgentCount,LeafNodesPerTree,BlackboardReadsPerLeafPerTick,WritesPerLeafPerTick,DecoratorLayersPerLeaf,SimulatedWorkIterationsPerLeaf,TrackedKeysPerAgent,WarmupFrames,MeasurementFrames,TicksPerFrame,EnableDeltaFlush,EnableDeterministicHashCheck,HashCheckIntervalFrames,SoakFrames,SoakSampleIntervalFrames,MeasuredFrameCount,PotentialTicks,TotalTicks,ExecutedTicks,EffectiveTickRatio,AverageActiveAgentsPerFrame,PeakActiveAgentsPerFrame,TotalDeltaFlushes,WarmupDeltaFlushes,MeasuredDeltaFlushes,TotalHashChecks,SoakSampleCount,TotalElapsedMilliseconds,AverageFrameMilliseconds,MaxFrameMilliseconds,TicksPerSecond,ManagedMemoryBeforeBytes,ManagedMemoryAfterBytes,ManagedMemoryDeltaBytes,PeakManagedMemoryBytes,SoakManagedMemoryDeltaBytes,Gen0Collections,Gen1Collections,Gen2Collections,TargetAverageFrameMilliseconds,TargetMaxFrameMilliseconds,MaxManagedMemoryDeltaBytes,MaxGcCollections,MinimumEffectiveTickRatio,AverageFrameBudgetPassed,MaxFrameBudgetPassed,ManagedMemoryBudgetPassed,GcBudgetPassed,EffectiveTickRatioBudgetPassed,ProductionBudgetPassed,BudgetSummary");
             if (batch.Results == null)
             {
                 return builder.ToString();
@@ -545,6 +876,10 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             {
                 var result = batch.Results[i];
                 builder.Append(Escape(batch.BatchName)).Append(',')
+                    .Append(Escape(batch.Summary)).Append(',')
+                    .Append(batch.CaseCount).Append(',')
+                    .Append(batch.PassedCount).Append(',')
+                    .Append(batch.FailedCount).Append(',')
                     .Append(Escape(result.BenchmarkName)).Append(',')
                     .Append(Escape(result.GeneratedAtUtc)).Append(',')
                     .Append(result.Complexity).Append(',')
@@ -587,7 +922,19 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                     .Append(result.SoakManagedMemoryDeltaBytes).Append(',')
                     .Append(result.Gen0Collections).Append(',')
                     .Append(result.Gen1Collections).Append(',')
-                    .Append(result.Gen2Collections)
+                    .Append(result.Gen2Collections).Append(',')
+                    .Append(result.TargetAverageFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(result.TargetMaxFrameMilliseconds.ToString("F4", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(result.MaxManagedMemoryDeltaBytes).Append(',')
+                    .Append(result.MaxGcCollections).Append(',')
+                    .Append(result.MinimumEffectiveTickRatio.ToString("F4", CultureInfo.InvariantCulture)).Append(',')
+                    .Append(result.AverageFrameBudgetPassed ? "true" : "false").Append(',')
+                    .Append(result.MaxFrameBudgetPassed ? "true" : "false").Append(',')
+                    .Append(result.ManagedMemoryBudgetPassed ? "true" : "false").Append(',')
+                    .Append(result.GcBudgetPassed ? "true" : "false").Append(',')
+                    .Append(result.EffectiveTickRatioBudgetPassed ? "true" : "false").Append(',')
+                    .Append(result.ProductionBudgetPassed ? "true" : "false").Append(',')
+                    .Append(Escape(result.BudgetSummary))
                     .AppendLine();
             }
 

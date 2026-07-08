@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Runtime.PerformanceTest;
 using CycloneGames.BehaviorTree.Tests.Editor.Framework;
 using NUnit.Framework;
 using Unity.PerformanceTesting;
@@ -260,6 +261,163 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Performance
                 source.Dispose();
                 target.Dispose();
             }
+        }
+
+        [Test]
+        public void BenchmarkSession_EvaluatesProductionBudgets()
+        {
+            var config = new BehaviorTreeBenchmarkConfig
+            {
+                BenchmarkName = "Budget Pass Smoke",
+                AgentCount = 4,
+                LeafNodesPerTree = 2,
+                BlackboardReadsPerLeafPerTick = 1,
+                WritesPerLeafPerTick = 1,
+                WarmupFrames = 1,
+                MeasurementFrames = 2,
+                EnableDeltaFlush = false,
+                TargetAverageFrameMilliseconds = double.MaxValue,
+                TargetMaxFrameMilliseconds = double.MaxValue,
+                MaxManagedMemoryDeltaBytes = long.MaxValue,
+                MaxGcCollections = int.MaxValue,
+                MinimumEffectiveTickRatio = 0d
+            };
+
+            BehaviorTreeBenchmarkResult result = BehaviorTreeBenchmarkSession.RunImmediate(config);
+
+            Assert.IsTrue(result.IsValid);
+            Assert.IsTrue(result.ProductionBudgetPassed);
+            StringAssert.Contains("PASS", result.BudgetSummary);
+        }
+
+        [Test]
+        public void BenchmarkAssessment_FailsWhenBudgetsAreExceeded()
+        {
+            var result = new BehaviorTreeBenchmarkResult
+            {
+                IsValid = true,
+                AverageFrameMilliseconds = 2d,
+                MaxFrameMilliseconds = 4d,
+                ManagedMemoryDeltaBytes = 2048L,
+                Gen0Collections = 1,
+                EffectiveTickRatio = 0.25d,
+                TargetAverageFrameMilliseconds = 1d,
+                TargetMaxFrameMilliseconds = 2d,
+                MaxManagedMemoryDeltaBytes = 1024L,
+                MaxGcCollections = 0,
+                MinimumEffectiveTickRatio = 0.5d
+            };
+
+            BehaviorTreeBenchmarkAssessmentUtility.Evaluate(result);
+
+            Assert.IsFalse(result.ProductionBudgetPassed);
+            Assert.IsFalse(result.AverageFrameBudgetPassed);
+            Assert.IsFalse(result.MaxFrameBudgetPassed);
+            Assert.IsFalse(result.ManagedMemoryBudgetPassed);
+            Assert.IsFalse(result.GcBudgetPassed);
+            Assert.IsFalse(result.EffectiveTickRatioBudgetPassed);
+            StringAssert.Contains("average frame", result.BudgetSummary);
+        }
+
+        [Test]
+        public void BenchmarkAssessment_HandlesExtremeNegativeMemoryDelta()
+        {
+            var result = new BehaviorTreeBenchmarkResult
+            {
+                IsValid = true,
+                AverageFrameMilliseconds = 1d,
+                MaxFrameMilliseconds = 1d,
+                ManagedMemoryDeltaBytes = long.MinValue,
+                TargetAverageFrameMilliseconds = 2d,
+                TargetMaxFrameMilliseconds = 2d,
+                MaxManagedMemoryDeltaBytes = 1024L,
+                MaxGcCollections = 0,
+                MinimumEffectiveTickRatio = 0d,
+                EffectiveTickRatio = 1d
+            };
+
+            Assert.DoesNotThrow(() => BehaviorTreeBenchmarkAssessmentUtility.Evaluate(result));
+            Assert.IsFalse(result.ManagedMemoryBudgetPassed);
+        }
+
+        [Test]
+        public void BenchmarkAssessment_PopulatesBatchSummary()
+        {
+            var batch = new BehaviorTreeBenchmarkBatchResult
+            {
+                BatchName = "Budget Batch",
+                Results = new[]
+                {
+                    new BehaviorTreeBenchmarkResult
+                    {
+                        IsValid = true,
+                        AverageFrameMilliseconds = 1d,
+                        MaxFrameMilliseconds = 2d,
+                        TargetAverageFrameMilliseconds = 2d,
+                        TargetMaxFrameMilliseconds = 3d,
+                        MaxManagedMemoryDeltaBytes = 1024L,
+                        MaxGcCollections = 0,
+                        MinimumEffectiveTickRatio = 0d
+                    },
+                    new BehaviorTreeBenchmarkResult
+                    {
+                        IsValid = true,
+                        AverageFrameMilliseconds = 5d,
+                        MaxFrameMilliseconds = 8d,
+                        TargetAverageFrameMilliseconds = 2d,
+                        TargetMaxFrameMilliseconds = 3d,
+                        MaxManagedMemoryDeltaBytes = 1024L,
+                        MaxGcCollections = 0,
+                        MinimumEffectiveTickRatio = 0d
+                    }
+                }
+            };
+
+            BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(batch);
+
+            Assert.AreEqual(2, batch.CaseCount);
+            Assert.AreEqual(1, batch.PassedCount);
+            Assert.AreEqual(1, batch.FailedCount);
+            StringAssert.Contains("FAIL", batch.Summary);
+        }
+
+        [Test]
+        public void BenchmarkPresetCatalog_CreatesCertificationMatrixWithBudgets()
+        {
+            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateCertificationMatrixConfigs();
+
+            Assert.AreEqual(BehaviorTreeBenchmarkPresetCatalog.GetCertificationPresets().Length, configs.Length);
+            for (int i = 0; i < configs.Length; i++)
+            {
+                Assert.Greater(configs[i].AgentCount, 0);
+                Assert.Greater(configs[i].TargetAverageFrameMilliseconds, 0d);
+                Assert.Greater(configs[i].TargetMaxFrameMilliseconds, 0d);
+                Assert.GreaterOrEqual(configs[i].MinimumEffectiveTickRatio, 0d);
+                Assert.LessOrEqual(configs[i].MinimumEffectiveTickRatio, 1d);
+            }
+        }
+
+        [Test]
+        public void BenchmarkPresetCatalog_EstimatesManagedMemoryBudgetFromWorkload()
+        {
+            BehaviorTreeBenchmarkConfig small = new BehaviorTreeBenchmarkConfig
+            {
+                AgentCount = 10,
+                LeafNodesPerTree = 1,
+                WritesPerLeafPerTick = 1,
+                TrackedKeysPerAgent = 1
+            };
+
+            BehaviorTreeBenchmarkConfig network = BehaviorTreeBenchmarkPresetCatalog.CreateConfig(
+                BehaviorTreeBenchmarkPreset.Network100Players500Ai,
+                BehaviorTreeBenchmarkComplexity.Medium);
+
+            long smallBudget = BehaviorTreeBenchmarkPresetCatalog.EstimateManagedMemoryDeltaBudgetBytes(small);
+            long networkBudget = BehaviorTreeBenchmarkPresetCatalog.EstimateManagedMemoryDeltaBudgetBytes(network);
+
+            Assert.Greater(networkBudget, smallBudget);
+            Assert.Greater(network.MaxManagedMemoryDeltaBytes, 8L * 1024L * 1024L);
+            Assert.Greater(network.MaxManagedMemoryDeltaBytes, 6_627_328L);
         }
     }
 }

@@ -707,6 +707,53 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
+        public void NetworkSnapshot_BufferRoundTripUsesValidCounts()
+        {
+            const int intKey = 707;
+            var sourceTree = BehaviorTreeTestFactory.CreateRuntimeTree(new FixedStateNode(RuntimeState.Running));
+
+            try
+            {
+                sourceTree.Blackboard.SetInt(intKey, 91);
+                using var buffer = new BTStateSnapshotBuffer();
+
+                BTStateSnapshot snapshot = BTNetworkSync.CaptureSnapshot(sourceTree, buffer);
+                ArraySegment<byte> payload = BTNetworkSync.SerializeSnapshot(snapshot, buffer);
+                var bytes = new byte[payload.Count];
+                Buffer.BlockCopy(payload.Array, payload.Offset, bytes, 0, payload.Count);
+
+                BTStateSnapshot restored = BTNetworkSync.DeserializeSnapshot(bytes);
+
+                Assert.AreEqual(snapshot.NodeCount, restored.NodeCount);
+                Assert.AreEqual(snapshot.BlackboardDataLength, restored.BlackboardDataLength);
+                Assert.AreEqual(snapshot.BlackboardHash, restored.BlackboardHash);
+            }
+            finally
+            {
+                sourceTree.Dispose();
+            }
+        }
+
+        [Test]
+        public void NetworkSnapshot_RejectsInvalidFormatMarker()
+        {
+            var sourceTree = BehaviorTreeTestFactory.CreateRuntimeTree(new FixedStateNode(RuntimeState.Running));
+
+            try
+            {
+                BTStateSnapshot snapshot = BTNetworkSync.CaptureSnapshot(sourceTree);
+                byte[] bytes = BTNetworkSync.SerializeSnapshot(snapshot);
+                bytes[0] ^= 0x7F;
+
+                Assert.Throws<InvalidDataException>(() => BTNetworkSync.DeserializeSnapshot(bytes));
+            }
+            finally
+            {
+                sourceTree.Dispose();
+            }
+        }
+
+        [Test]
         public void NetworkSnapshot_RejectsTrailingBytes()
         {
             var sourceTree = BehaviorTreeTestFactory.CreateRuntimeTree(new FixedStateNode(RuntimeState.Running));

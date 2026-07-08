@@ -13,12 +13,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.State
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.State.RuntimeBTChangeNode();
-            node.GUID = GUID;
-            node.StateId = _stateId;
-            return node;
-        }
     }
 }

@@ -20,14 +20,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeParallelAllNode();
-            node.GUID = GUID;
-            node.SuccessThreshold = _successThreshold;
-            node.FailureThreshold = _failureThreshold;
-            AddRuntimeChildren(node);
-            return node;
-        }
     }
 }

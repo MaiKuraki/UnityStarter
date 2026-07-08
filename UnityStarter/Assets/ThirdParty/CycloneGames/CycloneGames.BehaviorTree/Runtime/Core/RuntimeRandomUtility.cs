@@ -2,7 +2,11 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
-    internal struct RuntimeDeterministicRandom
+    /// <summary>
+    /// Stable deterministic random generator for replay, networking, and seeded behavior nodes.
+    /// The algorithm is intentionally fixed and platform-independent.
+    /// </summary>
+    public struct RuntimeDeterministicRandom
     {
         private uint _state;
 
@@ -12,6 +16,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         }
 
         public uint State => _state;
+
+        public static RuntimeDeterministicRandom FromState(uint state)
+        {
+            return new RuntimeDeterministicRandom(state);
+        }
 
         public uint Next()
         {
@@ -28,12 +37,36 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 return 0;
             }
 
-            return (int)(Next() % (uint)maxExclusive);
+            return NextInt(0, maxExclusive);
+        }
+
+        public int NextInt(int minInclusive, int maxExclusive)
+        {
+            if (maxExclusive <= minInclusive)
+            {
+                return minInclusive;
+            }
+
+            uint range = (uint)(maxExclusive - minInclusive);
+            uint threshold = (uint)(-range) % range;
+            uint value;
+            do
+            {
+                value = Next();
+            }
+            while (value < threshold);
+
+            return minInclusive + (int)(value % range);
         }
 
         public float NextFloat()
         {
             return (Next() & 0x7FFFFFu) / (float)0x800000u;
+        }
+
+        public float Range(float minInclusive, float maxInclusive)
+        {
+            return minInclusive + (maxInclusive - minInclusive) * NextFloat();
         }
     }
 

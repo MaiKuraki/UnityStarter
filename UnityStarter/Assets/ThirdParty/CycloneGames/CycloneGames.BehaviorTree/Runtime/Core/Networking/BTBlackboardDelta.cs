@@ -598,49 +598,4 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         }
     }
 
-    /// <summary>
-    /// Deterministic execution helpers for BehaviorTree network sync.
-    /// </summary>
-    public static class BTDeterministic
-    {
-        public struct DeterministicRNG
-        {
-            private uint _state;
-
-            public DeterministicRNG(uint seed)
-            {
-                _state = seed != 0 ? seed : 1;
-            }
-
-            public uint Next()
-            {
-                _state ^= _state << 13;
-                _state ^= _state >> 17;
-                _state ^= _state << 5;
-                return _state;
-            }
-
-            public int NextInt(int max)
-            {
-                return (int)(Next() % (uint)max);
-            }
-
-            public float NextFloat()
-            {
-                return (Next() & 0x7FFFFF) / (float)0x800000;
-            }
-
-            public float Range(float minInclusive, float maxInclusive)
-            {
-                return minInclusive + (maxInclusive - minInclusive) * NextFloat();
-            }
-
-            public uint State => _state;
-        }
-
-        public static bool FloatEqual(float a, float b, float epsilon = 0.0001f)
-        {
-            return Math.Abs(a - b) < epsilon;
-        }
-    }
 }

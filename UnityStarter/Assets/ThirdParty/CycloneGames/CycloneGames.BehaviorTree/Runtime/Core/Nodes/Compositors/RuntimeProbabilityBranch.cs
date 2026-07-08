@@ -1,5 +1,3 @@
-using CycloneGames.BehaviorTree.Runtime.Core.Networking;
-
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 {
     /// <summary>
@@ -42,9 +40,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
                 if (DeterministicSeedKey != 0 && blackboard.HasKey(DeterministicSeedKey))
                 {
                     uint seed = (uint)blackboard.GetInt(DeterministicSeedKey);
-                    var rng = new BTDeterministic.DeterministicRNG(seed);
-                    random = rng.NextFloat() * total;
-                    // Write back advanced state so next call produces different result
+                    var rng = RuntimeDeterministicRandom.FromState(seed);
+                    random = rng.Range(0f, total);
                     blackboard.SetInt(DeterministicSeedKey, (int)rng.State);
                 }
                 else

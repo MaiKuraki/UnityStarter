@@ -20,14 +20,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Conditions
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions.RuntimeRandomChanceNode(
-                _chance,
-                _outOf,
-                (uint)_seed);
-            node.GUID = GUID;
-            return node;
-        }
     }
 }

@@ -20,36 +20,25 @@ namespace CycloneGames.BehaviorTree.Networking
         ForceFullSnapshot = 1 << 3
     }
 
-    public struct BehaviorTreeManifestHandshakeMessage : INetworkProtocolHandshakeMessage
+    public struct BehaviorTreeManifestHandshakeMessage
     {
         public ulong ProtocolFingerprint;
-        public byte MinimumSupportedProtocolVersion;
-        public byte CurrentProtocolVersion;
         public ulong TreeTemplateHash;
         public BehaviorTreeNetworkFeatureFlags RequiredFeatures;
 
         public BehaviorTreeManifestHandshakeMessage(
             ulong protocolFingerprint,
-            byte minimumSupportedProtocolVersion,
-            byte currentProtocolVersion,
             ulong treeTemplateHash,
             BehaviorTreeNetworkFeatureFlags requiredFeatures)
         {
             ProtocolFingerprint = protocolFingerprint;
-            MinimumSupportedProtocolVersion = minimumSupportedProtocolVersion;
-            CurrentProtocolVersion = currentProtocolVersion;
             TreeTemplateHash = treeTemplateHash;
             RequiredFeatures = requiredFeatures;
         }
 
-        ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
-        byte INetworkProtocolHandshakeMessage.CurrentProtocolVersion => CurrentProtocolVersion;
-        byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
-        ulong INetworkProtocolHandshakeMessage.DomainStateHash => TreeTemplateHash;
-
         public bool IsCompatibleWithLocalProtocol()
         {
-            return NetworkProtocolHandshake.IsCompatible(this, BehaviorTreeNetworkProtocol.Module);
+            return ProtocolFingerprint == BehaviorTreeNetworkProtocol.ProtocolFingerprint;
         }
 
         public static BehaviorTreeManifestHandshakeMessage CreateLocal(
@@ -58,8 +47,6 @@ namespace CycloneGames.BehaviorTree.Networking
         {
             return new BehaviorTreeManifestHandshakeMessage(
                 BehaviorTreeNetworkProtocol.ProtocolFingerprint,
-                BehaviorTreeNetworkProtocol.MIN_SUPPORTED_PROTOCOL_VERSION,
-                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
                 treeTemplateHash,
                 requiredFeatures);
         }
@@ -71,7 +58,6 @@ namespace CycloneGames.BehaviorTree.Networking
         public ushort Sequence;
         public int Tick;
         public BehaviorTreeNetworkPayloadKind PayloadKind;
-        public byte ProtocolVersion;
         public ulong TreeTemplateHash;
         public ulong BlackboardHash;
         public ulong TreeStateHash;
@@ -82,7 +68,6 @@ namespace CycloneGames.BehaviorTree.Networking
             ushort sequence,
             int tick,
             BehaviorTreeNetworkPayloadKind payloadKind,
-            byte protocolVersion,
             ulong treeTemplateHash,
             ulong blackboardHash,
             ulong treeStateHash,
@@ -92,7 +77,6 @@ namespace CycloneGames.BehaviorTree.Networking
             Sequence = sequence;
             Tick = tick;
             PayloadKind = payloadKind;
-            ProtocolVersion = protocolVersion;
             TreeTemplateHash = treeTemplateHash;
             BlackboardHash = blackboardHash;
             TreeStateHash = treeStateHash;
@@ -104,7 +88,6 @@ namespace CycloneGames.BehaviorTree.Networking
             get
             {
                 return TargetNetworkId != 0u &&
-                       BehaviorTreeNetworkProtocol.IsSupportedProtocolVersion(ProtocolVersion) &&
                        PayloadKind != BehaviorTreeNetworkPayloadKind.Unknown &&
                        (PayloadKind == BehaviorTreeNetworkPayloadKind.HashOnly || (Payload != null && Payload.Length > 0));
             }
