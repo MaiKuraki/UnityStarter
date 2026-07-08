@@ -1,0 +1,18 @@
+{
+    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement",
+    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement",
+    "references": [
+        "UniTask",
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.AssetManagement.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
