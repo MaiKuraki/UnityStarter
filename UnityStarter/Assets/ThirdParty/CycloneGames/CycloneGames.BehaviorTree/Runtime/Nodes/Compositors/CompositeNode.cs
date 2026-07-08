@@ -44,16 +44,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             Children.Sort(_positionComparer);
         }
 
-        protected void AddRuntimeChildren(RuntimeCompositeNode runtimeNode)
-        {
-            runtimeNode.AbortType = (RuntimeAbortType)(int)AbortType;
-            for (int i = 0; i < Children.Count; i++)
-            {
-                BTNode child = Children[i];
-                runtimeNode.AddChild(CreateRequiredRuntimeNode(child, $"child[{i}]"));
-            }
-        }
-
         private class NodePositionComparer : IComparer<BTNode>
         {
             public int Compare(BTNode a, BTNode b)

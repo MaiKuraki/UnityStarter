@@ -15,12 +15,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.RuntimeMessageRemoveNode();
-            node.GUID = GUID;
-            node.KeyHash = UnityEngine.Animator.StringToHash(_key);
-            return node;
-        }
     }
 }

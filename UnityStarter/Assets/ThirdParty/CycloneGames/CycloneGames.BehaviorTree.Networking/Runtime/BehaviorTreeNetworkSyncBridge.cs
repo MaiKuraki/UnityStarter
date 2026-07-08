@@ -5,9 +5,10 @@ using CycloneGames.BehaviorTree.Runtime.Core.Networking;
 
 namespace CycloneGames.BehaviorTree.Networking
 {
-    public sealed class BehaviorTreeNetworkSyncBridge
+    public sealed class BehaviorTreeNetworkSyncBridge : IDisposable
     {
         private readonly BehaviorTreeNetworkProfile _profile;
+        private readonly BTStateSnapshotBuffer _snapshotBuffer = new BTStateSnapshotBuffer();
 
         public BehaviorTreeNetworkSyncBridge(BehaviorTreeNetworkProfile profile = null)
         {
@@ -33,16 +34,18 @@ namespace CycloneGames.BehaviorTree.Networking
                 throw new ArgumentNullException(nameof(tree));
             }
 
-            BTStateSnapshot snapshot = BTNetworkSync.CaptureSnapshot(tree);
-            byte[] payload = BTNetworkSync.SerializeSnapshot(snapshot);
-            ValidatePayloadSize(payload.Length, _profile.MaxSnapshotPayloadBytes, nameof(CaptureSnapshot));
+            BTStateSnapshot snapshot = BTNetworkSync.CaptureSnapshot(tree, _snapshotBuffer);
+            ArraySegment<byte> segment = BTNetworkSync.SerializeSnapshot(snapshot, _snapshotBuffer);
+            ValidatePayloadSize(segment.Count, _profile.MaxSnapshotPayloadBytes, nameof(CaptureSnapshot));
+
+            var payload = new byte[segment.Count];
+            Buffer.BlockCopy(segment.Array, segment.Offset, payload, 0, segment.Count);
 
             return new BehaviorTreeStatePayloadMessage(
                 targetNetworkId,
                 sequence,
                 tick,
                 BehaviorTreeNetworkPayloadKind.FullSnapshot,
-                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
                 treeTemplateHash,
                 snapshot.BlackboardHash,
                 snapshot.TreeStateHash,
@@ -80,7 +83,6 @@ namespace CycloneGames.BehaviorTree.Networking
                 sequence,
                 tick,
                 BehaviorTreeNetworkPayloadKind.BlackboardDelta,
-                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
                 treeTemplateHash,
                 blackboardHash,
                 blackboardHash,
@@ -111,7 +113,6 @@ namespace CycloneGames.BehaviorTree.Networking
                 sequence,
                 tick,
                 BehaviorTreeNetworkPayloadKind.HashOnly,
-                BehaviorTreeNetworkProtocol.PROTOCOL_VERSION,
                 treeTemplateHash,
                 blackboardHash,
                 blackboardHash,
@@ -281,6 +282,11 @@ namespace CycloneGames.BehaviorTree.Networking
                 BTNetworkSync.Limits.DEFAULT_MAX_NODE_COUNT,
                 maxSnapshotPayloadBytes,
                 RuntimeBlackboardSerializationLimits.Default);
+        }
+
+        public void Dispose()
+        {
+            _snapshotBuffer.Dispose();
         }
     }
 }

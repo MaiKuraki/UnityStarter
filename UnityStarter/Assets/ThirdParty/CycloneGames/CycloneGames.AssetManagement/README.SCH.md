@@ -2,9 +2,9 @@
 
 [English](./README.md) | 简体中文
 
-一个为 Unity 设计的 DI 优先、接口驱动的统一资源管理抽象层。它将游戏逻辑与底层资源系统（YooAsset、Addressables 或 Resources）解耦，让您编写更清晰、更易移植的高性能代码。
+一个为 Unity 设计的 DI 优先、接口驱动的统一资源管理抽象层。游戏逻辑只面向 `IAssetModule` 与 `IAssetPackage`；Resources、YooAsset、Addressables 或未来 provider adapter 都隔离在独立程序集边界后。
 
-基于 **W-TinyLFU** 架构，它提供了确定性的内存管理、细粒度的资源追踪（通过 Tag/Owner 元数据），并配备了强大的可视化编辑器调试工具（缓存调试器、句柄追踪器、场景追踪器与运行时治理面板），助您彻底告别内存泄漏。
+基于 **W-TinyLFU** 启发式缓存，它提供确定性的空闲句柄驱逐、Tag/Owner 追踪元数据、下载文件内容可信校验，以及用于检查缓存压力、句柄、场景和运行时治理状态的 Editor 诊断工具。
 
 ## 目录
 
@@ -30,20 +30,25 @@
 | ------------ | ------- | -------------------------------------------- |
 | Unity        | 2022.3+ | 最低版本要求                                 |
 | UniTask      | 是      | `com.cysharp.unitask` - 异步支持             |
-| YooAsset     | 可选    | `com.tuyoogame.yooasset` - 推荐的提供器      |
-| Addressables | 可选    | `com.unity.addressables` - 备选提供器        |
-| VContainer   | 可选    | `jp.hadashikick.vcontainer` - DI 集成        |
 | R3           | 是      | `com.cysharp.r3` - 用于 `IPatchService` 事件 |
+| CycloneGames.Hash | 是 | `com.cyclone-games.hash` - 确定性 fingerprint 与内容哈希 |
+| CycloneGames.IO | 是 | `com.cyclone-games.io` - 文件哈希与路径安全辅助 |
+| CycloneGames.Logger | 是 | `com.cyclone-games.logger` - 运行时诊断 |
+| YooAsset     | 可选    | `com.tuyoogame.yooasset` - 可选 provider |
+| Addressables | 可选    | `com.unity.addressables` - 可选 provider |
+| Navigathena  | 可选    | `com.mackysoft.navigathena` - 可选场景导航桥接 |
+| VContainer   | 可选    | `jp.hadashikick.vcontainer` - 可选 DI 集成 |
 
 ## 安装
 
 1. 将包导入您的 Unity 项目
-2. 提供器程序集通过 asmdef `versionDefines` 和 `defineConstraints` 自动启用
-3. 无需手动配置脚本定义符号
+2. 如果不是通过 UPM 依赖解析导入，请确保上表中的核心依赖已存在
+3. Provider 程序集通过 asmdef `versionDefines` 和 `defineConstraints` 自动启用
+4. 不要手动向 PlayerSettings 添加 scripting define symbols
 
 ### 程序集布局
 
-核心 Runtime 程序集只依赖 UniTask、R3 和 CycloneGames.Logger。提供器和集成代码位于独立程序集：
+核心 Runtime 程序集依赖 UniTask、R3、CycloneGames.Hash、CycloneGames.IO 和 CycloneGames.Logger。Provider 与 integration 代码位于独立程序集。可选程序集使用 `versionDefines` 生成 `CYCLONEGAMES_HAS_*` capability symbols，再通过 `defineConstraints` 只在对应包存在时参与编译。可选 provider/integration assembly 不会自动引用到所有宿主程序集；宿主 asmdef 应只显式引用实际使用的 provider 或 bridge。
 
 | 程序集 | 用途 | 可选依赖 |
 | --- | --- | --- |
@@ -65,7 +70,6 @@
 ```csharp
 using CycloneGames.AssetManagement.Runtime;
 using Cysharp.Threading.Tasks;
-using YooAsset;
 
 public class GameBootstrap
 {
@@ -75,7 +79,7 @@ public class GameBootstrap
     public async UniTask Initialize()
     {
         // 创建并初始化模块（只执行一次）
-        AssetModule = new YooAssetModule();
+        AssetModule = new ResourcesModule();
         await AssetModule.InitializeAsync();
 
         // 创建并初始化资源包（每个包只执行一次）
@@ -83,7 +87,7 @@ public class GameBootstrap
 
         var initOptions = new AssetPackageInitOptions(
             AssetPlayMode.Offline,
-            new OfflinePlayModeParameters()
+            providerOptions: null
         );
 
         await package.InitializeAsync(initOptions);
@@ -94,6 +98,7 @@ public class GameBootstrap
 ### 第二步：加载资源（在游戏任意位置）
 
 ```csharp
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 public class PlayerSpawner
@@ -135,7 +140,7 @@ public class PlayerSpawner
     v
 IAssetModule（接口）
     |
-    +-- YooAssetModule（推荐）
+    +-- YooAssetModule
     +-- AddressablesModule
     +-- ResourcesModule
     |
@@ -186,7 +191,7 @@ handle.Dispose(); // 不要忘记这一步！
 | 热更新       | 支持     | 有限         | 不支持    |
 | 场景加载     | 支持     | 支持         | 不支持    |
 | 原生文件加载 | 支持     | 不支持       | 不支持    |
-| 推荐用途     | 正式项目 | 已有项目     | 原型开发  |
+| 常见适用场景 | 重补丁/热更新产品 | 已采用 Addressables 的项目 | 内置原型和小型工具 |
 
 ---
 
@@ -194,7 +199,7 @@ handle.Dispose(); // 不要忘记这一步！
 
 ### YooAsset 提供器
 
-YooAsset 是推荐的提供器，具有完整的功能支持。
+YooAsset 是可选 provider，适用于明确采用其 package 与 patch workflow 的项目。
 
 #### 离线模式（单机游戏）
 
@@ -341,7 +346,10 @@ public async UniTask RunPatchFlow()
 
             case PatchEvent.DownloadProgress:
                 var progressArgs = (DownloadProgressEventArgs)args;
-                Debug.Log($"进度：{progressArgs.Progress:P0}");
+                float progress = progressArgs.TotalDownloadSizeBytes <= 0
+                    ? 0f
+                    : (float)progressArgs.CurrentDownloadSizeBytes / progressArgs.TotalDownloadSizeBytes;
+                Debug.Log($"进度：{progress:P0}");
                 break;
 
             case PatchEvent.PatchDone:
@@ -374,6 +382,121 @@ await patchService.RunAsync(
     });
 ```
 
+#### 带内容可信校验的事务式 Patch
+
+实现 `IAssetPatchTransactionService` 的 patch service 会提供更严格的事务 API。它保留旧的事件流，同时返回 `PatchRunResult`，并可以在下载完成后校验 provider-neutral 的 `ContentTrustManifest`：
+
+```csharp
+using CycloneGames.AssetManagement.Runtime.Trust;
+
+var manifest = new ContentTrustManifest(
+    version: "2026.07.09",
+    entries: bundleEntries,
+    rollbackVersion: "2026.07.08");
+
+var trustOptions = new PatchContentTrustOptions(
+    rootDirectory: downloadRoot,
+    manifest: manifest,
+    signatureVerifier: signatureVerifier,
+    failurePolicy: PatchTrustFailurePolicy.RollbackManifestThenFail,
+    clearUnusedCacheAfterRollback: true,
+    failureBuffer: reusableFailureList);
+
+var runOptions = new PatchRunOptions(
+    autoDownloadOnFoundNewVersion: true,
+    downloadOptions: PatchDownloadOptions.Default,
+    trustOptions: trustOptions,
+    appendTimeTicks: false);
+
+if (patchService is IAssetPatchTransactionService transaction)
+{
+    PatchRunResult result = await transaction.RunAsync(runOptions, cancellationToken);
+    if (result.Succeeded)
+    {
+        Debug.Log($"Patch applied: {result.PackageVersion}");
+    }
+}
+```
+
+事务状态机会通过 `PatchEvent.PatchStatesChanged` 报告公开的 `PatchWorkflowState` 值。内容可信校验失败会抛出 `PatchTrustVerificationException`；根据 `PatchTrustFailurePolicy`，服务可以直接失败、清理 unused cache、清理全部 cache、修复损坏 location，或将 active manifest 更新回 rollback version 后再失败。rollback 步骤刻意保持显式且 provider-neutral：它调用 `UpdatePackageManifestAsync(rollbackVersion)`，并可选调用 `ClearCacheFilesAsync(ClearCacheMode.Unused)`。
+
+#### Manifest 文档与签名 Payload
+
+`ContentTrustManifestBuilder` 用于从构建产物或已下载文件创建 provider-neutral manifest。它会将相对 location 规范化为正斜杠，在确定性排序后校验重复 location，并通过 `CycloneGames.IO` 计算 SHA-256 或 XxHash64 条目。
+
+`ContentTrustManifestCodec` 写入和读取紧凑 JSON 文档，用于传输与检查。JSON 文档不是签名安全边界。签名应基于 `ContentTrustManifestCanonicalPayload` bytes：该 payload 使用确定性 schema version、长度前缀 UTF-8 字符串、小端数字字段、排序后的 entries，并排除 `Signature` 字段。这样 JSON 空白、属性顺序、转义方式或 parser 行为都不会改变签名语义。
+
+```csharp
+ContentTrustManifest unsignedManifest = new ContentTrustManifestBuilder()
+    .WithVersion("2026.07.09")
+    .WithRollbackVersion("2026.07.08")
+    .AddFile(contentRoot, "bundles/ui.bundle")
+    .Build();
+
+ContentTrustManifest signedManifest =
+    ContentTrustManifestSignatureUtility.Sign(unsignedManifest, manifestSigner);
+
+string json = ContentTrustManifestCodec.ToJson(signedManifest);
+byte[] canonicalPayload = ContentTrustManifestCodec.ToCanonicalPayloadBytes(signedManifest);
+```
+
+#### 内容修复与自愈
+
+内容修复保持 provider-neutral。`AssetRepairPlanner` 将内容可信校验失败转换成确定性的 `AssetRepairPlan`；`AssetRepairService` 执行该 plan：清理 unused cache，通过 `CreateDownloaderForLocations` 下载失败 location，并可选再次运行内容可信校验。该服务不知道 Addressables、YooAsset 或未来任何 provider SDK 类型。
+
+```csharp
+var repairService = new AssetRepairService(package);
+var repairOptions = new AssetRepairOptions(
+    downloadOptions: PatchDownloadOptions.Default,
+    trustOptions: trustOptions,
+    clearUnusedCacheBeforeDownload: true,
+    recursiveDownloadLocations: true,
+    verifyAfterRepair: true);
+
+AssetRepairRunResult repair = await repairService.RepairAsync(
+    manifest,
+    reusableFailureList,
+    repairOptions,
+    cancellationToken);
+```
+
+只有 location-based 内容失败可修复：文件缺失、大小不匹配、hash 不匹配、hash 计算失败和 I/O 错误。manifest 层失败，例如 manifest 数据无效、签名被拒绝、不支持的 hash 算法或路径逃逸 trust root，仍然不可修复，应直接失败或 rollback。对于 patch transaction，`PatchTrustFailurePolicy.RepairLocationsThenReverify` 会修复 location 失败，并且只有修复后复验通过才允许 patch 成功。`RepairLocationsThenFail` 会执行同样的修复尝试，但 transaction 仍然失败，由调用方决定何时重试或重启。
+
+#### Patch Profile 与产品策略
+
+长期存在的产品策略应通过 profile 配置，而不是硬编码在 gameplay 代码里。`AssetPatchProfileAsset` 是 Unity authoring bridge；它会为当前平台或指定平台构建 `AssetPatchRuntimeProfile`。当产品层提供当前 trust manifest、签名校验器和可复用 failure buffer 后，runtime profile 再生成 `PatchRunOptions`。
+
+```csharp
+AssetPatchRuntimeProfile profile = patchProfileAsset.BuildRuntimeProfile();
+
+PatchRunOptions runOptions = profile.CreateRunOptions(
+    manifest: signedManifest,
+    signatureVerifier: signatureVerifier,
+    failureBuffer: reusableFailureList);
+
+IPatchService patchService = assetModule.CreatePatchService(profile.PackageName);
+PatchRunResult result = await ((IAssetPatchTransactionService)patchService)
+    .RunAsync(runOptions, cancellationToken);
+```
+
+服务器、headless 或 DI composition 代码可以绕过 Unity asset，直接使用 builder：
+
+```csharp
+AssetPatchRuntimeProfile profile = new AssetPatchRuntimeProfileBuilder()
+    .WithPackageName("Main")
+    .WithPlatform(AssetPatchPlatform.Android)
+    .WithDownloadPolicy(new AssetPatchDownloadPolicy(8, 3, 60))
+    .WithTrustPolicy(new AssetPatchTrustPolicy(
+        enabled: true,
+        rootDirectory: contentRoot,
+        PatchTrustFailurePolicy.RollbackManifestThenFail,
+        rollbackVersionOverride: null,
+        clearUnusedCacheAfterRollback: true))
+    .Build();
+```
+
+profile 只拥有策略：package 名称、平台 override、下载并发/重试/超时、append-time 行为、content trust root、trust failure policy、rollback override 和 rollback 后 cache 清理。它不拥有 CDN 路由、登录状态、区域灰度规则、UI 决策或账号专属 entitlement 逻辑；这些应由产品层在创建 `PatchRunOptions` 前注入。
+
 ### 底层 API（精细控制）
 
 用于自定义更新流程：
@@ -402,6 +525,83 @@ await package.ClearCacheFilesAsync(ClearCacheMode.Unused);
 ---
 
 ## 高级功能
+
+### 内容可信校验
+
+`CycloneGames.AssetManagement.Runtime.Trust` 提供 provider-neutral 的内容校验能力，用于下载后的 bundle、原生文件和外部 catalog payload 在进入运行时缓存前的可信检查。它适用于更新和补丁边界，不是 gameplay 热路径 API。
+
+```csharp
+using CycloneGames.AssetManagement.Runtime.Trust;
+
+var entry = new ContentTrustFileEntry(
+    "bundles/ui.bundle",
+    sizeBytes: 1048576,
+    ContentTrustHashAlgorithm.Sha256,
+    expectedHashHex: "...");
+
+ContentTrustVerificationResult result =
+    ContentTrustVerifier.Shared.VerifyFile(downloadRoot, entry);
+
+if (!result.Succeeded)
+{
+    // 拒绝更新、隔离文件，或触发重新下载。
+}
+```
+
+支持的检查包括 manifest root containment、单文件路径穿越防护、文件大小、SHA-256、XxHash64，以及通过 `IContentTrustSignatureVerifier` 接入的可选签名策略。校验器使用 `CycloneGames.IO` 进行文件哈希与路径 containment，使用 `CycloneGames.Hash` 计算确定性 manifest fingerprint。它不写文件，也不持久化状态。
+
+### 运行时缓存诊断
+
+实现 `IAssetRuntimeDiagnostics` 的 package 会暴露无逐条枚举分配的聚合缓存快照，适用于 telemetry、压测 HUD 和自动内存治理：
+
+```csharp
+if (package is IAssetRuntimeDiagnostics diagnostics)
+{
+    AssetRuntimeCacheSnapshot snapshot = diagnostics.GetRuntimeCacheSnapshot();
+    if (snapshot.IdleBudgetUsage > 0.8f)
+    {
+        package.TrimIdleCache(AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(30)));
+    }
+}
+```
+
+快照包含 package 名称、provider 名称、活跃句柄数、空闲句柄数、空闲字节估算、空闲字节预算和预算使用率。它刻意不枚举单个缓存条目；逐条分析仍应使用 Editor cache debugger。
+
+### 运行时 Telemetry 记录器
+
+`AssetRuntimeTelemetryRecorder` 会在内存中记录有容量上限的 `AssetRuntimeCacheSnapshot` 采样窗口。它由调用方持有，没有后台线程，也不会自行写文件。可在 player、压测构建、QA 构建或游戏内调试面板中使用，用于保留一小段本地资源压力记录：
+
+```csharp
+var recorder = new AssetRuntimeTelemetryRecorder(
+    new AssetRuntimeTelemetryOptions(
+        capacity: 512,
+        minimumSampleInterval: TimeSpan.FromSeconds(1),
+        includeZeroActivitySamples: false));
+
+if (package is IAssetRuntimeDiagnostics diagnostics)
+{
+    recorder.TryRecord(diagnostics);
+}
+```
+
+如果打包后的运行程序需要持久化当前有界窗口，使用 `AssetRuntimeTelemetryFileSink`，并由调用方传入可复用 scratch buffer：
+
+```csharp
+string path = AssetRuntimeTelemetryPaths.GetDefaultPersistentJsonLinesPath();
+var sink = new AssetRuntimeTelemetryFileSink();
+var samples = new AssetRuntimeTelemetrySample[recorder.Capacity];
+var text = new StringBuilder(64 * 1024);
+
+await sink.WriteJsonLinesAsync(path, recorder, samples, text, cancellationToken);
+```
+
+默认路径为：
+
+```text
+Application.persistentDataPath/CycloneGames/AssetManagement/Diagnostics/asset-runtime-telemetry.jsonl
+```
+
+该文件采用 JSON Lines 格式，每次 flush 都会以原子替换方式写入。这里刻意保存有界诊断窗口，而不是无限增长的日志流。删除该文件即可重置诊断记录；它不是事实来源，不应纳入 Git，并且可以通过重新记录恢复。重复 flush 会产生 JSON 序列化与 UTF-8 编码分配，因此应按产品定义的节奏写入，而不是每帧写入。
 
 ### 原生文件加载
 
@@ -487,7 +687,7 @@ async UniTask TrackProgress(GroupOperation op)
 
 ### 高性能资源缓存 (W-TinyLFU 架构)
 
-资源管理系统内置了零 GC、三级分层（Active、Trial、Main）的缓存架构，最大化缓存命中率，同时提供确定性的内存管理策略，且没有任何运行时开销：
+资源管理系统使用低分配、三级分层（Active、Trial、Main）的缓存架构，用于提升缓存命中率并保持空闲内存驱逐的确定性。当前 API 形态允许的热路径会避免可规避分配；任何项目级 0GC 结论都应通过 Unity Profiler 或 allocation tests 验证。
 
 - **Active (活跃池)**: 当前被游戏逻辑显式引用的资源（Refs > 0）。
 - **Trial (试用池 - LRU)**: 被释放资产的观察期缓存池。
@@ -516,7 +716,7 @@ package.ClearBucket("UI");
 ```csharp
 using CycloneGames.AssetManagement.Runtime;
 
-// 组合层级桶名称（非空段时零分配）
+// 使用稳定的点分隔约定组合层级桶名称
 string bucket = AssetBucketPath.Combine("UI", "Scene");           // → "UI.Scene"
 string sub    = AssetBucketPath.Combine("UI", "Scene", "MainCity"); // → "UI.Scene.MainCity"
 
@@ -678,7 +878,7 @@ var lazy = new AssetCacheRetentionScheduler(
 
 #### 方案 C：在场景切换时应用策略 (Navigathena)
 
-当存在 Navigathena 集成（`NAVIGATHENA_PRESENT`）时，把 `ApplyPackageCacheRetentionOperation` 作为切换的 `interruptOperation` 传入。它与 `UnloadPackageAssetsOperation` 互补，后者负责清理磁盘 bundle 文件。
+当存在 Navigathena 集成（`CYCLONEGAMES_HAS_NAVIGATHENA`）时，把 `ApplyPackageCacheRetentionOperation` 作为切换的 `interruptOperation` 传入。它与 `UnloadPackageAssetsOperation` 互补，后者负责清理磁盘 bundle 文件。
 
 ```csharp
 var policy = new AssetCacheRetentionPolicy(
@@ -720,7 +920,7 @@ await package.InitializeAsync(new AssetPackageInitOptions(
 
 ### 资源追踪与元数据 (Metadata Tracking)
 
-为了让运行时资源的追踪变得极其简单，所有加载 API 均支持零 GC 的 `tag` 和 `owner` 参数。这让你能够细粒度地追踪**是谁**加载了该资源，以及该资源的**用途**。
+为了让运行时资源追踪更容易，所有加载 API 都接受 `tag` 和 `owner` 元数据参数。调用方传入已有字符串常量或缓存标识符时，这条路径可以保持无额外分配，同时仍能细粒度地追踪**是谁**加载了该资源，以及该资源的**用途**。
 
 ```csharp
 // 加载资源并加上追踪标记
@@ -798,7 +998,7 @@ if (package is IAssetCatalogQuery catalogQuery)
 
 将句柄、场景与缓存层级汇聚为单一仪表盘 —— 概览指标卡片、Top Buckets、最长寿的活动句柄、以及场景生命周期快照。压力测试时评估整体资源健康度最快的入口。
 
-> 四个窗口都以**零逐帧 GC** 重绘（数据在限速快照上预构建），并同时适配 Pro（深色）与 Light（浅色）编辑器皮肤。
+> 四个窗口都会先构建限速快照再重绘，使常规 Editor repaint 路径在大型项目中保持低分配和响应性。具体 Editor 布局的 allocation budget 应通过 Unity Profiler 验证。
 
 #### 标记持久句柄
 
@@ -836,14 +1036,14 @@ HandleTracker.UnmarkPersistent("Assets/.../UIFramework.prefab");
 - **不支持 Inspector** — 策划必须手动输入路径，无法拖拽。
 - **直接的 `UnityEngine.Object` 引用** 会将资源拉入同一个 bundle，导致内存膨胀，并且无法实现按语言/按版本分包。
 
-`AssetRef<T>` 和 `SceneRef` 解决了以上所有问题，同时在**运行时零开销**（struct 类型，仅存储两个字符串）。
+`AssetRef<T>` 和 `SceneRef` 解决了以上所有问题，同时在运行时保持轻量。它们是只存储 `location` 与 `guid` 的 `struct` 值，本身不会加载资源，也不会持有句柄。
 
 ### 设计原则
 
 | 原则                        | 实现方式                                                                                                                |
 | --------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
 | **纯数据键**                | `AssetRef` 存储 `location` + `guid`。它永远不加载、不缓存、不持有句柄。                                                 |
-| **零 GC**                   | `struct` 而非 `class`。10 万个引用 = 零堆对象。                                                                         |
+| **低分配**                  | `struct` 而非 `class`；数组和序列化 owner 仍会按常规分配，但每个引用值本身不会额外分配一个对象。                         |
 | **通过 IAssetPackage 加载** | `package.LoadAsync(assetRef)` 返回 `IAssetHandle<T>`，复用已有的 ARC + W-TinyLFU 缓存。                                 |
 | **GUID 自动修复**           | 编辑器 PropertyDrawer 每次显示时从 GUID 反查路径。如果资源被移动/重命名，存储的 location 会自动更新。                   |
 | **SceneRef 独立类型**       | `SceneAsset` 是 editor-only 的，场景使用 `LoadSceneAsync` 而非 `LoadAssetAsync`。独立的 `SceneRef` 类型承载正确的语义。 |
@@ -986,7 +1186,45 @@ CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidat
 | `CreatePackage(name)`      | 创建新的资源包              |
 | `GetPackage(name)`         | 获取已存在的资源包          |
 | `RemovePackageAsync(name)` | 移除并销毁资源包            |
-| `CreatePatchService(name)` | 创建补丁服务（仅 YooAsset） |
+| `CreatePatchService(name)` | 创建由 provider 支撑的补丁服务 |
+
+### IPatchService / IAssetPatchTransactionService
+
+| 成员 | 说明 |
+| --- | --- |
+| `RunAsync(autoDownload, downloadOptions)` | 旧的事件驱动 patch 流程。 |
+| `Download()` | 通过旧的 fire-and-forget 路径启动待处理下载。 |
+| `Cancel()` | 取消当前 provider downloader。 |
+| `RunAsync(PatchRunOptions)` | 带结果报告和可选内容可信校验的事务式 patch 流程。 |
+| `DownloadAsync()` | 完成一个待处理事务并返回 `PatchRunResult`。 |
+
+### AssetPatchProfileAsset / AssetPatchRuntimeProfile
+
+| 成员 | 说明 |
+| --- | --- |
+| `BuildRuntimeProfile()` | 从 Unity authoring asset 构建当前平台的 runtime patch profile。 |
+| `BuildRuntimeProfile(platform)` | 为指定平台构建 runtime patch profile。 |
+| `CreateRunOptions(manifest, verifier, signatureVerifier, failureBuffer)` | 将 runtime profile 和产品层提供的 trust data 转换为 `PatchRunOptions`。 |
+| `AssetPatchRuntimeProfileBuilder` | 不依赖 Unity asset 创建同等 runtime profile，适用于 DI/headless/server composition。 |
+
+### ContentTrustManifestBuilder / Codec
+
+| 成员 | 说明 |
+| --- | --- |
+| `ContentTrustManifestBuilder.AddFile(root, location, algorithm)` | 添加相对文件条目并计算内容 hash。 |
+| `ContentTrustManifestBuilder.Build()` | 生成排序后的 provider-neutral trust manifest。 |
+| `ContentTrustManifestCodec.ToJson(manifest)` | 将 manifest document 写为存储或传输用 JSON。 |
+| `ContentTrustManifestCodec.FromJson(json)` | 从 JSON 读取 manifest document。 |
+| `ContentTrustManifestCodec.ToCanonicalPayloadBytes(manifest)` | 生成排除 signature 字段的确定性签名 bytes。 |
+| `ContentTrustManifestSignatureUtility.Sign(manifest, signer)` | 通过注入的产品/平台 signer 对 canonical bytes 签名。 |
+
+### IAssetRepairService
+
+| 成员 | 说明 |
+| --- | --- |
+| `RepairAsync(manifest, failures, options)` | 从内容可信校验失败构建 repair plan，并执行 location repair。 |
+| `RepairAsync(plan, options)` | 执行预先构建的 provider-neutral repair plan。 |
+| `RepairEvents` | 报告阶段变化、plan 创建、下载进度、完成和失败。 |
 
 ### IAssetPackage
 
@@ -999,7 +1237,7 @@ CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidat
 | `LoadAllAssetsAsync<T>(...)`   | 加载指定位置的所有资源 (支持 `bucket`/`tag`/`owner`) |
 | `IsAssetCached<T>(location)`   | 零分配驻留检查（Active 或空闲 Trial/Main 池）    |
 | `InstantiateAsync(handle)`     | 异步实例化预制体                                     |
-| `InstantiateSync(handle)`      | 同步实例化（零 GC）                                  |
+| `InstantiateSync(handle)`      | 同步实例化                                           |
 | `LoadSceneAsync(location)`     | 加载场景                                             |
 | `UnloadSceneAsync(handle)`     | 卸载场景                                             |
 | `LoadRawFileAsync(location)`   | 加载原生文件                                         |
@@ -1019,16 +1257,38 @@ CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidat
 | `UnmarkPersistent(location)` / `ClearPersistent()` | 移除持久标记。 |
 | `IsPersistent(location)` | 查询某位置是否被标记为持久。 |
 
+### IAssetRuntimeDiagnostics
+
+| 成员 | 说明 |
+| --- | --- |
+| `GetRuntimeCacheSnapshot()` | 返回运行时聚合缓存计数，不进行逐条缓存枚举。 |
+
+### AssetRuntimeTelemetryRecorder
+
+| 成员 | 说明 |
+| --- | --- |
+| `TryRecord(snapshot)` / `TryRecord(diagnostics)` | 在采样间隔和空活动过滤允许时记录一个样本。 |
+| `CopyTo(buffer)` | 将最新的有界窗口按从旧到新的顺序复制到调用方持有的 buffer。 |
+| `TryGetLatest(out sample)` | 无分配读取最新样本。 |
+| `Clear()` | 清空内存 telemetry 样本并重置序号。 |
+
+### AssetRuntimeTelemetryFileSink
+
+| 成员 | 说明 |
+| --- | --- |
+| `WriteJsonLinesAsync(path, recorder, samples, text, token)` | 使用调用方持有的 scratch buffer，将 recorder 当前有界窗口以 JSON Lines 原子写入。 |
+
 ### 脚本定义符号
 
 这些符号会根据已安装的包自动定义：
 
 | 符号                   | 定义时机               |
 | ---------------------- | ---------------------- |
-| `YOOASSET_PRESENT`     | 已安装 YooAsset 包     |
-| `ADDRESSABLES_PRESENT` | 已安装 Addressables 包 |
-| `VCONTAINER_PRESENT`   | 已安装 VContainer 包   |
-| `NAVIGATHENA_PRESENT`  | 已安装 Navigathena 包  |
+| `CYCLONEGAMES_HAS_YOOASSET`     | 通过 UPM 安装了 YooAsset 包 |
+| `CYCLONEGAMES_HAS_ADDRESSABLES` | 通过 UPM 安装了 Addressables 包 |
+| `CYCLONEGAMES_HAS_VCONTAINER`   | 通过 UPM 安装了 VContainer 包 |
+| `CYCLONEGAMES_HAS_NAVIGATHENA`  | 通过 UPM 安装了 Navigathena 包 |
+| `CYCLONEGAMES_HAS_VCONTAINER_UNITASK` | VContainer integration assembly 中可使用 UniTask |
 
 ---
 
@@ -1036,7 +1296,8 @@ CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidat
 
 1. **始终释放句柄** - 使用 `using` 语句或手动调用 `Dispose()`
 2. **优先使用异步加载** - 同步加载会阻塞主线程
-3. **选择合适的提供器** - 正式项目用 YooAsset，原型开发用 Resources
+3. **按产品选择 provider** - Resources 适合内置原型，Addressables 适合已采用 Unity catalog pipeline 的项目，YooAsset 适合明确采用其 patch workflow 的项目
 4. **开发时启用句柄追踪** - 帮助尽早发现内存泄漏
 5. **使用 DI 容器** - 将 `IAssetModule` 注册为单例以保持架构清晰
 6. **标记持久资源** - 通过 `HandleTracker.MarkPersistent` 声明 DontDestroyOnLoad / 引导 / 主场景资源，使泄漏检测保持高信号
+7. **记录有界 player telemetry** - 在打包构建中使用 `AssetRuntimeTelemetryRecorder` 记录缓存压力，并由产品显式选择 flush 节奏和存储路径

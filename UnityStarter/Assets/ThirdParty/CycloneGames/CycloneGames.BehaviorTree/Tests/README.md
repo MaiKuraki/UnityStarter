@@ -112,18 +112,20 @@ Main file:
 
 ## How to use the benchmark panel
 
-1. Open `Tools > CycloneGames > Behavior Tree Benchmark`.
+1. Open `Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark`.
 2. Choose a scale preset, complexity tier, and scheduling profile, or adjust the benchmark configuration manually.
 3. Use `Run Editor Benchmark` for a single editor-side benchmark pass.
 4. Use `Run Scale Matrix For Selected Complexity` to compare all scale presets under the current complexity tier.
 5. Use `Run Full Matrix (Scale x Complexity)` to run the complete preset-by-complexity benchmark matrix with each preset's recommended scheduling profile.
 6. Use `Run PriorityManaged Comparison` to compare the current setup across `FullRate / PriorityLod / PriorityManaged / UltraLod`.
-7. Use `Create PlayMode Benchmark Scene` to generate a scene from the current config.
-8. Use `Create Scene From Preset` to generate a scene from the selected preset and complexity tier.
-9. Use `Create Scale Matrix Scene` to generate a PlayMode scene that runs all scale presets for the selected complexity tier.
-10. Use `Create Full Matrix Scene` to generate a PlayMode scene that runs the full scale-by-complexity matrix automatically.
-11. Use `Create PriorityManaged Comparison Scene` to generate a scene that auto-runs the scheduling comparison batch.
-12. Enter Play Mode to let the generated runner execute automatically.
+7. Use `Run Production Certification Matrix` to run the heavyweight certification set with production budgets.
+8. Use `Create PlayMode Benchmark Scene` to generate a scene from the current config.
+9. Use `Create Scene From Preset` to generate a scene from the selected preset and complexity tier.
+10. Use `Create Scale Matrix Scene` to generate a PlayMode scene that runs all scale presets for the selected complexity tier.
+11. Use `Create Full Matrix Scene` to generate a PlayMode scene that runs the full scale-by-complexity matrix automatically.
+12. Use `Create PriorityManaged Comparison Scene` to generate a scene that auto-runs the scheduling comparison batch.
+13. Use `Create Production Certification Scene` to generate a PlayMode scene that auto-runs the certification matrix.
+14. Enter Play Mode to let the generated runner execute automatically.
 
 Important config fields:
 
@@ -135,12 +137,16 @@ Important config fields:
   - keeps the benchmark running after the measured phase so you can observe long-lived allocation or drift
 - `Soak Sample Interval`
   - controls how often the soak phase samples managed memory
+- `Production Budgets`
+  - stores pass/fail thresholds for average frame time, max frame time, workload-scaled managed memory capacity, GC collections, and effective tick ratio
+  - `Max Memory Delta` is a session-level retained-memory capacity budget, not a per-frame allocation budget; use GC collection counts, delta flush allocation guards, and soak memory drift for hot-path allocation stability
 
 PlayMode runner behavior:
 
 - `Create PlayMode Benchmark Scene` and `Create Scene From Preset` create a single-run runner.
 - `Create Scale Matrix Scene` creates a batch runner that executes all recommended scale presets for the selected complexity.
 - `Create Full Matrix Scene` creates a batch runner that executes all recommended scale presets across `Light / Medium / Heavy`.
+- `Create Production Certification Scene` creates a batch runner that executes the certification matrix, including heavy stress, network-mixed, and soak cases.
 - generated runners auto-export CSV / JSON into `Application.persistentDataPath/BehaviorTreeBenchmarkResults`.
 - if `Soak Frames > 0`, generated runners continue into soak mode before export.
 
@@ -158,11 +164,13 @@ After a single benchmark completes in the benchmark window:
 1. Click `Export Last Result as CSV` or `Export Last Result as JSON`.
 2. Choose the target file path.
 3. The window writes the file and reveals it in the file explorer.
+4. Click `Export Last Result to Default Folder` to write both CSV and JSON into `Application.persistentDataPath/BehaviorTreeBenchmarkResults`.
 
 After a matrix run completes:
 
 1. Click `Export Last Matrix as CSV` or `Export Last Matrix as JSON`.
 2. Each row or JSON item represents one scale-plus-complexity case.
+3. Click `Export Last Matrix to Default Folder` to write both CSV and JSON into the default benchmark result folder.
 
 Key result fields:
 
@@ -182,6 +190,10 @@ Key result fields:
   - highest managed memory sample seen during the run
 - `SoakManagedMemoryDeltaBytes`
   - peak managed memory growth since the soak baseline
+- `ProductionBudgetPassed`
+  - true only when average frame, max frame, managed memory delta, GC, and effective tick ratio budgets all pass
+- `BudgetSummary`
+  - human-readable pass/fail summary for the run
 
 For PlayMode generated scenes, export is automatic. The runner logs the final file path in the Unity Console.
 
@@ -193,5 +205,6 @@ For PlayMode generated scenes, export is automatic. The runner logs the final fi
 2. Use the benchmark window for quick tuning of both scale and complexity.
 3. Use `Run Scale Matrix For Selected Complexity` when you want to answer “how far does this complexity tier scale?”
 4. Use `Run Full Matrix (Scale x Complexity)` when you want a product-level comparison surface for engineering and design decisions.
-5. Use generated PlayMode benchmark scenes to profile real frame behavior, device differences, LOD scheduling tradeoffs, and long-running soak scenarios.
-6. Export CSV / JSON snapshots to compare benchmark runs over time or across hardware tiers.
+5. Use `Run Production Certification Matrix` before claiming a configuration is production-ready.
+6. Use generated PlayMode benchmark scenes to profile real frame behavior, device differences, LOD scheduling tradeoffs, and long-running soak scenarios.
+7. Export CSV / JSON snapshots to compare benchmark runs over time or across hardware tiers.

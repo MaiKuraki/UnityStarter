@@ -7,7 +7,7 @@ using UnityEngine.SceneManagement;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class ResourcesAssetPackage : IAssetPackage
+    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetRuntimeDiagnostics
     {
         private readonly string packageName;
         private int nextId = 1;
@@ -200,6 +200,11 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
             return _cacheService.Contains(cacheKey);
+        }
+
+        public AssetRuntimeCacheSnapshot GetRuntimeCacheSnapshot()
+        {
+            return _cacheService.CreateRuntimeSnapshot(packageName, "Resources");
         }
 
         public void SetCacheIdleMemoryBudget(long maxIdleBytes)

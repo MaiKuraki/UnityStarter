@@ -1,4 +1,4 @@
-#if YOOASSET_PRESENT
+#if CYCLONEGAMES_HAS_YOOASSET
 using System;
 using System.Collections.Generic;
 using System.Threading;
@@ -139,8 +139,8 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 throw new ArgumentException($"{DEBUG_FLAG} Package not found: {packageName}", nameof(packageName));
             }
-            return new YooAssetPatchService(package);
+            return new AssetPatchService(package);
         }
     }
 }
-#endif // YOOASSET_PRESENT
+#endif // CYCLONEGAMES_HAS_YOOASSET

@@ -17,14 +17,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeDelayNode();
-            node.GUID = GUID;
-            node.DelaySeconds = _delaySeconds;
-            node.UseUnscaledTime = _useUnscaledTime;
-            SetRuntimeChild(node);
-            return node;
-        }
     }
 }

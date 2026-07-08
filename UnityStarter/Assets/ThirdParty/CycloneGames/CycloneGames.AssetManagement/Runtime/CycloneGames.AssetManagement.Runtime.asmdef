@@ -4,7 +4,9 @@
     "references": [
         "UniTask",
         "CycloneGames.Logger",
-        "R3.Unity"
+        "R3.Unity",
+        "CycloneGames.IO.Runtime",
+        "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -1,9 +1,11 @@
+using System;
 using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Tests.Editor
 {
@@ -104,6 +106,40 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.IsNull(settings.PawnClass);
         }
 
+        [Test]
+        public void ResolveReferencesAsync_ReturnsFalse_WhenAssetReferenceHasNoResolver()
+        {
+            settings = ScriptableObject.CreateInstance<WorldSettings>();
+            AssignRequiredDirectReferences(settings);
+            SetSource(settings, "pawnSource", WorldSettingsReferenceSource.AssetReference);
+            SetString(settings, "pawnAssetLocation", "assets/pawn");
+
+            bool resolved = settings.ResolveReferencesAsync(CancellationToken.None, logWarnings: false).GetAwaiter().GetResult();
+
+            Assert.IsFalse(resolved);
+            Assert.IsNull(settings.PawnClass);
+        }
+
+        [Test]
+        public void ClearResolvedReferences_ReleasesExternalLease()
+        {
+            settings = ScriptableObject.CreateInstance<WorldSettings>();
+            AssignRequiredDirectReferences(settings);
+            SetSource(settings, "pawnSource", WorldSettingsReferenceSource.PathLocation);
+            SetString(settings, "pawnAssetLocation", "resolved/pawn");
+            Pawn resolvedPawn = CreateComponent<Pawn>(ref pawnObject, "ResolvedPawn");
+            var lease = new TestLease();
+            PathResolver.Instance.Asset = resolvedPawn;
+            PathResolver.Instance.Lease = lease;
+            WorldSettingsReferenceResolverRegistry.Register(PathResolver.Instance);
+            settings.ResolveReferencesAsync(CancellationToken.None, logWarnings: false).GetAwaiter().GetResult();
+
+            settings.ClearResolvedReferences();
+
+            Assert.IsTrue(lease.Disposed);
+            Assert.IsNull(settings.PawnClass);
+        }
+
         private void AssignRequiredDirectReferences(WorldSettings worldSettings)
         {
             SetObject(worldSettings, "gameModeClass", CreateComponent<GameMode>(ref gameModeObject, "GameMode"));
@@ -148,11 +184,13 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             public static readonly PathResolver Instance = new PathResolver();
 
             public Object Asset { get; set; }
+            public IDisposable Lease { get; set; }
             public string LastLocation { get; private set; }
 
             public void Reset()
             {
                 Asset = null;
+                Lease = null;
                 LastLocation = null;
             }
 
@@ -166,8 +204,18 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 LastLocation = location;
                 T asset = Asset as T;
                 return UniTask.FromResult(asset != null
-                    ? new WorldSettingsAssetLoadResult<T>(true, asset, null)
+                    ? new WorldSettingsAssetLoadResult<T>(true, asset, null, Lease)
                     : new WorldSettingsAssetLoadResult<T>(false, null, "Missing test asset."));
+            }
+        }
+
+        private sealed class TestLease : IDisposable
+        {
+            public bool Disposed { get; private set; }
+
+            public void Dispose()
+            {
+                Disposed = true;
             }
         }
     }

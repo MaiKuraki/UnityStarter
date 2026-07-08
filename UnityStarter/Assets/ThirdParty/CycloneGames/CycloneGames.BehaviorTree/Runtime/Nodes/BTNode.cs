@@ -1,5 +1,4 @@
 using System;
-using CycloneGames.BehaviorTree.Runtime.Core;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes
@@ -67,25 +66,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
 
         public virtual void OnDrawGizmos() { }
 
-        /// <summary>
-        /// Creates the pure C# runtime node used by the execution layer.
-        /// </summary>
-        public abstract RuntimeNode CreateRuntimeNode();
-
-        protected RuntimeNode CreateRequiredRuntimeNode(BTNode child, string role)
-        {
-            if (child == null)
-            {
-                throw new InvalidOperationException($"{GetType().Name} requires {role}.");
-            }
-
-            RuntimeNode runtimeNode = child.CreateRuntimeNode();
-            if (runtimeNode == null)
-            {
-                throw new InvalidOperationException($"{GetType().Name} {role} node {child.GetType().Name} returned null runtime node.");
-            }
-
-            return runtimeNode;
-        }
     }
 }

@@ -15,13 +15,5 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
             return clone;
         }
 
-        public override CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode CreateRuntimeNode()
-        {
-            var node = new CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors.RuntimeSwitchNode();
-            node.GUID = GUID;
-            node.VariableKeyHash = string.IsNullOrEmpty(_variableKey) ? 0 : Animator.StringToHash(_variableKey);
-            AddRuntimeChildren(node);
-            return node;
-        }
     }
 }

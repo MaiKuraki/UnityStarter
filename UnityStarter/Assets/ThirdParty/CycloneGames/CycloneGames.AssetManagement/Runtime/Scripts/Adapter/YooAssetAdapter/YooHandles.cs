@@ -1,4 +1,4 @@
-#if YOOASSET_PRESENT
+#if CYCLONEGAMES_HAS_YOOASSET
 using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;

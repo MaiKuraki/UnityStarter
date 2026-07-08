@@ -3,9 +3,9 @@
 <div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
 
 Multi-platform hardware feedback library for Unity.  
-Provides a unified API for **mobile haptics** (Android / iOS / WebGL), **gamepad rumble**, and **device light control** — compatible with both Dependency Injection and static access patterns.
+Provides production mobile haptics for **Android / iOS / WebGL**, plus backend-ready interfaces for **gamepad rumble** and **device light control**. The runtime APIs are compatible with Dependency Injection and static access patterns.
 
-Whether you need a simple one-line vibration call or pixel-perfect Core Haptics authoring with real-time modulation, this library provides the same interface across all platforms with automatic fallback to the best available hardware API.
+Whether you need a simple one-line vibration call or pixel-perfect Core Haptics authoring with real-time modulation, the mobile haptics stack provides one interface with platform-specific fallback. Gamepad rumble and light control ship with explicit no-op defaults and require a platform backend or integration assembly for real hardware output.
 
 ---
 
@@ -22,8 +22,8 @@ Whether you need a simple one-line vibration call or pixel-perfect Core Haptics 
 - **Universal haptic presets** — `HapticPreset` enum mapped to native APIs per device with appropriate sharpness values
 - **Zero-GC hot path** — Pre-allocated static buffers for all waveform sampling; cached JNI arrays; pre-cached enum name strings for native interop — no per-call heap allocations
 - **Latency-optimized iOS** — Pre-allocated and pre-warmed `UIFeedbackGenerator` instances; fire-and-forget ephemeral transient players that never block the continuous haptic
-- **Gamepad rumble interface** — Dual-motor control for controllers (placeholder, extensible)
-- **Device light control** — Light bar color, gradient, and intensity curve for DualSense / DualShock (placeholder, extensible)
+- **Gamepad rumble interface** — Dual-motor controller API with injectable `IGamepadRumbleBackend`; default runtime behavior is an explicit no-op until a platform backend is installed
+- **Device light control** — Light bar color, gradient, and intensity curve API with injectable `IDeviceLightBackend`; default runtime behavior is an explicit no-op until a platform backend is installed
 - **DI-friendly architecture** — Program against interfaces (`IHapticFeedbackService`, `IMobileVibrationService`, etc.)
 
 ---
@@ -156,14 +156,16 @@ Extends `IHapticFeedbackService` + `IDisposable`.
 
 All methods from `IMobileVibrationService` exposed as `static` methods.
 
-### `IGamepadRumbleService` — Gamepad (Placeholder)
+### `IGamepadRumbleService` — Gamepad Rumble
 
 | Member                                          | Description                              |
 | ----------------------------------------------- | ---------------------------------------- |
 | `SetMotorSpeeds(float low, float high)`         | Set dual-motor speeds directly (0.0–1.0) |
 | `Rumble(float low, float high, float duration)` | Timed rumble with auto-stop              |
 
-### `IDeviceLightService` — Device Light (Placeholder)
+`GamepadRumbleService` is a high-level wrapper over `IGamepadRumbleBackend`. Its default constructor uses `NoopGamepadRumbleBackend`, so unsupported platforms and projects without a hardware backend remain deterministic no-ops instead of partially implemented behavior. Real controller support should be provided by a separate platform integration assembly that owns device discovery, timing, player loop hooks, and native/Input System calls.
+
+### `IDeviceLightService` — Device Light
 
 | Member                                                  | Description                |
 | ------------------------------------------------------- | -------------------------- |
@@ -173,6 +175,8 @@ All methods from `IMobileVibrationService` exposed as `static` methods.
 | `PlayIntensityCurve(Color, AnimationCurve, float, int)` | Pulsing brightness         |
 | `CancelAnimation()`                                     | Stop light animation       |
 | `Reset()`                                               | Restore default            |
+
+`GamepadLightService` is a high-level wrapper over `IDeviceLightBackend`. Its default constructor uses `NoopDeviceLightBackend`; real DualSense, DualShock, keyboard RGB, or platform-specific lighting support should live in a dedicated backend/integration assembly.
 
 ---
 
@@ -191,6 +195,8 @@ All methods from `IMobileVibrationService` exposed as `static` methods.
 | API 30+ primitives      | ✅ (CLICK/TICK/THUD) | —              | —                  | —             | ⬜     |
 | Real-time modulation    | ⬜                   | ⬜             | ✅                 | ⬜            | ⬜     |
 | Cancel                  | ✅                   | ⬜             | ✅                 | ✅            | ⬜     |
+| Gamepad rumble          | Backend required     | Backend required | Backend required | Backend required | No-op default |
+| Device light            | Backend required     | Backend required | Backend required | Backend required | No-op default |
 
 ---
 
@@ -251,6 +257,8 @@ s_intensityBuf, s_sharpnessBuf, s_typeBuf, s_durationBuf
 ```
 
 `EnsureBuffers(count)` checks once per call; no allocation occurs on subsequent calls with equal or smaller counts. JNI objects (`AndroidJavaClass`, `AndroidJavaObject`) are cached for the service lifetime and disposed via `IDisposable`. Enum name strings used for native interop marshaling are pre-cached in static readonly arrays, avoiding `ToString()` heap allocations.
+
+The gamepad rumble and device light service wrappers are allocation-free on their steady-state guarded paths. Real backend allocation behavior depends on the selected integration and must be validated separately for the target hardware and platform API.
 
 ---
 

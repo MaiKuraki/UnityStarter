@@ -16,15 +16,23 @@ namespace CycloneGames.Choreography.CycloneAudio
         [Tooltip("Stop tracked duration events when this provider is destroyed.")]
         [SerializeField] private bool StopTrackedEventsOnDestroy = true;
 
+        [Tooltip("When true, skip event playback if the authored bank/group is not loaded in CycloneGames.Audio.")]
+        [SerializeField] private bool ValidateBankState = true;
+
         private CycloneAudioProvider _provider;
         private IAudioService _audioService;
+        private ICycloneAudioBankState _bankState;
         private IChoreographyDiagnostics _diagnostics;
         private bool _warnedUninitialized;
 
-        public void Initialize(IAudioService audioService, IChoreographyDiagnostics diagnostics = null)
+        public void Initialize(
+            IAudioService audioService,
+            IChoreographyDiagnostics diagnostics = null,
+            ICycloneAudioBankState bankState = null)
         {
             _audioService = audioService;
             _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _bankState = bankState;
             BuildProvider();
         }
 
@@ -62,8 +70,15 @@ namespace CycloneGames.Choreography.CycloneAudio
         {
             if (_provider == null)
             {
-                _diagnostics ??= NullChoreographyDiagnostics.Instance;
-                _audioService ??= AudioManager.Instance;
+                if (_diagnostics == null)
+                {
+                    _diagnostics = NullChoreographyDiagnostics.Instance;
+                }
+
+                if (_audioService == null)
+                {
+                    _audioService = AudioManager.Instance;
+                }
                 BuildProvider();
             }
         }
@@ -75,7 +90,12 @@ namespace CycloneGames.Choreography.CycloneAudio
                 return;
             }
 
-            _provider = new CycloneAudioProvider(_audioService, Emitter != null ? Emitter : gameObject, _diagnostics);
+            if (_bankState == null && ValidateBankState && AudioManager.Instance != null)
+            {
+                _bankState = new AudioManagerBankState();
+            }
+
+            _provider = new CycloneAudioProvider(_audioService, Emitter != null ? Emitter : gameObject, _diagnostics, _bankState);
         }
 
         private void WarnUninitialized()

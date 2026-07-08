@@ -24,7 +24,19 @@ namespace CycloneGames.Choreography.Core
         {
             Id = id;
             Kind = kind;
-            Clips = clips ?? EmptyClips;
+            Clips = CopyOrEmpty(clips);
+        }
+
+        private static ChoreographyClip[] CopyOrEmpty(ChoreographyClip[] clips)
+        {
+            if (clips == null || clips.Length == 0)
+            {
+                return EmptyClips;
+            }
+
+            ChoreographyClip[] copy = new ChoreographyClip[clips.Length];
+            Array.Copy(clips, copy, clips.Length);
+            return copy;
         }
     }
 }
