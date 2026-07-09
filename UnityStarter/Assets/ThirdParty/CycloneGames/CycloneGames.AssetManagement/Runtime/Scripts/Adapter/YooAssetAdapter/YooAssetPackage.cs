@@ -10,13 +10,23 @@ using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    public sealed class YooAssetPackage : IAssetPackage, IAssetCatalogQuery, IAssetRuntimeDiagnostics
+    public sealed class YooAssetPackage : IAssetPackage, IAssetCatalogQuery, IAssetRuntimeDiagnostics, IAssetPatchProviderReconciler
     {
         private readonly ResourcePackage _rawPackage;
         public string Name => _rawPackage.PackageName;
         private int _nextId = 1;
 
         private readonly Cache.AssetCacheService _cacheService;
+        private static readonly AssetPatchProviderReconciliationCapabilities ReconciliationCapabilities =
+            new AssetPatchProviderReconciliationCapabilities(
+                "YooAsset",
+                supportsVersionedManifestUpdate: true,
+                supportsExplicitCacheCleanup: true,
+                supportsUnusedCacheCleanup: true,
+                supportsTagScopedCacheCleanup: true,
+                supportsProviderManagedDownloadCache: true,
+                supportsIsolatedVersionPreDownload: false,
+                requiresMainThreadAccess: true);
 
         // Cached delegates to avoid per-call lambda allocation for non-cached handle types.
         private static readonly Action<string, IReferenceCounted> _sceneReleaseCallback =
@@ -24,10 +34,48 @@ namespace CycloneGames.AssetManagement.Runtime
         private static readonly Action<string, IReferenceCounted> _instantiateReleaseCallback =
             (_, h) => ((YooInstantiateHandle)h).DisposeInternal();
 
+        public AssetPatchProviderReconciliationCapabilities Capabilities => ReconciliationCapabilities;
+
         public YooAssetPackage(ResourcePackage rawPackage)
         {
             _rawPackage = rawPackage;
             _cacheService = new Cache.AssetCacheService(this);
+        }
+
+        public UniTask<AssetPatchProviderReconciliationResult> ReconcileAsync(
+            AssetPatchJournalRecord record,
+            AssetPatchRecoveryRecommendation recommendation,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            switch (recommendation.Action)
+            {
+                case AssetPatchRecoveryAction.None:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.NoActionRequired(
+                            ReconciliationCapabilities,
+                            "YooAsset has no provider-side recovery work for this journal."));
+                case AssetPatchRecoveryAction.ResumeOrRestartDownload:
+                case AssetPatchRecoveryAction.VerifyContentTrust:
+                case AssetPatchRecoveryAction.RepairContent:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.ReadyToRestartPatch(
+                            ReconciliationCapabilities,
+                            "YooAsset owns download cache validation; recreate the patch downloader against the active manifest and keep the journal until the retry completes."));
+                case AssetPatchRecoveryAction.RollbackManifest:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.RequiresOwnerAction(
+                            ReconciliationCapabilities,
+                            "YooAsset supports versioned manifest updates, but rollback must be explicitly enabled by recovery policy or performed by the product owner."));
+                case AssetPatchRecoveryAction.ClearCacheAndRetry:
+                case AssetPatchRecoveryAction.InspectTerminalFailure:
+                default:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.RequiresOwnerAction(
+                            ReconciliationCapabilities,
+                            "Inspect the YooAsset patch journal and choose whether to clear cache, roll back the manifest, or restart the patch."));
+            }
         }
 
         public async UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)

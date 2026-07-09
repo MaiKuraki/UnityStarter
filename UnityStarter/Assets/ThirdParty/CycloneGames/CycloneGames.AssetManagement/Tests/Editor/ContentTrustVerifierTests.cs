@@ -29,6 +29,41 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void VerifyBytes_Accepts_Buffer_Slice_Without_Copy()
+        {
+            byte[] payload = Utf8NoBom.GetBytes("trusted content");
+            byte[] buffer = Utf8NoBom.GetBytes("prefix--trusted content--suffix");
+            var entry = new ContentTrustFileEntry(
+                "bundles/ui.bundle",
+                payload.LongLength,
+                ContentTrustHashAlgorithm.Sha256,
+                ComputeSha256Hex(payload));
+
+            ContentTrustVerificationResult result = ContentTrustVerifier.Shared.VerifyBytes(
+                buffer.AsSpan(8, payload.Length),
+                entry);
+
+            Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(ContentTrustFailure.None, result.Failure);
+        }
+
+        [Test]
+        public void VerifyBytes_Accepts_Uppercase_Expected_Hash()
+        {
+            byte[] bytes = Utf8NoBom.GetBytes("trusted content");
+            var entry = new ContentTrustFileEntry(
+                "bundles/ui.bundle",
+                bytes.LongLength,
+                ContentTrustHashAlgorithm.Sha256,
+                ComputeSha256Hex(bytes).ToUpperInvariant());
+
+            ContentTrustVerificationResult result = ContentTrustVerifier.Shared.VerifyBytes(bytes, entry);
+
+            Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(ContentTrustFailure.None, result.Failure);
+        }
+
+        [Test]
         public void VerifyBytes_Rejects_Hash_Mismatch()
         {
             byte[] bytes = Utf8NoBom.GetBytes("trusted content");

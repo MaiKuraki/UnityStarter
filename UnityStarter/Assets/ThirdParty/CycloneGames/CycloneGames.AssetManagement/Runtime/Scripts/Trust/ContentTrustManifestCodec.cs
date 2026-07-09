@@ -13,8 +13,22 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         public static string ToJson(in ContentTrustManifest manifest, bool includeSignature = true)
         {
             var builder = new StringBuilder(EstimateJsonCapacity(in manifest));
-            AppendManifestJson(builder, in manifest, includeSignature);
+            AppendJson(builder, in manifest, includeSignature);
             return builder.ToString();
+        }
+
+        public static void AppendJson(
+            StringBuilder builder,
+            in ContentTrustManifest manifest,
+            bool includeSignature = true,
+            List<ContentTrustFileEntry> sortWorkspace = null)
+        {
+            if (builder == null)
+            {
+                throw new ArgumentNullException(nameof(builder));
+            }
+
+            AppendManifestJson(builder, in manifest, includeSignature, sortWorkspace);
         }
 
         public static string ToCanonicalPayload(in ContentTrustManifest manifest)
@@ -103,7 +117,11 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             return 192 + (count * 128);
         }
 
-        private static void AppendManifestJson(StringBuilder builder, in ContentTrustManifest manifest, bool includeSignature)
+        private static void AppendManifestJson(
+            StringBuilder builder,
+            in ContentTrustManifest manifest,
+            bool includeSignature,
+            List<ContentTrustFileEntry> sortWorkspace)
         {
             builder.Append('{');
             AppendJsonProperty(builder, "schemaVersion", SCHEMA_VERSION, appendComma: false);
@@ -117,11 +135,14 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             }
 
             builder.Append(",\"entries\":[");
-            AppendEntriesJson(builder, manifest.Entries);
+            AppendEntriesJson(builder, manifest.Entries, sortWorkspace);
             builder.Append("]}");
         }
 
-        private static void AppendEntriesJson(StringBuilder builder, IReadOnlyList<ContentTrustFileEntry> entries)
+        private static void AppendEntriesJson(
+            StringBuilder builder,
+            IReadOnlyList<ContentTrustFileEntry> entries,
+            List<ContentTrustFileEntry> sortWorkspace)
         {
             int count = entries?.Count ?? 0;
             if (count == 0)
@@ -129,28 +150,37 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 return;
             }
 
-            var sortedEntries = new List<ContentTrustFileEntry>(count);
-            for (int i = 0; i < count; i++)
-            {
-                sortedEntries.Add(entries[i]);
-            }
+            List<ContentTrustFileEntry> sortedEntries = sortWorkspace ?? new List<ContentTrustFileEntry>(count);
+            sortedEntries.Clear();
 
-            sortedEntries.Sort(CompareEntries);
-
-            for (int i = 0; i < sortedEntries.Count; i++)
+            try
             {
-                if (i > 0)
+                for (int i = 0; i < count; i++)
                 {
-                    builder.Append(',');
+                    sortedEntries.Add(entries[i]);
                 }
 
-                ContentTrustFileEntry entry = sortedEntries[i];
-                builder.Append('{');
-                AppendJsonProperty(builder, "location", entry.Location, appendComma: false);
-                AppendJsonProperty(builder, "sizeBytes", entry.SizeBytes, appendComma: true);
-                AppendJsonProperty(builder, "hashAlgorithm", entry.HashAlgorithm.ToString(), appendComma: true);
-                AppendJsonProperty(builder, "expectedHashHex", entry.ExpectedHashHex, appendComma: true);
-                builder.Append('}');
+                sortedEntries.Sort(CompareEntries);
+
+                for (int i = 0; i < sortedEntries.Count; i++)
+                {
+                    if (i > 0)
+                    {
+                        builder.Append(',');
+                    }
+
+                    ContentTrustFileEntry entry = sortedEntries[i];
+                    builder.Append('{');
+                    AppendJsonProperty(builder, "location", entry.Location, appendComma: false);
+                    AppendJsonProperty(builder, "sizeBytes", entry.SizeBytes, appendComma: true);
+                    AppendJsonProperty(builder, "hashAlgorithm", entry.HashAlgorithm, appendComma: true);
+                    AppendJsonProperty(builder, "expectedHashHex", entry.ExpectedHashHex, appendComma: true);
+                    builder.Append('}');
+                }
+            }
+            finally
+            {
+                sortedEntries.Clear();
             }
         }
 
@@ -217,6 +247,33 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             AppendJsonString(builder, name);
             builder.Append(':');
             builder.Append(value);
+        }
+
+        private static void AppendJsonProperty(StringBuilder builder, string name, ContentTrustHashAlgorithm value, bool appendComma)
+        {
+            if (appendComma)
+            {
+                builder.Append(',');
+            }
+
+            AppendJsonString(builder, name);
+            builder.Append(':');
+            AppendJsonString(builder, GetHashAlgorithmName(value));
+        }
+
+        private static string GetHashAlgorithmName(ContentTrustHashAlgorithm value)
+        {
+            switch (value)
+            {
+                case ContentTrustHashAlgorithm.None:
+                    return nameof(ContentTrustHashAlgorithm.None);
+                case ContentTrustHashAlgorithm.Sha256:
+                    return nameof(ContentTrustHashAlgorithm.Sha256);
+                case ContentTrustHashAlgorithm.XxHash64:
+                    return nameof(ContentTrustHashAlgorithm.XxHash64);
+                default:
+                    return value.ToString();
+            }
         }
 
         private static void AppendJsonString(StringBuilder builder, string value)

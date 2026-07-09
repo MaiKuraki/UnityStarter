@@ -92,6 +92,134 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             }
         }
 
+        [Test]
+        public async Task RepairAsync_When_Cancelled_Cancels_Downloader_And_Returns_Cancelled_Result()
+        {
+            var manifest = new ContentTrustManifest(
+                "manifest-current",
+                new[]
+                {
+                    new ContentTrustFileEntry("bundle.bin", 1L, ContentTrustHashAlgorithm.None, null)
+                });
+            var failures = new List<ContentTrustVerificationResult>(4)
+            {
+                ContentTrustVerificationResult.Failed(ContentTrustFailure.HashMismatch, "bundle.bin")
+            };
+            var downloader = new RepairingDownloader(
+                totalDownloadCount: 1,
+                totalDownloadBytes: 15L,
+                completeOnBegin: false);
+            var package = new RecordingAssetPackage
+            {
+                NameValue = "Main",
+                DownloaderForLocations = downloader
+            };
+            var service = new AssetRepairService(package);
+            var repairOptions = new AssetRepairOptions(
+                PatchDownloadOptions.Default,
+                PatchContentTrustOptions.Disabled,
+                clearUnusedCacheBeforeDownload: false,
+                verifyAfterRepair: false);
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            AssetRepairRunResult result = await service.RepairAsync(manifest, failures, repairOptions, cancellation.Token);
+
+            Assert.IsTrue(result.Cancelled);
+            Assert.AreEqual(AssetRepairRunStatus.Cancelled, result.Status);
+            Assert.AreEqual("Main", result.PackageName);
+            Assert.AreEqual("manifest-current", result.PackageVersion);
+            Assert.AreEqual(1, result.TotalDownloadCount);
+            Assert.AreEqual(15L, result.TotalDownloadBytes);
+            Assert.AreEqual(1, package.CreateDownloaderForLocationsCallCount);
+            Assert.IsTrue(downloader.BeginCalled);
+            Assert.IsTrue(downloader.CancelCalled);
+        }
+
+        [Test]
+        public async Task Cancel_During_Repair_Download_Cancels_Downloader_And_Returns_Cancelled_Result()
+        {
+            var manifest = new ContentTrustManifest(
+                "manifest-current",
+                new[]
+                {
+                    new ContentTrustFileEntry("bundle.bin", 1L, ContentTrustHashAlgorithm.None, null)
+                });
+            var failures = new List<ContentTrustVerificationResult>(4)
+            {
+                ContentTrustVerificationResult.Failed(ContentTrustFailure.HashMismatch, "bundle.bin")
+            };
+            AssetRepairService service = null;
+            var downloader = new RepairingDownloader(
+                totalDownloadCount: 1,
+                totalDownloadBytes: 15L,
+                onBegin: () => service.Cancel(),
+                completeOnBegin: false);
+            var package = new RecordingAssetPackage
+            {
+                NameValue = "Main",
+                DownloaderForLocations = downloader
+            };
+            service = new AssetRepairService(package);
+            var repairOptions = new AssetRepairOptions(
+                PatchDownloadOptions.Default,
+                PatchContentTrustOptions.Disabled,
+                clearUnusedCacheBeforeDownload: false,
+                verifyAfterRepair: false);
+
+            AssetRepairRunResult result = await service.RepairAsync(manifest, failures, repairOptions);
+
+            Assert.IsTrue(result.Cancelled);
+            Assert.AreEqual(AssetRepairRunStatus.Cancelled, result.Status);
+            Assert.AreEqual(1, result.TotalDownloadCount);
+            Assert.AreEqual(15L, result.TotalDownloadBytes);
+            Assert.AreEqual(1, package.CreateDownloaderForLocationsCallCount);
+            Assert.IsTrue(downloader.BeginCalled);
+            Assert.IsTrue(downloader.CancelCalled);
+        }
+
+        [Test]
+        public async Task Dispose_During_Repair_Download_Cancels_Downloader_And_Returns_Cancelled_Result()
+        {
+            var manifest = new ContentTrustManifest(
+                "manifest-current",
+                new[]
+                {
+                    new ContentTrustFileEntry("bundle.bin", 1L, ContentTrustHashAlgorithm.None, null)
+                });
+            var failures = new List<ContentTrustVerificationResult>(4)
+            {
+                ContentTrustVerificationResult.Failed(ContentTrustFailure.HashMismatch, "bundle.bin")
+            };
+            AssetRepairService service = null;
+            var downloader = new RepairingDownloader(
+                totalDownloadCount: 1,
+                totalDownloadBytes: 15L,
+                onBegin: () => service.Dispose(),
+                completeOnBegin: false);
+            var package = new RecordingAssetPackage
+            {
+                NameValue = "Main",
+                DownloaderForLocations = downloader
+            };
+            service = new AssetRepairService(package);
+            var repairOptions = new AssetRepairOptions(
+                PatchDownloadOptions.Default,
+                PatchContentTrustOptions.Disabled,
+                clearUnusedCacheBeforeDownload: false,
+                verifyAfterRepair: false);
+
+            AssetRepairRunResult result = await service.RepairAsync(manifest, failures, repairOptions);
+
+            Assert.IsTrue(result.Cancelled);
+            Assert.AreEqual(AssetRepairRunStatus.Cancelled, result.Status);
+            Assert.AreEqual(1, result.TotalDownloadCount);
+            Assert.AreEqual(15L, result.TotalDownloadBytes);
+            Assert.AreEqual(1, package.CreateDownloaderForLocationsCallCount);
+            Assert.IsTrue(downloader.BeginCalled);
+            Assert.IsTrue(downloader.CancelCalled);
+        }
+
         private static string CreateTempDirectory()
         {
             string directory = Path.Combine(Path.GetTempPath(), "CycloneGames.AssetManagement.RepairTests", Guid.NewGuid().ToString("N"));
@@ -120,23 +248,33 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         private sealed class RepairingDownloader : IDownloader
         {
             private readonly Action _onBegin;
+            private readonly bool _completeOnBegin;
+            private readonly bool _succeed;
 
-            public RepairingDownloader(int totalDownloadCount, long totalDownloadBytes, Action onBegin)
+            public RepairingDownloader(
+                int totalDownloadCount,
+                long totalDownloadBytes,
+                Action onBegin = null,
+                bool completeOnBegin = true,
+                bool succeed = true)
             {
                 TotalDownloadCount = totalDownloadCount;
                 TotalDownloadBytes = totalDownloadBytes;
                 _onBegin = onBegin;
+                _completeOnBegin = completeOnBegin;
+                _succeed = succeed;
             }
 
             public bool BeginCalled { get; private set; }
-            public bool IsDone => BeginCalled;
-            public bool Succeed => BeginCalled;
+            public bool CancelCalled { get; private set; }
+            public bool IsDone => CancelCalled || (BeginCalled && _completeOnBegin);
+            public bool Succeed => BeginCalled && !CancelCalled && _succeed && _completeOnBegin;
             public float Progress => BeginCalled ? 1f : 0f;
             public int TotalDownloadCount { get; }
             public int CurrentDownloadCount => BeginCalled ? TotalDownloadCount : 0;
             public long TotalDownloadBytes { get; }
             public long CurrentDownloadBytes => BeginCalled ? TotalDownloadBytes : 0L;
-            public string Error => string.Empty;
+            public string Error => CancelCalled ? "Cancelled" : string.Empty;
 
             public void Begin()
             {
@@ -160,6 +298,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
 
             public void Cancel()
             {
+                CancelCalled = true;
             }
 
             public void Combine(IDownloader other)

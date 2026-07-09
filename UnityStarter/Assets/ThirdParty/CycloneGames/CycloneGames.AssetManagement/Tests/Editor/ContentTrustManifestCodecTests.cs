@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
@@ -66,6 +67,26 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void Codec_AppendJson_Matches_ToJson_And_Clears_Workspace()
+        {
+            var manifest = new ContentTrustManifest(
+                "2026.07.09",
+                new[]
+                {
+                    new ContentTrustFileEntry("b.bundle", 2L, ContentTrustHashAlgorithm.None, null),
+                    new ContentTrustFileEntry("a.bundle", 1L, ContentTrustHashAlgorithm.None, null)
+                },
+                signature: "signed-payload");
+            var builder = new StringBuilder();
+            var workspace = new List<ContentTrustFileEntry>(4);
+
+            ContentTrustManifestCodec.AppendJson(builder, in manifest, sortWorkspace: workspace);
+
+            Assert.AreEqual(ContentTrustManifestCodec.ToJson(in manifest), builder.ToString());
+            Assert.AreEqual(0, workspace.Count);
+        }
+
+        [Test]
         public void CanonicalPayload_Excludes_Signature_And_Sorts_Entries()
         {
             var first = new ContentTrustManifest(
@@ -92,6 +113,29 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void CanonicalPayload_WriteTo_Matches_ToBytes_And_Clears_Workspace()
+        {
+            var manifest = new ContentTrustManifest(
+                "2026.07.09",
+                new[]
+                {
+                    new ContentTrustFileEntry("b.bundle", 2L, ContentTrustHashAlgorithm.None, null),
+                    new ContentTrustFileEntry("a.bundle", 1L, ContentTrustHashAlgorithm.None, null)
+                });
+            byte[] expected = ContentTrustManifestCodec.ToCanonicalPayloadBytes(in manifest);
+            var workspace = new List<ContentTrustFileEntry>(4);
+
+            using (var stream = new MemoryStream())
+            {
+                ContentTrustManifestCanonicalPayload.WriteTo(in manifest, stream, workspace);
+
+                CollectionAssert.AreEqual(expected, stream.ToArray());
+            }
+
+            Assert.AreEqual(0, workspace.Count);
+        }
+
+        [Test]
         public void SignatureUtility_Writes_Signer_Result_Without_Changing_Canonical_Payload()
         {
             var manifest = new ContentTrustManifest(
@@ -107,6 +151,22 @@ namespace CycloneGames.AssetManagement.Tests.Editor
 
             Assert.AreEqual("signature-bytes-" + before.Length, signed.Signature);
             CollectionAssert.AreEqual(before, after);
+        }
+
+        [Test]
+        public void SignatureUtility_CanonicalSigner_Can_Control_Payload_Buffering()
+        {
+            var manifest = new ContentTrustManifest(
+                "2026.07.09",
+                new[]
+                {
+                    new ContentTrustFileEntry("bundle.bin", 1L, ContentTrustHashAlgorithm.None, null)
+                });
+
+            ContentTrustManifest signed = ContentTrustManifestSignatureUtility.SignCanonical(in manifest, new CanonicalStreamSigner());
+            byte[] canonicalPayload = ContentTrustManifestCodec.ToCanonicalPayloadBytes(in manifest);
+
+            Assert.AreEqual("canonical-stream-" + canonicalPayload.Length, signed.Signature);
         }
 
         private static void WriteFile(string root, string relativePath, string value)
@@ -145,6 +205,19 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             public string Sign(byte[] canonicalPayload)
             {
                 return "signature-bytes-" + canonicalPayload.Length;
+            }
+        }
+
+        private sealed class CanonicalStreamSigner : IContentTrustManifestCanonicalSigner
+        {
+            public string SignCanonicalManifest(in ContentTrustManifest manifest)
+            {
+                using (var stream = new MemoryStream())
+                {
+                    var workspace = new List<ContentTrustFileEntry>(4);
+                    ContentTrustManifestCanonicalPayload.WriteTo(in manifest, stream, workspace);
+                    return "canonical-stream-" + stream.Length;
+                }
             }
         }
     }
