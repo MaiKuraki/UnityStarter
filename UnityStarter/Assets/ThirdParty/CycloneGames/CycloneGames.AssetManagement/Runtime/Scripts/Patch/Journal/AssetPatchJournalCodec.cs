@@ -10,6 +10,34 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         public const int SCHEMA_VERSION = 1;
 
+        // Wire tokens are string literals by design; enum renames must not silently change persisted journal files.
+        private static readonly StageToken[] StageTokens =
+        {
+            new StageToken(PatchWorkflowState.None, "None"),
+            new StageToken(PatchWorkflowState.Initialize, "Initialize"),
+            new StageToken(PatchWorkflowState.CheckVersion, "CheckVersion"),
+            new StageToken(PatchWorkflowState.UpdateManifest, "UpdateManifest"),
+            new StageToken(PatchWorkflowState.WaitingForDownload, "WaitingForDownload"),
+            new StageToken(PatchWorkflowState.Download, "Download"),
+            new StageToken(PatchWorkflowState.VerifyContentTrust, "VerifyContentTrust"),
+            new StageToken(PatchWorkflowState.RollbackManifest, "RollbackManifest"),
+            new StageToken(PatchWorkflowState.ClearCache, "ClearCache"),
+            new StageToken(PatchWorkflowState.Done, "Done"),
+            new StageToken(PatchWorkflowState.Failed, "Failed"),
+            new StageToken(PatchWorkflowState.Cancelled, "Cancelled"),
+            new StageToken(PatchWorkflowState.RepairContent, "RepairContent")
+        };
+
+        private static readonly StatusToken[] StatusTokens =
+        {
+            new StatusToken(AssetPatchJournalStatus.None, "None"),
+            new StatusToken(AssetPatchJournalStatus.InProgress, "InProgress"),
+            new StatusToken(AssetPatchJournalStatus.PendingDownload, "PendingDownload"),
+            new StatusToken(AssetPatchJournalStatus.Succeeded, "Succeeded"),
+            new StatusToken(AssetPatchJournalStatus.Failed, "Failed"),
+            new StatusToken(AssetPatchJournalStatus.Cancelled, "Cancelled")
+        };
+
         public static string ToJson(in AssetPatchJournalRecord record)
         {
             var builder = new StringBuilder(512);
@@ -123,12 +151,32 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private static bool TryParseStage(string value, out PatchWorkflowState stage)
         {
-            return Enum.TryParse(value, ignoreCase: false, out stage);
+            for (int i = 0; i < StageTokens.Length; i++)
+            {
+                if (string.Equals(StageTokens[i].Name, value, StringComparison.Ordinal))
+                {
+                    stage = StageTokens[i].Value;
+                    return true;
+                }
+            }
+
+            stage = default;
+            return false;
         }
 
         private static bool TryParseStatus(string value, out AssetPatchJournalStatus status)
         {
-            return Enum.TryParse(value, ignoreCase: false, out status);
+            for (int i = 0; i < StatusTokens.Length; i++)
+            {
+                if (string.Equals(StatusTokens[i].Name, value, StringComparison.Ordinal))
+                {
+                    status = StatusTokens[i].Value;
+                    return true;
+                }
+            }
+
+            status = default;
+            return false;
         }
 
         private static bool TryParseUInt64(string value, out ulong result)
@@ -144,57 +192,51 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private static string GetStageName(PatchWorkflowState stage)
         {
-            switch (stage)
+            for (int i = 0; i < StageTokens.Length; i++)
             {
-                case PatchWorkflowState.None:
-                    return nameof(PatchWorkflowState.None);
-                case PatchWorkflowState.Initialize:
-                    return nameof(PatchWorkflowState.Initialize);
-                case PatchWorkflowState.CheckVersion:
-                    return nameof(PatchWorkflowState.CheckVersion);
-                case PatchWorkflowState.UpdateManifest:
-                    return nameof(PatchWorkflowState.UpdateManifest);
-                case PatchWorkflowState.WaitingForDownload:
-                    return nameof(PatchWorkflowState.WaitingForDownload);
-                case PatchWorkflowState.Download:
-                    return nameof(PatchWorkflowState.Download);
-                case PatchWorkflowState.VerifyContentTrust:
-                    return nameof(PatchWorkflowState.VerifyContentTrust);
-                case PatchWorkflowState.RollbackManifest:
-                    return nameof(PatchWorkflowState.RollbackManifest);
-                case PatchWorkflowState.ClearCache:
-                    return nameof(PatchWorkflowState.ClearCache);
-                case PatchWorkflowState.Done:
-                    return nameof(PatchWorkflowState.Done);
-                case PatchWorkflowState.Failed:
-                    return nameof(PatchWorkflowState.Failed);
-                case PatchWorkflowState.Cancelled:
-                    return nameof(PatchWorkflowState.Cancelled);
-                case PatchWorkflowState.RepairContent:
-                    return nameof(PatchWorkflowState.RepairContent);
-                default:
-                    return stage.ToString();
+                if (StageTokens[i].Value == stage)
+                {
+                    return StageTokens[i].Name;
+                }
             }
+
+            throw new ArgumentOutOfRangeException(nameof(stage), "Unsupported patch workflow state.");
         }
 
         private static string GetStatusName(AssetPatchJournalStatus status)
         {
-            switch (status)
+            for (int i = 0; i < StatusTokens.Length; i++)
             {
-                case AssetPatchJournalStatus.None:
-                    return nameof(AssetPatchJournalStatus.None);
-                case AssetPatchJournalStatus.InProgress:
-                    return nameof(AssetPatchJournalStatus.InProgress);
-                case AssetPatchJournalStatus.PendingDownload:
-                    return nameof(AssetPatchJournalStatus.PendingDownload);
-                case AssetPatchJournalStatus.Succeeded:
-                    return nameof(AssetPatchJournalStatus.Succeeded);
-                case AssetPatchJournalStatus.Failed:
-                    return nameof(AssetPatchJournalStatus.Failed);
-                case AssetPatchJournalStatus.Cancelled:
-                    return nameof(AssetPatchJournalStatus.Cancelled);
-                default:
-                    return status.ToString();
+                if (StatusTokens[i].Value == status)
+                {
+                    return StatusTokens[i].Name;
+                }
+            }
+
+            throw new ArgumentOutOfRangeException(nameof(status), "Unsupported patch journal status.");
+        }
+
+        private readonly struct StageToken
+        {
+            public readonly PatchWorkflowState Value;
+            public readonly string Name;
+
+            public StageToken(PatchWorkflowState value, string name)
+            {
+                Value = value;
+                Name = name;
+            }
+        }
+
+        private readonly struct StatusToken
+        {
+            public readonly AssetPatchJournalStatus Value;
+            public readonly string Name;
+
+            public StatusToken(AssetPatchJournalStatus value, string name)
+            {
+                Value = value;
+                Name = name;
             }
         }
 

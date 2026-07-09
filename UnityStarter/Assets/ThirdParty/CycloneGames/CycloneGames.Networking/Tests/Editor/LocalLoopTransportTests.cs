@@ -7,6 +7,14 @@ namespace CycloneGames.Networking.Tests.Editor
     public sealed class LocalLoopTransportTests
     {
         [Test]
+        public void Available_Is_True_In_Editor()
+        {
+            using var transport = new LocalLoopTransport();
+
+            Assert.IsTrue(transport.Available);
+        }
+
+        [Test]
         public void PollEvents_Dispatches_Client_To_Server_Payload()
         {
             using var server = new LocalLoopTransport();

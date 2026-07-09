@@ -52,6 +52,36 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void Codec_RoundTrips_All_Stage_Tokens()
+        {
+            foreach (PatchWorkflowState stage in Enum.GetValues(typeof(PatchWorkflowState)))
+            {
+                AssetPatchJournalRecord record = CreateRecord(stage, AssetPatchJournalStatus.InProgress);
+
+                string json = AssetPatchJournalCodec.ToJson(in record);
+                bool parsed = AssetPatchJournalCodec.TryFromJson(json, out AssetPatchJournalRecord restored, out string error);
+
+                Assert.IsTrue(parsed, error);
+                Assert.AreEqual(stage, restored.Stage);
+            }
+        }
+
+        [Test]
+        public void Codec_RoundTrips_All_Status_Tokens()
+        {
+            foreach (AssetPatchJournalStatus status in Enum.GetValues(typeof(AssetPatchJournalStatus)))
+            {
+                AssetPatchJournalRecord record = CreateRecord(PatchWorkflowState.Download, status);
+
+                string json = AssetPatchJournalCodec.ToJson(in record);
+                bool parsed = AssetPatchJournalCodec.TryFromJson(json, out AssetPatchJournalRecord restored, out string error);
+
+                Assert.IsTrue(parsed, error);
+                Assert.AreEqual(status, restored.Status);
+            }
+        }
+
+        [Test]
         public void Codec_Rejects_Record_With_Missing_ContentTrustFingerprint()
         {
             const string json =
@@ -62,6 +92,48 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             Assert.IsFalse(parsed);
             Assert.AreEqual(default(AssetPatchJournalRecord), record);
             StringAssert.Contains("Unsupported patch journal content trust fingerprint", error);
+        }
+
+        [Test]
+        public void Codec_Rejects_Record_With_Unsupported_Stage()
+        {
+            const string json =
+                "{\"schemaVersion\":1,\"sequence\":7,\"packageName\":\"Main\",\"packageVersion\":\"manifest-current\",\"stage\":\"download\",\"status\":\"InProgress\",\"totalDownloadCount\":1,\"totalDownloadBytes\":1024,\"contentTrustEnabled\":true,\"trustFailureCount\":0,\"contentTrustManifestFingerprint\":\"1\",\"startedUtcTicks\":10,\"updatedUtcTicks\":20}";
+
+            bool parsed = AssetPatchJournalCodec.TryFromJson(json, out AssetPatchJournalRecord record, out string error);
+
+            Assert.IsFalse(parsed);
+            Assert.AreEqual(default(AssetPatchJournalRecord), record);
+            StringAssert.Contains("Unsupported patch journal stage", error);
+        }
+
+        [Test]
+        public void Codec_Rejects_Record_With_Unsupported_Status()
+        {
+            const string json =
+                "{\"schemaVersion\":1,\"sequence\":7,\"packageName\":\"Main\",\"packageVersion\":\"manifest-current\",\"stage\":\"Download\",\"status\":\"inProgress\",\"totalDownloadCount\":1,\"totalDownloadBytes\":1024,\"contentTrustEnabled\":true,\"trustFailureCount\":0,\"contentTrustManifestFingerprint\":\"1\",\"startedUtcTicks\":10,\"updatedUtcTicks\":20}";
+
+            bool parsed = AssetPatchJournalCodec.TryFromJson(json, out AssetPatchJournalRecord record, out string error);
+
+            Assert.IsFalse(parsed);
+            Assert.AreEqual(default(AssetPatchJournalRecord), record);
+            StringAssert.Contains("Unsupported patch journal status", error);
+        }
+
+        [Test]
+        public void Codec_Rejects_Unsupported_Stage_On_Write()
+        {
+            AssetPatchJournalRecord record = CreateRecord((PatchWorkflowState)byte.MaxValue, AssetPatchJournalStatus.InProgress);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => AssetPatchJournalCodec.ToJson(in record));
+        }
+
+        [Test]
+        public void Codec_Rejects_Unsupported_Status_On_Write()
+        {
+            AssetPatchJournalRecord record = CreateRecord(PatchWorkflowState.Download, (AssetPatchJournalStatus)byte.MaxValue);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => AssetPatchJournalCodec.ToJson(in record));
         }
 
         [Test]
