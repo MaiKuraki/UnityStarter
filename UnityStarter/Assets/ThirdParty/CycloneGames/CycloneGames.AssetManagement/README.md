@@ -418,13 +418,88 @@ if (patchService is IAssetPatchTransactionService transaction)
 }
 ```
 
-The transaction state machine reports public `PatchWorkflowState` values through `PatchEvent.PatchStatesChanged`. Content trust failures throw `PatchTrustVerificationException`; depending on `PatchTrustFailurePolicy`, the service can fail fast, clear unused cache, clear all cache, repair corrupted locations, or update the active manifest back to the rollback version and then fail. The rollback step is intentionally explicit and provider-neutral: it calls `UpdatePackageManifestAsync(rollbackVersion)` and optionally `ClearCacheFilesAsync(ClearCacheMode.Unused)`.
+The transaction state machine reports public `PatchWorkflowState` values through `PatchEvent.PatchStatesChanged`. Provider preflight failures before download are structured results: package version request, manifest update, and downloader creation failures return `PatchRunStatus.Failed` with `PatchFailureKind.PackageVersionRequestFailed`, `PatchFailureKind.ManifestUpdateFailed`, or `PatchFailureKind.DownloaderCreationFailed`. Provider download completion with `Succeed == false` returns `PatchFailureKind.ProviderDownloadFailed`, preserving the package version, download counts, byte counts, and provider error for startup recovery. Content trust failures still throw `PatchTrustVerificationException`; depending on `PatchTrustFailurePolicy`, the service can fail fast, clear unused cache, clear all cache, repair corrupted locations, or update the active manifest back to the rollback version and then fail. Cancellation is explicit and provider-owned: cancellation tokens, `Cancel()`, and service disposal call `IDownloader.Cancel()` when a downloader is owned by the service, publish the `Cancelled` state for explicit cancellation, and make the task-based API return a `PatchRunResult` with `PatchRunStatus.Cancelled` and `PatchFailureKind.Cancelled` instead of relying on an unstructured exception path. `Dispose()` cancels owned pending or active downloaders and suppresses later event publication after the event stream has been released. The rollback step is intentionally explicit and provider-neutral: it calls `UpdatePackageManifestAsync(rollbackVersion)` and optionally `ClearCacheFilesAsync(ClearCacheMode.Unused)`.
+
+#### Crash-Safe Patch Journal
+
+Mobile operating systems can suspend or kill the process while a downloader is active. Desktop users can also close the process during a manifest update, content verification, repair, or cache cleanup. In those cases C# `finally`, `Cancel()`, `Dispose()`, and Unity application lifecycle callbacks are not guaranteed to run. `AssetPatchService` therefore supports an optional provider-neutral journal that records each transaction checkpoint into an explicit file.
+
+```csharp
+string journalPath = AssetPatchJournalPaths.GetDefaultJournalPath(profile.PackageName);
+var journalStore = new FileAssetPatchJournalStore(journalPath);
+var patchService = new AssetPatchService(
+    package,
+    new AssetPatchJournalOptions(journalStore));
+
+PatchRunResult result = await patchService.RunAsync(runOptions, cancellationToken);
+```
+
+On the next launch, the product bootstrap can read the last checkpoint and decide whether to resume, restart, verify, repair, roll back, or ignore a completed transaction:
+
+```csharp
+if (journalStore.TryRead(out AssetPatchJournalRecord record, out string error))
+{
+    AssetPatchRecoveryRecommendation recovery =
+        AssetPatchJournalRecovery.Analyze(record);
+
+    if (recovery.Action == AssetPatchRecoveryAction.ResumeOrRestartDownload)
+    {
+        // Ask the active provider whether partial data can resume.
+        // If the provider cannot resume safely, clear the partial payload and restart the patch.
+    }
+}
+```
+
+For bootstraps that want a reusable executor instead of hand-written branching, use `AssetPatchRecoveryService`. Its default policy is inspect-only: it reads and classifies the journal, but it does not delete checkpoints, clear caches, restart downloads, or roll back manifests unless the product passes an explicit policy.
+
+```csharp
+var recoveryPolicy = new AssetPatchRecoveryPolicy(
+    rollbackFailedJournalWithVersion: true,
+    clearUnusedCacheAfterRollback: true,
+    clearJournalAfterSuccessfulRecovery: true);
+
+var recoveryService = new AssetPatchRecoveryService(
+    package,
+    journalStore,
+    recoveryPolicy);
+
+AssetPatchRecoveryResult recoveryResult =
+    await recoveryService.RecoverAsync(cancellationToken);
+
+if (recoveryResult.Status == AssetPatchRecoveryStatus.RequiresOwnerAction)
+{
+    // Show repair UI, restart the patch flow, or ask the provider-specific layer
+    // whether interrupted payloads can safely resume.
+}
+```
+
+If the active package implements `IAssetPatchProviderReconciler`, `AssetPatchRecoveryService` automatically records provider capability details in `recoveryResult.ProviderReconciliation`. The service still stays conservative: it only executes manifest rollback or cache cleanup when both the explicit recovery policy and the provider capability matrix allow that exact operation.
+
+| Provider | Versioned manifest update | Cache cleanup | Isolated version pre-download | Recovery behavior |
+| --- | --- | --- | --- | --- |
+| YooAsset | Supported through `UpdatePackageManifestAsync(version)`. | `All`, `Unused`, and `ByTags` are supported by the adapter. | Not supported by the current adapter. | Restart the patch against the active manifest; YooAsset owns completed-cache validation. |
+| Addressables | Not supported as a provider-neutral rollback to a historical catalog version. | Only `ClearCacheMode.All` is supported, and it maps to global Unity cache cleanup. | Not supported by the current adapter. | Restart dependency requests against Unity cache; do not assume safe partial resume or scoped cleanup. |
+| Resources | Not supported. | Not supported for provider-side patch cache. | Not supported. | An interrupted patch journal is a configuration error for a remote patch flow. |
+
+The same capability guard is used by content-trust failure handling. A trust policy that asks for versioned rollback or unused-cache cleanup will fail explicitly when the active provider cannot perform that operation with the requested semantics.
+
+The journal is intentionally small and stage-based. It records schema version, sequence, package name, target version, rollback version, public patch stage, journal status, expected download count/bytes, content trust state, trust fingerprint, UTC ticks, and the latest terminal error. It does not store CDN URLs, credentials, account identifiers, encryption keys, raw manifest documents, or provider SDK objects.
+
+The default path helper writes under:
+
+```text
+Application.persistentDataPath/CycloneGames/AssetManagement/PatchJournal/<package>.json
+```
+
+`FileAssetPatchJournalStore` uses `CycloneGames.IO` atomic text writes. Atomic replacement protects normal metadata updates from partial destination files, but platform durability limits still apply: on mobile or WebGL, a killed process may lose the latest in-flight write, and some filesystems fall back to delete-then-move. Treat the journal as a recovery checkpoint, not as the only source of truth. The provider cache, active manifest, and content trust manifest must still be reconciled before activating downloaded content.
 
 #### Manifest Documents and Signing Payloads
 
 `ContentTrustManifestBuilder` creates provider-neutral manifests from build outputs or downloaded files. It normalizes relative locations to forward slashes, validates duplicate locations after deterministic sorting, and can compute SHA-256 or XxHash64 entries through `CycloneGames.IO`.
 
 `ContentTrustManifestCodec` writes and reads a compact JSON document for transport and inspection. The JSON document is not the signing boundary. Signatures should be calculated over `ContentTrustManifestCanonicalPayload` bytes, which use a deterministic schema version, length-prefixed UTF-8 strings, little-endian numeric fields, sorted entries, and no `Signature` field. This prevents JSON whitespace, property order, escaping, or parser behavior from changing signature semantics.
+
+`ToJson` and `ToCanonicalPayloadBytes` are convenience APIs and allocate their result objects. Large build, patch, CI, and Editor tools should prefer the caller-owned paths: `ContentTrustManifestCodec.AppendJson(builder, manifest, sortWorkspace: workspace)`, `ContentTrustManifestCanonicalPayload.WriteTo(manifest, stream, workspace)`, and `IContentTrustManifestCanonicalSigner`. These APIs let the caller reuse `StringBuilder`, `Stream`, and sorting workspaces while keeping threading explicit; the manifest layer does not create worker threads or hidden global caches.
 
 ```csharp
 ContentTrustManifest unsignedManifest = new ContentTrustManifestBuilder()
@@ -440,9 +515,24 @@ string json = ContentTrustManifestCodec.ToJson(signedManifest);
 byte[] canonicalPayload = ContentTrustManifestCodec.ToCanonicalPayloadBytes(signedManifest);
 ```
 
+```csharp
+var jsonBuilder = new StringBuilder(64 * 1024);
+var sortWorkspace = new List<ContentTrustFileEntry>(1024);
+
+ContentTrustManifestCodec.AppendJson(jsonBuilder, signedManifest, sortWorkspace: sortWorkspace);
+
+using (var canonicalStream = new MemoryStream(64 * 1024))
+{
+    ContentTrustManifestCanonicalPayload.WriteTo(signedManifest, canonicalStream, sortWorkspace);
+    // Pass the stream to the product signer, platform keystore, or CI signing tool.
+}
+```
+
 #### Content Repair and Self-Healing
 
 Content repair is provider-neutral. `AssetRepairPlanner` converts content trust failures into a deterministic `AssetRepairPlan`; `AssetRepairService` executes the plan by clearing unused cache, downloading the failed locations through `CreateDownloaderForLocations`, and optionally running content trust verification again. The service does not know Addressables, YooAsset, or any future provider SDK type.
+
+Cancellation is structured and provider-owned. If the repair `CancellationToken`, `Cancel()`, or `Dispose()` interrupts a repair while a downloader is active, `AssetRepairService` calls `IDownloader.Cancel()` and returns an `AssetRepairRunResult` with `AssetRepairRunStatus.Cancelled`; callers do not need to infer cancellation from an exception path. After disposal, the service suppresses later event publication so owner teardown does not race a released `R3` event stream.
 
 ```csharp
 var repairService = new AssetRepairService(package);
@@ -548,7 +638,7 @@ if (!result.Succeeded)
 }
 ```
 
-Supported checks include manifest root containment, per-file path traversal defense, file size, SHA-256, XxHash64, and optional signature policy via `IContentTrustSignatureVerifier`. The verifier uses `CycloneGames.IO` for file hashing and path containment, and `CycloneGames.Hash` for deterministic manifest fingerprints. It does not write files or keep persistent state.
+Supported checks include manifest root containment, per-file path traversal defense, file size, SHA-256, XxHash64, and optional signature policy via `IContentTrustSignatureVerifier`. The verifier uses `CycloneGames.IO` for file hashing and path containment, and `CycloneGames.Hash` for deterministic manifest fingerprints. `ContentTrustVerifier` also implements `IContentTrustBufferVerifier`, so downloaders that own pooled or sliced buffers can verify `ReadOnlySpan<byte>` without copying into a new array. Successful hash checks compare hash bytes directly against the expected hex string and only format the actual hash when a mismatch must be reported. It does not write files or keep persistent state.
 
 ### Runtime Cache Diagnostics
 
@@ -1194,9 +1284,26 @@ Use `AssetRefValidator.ValidateAllReportOnly()` for CI/reporting flows that must
 | --- | --- |
 | `RunAsync(autoDownload, downloadOptions)` | Legacy event-driven patch flow. |
 | `Download()` | Starts a pending download through the legacy fire-and-forget path. |
-| `Cancel()` | Cancels the active provider downloader. |
+| `Cancel()` | Cancels the active or pending provider downloader and marks the transaction cancelled. |
+| `Dispose()` | Cancels owned provider downloader state and releases the patch event stream. |
 | `RunAsync(PatchRunOptions)` | Transactional patch flow with result reporting and optional content trust verification. |
 | `DownloadAsync()` | Completes a pending transaction and returns a `PatchRunResult`. |
+| `PatchFailureKind` | Classifies structured patch result failures such as provider preflight failure, provider download failure, or explicit cancellation. |
+
+### AssetPatch Journal
+
+| Member | Description |
+| --- | --- |
+| `AssetPatchJournalOptions` | Optional patch service configuration for a journal store and write-failure policy. |
+| `FileAssetPatchJournalStore` | Stores the latest patch checkpoint as an explicit JSON file using atomic replacement. |
+| `AssetPatchJournalCodec` | Converts `AssetPatchJournalRecord` to and from the journal JSON schema. |
+| `AssetPatchJournalRecovery.Analyze(record)` | Maps the last checkpoint to a deterministic recovery recommendation. |
+| `AssetPatchRecoveryService` | Executes conservative startup recovery from a journal using explicit product policy. |
+| `AssetPatchRecoveryPolicy` | Controls whether terminal journals are cleared, failed manifests roll back, or interrupted download caches are cleared. |
+| `IAssetPatchProviderReconciler` | Lets a provider report recovery capabilities and provider-specific restart/resume guidance without leaking provider SDK types. |
+| `AssetPatchProviderReconciliationCapabilities` | Declares whether a provider supports versioned manifest updates, scoped cache cleanup, provider-owned download cache, and isolated version pre-download. |
+| `AssetPatchProviderReconciliationResult` | Carries provider reconciliation status, message, and capability data inside `AssetPatchRecoveryResult`. |
+| `AssetPatchJournalPaths.GetDefaultJournalPath(packageName)` | Builds the default persistent-data journal path for a package. |
 
 ### AssetPatchProfileAsset / AssetPatchRuntimeProfile
 
@@ -1214,17 +1321,22 @@ Use `AssetRefValidator.ValidateAllReportOnly()` for CI/reporting flows that must
 | `ContentTrustManifestBuilder.AddFile(root, location, algorithm)` | Adds a relative file entry and computes its content hash. |
 | `ContentTrustManifestBuilder.Build()` | Produces a sorted provider-neutral trust manifest. |
 | `ContentTrustManifestCodec.ToJson(manifest)` | Writes the manifest document for storage or transport. |
+| `ContentTrustManifestCodec.AppendJson(builder, manifest, sortWorkspace)` | Appends JSON into caller-owned buffers for large build, Editor, and CI tools. |
 | `ContentTrustManifestCodec.FromJson(json)` | Reads a manifest document from JSON. |
 | `ContentTrustManifestCodec.ToCanonicalPayloadBytes(manifest)` | Produces deterministic signing bytes that exclude the signature field. |
-| `ContentTrustManifestSignatureUtility.Sign(manifest, signer)` | Signs canonical bytes through an injected product/platform signer. |
+| `ContentTrustManifestCanonicalPayload.WriteTo(manifest, stream, sortWorkspace)` | Writes deterministic signing bytes into a caller-owned stream. |
+| `ContentTrustManifestSignatureUtility.Sign(manifest, signer)` | Convenience path that signs allocated canonical bytes through an injected product/platform signer. |
+| `ContentTrustManifestSignatureUtility.SignCanonical(manifest, signer)` | Large-manifest path that lets `IContentTrustManifestCanonicalSigner` own streams, pooled buffers, or platform crypto handles. |
 
 ### IAssetRepairService
 
 | Member | Description |
 | --- | --- |
+| `Cancel()` | Cancels the active repair downloader and marks the repair operation cancelled. |
 | `RepairAsync(manifest, failures, options)` | Builds a repair plan from content trust failures and executes location repair. |
 | `RepairAsync(plan, options)` | Executes a precomputed provider-neutral repair plan. |
 | `RepairEvents` | Reports stage changes, plan creation, download progress, completion, and failure. |
+| `Dispose()` | Cancels owned repair downloader state and releases the repair event stream. |
 
 ### IAssetPackage
 

@@ -54,5 +54,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool Succeeded => Status == AssetRepairRunStatus.Succeeded;
         public bool NoRepairNeeded => Status == AssetRepairRunStatus.NoRepairNeeded;
         public bool NoRepairableLocations => Status == AssetRepairRunStatus.NoRepairableLocations;
+        public bool Cancelled => Status == AssetRepairRunStatus.Cancelled;
+        public bool Failed => Status == AssetRepairRunStatus.Failed;
     }
 }

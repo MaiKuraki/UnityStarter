@@ -12,6 +12,7 @@ namespace CycloneGames.Networking.Editor.Diagnostics
         private static GUIStyle foldoutLabelStyle;
         private static GUIStyle summaryLabelStyle;
         private static GUIStyle summaryValueStyle;
+        private static readonly Vector3[] FoldoutTrianglePoints = new Vector3[3];
 
         public static bool DrawFoldoutHeader(string title, bool foldout, Color color)
         {
@@ -84,11 +85,7 @@ namespace CycloneGames.Networking.Editor.Diagnostics
                 _ => MessageType.Info
             };
 
-            string text = string.IsNullOrEmpty(issue.Action)
-                ? $"[{issue.Code}] {issue.Message}"
-                : $"[{issue.Code}] {issue.Message}\n{issue.Action}";
-
-            EditorGUILayout.HelpBox(text, type);
+            EditorGUILayout.HelpBox(issue.DisplayText, type);
             if (issue.Context != null)
             {
                 EditorGUILayout.ObjectField("Context", issue.Context, typeof(UnityEngine.Object), true);
@@ -121,31 +118,24 @@ namespace CycloneGames.Networking.Editor.Diagnostics
         private static void DrawFoldoutTriangle(Rect rect, bool expanded)
         {
             Vector2 center = rect.center;
-            Vector3[] points;
 
             if (expanded)
             {
-                points = new[]
-                {
-                    new Vector3(center.x - 4f, center.y - 2f),
-                    new Vector3(center.x + 4f, center.y - 2f),
-                    new Vector3(center.x, center.y + 3f)
-                };
+                FoldoutTrianglePoints[0] = new Vector3(center.x - 4f, center.y - 2f);
+                FoldoutTrianglePoints[1] = new Vector3(center.x + 4f, center.y - 2f);
+                FoldoutTrianglePoints[2] = new Vector3(center.x, center.y + 3f);
             }
             else
             {
-                points = new[]
-                {
-                    new Vector3(center.x - 2f, center.y - 4f),
-                    new Vector3(center.x - 2f, center.y + 4f),
-                    new Vector3(center.x + 3f, center.y)
-                };
+                FoldoutTrianglePoints[0] = new Vector3(center.x - 2f, center.y - 4f);
+                FoldoutTrianglePoints[1] = new Vector3(center.x - 2f, center.y + 4f);
+                FoldoutTrianglePoints[2] = new Vector3(center.x + 3f, center.y);
             }
 
             Handles.BeginGUI();
             Color previousColor = Handles.color;
             Handles.color = new Color(0.90f, 0.90f, 0.90f, 0.95f);
-            Handles.DrawAAConvexPolygon(points);
+            Handles.DrawAAConvexPolygon(FoldoutTrianglePoints);
             Handles.color = previousColor;
             Handles.EndGUI();
         }

@@ -16,7 +16,10 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly Subject<(AssetRepairEvent, object)> _repairEvents = new Subject<(AssetRepairEvent, object)>();
         private readonly List<string> _locationWorkspace = new List<string>(16);
 
+        private IDownloader _activeDownloader;
+        private AssetRepairStage _currentStage = AssetRepairStage.None;
         private bool _running;
+        private bool _cancelRequested;
         private bool _disposed;
 
         public AssetRepairService(IAssetPackage package)
@@ -32,6 +35,11 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public string PackageName => _target.PackageName;
         public Observable<(AssetRepairEvent, object)> RepairEvents => _repairEvents;
+
+        public void Cancel()
+        {
+            CancelActiveDownloader(markCancelRequested: true, publishStage: true);
+        }
 
         public UniTask<AssetRepairRunResult> RepairAsync(
             ContentTrustManifest manifest,
@@ -61,12 +69,18 @@ namespace CycloneGames.AssetManagement.Runtime
             }
 
             _running = true;
+            _activeDownloader = null;
+            _currentStage = AssetRepairStage.None;
+            _cancelRequested = false;
             options = options.Normalized();
+            IDownloader downloader = null;
 
             try
             {
                 SetStage(AssetRepairStage.Plan);
+                ThrowIfCancellationRequested();
                 PublishEvent(AssetRepairEvent.PlanCreated, new AssetRepairPlanCreatedEventArgs(plan));
+                ThrowIfCancellationRequested();
 
                 if (!plan.HasFailures)
                 {
@@ -82,6 +96,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 {
                     SetStage(AssetRepairStage.ClearCache);
                     bool cacheCleared = await _target.ClearCacheFilesAsync(ClearCacheMode.Unused, cancellationToken: cancellationToken);
+                    ThrowIfCancellationRequested();
                     if (!cacheCleared)
                     {
                         return Complete(plan, options, AssetRepairRunStatus.Failed, 0, 0L, 0, 0UL, default, "Failed to clear unused cache before repair.");
@@ -89,7 +104,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
 
                 SetStage(AssetRepairStage.Download);
-                IDownloader downloader = _target.CreateDownloaderForLocations(
+                downloader = _target.CreateDownloaderForLocations(
                     plan.RepairLocations,
                     options.RecursiveDownloadLocations,
                     options.DownloadOptions.MaxConcurrentDownloads,
@@ -99,7 +114,9 @@ namespace CycloneGames.AssetManagement.Runtime
                     return Complete(plan, options, AssetRepairRunStatus.Failed, 0, 0L, 0, 0UL, default, "Repair downloader was not created.");
                 }
 
+                _activeDownloader = downloader;
                 await RunDownloaderAsync(downloader, cancellationToken);
+                ThrowIfCancellationRequested();
                 if (!downloader.Succeed)
                 {
                     return Complete(plan, options, AssetRepairRunStatus.Failed, downloader.TotalDownloadCount, downloader.TotalDownloadBytes, 0, 0UL, default, downloader.Error);
@@ -111,11 +128,13 @@ namespace CycloneGames.AssetManagement.Runtime
                 if (options.VerifyAfterRepair && options.TrustOptions.Enabled)
                 {
                     SetStage(AssetRepairStage.VerifyContentTrust);
+                    ThrowIfCancellationRequested();
                     postRepairTrustFailureCount = options.TrustOptions.Verifier.VerifyManifestFiles(
                         options.TrustOptions.RootDirectory,
                         in options.TrustOptions.Manifest,
                         options.TrustOptions.FailureBuffer,
                         options.TrustOptions.SignatureVerifier);
+                    ThrowIfCancellationRequested();
                     trustFingerprint = options.TrustOptions.Manifest.ComputeFingerprint();
                     if (postRepairTrustFailureCount > 0 && options.TrustOptions.FailureBuffer != null && options.TrustOptions.FailureBuffer.Count > 0)
                     {
@@ -148,13 +167,23 @@ namespace CycloneGames.AssetManagement.Runtime
                     firstPostRepairFailure,
                     null);
             }
-            catch (OperationCanceledException)
+            catch (OperationCanceledException ex)
             {
-                SetStage(AssetRepairStage.Cancelled);
-                throw;
+                CancelActiveDownloader(markCancelRequested: true, publishStage: false);
+                return Complete(
+                    plan,
+                    options,
+                    AssetRepairRunStatus.Cancelled,
+                    downloader?.TotalDownloadCount ?? 0,
+                    downloader?.TotalDownloadBytes ?? 0L,
+                    0,
+                    0UL,
+                    default,
+                    string.IsNullOrEmpty(ex.Message) ? "Asset repair operation was cancelled." : ex.Message);
             }
             catch (Exception ex)
             {
+                CancelActiveDownloader(markCancelRequested: false, publishStage: false);
                 SetStage(AssetRepairStage.Failed);
                 AssetRepairRunResult result = CreateResult(plan, options, AssetRepairRunStatus.Failed, 0, 0L, 0, 0UL, default, ex.Message);
                 PublishEvent(AssetRepairEvent.RepairFailed, result);
@@ -162,6 +191,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             finally
             {
+                _activeDownloader = null;
                 _running = false;
             }
         }
@@ -173,6 +203,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return;
             }
 
+            CancelActiveDownloader(markCancelRequested: true, publishStage: false);
             _disposed = true;
             _repairEvents.Dispose();
         }
@@ -184,6 +215,7 @@ namespace CycloneGames.AssetManagement.Runtime
             var progressArgs = new DownloadProgressEventArgs();
             while (!downloader.IsDone)
             {
+                ThrowIfCancellationRequested();
                 cancellationToken.ThrowIfCancellationRequested();
 
                 progressArgs.TotalDownloadCount = downloader.TotalDownloadCount;
@@ -194,6 +226,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 PublishEvent(AssetRepairEvent.DownloadProgress, progressArgs);
                 await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
             }
+
+            ThrowIfCancellationRequested();
         }
 
         private AssetRepairRunResult Complete(
@@ -207,7 +241,7 @@ namespace CycloneGames.AssetManagement.Runtime
             ContentTrustVerificationResult firstPostRepairFailure,
             string error)
         {
-            SetStage(status == AssetRepairRunStatus.Failed ? AssetRepairStage.Failed : AssetRepairStage.Done);
+            SetStage(GetTerminalStage(status));
             AssetRepairRunResult result = CreateResult(
                 plan,
                 options,
@@ -218,8 +252,27 @@ namespace CycloneGames.AssetManagement.Runtime
                 trustFingerprint,
                 firstPostRepairFailure,
                 error);
-            PublishEvent(status == AssetRepairRunStatus.Failed ? AssetRepairEvent.RepairFailed : AssetRepairEvent.RepairCompleted, result);
+            PublishEvent(IsFailureStatus(status) ? AssetRepairEvent.RepairFailed : AssetRepairEvent.RepairCompleted, result);
             return result;
+        }
+
+        private static AssetRepairStage GetTerminalStage(AssetRepairRunStatus status)
+        {
+            switch (status)
+            {
+                case AssetRepairRunStatus.Failed:
+                    return AssetRepairStage.Failed;
+                case AssetRepairRunStatus.Cancelled:
+                    return AssetRepairStage.Cancelled;
+                default:
+                    return AssetRepairStage.Done;
+            }
+        }
+
+        private static bool IsFailureStatus(AssetRepairRunStatus status)
+        {
+            return status == AssetRepairRunStatus.Failed ||
+                   status == AssetRepairRunStatus.Cancelled;
         }
 
         private static AssetRepairRunResult CreateResult(
@@ -252,12 +305,53 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void SetStage(AssetRepairStage stage)
         {
+            if (_currentStage == stage)
+            {
+                return;
+            }
+
+            _currentStage = stage;
             PublishEvent(AssetRepairEvent.StageChanged, stage);
         }
 
         private void PublishEvent(AssetRepairEvent repairEvent, object args)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _repairEvents.OnNext((repairEvent, args));
+        }
+
+        private void CancelActiveDownloader(bool markCancelRequested, bool publishStage)
+        {
+            if (markCancelRequested)
+            {
+                _cancelRequested = true;
+            }
+
+            _activeDownloader?.Cancel();
+            if (publishStage && CanTransitionToCancelled(_currentStage))
+            {
+                SetStage(AssetRepairStage.Cancelled);
+            }
+        }
+
+        private void ThrowIfCancellationRequested()
+        {
+            if (_cancelRequested)
+            {
+                throw new OperationCanceledException("Asset repair operation was cancelled.");
+            }
+        }
+
+        private static bool CanTransitionToCancelled(AssetRepairStage stage)
+        {
+            return stage != AssetRepairStage.None &&
+                   stage != AssetRepairStage.Done &&
+                   stage != AssetRepairStage.Failed &&
+                   stage != AssetRepairStage.Cancelled;
         }
 
         private void ThrowIfDisposed()

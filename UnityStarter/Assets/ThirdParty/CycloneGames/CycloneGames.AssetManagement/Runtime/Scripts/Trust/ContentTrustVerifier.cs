@@ -11,7 +11,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
     /// Provider-neutral content verifier for downloaded bundles, raw files, and provider manifests.
     /// Designed for update/download boundaries rather than gameplay hot paths.
     /// </summary>
-    public sealed class ContentTrustVerifier : IContentTrustVerifier
+    public sealed class ContentTrustVerifier : IContentTrustBufferVerifier
     {
         public static readonly ContentTrustVerifier Shared = new ContentTrustVerifier();
 
@@ -25,19 +25,24 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 return ContentTrustVerificationResult.Failed(ContentTrustFailure.MissingFile, entry.Location);
             }
 
+            return VerifyBytes(bytes.AsSpan(), in entry);
+        }
+
+        public ContentTrustVerificationResult VerifyBytes(ReadOnlySpan<byte> bytes, in ContentTrustFileEntry entry)
+        {
             ContentTrustVerificationResult validation = ValidateEntry(in entry);
             if (!validation.Succeeded)
             {
                 return validation;
             }
 
-            if (entry.SizeBytes != bytes.LongLength)
+            if (entry.SizeBytes != bytes.Length)
             {
                 return ContentTrustVerificationResult.Failed(
                     ContentTrustFailure.SizeMismatch,
                     entry.Location,
                     entry.SizeBytes.ToString(),
-                    bytes.LongLength.ToString());
+                    bytes.Length.ToString());
             }
 
             return VerifyHash(bytes, in entry);
@@ -222,49 +227,93 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashComputationFailed, entry.Location);
             }
 
-            string actual = FileUtility.ToHexString(hashBuffer);
-            if (!string.Equals(entry.ExpectedHashHex, actual, StringComparison.OrdinalIgnoreCase))
+            if (!MatchesExpectedHashHex(hashBuffer, entry.ExpectedHashHex))
             {
+                string actual = FileUtility.ToHexString(hashBuffer);
                 return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashMismatch, entry.Location, entry.ExpectedHashHex, actual);
             }
 
             return ContentTrustVerificationResult.Passed(entry.Location);
         }
 
-        private static ContentTrustVerificationResult VerifyHash(byte[] bytes, in ContentTrustFileEntry entry)
+        private static ContentTrustVerificationResult VerifyHash(ReadOnlySpan<byte> bytes, in ContentTrustFileEntry entry)
         {
             if (entry.HashAlgorithm == ContentTrustHashAlgorithm.None)
             {
                 return ContentTrustVerificationResult.Passed(entry.Location);
             }
 
-            string actual;
+            int hashSize = GetHashSizeInBytes(entry.HashAlgorithm);
+            Span<byte> hashBuffer = stackalloc byte[hashSize];
             if (entry.HashAlgorithm == ContentTrustHashAlgorithm.XxHash64)
             {
-                Span<byte> hashBuffer = stackalloc byte[XXHASH64_HEX_LENGTH / 2];
                 XxHash64 hasher = XxHash64.Create();
                 hasher.Append(bytes);
                 if (!hasher.TryWriteHash(hashBuffer))
                 {
                     return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashComputationFailed, entry.Location);
                 }
-
-                actual = FileUtility.ToHexString(hashBuffer);
             }
             else
             {
-                using (SHA256 sha256 = SHA256.Create())
+                using (var incrementalHasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
                 {
-                    actual = FileUtility.ToHexString(sha256.ComputeHash(bytes));
+                    incrementalHasher.AppendData(bytes);
+                    if (!incrementalHasher.TryGetHashAndReset(hashBuffer, out int bytesWritten) || bytesWritten != hashSize)
+                    {
+                        return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashComputationFailed, entry.Location);
+                    }
                 }
             }
 
-            if (!string.Equals(entry.ExpectedHashHex, actual, StringComparison.OrdinalIgnoreCase))
+            if (!MatchesExpectedHashHex(hashBuffer, entry.ExpectedHashHex))
             {
+                string actual = FileUtility.ToHexString(hashBuffer);
                 return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashMismatch, entry.Location, entry.ExpectedHashHex, actual);
             }
 
             return ContentTrustVerificationResult.Passed(entry.Location);
+        }
+
+        private static bool MatchesExpectedHashHex(ReadOnlySpan<byte> hashBytes, string expectedHashHex)
+        {
+            if (string.IsNullOrEmpty(expectedHashHex) || expectedHashHex.Length != hashBytes.Length * 2)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < hashBytes.Length; i++)
+            {
+                byte value = hashBytes[i];
+                int high = FromHex(expectedHashHex[i * 2]);
+                int low = FromHex(expectedHashHex[(i * 2) + 1]);
+                if (high < 0 || low < 0 || value != (byte)((high << 4) | low))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static int FromHex(char value)
+        {
+            if (value >= '0' && value <= '9')
+            {
+                return value - '0';
+            }
+
+            if (value >= 'a' && value <= 'f')
+            {
+                return value - 'a' + 10;
+            }
+
+            if (value >= 'A' && value <= 'F')
+            {
+                return value - 'A' + 10;
+            }
+
+            return -1;
         }
 
         private static bool IsExpectedHashValid(string hex, int expectedLength)

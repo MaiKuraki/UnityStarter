@@ -1,5 +1,6 @@
 #if NEWTONSOFT_JSON
 using System;
+using System.Buffers;
 using System.Text;
 using Newtonsoft.Json;
 using CycloneGames.Networking.Serialization;
@@ -24,6 +25,8 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
     /// </remarks>
     public sealed class NewtonsoftJsonSerializerAdapter : INetSerializer
     {
+        private const int STACKALLOC_THRESHOLD = 512;
+
         private static readonly Lazy<NewtonsoftJsonSerializerAdapter> _instance =
             new Lazy<NewtonsoftJsonSerializerAdapter>(() => new NewtonsoftJsonSerializerAdapter());
 
@@ -95,15 +98,18 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
 
         public void Serialize<T>(in T value, INetWriter writer) where T : struct
         {
+            if (writer == null)
+            {
+                throw new ArgumentNullException(nameof(writer));
+            }
+
             string json = JsonConvert.SerializeObject(value, _settings);
-            byte[] bytes = _encoding.GetBytes(json);
-            writer.WriteBytes(bytes);
+            WriteUtf8String(json, writer);
         }
 
         public T Deserialize<T>(ReadOnlySpan<byte> data) where T : struct
         {
-            // Newtonsoft.Json doesn't support Span directly, need to convert
-            string json = _encoding.GetString(data.ToArray());
+            string json = _encoding.GetString(data);
             return JsonConvert.DeserializeObject<T>(json, _settings);
         }
 
@@ -111,6 +117,35 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
         {
             var span = reader.ReadBytesSpan(reader.Remaining);
             return Deserialize<T>(span);
+        }
+
+        private void WriteUtf8String(string json, INetWriter writer)
+        {
+            int byteCount = _encoding.GetByteCount(json);
+            if (byteCount == 0)
+            {
+                writer.WriteBytes(ReadOnlySpan<byte>.Empty);
+                return;
+            }
+
+            if (byteCount <= STACKALLOC_THRESHOLD)
+            {
+                Span<byte> bytes = stackalloc byte[byteCount];
+                int writtenBytes = _encoding.GetBytes(json.AsSpan(), bytes);
+                writer.WriteBytes(bytes.Slice(0, writtenBytes));
+                return;
+            }
+
+            byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
+            try
+            {
+                int writtenBytes = _encoding.GetBytes(json, 0, json.Length, rented, 0);
+                writer.WriteBytes(new ReadOnlySpan<byte>(rented, 0, writtenBytes));
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(rented);
+            }
         }
     }
 }

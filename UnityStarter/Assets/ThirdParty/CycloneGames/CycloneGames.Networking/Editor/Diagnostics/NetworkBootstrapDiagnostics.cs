@@ -17,6 +17,9 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             new BackendSdkPackageChecker()
         };
 
+        private static readonly Dictionary<string, Type> TypeLookupCache =
+            new Dictionary<string, Type>(StringComparer.Ordinal);
+
         public static NetworkBootstrapReport Run(NetworkBootstrapPreset preset = null)
         {
             var context = new NetworkBootstrapContext(preset);
@@ -80,18 +83,28 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             if (string.IsNullOrEmpty(fullName))
                 return null;
 
+            if (TypeLookupCache.TryGetValue(fullName, out Type cachedType))
+                return cachedType;
+
             Type type = Type.GetType(fullName, false);
             if (type != null)
+            {
+                TypeLookupCache[fullName] = type;
                 return type;
+            }
 
             Assembly[] assemblies = AppDomain.CurrentDomain.GetAssemblies();
             for (int i = 0; i < assemblies.Length; i++)
             {
                 type = assemblies[i].GetType(fullName, false);
                 if (type != null)
+                {
+                    TypeLookupCache[fullName] = type;
                     return type;
+                }
             }
 
+            TypeLookupCache[fullName] = null;
             return null;
         }
 
