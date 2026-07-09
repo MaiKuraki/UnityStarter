@@ -10,7 +10,7 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
     /// <see cref="IUIWindowBinder"/> that bridges <see cref="ILocalizationService"/> locale
     /// changes to every <see cref="ILocaleResponder"/> found within active UIWindows.
     /// <para>
-    /// Register via <c>UIManager.RegisterWindowBinder(binder)</c>.
+    /// Register via <c>IUIService.RegisterWindowBinder(binder)</c>.
     /// With VContainer: register <see cref="LocalizationWindowBinder"/> as a singleton and
     /// let the container call <c>RegisterWindowBinder</c> during setup.
     /// </para>

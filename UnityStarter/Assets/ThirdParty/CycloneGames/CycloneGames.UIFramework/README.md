@@ -10,7 +10,7 @@
 
 | Feature                     | Detail                                                                                                                                                                   |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **MVP Auto-Binding**        | Decorate a Presenter with `[UIPresenterBind("WindowName")]` — binding, lifecycle forwarding, and injection happen automatically with zero boilerplate                    |
+| **Optional MVP Binding**    | Start with classic `UIWindow`, then opt selected windows into Presenter binding through UIWindowCreator-generated or manual registration without assembly scanning          |
 | **DI / IoC**                | All contracts are interfaces (`IUIService`, `IUINavigationService`, `IUITransitionCoordinator`, etc.). Drop-in compatible with VContainer, Zenject, or any IoC container |
 | **Data-Driven Config**      | Every window and layer is configured via `ScriptableObject`, giving designers full control without touching code                                                         |
 | **Service-Oriented Facade** | `IUIService` is the single public API; internal `UIManager` complexity stays hidden                                                                                      |
@@ -86,7 +86,7 @@ flowchart TB
     end
 
     subgraph MVP["🔌 MVP Layer"]
-        Binder["UIPresenterBinder<br/>[UIPresenterBind] auto-discover"]
+        Binder["UIPresenterBinder<br/>explicit registry"]
         Presenter["UIPresenter<TView><br/>• NavigateTo / NavigateToAsync<br/>• NavigateBack<br/>• NavigationService"]
     end
 
@@ -773,9 +773,15 @@ builder.Register<UINavigationService>(Lifetime.Singleton).AsImplementedInterface
 `UIPresenter<TView>` exposes two built-in helpers:
 
 ```csharp
-[UIPresenterBind("UIWindow_Shop")]
 public class ShopPresenter : UIPresenter<IShopView>
 {
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<ShopPresenter>();
+        UIPresenterBinder.RegisterGlobalMapping<ShopPresenter>("UIWindow_Shop");
+    }
+
     public void OnClickItemDetail(int itemId)
     {
         // Opens UIWindow_ItemDetail and registers ShopPresenter's window as its opener.
@@ -794,9 +800,15 @@ public class ShopPresenter : UIPresenter<IShopView>
 ### Step 3: Reading the Context in the Target Window
 
 ```csharp
-[UIPresenterBind("UIWindow_ItemDetail")]
 public class ItemDetailPresenter : UIPresenter<IItemDetailView>
 {
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<ItemDetailPresenter>();
+        UIPresenterBinder.RegisterGlobalMapping<ItemDetailPresenter>("UIWindow_ItemDetail");
+    }
+
     public override void OnViewOpened()
     {
         // Retrieve the payload passed by the opener
@@ -895,9 +907,15 @@ uiService.SetTransitionCoordinator(fadeCoordinator);
 ### Step 2: Navigate With Coordinated Animation (from a Presenter)
 
 ```csharp
-[UIPresenterBind("UIWindow_Shop")]
 public class ShopPresenter : UIPresenter<IShopView>
 {
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<ShopPresenter>();
+        UIPresenterBinder.RegisterGlobalMapping<ShopPresenter>("UIWindow_Shop");
+    }
+
     // Simultaneous animation — A exits while B enters
     public async void OnClickDetail(int itemId)
     {
@@ -2111,18 +2129,18 @@ The Performance Auditor suggests an optimal policy for each window based on its 
 
 ---
 
-## Architecture Patterns (MVP with Auto-Binding)
+## Architecture Patterns (Optional MVP Binding)
 
-CycloneGames.UIFramework provides **optional** MVP (Model-View-Presenter) support with automatic Presenter lifecycle management. You can use the traditional approach (all logic in UIWindow) or the new MVP pattern with automatic binding.
+CycloneGames.UIFramework treats `UIWindow` as the stable entry point. MVP is optional: teams can start with classic windows, add manual presenters when a window grows, and later opt selected windows into generated or explicit Presenter registration.
 
 ### Usage Levels
 
-| Level  | Pattern                                                    | Use Case                  |
-| ------ | ---------------------------------------------------------- | ------------------------- |
-| **L0** | `class MyUI : UIWindow`                                    | Simple windows, beginners |
-| **L1** | `class MyUI : UIWindow` + manual Presenter                 | Manual control            |
-| **L2** | `class MyUI : UIWindow` + `[UIPresenterBind]`              | Auto-binding, no DI       |
-| **L3** | `class MyUI : UIWindow` + `[UIPresenterBind]` + VContainer | Full DI integration       |
+| Level  | Pattern                                                             | Use Case                         |
+| ------ | ------------------------------------------------------------------- | -------------------------------- |
+| **L0** | `class MyUI : UIWindow`                                             | Simple windows, beginners        |
+| **L1** | `class MyUI : UIWindow` + manual Presenter                          | Manual control                   |
+| **L2** | `class MyUI : UIWindow` + generated or manual Presenter registration | Automatic lifecycle, no DI       |
+| **L3** | `class MyUI : UIWindow` + Presenter registration + VContainer        | Full DI integration              |
 
 ---
 
@@ -2145,9 +2163,9 @@ public class UIWindowSimple : UIWindow
 
 ---
 
-### Level 2: Auto-Binding (No DI Framework Required)
+### Level 2: Explicit Binding (No DI Framework Required)
 
-Use `[UIPresenterBind]` to automatically create and manage Presenters entirely decoupled from Views.
+Use UIWindowCreator's MVP option, or call `UIPresenterFactory.Register` and `UIPresenterBinder.RegisterGlobalMapping` manually. Only registered windows receive a Presenter; all other windows remain classic `UIWindow` instances.
 
 #### Step 1: Define View Interface
 
@@ -2180,18 +2198,34 @@ public class UIWindowInventory : UIWindow, IInventoryView
 
 ```csharp
 using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
 
-[UIPresenterBind("UIWindow_Inventory")]
-// Or use strongly typed binding: [UIPresenterBind(typeof(UIWindowInventory))]
 public class InventoryPresenter : UIPresenter<IInventoryView>
 {
-    // Auto-injected from UIServiceLocator (no DI framework needed)
-    [UIInject] private IInventoryService InventoryService { get; set; }
+    private IInventoryService _inventoryService;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<InventoryPresenter>(
+            presenter => presenter.SetInventoryService(UIServiceLocator.Get<IInventoryService>()));
+        UIPresenterBinder.RegisterGlobalMapping<InventoryPresenter>("UIWindow_Inventory");
+    }
+
+    private void SetInventoryService(IInventoryService inventoryService)
+    {
+        _inventoryService = inventoryService;
+    }
 
     public override void OnViewOpened()
     {
-        View.SetGold(InventoryService.Gold);
-        View.SetItemCount(InventoryService.ItemCount);
+        if (_inventoryService == null)
+        {
+            return;
+        }
+
+        View.SetGold(_inventoryService.Gold);
+        View.SetItemCount(_inventoryService.ItemCount);
     }
 
     public override void OnViewClosing()
@@ -2208,7 +2242,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 > [!NOTE]
 >
-> `[UIInject]` is **optional**. If your Presenter works without external dependencies, or if you use a full DI framework (Level 3) that handles injection differently, you do not need to use this attribute.
+> Presenter creation is explicit by design. Use a factory delegate, an injector delegate, or a DI container; the framework does not use reflection fallback when a Presenter is missing from the registry.
 
 #### Step 4: Register Services (No DI Framework)
 
@@ -2219,7 +2253,7 @@ public class GameBootstrap : MonoBehaviour
 {
     void Awake()
     {
-        // Register services for [UIInject] to work
+        // Register services so explicit presenter injectors can resolve them
         UIServiceLocator.Register<IInventoryService>(new InventoryService());
         UIServiceLocator.Register<IAudioService>(new AudioService());
     }
@@ -2252,8 +2286,8 @@ When your project has VContainer package (`jp.hadashikick.vcontainer`) installed
 
 > [!NOTE]
 >
-> The `VCONTAINER_PRESENT` define symbol is configured in `CycloneGames.UIFramework.Runtime.asmdef` via `versionDefines`.
-> When Unity detects the VContainer package, it automatically adds this symbol. **No manual Project Settings configuration required**.
+> The `CYCLONEGAMES_HAS_VCONTAINER` capability symbol is configured in `CycloneGames.UIFramework.Runtime.Integrations.VContainer.asmdef` via `versionDefines`.
+> When Unity detects the VContainer package, the integration assembly is enabled and auto-referenced. **No manual Project Settings configuration or core asmdef modification is required**.
 
 #### Step 1: Understand Architecture
 
@@ -2267,13 +2301,15 @@ VContainer
 │   ├── Dependency: IMainCameraService (optional)
 │   └── Dependency: IAssetPackage (optional)
 │
+├── UIPresenterBinder ← Maps registered windows to Presenters
+│
 ├── VContainerWindowBinder ← Adapter connecting VContainer with Presenter factory
 │
 ├── UISystemInitializer ← Initializes the binder
 │
-└── Presenter types (optional registration)
+└── Presenter types (optional VContainer registration)
     ├── Registered → Uses VContainer constructor injection
-    └── Not registered → Auto-fallback to Activator + [UIInject]
+    └── Not registered → Uses explicit UIPresenterFactory registration
 ```
 
 #### Step 2: Complete Configuration Example
@@ -2324,6 +2360,7 @@ public class GameLifetimeScope : LifetimeScope
         // ========================================
         // 3. UIFramework Presenter Support
         // ========================================
+        builder.Register<UIPresenterBinder>(Lifetime.Singleton);
         builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
         builder.RegisterEntryPoint<UISystemInitializer>();
 
@@ -2336,8 +2373,8 @@ public class GameLifetimeScope : LifetimeScope
         // ========================================
         // 5. Presenter Registration - OPTIONAL!
         // ========================================
-        // If not registered, UIPresenterFactory auto-falls back to Activator
-        // Presenters in hot-update assemblies use [UIInject] for injection
+        // If not registered in VContainer, generated/manual UIPresenterFactory
+        // registrations can still construct Presenters without using DI.
 
         // For constructor injection, register explicitly:
         // builder.Register<InventoryPresenter>(Lifetime.Transient);
@@ -2347,22 +2384,8 @@ public class GameLifetimeScope : LifetimeScope
 
 > [!NOTE]
 >
-> **About `[UIInject]` and VContainer Integration**
->
 > `VContainerWindowBinder` automatically registers VContainer's resolver with `UIServiceLocator` on creation.
-> This means `[UIInject]` can **automatically inject services registered in VContainer**:
->
-> ```csharp
-> // Register in VContainer
-> builder.Register<IAudioService, AudioService>(Lifetime.Singleton);
->
-> // Use [UIInject] in Presenter (no need to register Presenter in VContainer)
-> public class HotUpdatePresenter : UIPresenter<IView>
-> {
->     [UIInject] private IAudioService AudioService { get; set; } // ✅ Auto-resolved from VContainer
-> }
-> ```
->
+> Explicit Presenter injector delegates can resolve services from `UIServiceLocator.Get<T>()` without exposing VContainer types in core UI code.
 > Scene-scoped services are also supported: each `VContainerWindowBinder` maintains its own resolver in the stack, auto-cleaned on dispose.
 
 #### Step 3: Create UI System Initializer
@@ -2370,20 +2393,31 @@ public class GameLifetimeScope : LifetimeScope
 ```csharp
 using VContainer;
 using VContainer.Unity;
+using CycloneGames.UIFramework.Runtime;
 using CycloneGames.UIFramework.Runtime.Integrations;
 
 public class UISystemInitializer : IStartable
 {
-    private readonly VContainerWindowBinder _binder;
+    private readonly IUIService _uiService;
+    private readonly UIPresenterBinder _presenterBinder;
+    private readonly VContainerWindowBinder _vContainerBinder;
 
     [Inject]
-    public UISystemInitializer(IObjectResolver resolver)
+    public UISystemInitializer(
+        IUIService uiService,
+        UIPresenterBinder presenterBinder,
+        VContainerWindowBinder vContainerBinder)
     {
-        _binder = new VContainerWindowBinder(resolver);
+        _uiService = uiService;
+        _presenterBinder = presenterBinder;
+        _vContainerBinder = vContainerBinder;
+        _presenterBinder.SetUIService(uiService);
     }
 
     public void Start()
     {
+        _uiService.RegisterWindowBinder(_presenterBinder);
+        _uiService.RegisterWindowBinder(_vContainerBinder);
         CycloneGames.Logger.CLogger.Log("[UISystemInitializer] VContainer integration initialized");
     }
 }
@@ -2391,26 +2425,50 @@ public class UISystemInitializer : IStartable
 
 #### Step 4: Writing Presenters
 
-**Approach A: Using `[UIInject]` (No registration needed, hot-update friendly)**
+**Approach A: Generated or explicit registration (recommended default)**
 
 ```csharp
 using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
 
-// No VContainer registration needed, auto-falls back to Activator
 public class InventoryPresenter : UIPresenter<IInventoryView>
 {
-    [UIInject] private IInventoryService InventoryService { get; set; }
-    [UIInject] private IAudioService AudioService { get; set; }
+    private IInventoryService _inventoryService;
+    private IAudioService _audioService;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<InventoryPresenter>(
+            presenter =>
+            {
+                presenter.SetServices(
+                    UIServiceLocator.Get<IInventoryService>(),
+                    UIServiceLocator.Get<IAudioService>());
+            });
+        UIPresenterBinder.RegisterGlobalMapping<InventoryPresenter>("UIWindow_Inventory");
+    }
+
+    private void SetServices(IInventoryService inventoryService, IAudioService audioService)
+    {
+        _inventoryService = inventoryService;
+        _audioService = audioService;
+    }
 
     public override void OnViewOpened()
     {
-        View.SetGold(InventoryService.Gold);
-        AudioService.PlaySFX("ui_open");
+        if (_inventoryService == null || _audioService == null)
+        {
+            return;
+        }
+
+        View.SetGold(_inventoryService.Gold);
+        _audioService.PlaySFX("ui_open");
     }
 }
 ```
 
-**Approach B: Using Constructor Injection (Requires VContainer registration)**
+**Approach B: Constructor injection (requires VContainer registration)**
 
 ```csharp
 using VContainer;
@@ -2436,7 +2494,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 #### Step 5: Scene-Scoped Services (Optional)
 
-If your scene has exclusive services that need to be used in UI, simply register `UIServiceLocatorBridge`:
+If explicit Presenter injectors need scene-exclusive services, register `UIServiceLocatorBridge` in that scene's scope:
 
 ```csharp
 using VContainer;
@@ -2461,25 +2519,49 @@ public class BattleSceneLifetimeScope : LifetimeScope
 >
 > **When is `UIServiceLocatorBridge` needed?**
 >
-> | Scenario                                       | Required?                                      |
-> | ---------------------------------------------- | ---------------------------------------------- |
-> | Only using Root global services                | ❌ No (`VContainerWindowBinder` handles it)    |
-> | Scene-exclusive services via `[UIInject]`      | ✅ Yes, register in that scene's LifetimeScope |
-> | Using constructor injection (not `[UIInject]`) | ❌ No (VContainer handles parent-child scopes) |
+> | Scenario                                          | Required?                                      |
+> | ------------------------------------------------- | ---------------------------------------------- |
+> | Only using Root global services                   | ❌ No (`VContainerWindowBinder` handles it)    |
+> | Scene-exclusive services via explicit injector    | ✅ Yes, register in that scene's LifetimeScope |
+> | Using constructor injection through VContainer    | ❌ No (VContainer handles parent-child scopes) |
 >
-> **If you forget to register**: `[UIInject]` will return `null` for scene services, but won't throw.
+> **If you forget to register**: `UIServiceLocator.Get<T>()` returns `null` for scene-only services.
 
-Now scene UI can access scene services via `[UIInject]`:
+Scene UI can access scene services through explicit injector delegates:
 
 ```csharp
+using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
+
 public class BattleHUDPresenter : UIPresenter<IBattleHUDView>
 {
-    [UIInject] private IBattleService BattleService { get; set; }  // Scene service ✅
-    [UIInject] private IAudioService AudioService { get; set; }    // Global service ✅
+    private IBattleService _battleService;
+    private IAudioService _audioService;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<BattleHUDPresenter>(
+            presenter => presenter.SetServices(
+                UIServiceLocator.Get<IBattleService>(),
+                UIServiceLocator.Get<IAudioService>()));
+        UIPresenterBinder.RegisterGlobalMapping<BattleHUDPresenter>("UIWindow_BattleHUD");
+    }
+
+    private void SetServices(IBattleService battleService, IAudioService audioService)
+    {
+        _battleService = battleService;
+        _audioService = audioService;
+    }
 
     public override void OnViewOpened()
     {
-        View.SetEnemyCount(BattleService.EnemyCount);
+        if (_battleService == null)
+        {
+            return;
+        }
+
+        View.SetEnemyCount(_battleService.EnemyCount);
     }
 }
 ```
@@ -2492,10 +2574,10 @@ public class BattleHUDPresenter : UIPresenter<IBattleHUDView>
 > Global Root Scope starts → VContainerWindowBinder Push(rootResolver)
 > Enter Battle Scene → UIServiceLocatorBridge Push(battleResolver)
 >
-> [UIInject] resolves IBattleService:
+> Explicit injector resolves IBattleService:
 >   1. Check battleResolver → Found!
 >
-> [UIInject] resolves IAudioService:
+> Explicit injector resolves IAudioService:
 >   1. Check battleResolver → Not found
 >   2. Check rootResolver → Found!
 >
@@ -2541,30 +2623,31 @@ public class GameController
 >     │  - Calls uiService.Initialize(...)
 >     ▼
 > UISystemInitializer.Start() called
->     │  - Creates VContainerWindowBinder
+>     │  - Creates UIPresenterBinder and VContainerWindowBinder
+>     │  - Registers both binders through IUIService
 >     │  - Sets UIPresenterFactory.CustomFactory
 >     ▼
 > Runtime: uiService.OpenUIAsync("UIWindow_Inventory")
 >     │  - UIManager loads prefab
 >     │  - Instantiates UIWindow
 >     │  - UIManager triggers OnWindowCreated on binders
->     │  - VContainerWindowBinder matches [UIPresenterBind("UIWindow_Inventory")]
+>     │  - UIPresenterBinder resolves explicit mapping for "UIWindow_Inventory"
 >     │  - UIPresenterFactory.Create() instantiates InventoryPresenter
 >     ├─ VContainer registered → Constructor injection
->     └─ VContainer not registered → Activator + [UIInject] injection
+>     └─ VContainer not registered → Generated/manual registration fallback
 > ```
 
 ---
 
 ### Design Philosophy: Decoupled Binder Architecture
 
-You might ask: _"Why does the framework use `[UIPresenterBind]` instead of the Presenter creating the View?"_
+You might ask: _"Why does the framework use explicit Presenter registration instead of the Presenter creating the View?"_
 
 We chose the **Binder-Driven** approach specifically for the Unity engine environment:
 
 1.  **Unity-Native Workflow**: In Unity, UI starts with Prefabs. The "Entry Point" is naturally the `UIWindow` component on a GameObject.
 2.  **Lifecycle Safety**: The Presenter's lifecycle is perfectly bound to the View (`OnWindowCreated` to `OnWindowDestroying`). You never have "Zombie Presenters" running without a View, which avoids many common memory leak errors.
-3.  **DI Compatible**: Even though the Window lifecycle initiates creation, the `UIPresenterBinder` serves as an indirection layer. This allows full DI frameworks (like VContainer) to intervene and inject dependencies, giving you the best of both worlds: **Unity-driven lifecycle + pure DI-driven logic**.
+3.  **DI Compatible**: Even though the Window lifecycle initiates creation, the `UIPresenterBinder` and `UIPresenterFactory` serve as indirection layers. This allows full DI frameworks (like VContainer) to intervene and inject dependencies while classic windows remain valid.
 
 ---
 
@@ -2594,17 +2677,19 @@ We chose the **Binder-Driven** approach specifically for the Unity engine enviro
 
 #### `UIPresenterFactory`
 
-| Property/Method | Description                         |
-| --------------- | ----------------------------------- |
-| `CustomFactory` | Set to integrate with DI frameworks |
-| `Create<T>()`   | Create a Presenter instance         |
-| `ClearCache()`  | Clear reflection cache              |
+| Property/Method          | Description                                      |
+| ------------------------ | ------------------------------------------------ |
+| `CustomFactory`          | Set to integrate with DI frameworks              |
+| `Register<TPresenter>()` | Register an explicit Presenter factory           |
+| `Unregister(Type)`       | Remove an explicit Presenter registration        |
+| `ClearRegistrations()`   | Clear explicit Presenter registrations           |
+| `Create<T>()`            | Create a Presenter from DI or explicit registry  |
 
 ---
 
 ### Performance Notes
 
-- **Zero GC after warmup**: Reflection results are cached
+- **No runtime Presenter reflection**: Presenter creation uses DI delegates or explicit factories
 - **Thread-safe**: UIServiceLocator uses locking for concurrent access
 - **Memory-safe**: Presenters are disposed with their windows
 - **No forced DI**: Works without any DI framework
@@ -2712,7 +2797,7 @@ Or register manually:
 
 ```csharp
 var binder = new LocalizationWindowBinder(localizationService);
-uiManager.RegisterWindowBinder(binder);
+uiService.RegisterWindowBinder(binder);
 ```
 
 Once registered, every `UIWindow` that opens will automatically propagate locale changes to all `ILocaleResponder` components in its hierarchy.

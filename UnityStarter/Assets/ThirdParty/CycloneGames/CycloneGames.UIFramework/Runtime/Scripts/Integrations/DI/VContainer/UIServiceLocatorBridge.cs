@@ -1,11 +1,11 @@
-#if VCONTAINER_PRESENT
+#if CYCLONEGAMES_HAS_VCONTAINER
 using System;
 using VContainer;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations
 {
     /// <summary>
-    /// Bridges VContainer scope to UIServiceLocator. Register in any LifetimeScope to enable [UIInject] for that scope's services.
+    /// Bridges VContainer scope to UIServiceLocator for explicit presenter injectors.
     /// Resolver is pushed immediately on construction to ensure availability before any UI operations.
     /// </summary>
     public sealed class UIServiceLocatorBridge : IDisposable

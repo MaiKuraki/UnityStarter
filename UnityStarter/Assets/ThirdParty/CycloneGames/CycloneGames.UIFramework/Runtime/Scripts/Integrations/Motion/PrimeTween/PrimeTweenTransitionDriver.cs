@@ -1,4 +1,4 @@
-#if PRIME_TWEEN_PRESENT
+#if CYCLONEGAMES_HAS_PRIMETWEEN
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;

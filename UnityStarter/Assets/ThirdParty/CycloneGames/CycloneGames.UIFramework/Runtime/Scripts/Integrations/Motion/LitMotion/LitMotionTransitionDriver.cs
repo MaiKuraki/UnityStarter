@@ -1,4 +1,4 @@
-#if LIT_MOTION_PRESENT
+#if CYCLONEGAMES_HAS_LITMOTION
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
