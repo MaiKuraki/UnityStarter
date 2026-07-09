@@ -1,8 +1,10 @@
 using System;
 using System.Collections.Generic;
+using NUnit.Framework;
+using CycloneGames.Networking.Interest;
+using CycloneGames.Networking.Simulation;
 using CycloneGames.Networking.Stubs;
 using CycloneGames.Networking.Transports;
-using NUnit.Framework;
 
 namespace CycloneGames.Networking.Tests.Editor
 {
@@ -489,6 +491,32 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
+        public void NetworkTickSystem_IgnoresDuplicateTickableRegistration()
+        {
+            var system = new NetworkTickSystem(tickRate: 30);
+            var tickable = new CountingTickable();
+
+            system.RegisterTickable(tickable);
+            system.RegisterTickable(tickable);
+            system.Update(system.TickInterval);
+
+            Assert.AreEqual(1, tickable.TickCount);
+        }
+
+        [Test]
+        public void NetworkTickSystem_UsesStableSnapshotDuringTickMutation()
+        {
+            var system = new NetworkTickSystem(tickRate: 30);
+            var selfRemoving = new SelfRemovingTickable(system);
+
+            system.RegisterTickable(selfRemoving);
+            system.Update(system.TickInterval);
+            system.Update(system.TickInterval);
+
+            Assert.AreEqual(1, selfRemoving.TickCount);
+        }
+
+        [Test]
         public void DistanceInterestRule_FiltersByRadiusAndLayer()
         {
             var rule = new DistanceInterestRule();
@@ -510,6 +538,112 @@ namespace CycloneGames.Networking.Tests.Editor
 
             Assert.AreEqual(1, count);
             Assert.AreEqual(1u, visible[0]);
+        }
+
+        [Test]
+        public void GridInterestManager_RejectsInvalidCellSize()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() => new GridInterestManager(0f, 100f));
+        }
+
+        [Test]
+        public void GridInterestManager_NullObserverGroupsClearsGroupVisibility()
+        {
+            var manager = new GridInterestManager(cellSize: 10f, visibilityRange: 1f);
+            var connection = new TestConnection(7);
+            var entity = new TestEntity(100u, new UnityEngine.Vector3(100f, 0f, 0f), ownerConnectionId: -1, alwaysRelevant: false, relevanceGroup: 3);
+            manager.SetObserverPosition(connection.ConnectionId, UnityEngine.Vector3.zero);
+            manager.SetObserverGroups(connection.ConnectionId, new HashSet<int> { 3 });
+
+            Assert.IsTrue(manager.IsVisible(connection, entity));
+
+            manager.SetObserverGroups(connection.ConnectionId, null);
+
+            Assert.IsFalse(manager.IsVisible(connection, entity));
+        }
+
+        [Test]
+        public void CompositeInterestManager_IgnoresDuplicateManagers()
+        {
+            var composite = new CompositeInterestManager();
+            var child = new CountingInterestManager();
+
+            composite.Add(child);
+            composite.Add(child);
+            composite.PreUpdate(Array.Empty<INetworkEntity>());
+
+            Assert.AreEqual(1, child.PreUpdateCount);
+        }
+
+        private sealed class CountingTickable : ITickable
+        {
+            public int TickCount { get; private set; }
+
+            public void OnNetworkTick(NetworkTick tick, float tickDeltaTime)
+            {
+                TickCount++;
+            }
+        }
+
+        private sealed class SelfRemovingTickable : ITickable
+        {
+            private readonly NetworkTickSystem _system;
+
+            public SelfRemovingTickable(NetworkTickSystem system)
+            {
+                _system = system;
+            }
+
+            public int TickCount { get; private set; }
+
+            public void OnNetworkTick(NetworkTick tick, float tickDeltaTime)
+            {
+                TickCount++;
+                _system.UnregisterTickable(this);
+            }
+        }
+
+        private sealed class CountingInterestManager : IInterestManager
+        {
+            public int PreUpdateCount { get; private set; }
+
+            public void RebuildForConnection(INetConnection connection, IReadOnlyList<INetworkEntity> allEntities, HashSet<uint> results)
+            {
+                results.Clear();
+            }
+
+            public bool IsVisible(INetConnection connection, INetworkEntity entity)
+            {
+                return false;
+            }
+
+            public void PreUpdate(IReadOnlyList<INetworkEntity> allEntities)
+            {
+                PreUpdateCount++;
+            }
+        }
+
+        private sealed class TestEntity : INetworkEntity
+        {
+            public TestEntity(
+                uint networkId,
+                UnityEngine.Vector3 position,
+                int ownerConnectionId,
+                bool alwaysRelevant,
+                int relevanceGroup)
+            {
+                NetworkId = networkId;
+                Position = position;
+                OwnerConnectionId = ownerConnectionId;
+                AlwaysRelevant = alwaysRelevant;
+                RelevanceGroup = relevanceGroup;
+            }
+
+            public uint NetworkId { get; }
+            public UnityEngine.Vector3 Position { get; }
+            public int OwnerConnectionId { get; }
+            public bool AlwaysRelevant { get; }
+            public int RelevanceGroup { get; }
         }
 
         private sealed class TestConnection : INetConnection

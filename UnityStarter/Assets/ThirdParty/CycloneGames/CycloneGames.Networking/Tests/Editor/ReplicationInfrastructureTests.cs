@@ -1,7 +1,9 @@
+using System;
+using NUnit.Framework;
 using CycloneGames.Networking.Buffers;
 using CycloneGames.Networking.Replication;
+using CycloneGames.Networking.Routing;
 using CycloneGames.Networking.Serialization;
-using NUnit.Framework;
 
 namespace CycloneGames.Networking.Tests.Editor
 {
@@ -56,6 +58,32 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual(0, count);
             Assert.IsTrue(index.Remove(1UL));
             Assert.AreEqual(2, index.Count);
+        }
+
+        [Test]
+        public void SpatialHashIndex_RejectsNonFiniteCoordinates()
+        {
+            var index = new NetworkSpatialHashIndex(cellSize: 10f);
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                index.Upsert(1UL, sourceIndex: 0, new NetworkVector3(float.NaN, 0f, 0f)));
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                index.Query(new NetworkVector3(float.PositiveInfinity, 0f, 0f), 10f, NetworkReplicationObserver.ALL_LAYERS, new NetworkSpatialQueryResult[4]));
+        }
+
+        [Test]
+        public void SpatialHashIndex_EmptyResultBufferReturnsZero()
+        {
+            var index = new NetworkSpatialHashIndex(cellSize: 10f);
+            index.Upsert(1UL, sourceIndex: 0, NetworkVector3.Zero);
+
+            int count = index.Query(
+                NetworkVector3.Zero,
+                radius: 20f,
+                NetworkReplicationObserver.ALL_LAYERS,
+                Array.Empty<NetworkSpatialQueryResult>());
+
+            Assert.AreEqual(0, count);
         }
 
         [Test]
@@ -141,6 +169,34 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual(0, scheduler.GetPriorityBudget(1));
             Assert.AreEqual(0, budget.MaxBytes);
             Assert.AreEqual(0, budget.MaxMessages);
+        }
+
+        [Test]
+        public void ActorRouteTable_MigrationRemovesActorFromPreviousProcessIndex()
+        {
+            var router = new ActorRouteTable();
+
+            router.Register(10, "process-a");
+            router.Register(11, "process-a");
+            router.Register(10, "process-b");
+
+            Assert.IsTrue(router.TryResolve(10, out string processId));
+            Assert.AreEqual("process-b", processId);
+            CollectionAssert.AreEquivalent(new[] { 11 }, router.GetActorsOnProcess("process-a"));
+            CollectionAssert.AreEquivalent(new[] { 10 }, router.GetActorsOnProcess("process-b"));
+        }
+
+        [Test]
+        public void ActorRouteTable_UnregisterRemovesActorFromProcessIndex()
+        {
+            var router = new ActorRouteTable();
+
+            router.Register(10, "process-a");
+            router.Unregister(10);
+
+            Assert.IsFalse(router.TryResolve(10, out _));
+            Assert.AreEqual(0, router.TrackedActorCount);
+            Assert.AreEqual(0, router.GetActorsOnProcess("process-a").Count);
         }
 
         [Test]

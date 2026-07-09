@@ -36,7 +36,7 @@ namespace CycloneGames.Networking.Replication
             NetworkSpatialAxisMode axisMode = NetworkSpatialAxisMode.XZ,
             int capacity = 1024)
         {
-            if (cellSize <= 0f || float.IsNaN(cellSize))
+            if (cellSize <= 0f || !IsFinite(cellSize))
             {
                 throw new ArgumentOutOfRangeException(nameof(cellSize));
             }
@@ -75,6 +75,8 @@ namespace CycloneGames.Networking.Replication
             {
                 throw new ArgumentOutOfRangeException(nameof(sourceIndex));
             }
+
+            ValidateFinite(position, nameof(position));
 
             CellKey cell = GetCell(position);
             var entry = new Entry(objectId, sourceIndex, position, layerMask);
@@ -118,9 +120,16 @@ namespace CycloneGames.Networking.Replication
             uint layerMask,
             Span<NetworkSpatialQueryResult> results)
         {
-            if (radius < 0f || float.IsNaN(radius))
+            if (radius < 0f || !IsFinite(radius))
             {
                 throw new ArgumentOutOfRangeException(nameof(radius));
+            }
+
+            ValidateFinite(center, nameof(center));
+
+            if (results.Length == 0 || layerMask == 0u)
+            {
+                return 0;
             }
 
             CellKey min = GetCell(new NetworkVector3(center.X - radius, center.Y - radius, center.Z - radius));
@@ -233,7 +242,13 @@ namespace CycloneGames.Networking.Replication
 
         private int ToCell(float value)
         {
-            return (int)MathF.Floor(value / _cellSize);
+            float scaled = value / _cellSize;
+            if (scaled <= int.MinValue || scaled >= int.MaxValue)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value));
+            }
+
+            return (int)MathF.Floor(scaled);
         }
 
         private float SqrDistance(NetworkVector3 left, NetworkVector3 right)
@@ -242,6 +257,19 @@ namespace CycloneGames.Networking.Replication
             float dy = _axisMode == NetworkSpatialAxisMode.XZ ? 0f : left.Y - right.Y;
             float dz = _axisMode == NetworkSpatialAxisMode.XY ? 0f : left.Z - right.Z;
             return dx * dx + dy * dy + dz * dz;
+        }
+
+        private static void ValidateFinite(NetworkVector3 value, string parameterName)
+        {
+            if (!IsFinite(value.X) || !IsFinite(value.Y) || !IsFinite(value.Z))
+            {
+                throw new ArgumentOutOfRangeException(parameterName);
+            }
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
         private readonly struct ObjectLocation

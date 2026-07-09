@@ -15,6 +15,7 @@ namespace CycloneGames.Networking.Simulation
     {
         private readonly List<ITickable> _tickables = new List<ITickable>(32);
         private readonly object _tickableLock = new object();
+        private ITickable[] _tickableSnapshot = Array.Empty<ITickable>();
 
         private double _accumulator;
         private double _serverTimeOffset;
@@ -46,7 +47,10 @@ namespace CycloneGames.Networking.Simulation
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Update(float deltaTime)
         {
-            if (deltaTime < 0f) deltaTime = 0f;
+            if (deltaTime < 0f)
+            {
+                deltaTime = 0f;
+            }
 
             _accumulator += deltaTime;
 
@@ -54,7 +58,9 @@ namespace CycloneGames.Networking.Simulation
             const int maxTicksPerFrame = 5;
             double maxAccumulator = TickInterval * maxTicksPerFrame;
             if (_accumulator > maxAccumulator)
+            {
                 _accumulator = maxAccumulator;
+            }
 
             while (_accumulator >= TickInterval)
             {
@@ -70,22 +76,18 @@ namespace CycloneGames.Networking.Simulation
         {
             OnPreTick?.Invoke(tick);
 
-            // Copy tickables under lock, then iterate outside to prevent deadlock
-            // if callbacks attempt to register/unregister tickables.
+            // Snapshot is rebuilt only when registration changes. This keeps the tick hot path stable
+            // while still allowing callbacks to register or unregister without mutating the active pass.
             ITickable[] snapshot;
-            int count;
             lock (_tickableLock)
             {
-                count = _tickables.Count;
-                snapshot = System.Buffers.ArrayPool<ITickable>.Shared.Rent(count);
-                _tickables.CopyTo(0, snapshot, 0, count);
+                snapshot = _tickableSnapshot;
             }
 
-            for (int i = 0; i < count; i++)
+            for (int i = 0; i < snapshot.Length; i++)
             {
                 snapshot[i].OnNetworkTick(tick, TickInterval);
             }
-            System.Buffers.ArrayPool<ITickable>.Shared.Return(snapshot, clearArray: true);
 
             OnTick?.Invoke(tick);
             OnPostTick?.Invoke(tick);
@@ -109,12 +111,37 @@ namespace CycloneGames.Networking.Simulation
 
         public void RegisterTickable(ITickable tickable)
         {
-            lock (_tickableLock) { _tickables.Add(tickable); }
+            if (tickable == null)
+            {
+                throw new ArgumentNullException(nameof(tickable));
+            }
+
+            lock (_tickableLock)
+            {
+                if (_tickables.Contains(tickable))
+                {
+                    return;
+                }
+
+                _tickables.Add(tickable);
+                RebuildTickableSnapshotLocked();
+            }
         }
 
         public void UnregisterTickable(ITickable tickable)
         {
-            lock (_tickableLock) { _tickables.Remove(tickable); }
+            if (tickable == null)
+            {
+                return;
+            }
+
+            lock (_tickableLock)
+            {
+                if (_tickables.Remove(tickable))
+                {
+                    RebuildTickableSnapshotLocked();
+                }
+            }
         }
 
         public void Reset()
@@ -122,6 +149,13 @@ namespace CycloneGames.Networking.Simulation
             _tickValue = 0;
             _accumulator = 0;
             _serverTimeOffset = 0;
+        }
+
+        private void RebuildTickableSnapshotLocked()
+        {
+            _tickableSnapshot = _tickables.Count == 0
+                ? Array.Empty<ITickable>()
+                : _tickables.ToArray();
         }
     }
 }

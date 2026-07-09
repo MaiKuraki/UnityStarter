@@ -460,8 +460,23 @@ namespace CycloneGames.Networking.Transports
 
         internal void Drain()
         {
-            while (_serverToClient.TryDequeue(out _)) { }
-            while (_clientToServer.TryDequeue(out _)) { }
+            while (_serverToClient.TryDequeue(out LocalLoopMessage serverMessage))
+            {
+                ReturnMessageBuffer(serverMessage);
+            }
+
+            while (_clientToServer.TryDequeue(out LocalLoopMessage clientMessage))
+            {
+                ReturnMessageBuffer(clientMessage);
+            }
+        }
+
+        private static void ReturnMessageBuffer(in LocalLoopMessage msg)
+        {
+            if (msg.Buffer != null)
+            {
+                ArrayPool<byte>.Shared.Return(msg.Buffer);
+            }
         }
     }
 
@@ -480,17 +495,28 @@ namespace CycloneGames.Networking.Transports
 
         internal static bool TryRemoveChannel(string name)
         {
-            return s_channels.TryRemove(name, out _);
+            if (s_channels.TryRemove(name, out LocalLoopChannel channel))
+            {
+                channel.Drain();
+                return true;
+            }
+
+            return false;
         }
 
         internal static void ReleaseChannel(string name, LocalLoopChannel channel)
         {
             if (string.IsNullOrEmpty(name) || channel == null || channel.HasRegistrations)
+            {
                 return;
+            }
 
             if (s_channels.TryGetValue(name, out LocalLoopChannel current) && ReferenceEquals(current, channel))
             {
-                s_channels.TryRemove(name, out _);
+                if (s_channels.TryRemove(name, out LocalLoopChannel removed))
+                {
+                    removed.Drain();
+                }
             }
         }
     }

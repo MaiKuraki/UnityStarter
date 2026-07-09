@@ -279,13 +279,24 @@ namespace CycloneGames.Networking.Buffers
         private void EnsureCapacity(int required)
         {
             if (required < 0)
+            {
                 throw new ArgumentOutOfRangeException(nameof(required));
-            if (_buffer == null)
-                _buffer = ArrayPool<byte>.Shared.Rent(Math.Min(Math.Max(required, DefaultCapacity), MaxCapacity));
-            if (_buffer.Length >= required) return;
+            }
 
             if (required > MaxCapacity)
+            {
                 throw new InvalidOperationException($"Buffer capacity exceeded maximum of {MaxCapacity}");
+            }
+
+            if (_buffer == null)
+            {
+                _buffer = ArrayPool<byte>.Shared.Rent(Math.Max(required, DefaultCapacity));
+            }
+
+            if (_buffer.Length >= required)
+            {
+                return;
+            }
 
             int newCapacity = Math.Min(Math.Max(required, _buffer.Length * 2), MaxCapacity);
             byte[] newBuffer = ArrayPool<byte>.Shared.Rent(newCapacity);
