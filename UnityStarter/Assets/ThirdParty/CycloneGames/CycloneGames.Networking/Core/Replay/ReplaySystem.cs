@@ -318,6 +318,7 @@ namespace CycloneGames.Networking.Replay
     {
         private readonly ReplayRecorder _liveRecorder;
         private readonly List<SpectatorConnection> _spectators = new List<SpectatorConnection>(32);
+        private readonly List<ReplayFrame> _tempFrames = new List<ReplayFrame>(4);
         private readonly int _delayTicks;
 
         public int SpectatorCount => _spectators.Count;
@@ -366,8 +367,6 @@ namespace CycloneGames.Networking.Replay
             int delayedTick = currentTick - _delayTicks;
             if (delayedTick < _liveRecorder.StartTick) return;
 
-            var tempFrames = new List<ReplayFrame>(4);
-
             for (int s = 0; s < _spectators.Count; s++)
             {
                 var spec = _spectators[s];
@@ -375,9 +374,9 @@ namespace CycloneGames.Networking.Replay
 
                 if (fromTick > delayedTick) continue;
 
-                int count = _liveRecorder.GetFrames(fromTick, delayedTick, tempFrames);
+                int count = _liveRecorder.GetFrames(fromTick, delayedTick, _tempFrames);
                 for (int i = 0; i < count; i++)
-                    OnSendToSpectator?.Invoke(spec.Connection, tempFrames[i]);
+                    OnSendToSpectator?.Invoke(spec.Connection, _tempFrames[i]);
 
                 spec.LastSentTick = delayedTick;
                 _spectators[s] = spec;

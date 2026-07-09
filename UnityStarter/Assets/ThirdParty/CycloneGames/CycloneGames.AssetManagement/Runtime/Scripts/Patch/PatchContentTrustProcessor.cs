@@ -56,11 +56,21 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 case PatchTrustFailurePolicy.ClearUnusedCacheThenFail:
                     _setState(PatchWorkflowState.ClearCache);
-                    await _package.ClearCacheFilesAsync(ClearCacheMode.Unused, cancellationToken: cancellationToken);
+                    await ClearCacheOrThrowAsync(
+                        ClearCacheMode.Unused,
+                        packageName,
+                        packageVersion,
+                        trustArgs,
+                        cancellationToken);
                     throw exception;
                 case PatchTrustFailurePolicy.ClearAllCacheThenFail:
                     _setState(PatchWorkflowState.ClearCache);
-                    await _package.ClearCacheFilesAsync(ClearCacheMode.All, cancellationToken: cancellationToken);
+                    await ClearCacheOrThrowAsync(
+                        ClearCacheMode.All,
+                        packageName,
+                        packageVersion,
+                        trustArgs,
+                        cancellationToken);
                     throw exception;
                 case PatchTrustFailurePolicy.RollbackManifestThenFail:
                     await RollbackManifestAfterTrustFailureAsync(options, packageName, packageVersion, trustArgs, cancellationToken);
@@ -72,6 +82,33 @@ namespace CycloneGames.AssetManagement.Runtime
                     return await RepairLocationsAfterTrustFailureAsync(options, packageName, packageVersion, trustArgs, reverify: true, cancellationToken);
                 default:
                     throw exception;
+            }
+        }
+
+        private async UniTask ClearCacheOrThrowAsync(
+            ClearCacheMode clearMode,
+            string packageName,
+            string packageVersion,
+            PatchTrustVerificationEventArgs trustArgs,
+            CancellationToken cancellationToken)
+        {
+            if (!CanUseCacheCleanupMode(clearMode))
+            {
+                throw CreateTrustException(
+                    packageName,
+                    packageVersion,
+                    trustArgs,
+                    $"Content trust verification failed and provider does not support '{clearMode}' cache cleanup.");
+            }
+
+            bool cacheCleared = await _package.ClearCacheFilesAsync(clearMode, cancellationToken: cancellationToken);
+            if (!cacheCleared)
+            {
+                throw CreateTrustException(
+                    packageName,
+                    packageVersion,
+                    trustArgs,
+                    $"Content trust verification failed and '{clearMode}' cache cleanup did not complete.");
             }
         }
 
@@ -149,6 +186,25 @@ namespace CycloneGames.AssetManagement.Runtime
                 throw CreateTrustException(packageName, packageVersion, trustArgs, "Content trust verification failed and no rollback version is available.");
             }
 
+            if (!CanUseVersionedManifestUpdate())
+            {
+                throw CreateTrustException(
+                    packageName,
+                    packageVersion,
+                    trustArgs,
+                    "Content trust verification failed and provider does not support rollback to a specific manifest version.");
+            }
+
+            if (options.TrustOptions.ClearUnusedCacheAfterRollback &&
+                !CanUseCacheCleanupMode(ClearCacheMode.Unused))
+            {
+                throw CreateTrustException(
+                    packageName,
+                    packageVersion,
+                    trustArgs,
+                    "Content trust verification failed and provider does not support unused cache cleanup after rollback.");
+            }
+
             _setState(PatchWorkflowState.RollbackManifest);
             bool rollbackSucceeded = await _package.UpdatePackageManifestAsync(
                 rollbackVersion,
@@ -164,8 +220,45 @@ namespace CycloneGames.AssetManagement.Runtime
             if (options.TrustOptions.ClearUnusedCacheAfterRollback)
             {
                 _setState(PatchWorkflowState.ClearCache);
-                await _package.ClearCacheFilesAsync(ClearCacheMode.Unused, cancellationToken: cancellationToken);
+                await ClearCacheOrThrowAsync(
+                    ClearCacheMode.Unused,
+                    packageName,
+                    packageVersion,
+                    trustArgs,
+                    cancellationToken);
             }
+        }
+
+        private bool CanUseVersionedManifestUpdate()
+        {
+            return _package is not IAssetPatchProviderReconciler reconciler ||
+                   reconciler.Capabilities.SupportsVersionedManifestUpdate;
+        }
+
+        private bool CanUseCacheCleanupMode(ClearCacheMode clearMode)
+        {
+            if (_package is not IAssetPatchProviderReconciler reconciler)
+            {
+                return true;
+            }
+
+            AssetPatchProviderReconciliationCapabilities capabilities = reconciler.Capabilities;
+            if (!capabilities.SupportsExplicitCacheCleanup)
+            {
+                return false;
+            }
+
+            if (clearMode == ClearCacheMode.Unused && !capabilities.SupportsUnusedCacheCleanup)
+            {
+                return false;
+            }
+
+            if (clearMode == ClearCacheMode.ByTags && !capabilities.SupportsTagScopedCacheCleanup)
+            {
+                return false;
+            }
+
+            return true;
         }
 
         private static PatchTrustVerificationException CreateTrustException(

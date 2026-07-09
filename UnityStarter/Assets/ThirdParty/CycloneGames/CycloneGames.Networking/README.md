@@ -51,9 +51,9 @@ CycloneGames.Networking/
 
 | Assembly | Role |
 | --- | --- |
-| `CycloneGames.Networking.Core` | Pure C# networking contracts, profiles, catalogs, replication, sessions, security, and validation helpers. |
+| `CycloneGames.Networking.Core` | Engine-free networking contracts, profiles, catalogs, replication, sessions, security, validation helpers, deterministic math payloads, and hashing support. |
 | `CycloneGames.Networking.Unity.Runtime` | Unity runtime bridge and adapter-facing helpers. |
-| `CycloneGames.Networking.DOD.Runtime` | Data-oriented runtime helpers. |
+| `CycloneGames.Networking.DOD.Runtime` | Burst/Jobs-oriented runtime helpers that bridge Core, Unity.Runtime, Burst, Collections, Mathematics, and Jobs. |
 | `CycloneGames.Networking.Editor` | Editor diagnostics and tooling. |
 | `CycloneGames.Networking.Tests.Editor` | EditMode regression tests. |
 | `CycloneGames.Networking.Adapter.Mirror` | Optional Mirror adapter assembly. |
@@ -61,7 +61,7 @@ CycloneGames.Networking/
 | `CycloneGames.Networking.Adapter.Nakama` | Optional Nakama adapter assembly. |
 | `CycloneGames.Networking.Serializer.*` | Optional serializer integration assemblies. |
 
-The core assembly does not expose UnityEngine types in its public contracts. Unity-facing behavior is isolated in runtime, adapter, serializer, or editor assemblies.
+`CycloneGames.Networking.Core` is `noEngineReferences: true` and does not expose UnityEngine types in its public contracts. It directly references `CycloneGames.DeterministicMath.Core` and `CycloneGames.Hash.Core`; those are core dependencies, not optional integrations. Unity-facing behavior is isolated in runtime, adapter, serializer, DOD, or editor assemblies.
 
 ## Architecture Overview
 
@@ -88,8 +88,8 @@ graph TD
     Core --> Security
     Core --> Validation
     UnityRuntime --> Core
-    Adapters --> UnityRuntime
-    Serializers --> UnityRuntime
+    Adapters --> Core
+    Serializers --> Core
     GameplayPackages --> Core
 ```
 
@@ -454,10 +454,19 @@ The security layer is split into composable contracts:
 | `NetworkSecurityPipeline` | Validates direction, payload size, auth state, transport encryption, signature, replay window, and rate limit. |
 | `INetworkMessageSigner` | Signs and verifies message payloads. |
 | `HmacSha256NetworkMessageSigner` | Built-in HMAC-SHA256 signer. |
-| `INetworkCryptoProvider` | Encryption/decryption abstraction. The built-in provider is a no-op implementation. |
+| `INetworkCryptoProvider` | Payload protection abstraction. The built-in provider is a no-op implementation. |
 | `INetworkReplayProtector` | Replay protection abstraction. |
 | `INetworkAntiCheatSignalSink` | Records rejected-message and anomaly signals. |
 | `INetworkAuthoritativeValidator<TCommand, TState>` | Server-authoritative command validation contract. |
+
+Current implementation status in this checkout:
+
+- `HmacSha256NetworkMessageSigner` exists, but `NetworkSecurityPresets` do not create it automatically; pass an enabled signer from the composition root when a policy requires signatures.
+- `NoopNetworkCryptoProvider` is the only built-in `INetworkCryptoProvider`. Prefer transport-level confidentiality such as TLS, DTLS, or WSS when the selected backend supports it. Add application-layer crypto only when the product threat model requires it and it has been verified on every target platform.
+- `NetworkAuthenticationProviderChain` and `RejectAllNetworkAuthenticationProvider` exist. Product identity providers such as JWT, Steam, platform identity, or backend sessions are project or adapter responsibilities.
+- `NoopNetworkAntiCheatSignalSink` and `RecordingNetworkAntiCheatSignalSink` exist. Production telemetry, moderation, disconnect policy, and analytics sinks are not built in.
+- `NetworkSecurityAudit` evaluates release encryption, signer availability, rate limiting, replay protection, anti-cheat sink wiring, and default authentication policy. A CI or batchmode audit entry point is still project-owned.
+- `NetworkSecurityPresets.CreateProductionServerSecurityBaseline` is the strict server helper. It rejects disabled signers, no-op anti-cheat sinks, and missing rate limiters at construction time, then enables authenticated connections, encrypted-transport policy, replay protection, message signatures, and rate limiting on the default policy.
 
 Example security pipeline configuration:
 
@@ -467,29 +476,31 @@ using CycloneGames.Networking.Security;
 
 public static class SecurityPipelineFactory
 {
-    public static NetworkSecurityPipeline Create(byte[] sessionKey, ushort signedMessageId)
+    public static NetworkSecurityPipeline Create(
+        INetworkMessageSigner signer,
+        ushort signedMessageId,
+        INetworkAntiCheatSignalSink antiCheatSink,
+        RateLimiter rateLimiter)
     {
-        var policies = new MessageSecurityPolicyRegistry();
+        NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateProductionServerSecurityBaseline(
+            signer,
+            antiCheatSink,
+            rateLimiter);
+
+        MessageSecurityPolicyRegistry policies = options.MessagePolicies;
         policies.SetPolicy(
             signedMessageId,
-            MessageSecurityPolicy.Default
+            policies.DefaultPolicy
                 .WithAuthenticatedConnectionRequired(true)
                 .WithReplayProtection(true)
                 .WithSignatureRequired(true));
 
-        return new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
-        {
-            MessagePolicies = policies,
-            MessageSigner = new HmacSha256NetworkMessageSigner(sessionKey),
-            ReplayProtector = new NetworkReplayGuardProtector(),
-            EnableRateLimiting = true,
-            RateLimiter = new RateLimiter(64, 65536, 16)
-        });
+        return new NetworkSecurityPipeline(options);
     }
 }
 ```
 
-Security providers are runtime objects. Key ownership, long-term credential storage, moderation workflows, and platform identity verification live outside this package.
+The `signer`, `antiCheatSink`, and `rateLimiter` arguments above must be project-owned runtime objects; the composition root owns disposal for `IDisposable` providers such as `HmacSha256NetworkMessageSigner`. Key ownership, long-term credential storage, moderation workflows, and platform identity verification live outside this package.
 
 ## Optional Adapters
 
@@ -505,14 +516,18 @@ When a dependency is absent, Unity does not compile the matching adapter assembl
 
 ## Optional Serializers
 
-The serializer integration assemblies live under `Unity.Runtime/Serializers/`:
+The serializer integration assemblies live under `Unity.Runtime/Serializers/` and directly reference `CycloneGames.Networking.Core`.
 
-- FlatBuffers
-- MessagePack
-- NewtonsoftJson
-- ProtoBuf
+| Serializer assembly | Package resource | Define |
+| --- | --- | --- |
+| `CycloneGames.Networking.Serializer.FlatBuffers` | `com.google.flatbuffers` | `FLATBUFFERS` |
+| `CycloneGames.Networking.Serializer.MessagePack` | `com.github.messagepack-csharp` | `MESSAGEPACK` |
+| `CycloneGames.Networking.Serializer.NewtonsoftJson` | `com.unity.nuget.newtonsoft-json` | `NEWTONSOFT_JSON` |
+| `CycloneGames.Networking.Serializer.ProtoBuf` | `com.google.protobuf` | `PROTOBUF` |
 
 The core serializer contract is `INetSerializer`. Adapter code can use `INetworkSerializerConfigurable` to replace or wrap the serializer during bootstrap.
+
+`MessagePackSerializerAdapter` uses a thread-local pooled `IBufferWriter<byte>` for serialization and an `ArrayPool<byte>` backed copy for `ReadOnlySpan<byte>` deserialization. This removes per-call `ArrayBufferWriter<byte>` and `ToArray()` allocations from the adapter itself, but final allocation behavior still depends on MessagePack-CSharp formatters and must be verified on IL2CPP targets.
 
 ## Validation and Hardening APIs
 
@@ -565,3 +580,4 @@ Focus test coverage on:
 - `CycloneGames.AIPerception.Networking`
 - `CycloneGames.RPGFoundation.Interaction.Networking`
 - `CycloneGames.RPGFoundation.Movement.Networking`
+- `CycloneGames.RPGFoundation.Projectile.Networking`

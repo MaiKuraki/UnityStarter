@@ -61,10 +61,9 @@ For module-level details, use the [Module Map](#module-map). It is the primary i
 | Item | Detail |
 | --- | --- |
 | Unity project root | `UnityStarter/` |
-| Unity version source | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
-| Current Unity version | `2022.3.62f3` |
-| CycloneGames module folders | 30+ under `UnityStarter/Assets/ThirdParty/CycloneGames/` |
-| Assembly definitions | 140+ `.asmdef` files under `UnityStarter/Assets/` |
+| Unity version source | `UnityStarter/ProjectSettings/ProjectVersion.txt`; read this file in the current checkout before opening or building the project. |
+| CycloneGames module folders | 36 package folders under `UnityStarter/Assets/ThirdParty/CycloneGames/` in this checkout. |
+| Assembly definitions | 180+ `.asmdef` files under `UnityStarter/Assets/`, including 170+ under CycloneGames packages. |
 | Analyzer rules | 20+ implemented `CycloneGames.Analyzers` rules |
 | Standalone tools | Go tools with Windows executables under `Tools/Executable/Windows/` |
 
@@ -153,6 +152,7 @@ Use this section as a navigation map. Recommended first pass: `GameplayFramework
 | --- | --- | --- |
 | **GameplayFramework** | Actor/Pawn/Controller/GameMode structure, gameplay lifecycle, camera flow, and scene-flow foundation. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) |
 | **GameplayAbilities** | GAS-style data-driven ability, attribute, effect, cost, cooldown, and cue system. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
+| **Choreography** | Engine-free action presentation scheduling for animation, audio, VFX, gameplay-event markers, and preload coordination. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography/README.md) |
 | **GameplayTags** | Hierarchical tags, generated constants, query helpers, editor tooling, and integration points. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md) |
 | **RPGFoundation** | RPG movement and interaction foundations that can integrate with other gameplay packages. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.md) |
 | **UIFramework** | Window management, UI flow, presentation patterns, and asset-backed UI loading that delegates handle ownership and eviction decisions to `AssetManagement`'s W-TinyLFU cache; `UIFramework` does not maintain a separate `CacheRetention` policy layer. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
@@ -172,6 +172,8 @@ Use this section as a navigation map. Recommended first pass: `GameplayFramework
 | **AssetManagement** | Interface-first asset loading abstraction with W-TinyLFU-inspired caching, `CacheRetention` policies/scheduler, provider abstraction, diagnostics, and async loading flows. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AssetManagement/README.md) |
 | **DataTable** | Designer-facing data pipeline with optional Luban, MessagePack, and asset-management bridges. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/README.md) |
 | **GameplayTags.DataTable** | DataTable integration for GameplayTags authoring and loading. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags.DataTable/README.md) |
+| **Choreography.AssetManagement** | Optional Choreography resource provider bridge for `CycloneGames.AssetManagement`. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography.AssetManagement/README.md) |
+| **Choreography.CycloneAudio** | Optional Choreography audio provider bridge for `CycloneGames.Audio`. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography.CycloneAudio/README.md) |
 | **Localization** | String tables, locale fallback, asset variants, and hot-reload-oriented loading. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Localization/README.md) |
 | **Audio** | Audio management layer with async loading, runtime ownership, and platform-aware policies. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md) |
 | **FontAssets** | CJK, Latin, symbol, and number font assets. | [Folder](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.FontAssets/) |
@@ -213,6 +215,7 @@ The networking layer is present and documented, but it is not yet project-valida
 | **BehaviorTree.Networking** | Behavior tree replication profiles, authority helpers, snapshots, and blackboard deltas. | Experimental. [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree.Networking/README.md) |
 | **RPGFoundation.Movement.Networking** | Movement input, snapshot, correction, teleport, authority transfer, validation, history, and reconciliation contracts. | Experimental. [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation.Movement.Networking/README.md) |
 | **RPGFoundation.Interaction.Networking** | Interaction DTOs, vector conversion, authority validation bridge, and message catalog registration. | Experimental. [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation.Interaction.Networking/README.md) |
+| **RPGFoundation.Projectile.Networking** | Projectile protocol metadata, DTOs, validation helpers, prediction reconciliation, snapshot history, and authority bridge contracts. | Experimental. [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation.Projectile.Networking/README.md) |
 
 ## Build, CI/CD And Project Tooling
 
@@ -263,7 +266,7 @@ See [Tools README](Tools/README.md) for usage details.
 
 ### Requirements
 
-- `2022.3.62f3`+
+- The Unity version recorded in `UnityStarter/ProjectSettings/ProjectVersion.txt`.
 - Git / Perforce / SVN, used by the Build module for automatic version information.
 
 ### First Run
@@ -306,6 +309,7 @@ Versions should be checked in `UnityStarter/Packages/manifest.json`, `UnityStart
 | [`Tools/README.md`](Tools/README.md) | Standalone project maintenance tools. |
 | [`Docs/AudioBestPractices/AudioBestPractices.md`](Docs/AudioBestPractices/AudioBestPractices.md) | Audio import and runtime audio guidance. |
 | [`Docs/Networking/GameJamLanMultiplayerGuide.md`](Docs/Networking/GameJamLanMultiplayerGuide.md) | LAN multiplayer planning guide. |
+| [`Docs/Networking/NetworkSecurityHardeningPlan.md`](Docs/Networking/NetworkSecurityHardeningPlan.md) | Current networking security state and hardening roadmap. |
 | [DeepWiki](https://deepwiki.com/MaiKuraki/UnityStarter) | Generated codebase overview. |
 
 ## Validation Status

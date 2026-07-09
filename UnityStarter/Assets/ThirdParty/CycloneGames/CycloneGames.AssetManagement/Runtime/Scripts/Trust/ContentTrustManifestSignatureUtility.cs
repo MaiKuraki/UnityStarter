@@ -4,6 +4,22 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 {
     public static class ContentTrustManifestSignatureUtility
     {
+        public static ContentTrustManifest SignCanonical(in ContentTrustManifest manifest, IContentTrustManifestCanonicalSigner signer)
+        {
+            if (signer == null)
+            {
+                throw new ArgumentNullException(nameof(signer));
+            }
+
+            string signature = signer.SignCanonicalManifest(in manifest);
+            if (string.IsNullOrEmpty(signature))
+            {
+                throw new InvalidOperationException("Content trust manifest signer returned an empty signature.");
+            }
+
+            return WithSignature(in manifest, signature);
+        }
+
         public static ContentTrustManifest Sign(in ContentTrustManifest manifest, IContentTrustManifestSigner signer)
         {
             if (signer == null)

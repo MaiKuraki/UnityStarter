@@ -1,12 +1,13 @@
-using CycloneGames.Networking.Buffers;
-using CycloneGames.Networking.Rpc;
-using CycloneGames.Networking.Serialization;
-using CycloneGames.Networking.Transports;
-using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
+using NUnit.Framework;
+using CycloneGames.Networking.Buffers;
+using CycloneGames.Networking.Rpc;
+using CycloneGames.Networking.Serialization;
+using CycloneGames.Networking.Transports;
+using CycloneGames.Networking.Unity.Runtime.Serialization;
 
 namespace CycloneGames.Networking.Tests.Editor
 {
@@ -76,6 +77,15 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
+        public void WriteBytes_RejectsPayloadsBeyondNetworkBufferCapacity()
+        {
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            byte[] oversizedPayload = new byte[NetworkConstants.MaxMTU + 1];
+
+            Assert.Throws<InvalidOperationException>(() => buffer.WriteBytes(oversizedPayload));
+        }
+
+        [Test]
         public void SerializerFactory_Freeze_BlocksRuntimeMutation()
         {
             SerializerFactory.RegisterCreator(SerializerType.Json, () => DummySerializer.Instance);
@@ -121,6 +131,26 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual(64, failures);
             Assert.IsTrue(SerializerFactory.IsFrozen);
             Assert.IsFalse(SerializerFactory.IsAvailable(SerializerType.MessagePack));
+        }
+
+        [Test]
+        public void UnityJsonSerializer_WriterRoundTripsThroughNetworkBuffer()
+        {
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            var value = new JsonRoundTripData
+            {
+                A = 17,
+                B = 2.5f
+            };
+
+            UnityJsonSerializerAdapter.Instance.Serialize(value, buffer);
+            Assert.Greater(buffer.Position, 0);
+
+            buffer.FlipForRead();
+            JsonRoundTripData result = UnityJsonSerializerAdapter.Instance.Deserialize<JsonRoundTripData>(buffer);
+
+            Assert.AreEqual(value.A, result.A);
+            Assert.AreEqual(value.B, result.B);
         }
 
         [Test]
@@ -525,6 +555,13 @@ namespace CycloneGames.Networking.Tests.Editor
             public long C;
             public long D;
             public long E;
+        }
+
+        [Serializable]
+        private struct JsonRoundTripData
+        {
+            public int A;
+            public float B;
         }
 
         private sealed class CapturingNetworkManager : INetworkManager

@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
@@ -15,18 +16,43 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         {
             using (var stream = new MemoryStream(EstimateCapacity(in manifest)))
             {
-                WriteString(stream, MAGIC);
-                WriteInt32LittleEndian(stream, ContentTrustManifestCodec.SCHEMA_VERSION);
-                WriteString(stream, manifest.Version);
-                WriteString(stream, manifest.MinimumClientVersion);
-                WriteString(stream, manifest.RollbackVersion);
-                WriteString(stream, manifest.ContentRoot);
+                WriteTo(in manifest, stream);
+                return stream.ToArray();
+            }
+        }
+
+        public static void WriteTo(
+            in ContentTrustManifest manifest,
+            Stream destination,
+            List<ContentTrustFileEntry> sortWorkspace = null)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            byte[] utf8Buffer = null;
+            try
+            {
+                WriteString(destination, MAGIC, ref utf8Buffer);
+                WriteInt32LittleEndian(destination, ContentTrustManifestCodec.SCHEMA_VERSION);
+                WriteString(destination, manifest.Version, ref utf8Buffer);
+                WriteString(destination, manifest.MinimumClientVersion, ref utf8Buffer);
+                WriteString(destination, manifest.RollbackVersion, ref utf8Buffer);
+                WriteString(destination, manifest.ContentRoot, ref utf8Buffer);
 
                 int count = manifest.Entries?.Count ?? 0;
-                WriteInt32LittleEndian(stream, count);
-                if (count > 0)
+                WriteInt32LittleEndian(destination, count);
+                if (count <= 0)
                 {
-                    var sortedEntries = new List<ContentTrustFileEntry>(count);
+                    return;
+                }
+
+                List<ContentTrustFileEntry> sortedEntries = sortWorkspace ?? new List<ContentTrustFileEntry>(count);
+                sortedEntries.Clear();
+
+                try
+                {
                     for (int i = 0; i < count; i++)
                     {
                         sortedEntries.Add(manifest.Entries[i]);
@@ -36,14 +62,23 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                     for (int i = 0; i < sortedEntries.Count; i++)
                     {
                         ContentTrustFileEntry entry = sortedEntries[i];
-                        WriteString(stream, entry.Location);
-                        WriteInt64LittleEndian(stream, entry.SizeBytes);
-                        WriteInt32LittleEndian(stream, (int)entry.HashAlgorithm);
-                        WriteString(stream, entry.ExpectedHashHex);
+                        WriteString(destination, entry.Location, ref utf8Buffer);
+                        WriteInt64LittleEndian(destination, entry.SizeBytes);
+                        WriteInt32LittleEndian(destination, (int)entry.HashAlgorithm);
+                        WriteString(destination, entry.ExpectedHashHex, ref utf8Buffer);
                     }
                 }
-
-                return stream.ToArray();
+                finally
+                {
+                    sortedEntries.Clear();
+                }
+            }
+            finally
+            {
+                if (utf8Buffer != null)
+                {
+                    ArrayPool<byte>.Shared.Return(utf8Buffer);
+                }
             }
         }
 
@@ -71,7 +106,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             return algorithm != 0 ? algorithm : string.CompareOrdinal(x.ExpectedHashHex, y.ExpectedHashHex);
         }
 
-        private static void WriteString(Stream stream, string value)
+        private static void WriteString(Stream stream, string value, ref byte[] utf8Buffer)
         {
             if (value == null)
             {
@@ -79,9 +114,25 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 return;
             }
 
-            byte[] bytes = Utf8NoBom.GetBytes(value);
-            WriteInt32LittleEndian(stream, bytes.Length);
-            stream.Write(bytes, 0, bytes.Length);
+            int byteCount = Utf8NoBom.GetByteCount(value);
+            WriteInt32LittleEndian(stream, byteCount);
+            if (byteCount == 0)
+            {
+                return;
+            }
+
+            if (utf8Buffer == null || utf8Buffer.Length < byteCount)
+            {
+                byte[] previousBuffer = utf8Buffer;
+                utf8Buffer = ArrayPool<byte>.Shared.Rent(byteCount);
+                if (previousBuffer != null)
+                {
+                    ArrayPool<byte>.Shared.Return(previousBuffer);
+                }
+            }
+
+            int written = Utf8NoBom.GetBytes(value, 0, value.Length, utf8Buffer, 0);
+            stream.Write(utf8Buffer, 0, written);
         }
 
         private static void WriteInt32LittleEndian(Stream stream, int value)

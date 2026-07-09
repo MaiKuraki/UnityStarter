@@ -14,7 +14,7 @@ using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetCatalogQuery, IAssetRuntimeDiagnostics
+    internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetCatalogQuery, IAssetRuntimeDiagnostics, IAssetPatchProviderReconciler
     {
         private readonly string packageName;
         private int nextId = 1;
@@ -23,6 +23,16 @@ namespace CycloneGames.AssetManagement.Runtime
         public string Name => packageName;
 
         private readonly Cache.AssetCacheService _cacheService;
+        private static readonly AssetPatchProviderReconciliationCapabilities ReconciliationCapabilities =
+            new AssetPatchProviderReconciliationCapabilities(
+                "Addressables",
+                supportsVersionedManifestUpdate: false,
+                supportsExplicitCacheCleanup: true,
+                supportsUnusedCacheCleanup: false,
+                supportsTagScopedCacheCleanup: false,
+                supportsProviderManagedDownloadCache: true,
+                supportsIsolatedVersionPreDownload: false,
+                requiresMainThreadAccess: true);
 
         // Cached delegates to avoid per-call lambda allocation for non-cached handle types.
         private static readonly Action<string, IReferenceCounted> _instantiateReleaseCallback =
@@ -30,10 +40,48 @@ namespace CycloneGames.AssetManagement.Runtime
         private static readonly Action<string, IReferenceCounted> _sceneReleaseCallback =
             (_, h) => ((AddressableSceneHandle)h).DisposeInternal();
 
+        public AssetPatchProviderReconciliationCapabilities Capabilities => ReconciliationCapabilities;
+
         public AddressablesAssetPackage(string name)
         {
             packageName = name;
             _cacheService = new Cache.AssetCacheService(this);
+        }
+
+        public UniTask<AssetPatchProviderReconciliationResult> ReconcileAsync(
+            AssetPatchJournalRecord record,
+            AssetPatchRecoveryRecommendation recommendation,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            switch (recommendation.Action)
+            {
+                case AssetPatchRecoveryAction.None:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.NoActionRequired(
+                            ReconciliationCapabilities,
+                            "Addressables has no provider-side recovery work for this journal."));
+                case AssetPatchRecoveryAction.ResumeOrRestartDownload:
+                case AssetPatchRecoveryAction.VerifyContentTrust:
+                case AssetPatchRecoveryAction.RepairContent:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.ReadyToRestartPatch(
+                            ReconciliationCapabilities,
+                            "Addressables will resolve dependencies against Unity cache when dependencies are requested again; cache cleanup is global-only in this adapter."));
+                case AssetPatchRecoveryAction.RollbackManifest:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.RequiresOwnerAction(
+                            ReconciliationCapabilities,
+                            "Addressables does not expose a provider-neutral runtime rollback to a specific historical catalog version through this adapter."));
+                case AssetPatchRecoveryAction.ClearCacheAndRetry:
+                case AssetPatchRecoveryAction.InspectTerminalFailure:
+                default:
+                    return UniTask.FromResult(
+                        AssetPatchProviderReconciliationResult.RequiresOwnerAction(
+                            ReconciliationCapabilities,
+                            "Inspect the Addressables catalog and cache state before clearing global Unity cache or restarting the patch."));
+            }
         }
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
@@ -63,7 +111,7 @@ namespace CycloneGames.AssetManagement.Runtime
             // 1. Standalone game: Uses StreamingAssets (bundled version)
             // 2. Standalone + DLC: Uses PersistentDataPath (DLC version) or StreamingAssets (base version)
             // 3. Online game: Uses remote server (server version) or StreamingAssets (fallback)
-            // 4. Hot-update game: Uses remote server → PersistentDataPath (cached) → StreamingAssets (baseline)
+            // 4. Hot-update game: Uses remote server -> PersistentDataPath (cached) -> StreamingAssets (baseline)
             //
             // Priority order (adaptive based on catalog type):
             // 1. Remote server (if remote catalog detected) - for online/hot-update games
@@ -417,11 +465,13 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.All, object tags = null, CancellationToken cancellationToken = default)
         {
-            if (clearMode == ClearCacheMode.ByTags)
+            if (clearMode == ClearCacheMode.All)
             {
-                CLogger.LogWarning("[AddressablesAssetPackage] ClearCacheFilesAsync by tags is not supported by Addressables. All cache will be cleared.");
+                return UniTask.FromResult(Caching.ClearCache());
             }
-            return UniTask.FromResult(Caching.ClearCache());
+
+            CLogger.LogWarning($"[AddressablesAssetPackage] ClearCacheFilesAsync mode '{clearMode}' is not supported by this adapter. Use ClearCacheMode.All only when global Unity cache cleanup is intended.");
+            return UniTask.FromResult(false);
         }
 
         public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)

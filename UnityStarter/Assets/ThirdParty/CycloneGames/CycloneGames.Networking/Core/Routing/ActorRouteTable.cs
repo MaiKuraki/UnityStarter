@@ -1,13 +1,12 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Threading;
 
 namespace CycloneGames.Networking.Routing
 {
     /// <summary>
-    /// Default in-memory <see cref="IActorRouter"/> implementation backed by a
-    /// lock-free <see cref="ConcurrentDictionary{TKey,TValue}"/>.
+    /// Default in-memory <see cref="IActorRouter"/> implementation backed by
+    /// concurrent actor and process indexes.
     /// </summary>
     /// <remarks>
     /// <para>
@@ -15,40 +14,52 @@ namespace CycloneGames.Networking.Routing
     /// in the same address space. For multi-process deployments, replace with a
     /// distributed router backed by Redis, etcd, or a dedicated routing service.
     /// </para>
-    /// <para>
-    /// Thread Safety: All public methods are safe for concurrent access from
-    /// multiple threads. Registration and resolution use lock-free operations.
-    /// </para>
+        /// <para>
+        /// Thread Safety: All public methods are safe for concurrent access from
+        /// multiple threads. Registration and resolution use concurrent dictionary operations.
+        /// </para>
     /// </remarks>
     public sealed class ActorRouteTable : IActorRouter
     {
         private readonly ConcurrentDictionary<int, string> _routes = new();
-        private readonly ConcurrentDictionary<string, ConcurrentBag<int>> _processIndex = new();
+        private readonly ConcurrentDictionary<string, ConcurrentDictionary<int, byte>> _processIndex =
+            new ConcurrentDictionary<string, ConcurrentDictionary<int, byte>>(StringComparer.Ordinal);
 
         public int TrackedActorCount => _routes.Count;
 
         public void Register(int actorId, string processId)
         {
             if (string.IsNullOrEmpty(processId))
+            {
                 throw new ArgumentNullException(nameof(processId));
+            }
 
-            string previousProcess = null;
-            _routes.AddOrUpdate(actorId,
-                _ =>
+            while (true)
+            {
+                if (!_routes.TryGetValue(actorId, out string existingProcess))
+                {
+                    if (_routes.TryAdd(actorId, processId))
+                    {
+                        AddToProcessIndex(actorId, processId);
+                        return;
+                    }
+
+                    continue;
+                }
+
+                if (string.Equals(existingProcess, processId, StringComparison.Ordinal))
                 {
                     AddToProcessIndex(actorId, processId);
-                    return processId;
-                },
-                (_, existingProcess) =>
+                    return;
+                }
+
+                if (_routes.TryUpdate(actorId, processId, existingProcess))
                 {
-                    if (!string.Equals(existingProcess, processId, StringComparison.Ordinal))
-                    {
-                        previousProcess = existingProcess;
-                        RemoveFromProcessIndex(actorId, existingProcess);
-                        AddToProcessIndex(actorId, processId);
-                    }
-                    return processId;
-                });
+                    RemoveFromProcessIndex(actorId, existingProcess);
+                    AddToProcessIndex(actorId, processId);
+                    return;
+                }
+            }
         }
 
         public void Unregister(int actorId)
@@ -71,26 +82,54 @@ namespace CycloneGames.Networking.Routing
 
         public IReadOnlyList<int> GetActorsOnProcess(string processId)
         {
-            if (_processIndex.TryGetValue(processId, out ConcurrentBag<int> bag))
+            if (string.IsNullOrEmpty(processId))
             {
-                return bag.ToArray();
+                return Array.Empty<int>();
             }
-            return Array.Empty<int>();
+
+            if (!_processIndex.TryGetValue(processId, out ConcurrentDictionary<int, byte> actors) || actors.IsEmpty)
+            {
+                return Array.Empty<int>();
+            }
+
+            int[] result = new int[Math.Max(actors.Count, 1)];
+            int count = 0;
+            foreach (int actorId in actors.Keys)
+            {
+                if (count == result.Length)
+                {
+                    Array.Resize(ref result, result.Length * 2);
+                }
+
+                result[count++] = actorId;
+            }
+
+            if (count == 0)
+            {
+                return Array.Empty<int>();
+            }
+
+            if (count != result.Length)
+            {
+                Array.Resize(ref result, count);
+            }
+
+            return result;
         }
 
         private void AddToProcessIndex(int actorId, string processId)
         {
-            ConcurrentBag<int> bag = _processIndex.GetOrAdd(processId, _ => new ConcurrentBag<int>());
-            bag.Add(actorId);
+            ConcurrentDictionary<int, byte> actors = _processIndex.GetOrAdd(
+                processId,
+                _ => new ConcurrentDictionary<int, byte>());
+            actors.TryAdd(actorId, 0);
         }
 
         private void RemoveFromProcessIndex(int actorId, string processId)
         {
-            if (_processIndex.TryGetValue(processId, out ConcurrentBag<int> bag))
+            if (_processIndex.TryGetValue(processId, out ConcurrentDictionary<int, byte> actors))
             {
-                // ConcurrentBag does not support targeted removal; the bag is
-                // rebuilt on enumeration. For diagnostics use only; the index is
-                // not on a hot path.
+                actors.TryRemove(actorId, out _);
             }
         }
     }
