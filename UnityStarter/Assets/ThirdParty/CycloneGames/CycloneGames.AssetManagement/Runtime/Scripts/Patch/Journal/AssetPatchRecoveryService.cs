@@ -48,13 +48,21 @@ namespace CycloneGames.AssetManagement.Runtime
 
                 if (record.Status == AssetPatchJournalStatus.Succeeded)
                 {
-                    bool cleared = ClearJournalIf(_policy.ClearSucceededJournal);
+                    if (!TryClearJournalIf(_policy.ClearSucceededJournal, out bool cleared, out string clearError))
+                    {
+                        return CreateResult(AssetPatchRecoveryStatus.Failed, in record, recommendation, false, false, false, clearError);
+                    }
+
                     return CreateResult(AssetPatchRecoveryStatus.NoActionRequired, in record, recommendation, cleared, false, false, null);
                 }
 
                 if (record.Status == AssetPatchJournalStatus.Cancelled)
                 {
-                    bool cleared = ClearJournalIf(_policy.ClearCancelledJournal);
+                    if (!TryClearJournalIf(_policy.ClearCancelledJournal, out bool cleared, out string clearError))
+                    {
+                        return CreateResult(AssetPatchRecoveryStatus.Failed, in record, recommendation, false, false, false, clearError);
+                    }
+
                     return CreateResult(AssetPatchRecoveryStatus.NoActionRequired, in record, recommendation, cleared, false, false, null);
                 }
 
@@ -105,7 +113,11 @@ namespace CycloneGames.AssetManagement.Runtime
                         return CreateResult(AssetPatchRecoveryStatus.Failed, in record, recommendation, false, false, false, "Failed to clear interrupted patch cache.");
                     }
 
-                    bool journalCleared = ClearJournalIf(_policy.ClearJournalAfterSuccessfulRecovery);
+                    if (!TryClearJournalIf(_policy.ClearJournalAfterSuccessfulRecovery, out bool journalCleared, out string clearError))
+                    {
+                        return CreateResult(AssetPatchRecoveryStatus.Failed, in record, recommendation, false, false, true, clearError);
+                    }
+
                     return CreateResult(AssetPatchRecoveryStatus.CacheCleanupCompleted, in record, recommendation, journalCleared, false, true, null);
                 }
 
@@ -150,7 +162,11 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
             }
 
-            bool journalCleared = ClearJournalIf(_policy.ClearJournalAfterSuccessfulRecovery);
+            if (!TryClearJournalIf(_policy.ClearJournalAfterSuccessfulRecovery, out bool journalCleared, out string clearError))
+            {
+                return CreateResult(AssetPatchRecoveryStatus.Failed, in record, recommendation, false, true, cacheCleared, clearError);
+            }
+
             return CreateResult(AssetPatchRecoveryStatus.RollbackCompleted, in record, recommendation, journalCleared, true, cacheCleared, null);
         }
 
@@ -220,15 +236,23 @@ namespace CycloneGames.AssetManagement.Runtime
             return true;
         }
 
-        private bool ClearJournalIf(bool shouldClear)
+        private bool TryClearJournalIf(bool shouldClear, out bool journalCleared, out string error)
         {
+            journalCleared = false;
+            error = null;
+
             if (!shouldClear)
             {
-                return false;
+                return true;
             }
 
-            _journalStore.Clear();
-            return true;
+            if (_journalStore.TryClear(out error))
+            {
+                journalCleared = true;
+                return true;
+            }
+
+            return false;
         }
 
         private static AssetPatchRecoveryResult CreateResult(

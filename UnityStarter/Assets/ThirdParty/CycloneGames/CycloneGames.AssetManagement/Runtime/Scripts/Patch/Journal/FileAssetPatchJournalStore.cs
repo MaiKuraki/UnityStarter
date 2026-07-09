@@ -56,13 +56,25 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        public void Clear()
+        public bool TryClear(out string error)
         {
+            error = null;
+
             lock (_gate)
             {
-                if (File.Exists(FilePath))
+                try
                 {
-                    File.Delete(FilePath);
+                    if (File.Exists(FilePath))
+                    {
+                        File.Delete(FilePath);
+                    }
+
+                    return true;
+                }
+                catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is ArgumentException || ex is NotSupportedException)
+                {
+                    error = ex.Message;
+                    return false;
                 }
             }
         }

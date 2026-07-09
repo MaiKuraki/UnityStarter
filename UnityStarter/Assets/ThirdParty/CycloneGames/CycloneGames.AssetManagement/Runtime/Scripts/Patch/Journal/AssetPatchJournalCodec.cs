@@ -25,21 +25,21 @@ namespace CycloneGames.AssetManagement.Runtime
             }
 
             builder.Append('{');
-            AppendJsonProperty(builder, "schemaVersion", SCHEMA_VERSION, appendComma: false);
-            AppendJsonProperty(builder, "sequence", record.Sequence, appendComma: true);
-            AppendJsonProperty(builder, "packageName", record.PackageName, appendComma: true);
-            AppendJsonProperty(builder, "packageVersion", record.PackageVersion, appendComma: true);
-            AppendJsonProperty(builder, "rollbackVersion", record.RollbackVersion, appendComma: true);
-            AppendJsonProperty(builder, "stage", GetStageName(record.Stage), appendComma: true);
-            AppendJsonProperty(builder, "status", GetStatusName(record.Status), appendComma: true);
-            AppendJsonProperty(builder, "totalDownloadCount", record.TotalDownloadCount, appendComma: true);
-            AppendJsonProperty(builder, "totalDownloadBytes", record.TotalDownloadBytes, appendComma: true);
-            AppendJsonProperty(builder, "contentTrustEnabled", record.ContentTrustEnabled, appendComma: true);
-            AppendJsonProperty(builder, "trustFailureCount", record.TrustFailureCount, appendComma: true);
-            AppendJsonProperty(builder, "contentTrustManifestFingerprint", record.ContentTrustManifestFingerprint.ToString(CultureInfo.InvariantCulture), appendComma: true);
-            AppendJsonProperty(builder, "startedUtcTicks", record.StartedUtcTicks, appendComma: true);
-            AppendJsonProperty(builder, "updatedUtcTicks", record.UpdatedUtcTicks, appendComma: true);
-            AppendJsonProperty(builder, "error", record.Error, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "schemaVersion", SCHEMA_VERSION, appendComma: false);
+            JsonBuilderUtility.AppendProperty(builder, "sequence", record.Sequence, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "packageName", record.PackageName, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "packageVersion", record.PackageVersion, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "rollbackVersion", record.RollbackVersion, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "stage", GetStageName(record.Stage), appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "status", GetStatusName(record.Status), appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "totalDownloadCount", record.TotalDownloadCount, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "totalDownloadBytes", record.TotalDownloadBytes, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "contentTrustEnabled", record.ContentTrustEnabled, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "trustFailureCount", record.TrustFailureCount, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "contentTrustManifestFingerprint", record.ContentTrustManifestFingerprint.ToString(CultureInfo.InvariantCulture), appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "startedUtcTicks", record.StartedUtcTicks, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "updatedUtcTicks", record.UpdatedUtcTicks, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "error", record.Error, appendComma: true);
             builder.Append('}');
         }
 
@@ -136,7 +136,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (string.IsNullOrEmpty(value))
             {
                 result = 0UL;
-                return true;
+                return false;
             }
 
             return ulong.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out result);
@@ -196,107 +196,6 @@ namespace CycloneGames.AssetManagement.Runtime
                 default:
                     return status.ToString();
             }
-        }
-
-        private static void AppendJsonProperty(StringBuilder builder, string name, string value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            AppendJsonString(builder, value);
-        }
-
-        private static void AppendJsonProperty(StringBuilder builder, string name, int value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            builder.Append(value);
-        }
-
-        private static void AppendJsonProperty(StringBuilder builder, string name, long value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            builder.Append(value);
-        }
-
-        private static void AppendJsonProperty(StringBuilder builder, string name, bool value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            builder.Append(value ? "true" : "false");
-        }
-
-        private static void AppendJsonString(StringBuilder builder, string value)
-        {
-            if (value == null)
-            {
-                builder.Append("null");
-                return;
-            }
-
-            builder.Append('"');
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                switch (c)
-                {
-                    case '"':
-                        builder.Append("\\\"");
-                        break;
-                    case '\\':
-                        builder.Append("\\\\");
-                        break;
-                    case '\b':
-                        builder.Append("\\b");
-                        break;
-                    case '\f':
-                        builder.Append("\\f");
-                        break;
-                    case '\n':
-                        builder.Append("\\n");
-                        break;
-                    case '\r':
-                        builder.Append("\\r");
-                        break;
-                    case '\t':
-                        builder.Append("\\t");
-                        break;
-                    default:
-                        if (c < ' ')
-                        {
-                            builder.Append("\\u");
-                            builder.Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
-                        }
-                        else
-                        {
-                            builder.Append(c);
-                        }
-
-                        break;
-                }
-            }
-
-            builder.Append('"');
         }
 
         [Serializable]

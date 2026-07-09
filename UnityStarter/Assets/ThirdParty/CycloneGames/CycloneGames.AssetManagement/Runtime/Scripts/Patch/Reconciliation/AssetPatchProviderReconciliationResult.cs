@@ -21,7 +21,10 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public bool HasResult => Status != AssetPatchProviderReconciliationStatus.NotRun;
 
-        public bool Succeeded => Status != AssetPatchProviderReconciliationStatus.Failed;
+        public bool Succeeded =>
+            Status == AssetPatchProviderReconciliationStatus.NoActionRequired ||
+            Status == AssetPatchProviderReconciliationStatus.ReadyToRestartPatch ||
+            Status == AssetPatchProviderReconciliationStatus.ReadyToResumeDownload;
 
         public bool NeedsOwnerAction =>
             Status == AssetPatchProviderReconciliationStatus.ReadyToRestartPatch ||

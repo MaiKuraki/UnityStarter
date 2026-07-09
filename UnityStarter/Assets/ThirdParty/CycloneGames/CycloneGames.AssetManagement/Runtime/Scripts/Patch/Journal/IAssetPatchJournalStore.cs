@@ -4,6 +4,6 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         void Write(in AssetPatchJournalRecord record);
         bool TryRead(out AssetPatchJournalRecord record, out string error);
-        void Clear();
+        bool TryClear(out string error);
     }
 }

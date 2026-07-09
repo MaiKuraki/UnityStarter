@@ -64,6 +64,22 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void VerifyBytes_Accepts_Matching_XxHash64()
+        {
+            byte[] bytes = Utf8NoBom.GetBytes("Hello");
+            var entry = new ContentTrustFileEntry(
+                "bundles/ui.bundle",
+                bytes.LongLength,
+                ContentTrustHashAlgorithm.XxHash64,
+                "0a75a91375b27d44");
+
+            ContentTrustVerificationResult result = ContentTrustVerifier.Shared.VerifyBytes(bytes, entry);
+
+            Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(ContentTrustFailure.None, result.Failure);
+        }
+
+        [Test]
         public void VerifyBytes_Rejects_Hash_Mismatch()
         {
             byte[] bytes = Utf8NoBom.GetBytes("trusted content");
@@ -174,6 +190,27 @@ namespace CycloneGames.AssetManagement.Tests.Editor
                 });
 
             Assert.AreNotEqual(first.ComputeFingerprint(), second.ComputeFingerprint());
+        }
+
+        [Test]
+        public void ComputeFingerprint_Ignores_Signature()
+        {
+            var first = new ContentTrustManifest(
+                "2026.07.09",
+                new[]
+                {
+                    new ContentTrustFileEntry("a.bundle", 1L, ContentTrustHashAlgorithm.None, null)
+                },
+                signature: "first-signature");
+            var second = new ContentTrustManifest(
+                "2026.07.09",
+                new[]
+                {
+                    new ContentTrustFileEntry("a.bundle", 1L, ContentTrustHashAlgorithm.None, null)
+                },
+                signature: "second-signature");
+
+            Assert.AreEqual(first.ComputeFingerprint(), second.ComputeFingerprint());
         }
 
         private static string CreateTempRoot()

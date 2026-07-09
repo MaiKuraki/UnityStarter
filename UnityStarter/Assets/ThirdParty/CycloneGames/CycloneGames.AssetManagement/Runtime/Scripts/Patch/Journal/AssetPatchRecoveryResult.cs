@@ -64,7 +64,6 @@ namespace CycloneGames.AssetManagement.Runtime
         public bool Succeeded =>
             Status == AssetPatchRecoveryStatus.NoJournal ||
             Status == AssetPatchRecoveryStatus.NoActionRequired ||
-            Status == AssetPatchRecoveryStatus.RequiresOwnerAction ||
             Status == AssetPatchRecoveryStatus.RollbackCompleted ||
             Status == AssetPatchRecoveryStatus.CacheCleanupCompleted;
     }

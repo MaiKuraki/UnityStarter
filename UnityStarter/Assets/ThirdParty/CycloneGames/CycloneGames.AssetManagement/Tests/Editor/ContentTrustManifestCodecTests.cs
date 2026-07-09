@@ -67,6 +67,19 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void Codec_Rejects_Entry_With_Missing_HashAlgorithm()
+        {
+            const string json =
+                "{\"schemaVersion\":1,\"version\":\"2026.07.09\",\"entries\":[{\"location\":\"bundles/ui.bundle\",\"sizeBytes\":42,\"expectedHashHex\":\"0123456789abcdef\"}]}";
+
+            bool parsed = ContentTrustManifestCodec.TryFromJson(json, out ContentTrustManifest manifest, out string error);
+
+            Assert.IsFalse(parsed);
+            Assert.IsNull(manifest.Entries);
+            StringAssert.Contains("Unsupported content trust hash algorithm", error);
+        }
+
+        [Test]
         public void Codec_AppendJson_Matches_ToJson_And_Clears_Workspace()
         {
             var manifest = new ContentTrustManifest(

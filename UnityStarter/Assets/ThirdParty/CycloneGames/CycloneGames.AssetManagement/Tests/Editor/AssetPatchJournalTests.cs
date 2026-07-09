@@ -52,6 +52,19 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void Codec_Rejects_Record_With_Missing_ContentTrustFingerprint()
+        {
+            const string json =
+                "{\"schemaVersion\":1,\"sequence\":7,\"packageName\":\"Main\",\"packageVersion\":\"manifest-current\",\"stage\":\"Download\",\"status\":\"InProgress\",\"totalDownloadCount\":1,\"totalDownloadBytes\":1024,\"contentTrustEnabled\":true,\"trustFailureCount\":0,\"startedUtcTicks\":10,\"updatedUtcTicks\":20}";
+
+            bool parsed = AssetPatchJournalCodec.TryFromJson(json, out AssetPatchJournalRecord record, out string error);
+
+            Assert.IsFalse(parsed);
+            Assert.AreEqual(default(AssetPatchJournalRecord), record);
+            StringAssert.Contains("Unsupported patch journal content trust fingerprint", error);
+        }
+
+        [Test]
         public void FileStore_WriteReadClear_Persists_Record()
         {
             string directory = Path.Combine(Path.GetTempPath(), "CycloneGames.AssetManagement.JournalTests", Guid.NewGuid().ToString("N"));
@@ -83,7 +96,8 @@ namespace CycloneGames.AssetManagement.Tests.Editor
                 Assert.AreEqual(record.PackageName, restored.PackageName);
                 Assert.AreEqual(record.Status, restored.Status);
 
-                store.Clear();
+                bool cleared = store.TryClear(out string clearError);
+                Assert.IsTrue(cleared, clearError);
                 Assert.IsFalse(File.Exists(journalPath));
             }
             finally
@@ -167,6 +181,51 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             {
                 Directory.Delete(directory, recursive: true);
             }
+        }
+
+        [Test]
+        public async Task RecoveryService_When_Journal_Clear_Fails_Returns_Failed_Result()
+        {
+            var record = CreateRecord(PatchWorkflowState.Done, AssetPatchJournalStatus.Succeeded);
+            var store = new ClearFailingJournalStore(record, "journal locked");
+            var package = new RecordingAssetPackage { NameValue = "Main" };
+            var service = new AssetPatchRecoveryService(package, store, AssetPatchRecoveryPolicy.ClearTerminalJournals);
+
+            AssetPatchRecoveryResult result = await service.RecoverAsync();
+
+            Assert.AreEqual(AssetPatchRecoveryStatus.Failed, result.Status);
+            Assert.IsFalse(result.Succeeded);
+            Assert.IsTrue(result.JournalRead);
+            Assert.IsFalse(result.JournalCleared);
+            Assert.AreEqual("journal locked", result.Error);
+        }
+
+        [Test]
+        public void RecoveryResult_RequiresOwnerAction_Is_Not_Succeeded()
+        {
+            var result = new AssetPatchRecoveryResult(
+                AssetPatchRecoveryStatus.RequiresOwnerAction,
+                AssetPatchRecoveryAction.ResumeOrRestartDownload,
+                default,
+                default,
+                journalRead: true,
+                journalCleared: false,
+                manifestRolledBack: false,
+                cacheCleared: false,
+                error: null);
+
+            Assert.IsFalse(result.Succeeded);
+        }
+
+        [Test]
+        public void ProviderReconciliationResult_Owner_Action_Statuses_Are_Not_Succeeded()
+        {
+            AssetPatchProviderReconciliationCapabilities capabilities = CreateProviderCapabilities();
+
+            Assert.IsFalse(AssetPatchProviderReconciliationResult.RequiresOwnerAction(capabilities, "owner action").Succeeded);
+            Assert.IsFalse(AssetPatchProviderReconciliationResult.NotSupported(capabilities, "not supported").Succeeded);
+            Assert.IsFalse(AssetPatchProviderReconciliationResult.Failed(capabilities, "failed").Succeeded);
+            Assert.IsTrue(AssetPatchProviderReconciliationResult.ReadyToRestartPatch(capabilities, "ready").Succeeded);
         }
 
         [Test]
@@ -450,6 +509,35 @@ namespace CycloneGames.AssetManagement.Tests.Editor
                 LastRecord = record;
                 LastRecommendation = recommendation;
                 return UniTask.FromResult(_result);
+            }
+        }
+
+        private sealed class ClearFailingJournalStore : IAssetPatchJournalStore
+        {
+            private readonly AssetPatchJournalRecord _record;
+            private readonly string _clearError;
+
+            public ClearFailingJournalStore(AssetPatchJournalRecord record, string clearError)
+            {
+                _record = record;
+                _clearError = clearError;
+            }
+
+            public void Write(in AssetPatchJournalRecord record)
+            {
+            }
+
+            public bool TryRead(out AssetPatchJournalRecord record, out string error)
+            {
+                record = _record;
+                error = null;
+                return true;
+            }
+
+            public bool TryClear(out string error)
+            {
+                error = _clearError;
+                return false;
             }
         }
     }

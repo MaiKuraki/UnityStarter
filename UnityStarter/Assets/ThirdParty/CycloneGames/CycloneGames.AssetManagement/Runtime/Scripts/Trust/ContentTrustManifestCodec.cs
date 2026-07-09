@@ -4,6 +4,8 @@ using System.Text;
 
 using UnityEngine;
 
+using CycloneGames.AssetManagement.Runtime;
+
 namespace CycloneGames.AssetManagement.Runtime.Trust
 {
     public static class ContentTrustManifestCodec
@@ -124,14 +126,14 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             List<ContentTrustFileEntry> sortWorkspace)
         {
             builder.Append('{');
-            AppendJsonProperty(builder, "schemaVersion", SCHEMA_VERSION, appendComma: false);
-            AppendJsonProperty(builder, "version", manifest.Version, appendComma: true);
-            AppendJsonProperty(builder, "minimumClientVersion", manifest.MinimumClientVersion, appendComma: true);
-            AppendJsonProperty(builder, "rollbackVersion", manifest.RollbackVersion, appendComma: true);
-            AppendJsonProperty(builder, "contentRoot", manifest.ContentRoot, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "schemaVersion", SCHEMA_VERSION, appendComma: false);
+            JsonBuilderUtility.AppendProperty(builder, "version", manifest.Version, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "minimumClientVersion", manifest.MinimumClientVersion, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "rollbackVersion", manifest.RollbackVersion, appendComma: true);
+            JsonBuilderUtility.AppendProperty(builder, "contentRoot", manifest.ContentRoot, appendComma: true);
             if (includeSignature)
             {
-                AppendJsonProperty(builder, "signature", manifest.Signature, appendComma: true);
+                JsonBuilderUtility.AppendProperty(builder, "signature", manifest.Signature, appendComma: true);
             }
 
             builder.Append(",\"entries\":[");
@@ -171,10 +173,10 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
                     ContentTrustFileEntry entry = sortedEntries[i];
                     builder.Append('{');
-                    AppendJsonProperty(builder, "location", entry.Location, appendComma: false);
-                    AppendJsonProperty(builder, "sizeBytes", entry.SizeBytes, appendComma: true);
-                    AppendJsonProperty(builder, "hashAlgorithm", entry.HashAlgorithm, appendComma: true);
-                    AppendJsonProperty(builder, "expectedHashHex", entry.ExpectedHashHex, appendComma: true);
+                    JsonBuilderUtility.AppendProperty(builder, "location", entry.Location, appendComma: false);
+                    JsonBuilderUtility.AppendProperty(builder, "sizeBytes", entry.SizeBytes, appendComma: true);
+                    JsonBuilderUtility.AppendProperty(builder, "hashAlgorithm", GetHashAlgorithmName(entry.HashAlgorithm), appendComma: true);
+                    JsonBuilderUtility.AppendProperty(builder, "expectedHashHex", entry.ExpectedHashHex, appendComma: true);
                     builder.Append('}');
                 }
             }
@@ -189,7 +191,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             if (string.IsNullOrEmpty(value))
             {
                 algorithm = ContentTrustHashAlgorithm.None;
-                return true;
+                return false;
             }
 
             return Enum.TryParse(value, ignoreCase: false, out algorithm);
@@ -213,54 +215,6 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             return algorithm != 0 ? algorithm : string.CompareOrdinal(x.ExpectedHashHex, y.ExpectedHashHex);
         }
 
-        private static void AppendJsonProperty(StringBuilder builder, string name, string value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            AppendJsonString(builder, value);
-        }
-
-        private static void AppendJsonProperty(StringBuilder builder, string name, int value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            builder.Append(value);
-        }
-
-        private static void AppendJsonProperty(StringBuilder builder, string name, long value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            builder.Append(value);
-        }
-
-        private static void AppendJsonProperty(StringBuilder builder, string name, ContentTrustHashAlgorithm value, bool appendComma)
-        {
-            if (appendComma)
-            {
-                builder.Append(',');
-            }
-
-            AppendJsonString(builder, name);
-            builder.Append(':');
-            AppendJsonString(builder, GetHashAlgorithmName(value));
-        }
-
         private static string GetHashAlgorithmName(ContentTrustHashAlgorithm value)
         {
             switch (value)
@@ -274,59 +228,6 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 default:
                     return value.ToString();
             }
-        }
-
-        private static void AppendJsonString(StringBuilder builder, string value)
-        {
-            if (value == null)
-            {
-                builder.Append("null");
-                return;
-            }
-
-            builder.Append('"');
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                switch (c)
-                {
-                    case '"':
-                        builder.Append("\\\"");
-                        break;
-                    case '\\':
-                        builder.Append("\\\\");
-                        break;
-                    case '\b':
-                        builder.Append("\\b");
-                        break;
-                    case '\f':
-                        builder.Append("\\f");
-                        break;
-                    case '\n':
-                        builder.Append("\\n");
-                        break;
-                    case '\r':
-                        builder.Append("\\r");
-                        break;
-                    case '\t':
-                        builder.Append("\\t");
-                        break;
-                    default:
-                        if (c < ' ')
-                        {
-                            builder.Append("\\u");
-                            builder.Append(((int)c).ToString("x4"));
-                        }
-                        else
-                        {
-                            builder.Append(c);
-                        }
-
-                        break;
-                }
-            }
-
-            builder.Append('"');
         }
 
         [Serializable]
