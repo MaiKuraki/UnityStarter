@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading;
+
 using Cysharp.Threading.Tasks;
 using CycloneGames.AssetManagement.Runtime;
 using UnityEngine;
@@ -110,6 +111,10 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public int InitializeCallCount;
         public AssetCacheRetentionPolicy LastRetentionPolicy;
         public string RequestPackageVersionValue = "1.0.0";
+        public System.Exception RequestPackageVersionException;
+        public System.Exception UpdatePackageManifestException;
+        public System.Exception CreateDownloaderForAllException;
+        public bool UpdatePackageManifestResult = true;
         public readonly List<string> UpdatedPackageVersions = new List<string>();
         public IDownloader DownloaderForAll;
         public IDownloader DownloaderForLocations;
@@ -131,11 +136,25 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         public UniTask DestroyAsync() => UniTask.CompletedTask;
-        public UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default) => UniTask.FromResult(RequestPackageVersionValue);
+        public UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
+        {
+            if (RequestPackageVersionException != null)
+            {
+                return UniTask.FromException<string>(RequestPackageVersionException);
+            }
+
+            return UniTask.FromResult(RequestPackageVersionValue);
+        }
+
         public UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
         {
+            if (UpdatePackageManifestException != null)
+            {
+                return UniTask.FromException<bool>(UpdatePackageManifestException);
+            }
+
             UpdatedPackageVersions.Add(packageVersion);
-            return UniTask.FromResult(true);
+            return UniTask.FromResult(UpdatePackageManifestResult);
         }
 
         public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.All, object clearParam = null, CancellationToken cancellationToken = default)
@@ -150,6 +169,11 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             CreateDownloaderForAllCallCount++;
             LastDownloadingMaxNumber = downloadingMaxNumber;
             LastFailedTryAgain = failedTryAgain;
+            if (CreateDownloaderForAllException != null)
+            {
+                throw CreateDownloaderForAllException;
+            }
+
             return DownloaderForAll;
         }
 

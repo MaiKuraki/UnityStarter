@@ -16,12 +16,16 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             Message = message ?? string.Empty;
             Action = action ?? string.Empty;
             Context = context;
+            DisplayText = string.IsNullOrEmpty(Action)
+                ? $"[{Code}] {Message}"
+                : $"[{Code}] {Message}\n{Action}";
         }
 
         public NetworkBootstrapIssueSeverity Severity { get; }
         public string Code { get; }
         public string Message { get; }
         public string Action { get; }
+        public string DisplayText { get; }
         public UnityEngine.Object Context { get; }
     }
 }

@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using UnityEngine;
@@ -16,6 +17,7 @@ namespace CycloneGames.Networking.Interest
         private readonly float _visibilityRange;
         private readonly int _cellRange;        // cellRange = ceil(visibilityRange / cellSize)
         private readonly Dictionary<long, List<INetworkEntity>> _grid;
+        private readonly List<long> _emptyCellScratch = new List<long>(16);
 
         // Reusable connection observer data: connectionId -> position
         private readonly Dictionary<int, Vector3> _observerPositions = new Dictionary<int, Vector3>();
@@ -29,6 +31,16 @@ namespace CycloneGames.Networking.Interest
         /// <param name="visibilityRange">Max distance an entity is visible from an observer.</param>
         public GridInterestManager(float cellSize = 50f, float visibilityRange = 100f)
         {
+            if (cellSize <= 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(cellSize));
+            }
+
+            if (visibilityRange < 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(visibilityRange));
+            }
+
             _cellSize = cellSize;
             _visibilityRange = visibilityRange;
             _cellRange = Mathf.CeilToInt(visibilityRange / cellSize);
@@ -51,14 +63,25 @@ namespace CycloneGames.Networking.Interest
 
         public void SetObserverGroups(int connectionId, HashSet<int> groups)
         {
+            if (groups == null || groups.Count == 0)
+            {
+                _observerGroups.Remove(connectionId);
+                return;
+            }
+
             _observerGroups[connectionId] = groups;
         }
 
         public void PreUpdate(IReadOnlyList<INetworkEntity> allEntities)
         {
+            if (allEntities == null)
+            {
+                throw new ArgumentNullException(nameof(allEntities));
+            }
+
             // Clear and rehash all entities into grid
             // Prune empty cells to prevent unbounded dictionary growth
-            List<long> emptyKeys = null;
+            _emptyCellScratch.Clear();
             foreach (var pair in _grid)
             {
                 pair.Value.Clear();
@@ -82,23 +105,39 @@ namespace CycloneGames.Networking.Interest
             {
                 if (pair.Value.Count == 0)
                 {
-                    emptyKeys ??= new List<long>(16);
-                    emptyKeys.Add(pair.Key);
+                    _emptyCellScratch.Add(pair.Key);
                 }
             }
-            if (emptyKeys != null)
+
+            for (int i = 0; i < _emptyCellScratch.Count; i++)
             {
-                for (int i = 0; i < emptyKeys.Count; i++)
-                    _grid.Remove(emptyKeys[i]);
+                _grid.Remove(_emptyCellScratch[i]);
             }
         }
 
         public void RebuildForConnection(INetConnection connection, IReadOnlyList<INetworkEntity> allEntities, HashSet<uint> results)
         {
+            if (connection == null)
+            {
+                throw new ArgumentNullException(nameof(connection));
+            }
+
+            if (allEntities == null)
+            {
+                throw new ArgumentNullException(nameof(allEntities));
+            }
+
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
             results.Clear();
 
             if (!_observerPositions.TryGetValue(connection.ConnectionId, out var observerPos))
+            {
                 return;
+            }
 
             _observerGroups.TryGetValue(connection.ConnectionId, out var groups);
             float rangeSq = _visibilityRange * _visibilityRange;
@@ -113,7 +152,9 @@ namespace CycloneGames.Networking.Interest
                 {
                     long key = PackKey(cx + dx, cz + dz);
                     if (!_grid.TryGetValue(key, out var cell))
+                    {
                         continue;
+                    }
 
                     for (int i = 0; i < cell.Count; i++)
                     {
@@ -134,7 +175,9 @@ namespace CycloneGames.Networking.Interest
 
                         float distSq = (entity.Position - observerPos).sqrMagnitude;
                         if (distSq <= rangeSq)
+                        {
                             results.Add(entity.NetworkId);
+                        }
                     }
                 }
             }
@@ -143,21 +186,39 @@ namespace CycloneGames.Networking.Interest
             for (int i = 0; i < allEntities.Count; i++)
             {
                 if (allEntities[i].AlwaysRelevant)
+                {
                     results.Add(allEntities[i].NetworkId);
+                }
             }
         }
 
         public bool IsVisible(INetConnection connection, INetworkEntity entity)
         {
+            if (connection == null)
+            {
+                throw new ArgumentNullException(nameof(connection));
+            }
+
+            if (entity == null)
+            {
+                throw new ArgumentNullException(nameof(entity));
+            }
+
             if (entity.AlwaysRelevant || entity.OwnerConnectionId == connection.ConnectionId)
+            {
                 return true;
+            }
 
             if (!_observerPositions.TryGetValue(connection.ConnectionId, out var observerPos))
+            {
                 return false;
+            }
 
             if (_observerGroups.TryGetValue(connection.ConnectionId, out var groups) &&
                 entity.RelevanceGroup != 0 && groups.Contains(entity.RelevanceGroup))
+            {
                 return true;
+            }
 
             return (entity.Position - observerPos).sqrMagnitude <= _visibilityRange * _visibilityRange;
         }

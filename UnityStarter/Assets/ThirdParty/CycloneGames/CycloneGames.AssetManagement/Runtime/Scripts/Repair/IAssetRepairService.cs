@@ -14,6 +14,8 @@ namespace CycloneGames.AssetManagement.Runtime
         string PackageName { get; }
         Observable<(AssetRepairEvent, object)> RepairEvents { get; }
 
+        void Cancel();
+
         UniTask<AssetRepairRunResult> RepairAsync(
             ContentTrustManifest manifest,
             IReadOnlyList<ContentTrustVerificationResult> failures,

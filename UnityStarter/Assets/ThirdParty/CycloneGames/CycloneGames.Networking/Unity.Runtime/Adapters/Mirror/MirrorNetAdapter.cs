@@ -1,18 +1,16 @@
 #if CYCLONE_NETWORKING_HAS_MIRROR
 using System;
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Buffers;
 using System.Threading;
-using Mirror;
 using UnityEngine;
-using CycloneGames.Networking.Serialization;
+using Mirror;
 using CycloneGames.Networking.Buffers;
 using CycloneGames.Networking.Security;
+using CycloneGames.Networking.Serialization;
 using CycloneGames.Networking.Services;
 using CycloneGames.Logger;
-
-using CycloneGames.Networking;
 
 namespace CycloneGames.Networking.Adapter.Mirror
 {
@@ -51,6 +49,8 @@ namespace CycloneGames.Networking.Adapter.Mirror
         [SerializeField] private int _maxMessagesPerSecond = 120;
         [SerializeField] private int _burstMessages = 40;
         [SerializeField] private int _maxQueuedPackets = 1024;
+        [Tooltip("Maximum queued cross-thread sends processed per frame. Use 0 for unlimited draining.")]
+        [SerializeField] private int _maxQueuedPacketsPerFrame = 256;
         [SerializeField] private bool _requireAuthenticatedMessages = false;
         [SerializeField] private bool _requireEncryptedTransport = false;
 
@@ -318,8 +318,12 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
         private void ProcessSendQueue()
         {
-            while (_sendQueue.TryDequeue(out var packet))
+            int processed = 0;
+            int maxPackets = _maxQueuedPacketsPerFrame <= 0 ? int.MaxValue : _maxQueuedPacketsPerFrame;
+            while (processed < maxPackets && _sendQueue.TryDequeue(out var packet))
             {
+                processed++;
+
                 try
                 {
                     if (packet.IsDisconnect)
@@ -357,7 +361,10 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 finally
                 {
                     if (packet.Data != null)
+                    {
                         ArrayPool<byte>.Shared.Return(packet.Data);
+                    }
+
                     Interlocked.Decrement(ref _queuedPacketCount);
                 }
             }
@@ -386,6 +393,8 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 global::Mirror.Transport.active.OnClientError -= HandleClientError;
                 global::Mirror.Transport.active.OnServerError -= HandleServerError;
             }
+
+            ClearQueuedPackets();
 
             RuntimeContext?.Dispose();
             RuntimeContext = null;
@@ -601,11 +610,33 @@ namespace CycloneGames.Networking.Adapter.Mirror
         public void Stop()
         {
             if (!TryGetNetworkManager(out NetworkManager manager))
+            {
                 return;
+            }
 
             _lifecycleState = NetworkLifecycleState.Stopping;
             manager.StopHost();
+            ClearQueuedPackets();
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
+        }
+
+        private void ClearQueuedPackets()
+        {
+            while (_sendQueue.TryDequeue(out QueuedPacket packet))
+            {
+                if (packet.Data != null)
+                {
+                    ArrayPool<byte>.Shared.Return(packet.Data);
+                }
+
+                Interlocked.Decrement(ref _queuedPacketCount);
+            }
+
+            int count = Volatile.Read(ref _queuedPacketCount);
+            if (count < 0)
+            {
+                Interlocked.Exchange(ref _queuedPacketCount, 0);
+            }
         }
 
         public void Disconnect(INetConnection connection)

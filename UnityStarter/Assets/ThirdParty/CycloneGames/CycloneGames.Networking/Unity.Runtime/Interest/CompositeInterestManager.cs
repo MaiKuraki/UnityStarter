@@ -1,5 +1,5 @@
+using System;
 using System.Collections.Generic;
-using UnityEngine;
 
 namespace CycloneGames.Networking.Interest
 {
@@ -13,17 +13,53 @@ namespace CycloneGames.Networking.Interest
         private readonly List<IInterestManager> _managers = new List<IInterestManager>(4);
         private readonly HashSet<uint> _tempResults = new HashSet<uint>();
 
-        public void Add(IInterestManager manager) => _managers.Add(manager);
+        public void Add(IInterestManager manager)
+        {
+            if (manager == null)
+            {
+                throw new ArgumentNullException(nameof(manager));
+            }
+
+            if (_managers.Contains(manager))
+            {
+                return;
+            }
+
+            _managers.Add(manager);
+        }
+
         public bool Remove(IInterestManager manager) => _managers.Remove(manager);
 
         public void PreUpdate(IReadOnlyList<INetworkEntity> allEntities)
         {
+            if (allEntities == null)
+            {
+                throw new ArgumentNullException(nameof(allEntities));
+            }
+
             for (int i = 0; i < _managers.Count; i++)
+            {
                 _managers[i].PreUpdate(allEntities);
+            }
         }
 
         public void RebuildForConnection(INetConnection connection, IReadOnlyList<INetworkEntity> allEntities, HashSet<uint> results)
         {
+            if (connection == null)
+            {
+                throw new ArgumentNullException(nameof(connection));
+            }
+
+            if (allEntities == null)
+            {
+                throw new ArgumentNullException(nameof(allEntities));
+            }
+
+            if (results == null)
+            {
+                throw new ArgumentNullException(nameof(results));
+            }
+
             results.Clear();
 
             for (int i = 0; i < _managers.Count; i++)

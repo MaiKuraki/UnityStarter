@@ -48,6 +48,67 @@ namespace CycloneGames.Networking.Security
         }
 
         /// <summary>
+        /// Strict server preset for release-oriented composition roots. Unlike
+        /// <see cref="CreateServerSecurityBaseline"/>, this method rejects no-op telemetry,
+        /// disabled signers, and missing rate limiters at construction time.
+        /// </summary>
+        public static NetworkSecurityPipelineOptions CreateProductionServerSecurityBaseline(
+            INetworkMessageSigner messageSigner,
+            INetworkAntiCheatSignalSink antiCheatSink,
+            RateLimiter rateLimiter,
+            INetworkCryptoProvider cryptoProvider = null,
+            bool requireEncryptedTransport = true)
+        {
+            if (messageSigner == null)
+            {
+                throw new ArgumentNullException(nameof(messageSigner));
+            }
+
+            if (!messageSigner.IsEnabled)
+            {
+                throw new ArgumentException("Production server security requires an enabled message signer.", nameof(messageSigner));
+            }
+
+            if (antiCheatSink == null)
+            {
+                throw new ArgumentNullException(nameof(antiCheatSink));
+            }
+
+            if (ReferenceEquals(antiCheatSink, NoopNetworkAntiCheatSignalSink.Instance))
+            {
+                throw new ArgumentException("Production server security requires a non-noop anti-cheat signal sink.", nameof(antiCheatSink));
+            }
+
+            if (rateLimiter == null)
+            {
+                throw new ArgumentNullException(nameof(rateLimiter));
+            }
+
+            if (cryptoProvider != null && !cryptoProvider.IsEnabled)
+            {
+                throw new ArgumentException("A supplied production crypto provider must be enabled.", nameof(cryptoProvider));
+            }
+
+            MessageSecurityPolicy defaultPolicy = MessageSecurityPolicy.Default
+                .WithAuthenticatedConnectionRequired(true)
+                .WithEncryptedTransportRequired(requireEncryptedTransport)
+                .WithReplayProtection(true)
+                .WithSignatureRequired(true);
+
+            return new NetworkSecurityPipelineOptions
+            {
+                MessagePolicies = new MessageSecurityPolicyRegistry(defaultPolicy),
+                ReplayProtector = new NetworkReplayGuardProtector(),
+                MessageSigner = messageSigner,
+                CryptoProvider = cryptoProvider ?? NoopNetworkCryptoProvider.Instance,
+                AntiCheatSignalSink = antiCheatSink,
+                RateLimiter = rateLimiter,
+                EnableRateLimiting = true,
+                ReportRejectedMessages = true
+            };
+        }
+
+        /// <summary>
         /// Client security baseline: replay protection on, rejection reporting on. Clients usually do not
         /// rate-limit their own single server connection, so rate limiting is left disabled by default. Signing
         /// and crypto default to <c>Noop</c>; supply real implementations (or rely on an authenticated, encrypted

@@ -11,23 +11,36 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly IAssetPackage _package;
         private readonly Subject<(PatchEvent, object)> _patchEvents = new Subject<(PatchEvent, object)>();
         private readonly PatchContentTrustProcessor _trustProcessor;
+        private readonly AssetPatchJournalOptions _journalOptions;
 
         private PatchWorkflowState _currentState = PatchWorkflowState.None;
         private PatchRunOptions _pendingOptions;
         private IDownloader _downloader;
         private string _pendingPackageVersion;
+        private long _journalSequence;
+        private long _journalStartedUtcTicks;
+        private int _lastTrustFailureCount;
+        private ulong _lastTrustFingerprint;
         private bool _downloadInProgress;
+        private bool _cancelRequested;
         private bool _disposed;
 
         public AssetPatchService(IAssetPackage package)
+            : this(package, AssetPatchJournalOptions.Disabled)
+        {
+        }
+
+        public AssetPatchService(IAssetPackage package, AssetPatchJournalOptions journalOptions)
         {
             _package = package ?? throw new ArgumentNullException(nameof(package));
+            _journalOptions = journalOptions;
             _trustProcessor = new PatchContentTrustProcessor(_package, SetState, PublishEvent);
         }
 
         public string PackageName => _package.Name;
 
         public Observable<(PatchEvent, object)> PatchEvents => _patchEvents;
+        public string LastJournalWriteError { get; private set; }
 
         public async UniTask RunAsync(
             bool autoDownloadOnFoundNewVersion,
@@ -52,36 +65,107 @@ namespace CycloneGames.AssetManagement.Runtime
             _pendingOptions = options;
             _pendingPackageVersion = null;
             _downloader = null;
+            _journalStartedUtcTicks = DateTime.UtcNow.Ticks;
+            _journalSequence = 0L;
+            _lastTrustFailureCount = 0;
+            _lastTrustFingerprint = options.TrustOptions.Enabled ? options.TrustOptions.Manifest.ComputeFingerprint() : 0UL;
+            LastJournalWriteError = null;
+            _cancelRequested = false;
 
             try
             {
                 SetState(PatchWorkflowState.Initialize);
+                ThrowIfCancellationRequested();
 
                 SetState(PatchWorkflowState.CheckVersion);
-                string packageVersion = await _package.RequestPackageVersionAsync(
-                    options.AppendTimeTicks,
-                    options.DownloadOptions.RequestTimeoutSeconds,
-                    cancellationToken);
+                string packageVersion;
+                try
+                {
+                    packageVersion = await _package.RequestPackageVersionAsync(
+                        options.AppendTimeTicks,
+                        options.DownloadOptions.RequestTimeoutSeconds,
+                        cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return PublishProviderFailure(
+                        PatchFailureKind.PackageVersionRequestFailed,
+                        options,
+                        null,
+                        null,
+                        "Failed to request package version",
+                        ex.Message);
+                }
+                ThrowIfCancellationRequested();
 
                 SetState(PatchWorkflowState.UpdateManifest);
-                bool manifestUpdated = await _package.UpdatePackageManifestAsync(
-                    packageVersion,
-                    options.DownloadOptions.RequestTimeoutSeconds,
-                    cancellationToken);
+                bool manifestUpdated;
+                try
+                {
+                    manifestUpdated = await _package.UpdatePackageManifestAsync(
+                        packageVersion,
+                        options.DownloadOptions.RequestTimeoutSeconds,
+                        cancellationToken);
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    return PublishProviderFailure(
+                        PatchFailureKind.ManifestUpdateFailed,
+                        options,
+                        packageVersion,
+                        null,
+                        "Failed to update package manifest",
+                        ex.Message);
+                }
+                ThrowIfCancellationRequested();
                 if (!manifestUpdated)
                 {
-                    throw new InvalidOperationException("Failed to update package manifest.");
+                    return PublishProviderFailure(
+                        PatchFailureKind.ManifestUpdateFailed,
+                        options,
+                        packageVersion,
+                        null,
+                        "Failed to update package manifest",
+                        null);
                 }
 
-                _downloader = _package.CreateDownloaderForAll(
-                    options.DownloadOptions.MaxConcurrentDownloads,
-                    options.DownloadOptions.FailedRetryCount);
+                try
+                {
+                    _downloader = _package.CreateDownloaderForAll(
+                        options.DownloadOptions.MaxConcurrentDownloads,
+                        options.DownloadOptions.FailedRetryCount);
+                }
+                catch (Exception ex)
+                {
+                    return PublishProviderFailure(
+                        PatchFailureKind.DownloaderCreationFailed,
+                        options,
+                        packageVersion,
+                        null,
+                        "Patch downloader was not created",
+                        ex.Message);
+                }
                 if (_downloader == null)
                 {
-                    throw new InvalidOperationException("Patch downloader was not created.");
+                    return PublishProviderFailure(
+                        PatchFailureKind.DownloaderCreationFailed,
+                        options,
+                        packageVersion,
+                        null,
+                        "Patch downloader was not created",
+                        null);
                 }
 
                 _pendingPackageVersion = packageVersion;
+                WriteJournalCheckpoint(_currentState, GetJournalStatusForState(_currentState), null);
 
                 if (_downloader.TotalDownloadCount == 0)
                 {
@@ -93,7 +177,8 @@ namespace CycloneGames.AssetManagement.Runtime
                     PackageVersion = packageVersion,
                     TotalDownloadSizeBytes = _downloader.TotalDownloadBytes
                 };
-                _patchEvents.OnNext((PatchEvent.FoundNewVersion, foundArgs));
+                PublishEvent(PatchEvent.FoundNewVersion, foundArgs);
+                ThrowIfCancellationRequested();
 
                 if (options.AutoDownloadOnFoundNewVersion)
                 {
@@ -103,6 +188,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 SetState(PatchWorkflowState.WaitingForDownload);
                 return CreateResult(
                     PatchRunStatus.PendingDownload,
+                    PatchFailureKind.None,
                     packageVersion,
                     null,
                     _downloader.TotalDownloadCount,
@@ -111,6 +197,10 @@ namespace CycloneGames.AssetManagement.Runtime
                     0,
                     0UL,
                     null);
+            }
+            catch (OperationCanceledException ex)
+            {
+                return PublishCancellation(ex, options, _pendingPackageVersion, _downloader);
             }
             catch (Exception ex)
             {
@@ -132,9 +222,22 @@ namespace CycloneGames.AssetManagement.Runtime
                 throw new InvalidOperationException("Patch download is already running.");
             }
 
+            if (_cancelRequested)
+            {
+                return PublishCancellation(
+                    new OperationCanceledException("Patch operation was cancelled."),
+                    _pendingOptions,
+                    _pendingPackageVersion,
+                    _downloader);
+            }
+
             try
             {
                 return await DownloadInternalAsync(_pendingOptions, _pendingPackageVersion, cancellationToken);
+            }
+            catch (OperationCanceledException ex)
+            {
+                return PublishCancellation(ex, _pendingOptions, _pendingPackageVersion, _downloader);
             }
             catch (Exception ex)
             {
@@ -150,8 +253,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Cancel()
         {
-            _downloader?.Cancel();
-            SetState(PatchWorkflowState.Cancelled);
+            CancelDownloader(markCancelRequested: true, publishState: true);
         }
 
         public void Dispose()
@@ -161,6 +263,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return;
             }
 
+            CancelDownloader(markCancelRequested: true, publishState: false);
             _disposed = true;
             _patchEvents.Dispose();
         }
@@ -191,6 +294,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 var progressArgs = new DownloadProgressEventArgs();
                 while (!_downloader.IsDone)
                 {
+                    ThrowIfCancellationRequested();
                     cancellationToken.ThrowIfCancellationRequested();
 
                     progressArgs.TotalDownloadCount = _downloader.TotalDownloadCount;
@@ -198,13 +302,14 @@ namespace CycloneGames.AssetManagement.Runtime
                     progressArgs.TotalDownloadSizeBytes = _downloader.TotalDownloadBytes;
                     progressArgs.CurrentDownloadSizeBytes = _downloader.CurrentDownloadBytes;
 
-                    _patchEvents.OnNext((PatchEvent.DownloadProgress, progressArgs));
+                    PublishEvent(PatchEvent.DownloadProgress, progressArgs);
                     await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
                 }
 
+                ThrowIfCancellationRequested();
                 if (!_downloader.Succeed)
                 {
-                    throw new InvalidOperationException($"Download failed: {_downloader.Error}");
+                    return PublishDownloadFailure(options, packageVersion, _downloader);
                 }
 
                 return await CompleteAfterDownloadAsync(
@@ -220,6 +325,63 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
+        private PatchRunResult PublishDownloadFailure(
+            PatchRunOptions options,
+            string packageVersion,
+            IDownloader downloader)
+        {
+            string providerError = downloader == null ? null : downloader.Error;
+            return PublishProviderFailure(
+                PatchFailureKind.ProviderDownloadFailed,
+                options,
+                packageVersion,
+                downloader,
+                "Download failed",
+                providerError);
+        }
+
+        private PatchRunResult PublishProviderFailure(
+            PatchFailureKind failureKind,
+            PatchRunOptions options,
+            string packageVersion,
+            IDownloader downloader,
+            string message,
+            string providerError)
+        {
+            _pendingPackageVersion = packageVersion;
+            if (downloader != null)
+            {
+                _downloader = downloader;
+            }
+
+            string error = BuildProviderFailureMessage(message, providerError);
+            SetState(PatchWorkflowState.Failed);
+            PatchRunResult result = CreateResult(
+                PatchRunStatus.Failed,
+                failureKind,
+                packageVersion,
+                null,
+                downloader?.TotalDownloadCount ?? 0,
+                downloader?.TotalDownloadBytes ?? 0L,
+                options.TrustOptions.Enabled,
+                0,
+                0UL,
+                error);
+            WriteJournalCheckpoint(PatchWorkflowState.Failed, AssetPatchJournalStatus.Failed, error);
+            PublishEvent(PatchEvent.PatchFailed, result);
+            return result;
+        }
+
+        private static string BuildProviderFailureMessage(string message, string providerError)
+        {
+            if (string.IsNullOrEmpty(providerError))
+            {
+                return message;
+            }
+
+            return $"{message}: {providerError}";
+        }
+
         private async UniTask<PatchRunResult> CompleteAfterDownloadAsync(
             PatchRunOptions options,
             string packageVersion,
@@ -233,22 +395,33 @@ namespace CycloneGames.AssetManagement.Runtime
             if (options.TrustOptions.Enabled)
             {
                 SetState(PatchWorkflowState.VerifyContentTrust);
+                ThrowIfCancellationRequested();
                 PatchTrustVerificationEventArgs trustArgs = _trustProcessor.Verify(options.TrustOptions, packageVersion);
+                ThrowIfCancellationRequested();
                 trustFailureCount = trustArgs.FailureCount;
                 trustFingerprint = trustArgs.ManifestFingerprint;
+                _lastTrustFailureCount = trustFailureCount;
+                _lastTrustFingerprint = trustFingerprint;
                 PublishEvent(PatchEvent.ContentTrustVerified, trustArgs);
+                WriteJournalCheckpoint(PatchWorkflowState.VerifyContentTrust, AssetPatchJournalStatus.InProgress, null);
+                ThrowIfCancellationRequested();
 
                 if (trustFailureCount > 0)
                 {
                     trustArgs = await _trustProcessor.HandleFailureAsync(options, PackageName, packageVersion, trustArgs, cancellationToken);
+                    ThrowIfCancellationRequested();
                     trustFailureCount = trustArgs.FailureCount;
                     trustFingerprint = trustArgs.ManifestFingerprint;
+                    _lastTrustFailureCount = trustFailureCount;
+                    _lastTrustFingerprint = trustFingerprint;
+                    WriteJournalCheckpoint(_currentState, GetJournalStatusForState(_currentState), null);
                 }
             }
 
             SetState(PatchWorkflowState.Done);
             PatchRunResult result = CreateResult(
                 PatchRunStatus.Succeeded,
+                PatchFailureKind.None,
                 packageVersion,
                 null,
                 totalDownloadCount,
@@ -263,6 +436,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private PatchRunResult CreateResult(
             PatchRunStatus status,
+            PatchFailureKind failureKind,
             string packageVersion,
             string rollbackVersion,
             int totalDownloadCount,
@@ -277,6 +451,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 packageVersion,
                 rollbackVersion,
                 status,
+                failureKind,
                 totalDownloadCount,
                 totalDownloadBytes,
                 trustEnabled,
@@ -287,26 +462,147 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void PublishFailure(Exception ex)
         {
-            if (ex is OperationCanceledException)
-            {
-                SetState(PatchWorkflowState.Cancelled);
-                PublishEvent(PatchEvent.PatchFailed, ex);
-                return;
-            }
-
             SetState(PatchWorkflowState.Failed);
+            WriteJournalCheckpoint(PatchWorkflowState.Failed, AssetPatchJournalStatus.Failed, ex.Message);
             PublishEvent(PatchEvent.PatchFailed, ex);
+        }
+
+        private PatchRunResult PublishCancellation(
+            OperationCanceledException ex,
+            PatchRunOptions options,
+            string packageVersion,
+            IDownloader downloader)
+        {
+            CancelDownloader(markCancelRequested: true, publishState: true);
+            string error = string.IsNullOrEmpty(ex.Message) ? "Patch operation was cancelled." : ex.Message;
+
+            PatchRunResult result = CreateResult(
+                PatchRunStatus.Cancelled,
+                PatchFailureKind.Cancelled,
+                packageVersion,
+                null,
+                downloader?.TotalDownloadCount ?? 0,
+                downloader?.TotalDownloadBytes ?? 0L,
+                options.TrustOptions.Enabled,
+                0,
+                0UL,
+                error);
+            WriteJournalCheckpoint(PatchWorkflowState.Cancelled, AssetPatchJournalStatus.Cancelled, error);
+            PublishEvent(PatchEvent.PatchFailed, result);
+            return result;
         }
 
         private void SetState(PatchWorkflowState newState)
         {
+            if (_currentState == newState)
+            {
+                return;
+            }
+
             _currentState = newState;
             PublishEvent(PatchEvent.PatchStatesChanged, newState);
+            WriteJournalCheckpoint(newState, GetJournalStatusForState(newState), null);
         }
 
         private void PublishEvent(PatchEvent patchEvent, object args)
         {
+            if (_disposed)
+            {
+                return;
+            }
+
             _patchEvents.OnNext((patchEvent, args));
+        }
+
+        private void CancelDownloader(bool markCancelRequested, bool publishState)
+        {
+            if (markCancelRequested)
+            {
+                _cancelRequested = true;
+            }
+
+            _downloader?.Cancel();
+            if (publishState && CanTransitionToCancelled(_currentState))
+            {
+                SetState(PatchWorkflowState.Cancelled);
+            }
+        }
+
+        private void ThrowIfCancellationRequested()
+        {
+            if (_cancelRequested)
+            {
+                throw new OperationCanceledException("Patch operation was cancelled.");
+            }
+        }
+
+        private void WriteJournalCheckpoint(PatchWorkflowState stage, AssetPatchJournalStatus status, string error)
+        {
+            if (!_journalOptions.Enabled)
+            {
+                return;
+            }
+
+            try
+            {
+                IDownloader downloader = _downloader;
+                var record = new AssetPatchJournalRecord(
+                    ++_journalSequence,
+                    PackageName,
+                    _pendingPackageVersion,
+                    GetRollbackVersion(_pendingOptions),
+                    stage,
+                    status,
+                    downloader?.TotalDownloadCount ?? 0,
+                    downloader?.TotalDownloadBytes ?? 0L,
+                    _pendingOptions.TrustOptions.Enabled,
+                    _lastTrustFailureCount,
+                    _lastTrustFingerprint,
+                    _journalStartedUtcTicks,
+                    DateTime.UtcNow.Ticks,
+                    error);
+                _journalOptions.Store.Write(in record);
+                LastJournalWriteError = null;
+            }
+            catch (Exception ex) when (_journalOptions.WriteFailurePolicy == AssetPatchJournalWriteFailurePolicy.ContinueWithoutJournal)
+            {
+                LastJournalWriteError = ex.Message;
+            }
+        }
+
+        private static AssetPatchJournalStatus GetJournalStatusForState(PatchWorkflowState state)
+        {
+            switch (state)
+            {
+                case PatchWorkflowState.WaitingForDownload:
+                    return AssetPatchJournalStatus.PendingDownload;
+                case PatchWorkflowState.Done:
+                    return AssetPatchJournalStatus.Succeeded;
+                case PatchWorkflowState.Failed:
+                    return AssetPatchJournalStatus.Failed;
+                case PatchWorkflowState.Cancelled:
+                    return AssetPatchJournalStatus.Cancelled;
+                default:
+                    return AssetPatchJournalStatus.InProgress;
+            }
+        }
+
+        private static string GetRollbackVersion(PatchRunOptions options)
+        {
+            if (!string.IsNullOrEmpty(options.TrustOptions.RollbackVersionOverride))
+            {
+                return options.TrustOptions.RollbackVersionOverride;
+            }
+
+            return options.TrustOptions.Manifest.RollbackVersion;
+        }
+
+        private static bool CanTransitionToCancelled(PatchWorkflowState state)
+        {
+            return state != PatchWorkflowState.None &&
+                   state != PatchWorkflowState.Done &&
+                   state != PatchWorkflowState.Failed &&
+                   state != PatchWorkflowState.Cancelled;
         }
 
         private void ThrowIfDisposed()

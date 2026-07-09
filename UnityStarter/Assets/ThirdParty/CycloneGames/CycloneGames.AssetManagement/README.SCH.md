@@ -418,13 +418,88 @@ if (patchService is IAssetPatchTransactionService transaction)
 }
 ```
 
-事务状态机会通过 `PatchEvent.PatchStatesChanged` 报告公开的 `PatchWorkflowState` 值。内容可信校验失败会抛出 `PatchTrustVerificationException`；根据 `PatchTrustFailurePolicy`，服务可以直接失败、清理 unused cache、清理全部 cache、修复损坏 location，或将 active manifest 更新回 rollback version 后再失败。rollback 步骤刻意保持显式且 provider-neutral：它调用 `UpdatePackageManifestAsync(rollbackVersion)`，并可选调用 `ClearCacheFilesAsync(ClearCacheMode.Unused)`。
+事务状态机会通过 `PatchEvent.PatchStatesChanged` 报告公开的 `PatchWorkflowState` 值。下载前的 provider preflight 失败会返回结构化结果：package version 请求失败、manifest 更新失败和 downloader 创建失败分别返回 `PatchRunStatus.Failed` 与 `PatchFailureKind.PackageVersionRequestFailed`、`PatchFailureKind.ManifestUpdateFailed` 或 `PatchFailureKind.DownloaderCreationFailed`。Provider 下载完成但 `Succeed == false` 时，会返回 `PatchFailureKind.ProviderDownloadFailed`，保留 package version、下载数量、字节数和 provider error，供启动期恢复使用。内容可信校验失败仍会抛出 `PatchTrustVerificationException`；根据 `PatchTrustFailurePolicy`，服务可以直接失败、清理 unused cache、清理全部 cache、修复损坏 location，或将 active manifest 更新回 rollback version 后再失败。取消保持显式且由 provider 拥有：当服务已经拥有 downloader 时，cancellation token、`Cancel()` 和服务释放都会调用 `IDownloader.Cancel()`；显式取消会发布 `Cancelled` 状态，并让 task-based API 返回 `PatchRunStatus.Cancelled` 和 `PatchFailureKind.Cancelled` 的 `PatchRunResult`，而不是依赖非结构化异常路径。`Dispose()` 会取消服务拥有的 pending 或 active downloader，并在事件流释放后抑制后续事件发布。rollback 步骤刻意保持显式且 provider-neutral：它调用 `UpdatePackageManifestAsync(rollbackVersion)`，并可选调用 `ClearCacheFilesAsync(ClearCacheMode.Unused)`。
+
+#### 崩溃安全 Patch Journal
+
+移动操作系统可能在 downloader 活跃期间挂起或杀掉进程。桌面用户也可能在 manifest 更新、内容校验、修复或 cache 清理期间关闭进程。在这些情况下，C# `finally`、`Cancel()`、`Dispose()` 和 Unity application lifecycle callback 都不保证执行。因此 `AssetPatchService` 支持可选的 provider-neutral journal，将每个 transaction checkpoint 写入显式文件。
+
+```csharp
+string journalPath = AssetPatchJournalPaths.GetDefaultJournalPath(profile.PackageName);
+var journalStore = new FileAssetPatchJournalStore(journalPath);
+var patchService = new AssetPatchService(
+    package,
+    new AssetPatchJournalOptions(journalStore));
+
+PatchRunResult result = await patchService.RunAsync(runOptions, cancellationToken);
+```
+
+下次启动时，产品 bootstrap 可以读取最后一个 checkpoint，并决定 resume、restart、verify、repair、rollback，或忽略已经完成的 transaction：
+
+```csharp
+if (journalStore.TryRead(out AssetPatchJournalRecord record, out string error))
+{
+    AssetPatchRecoveryRecommendation recovery =
+        AssetPatchJournalRecovery.Analyze(record);
+
+    if (recovery.Action == AssetPatchRecoveryAction.ResumeOrRestartDownload)
+    {
+        // Ask the active provider whether partial data can resume.
+        // If the provider cannot resume safely, clear the partial payload and restart the patch.
+    }
+}
+```
+
+如果 bootstrap 不希望手写分支，可以使用 `AssetPatchRecoveryService` 作为可复用 executor。它的默认 policy 是 inspect-only：只读取和分类 journal，不会删除 checkpoint、清 cache、重启下载或 rollback manifest，除非产品层显式传入 policy。
+
+```csharp
+var recoveryPolicy = new AssetPatchRecoveryPolicy(
+    rollbackFailedJournalWithVersion: true,
+    clearUnusedCacheAfterRollback: true,
+    clearJournalAfterSuccessfulRecovery: true);
+
+var recoveryService = new AssetPatchRecoveryService(
+    package,
+    journalStore,
+    recoveryPolicy);
+
+AssetPatchRecoveryResult recoveryResult =
+    await recoveryService.RecoverAsync(cancellationToken);
+
+if (recoveryResult.Status == AssetPatchRecoveryStatus.RequiresOwnerAction)
+{
+    // Show repair UI, restart the patch flow, or ask the provider-specific layer
+    // whether interrupted payloads can safely resume.
+}
+```
+
+如果 active package 实现了 `IAssetPatchProviderReconciler`，`AssetPatchRecoveryService` 会自动把 provider capability 细节写入 `recoveryResult.ProviderReconciliation`。该 service 仍然保持保守：只有显式 recovery policy 和 provider capability matrix 同时允许某个精确操作时，才会执行 manifest rollback 或 cache cleanup。
+
+| Provider | 指定版本 manifest update | Cache cleanup | 隔离版本预下载 | 恢复行为 |
+| --- | --- | --- | --- | --- |
+| YooAsset | 通过 `UpdatePackageManifestAsync(version)` 支持。 | adapter 支持 `All`、`Unused` 和 `ByTags`。 | 当前 adapter 不支持。 | 基于 active manifest 重启 patch；已完成 cache 的校验由 YooAsset 拥有。 |
+| Addressables | 不支持 provider-neutral 的历史 catalog 指定版本 rollback。 | 仅支持 `ClearCacheMode.All`，并映射到 Unity 全局 cache 清理。 | 当前 adapter 不支持。 | 重新请求 dependency 并让 Unity cache 解析；不要假设安全 partial resume 或 scoped cleanup。 |
+| Resources | 不支持。 | 不支持 provider-side patch cache。 | 不支持。 | 如果远程 patch 流程产生中断 journal，说明 provider 配置不匹配。 |
+
+content-trust 失败处理也使用同一套 capability guard。trust policy 如果要求指定版本 rollback 或 unused-cache cleanup，而 active provider 无法按该语义执行，会显式失败。
+
+journal 刻意保持很小，并以阶段为核心。它记录 schema version、sequence、package name、目标版本、rollback version、公开 patch stage、journal status、预期下载数量/字节数、内容可信状态、trust fingerprint、UTC ticks 和最后的终态错误。它不保存 CDN URL、凭据、账号标识、加密 key、原始 manifest document 或 provider SDK 对象。
+
+默认路径 helper 写入：
+
+```text
+Application.persistentDataPath/CycloneGames/AssetManagement/PatchJournal/<package>.json
+```
+
+`FileAssetPatchJournalStore` 使用 `CycloneGames.IO` 原子文本写入。原子替换能防止正常元数据更新过程中生成 partial destination file，但平台耐久性限制仍然存在：在移动端或 WebGL 上，被杀进程可能丢失最新一次正在进行的写入；部分文件系统也会退回 delete-then-move。请把 journal 当作恢复 checkpoint，而不是唯一事实来源。真正激活下载内容前，仍必须 reconciliation provider cache、active manifest 和 content trust manifest。
 
 #### Manifest 文档与签名 Payload
 
 `ContentTrustManifestBuilder` 用于从构建产物或已下载文件创建 provider-neutral manifest。它会将相对 location 规范化为正斜杠，在确定性排序后校验重复 location，并通过 `CycloneGames.IO` 计算 SHA-256 或 XxHash64 条目。
 
 `ContentTrustManifestCodec` 写入和读取紧凑 JSON 文档，用于传输与检查。JSON 文档不是签名安全边界。签名应基于 `ContentTrustManifestCanonicalPayload` bytes：该 payload 使用确定性 schema version、长度前缀 UTF-8 字符串、小端数字字段、排序后的 entries，并排除 `Signature` 字段。这样 JSON 空白、属性顺序、转义方式或 parser 行为都不会改变签名语义。
+
+`ToJson` 和 `ToCanonicalPayloadBytes` 是 convenience API，会分配结果对象。大型构建、patch、CI 和 Editor 工具应优先使用 caller-owned 路径：`ContentTrustManifestCodec.AppendJson(builder, manifest, sortWorkspace: workspace)`、`ContentTrustManifestCanonicalPayload.WriteTo(manifest, stream, workspace)` 和 `IContentTrustManifestCanonicalSigner`。这些 API 允许调用方复用 `StringBuilder`、`Stream` 和排序 workspace，同时保持线程调度显式；manifest 层不会创建 worker thread，也不会保存隐藏全局 cache。
 
 ```csharp
 ContentTrustManifest unsignedManifest = new ContentTrustManifestBuilder()
@@ -440,9 +515,24 @@ string json = ContentTrustManifestCodec.ToJson(signedManifest);
 byte[] canonicalPayload = ContentTrustManifestCodec.ToCanonicalPayloadBytes(signedManifest);
 ```
 
+```csharp
+var jsonBuilder = new StringBuilder(64 * 1024);
+var sortWorkspace = new List<ContentTrustFileEntry>(1024);
+
+ContentTrustManifestCodec.AppendJson(jsonBuilder, signedManifest, sortWorkspace: sortWorkspace);
+
+using (var canonicalStream = new MemoryStream(64 * 1024))
+{
+    ContentTrustManifestCanonicalPayload.WriteTo(signedManifest, canonicalStream, sortWorkspace);
+    // Pass the stream to the product signer, platform keystore, or CI signing tool.
+}
+```
+
 #### 内容修复与自愈
 
 内容修复保持 provider-neutral。`AssetRepairPlanner` 将内容可信校验失败转换成确定性的 `AssetRepairPlan`；`AssetRepairService` 执行该 plan：清理 unused cache，通过 `CreateDownloaderForLocations` 下载失败 location，并可选再次运行内容可信校验。该服务不知道 Addressables、YooAsset 或未来任何 provider SDK 类型。
+
+取消是结构化且由 provider 拥有的流程。如果 repair `CancellationToken`、`Cancel()` 或 `Dispose()` 在 repair downloader 活跃期间中断流程，`AssetRepairService` 会调用 `IDownloader.Cancel()`，并返回 `AssetRepairRunStatus.Cancelled` 的 `AssetRepairRunResult`；调用方不需要从异常路径推断取消。服务释放后会抑制后续事件发布，避免 owner teardown 与已释放的 `R3` 事件流发生竞态。
 
 ```csharp
 var repairService = new AssetRepairService(package);
@@ -548,7 +638,7 @@ if (!result.Succeeded)
 }
 ```
 
-支持的检查包括 manifest root containment、单文件路径穿越防护、文件大小、SHA-256、XxHash64，以及通过 `IContentTrustSignatureVerifier` 接入的可选签名策略。校验器使用 `CycloneGames.IO` 进行文件哈希与路径 containment，使用 `CycloneGames.Hash` 计算确定性 manifest fingerprint。它不写文件，也不持久化状态。
+支持的检查包括 manifest root containment、单文件路径穿越防护、文件大小、SHA-256、XxHash64，以及通过 `IContentTrustSignatureVerifier` 接入的可选签名策略。校验器使用 `CycloneGames.IO` 进行文件哈希与路径 containment，使用 `CycloneGames.Hash` 计算确定性 manifest fingerprint。`ContentTrustVerifier` 同时实现 `IContentTrustBufferVerifier`，因此 downloader 持有 pooled 或 sliced buffer 时可以直接校验 `ReadOnlySpan<byte>`，不需要复制到新的 byte array。成功的 hash 检查会直接比较 hash bytes 与 expected hex string，只有 mismatch 需要报告 actual hash 时才格式化字符串。它不写文件，也不持久化状态。
 
 ### 运行时缓存诊断
 
@@ -1194,9 +1284,26 @@ CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidat
 | --- | --- |
 | `RunAsync(autoDownload, downloadOptions)` | 旧的事件驱动 patch 流程。 |
 | `Download()` | 通过旧的 fire-and-forget 路径启动待处理下载。 |
-| `Cancel()` | 取消当前 provider downloader。 |
+| `Cancel()` | 取消当前 active 或 pending provider downloader，并将 transaction 标记为 cancelled。 |
+| `Dispose()` | 取消服务拥有的 provider downloader 状态，并释放 patch 事件流。 |
 | `RunAsync(PatchRunOptions)` | 带结果报告和可选内容可信校验的事务式 patch 流程。 |
 | `DownloadAsync()` | 完成一个待处理事务并返回 `PatchRunResult`。 |
+| `PatchFailureKind` | 对结构化 patch result 失败进行分类，例如 provider preflight 失败、provider 下载失败或显式取消。 |
+
+### AssetPatch Journal
+
+| 成员 | 说明 |
+| --- | --- |
+| `AssetPatchJournalOptions` | patch service 的可选 journal store 与写入失败策略配置。 |
+| `FileAssetPatchJournalStore` | 使用原子替换把最新 patch checkpoint 存为显式 JSON 文件。 |
+| `AssetPatchJournalCodec` | 将 `AssetPatchJournalRecord` 转换为 journal JSON schema，或从 JSON 读取。 |
+| `AssetPatchJournalRecovery.Analyze(record)` | 将最后一个 checkpoint 映射成确定性的恢复建议。 |
+| `AssetPatchRecoveryService` | 使用显式产品策略，从 journal 执行保守的启动期恢复。 |
+| `AssetPatchRecoveryPolicy` | 控制是否清理终态 journal、是否 rollback 失败 manifest，或是否清理中断下载 cache。 |
+| `IAssetPatchProviderReconciler` | 允许 provider 报告恢复能力和 provider-specific 的重启/续传建议，同时不泄漏 provider SDK 类型。 |
+| `AssetPatchProviderReconciliationCapabilities` | 声明 provider 是否支持指定版本 manifest update、scoped cache cleanup、provider-owned download cache 和隔离版本预下载。 |
+| `AssetPatchProviderReconciliationResult` | 在 `AssetPatchRecoveryResult` 中携带 provider reconciliation 状态、说明和 capability 数据。 |
+| `AssetPatchJournalPaths.GetDefaultJournalPath(packageName)` | 为 package 构建默认 persistent-data journal 路径。 |
 
 ### AssetPatchProfileAsset / AssetPatchRuntimeProfile
 
@@ -1214,17 +1321,22 @@ CI 或报告流程如果不允许修改项目资产，请调用 `AssetRefValidat
 | `ContentTrustManifestBuilder.AddFile(root, location, algorithm)` | 添加相对文件条目并计算内容 hash。 |
 | `ContentTrustManifestBuilder.Build()` | 生成排序后的 provider-neutral trust manifest。 |
 | `ContentTrustManifestCodec.ToJson(manifest)` | 将 manifest document 写为存储或传输用 JSON。 |
+| `ContentTrustManifestCodec.AppendJson(builder, manifest, sortWorkspace)` | 将 JSON 追加到 caller-owned buffer，用于大型 build、Editor 和 CI 工具。 |
 | `ContentTrustManifestCodec.FromJson(json)` | 从 JSON 读取 manifest document。 |
 | `ContentTrustManifestCodec.ToCanonicalPayloadBytes(manifest)` | 生成排除 signature 字段的确定性签名 bytes。 |
-| `ContentTrustManifestSignatureUtility.Sign(manifest, signer)` | 通过注入的产品/平台 signer 对 canonical bytes 签名。 |
+| `ContentTrustManifestCanonicalPayload.WriteTo(manifest, stream, sortWorkspace)` | 将确定性签名 bytes 写入 caller-owned stream。 |
+| `ContentTrustManifestSignatureUtility.Sign(manifest, signer)` | Convenience 路径，通过注入的产品/平台 signer 对已分配的 canonical bytes 签名。 |
+| `ContentTrustManifestSignatureUtility.SignCanonical(manifest, signer)` | 大型 manifest 路径，允许 `IContentTrustManifestCanonicalSigner` 自行管理 stream、pooled buffer 或平台 crypto handle。 |
 
 ### IAssetRepairService
 
 | 成员 | 说明 |
 | --- | --- |
+| `Cancel()` | 取消当前 active repair downloader，并将 repair 操作标记为 cancelled。 |
 | `RepairAsync(manifest, failures, options)` | 从内容可信校验失败构建 repair plan，并执行 location repair。 |
 | `RepairAsync(plan, options)` | 执行预先构建的 provider-neutral repair plan。 |
 | `RepairEvents` | 报告阶段变化、plan 创建、下载进度、完成和失败。 |
+| `Dispose()` | 取消服务拥有的 repair downloader 状态，并释放 repair 事件流。 |
 
 ### IAssetPackage
 

@@ -71,9 +71,9 @@ namespace CycloneGames.AssetManagement.Runtime
             builder.Append(",\"timestampUtcTicks\":");
             builder.Append(sample.TimestampUtcTicks);
             builder.Append(",\"packageName\":");
-            AppendJsonString(builder, snapshot.PackageName);
+            JsonBuilderUtility.AppendString(builder, snapshot.PackageName);
             builder.Append(",\"providerName\":");
-            AppendJsonString(builder, snapshot.ProviderName);
+            JsonBuilderUtility.AppendString(builder, snapshot.ProviderName);
             builder.Append(",\"activeCount\":");
             builder.Append(snapshot.ActiveCount);
             builder.Append(",\"idleCount\":");
@@ -90,54 +90,5 @@ namespace CycloneGames.AssetManagement.Runtime
             builder.AppendLine();
         }
 
-        private static void AppendJsonString(StringBuilder builder, string value)
-        {
-            builder.Append('"');
-            if (!string.IsNullOrEmpty(value))
-            {
-                for (int i = 0; i < value.Length; i++)
-                {
-                    char c = value[i];
-                    switch (c)
-                    {
-                        case '"':
-                            builder.Append("\\\"");
-                            break;
-                        case '\\':
-                            builder.Append("\\\\");
-                            break;
-                        case '\b':
-                            builder.Append("\\b");
-                            break;
-                        case '\f':
-                            builder.Append("\\f");
-                            break;
-                        case '\n':
-                            builder.Append("\\n");
-                            break;
-                        case '\r':
-                            builder.Append("\\r");
-                            break;
-                        case '\t':
-                            builder.Append("\\t");
-                            break;
-                        default:
-                            if (c < 32)
-                            {
-                                builder.Append("\\u");
-                                builder.Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
-                            }
-                            else
-                            {
-                                builder.Append(c);
-                            }
-
-                            break;
-                    }
-                }
-            }
-
-            builder.Append('"');
-        }
     }
 }

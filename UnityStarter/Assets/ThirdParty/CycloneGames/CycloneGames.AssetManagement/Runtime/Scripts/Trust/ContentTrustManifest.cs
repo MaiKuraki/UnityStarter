@@ -42,7 +42,6 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             hash = CombineString(hash, MinimumClientVersion);
             hash = CombineString(hash, RollbackVersion);
             hash = CombineString(hash, ContentRoot);
-            hash = CombineString(hash, Signature);
 
             int count = Entries?.Count ?? 0;
             hash = StableHash64.CombineUInt64LittleEndian(hash, (ulong)count);

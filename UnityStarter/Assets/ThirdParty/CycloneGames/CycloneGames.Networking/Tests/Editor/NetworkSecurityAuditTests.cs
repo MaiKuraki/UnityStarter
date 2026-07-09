@@ -59,6 +59,62 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
+        public void ProductionServerSecurityBaseline_Rejects_Disabled_Signer()
+        {
+            var rateLimiter = new RateLimiter(maxMessagesPerSecond: 120, maxBytesPerSecond: 65536, burstLimit: 8);
+            var sink = new RecordingNetworkAntiCheatSignalSink();
+
+            Assert.Throws<System.ArgumentException>(() =>
+                NetworkSecurityPresets.CreateProductionServerSecurityBaseline(
+                    NoopNetworkMessageSigner.Instance,
+                    sink,
+                    rateLimiter));
+        }
+
+        [Test]
+        public void ProductionServerSecurityBaseline_Rejects_Noop_AntiCheat_Sink()
+        {
+            using var signer = new HmacSha256NetworkMessageSigner(SampleKey);
+            var rateLimiter = new RateLimiter(maxMessagesPerSecond: 120, maxBytesPerSecond: 65536, burstLimit: 8);
+
+            Assert.Throws<System.ArgumentException>(() =>
+                NetworkSecurityPresets.CreateProductionServerSecurityBaseline(
+                    signer,
+                    NoopNetworkAntiCheatSignalSink.Instance,
+                    rateLimiter));
+        }
+
+        [Test]
+        public void ProductionServerSecurityBaseline_Requires_Signature_Encryption_Replay_And_RateLimit()
+        {
+            using var signer = new HmacSha256NetworkMessageSigner(SampleKey);
+            var rateLimiter = new RateLimiter(maxMessagesPerSecond: 120, maxBytesPerSecond: 65536, burstLimit: 8);
+            var sink = new RecordingNetworkAntiCheatSignalSink();
+
+            NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateProductionServerSecurityBaseline(
+                signer,
+                sink,
+                rateLimiter);
+
+            MessageSecurityPolicy policy = options.MessagePolicies.DefaultPolicy;
+            Assert.IsTrue(policy.RequireAuthenticatedConnection);
+            Assert.IsTrue(policy.RequireEncryptedTransport);
+            Assert.IsTrue(policy.EnableReplayProtection);
+            Assert.IsTrue(policy.RequireSignature);
+            Assert.IsTrue(options.EnableRateLimiting);
+            Assert.AreSame(rateLimiter, options.RateLimiter);
+            Assert.AreSame(signer, options.MessageSigner);
+            Assert.AreSame(sink, options.AntiCheatSignalSink);
+
+            var environment = new NetworkSecurityEnvironment(
+                transportEncrypted: true,
+                isReleaseBuild: true,
+                isServer: true);
+            NetworkSecurityAuditReport report = NetworkSecurityAudit.Evaluate(options, environment);
+            Assert.IsFalse(report.HasCritical, report.BuildSummary());
+        }
+
+        [Test]
         public void Audit_Reports_Required_Signature_Without_Signer_As_Critical()
         {
             var options = new NetworkSecurityPipelineOptions

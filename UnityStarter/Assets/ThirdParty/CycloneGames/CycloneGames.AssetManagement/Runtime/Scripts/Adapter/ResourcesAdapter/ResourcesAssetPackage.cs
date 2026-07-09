@@ -7,7 +7,7 @@ using UnityEngine.SceneManagement;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetRuntimeDiagnostics
+    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetRuntimeDiagnostics, IAssetPatchProviderReconciler
     {
         private readonly string packageName;
         private int nextId = 1;
@@ -15,15 +15,48 @@ namespace CycloneGames.AssetManagement.Runtime
         public string Name => packageName;
 
         private readonly Cache.AssetCacheService _cacheService;
+        private static readonly AssetPatchProviderReconciliationCapabilities ReconciliationCapabilities =
+            new AssetPatchProviderReconciliationCapabilities(
+                "Resources",
+                supportsVersionedManifestUpdate: false,
+                supportsExplicitCacheCleanup: false,
+                supportsUnusedCacheCleanup: false,
+                supportsTagScopedCacheCleanup: false,
+                supportsProviderManagedDownloadCache: false,
+                supportsIsolatedVersionPreDownload: false,
+                requiresMainThreadAccess: true);
 
         // Cached delegate to avoid per-call lambda allocation for non-cached handle types.
         private static readonly Action<string, IReferenceCounted> _instantiateReleaseCallback =
             (_, h) => ((ResourcesInstantiateHandle)h).DisposeInternal();
 
+        public AssetPatchProviderReconciliationCapabilities Capabilities => ReconciliationCapabilities;
+
         public ResourcesAssetPackage(string name)
         {
             packageName = name;
             _cacheService = new Cache.AssetCacheService(this);
+        }
+
+        public UniTask<AssetPatchProviderReconciliationResult> ReconcileAsync(
+            AssetPatchJournalRecord record,
+            AssetPatchRecoveryRecommendation recommendation,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!recommendation.RequiresProviderReconciliation)
+            {
+                return UniTask.FromResult(
+                    AssetPatchProviderReconciliationResult.NoActionRequired(
+                        ReconciliationCapabilities,
+                        "Resources has no provider-side patch state for this journal."));
+            }
+
+            return UniTask.FromResult(
+                AssetPatchProviderReconciliationResult.NotSupported(
+                    ReconciliationCapabilities,
+                    "Resources does not support remote manifests, download cache recovery, or interrupted patch reconciliation."));
         }
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
