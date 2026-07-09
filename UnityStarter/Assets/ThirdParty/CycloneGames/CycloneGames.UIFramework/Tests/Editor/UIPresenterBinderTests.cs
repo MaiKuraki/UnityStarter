@@ -33,7 +33,8 @@ namespace CycloneGames.UIFramework.Tests.Editor
         public void TearDown()
         {
             UIPresenterFactory.CustomFactory = null;
-            UIPresenterFactory.ClearCache();
+            UIPresenterFactory.ClearRegistrations();
+            UIPresenterBinder.ClearGlobalMappings();
 
             if (_windowObject != null)
             {
@@ -77,6 +78,72 @@ namespace CycloneGames.UIFramework.Tests.Editor
 
             Assert.AreEqual(1, RecordingPresenter.DisposeCount);
             Assert.AreEqual(string.Empty, RecordingPresenter.Lifecycle);
+        }
+
+        [Test]
+        public void ExplicitRegistration_CreatesPresenterWithoutCustomFactory()
+        {
+            UIPresenterFactory.CustomFactory = null;
+            UIPresenterFactory.Register(() => new RecordingPresenter());
+
+            var binder = new UIPresenterBinder();
+            binder.RegisterMapping<RecordingPresenter>("InventoryWindow");
+
+            binder.OnWindowCreated(_window);
+
+            Assert.AreEqual(1, RecordingPresenter.CreatedCount);
+            Assert.AreSame(_window, RecordingPresenter.LastView);
+        }
+
+        [Test]
+        public void DefaultBinder_ResolvesCreatorGeneratedRegistration()
+        {
+            UIPresenterFactory.CustomFactory = null;
+            CreatorGeneratedPresenter.RegisterGeneratedBinding();
+
+            var windowObject = new GameObject(nameof(CreatorGeneratedWindow));
+            var window = windowObject.AddComponent<CreatorGeneratedWindow>();
+            window.SetWindowName(nameof(CreatorGeneratedWindow));
+
+            try
+            {
+                var binder = new UIPresenterBinder();
+
+                binder.OnWindowCreated(window);
+
+                Assert.AreEqual(1, CreatorGeneratedPresenter.CreatedCount);
+                Assert.AreSame(window, CreatorGeneratedPresenter.LastView);
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(windowObject);
+                CreatorGeneratedPresenter.Reset();
+            }
+        }
+
+        [Test]
+        public void OnWindowCreated_WithoutPresenterMapping_LeavesClassicWindowUntouched()
+        {
+            UIPresenterFactory.CustomFactory = null;
+            var binder = new UIPresenterBinder();
+
+            binder.OnWindowCreated(_window);
+            binder.OnWindowStateChanged(_window, WindowStateCallbackType.OnStartOpen);
+            binder.OnWindowDestroying(_window);
+
+            Assert.AreEqual(0, RecordingPresenter.CreatedCount);
+            Assert.IsNull(RecordingPresenter.LastView);
+        }
+
+        [Test]
+        public void OnWindowCreated_WithMappingButNoFactoryRegistration_DoesNotCreatePresenter()
+        {
+            UIPresenterFactory.CustomFactory = null;
+
+            _binder.OnWindowCreated(_window);
+
+            Assert.AreEqual(0, RecordingPresenter.CreatedCount);
+            Assert.IsNull(RecordingPresenter.LastView);
         }
 
         private sealed class RecordingPresenter : IUIPresenter
@@ -142,6 +209,62 @@ namespace CycloneGames.UIFramework.Tests.Editor
             }
         }
 
+        private sealed class CreatorGeneratedWindow : UIWindow
+        {
+        }
+
+        private sealed class CreatorGeneratedPresenter : IUIPresenter
+        {
+            public static int CreatedCount;
+            public static UIWindow LastView;
+
+            public static void RegisterGeneratedBinding()
+            {
+                UIPresenterFactory.Register<CreatorGeneratedPresenter>();
+                UIPresenterBinder.RegisterGlobalMapping<CreatorGeneratedPresenter>(nameof(CreatorGeneratedWindow));
+            }
+
+            public CreatorGeneratedPresenter()
+            {
+                CreatedCount++;
+            }
+
+            public static void Reset()
+            {
+                CreatedCount = 0;
+                LastView = null;
+            }
+
+            public void SetView(UIWindow view)
+            {
+                LastView = view;
+            }
+
+            public void SetUIService(IUIService uiService)
+            {
+            }
+
+            public void OnViewOpening()
+            {
+            }
+
+            public void OnViewOpened()
+            {
+            }
+
+            public void OnViewClosing()
+            {
+            }
+
+            public void OnViewClosed()
+            {
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
         private sealed class TestUIService : IUIService
         {
             public IUINavigationService NavigationService { get; private set; }
@@ -159,6 +282,8 @@ namespace CycloneGames.UIFramework.Tests.Editor
             public void Initialize(IAssetPathBuilderFactory factory, IUnityObjectSpawner spawner, IMainCameraService cameraService, IAssetPackage package) { }
             public void SetNavigationService(IUINavigationService nav) => NavigationService = nav;
             public void SetTransitionCoordinator(IUITransitionCoordinator coordinator) => TransitionCoordinator = coordinator;
+            public void RegisterWindowBinder(IUIWindowBinder binder) { }
+            public void UnregisterWindowBinder(IUIWindowBinder binder) { }
             public void SetCoordinatedNavStrategy(CoordinatedNavStrategy strategy) { }
             public UniTask CoordinatedNavigateAsync(string fromWindow, string toWindow, NavigationDirection direction = NavigationDirection.Forward, System.Threading.CancellationToken ct = default) => UniTask.CompletedTask;
         }

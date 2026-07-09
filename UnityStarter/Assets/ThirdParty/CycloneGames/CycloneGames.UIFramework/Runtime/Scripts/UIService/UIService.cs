@@ -74,6 +74,16 @@ namespace CycloneGames.UIFramework.Runtime
         void SetTransitionCoordinator(IUITransitionCoordinator coordinator);
 
         /// <summary>
+        /// Registers a global window binder for optional integrations such as MVP, DI, localization, or analytics.
+        /// </summary>
+        void RegisterWindowBinder(IUIWindowBinder binder);
+
+        /// <summary>
+        /// Unregisters a previously registered global window binder.
+        /// </summary>
+        void UnregisterWindowBinder(IUIWindowBinder binder);
+
+        /// <summary>
         /// Sets the strategy for handling rapid sequential coordinated navigations.
         /// <see cref="CoordinatedNavStrategy.DirectJump"/>: skip intermediate pages.
         /// <see cref="CoordinatedNavStrategy.CardStack"/>: overlapping cascading transitions.
@@ -346,13 +356,37 @@ namespace CycloneGames.UIFramework.Runtime
         {
             _transitionCoordinator = coordinator;
             if (uiManagerInstance != null)
+            {
                 uiManagerInstance.SetTransitionCoordinator(coordinator);
+            }
+        }
+
+        public void RegisterWindowBinder(IUIWindowBinder binder)
+        {
+            if (!CheckInitialization())
+            {
+                return;
+            }
+
+            uiManagerInstance.RegisterWindowBinder(binder);
+        }
+
+        public void UnregisterWindowBinder(IUIWindowBinder binder)
+        {
+            if (!CheckInitialization())
+            {
+                return;
+            }
+
+            uiManagerInstance.UnregisterWindowBinder(binder);
         }
 
         public void SetCoordinatedNavStrategy(CoordinatedNavStrategy strategy)
         {
             if (uiManagerInstance != null)
+            {
                 uiManagerInstance.SetCoordinatedNavStrategy(strategy);
+            }
         }
 
         public async Cysharp.Threading.Tasks.UniTask CoordinatedNavigateAsync(
@@ -360,7 +394,11 @@ namespace CycloneGames.UIFramework.Runtime
             NavigationDirection direction = NavigationDirection.Forward,
             System.Threading.CancellationToken ct = default)
         {
-            if (!CheckInitialization()) return;
+            if (!CheckInitialization())
+            {
+                return;
+            }
+
             await uiManagerInstance.CoordinatedNavigateAsync(fromWindow, toWindow, direction, _transitionCoordinator, ct);
         }
     }

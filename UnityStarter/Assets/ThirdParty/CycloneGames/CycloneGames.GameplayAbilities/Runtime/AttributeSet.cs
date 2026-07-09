@@ -27,6 +27,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
         }
 
+        /// <summary>
+        /// Override this in generated or handwritten AttributeSet types to avoid runtime reflection discovery.
+        /// </summary>
+        protected virtual void RegisterAttributes()
+        {
+        }
+
+        protected void RegisterAttribute(GameplayAttribute attribute)
+        {
+            if (attribute == null)
+            {
+                return;
+            }
+
+            attribute.OwningSet = this;
+            discoveredAttributes[attribute.Name] = attribute;
+        }
+
         private void EnsureAttributesDiscovered()
         {
             if (attributesDiscovered)
@@ -40,6 +58,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void DiscoverAndInitAttributes()
         {
+            int explicitAttributeCount = discoveredAttributes.Count;
+            RegisterAttributes();
+            if (discoveredAttributes.Count != explicitAttributeCount)
+            {
+                return;
+            }
+
             Type setType = GetType();
             List<Func<AttributeSet, GameplayAttribute>> getters;
 
@@ -75,8 +100,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var attr = getters[i](this);
                 if (attr != null)
                 {
-                    attr.OwningSet = this;
-                    discoveredAttributes[attr.Name] = attr;
+                    RegisterAttribute(attr);
                 }
             }
         }
@@ -213,7 +237,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
         protected virtual void ApplyDefaultInstantEffectModification(GameplayEffectModCallbackData data)
         {
             var attribute = GetAttribute(data.Modifier.AttributeName);
-            if (attribute == null) return;
+            if (attribute == null)
+            {
+                return;
+            }
 
             var newBase = GetBaseFixedValue(attribute);
             var magnitude = data.EvaluatedMagnitudeFixed;
@@ -226,7 +253,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     newBase *= magnitude;
                     break;
                 case EAttributeModifierOperation.Division:
-                    if (magnitude.RawValue != 0) newBase /= magnitude;
+                    if (magnitude.RawValue != 0)
+                    {
+                        newBase /= magnitude;
+                    }
+
                     break;
                 case EAttributeModifierOperation.Override:
                     newBase = magnitude;

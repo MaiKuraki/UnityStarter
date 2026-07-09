@@ -1,4 +1,4 @@
-#if VCONTAINER_PRESENT
+#if CYCLONEGAMES_HAS_VCONTAINER
 using System;
 using VContainer;
 
@@ -48,7 +48,11 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
 
         public void OnWindowCreated(UIWindow window)
         {
-            if (window == null) return;
+            if (window == null)
+            {
+                return;
+            }
+
             _resolver.Inject(window);
         }
 
@@ -62,7 +66,11 @@ namespace CycloneGames.UIFramework.Runtime.Integrations
 
         public void Dispose()
         {
-            if (_disposed) return;
+            if (_disposed)
+            {
+                return;
+            }
+
             _disposed = true;
 
             UIServiceLocator.PopResolver();

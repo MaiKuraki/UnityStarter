@@ -33,6 +33,7 @@ namespace CycloneGames.Networking.Transports
         private const string InvalidPayloadSegmentError = "Invalid payload segment.";
         private const string PayloadTooLargeError = "Payload exceeds the channel packet size limit.";
         private const string ChannelNotReadyError = "Local loop channel is not ready. Ensure both server and client have started.";
+        private const string UnsupportedBuildError = "LocalLoopTransport is only available in the Unity Editor or Development builds.";
         private const string DefaultChannelName = "default";
 
         private LocalLoopChannel _channel;
@@ -54,7 +55,7 @@ namespace CycloneGames.Networking.Transports
         public bool IsClient => !_isServer && _isRunning;
         public bool IsRunning => _isRunning;
         public bool IsEncrypted => false;
-        public bool Available => true;
+        public bool Available => IsBuildSupported;
         public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport;
         public NetworkTransportCapabilities Capabilities { get; } = new NetworkTransportCapabilities(
             "LocalLoop",
@@ -126,6 +127,7 @@ namespace CycloneGames.Networking.Transports
         public void StartServer()
         {
             ThrowIfDisposed();
+            ThrowIfUnsupportedBuild();
             if (_isRunning) return;
 
             _channel = LocalLoopRegistry.GetOrCreateChannel(DefaultChannelName);
@@ -141,6 +143,7 @@ namespace CycloneGames.Networking.Transports
         public void StartClient(string address)
         {
             ThrowIfDisposed();
+            ThrowIfUnsupportedBuild();
             if (_isRunning) return;
 
             string channelName = string.IsNullOrEmpty(address) ? DefaultChannelName : address;
@@ -319,6 +322,26 @@ namespace CycloneGames.Networking.Transports
         {
             if (_disposed)
                 throw new ObjectDisposedException(nameof(LocalLoopTransport));
+        }
+
+        private static bool IsBuildSupported
+        {
+            get
+            {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                return true;
+#else
+                return false;
+#endif
+            }
+        }
+
+        private static void ThrowIfUnsupportedBuild()
+        {
+            if (!IsBuildSupported)
+            {
+                throw new InvalidOperationException(UnsupportedBuildError);
+            }
         }
 
         private void RaiseError(INetConnection connection, TransportError error, string message)

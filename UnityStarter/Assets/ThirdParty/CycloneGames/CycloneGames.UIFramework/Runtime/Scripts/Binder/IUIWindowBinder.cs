@@ -4,23 +4,18 @@ namespace CycloneGames.UIFramework.Runtime
     /// [OPTIONAL EXTENSION POINT]
     /// 
     /// Interface for custom window binding logic when windows are created/destroyed.
-    /// This is NOT currently integrated into UIManager - it exists as an extension point
-    /// for advanced scenarios where you need direct access to UIWindow instances.
+    /// UIManager invokes registered binders during window creation, destruction, and
+    /// lifecycle state transitions.
     /// 
-    /// TYPICAL USE CASES (if integrated):
-    /// - Injecting dependencies directly into UIWindow (not recommended - use Presenter instead)
+    /// TYPICAL USE CASES:
+    /// - Optional MVP presenter binding for selected windows
+    /// - Dependency injection into UIWindow components at the composition boundary
     /// - Global UI analytics/logging
     /// - Custom resource preloading
     /// - Event subscription management
     /// 
-    /// FOR MOST USERS:
-    /// Use UIWindow<TPresenter> with UIPresenterFactory.CustomFactory for DI integration.
-    /// This interface is only needed if you must inject into UIWindow itself.
-    /// 
-    /// TO INTEGRATE (if needed in future):
-    /// 1. Add IUIWindowBinder reference to UIManager
-    /// 2. Call OnWindowCreated() after instantiation in OpenUIAsync()
-    /// 3. Call OnWindowDestroying() before destruction in CloseUIAsync()
+    /// Classic UIWindow usage does not require a binder. Register binders only for
+    /// project-level integrations that should observe all windows.
     /// </summary>
     public enum WindowStateCallbackType
     {

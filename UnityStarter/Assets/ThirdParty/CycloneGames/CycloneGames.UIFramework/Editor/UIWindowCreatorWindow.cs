@@ -621,7 +621,7 @@ namespace CycloneGames.UIFramework.Editor
             {
                 DrawPreviewRow("View interface", "I" + GetSafeWindowName("UIWindow_New") + "View.cs");
                 DrawPreviewRow("Presenter", GetSafeWindowName("UIWindow_New") + "Presenter.cs");
-                DrawPreviewRow("Binding", "[UIPresenterBind(typeof(" + GetSafeWindowName("UIWindow_New") + "))]");
+                DrawPreviewRow("Binding", "Generated runtime registration");
             }
             else
             {
@@ -1647,14 +1647,21 @@ public interface {interfaceName}
             if (string.IsNullOrEmpty(namespaceName))
             {
                 scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
 
 /// <summary>
 /// Presenter for {className}.
 /// Handles business logic and communicates with the View through {viewInterface}.
 /// </summary>
-[UIPresenterBind(typeof({className}))]
 public class {presenterName} : UIPresenter<{viewInterface}>
 {{
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {{
+        UIPresenterFactory.Register<{presenterName}>();
+        UIPresenterBinder.RegisterGlobalMapping<{presenterName}>(nameof({className}));
+    }}
+
     protected override void OnViewBound()
     {{
         // Called when View is first bound (during UIWindow.Awake)
@@ -1695,6 +1702,7 @@ public class {presenterName} : UIPresenter<{viewInterface}>
             else
             {
                 scriptContent = $@"using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
 
 namespace {namespaceName}
 {{
@@ -1702,9 +1710,15 @@ namespace {namespaceName}
     /// Presenter for {className}.
     /// Handles business logic and communicates with the View through {viewInterface}.
     /// </summary>
-    [UIPresenterBind(typeof({className}))]
     public class {presenterName} : UIPresenter<{viewInterface}>
     {{
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+        private static void RegisterPresenter()
+        {{
+            UIPresenterFactory.Register<{presenterName}>();
+            UIPresenterBinder.RegisterGlobalMapping<{presenterName}>(nameof({className}));
+        }}
+
         protected override void OnViewBound()
         {{
             // Called when View is first bound (during UIWindow.Awake)
