@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.DataTable.Tests.Editor",
+    "rootNamespace": "CycloneGames.DataTable.Tests.Editor",
+    "references": [
+        "CycloneGames.DataTable.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

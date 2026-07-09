@@ -67,6 +67,29 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
+        public void Codec_RoundTrips_All_HashAlgorithm_Tokens()
+        {
+            foreach (ContentTrustHashAlgorithm algorithm in Enum.GetValues(typeof(ContentTrustHashAlgorithm)))
+            {
+                var manifest = new ContentTrustManifest(
+                    "2026.07.09",
+                    new[]
+                    {
+                        new ContentTrustFileEntry(
+                            "bundles/ui.bundle",
+                            42L,
+                            algorithm,
+                            "0123456789abcdef")
+                    });
+
+                string json = ContentTrustManifestCodec.ToJson(in manifest);
+                ContentTrustManifest parsed = ContentTrustManifestCodec.FromJson(json);
+
+                Assert.AreEqual(algorithm, parsed.Entries[0].HashAlgorithm);
+            }
+        }
+
+        [Test]
         public void Codec_Rejects_Entry_With_Missing_HashAlgorithm()
         {
             const string json =
@@ -77,6 +100,36 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             Assert.IsFalse(parsed);
             Assert.IsNull(manifest.Entries);
             StringAssert.Contains("Unsupported content trust hash algorithm", error);
+        }
+
+        [Test]
+        public void Codec_Rejects_Entry_With_Unsupported_HashAlgorithm()
+        {
+            const string json =
+                "{\"schemaVersion\":1,\"version\":\"2026.07.09\",\"entries\":[{\"location\":\"bundles/ui.bundle\",\"sizeBytes\":42,\"hashAlgorithm\":\"sha256\",\"expectedHashHex\":\"0123456789abcdef\"}]}";
+
+            bool parsed = ContentTrustManifestCodec.TryFromJson(json, out ContentTrustManifest manifest, out string error);
+
+            Assert.IsFalse(parsed);
+            Assert.IsNull(manifest.Entries);
+            StringAssert.Contains("Unsupported content trust hash algorithm", error);
+        }
+
+        [Test]
+        public void Codec_Rejects_Unsupported_HashAlgorithm_On_Write()
+        {
+            var manifest = new ContentTrustManifest(
+                "2026.07.09",
+                new[]
+                {
+                    new ContentTrustFileEntry(
+                        "bundles/ui.bundle",
+                        42L,
+                        (ContentTrustHashAlgorithm)byte.MaxValue,
+                        "0123456789abcdef")
+                });
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => ContentTrustManifestCodec.ToJson(in manifest));
         }
 
         [Test]

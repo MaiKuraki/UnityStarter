@@ -12,6 +12,14 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
     {
         public const int SCHEMA_VERSION = 1;
 
+        // Wire tokens are string literals by design; enum renames must not silently change persisted manifests.
+        private static readonly HashAlgorithmToken[] HashAlgorithmTokens =
+        {
+            new HashAlgorithmToken(ContentTrustHashAlgorithm.None, "None"),
+            new HashAlgorithmToken(ContentTrustHashAlgorithm.Sha256, "Sha256"),
+            new HashAlgorithmToken(ContentTrustHashAlgorithm.XxHash64, "XxHash64")
+        };
+
         public static string ToJson(in ContentTrustManifest manifest, bool includeSignature = true)
         {
             var builder = new StringBuilder(EstimateJsonCapacity(in manifest));
@@ -188,13 +196,17 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         private static bool TryParseHashAlgorithm(string value, out ContentTrustHashAlgorithm algorithm)
         {
-            if (string.IsNullOrEmpty(value))
+            for (int i = 0; i < HashAlgorithmTokens.Length; i++)
             {
-                algorithm = ContentTrustHashAlgorithm.None;
-                return false;
+                if (string.Equals(HashAlgorithmTokens[i].Name, value, StringComparison.Ordinal))
+                {
+                    algorithm = HashAlgorithmTokens[i].Value;
+                    return true;
+                }
             }
 
-            return Enum.TryParse(value, ignoreCase: false, out algorithm);
+            algorithm = default;
+            return false;
         }
 
         private static int CompareEntries(ContentTrustFileEntry x, ContentTrustFileEntry y)
@@ -217,16 +229,26 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         private static string GetHashAlgorithmName(ContentTrustHashAlgorithm value)
         {
-            switch (value)
+            for (int i = 0; i < HashAlgorithmTokens.Length; i++)
             {
-                case ContentTrustHashAlgorithm.None:
-                    return nameof(ContentTrustHashAlgorithm.None);
-                case ContentTrustHashAlgorithm.Sha256:
-                    return nameof(ContentTrustHashAlgorithm.Sha256);
-                case ContentTrustHashAlgorithm.XxHash64:
-                    return nameof(ContentTrustHashAlgorithm.XxHash64);
-                default:
-                    return value.ToString();
+                if (HashAlgorithmTokens[i].Value == value)
+                {
+                    return HashAlgorithmTokens[i].Name;
+                }
+            }
+
+            throw new ArgumentOutOfRangeException(nameof(value), "Unsupported content trust hash algorithm.");
+        }
+
+        private readonly struct HashAlgorithmToken
+        {
+            public readonly ContentTrustHashAlgorithm Value;
+            public readonly string Name;
+
+            public HashAlgorithmToken(ContentTrustHashAlgorithm value, string name)
+            {
+                Value = value;
+                Name = name;
             }
         }
 

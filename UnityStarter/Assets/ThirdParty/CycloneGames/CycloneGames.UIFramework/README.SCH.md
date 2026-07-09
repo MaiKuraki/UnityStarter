@@ -10,7 +10,7 @@
 
 | 特性             | 说明                                                                                                                                      |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| **MVP 自动绑定** | 用 `[UIPresenterBind("窗口名")]` 装饰 Presenter，绑定、生命周期转发和注入自动完成，零样板代码                                             |
+| **可选 MVP 绑定** | 从普通 `UIWindow` 起步，在复杂窗口上通过 UIWindowCreator 生成或手写显式注册接入 Presenter，无运行时程序集扫描                              |
 | **DI / IoC**     | 所有公共契约均为接口（`IUIService`、`IUINavigationService`、`IUITransitionCoordinator` 等），原生兼容 VContainer、Zenject 及任何 IoC 容器 |
 | **数据驱动配置** | 每个窗口和层级通过 `ScriptableObject` 配置，设计师无需碰代码即可完全控制                                                                  |
 | **服务门面模式** | `IUIService` 是唯一的公共 API，内部 `UIManager` 复杂性完全封装                                                                            |
@@ -86,7 +86,7 @@ flowchart TB
     end
 
     subgraph MVP["🔌 MVP 层"]
-        Binder["UIPresenterBinder<br/>[UIPresenterBind] 自动发现"]
+        Binder["UIPresenterBinder<br/>显式注册表"]
         Presenter["UIPresenter<TView><br/>• NavigateTo / NavigateToAsync<br/>• NavigateBack<br/>• NavigationService"]
     end
 
@@ -773,9 +773,15 @@ builder.Register<UINavigationService>(Lifetime.Singleton).AsImplementedInterface
 `UIPresenter<TView>` 基类内置了两个导航辅助方法：
 
 ```csharp
-[UIPresenterBind("UIWindow_Shop")]
 public class ShopPresenter : UIPresenter<IShopView>
 {
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<ShopPresenter>();
+        UIPresenterBinder.RegisterGlobalMapping<ShopPresenter>("UIWindow_Shop");
+    }
+
     public void OnClickItemDetail(int itemId)
     {
         // 打开详情窗口，并将商店窗口记为其 Opener
@@ -794,9 +800,15 @@ public class ShopPresenter : UIPresenter<IShopView>
 ### 第三步：在目标窗口中读取上下文
 
 ```csharp
-[UIPresenterBind("UIWindow_ItemDetail")]
 public class ItemDetailPresenter : UIPresenter<IItemDetailView>
 {
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<ItemDetailPresenter>();
+        UIPresenterBinder.RegisterGlobalMapping<ItemDetailPresenter>("UIWindow_ItemDetail");
+    }
+
     public override void OnViewOpened()
     {
         // 取出 Shop 传来的 context 数据
@@ -894,9 +906,15 @@ uiService.SetTransitionCoordinator(fadeCoordinator);
 ### 第二步：在 Presenter 中发起协调导航
 
 ```csharp
-[UIPresenterBind("UIWindow_Shop")]
 public class ShopPresenter : UIPresenter<IShopView>
 {
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<ShopPresenter>();
+        UIPresenterBinder.RegisterGlobalMapping<ShopPresenter>("UIWindow_Shop");
+    }
+
     // 同步动画：A 退出的同时 B 进入
     public async void OnClickDetail(int itemId)
     {
@@ -2108,18 +2126,18 @@ uiManager.CopyLayerRuntimeStats(layerStats);
 
 ---
 
-## 架构模式 (MVP 自动绑定)
+## 架构模式 (可选 MVP 绑定)
 
-CycloneGames.UIFramework 提供**可选的** MVP (Model-View-Presenter) 支持，具有自动 Presenter 生命周期管理。您可以使用传统方式（所有逻辑写在 UIWindow 中）或使用新的 MVP 模式自动绑定。
+CycloneGames.UIFramework 将 `UIWindow` 作为稳定入口。MVP 是可选能力：团队可以先从普通窗口起步，在窗口复杂后加入手动 Presenter，再对选中的窗口启用 UIWindowCreator 生成或手写的显式 Presenter 注册。
 
 ### 使用级别
 
-| 级别   | 模式                                                       | 使用场景        |
-| ------ | ---------------------------------------------------------- | --------------- |
-| **L0** | `class MyUI : UIWindow`                                    | 简单窗口、新手  |
-| **L1** | `class MyUI : UIWindow` + 手动 Presenter                   | 手动控制        |
-| **L2** | `class MyUI : UIWindow` + `[UIPresenterBind]`              | 自动绑定、无 DI |
-| **L3** | `class MyUI : UIWindow` + `[UIPresenterBind]` + VContainer | 完整 DI 集成    |
+| 级别   | 模式                                                                 | 使用场景          |
+| ------ | -------------------------------------------------------------------- | ----------------- |
+| **L0** | `class MyUI : UIWindow`                                              | 简单窗口、新人    |
+| **L1** | `class MyUI : UIWindow` + 手动 Presenter                             | 手动控制          |
+| **L2** | `class MyUI : UIWindow` + 生成或手写 Presenter 注册                  | 自动生命周期、无 DI |
+| **L3** | `class MyUI : UIWindow` + Presenter 注册 + VContainer                | 完整 DI 集成      |
 
 ---
 
@@ -2142,9 +2160,9 @@ public class UIWindowSimple : UIWindow
 
 ---
 
-### Level 2: 自动绑定（无需 DI 框架）
+### Level 2: 显式绑定（无需 DI 框架）
 
-使用 `[UIPresenterBind]` 来全自动且无耦合地创建和管理 Presenter。
+使用 UIWindowCreator 的 MVP 选项，或手动调用 `UIPresenterFactory.Register` 与 `UIPresenterBinder.RegisterGlobalMapping`。只有已注册的窗口会获得 Presenter，其他窗口仍然是普通 `UIWindow`。
 
 #### 步骤 1: 定义 View 接口
 
@@ -2177,18 +2195,34 @@ public class UIWindowInventory : UIWindow, IInventoryView
 
 ```csharp
 using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
 
-[UIPresenterBind("UIWindow_Inventory")]
-// 也可以使用强类型绑定：[UIPresenterBind(typeof(UIWindowInventory))]
 public class InventoryPresenter : UIPresenter<IInventoryView>
 {
-    // 从 UIServiceLocator 自动注入（无需 DI 框架）
-    [UIInject] private IInventoryService InventoryService { get; set; }
+    private IInventoryService _inventoryService;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<InventoryPresenter>(
+            presenter => presenter.SetInventoryService(UIServiceLocator.Get<IInventoryService>()));
+        UIPresenterBinder.RegisterGlobalMapping<InventoryPresenter>("UIWindow_Inventory");
+    }
+
+    private void SetInventoryService(IInventoryService inventoryService)
+    {
+        _inventoryService = inventoryService;
+    }
 
     public override void OnViewOpened()
     {
-        View.SetGold(InventoryService.Gold);
-        View.SetItemCount(InventoryService.ItemCount);
+        if (_inventoryService == null)
+        {
+            return;
+        }
+
+        View.SetGold(_inventoryService.Gold);
+        View.SetItemCount(_inventoryService.ItemCount);
     }
 
     public override void OnViewClosing()
@@ -2205,7 +2239,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 > [!NOTE]
 >
-> `[UIInject]` 是**完全可选的**。如果您的 Presenter 没有外部依赖，或者您使用的是完整的 DI 框架（Level 3，它会接管注入逻辑），则无需使用此属性。
+> Presenter 创建是显式设计。使用 factory delegate、injector delegate 或 DI 容器；当 Presenter 没有注册时，框架不会使用反射 fallback。
 
 #### 步骤 4: 注册服务（无 DI 框架）
 
@@ -2216,7 +2250,7 @@ public class GameBootstrap : MonoBehaviour
 {
     void Awake()
     {
-        // 注册服务使 [UIInject] 生效
+        // 注册服务，供显式 Presenter injector 解析
         UIServiceLocator.Register<IInventoryService>(new InventoryService());
         UIServiceLocator.Register<IAudioService>(new AudioService());
     }
@@ -2249,8 +2283,8 @@ Presenter 生命周期完全自动，与 UIWindow 1:1 映射：
 
 > [!NOTE]
 >
-> `VCONTAINER_PRESENT` 定义符号已在 `CycloneGames.UIFramework.Runtime.asmdef` 的 `versionDefines` 中配置。
-> 当 Unity 检测到 VContainer 包时，会自动添加此符号，**无需手动配置 Project Settings**。
+> `CYCLONEGAMES_HAS_VCONTAINER` capability symbol 由 `CycloneGames.UIFramework.Runtime.Integrations.VContainer.asmdef` 通过 `versionDefines` 配置。
+> Unity 检测到 VContainer 包后会启用并自动引用该 integration assembly，**无需手动配置 Project Settings，也无需修改核心 asmdef**。
 
 #### 步骤 1: 理解架构
 
@@ -2264,13 +2298,15 @@ VContainer
 │   ├── 依赖: IMainCameraService (可选)
 │   └── 依赖: IAssetPackage (可选)
 │
+├── UIPresenterBinder ← 将已注册窗口映射到 Presenter
+│
 ├── VContainerWindowBinder ← 适配器，连接 VContainer 与 Presenter 工厂
 │
 ├── UISystemInitializer ← 初始化绑定器
 │
-└── Presenter 类型（可选注册）
+└── Presenter 类型（可选 VContainer 注册）
     ├── 已注册 → 使用 VContainer 构造函数注入
-    └── 未注册 → 自动回退到 Activator + [UIInject]
+    └── 未注册 → 使用显式 UIPresenterFactory 注册
 ```
 
 #### 步骤 2: 完整配置示例
@@ -2321,6 +2357,7 @@ public class GameLifetimeScope : LifetimeScope
         // ========================================
         // 3. UIFramework Presenter 支持
         // ========================================
+        builder.Register<UIPresenterBinder>(Lifetime.Singleton);
         builder.Register<VContainerWindowBinder>(Lifetime.Singleton);
         builder.RegisterEntryPoint<UISystemInitializer>();
 
@@ -2333,8 +2370,8 @@ public class GameLifetimeScope : LifetimeScope
         // ========================================
         // 5. Presenter 注册 - 可选！
         // ========================================
-        // 如果不注册，UIPresenterFactory 会自动回退到 Activator 创建
-        // 热更新程序集中的 Presenter 使用 [UIInject] 属性注入
+        // 如果不在 VContainer 中注册，UIWindowCreator 生成或手写的
+        // UIPresenterFactory 注册仍然可以在不使用 DI 的情况下创建 Presenter
 
         // 如果需要构造函数注入，显式注册：
         // builder.Register<InventoryPresenter>(Lifetime.Transient);
@@ -2344,22 +2381,8 @@ public class GameLifetimeScope : LifetimeScope
 
 > [!NOTE]
 >
-> **关于 `[UIInject]` 与 VContainer 的集成**
->
 > `VContainerWindowBinder` 创建时会自动将 VContainer 的解析器注册到 `UIServiceLocator`。
-> 这意味着 `[UIInject]` 可以**自动注入 VContainer 中注册的服务**：
->
-> ```csharp
-> // 在 VContainer 中注册
-> builder.Register<IAudioService, AudioService>(Lifetime.Singleton);
->
-> // 在 Presenter 中使用 [UIInject]（无需在 VContainer 注册 Presenter）
-> public class HotUpdatePresenter : UIPresenter<IView>
-> {
->     [UIInject] private IAudioService AudioService { get; set; } // ✅ 自动从 VContainer 解析
-> }
-> ```
->
+> 显式 Presenter injector delegate 可以通过 `UIServiceLocator.Get<T>()` 解析服务，而无需在核心 UI 代码中暴露 VContainer 类型。
 > 场景作用域服务也受支持：每个 `VContainerWindowBinder` 维护独立的解析器栈，销毁时自动清理。
 
 #### 步骤 3: 创建 UI 系统初始化器
@@ -2367,20 +2390,31 @@ public class GameLifetimeScope : LifetimeScope
 ```csharp
 using VContainer;
 using VContainer.Unity;
+using CycloneGames.UIFramework.Runtime;
 using CycloneGames.UIFramework.Runtime.Integrations;
 
 public class UISystemInitializer : IStartable
 {
-    private readonly VContainerWindowBinder _binder;
+    private readonly IUIService _uiService;
+    private readonly UIPresenterBinder _presenterBinder;
+    private readonly VContainerWindowBinder _vContainerBinder;
 
     [Inject]
-    public UISystemInitializer(IObjectResolver resolver)
+    public UISystemInitializer(
+        IUIService uiService,
+        UIPresenterBinder presenterBinder,
+        VContainerWindowBinder vContainerBinder)
     {
-        _binder = new VContainerWindowBinder(resolver);
+        _uiService = uiService;
+        _presenterBinder = presenterBinder;
+        _vContainerBinder = vContainerBinder;
+        _presenterBinder.SetUIService(uiService);
     }
 
     public void Start()
     {
+        _uiService.RegisterWindowBinder(_presenterBinder);
+        _uiService.RegisterWindowBinder(_vContainerBinder);
         CycloneGames.Logger.CLogger.Log("[UISystemInitializer] VContainer integration initialized");
     }
 }
@@ -2388,26 +2422,50 @@ public class UISystemInitializer : IStartable
 
 #### 步骤 4: Presenter 编写方式
 
-**方式 A: 使用 `[UIInject]`（无需注册，热更新友好）**
+**方式 A: 生成或显式注册（推荐默认方式）**
 
 ```csharp
 using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
 
-// 无需在 VContainer 中注册，自动回退到 Activator 创建
 public class InventoryPresenter : UIPresenter<IInventoryView>
 {
-    [UIInject] private IInventoryService InventoryService { get; set; }
-    [UIInject] private IAudioService AudioService { get; set; }
+    private IInventoryService _inventoryService;
+    private IAudioService _audioService;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<InventoryPresenter>(
+            presenter =>
+            {
+                presenter.SetServices(
+                    UIServiceLocator.Get<IInventoryService>(),
+                    UIServiceLocator.Get<IAudioService>());
+            });
+        UIPresenterBinder.RegisterGlobalMapping<InventoryPresenter>("UIWindow_Inventory");
+    }
+
+    private void SetServices(IInventoryService inventoryService, IAudioService audioService)
+    {
+        _inventoryService = inventoryService;
+        _audioService = audioService;
+    }
 
     public override void OnViewOpened()
     {
-        View.SetGold(InventoryService.Gold);
-        AudioService.PlaySFX("ui_open");
+        if (_inventoryService == null || _audioService == null)
+        {
+            return;
+        }
+
+        View.SetGold(_inventoryService.Gold);
+        _audioService.PlaySFX("ui_open");
     }
 }
 ```
 
-**方式 B: 使用构造函数注入（需要在 VContainer 注册）**
+**方式 B: 构造函数注入（需要在 VContainer 注册）**
 
 ```csharp
 using VContainer;
@@ -2433,7 +2491,7 @@ public class InventoryPresenter : UIPresenter<IInventoryView>
 
 #### 步骤 5: 场景作用域服务（可选）
 
-如果场景有专属服务需要在 UI 中使用，只需注册 `UIServiceLocatorBridge`：
+如果显式 Presenter injector 需要使用场景专属服务，请在该场景作用域中注册 `UIServiceLocatorBridge`：
 
 ```csharp
 using VContainer;
@@ -2458,25 +2516,49 @@ public class BattleSceneLifetimeScope : LifetimeScope
 >
 > **何时需要注册 `UIServiceLocatorBridge`？**
 >
-> | 场景                                | 是否需要                                     |
-> | ----------------------------------- | -------------------------------------------- |
-> | 只使用 Root 全局服务                | ❌ 不需要（`VContainerWindowBinder` 已处理） |
-> | 有场景专属服务需要 `[UIInject]`     | ✅ 需要在该场景的 LifetimeScope 注册         |
-> | 使用构造函数注入（非 `[UIInject]`） | ❌ 不需要（VContainer 自动处理父子作用域）   |
+> | 场景                                  | 是否需要                                     |
+> | ------------------------------------- | -------------------------------------------- |
+> | 只使用 Root 全局服务                  | ❌ 不需要（`VContainerWindowBinder` 已处理） |
+> | 显式 injector 需要场景专属服务        | ✅ 需要在该场景的 LifetimeScope 注册         |
+> | 通过 VContainer 使用构造函数注入      | ❌ 不需要（VContainer 自动处理父子作用域）   |
 >
-> **如果忘记注册**：`[UIInject]` 注入场景服务时会返回 `null`，但不会抛出异常。
+> **如果忘记注册**：`UIServiceLocator.Get<T>()` 对场景专属服务会返回 `null`。
 
-现在场景 UI 可以通过 `[UIInject]` 访问场景服务：
+场景 UI 可以通过显式 injector delegate 访问场景服务：
 
 ```csharp
+using CycloneGames.UIFramework.Runtime;
+using UnityEngine;
+
 public class BattleHUDPresenter : UIPresenter<IBattleHUDView>
 {
-    [UIInject] private IBattleService BattleService { get; set; }  // 场景服务 ✅
-    [UIInject] private IAudioService AudioService { get; set; }    // 全局服务 ✅
+    private IBattleService _battleService;
+    private IAudioService _audioService;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void RegisterPresenter()
+    {
+        UIPresenterFactory.Register<BattleHUDPresenter>(
+            presenter => presenter.SetServices(
+                UIServiceLocator.Get<IBattleService>(),
+                UIServiceLocator.Get<IAudioService>()));
+        UIPresenterBinder.RegisterGlobalMapping<BattleHUDPresenter>("UIWindow_BattleHUD");
+    }
+
+    private void SetServices(IBattleService battleService, IAudioService audioService)
+    {
+        _battleService = battleService;
+        _audioService = audioService;
+    }
 
     public override void OnViewOpened()
     {
-        View.SetEnemyCount(BattleService.EnemyCount);
+        if (_battleService == null)
+        {
+            return;
+        }
+
+        View.SetEnemyCount(_battleService.EnemyCount);
     }
 }
 ```
@@ -2489,10 +2571,10 @@ public class BattleHUDPresenter : UIPresenter<IBattleHUDView>
 > 全局 Root Scope 启动 → VContainerWindowBinder Push(rootResolver)
 > 进入战斗场景 → UIServiceLocatorBridge Push(battleResolver)
 >
-> [UIInject] 解析 IBattleService:
+> 显式 injector 解析 IBattleService:
 >   1. 查 battleResolver → 找到！
 >
-> [UIInject] 解析 IAudioService:
+> 显式 injector 解析 IAudioService:
 >   1. 查 battleResolver → 未找到
 >   2. 查 rootResolver → 找到！
 >
@@ -2538,30 +2620,31 @@ public class GameController
 >     │  - 调用 uiService.Initialize(...)
 >     ▼
 > UISystemInitializer.Start() 被调用
->     │  - 创建 VContainerWindowBinder
+>     │  - 创建 UIPresenterBinder 与 VContainerWindowBinder
+>     │  - 通过 IUIService 注册两个 binder
 >     │  - 设置 UIPresenterFactory.CustomFactory
 >     ▼
 > 运行时：uiService.OpenUIAsync("UIWindow_Inventory")
 >     │  - UIManager 加载预制体
 >     │  - 实例化 UIWindow
 >     │  - UIManager 触发 OnWindowCreated
->     │  - VContainerWindowBinder 匹配 [UIPresenterBind("UIWindow_Inventory")]
+>     │  - UIPresenterBinder 解析 "UIWindow_Inventory" 的显式映射
 >     │  - UIPresenterFactory.Create() 创建 InventoryPresenter
 >     ├─ VContainer 已注册 → 构造函数注入
->     └─ VContainer 未注册 → Activator + [UIInject] 注入
+>     └─ VContainer 未注册 → 生成或手写注册 fallback
 > ```
 
 ---
 
 ### 设计理念：彻底解耦的 Binder 架构
 
-您可能会问：_“为什么框架选择了 `[UIPresenterBind]` 而不是传统的 Presenter 创建 View 流程？”_
+您可能会问：_“为什么框架选择显式 Presenter 注册，而不是传统的 Presenter 创建 View 流程？”_
 
 我们针对 Unity 引擎特性专门选择了 **Binder 驱动**模式：
 
 1.  **符合 Unity 原生工作流**: 在 Unity 中，UI 始于 Prefab。`UIWindow` 组件是天然的界面入口，完全符合日常开发中拖拽预制体的直觉。
 2.  **生命周期安全**: Presenter 的创建与销毁完全被底层的 Binder 同步管理（`OnWindowCreated` 到 `OnWindowDestroying`）。永远不会出现“View 销毁了但 Presenter 还在跑”的僵尸状态，避免了空引用与内存泄漏。
-3.  **兼容依赖注入**: 虽然是窗口生命周期触发了装配，但通过 `UIPresenterBinder` 作为中介隔离，真正的对象组装和依赖注入依然可以由 DI 框架（如 VContainer）接管。这实现了 **Unity 驱动生命周期 + DI 驱动业务逻辑** 的完美平衡。
+3.  **兼容依赖注入**: 虽然是窗口生命周期触发了装配，但 `UIPresenterBinder` 与 `UIPresenterFactory` 会作为中介层，允许 DI 框架（如 VContainer）接管对象创建与注入，同时普通窗口仍然完全有效。
 
 ---
 
@@ -2591,17 +2674,19 @@ public class GameController
 
 #### `UIPresenterFactory`
 
-| 属性/方法       | 描述                |
-| --------------- | ------------------- |
-| `CustomFactory` | 设置以集成 DI 框架  |
-| `Create<T>()`   | 创建 Presenter 实例 |
-| `ClearCache()`  | 清除反射缓存        |
+| 属性/方法                 | 描述                                  |
+| ------------------------- | ------------------------------------- |
+| `CustomFactory`           | 设置以集成 DI 框架                    |
+| `Register<TPresenter>()`  | 注册显式 Presenter factory            |
+| `Unregister(Type)`        | 移除显式 Presenter 注册               |
+| `ClearRegistrations()`    | 清除显式 Presenter 注册               |
+| `Create<T>()`             | 从 DI 或显式注册表创建 Presenter 实例 |
 
 ---
 
 ### 性能说明
 
-- **预热后零 GC**：反射结果被缓存
+- **无运行时 Presenter 反射**：Presenter 创建使用 DI delegate 或显式 factory
 - **线程安全**：UIServiceLocator 使用锁保证并发访问
 - **内存安全**：Presenter 随窗口一起销毁
 - **无强制 DI**：无需任何 DI 框架即可工作
@@ -2709,7 +2794,7 @@ public class UIInstaller : LifetimeScope
 
 ```csharp
 var binder = new LocalizationWindowBinder(localizationService);
-uiManager.RegisterWindowBinder(binder);
+uiService.RegisterWindowBinder(binder);
 ```
 
 注册后，每个打开的 `UIWindow` 都会自动将语言变更传播到其层级结构中的所有 `ILocaleResponder` 组件。

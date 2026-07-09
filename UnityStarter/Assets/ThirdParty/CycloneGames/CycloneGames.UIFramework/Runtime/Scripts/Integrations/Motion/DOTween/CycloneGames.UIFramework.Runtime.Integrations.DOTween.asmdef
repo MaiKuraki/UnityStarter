@@ -1,0 +1,27 @@
+{
+    "name": "CycloneGames.UIFramework.Runtime.Integrations.DOTween",
+    "rootNamespace": "CycloneGames.UIFramework.Runtime",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "DOTween.Modules",
+        "UniTask",
+        "UniTask.DOTween"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_DOTWEEN"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.demigiant.dotween",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_DOTWEEN"
+        }
+    ],
+    "noEngineReferences": false
+}
