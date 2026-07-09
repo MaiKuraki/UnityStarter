@@ -171,7 +171,7 @@ namespace CycloneGames.AssetManagement.Runtime
             // Use Unity Addressables' PlatformMappingService to get the correct platform path
             // This ensures consistency between build-time and runtime paths
             // For example: StandaloneWindows64 -> "Windows", StandaloneOSX -> "OSX"
-#if CYCLONEGAMES_HAS_ADDRESSABLES
+#if UNITY_EDITOR && CYCLONEGAMES_HAS_ADDRESSABLES
             try
             {
                 // Use reflection to call PlatformMappingService.GetPlatformPathSubFolder()

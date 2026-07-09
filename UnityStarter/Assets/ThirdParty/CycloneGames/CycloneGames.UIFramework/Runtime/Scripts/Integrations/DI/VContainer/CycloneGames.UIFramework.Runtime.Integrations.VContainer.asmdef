@@ -1,0 +1,25 @@
+{
+    "name": "CycloneGames.UIFramework.Runtime.Integrations.VContainer",
+    "rootNamespace": "CycloneGames.UIFramework.Runtime.Integrations",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "VContainer"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_VCONTAINER"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_VCONTAINER"
+        }
+    ],
+    "noEngineReferences": false
+}

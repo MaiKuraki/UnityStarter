@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.UIFramework.Runtime.Integrations.PrimeTween",
+    "rootNamespace": "CycloneGames.UIFramework.Runtime",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "PrimeTween.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_PRIMETWEEN"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.kyrylokuzyk.primetween",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_PRIMETWEEN"
+        }
+    ],
+    "noEngineReferences": false
+}

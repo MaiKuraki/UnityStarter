@@ -1,4 +1,4 @@
-#if DO_TWEEN_PRESENT
+#if CYCLONEGAMES_HAS_DOTWEEN
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
