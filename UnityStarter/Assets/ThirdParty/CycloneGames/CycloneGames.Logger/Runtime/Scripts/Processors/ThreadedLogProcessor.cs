@@ -1,177 +1,131 @@
 using System;
-using System.Collections.Concurrent;
 using System.Threading;
 
 namespace CycloneGames.Logger
 {
-    /// <summary>
-    /// Background-thread processing strategy using BlockingCollection.
-    /// Uses dedicated Thread (instead of Task) for better IL2CPP compatibility.
-    /// </summary>
-    internal sealed class ThreadedLogProcessor : ILogProcessor, ILogProcessorDiagnostics
+    internal sealed class ThreadedLogProcessor : ILogProcessor
     {
         private readonly CLogger _owner;
-        private readonly LoggerProcessingOptions _options;
-        private readonly BlockingCollection<LogMessage> _queue;
+        private readonly BoundedLogQueue _queue;
         private readonly Thread _workerThread;
-        private volatile bool _isDisposed;
-        private volatile bool _isStopped;
-        private long _droppedMessageCount;
-        private long _processedMessageCount;
+        private readonly int _maintenanceIntervalMs;
+        private int _shutdownState;
 
-        public bool IsStopped => _isStopped;
+        public bool IsStopped => Volatile.Read(ref _shutdownState) == 2 && _queue.IsStopped && !_workerThread.IsAlive;
 
-        public ThreadedLogProcessor(CLogger owner, LoggerProcessingOptions options = null)
+        internal ThreadedLogProcessor(CLogger owner, LoggerProcessingOptions options = null)
         {
             _owner = owner ?? throw new ArgumentNullException(nameof(owner));
-            _options = LoggerProcessingOptions.CreateValidated(options);
-            _queue = new BlockingCollection<LogMessage>(new ConcurrentQueue<LogMessage>(), _options.MaxQueuedMessages);
+            LoggerProcessingOptions validatedOptions = LoggerProcessingOptions.CreateValidated(options);
+            _maintenanceIntervalMs = validatedOptions.MaintenanceIntervalMs;
+            _queue = new BoundedLogQueue(validatedOptions);
             _workerThread = new Thread(ProcessLoop)
             {
                 Name = "CLogger.Worker",
-                IsBackground = true,
-                Priority = ThreadPriority.BelowNormal
+                IsBackground = true
             };
             _workerThread.Start();
         }
 
-        public void Enqueue(LogMessage message)
+        public bool TryReserve(LogLevel level, int estimatedCharacters, bool allowEviction, out int reservedCharacters)
         {
-            if (message == null) return;
-
-            if (_isDisposed || _queue.IsAddingCompleted)
-            {
-                LogMessagePool.Return(message);
-                return;
-            }
-
-            try
-            {
-                if (TryEnqueue(message)) return;
-
-                DropMessage(message);
-            }
-            catch (InvalidOperationException)
-            {
-                LogMessagePool.Return(message);
-            }
+            return _queue.TryReserve(level, estimatedCharacters, allowEviction, out reservedCharacters);
         }
 
-        public void Pump(int maxItems) { /* background thread handles it */ }
+        public bool TryCommit(LogMessage message, int reservedCharacters, int actualCharacters)
+        {
+            return _queue.TryCommit(message, reservedCharacters, actualCharacters);
+        }
+
+        public void CancelReservation(int reservedCharacters)
+        {
+            _queue.CancelReservation(reservedCharacters);
+        }
+
+        public void Pump(int maxItems, int budgetMilliseconds)
+        {
+        }
+
+        public bool TryFlush(int timeoutMs)
+        {
+            return _queue.WaitUntilIdle(timeoutMs);
+        }
+
+        public LoggerShutdownResult Shutdown(int timeoutMs)
+        {
+            int previous = Interlocked.CompareExchange(ref _shutdownState, 1, 0);
+            if (previous == 2 && !_workerThread.IsAlive)
+            {
+                return new LoggerShutdownResult(LoggerShutdownStatus.AlreadyStopped, GetStatistics().DroppedMessageCount, true);
+            }
+
+            _queue.CompleteAdding();
+            bool stopped = _workerThread.Join(timeoutMs);
+            if (!stopped)
+            {
+                LogProcessingStatistics timedOutStatistics = GetStatistics();
+                return new LoggerShutdownResult(LoggerShutdownStatus.TimedOut, timedOutStatistics.DroppedMessageCount, false);
+            }
+
+            Volatile.Write(ref _shutdownState, 2);
+            LogProcessingStatistics statistics = GetStatistics();
+            LoggerShutdownStatus status = statistics.DroppedMessageCount == 0
+                ? LoggerShutdownStatus.Completed
+                : LoggerShutdownStatus.CompletedWithDrops;
+            return new LoggerShutdownResult(status, statistics.DroppedMessageCount, false);
+        }
 
         public LogProcessingStatistics GetStatistics()
         {
-            return new LogProcessingStatistics(_queue.Count, Interlocked.Read(ref _droppedMessageCount), Interlocked.Read(ref _processedMessageCount));
+            return _queue.GetStatistics();
         }
 
-        private bool TryEnqueue(LogMessage message)
+        public void Dispose()
         {
-            if (_queue.TryAdd(message)) return true;
-
-            if (message.Level >= _options.GuaranteedLevel && TryDropOldest())
+            LoggerShutdownResult result = Shutdown(LoggerProcessingOptions.DefaultShutdownDrainTimeoutMs);
+            if (result.IsComplete)
             {
-                return _queue.TryAdd(message);
+                _queue.Dispose();
             }
-
-            switch (_options.OverflowPolicy)
-            {
-                case LogQueueOverflowPolicy.Block:
-                    if (_queue.TryAdd(message, _options.EnqueueBlockTimeoutMs)) return true;
-                    if (message.Level >= _options.GuaranteedLevel && TryDropOldest())
-                    {
-                        return _queue.TryAdd(message);
-                    }
-                    return false;
-
-                case LogQueueOverflowPolicy.DropOldest:
-                    if (!TryDropOldest()) return false;
-                    return _queue.TryAdd(message);
-
-                default:
-                    return false;
-            }
-        }
-
-        private bool TryDropOldest()
-        {
-            try
-            {
-                if (!_queue.TryTake(out var dropped)) return false;
-
-                LogMessagePool.Return(dropped);
-                Interlocked.Increment(ref _droppedMessageCount);
-                return true;
-            }
-            catch (InvalidOperationException)
-            {
-                return false;
-            }
-        }
-
-        private void DropMessage(LogMessage message)
-        {
-            LogMessagePool.Return(message);
-            Interlocked.Increment(ref _droppedMessageCount);
         }
 
         private void ProcessLoop()
         {
             try
             {
-                // GetConsumingEnumerable blocks when empty, completes when CompleteAdding() is called and queue is drained.
-                foreach (var msg in _queue.GetConsumingEnumerable())
+                while (true)
                 {
-                    try
+                    if (_queue.WaitDequeue(_maintenanceIntervalMs, out LogMessage message, out int characters, out bool addingCompleted))
                     {
-                        _owner.DispatchToLoggers(msg);
-                        Interlocked.Increment(ref _processedMessageCount);
+                        try
+                        {
+                            _owner.DispatchToLoggers(message);
+                        }
+                        finally
+                        {
+                            LogMessagePool.Return(message);
+                            _queue.CompleteProcessing(characters);
+                        }
+
+                        continue;
                     }
-                    finally
+
+                    _owner.PerformSinkMaintenance();
+                    if (addingCompleted && _queue.WaitUntilIdle(_maintenanceIntervalMs))
                     {
-                        LogMessagePool.Return(msg);
+                        break;
                     }
                 }
             }
-            catch (OperationCanceledException) { }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                Console.Error.WriteLine($"[CRITICAL] ThreadedLogProcessor: {ex}");
+                EmergencyLogger.TryWrite("ThreadedLogProcessor stopped after an unexpected failure.", exception);
+                _queue.CompleteAdding();
+                _queue.DrainPendingAsDropped();
             }
             finally
             {
-                _isStopped = true;
-            }
-        }
-
-        public void Dispose()
-        {
-            if (_isDisposed) return;
-            _isDisposed = true;
-
-            // Signal no more items; worker will drain remaining messages then exit naturally.
-            _queue.CompleteAdding();
-
-            if (!_workerThread.Join(TimeSpan.FromMilliseconds(_options.ShutdownDrainTimeoutMs)))
-            {
-                Console.Error.WriteLine("[WARNING] ThreadedLogProcessor: Worker thread did not exit gracefully.");
-                DrainPendingMessagesAsDropped();
-                return;
-            }
-
-            _queue.Dispose();
-        }
-
-        private void DrainPendingMessagesAsDropped()
-        {
-            try
-            {
-                while (_queue.TryTake(out var message))
-                {
-                    DropMessage(message);
-                }
-            }
-            catch (InvalidOperationException)
-            {
+                Volatile.Write(ref _shutdownState, 2);
             }
         }
     }

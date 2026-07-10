@@ -26,7 +26,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void That(bool condition, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -34,7 +33,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void That(bool condition, Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -42,7 +40,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void That<T>(bool condition, T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -50,7 +47,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void IsTrue(bool condition, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -58,7 +54,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void IsFalse(bool condition, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (!condition) return;
@@ -66,7 +61,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void IsNull(object value, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (value == null) return;
@@ -74,7 +68,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void IsNotNull(object value, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (value != null) return;
@@ -82,7 +75,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void AreEqual<T>(T expected, T actual, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (EqualityComparer<T>.Default.Equals(expected, actual)) return;
@@ -90,7 +82,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void AreNotEqual<T>(T notExpected, T actual, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (!EqualityComparer<T>.Default.Equals(notExpected, actual)) return;
@@ -98,27 +89,23 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void Fail(string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             HandleFailure(message ?? DefaultFailureMessage, category, filePath, lineNumber, memberName);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void Fail(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             HandleFailure(messageBuilder, category, filePath, lineNumber, memberName);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public void Fail<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             HandleFailure(state, messageBuilder, category, filePath, lineNumber, memberName);
         }
 
-        [UnityEngine.HideInCallstack]
         private void HandleFailure(string message, string category, string filePath, int lineNumber, string memberName)
         {
             var options = _options;
@@ -133,11 +120,11 @@ namespace CycloneGames.Logger
 
             if (options.ShouldThrow)
             {
+                FlushBeforeThrow(options);
                 throw new CLogAssertionException(resolvedMessage, resolvedCategory, filePath, lineNumber, memberName);
             }
         }
 
-        [UnityEngine.HideInCallstack]
         private void HandleFailure(Action<StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
             if (messageBuilder == null)
@@ -158,6 +145,7 @@ namespace CycloneGames.Logger
                     _logger.Log(options.FailureLevel, message, resolvedCategory, filePath, lineNumber, memberName);
                 }
 
+                FlushBeforeThrow(options);
                 throw new CLogAssertionException(message, resolvedCategory, filePath, lineNumber, memberName);
             }
 
@@ -167,7 +155,6 @@ namespace CycloneGames.Logger
             }
         }
 
-        [UnityEngine.HideInCallstack]
         private void HandleFailure<T>(T state, Action<T, StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
             if (messageBuilder == null)
@@ -188,6 +175,7 @@ namespace CycloneGames.Logger
                     _logger.Log(options.FailureLevel, message, resolvedCategory, filePath, lineNumber, memberName);
                 }
 
+                FlushBeforeThrow(options);
                 throw new CLogAssertionException(message, resolvedCategory, filePath, lineNumber, memberName);
             }
 
@@ -208,6 +196,14 @@ namespace CycloneGames.Logger
             finally
             {
                 StringBuilderPool.Return(sb);
+            }
+        }
+
+        private void FlushBeforeThrow(CLogAssertRuntimeOptions options)
+        {
+            if (options.ShouldLog && options.FlushBeforeThrow)
+            {
+                _logger.TryFlush(LogFlushMode.Buffered, options.FlushTimeoutMs);
             }
         }
 

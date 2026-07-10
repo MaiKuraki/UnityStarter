@@ -15,8 +15,10 @@ namespace CycloneGames.Logger
         public LogLevel FailureLevel = LogLevel.Error;
         public CLogAssertFailureBehavior FailureBehavior = CLogAssertFailureBehavior.LogOnly;
         public string Category = "Assert";
+        public bool FlushBeforeThrow = true;
+        public int FlushTimeoutMs = 100;
 
-        public static readonly CLogAssertOptions Default = new CLogAssertOptions();
+        public static CLogAssertOptions Default => new CLogAssertOptions();
 
         public CLogAssertOptions()
         {
@@ -30,6 +32,8 @@ namespace CycloneGames.Logger
             FailureLevel = source.FailureLevel;
             FailureBehavior = source.FailureBehavior;
             Category = source.Category;
+            FlushBeforeThrow = source.FlushBeforeThrow;
+            FlushTimeoutMs = source.FlushTimeoutMs;
         }
 
         public CLogAssertOptions Clone()
@@ -45,13 +49,16 @@ namespace CycloneGames.Logger
                 options.Enabled,
                 options.FailureLevel,
                 options.FailureBehavior,
-                string.IsNullOrEmpty(options.Category) ? "Assert" : options.Category);
+                string.IsNullOrEmpty(options.Category) ? "Assert" : options.Category,
+                options.FlushBeforeThrow,
+                options.FlushTimeoutMs);
         }
 
         private void Validate()
         {
             if (!Enum.IsDefined(typeof(LogLevel), FailureLevel)) throw new ArgumentOutOfRangeException(nameof(FailureLevel), "Unknown failure log level.");
             if (!Enum.IsDefined(typeof(CLogAssertFailureBehavior), FailureBehavior)) throw new ArgumentOutOfRangeException(nameof(FailureBehavior), "Unknown failure behavior.");
+            if (FlushTimeoutMs < 0) throw new ArgumentOutOfRangeException(nameof(FlushTimeoutMs), "FlushTimeoutMs cannot be negative.");
         }
     }
 
@@ -63,13 +70,23 @@ namespace CycloneGames.Logger
         public readonly LogLevel FailureLevel;
         public readonly CLogAssertFailureBehavior FailureBehavior;
         public readonly string Category;
+        public readonly bool FlushBeforeThrow;
+        public readonly int FlushTimeoutMs;
 
-        public CLogAssertRuntimeOptions(bool enabled, LogLevel failureLevel, CLogAssertFailureBehavior failureBehavior, string category)
+        public CLogAssertRuntimeOptions(
+            bool enabled,
+            LogLevel failureLevel,
+            CLogAssertFailureBehavior failureBehavior,
+            string category,
+            bool flushBeforeThrow,
+            int flushTimeoutMs)
         {
             Enabled = enabled;
             FailureLevel = failureLevel;
             FailureBehavior = failureBehavior;
             Category = category;
+            FlushBeforeThrow = flushBeforeThrow;
+            FlushTimeoutMs = flushTimeoutMs;
         }
 
         public bool ShouldLog => FailureLevel != LogLevel.None && (FailureBehavior == CLogAssertFailureBehavior.LogOnly || FailureBehavior == CLogAssertFailureBehavior.LogAndThrow);

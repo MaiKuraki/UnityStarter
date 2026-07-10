@@ -6,14 +6,24 @@ namespace CycloneGames.Logger
     {
         public static CLogger CreateThreaded(LoggerProcessingOptions options = null, Func<DateTime> timestampProvider = null)
         {
-            var capturedOptions = LoggerProcessingOptions.CreateValidated(options);
-            return new CLogger(owner => new ThreadedLogProcessor(owner, capturedOptions), timestampProvider ?? (() => DateTime.Now));
+#if UNITY_WEBGL && !UNITY_EDITOR
+            throw new PlatformNotSupportedException("Threaded logger processing is unavailable in WebGL players. Use CreateSingleThreaded.");
+#else
+            LoggerProcessingOptions capturedOptions = LoggerProcessingOptions.CreateValidated(options);
+            return new CLogger(
+                (owner, _) => new ThreadedLogProcessor(owner, capturedOptions),
+                capturedOptions,
+                timestampProvider ?? (() => DateTime.UtcNow));
+#endif
         }
 
         public static CLogger CreateSingleThreaded(LoggerProcessingOptions options = null, Func<DateTime> timestampProvider = null)
         {
-            var capturedOptions = LoggerProcessingOptions.CreateValidated(options);
-            return new CLogger(owner => new SingleThreadLogProcessor(owner, capturedOptions), timestampProvider ?? (() => DateTime.Now));
+            LoggerProcessingOptions capturedOptions = LoggerProcessingOptions.CreateValidated(options);
+            return new CLogger(
+                (owner, _) => new SingleThreadLogProcessor(owner, capturedOptions),
+                capturedOptions,
+                timestampProvider ?? (() => DateTime.UtcNow));
         }
     }
 }

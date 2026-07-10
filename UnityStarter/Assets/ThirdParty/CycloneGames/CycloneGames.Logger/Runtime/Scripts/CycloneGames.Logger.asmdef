@@ -1,9 +1,7 @@
 {
     "name": "CycloneGames.Logger",
     "rootNamespace": "",
-    "references": [
-        "CycloneGames.Logger.Util"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
@@ -12,5 +10,5 @@
     "autoReferenced": true,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false
+    "noEngineReferences": true
 }

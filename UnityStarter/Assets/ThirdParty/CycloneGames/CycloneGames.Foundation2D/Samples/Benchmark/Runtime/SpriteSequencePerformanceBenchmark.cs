@@ -134,6 +134,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
         [SerializeField] private string logCategory = "SpriteSequence.Benchmark";
 
         private FileLogger _fileLogger;
+        private CLogger _loggerOwner;
         private ProfilerRecorder _gcAllocRecorder;
         private bool _running;
         private readonly List<SpriteSequenceController> _generatedControllers = new(512);
@@ -257,6 +258,10 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
         private void AttachFileLogger()
         {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            CLogger.LogWarning("Sprite benchmark file logging is unavailable on WebGL.", logCategory);
+            return;
+#else
             if (_fileLogger != null)
             {
                 return;
@@ -274,8 +279,10 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             };
 
             _fileLogger = new FileLogger(logPath, options);
-            CLogger.Instance.AddLogger(_fileLogger);
+            _loggerOwner = CLogger.Instance;
+            _loggerOwner.AddLogger(_fileLogger);
             CLogger.LogInfo($"Sprite benchmark logger attached: {logPath}", logCategory);
+#endif
         }
 
         private void DetachFileLogger()
@@ -285,9 +292,13 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 return;
             }
 
-            CLogger.Instance.RemoveLogger(_fileLogger);
-            _fileLogger.Dispose();
+            if (_loggerOwner != null && _loggerOwner.RemoveLogger(_fileLogger, 2000))
+            {
+                _fileLogger.Dispose();
+            }
+
             _fileLogger = null;
+            _loggerOwner = null;
         }
 
         private static SpriteSequenceController[] FindControllers(bool ignoreInactive)

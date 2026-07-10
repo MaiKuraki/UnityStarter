@@ -1,245 +1,220 @@
 # CycloneGames.Logger Samples
 
-High-performance, zero-GC logging system with three-tier adaptive capacity management for optimal memory safety across all Unity platforms.
+The sample scene teaches the Logger workflow in small, isolated steps: write ordinary records, use the allocation-aware builder API, observe queue and cache state, attach a temporary file sink, and run a local comparison harness.
 
-## Key Features
+The scripts compile in `CycloneGames.Logger.Samples`. That assembly references `CycloneGames.Logger` and `CycloneGames.Logger.Unity`, has `autoReferenced: false`, and is not part of the production API surface.
 
-- **Three-Tier Capacity Management** - Automatic pool expansion & contraction
-- **Zero-GC Logging** - Builder API eliminates allocations in hot paths
-- **Object Pool Monitoring** - Debug/Development build statistics
-- **Cross-Platform** - Supports Windows, macOS, Linux, Android, iOS, WebGL, and consoles
+Samples are teaching and diagnostic tools. Their timings and allocations depend on the Editor or Player, backend, hardware, Console state, storage, active sinks, and current settings. They are not shipping performance targets, universal capacity recommendations, or platform certification evidence.
 
-## Sample Scripts
+## Sample Contents
 
-### LoggerPoolMonitor.cs
+| File | What it demonstrates | Important side effect |
+| --- | --- | --- |
+| `LoggerSample.cs` | Minimal `CLogger.LogInfo`, `LogWarning`, and `LogError` usage | Uses the project-owned Unity bootstrap; it does not create or stop the logger |
+| `LoggerPerformanceTest.cs` | A finite mixed-level load using state plus cached/static builders | Registers a temporary file sink outside WebGL and changes the global level to `Trace` |
+| `LoggerPoolMonitor.cs` | Queue count/character occupancy and process-wide cache observations | Prints through `Debug.Log` and can submit a bounded burst |
+| `LoggerBenchmark.cs` | Local comparison of filtered, no-sink, core, file, and Unity Console paths | Reconfigures/stops the global logger, forces GC, performs I/O, and writes a report |
+| `SampleScene.unity` | Hosts the example components | `Benchmark` is active by default; `LoggerSample` and `PerformanceTest` are inactive |
 
-**Interactive pool monitoring and capacity validation**
+`LoggerPoolMonitor` is not placed in the scene. Add it to a temporary GameObject when you want to inspect queue and cache statistics.
 
-Features:
+## Before Running a Sample
 
-- Real-time pool statistics display
-- Burst test to validate zero-GC behavior
-- Demonstrates three-tier capacity management (Target/Peak/Max)
-- Context menu commands for easy testing
+1. Open `UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/Samples/SampleScene.unity`.
+2. Wait for `CycloneGames.Logger`, `CycloneGames.Logger.Unity`, and `CycloneGames.Logger.Samples` to compile without errors.
+3. Create and validate `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset` if it does not exist.
+4. Keep only one of `Benchmark`, `LoggerSample`, or `PerformanceTest` active.
+5. Enter Play Mode, observe the relevant output, then leave Play Mode and check for shutdown or disposal errors.
 
-Usage:
+`LoggerBenchmark` owns global Logger reconfiguration for its isolated run. Do not enable it in a scene containing application systems that own or use the global logger.
 
-```csharp
-// Add to a GameObject and play
-// Right-click in Inspector for context menu:
-//  - Show Pool Statistics
-//  - Run Burst Test
-//  - Reset Statistics
-```
+## Tutorial 1: Minimal Unity Logging
 
-### LoggerBenchmark.cs
-
-**Performance comparison with GC tracking**
-
-Tests:
-
-- Unity Debug.Log vs CLogger String API vs Builder (closure) vs Builder (generic/static)
-- Measures execution time and GC allocations
-- Displays object pool statistics after tests
-
-Expected Results:
-
-- Builder generic (static lambda): **Near-zero GC** (no closure, no string allocation)
-- Builder closure: Low GC allocation (closure object per call)
-- String API: Medium GC allocation
-- Unity Debug.Log: High GC allocation
-
-Note: GC measurements include Unity test environment overhead and cold-start pool allocation. The key indicators are 100% Return Rate and 0% Discard Rate, which validate zero-GC behavior in production.
-
-### LoggerPerformanceTest.cs
-
-**High-volume logging stress test**
-
-- Logs 10,000 messages across all severity levels
-- Validates pool behavior under sustained load
-- Reports peak pool size and discard count
-
-### LoggerSample.cs
-
-**Basic usage example**
-
-Simple demonstration of logger setup and basic logging.
-
----
-
-## Three-Tier Capacity Management
-
-The logger uses adaptive object pools with automatic expansion and contraction:
-
-```
-Target (128/256)  <- Normal steady-state capacity
-    | Auto-expand under load
-Peak (1024/4096)  <- Maximum allowed during bursts (0 GC)
-    | Triggers async trim
-Max (2048/8192)   <- Hard limit to prevent memory leaks
-```
-
-### How It Works
-
-1. **Normal Load**: Pool stays at Target capacity (128 for StringBuilder, 256 for LogMessage)
-2. **Burst Load**: Pool auto-expands to Peak capacity **without discarding objects** (0 GC)
-3. **After Burst**: Pool automatically shrinks back to Target, releasing excess memory
-4. **Extreme Load**: Only discards when exceeding Max (rare, safety mechanism)
-
-**Result**: Zero GC in 99.9% of scenarios while maintaining memory safety.
-
----
-
-## Processing Strategies
-
-### ThreadedLogProcessor (Default)
-
-Uses a background thread with `BelowNormal` priority for maximum performance on platforms with threading support.
-
-### SingleThreadLogProcessor
-
-For platforms without threads (WebGL). Requires calling `Pump()` each frame.
+Enable the `LoggerSample` GameObject and disable the other scenarios. The component relies on `LoggerBootstrap` and contains only normal application calls:
 
 ```csharp
-#if UNITY_WEBGL && !UNITY_EDITOR
-    CLogger.ConfigureSingleThreadedProcessing();
-#else
-    CLogger.ConfigureThreadedProcessing();
-#endif
-```
-
----
-
-## Zero-GC Logging
-
-### String API (Convenient)
-
-```csharp
-CLogger.LogInfo($"Player HP: {hp}", "Combat");
-// Small GC from string interpolation
-```
-
-### Builder API (Low-GC)
-
-```csharp
-CLogger.LogInfo(sb => sb.Append("Player HP: ").Append(hp), "Combat");
-// StringBuilder is pooled, but capturing `hp` allocates a closure object
-```
-
-### Stateful Builder (Zero-GC) [Recommended]
-
-```csharp
-CLogger.LogInfo(player, static (p, sb) =>
-    sb.Append("Player ").Append(p.name).Append(" HP: ").Append(p.hp), "Combat");
-// Zero GC: static keyword prevents closure allocation
-```
-
----
-
-## Object Pool Statistics (Editor/Development Only)
-
-Monitor pool health in Editor or Development builds:
-
-```csharp
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-var stats = StringBuilderPool.GetStatistics();
-Debug.Log($@"
-StringBuilder Pool:
-  Current: {stats.CurrentSize} | Peak: {stats.PeakSize}
-  Hit Rate: {stats.HitRate:P} | Misses: {stats.TotalMisses} | Discard Rate: {stats.DiscardRate:P}
-");
-#endif
-```
-
-**Key Metrics**:
-
-- **HitRate**: Should be ~100% (objects retrieved from pool vs created)
-- **TotalMisses**: Number of `new` allocations when pool was empty; should be ~0 when warm
-- **PeakSize**: Maximum pool size reached (should be below Max)
-- **DiscardRate**: Should be ~0% for optimal performance
-
----
-
-## Centralized Setup
-
-### Option 1: LoggerSettings Asset (Recommended)
-
-1. Create via `Assets -> Create -> CycloneGames -> Logger -> LoggerSettings`
-2. Move to `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`
-3. Configure: processing mode, loggers, log level, etc.
-
-Without this asset, the built-in bootstrap registers UnityLogger in both Editor and Player builds. It does not disable logging based on `DEVELOPMENT_BUILD`.
-
-For CI builds, pass command-line overrides to Unity batchmode / `BuildScript.PerformBuild_CI`:
-
-```text
--loggerMode File -loggerLevel Warning -loggerFileName Player.log
--loggerMode UnityAndFile -loggerLevel Info
--loggerMode Off
-```
-
-You can also provide a profile asset:
-
-```text
--loggerSettings Assets/Config/LoggerSettings.Release.asset
-```
-
-### Option 2: Custom Bootstrap
-
-```csharp
-[RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-static void Initialize()
+private void Start()
 {
-    #if UNITY_WEBGL && !UNITY_EDITOR
-    CLogger.ConfigureSingleThreadedProcessing();
-    #else
-    CLogger.ConfigureThreadedProcessing();
-    #endif
-
-    CLogger.Instance.AddLoggerUnique(new UnityLogger());
-
-    #if !UNITY_WEBGL || UNITY_EDITOR
-    var path = Path.Combine(Application.persistentDataPath, "App.log");
-    CLogger.Instance.AddLoggerUnique(new FileLogger(path));
-    #endif
-
-    CLogger.Instance.SetLogLevel(LogLevel.Info);
+    CLogger.LogInfo("Logger sample started.", "Sample");
+    CLogger.LogWarning("This is a warning example.", "Sample");
+    CLogger.LogError("This is an error example.", "Sample");
 }
 ```
 
----
+Expected result:
 
-## Best Practices
+- the active settings asset chooses the sink set;
+- the default `Info` threshold accepts all three records;
+- `Sample` appears as the category;
+- Unity Console output contains a source link when `UnityLogger` is active.
 
-**Performance:**
+If no record appears, verify `registerUnityLogger`, `defaultLevel`, `defaultFilter`, and the Console filters.
 
-- Use **Builder API** in performance-critical code
-- Monitor **DiscardRate** in development builds
-- Set appropriate **LogLevel** to filter unnecessary logs
+## Tutorial 2: Allocation-Aware Message Construction
 
-**Platform:**
+An interpolated string is created before the logger can filter it:
 
-- Call **Pump()** in Update for WebGL builds
-- Use **categories** for fine-grained filtering
+```csharp
+CLogger.LogDebug($"Entity {entityId} updated.", "Simulation");
+```
 
-**Quality:**
+For a measured hot path, pass the state separately and use a static or cached delegate:
 
-- Centralize logger configuration
-- Avoid duplicate logger registration
+```csharp
+CLogger.LogDebug(
+    entityId,
+    static (value, builder) => builder.Append("Entity ").Append(value).Append(" updated."),
+    "Simulation");
+```
 
----
+The builder runs only after level, category, sink, lifecycle, and queue-reservation checks succeed. This avoids a capturing closure in the shown call, but does not guarantee that the complete path is allocation-free. Pool misses, builder growth, sink formatting, Unity Console copies, exceptions, and I/O can allocate.
 
-## Troubleshooting
+## Tutorial 3: Finite Mixed-Level Load
 
-**Q: High DiscardRate in statistics?**  
-A: Increase `PeakPoolSize` in pool source code, or reduce log frequency.
+Enable `PerformanceTest` and disable the other scenarios. `LoggerPerformanceTest`:
 
-**Q: Memory growing over time?**  
-A: Verify `TrimCount > 0` in statistics. Pools should auto-trim after bursts.
+1. creates a `FileLogger` under `Application.temporaryCachePath` outside WebGL;
+2. registers it through `AddLoggerUnique`;
+3. sets the global level to `Trace`;
+4. submits up to 10,000 records across all six active severities;
+5. removes and disposes the file sink only when `RemoveLogger` returns `true`.
 
-**Q: WebGL logs not appearing?**  
-A: Ensure `Pump()` is called each frame with sufficient `maxItems`.
+The output file is:
 
----
+`Application.temporaryCachePath/CycloneGames.Logger/LoadExample.log`
 
-For more details, see the main package documentation.
+The displayed elapsed time covers frame-distributed submission. Frame rate, active sinks, queue drops, Unity Console, storage, Editor overhead, and scheduling all affect it. Do not report it as Logger throughput. Inspect all of the following before drawing a local conclusion:
+
+- `CLogger.Instance.GetProcessingStatistics()`;
+- `FileLogger.Statistics`;
+- Unity Profiler data;
+- file contents and final byte count.
+
+WebGL skips the file sink because `FileLogger` is unsupported there.
+
+## Tutorial 4: Queue and Cache Observation
+
+Add `LoggerPoolMonitor` to a temporary GameObject. It reports:
+
+- current and peak core queue message occupancy;
+- current and peak retained-character occupancy;
+- total core drops;
+- retained and peak cached `LogMessage`/`StringBuilder` counts;
+- cache misses.
+
+Use the `Run Bounded Burst Example` context menu to submit `BurstLogCount` records through a static state-builder callback. The burst remains governed by the active `LoggerProcessingOptions`: records can be rejected or evicted, and reserved critical capacity reduces ordinary contention without guaranteeing delivery.
+
+The component intentionally displays only a small subset. Advanced diagnosis should also query:
+
+- `ReservedCount`, `InFlightCount`, and their character equivalents;
+- `MessageBuilderFailureCount` and `TimestampProviderFailureCount`;
+- filter occupancy and rejected mutations;
+- sink failure, quarantine, and disposal counters;
+- `UnityLogger.GetStatistics()` for the separate Unity handoff.
+
+Logger cache statistics are not a heap profile. They exclude caller strings, most objects, sink buffers, Unity Console storage, native/OS buffers, and filesystem caches. Use Unity Memory Profiler and target tools for a full memory investigation.
+
+## Tutorial 5: Local Benchmark Harness
+
+Enable `Benchmark` and disable every other scenario. The harness runs:
+
+- direct `UnityEngine.Debug.Log` output;
+- filtered generic logging;
+- an initialized logger without a sink;
+- core string, capturing builder, and generic state-builder cases;
+- a burst without intermediate pumping;
+- file output outside WebGL;
+- Unity Console handoff.
+
+It writes UTF-8 without BOM to:
+
+- `Application.temporaryCachePath/CycloneGames.Logger/LoggerBenchmarkReport.txt`
+- `Application.temporaryCachePath/CycloneGames.Logger/LoggerBenchmarkFile.log`
+
+The report includes elapsed time, derived microseconds per log, derived logs per second, current-thread allocation observations when supported, Gen0 collection count, pool misses/discards, and core drops.
+
+Interpret the report carefully:
+
+- cases use different iteration counts and include different work;
+- the harness selects single-thread processing for controlled caller-pumped cases;
+- `NullLogger` measures core dispatch, not a production sink;
+- Unity Console and file cases include their formatting and I/O costs;
+- forced GC, coroutine yields, Console visibility/collapse, filesystem cache, antivirus, and thermal state affect results;
+- `GC.GetAllocatedBytesForCurrentThread` may be unavailable and does not include allocations on another thread;
+- the harness has no standalone Player automation, confidence interval, device thermal protocol, or multi-platform baseline.
+
+Use `CycloneGames.Logger.Tests.Performance` for repeatable package-level regression cases. Shipping performance evidence needs a separate protocol with fixed build, hardware, workload, warmup, sample count, storage state, thermal state, and acceptance thresholds.
+
+## Advanced Exercise: A Safe Custom Sink Boundary
+
+Custom sinks receive a borrowed `LogMessage` and may read it only until `Log` returns. Copy only the data needed by the next owner.
+
+```csharp
+using System.Text;
+using CycloneGames.Logger;
+
+public sealed class ExampleSink : ILogger
+{
+    private readonly object _syncRoot = new object();
+    private readonly StringBuilder _scratch = new StringBuilder(256);
+
+    public void Log(LogMessage message)
+    {
+        lock (_syncRoot)
+        {
+            _scratch.Clear();
+            message.AppendMessageTo(_scratch, escapeControlCharacters: true);
+            // Consume or copy the bounded text before returning.
+        }
+    }
+
+    public void Dispose()
+    {
+    }
+}
+```
+
+Do not retain `LogMessage`. A copied handoff for UI, network, upload, or platform SDK work needs its own message and byte/character limits, overflow policy, drop statistics, thread affinity, flush behavior, and shutdown owner. Format source line numbers with invariant culture or an equivalent invariant integer routine.
+
+## Ownership Checklist for Samples
+
+- Project bootstrap owns the global `CLogger`.
+- `LoggerSample` only produces records.
+- `LoggerPerformanceTest` temporarily owns a `FileLogger` until successful registration transfers it to `CLogger`.
+- Only `RemoveLogger(...)=true` transfers that sink back for caller disposal.
+- `LoggerBenchmark` owns the global configuration during its isolated execution and calls `CLogger.Shutdown`.
+- Never run the benchmark beside another global Logger owner.
+
+## Output and Cleanup
+
+| Output | Persistence | Cleanup |
+| --- | --- | --- |
+| Unity Console records | Editor/Player dependent | Clear normally; they are not durable records |
+| `LoadExample.log` | Plaintext UTF-8 under `temporaryCachePath` | Safe to delete after `LoggerPerformanceTest` stops |
+| `LoggerBenchmarkReport.txt` | Plaintext UTF-8 under `temporaryCachePath` | Safe to delete after inspection |
+| `LoggerBenchmarkFile.log` | Plaintext UTF-8 under `temporaryCachePath` | Safe to delete after the benchmark stops |
+
+Do not commit these files. They can contain source locations and sample/application data. The operating system can clear `temporaryCachePath` at any time.
+
+## Validation and Troubleshooting
+
+Minimum sample validation:
+
+1. Run `CycloneGames.Logger.Tests.Editor` before using sample output for diagnosis.
+2. Run one scenario at a time.
+3. Record Editor/Player, backend, target, hardware, build type, settings, sink set, and Console state.
+4. Confirm core and Unity handoff drop counters are appropriate for the scenario.
+5. Confirm temporary files can be opened, flushed, and deleted after Play Mode.
+6. Repeat performance investigations in a standalone Player and on representative hardware; test IL2CPP separately where used.
+
+| Symptom | Action |
+| --- | --- |
+| No sample records | Enable a sink, check level/filter, and confirm the benchmark did not stop the global logger |
+| Samples interfere | Keep one scenario active and re-enter Play Mode so subsystem registration resets static state |
+| Drop counters increase | Treat it as overload evidence; inspect both count/character peaks and Unity handoff statistics before changing capacity |
+| WebGL has no sample file | Expected; file sample code is excluded for the Player path |
+| Allocation shows `N/A` or zero | The counter is unavailable or inconclusive; use Profiler and platform tools |
+| Timing is large or unstable | Reduce unrelated Editor/Console work, then move the experiment to a controlled standalone Player protocol |
+| Temporary file cannot be written | Inspect sandbox, quota, permissions, sharing, and `FileLogger.Statistics` |
+
+For full configuration, lifecycle, platform, persistence, performance, and custom-sink guidance, read the package-level `README.md` or `README.SCH.md`.
