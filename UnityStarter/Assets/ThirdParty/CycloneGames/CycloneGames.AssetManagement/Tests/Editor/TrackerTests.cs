@@ -88,5 +88,21 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             Assert.AreEqual(1f, info.Progress);
             Assert.AreEqual(2, info.RefCount);
         }
+
+        [Test]
+        public void SceneTracker_Removes_Released_Handle_Before_Reading_Snapshot()
+        {
+            var handle = new TestSceneHandle
+            {
+                ShouldRemoveFromSceneTrackerValue = true
+            };
+
+            SceneTracker.Register(8, "default", "TestProvider", "Scenes/Released", null, LoadSceneMode.Single, handle);
+
+            var scenes = SceneTracker.GetTrackedScenes();
+
+            Assert.IsEmpty(scenes);
+            Assert.AreEqual(0, SceneTracker.GetTrackedSceneCount());
+        }
     }
 }

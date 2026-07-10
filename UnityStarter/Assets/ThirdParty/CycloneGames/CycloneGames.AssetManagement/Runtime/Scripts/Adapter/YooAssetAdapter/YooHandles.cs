@@ -371,7 +371,7 @@ namespace CycloneGames.AssetManagement.Runtime
         void IInternalCacheable.ForceDispose() => DisposeInternal();
     }
 
-    internal sealed class YooSceneHandle : ISceneHandle, IReferenceCounted, IInternalCacheable
+    internal sealed class YooSceneHandle : ISceneHandle, IReferenceCounted, IInternalCacheable, ISceneTrackerHandleState
     {
         private int _id;
         internal int DebugId => _id;
@@ -381,6 +381,10 @@ namespace CycloneGames.AssetManagement.Runtime
         private Action<string, IReferenceCounted> _onReleaseToCache;
         private SceneActivationState _activationState;
         private bool _manualLoadResumed;
+        private string _scenePath;
+        private Scene _scene;
+        private float _progress;
+        private string _error;
 
         public static bool SupportsDeferredActivation => true;
         public SceneActivationMode ActivationMode { get; private set; }
@@ -407,6 +411,10 @@ namespace CycloneGames.AssetManagement.Runtime
             _onReleaseToCache = onReleaseToCache;
             _disposed = false;
             _refCount = 1;
+            _scenePath = raw != null && raw.IsValid ? raw.SceneName : string.Empty;
+            _scene = default;
+            _progress = 0f;
+            _error = string.Empty;
         }
 
         public static YooSceneHandle Create(int id, YooAsset.SceneHandle raw, bool activateOnLoad, bool isActivated, Action<string, IReferenceCounted> onReleaseToCache)
@@ -416,9 +424,51 @@ namespace CycloneGames.AssetManagement.Runtime
             return h;
         }
 
-        public bool IsDone => Raw == null || Raw.IsDone;
-        public float Progress => Raw?.Progress ?? 0f;
-        public string Error => Raw?.LastError ?? string.Empty;
+        private bool CanReadRaw => !_disposed && Raw != null && Raw.IsValid;
+
+        public bool ShouldRemoveFromSceneTracker
+        {
+            get
+            {
+                if (_disposed)
+                {
+                    return true;
+                }
+
+                if (Raw == null)
+                {
+                    return !_scene.IsValid() || !_scene.isLoaded;
+                }
+
+                return !Raw.IsValid && (!_scene.IsValid() || _scene.isLoaded);
+            }
+        }
+
+        public bool IsDone => !CanReadRaw || Raw.IsDone;
+        public float Progress
+        {
+            get
+            {
+                if (!CanReadRaw)
+                {
+                    return _progress;
+                }
+                _progress = Raw.Progress;
+                return _progress;
+            }
+        }
+        public string Error
+        {
+            get
+            {
+                if (!CanReadRaw)
+                {
+                    return _error;
+                }
+                _error = Raw.Error ?? string.Empty;
+                return _error;
+            }
+        }
         public UniTask Task => IsDone ? UniTask.CompletedTask : (Raw?.Task.AsUniTask() ?? UniTask.CompletedTask);
         public void WaitForAsyncComplete() { }
 
@@ -432,7 +482,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             if (!IsDone)
             {
-                if (ActivationMode == SceneActivationMode.Manual && Raw != null && !_manualLoadResumed)
+                if (ActivationMode == SceneActivationMode.Manual && CanReadRaw && !_manualLoadResumed)
                 {
                     Raw.UnSuspend();
                     _manualLoadResumed = true;
@@ -447,7 +497,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return;
             }
 
-            if (Raw == null)
+            if (!CanReadRaw)
             {
                 return;
             }
@@ -468,8 +518,18 @@ namespace CycloneGames.AssetManagement.Runtime
             _activationState = SceneActivationState.Activated;
         }
 
-        public string ScenePath => Raw?.SceneName;
-        public Scene Scene => Raw?.SceneObject ?? default;
+        public string ScenePath => _scenePath;
+        public Scene Scene
+        {
+            get
+            {
+                if (CanReadRaw)
+                {
+                    _scene = Raw.SceneObject;
+                }
+                return _scene;
+            }
+        }
 
         private void RefreshActivationState()
         {
@@ -502,11 +562,30 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             if (newCount == 0)
             {
+                if (CanDisposeReleasedHandleWithoutSceneUnload())
+                {
+                    DisposeInternal();
+                    return;
+                }
                 CLogger.LogWarning("[YooSceneHandle] Release only releases caller ownership. Use IAssetPackage.UnloadSceneAsync to unload the scene.");
             }
         }
 
         public void Dispose() => Release();
+
+        private bool CanDisposeReleasedHandleWithoutSceneUnload()
+        {
+            if (_disposed)
+                return false;
+            if (Raw == null)
+                return true;
+            if (!Raw.IsValid)
+                return true;
+            if (!Raw.IsDone)
+                return false;
+            Scene scene = Scene;
+            return !scene.IsValid() || !scene.isLoaded;
+        }
 
         internal void DisposeInternal()
         {
@@ -516,10 +595,14 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 if (Raw.IsValid)
                 {
+                    _progress = Raw.Progress;
+                    _error = Raw.Error ?? string.Empty;
+                    _scene = Raw.SceneObject;
                     Raw.Dispose();
                 }
                 Raw = null;
             }
+            _scenePath = string.Empty;
             ActivationMode = SceneActivationMode.ActivateOnLoad;
             _activationState = SceneActivationState.Loading;
             _manualLoadResumed = false;

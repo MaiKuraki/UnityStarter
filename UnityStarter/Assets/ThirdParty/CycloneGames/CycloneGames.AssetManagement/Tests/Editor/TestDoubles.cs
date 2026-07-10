@@ -68,7 +68,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public void WaitForAsyncComplete() { }
     }
 
-    internal sealed class TestSceneHandle : ISceneHandle, IReferenceCounted
+    internal sealed class TestSceneHandle : ISceneHandle, IReferenceCounted, ISceneTrackerHandleState
     {
         public string ScenePathValue;
         public SceneActivationMode ActivationModeValue;
@@ -78,6 +78,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public float ProgressValue;
         public int RefCountValue = 1;
         public string ErrorValue = string.Empty;
+        public bool ShouldRemoveFromSceneTrackerValue;
 
         public string ScenePath => ScenePathValue;
         public Scene Scene => default;
@@ -89,6 +90,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         public string Error => ErrorValue;
         public UniTask Task => UniTask.CompletedTask;
         public int RefCount => RefCountValue;
+        public bool ShouldRemoveFromSceneTracker => ShouldRemoveFromSceneTrackerValue;
         public UniTask ActivateAsync(CancellationToken cancellationToken = default) => UniTask.CompletedTask;
         public void Retain() => RefCountValue++;
         public void Release() => RefCountValue--;

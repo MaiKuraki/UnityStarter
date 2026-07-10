@@ -112,6 +112,12 @@ namespace CycloneGames.AssetManagement.Runtime
                 var handle = entry.Handle;
                 if (handle == null) continue;
 
+                if (handle is ISceneTrackerHandleState state && state.ShouldRemoveFromSceneTracker)
+                {
+                    _trackedScenes.TryRemove(kvp.Key, out _);
+                    continue;
+                }
+
                 var info = new SceneInfo
                 {
                     Id = entry.Id,
@@ -155,5 +161,10 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             _trackedScenes.Clear();
         }
+    }
+
+    internal interface ISceneTrackerHandleState
+    {
+        bool ShouldRemoveFromSceneTracker { get; }
     }
 }
