@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Buffers;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO;
 using CycloneGames.InputSystem.Runtime;
 
 namespace CycloneGames.InputSystem.Editor
@@ -157,7 +157,7 @@ namespace CycloneGames.InputSystem.Editor
                 }
 
                 string filePath = Path.Combine(_codegenPath, "InputActions.cs");
-                FileUtility.WriteAllText(filePath, sb.ToString());
+                SystemFileStore.Default.WriteTextAtomically(filePath, sb.ToString());
 
                 SetStatus("Successfully saved and generated constants file.", MessageType.Info);
                 EditorUtility.DisplayDialog("Save & Generate Successful", "User input configuration has been saved and InputActions.cs has been generated.", "OK");

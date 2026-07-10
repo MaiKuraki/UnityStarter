@@ -3,7 +3,7 @@ using System.IO;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO;
 using CycloneGames.Logger;
 using CycloneGames.UIFramework.Runtime;
 
@@ -24,6 +24,8 @@ namespace CycloneGames.UIFramework.Editor
 
     public class UIWindowCreatorWindow : EditorWindow
     {
+        private const int MAX_SETTINGS_BYTES = 1024 * 1024;
+
         private enum PipelineStatus
         {
             Ready,
@@ -310,7 +312,9 @@ namespace CycloneGames.UIFramework.Editor
             {
                 try
                 {
-                    string json = FileUtility.ReadAllText(settingsPath);
+                    string json = SystemFileStore.Default.ReadText(
+                        settingsPath,
+                        MAX_SETTINGS_BYTES);
                     UIWindowCreatorSettings settings = JsonUtility.FromJson<UIWindowCreatorSettings>(json);
 
                     if (settings != null)
@@ -366,7 +370,7 @@ namespace CycloneGames.UIFramework.Editor
                 };
 
                 string json = JsonUtility.ToJson(settings, true);
-                FileUtility.WriteAllText(settingsPath, json);
+                SystemFileStore.Default.WriteTextAtomically(settingsPath, json);
                 SaveEditorPrefsSelection();
             }
             catch (Exception e)
@@ -1782,7 +1786,7 @@ namespace {namespaceName}
 
         private void WriteScriptFile(string scriptPath, string content)
         {
-            FileUtility.WriteAllText(scriptPath, content);
+            SystemFileStore.Default.WriteTextAtomically(scriptPath, content);
 
             AssetDatabase.ImportAsset(scriptPath, ImportAssetOptions.ForceUpdate);
             AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);

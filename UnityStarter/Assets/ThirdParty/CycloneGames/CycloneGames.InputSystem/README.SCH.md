@@ -32,13 +32,13 @@
 在游戏启动时（例如在 `MonoBehaviour.Start()` 或初始化脚本中）加载配置：
 
 ```csharp
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO.Unity;
 using CycloneGames.InputSystem.Runtime;
 using Cysharp.Threading.Tasks;
 
 // 在启动时调用
-var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
-var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", UnityPathSource.PersistentData);
+var defaultUri = UnityFileUri.Create("input_config.yaml", UnityFileLocation.StreamingAssets);
+var userUri = UnityFileUri.Create("user_input_settings.yaml", UnityFileLocation.PersistentData);
 await InputSystemLoader.InitializeAsync(defaultUri, userUri);
 ```
 
@@ -789,11 +789,11 @@ await InputManager.Instance.SaveUserConfigurationAsync();
 ### 重置为默认配置
 
 ```csharp
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO.Unity;
 using CycloneGames.InputSystem.Runtime;
 
-var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
-var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", UnityPathSource.PersistentData);
+var defaultUri = UnityFileUri.Create("input_config.yaml", UnityFileLocation.StreamingAssets);
+var userUri = UnityFileUri.Create("user_input_settings.yaml", UnityFileLocation.PersistentData);
 
 bool success = await InputSystemLoader.ResetToDefaultAsync(defaultUri, userUri);
 if (success)

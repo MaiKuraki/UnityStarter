@@ -4,7 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO;
 
 namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
 {
@@ -308,7 +308,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                     Directory.CreateDirectory(directory);
                 }
                 
-                FileUtility.WriteAllText(filePath, report);
+                SystemFileStore.Default.WriteTextAtomically(filePath, report);
             }
             catch (Exception ex)
             {
@@ -323,7 +323,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 var filePath = GetMarkdownReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                FileUtility.WriteAllText(filePath, report);
+                SystemFileStore.Default.WriteTextAtomically(filePath, report);
             }
             catch (Exception ex)
             {
@@ -338,7 +338,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.PureCSharp
                 var filePath = GetMarkdownSchReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                FileUtility.WriteAllText(filePath, report);
+                SystemFileStore.Default.WriteTextAtomically(filePath, report);
             }
             catch (Exception ex)
             {

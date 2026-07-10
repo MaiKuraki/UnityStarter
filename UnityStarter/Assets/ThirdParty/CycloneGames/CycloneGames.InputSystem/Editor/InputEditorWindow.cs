@@ -7,13 +7,16 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Buffers;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO;
+using CycloneGames.IO.Unity;
 using CycloneGames.InputSystem.Runtime;
 
 namespace CycloneGames.InputSystem.Editor
 {
     public partial class InputEditorWindow : EditorWindow
     {
+        private const int MAX_CONFIG_BYTES = 16 * 1024 * 1024;
+
         private InputConfigurationSO _configSO;
         private SerializedObject _serializedConfig;
         private Vector2 _scrollPosition;
@@ -155,7 +158,7 @@ namespace CycloneGames.InputSystem.Editor
                 }
             }
 
-            _userConfigPath = FilePathUtility.GetUnityWebRequestUri(fullPath, UnityPathSource.PersistentData);
+            _userConfigPath = UnityFileUri.Create(fullPath, UnityFileLocation.PersistentData);
 
             string localPath = new System.Uri(_userConfigPath).LocalPath;
             _userConfigFullPathDisplay = localPath.Replace('\\', '/');
@@ -165,7 +168,9 @@ namespace CycloneGames.InputSystem.Editor
         {
             if (string.IsNullOrEmpty(_defaultConfigFolderPath) || _defaultConfigFolder == null)
             {
-                _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
+                _defaultConfigPath = UnityFileUri.Create(
+                    DefaultConfigFileName,
+                    UnityFileLocation.StreamingAssets);
                 string localPath = new System.Uri(_defaultConfigPath).LocalPath;
                 _defaultConfigFullPathDisplay = localPath.Replace('\\', '/');
                 return;
@@ -183,7 +188,9 @@ namespace CycloneGames.InputSystem.Editor
             }
 
             string fullSystemPath = Path.Combine(Application.dataPath, folderPath, DefaultConfigFileName);
-            _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(fullSystemPath, UnityPathSource.AbsoluteOrFullUri);
+            _defaultConfigPath = UnityFileUri.Create(
+                fullSystemPath,
+                UnityFileLocation.AbsolutePathOrUri);
 
             _defaultConfigFullPathDisplay = fullSystemPath.Replace('\\', '/');
         }
@@ -921,7 +928,7 @@ namespace CycloneGames.InputSystem.Editor
         {
             try
             {
-                string yamlContent = FileUtility.ReadAllText(path);
+                string yamlContent = SystemFileStore.Default.ReadText(path, MAX_CONFIG_BYTES);
                 var configModel = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
 
                 // Schema fingerprint mismatch detection: warn developer if loaded config is outdated
@@ -994,7 +1001,7 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                FileUtility.WriteAllBytes(localPath, yamlBytes);
+                SystemFileStore.Default.WriteBytesAtomically(localPath, yamlBytes);
                 SetStatus($"Successfully saved user configuration to: {localPath}", MessageType.Info);
 
                 if (generateConstants)
@@ -1049,7 +1056,7 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                FileUtility.WriteAllBytes(localPath, yamlBytes);
+                SystemFileStore.Default.WriteBytesAtomically(localPath, yamlBytes);
                 SetStatus($"Generated new default config at: {localPath}", MessageType.Info);
                 AssetDatabase.Refresh();
 
@@ -1093,7 +1100,7 @@ namespace CycloneGames.InputSystem.Editor
                     Directory.CreateDirectory(directory);
                 }
 
-                FileUtility.WriteAllBytes(localPath, yamlBytes);
+                SystemFileStore.Default.WriteBytesAtomically(localPath, yamlBytes);
                 SetStatus($"Successfully overridden default config at: {localPath}", MessageType.Info);
                 AssetDatabase.Refresh();
 

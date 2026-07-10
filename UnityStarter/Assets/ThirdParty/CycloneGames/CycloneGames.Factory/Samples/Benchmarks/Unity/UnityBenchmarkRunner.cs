@@ -8,7 +8,7 @@ using System.Threading;
 using UnityEngine;
 using UnityEngine.Profiling;
 using Cysharp.Threading.Tasks;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO;
 
 namespace CycloneGames.Factory.Samples.Benchmarks.Unity
 {
@@ -1457,7 +1457,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 var filePath = GetReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                FileUtility.WriteAllText(filePath, report);
+                SystemFileStore.Default.WriteTextAtomically(filePath, report);
             }
             catch (System.Exception ex)
             {
@@ -1472,7 +1472,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 var filePath = GetMarkdownReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                FileUtility.WriteAllText(filePath, report);
+                SystemFileStore.Default.WriteTextAtomically(filePath, report);
             }
             catch (System.Exception ex)
             {
@@ -1487,7 +1487,7 @@ namespace CycloneGames.Factory.Samples.Benchmarks.Unity
                 var filePath = GetMarkdownSchReportFilePath(customName);
                 var directory = Path.GetDirectoryName(filePath);
                 if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-                FileUtility.WriteAllText(filePath, report);
+                SystemFileStore.Default.WriteTextAtomically(filePath, report);
             }
             catch (System.Exception ex)
             {

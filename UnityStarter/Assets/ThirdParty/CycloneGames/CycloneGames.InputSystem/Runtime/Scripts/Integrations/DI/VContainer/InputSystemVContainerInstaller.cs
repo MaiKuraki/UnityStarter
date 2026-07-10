@@ -2,7 +2,7 @@
 using System;
 using VContainer;
 using VContainer.Unity;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO.Unity;
 using CycloneGames.AssetManagement.Runtime;
 using Cysharp.Threading.Tasks;
 
@@ -164,7 +164,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             string yamlContent = null;
             string defaultYamlContent = null;
             string userConfigFileName = _userConfigFileName ?? "user_input_settings.yaml";
-            string userConfigUri = FilePathUtility.GetUnityWebRequestUri(userConfigFileName, UnityPathSource.PersistentData);
+            string userConfigUri = UnityFileUri.Create(userConfigFileName, UnityFileLocation.PersistentData);
             bool loadedFromUserConfig = false;
             bool userConfigCorrupted = false;
 
@@ -179,7 +179,9 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             }
             else if (!string.IsNullOrEmpty(_defaultConfigFileName))
             {
-                var defaultUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigFileName, UnityPathSource.StreamingAssets);
+                string defaultUri = UnityFileUri.Create(
+                    _defaultConfigFileName,
+                    UnityFileLocation.StreamingAssets);
                 (bool defaultSuccess, string defaultContent) = await InputConfigurationFileLoader.LoadTextFromUriAsync(defaultUri, "[InputSystemInitializer]");
                 if (defaultSuccess && !string.IsNullOrEmpty(defaultContent))
                 {
@@ -323,7 +325,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             }
 
             string userConfigFileName = _userConfigFileName ?? "user_input_settings.yaml";
-            string userConfigUri = FilePathUtility.GetUnityWebRequestUri(userConfigFileName, UnityPathSource.PersistentData);
+            string userConfigUri = UnityFileUri.Create(userConfigFileName, UnityFileLocation.PersistentData);
 
             var inputManager = CycloneGames.InputSystem.Runtime.InputManager.Instance;
 
@@ -364,7 +366,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         public async UniTask ReloadUserConfigurationAsync()
         {
             string userConfigFileName = _userConfigFileName ?? "user_input_settings.yaml";
-            string userConfigUri = FilePathUtility.GetUnityWebRequestUri(userConfigFileName, UnityPathSource.PersistentData);
+            string userConfigUri = UnityFileUri.Create(userConfigFileName, UnityFileLocation.PersistentData);
 
             var inputManager = CycloneGames.InputSystem.Runtime.InputManager.Instance;
             if (inputManager == null)

@@ -1,6 +1,6 @@
 using CycloneGames.InputSystem.Runtime;
 using CycloneGames.InputSystem.Runtime.Generated;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO.Unity;
 using Cysharp.Threading.Tasks;
 using R3;
 using System.Threading;
@@ -49,8 +49,12 @@ namespace CycloneGames.InputSystem.Sample
             isInitialized = true;
             DontDestroyOnLoad(gameObject);
 
-            string defaultConfigUri = FilePathUtility.GetUnityWebRequestUri(_defaultConfigName, UnityPathSource.StreamingAssets);
-            string userConfigUri = FilePathUtility.GetUnityWebRequestUri(_userConfigName, UnityPathSource.PersistentData);
+            string defaultConfigUri = UnityFileUri.Create(
+                _defaultConfigName,
+                UnityFileLocation.StreamingAssets);
+            string userConfigUri = UnityFileUri.Create(
+                _userConfigName,
+                UnityFileLocation.PersistentData);
             await InputSystemLoader.InitializeAsync(defaultConfigUri, userConfigUri);
             await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
 

@@ -1,0 +1,21 @@
+{
+    "name": "CycloneGames.IO.Tests.Unity",
+    "rootNamespace": "CycloneGames.IO.Tests.Unity",
+    "references": [
+        "CycloneGames.IO.Unity"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

@@ -6,7 +6,7 @@
         "Unity.Burst",
         "Unity.Mathematics",
         "Unity.Collections",
-        "CycloneGames.IO.Runtime",
+        "CycloneGames.IO.SystemIO",
         "CycloneGames.Factory.Runtime",
         "CycloneGames.Factory.DOD.Runtime"
     ],

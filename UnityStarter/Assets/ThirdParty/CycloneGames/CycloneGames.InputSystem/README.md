@@ -36,12 +36,12 @@ These constants enable type-safe, allocation-free input access at runtime.
 Load the configuration at game startup:
 
 ```csharp
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO.Unity;
 using CycloneGames.InputSystem.Runtime;
 using Cysharp.Threading.Tasks;
 
-var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
-var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", UnityPathSource.PersistentData);
+var defaultUri = UnityFileUri.Create("input_config.yaml", UnityFileLocation.StreamingAssets);
+var userUri = UnityFileUri.Create("user_input_settings.yaml", UnityFileLocation.PersistentData);
 await InputSystemLoader.InitializeAsync(defaultUri, userUri);
 ```
 
@@ -534,8 +534,8 @@ await InputManager.Instance.SaveUserConfigurationAsync();
 Delete user config and reinitialize from the default. Cross-platform: Windows, macOS, Linux, Android, iOS, WebGL.
 
 ```csharp
-var defaultUri = FilePathUtility.GetUnityWebRequestUri("input_config.yaml", UnityPathSource.StreamingAssets);
-var userUri = FilePathUtility.GetUnityWebRequestUri("user_input_settings.yaml", UnityPathSource.PersistentData);
+var defaultUri = UnityFileUri.Create("input_config.yaml", UnityFileLocation.StreamingAssets);
+var userUri = UnityFileUri.Create("user_input_settings.yaml", UnityFileLocation.PersistentData);
 bool success = await InputSystemLoader.ResetToDefaultAsync(defaultUri, userUri);
 ```
 

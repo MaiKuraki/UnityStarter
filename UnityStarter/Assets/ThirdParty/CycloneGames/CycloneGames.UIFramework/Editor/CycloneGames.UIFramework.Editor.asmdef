@@ -2,7 +2,7 @@
     "name": "CycloneGames.UIFramework.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.IO.Runtime",
+        "CycloneGames.IO.SystemIO",
         "CycloneGames.Logger",
         "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.UIFramework.Runtime"
