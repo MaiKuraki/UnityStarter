@@ -620,7 +620,7 @@ var items = DataTableRegistry.Get<DataTable<ItemRow>>();
 
 如果你的项目使用了 `CycloneGames.AssetManagement`，可以通过 `AssetManagementDataTableBytesLoader` 把表 `.bytes` 作为 `TextAsset` 加载；若 Provider 支持原始二进制文件，也可以使用 `AssetManagementDataTableRawFileBytesLoader`。两者都会以 `IDataTableBytesProvider` 的形式暴露给 Luban、MessagePack 或自定义格式适配层。`DataTableAssetLoadContext` 用于携带 AssetManagement 的 bucket、tag 和 owner 元数据，`DataTableManifest` 可在格式解析前校验表名、字节长度和 SHA-256。
 
-运行时 manifest 校验会在 `CycloneGames.DataTable.Core` 内保留一个很小的 SHA-256 helper，而不是直接依赖 Unity-facing IO assemblies。构建期和 Editor 工具可以使用 `CycloneGames.IO.Runtime.FileUtility` 或 `XxHash64` 生成、比较 manifest 值，再传给 DataTable。
+运行时 manifest 校验会在 `CycloneGames.DataTable.Core` 内保留一个很小的 SHA-256 helper，而不直接依赖 IO 包。构建期和 Editor 工具可以使用 `CycloneGames.IO.FileHasher`、`CycloneGames.IO.ContentHasher` 或 `XxHash64` 生成 manifest 值，再传给 DataTable。
 
 ```csharp
 using CycloneGames.DataTable;
