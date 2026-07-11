@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Networking
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static long FromDouble(double value)
         {
-            return FPInt64.FromDoubleUnsafe(value).RawValue;
+            return FPInt64.FromDouble(value).RawValue;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

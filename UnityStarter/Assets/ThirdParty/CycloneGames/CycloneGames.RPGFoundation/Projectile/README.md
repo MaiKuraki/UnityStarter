@@ -151,6 +151,8 @@ The Core interface intentionally does not own Unity collider filtering. Server w
 
 The optional deterministic assembly is enabled by `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` and references `CycloneGames.DeterministicMath.Core`.
 
+The integration chooses explicit zero-vector fallbacks at projectile boundaries: a zero spawn direction creates zero initial velocity, and a homing target located exactly at the projectile position preserves the current travel direction. This policy is local to projectile simulation; the base `FPVector3.Normalized` contract remains fail-fast.
+
 Use it when the product needs:
 
 - Lockstep or rollback projectile simulation.

@@ -149,6 +149,8 @@ Core interface 不直接拥有 Unity collider filtering。Server world、determi
 
 可选 deterministic assembly 由 `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` 启用，并引用 `CycloneGames.DeterministicMath.Core`。
 
+该 integration 在 projectile 边界显式选择 zero-vector fallback：zero spawn direction 会生成 zero initial velocity；当 homing target 与 projectile 位于同一点时，则保留当前飞行方向。此策略只属于 projectile simulation；基础 `FPVector3.Normalized` 契约仍保持 fail-fast。
+
 适用场景：
 
 - Lockstep 或 rollback projectile simulation。

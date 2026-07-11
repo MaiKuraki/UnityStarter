@@ -30,7 +30,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// - Aggressive shrink mode for scene transitions
     /// - Pre-warming support
     /// - 0 GC Instance ID tracking
-    /// - Idle-Decay mechanism to work with W-TinyLFU
+    /// - Idle-decay that releases asset leases back to the bounded SLRU cache
     /// </summary>
     public class GameObjectPoolManager : IGameObjectPoolManager
     {
@@ -46,9 +46,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             public int InitialCapacity;
 
             /// <summary>
-            /// Time in seconds before an idle pool is fully destroyed to trigger W-TinyLFU eviction.
+            /// Time in seconds before an idle pool is fully destroyed and its asset lease is released,
+            /// allowing a measurable zero-reference entry to enter SLRU retention, or an
+            /// unmeasurable entry to release its provider handle immediately.
             /// Set to -1f (or any value <= 0) to create an "Immortal Pool", which never auto-decays.
-            /// Ideal for persistent hero abilities to guarantee 0-GC access.
+            /// Useful for persistent abilities when their measured lifetime justifies permanent retention.
             /// </summary>
             public float IdleExpirationTime;
 
@@ -387,7 +389,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Checks all pools and force-drains those that have been completely idle for too long,
-        /// passing them back to W-TinyLFU cache service for active tracking/eviction.
+        /// then returns their asset leases to cache authority for measured SLRU retention or disposal.
         /// </summary>
         private void TickDecay()
         {
@@ -406,7 +408,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     if (now - poolData.LastAccessTime > poolData.Config.IdleExpirationTime)
                     {
                         // Completely idle and expired: Destroy ALL pool contents to release handle
-                        // Ignore MinCapacity so W-TinyLFU gets a chance to clean it up.
+                        // Ignore MinCapacity so no pooled instance keeps the asset lease alive.
                         while (poolData.Pool.Count > 0)
                         {
                             var instance = poolData.Pool.Pop();
@@ -418,7 +420,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                             }
                         }
 
-                        // Let go of reference to notify W-TinyLFU
+                        // Release the caller lease so AssetCacheService can choose measured retention or disposal.
                         poolData.Handle.Dispose();
                         poolData.Handle = null;
                         poolData.PeakActiveSinceLastCheck = 0;

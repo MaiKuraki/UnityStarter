@@ -18,8 +18,8 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
 
             try
             {
-                var health = FPInt64.FromString("12.5");
-                var position = new FPVector3(FPInt64.FromInt(3), FPInt64.FromInt(-4), FPInt64.FromString("5.25"));
+                var health = FPInt64.Parse("12.5");
+                var position = new FPVector3(FPInt64.FromInt(3), FPInt64.FromInt(-4), FPInt64.Parse("5.25"));
 
                 blackboard.SetFPInt64(healthKey, health);
                 blackboard.SetFPVector3(positionKey, position);
@@ -40,7 +40,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
         public void SchemaDefaultsAndDeltaSupportFixedPointKeys()
         {
             RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
-                .AddFPInt64("Cooldown", FPInt64.FromString("1.25"), RuntimeBlackboardSyncFlags.Networked)
+                .AddFPInt64("Cooldown", FPInt64.Parse("1.25"), RuntimeBlackboardSyncFlags.Networked)
                 .AddFPVector2("Velocity", new FPVector2(FPInt64.FromInt(1), FPInt64.FromInt(2)), RuntimeBlackboardSyncFlags.Delta)
                 .Build();
 
@@ -54,7 +54,7 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
             {
                 delta.Attach(source);
 
-                Assert.AreEqual(FPInt64.FromString("1.25").RawValue, source.GetFPInt64(cooldownKey).RawValue);
+                Assert.AreEqual(FPInt64.Parse("1.25").RawValue, source.GetFPInt64(cooldownKey).RawValue);
                 Assert.AreEqual(FPInt64.FromInt(1).RawValue, source.GetFPVector2(velocityKey).X.RawValue);
 
                 source.SetFPVector2(velocityKey, new FPVector2(FPInt64.FromInt(7), FPInt64.FromInt(8)));

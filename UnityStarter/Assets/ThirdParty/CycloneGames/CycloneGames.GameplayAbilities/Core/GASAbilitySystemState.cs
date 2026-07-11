@@ -641,7 +641,7 @@ namespace CycloneGames.GameplayAbilities.Core
             GASModifierEvaluationChannel evaluationChannel)
         {
             var add = FPInt64.Zero;
-            var multiply = FPInt64.OneValue;
+            var multiply = FPInt64.One;
             var overrideValue = FPInt64.Zero;
             bool hasOverride = false;
             bool hasModifierInChannel = false;

@@ -384,14 +384,14 @@ using CycloneGames.BehaviorTree.Integrations.DeterministicMath;
 using CycloneGames.DeterministicMath;
 
 RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
-    .AddFPInt64("Cooldown", FPInt64.FromString("1.25"))
+    .AddFPInt64("Cooldown", FPInt64.Parse("1.25"))
     .AddFPVector3("Position", RuntimeBlackboardSyncFlags.Networked)
     .Build();
 
 blackboard.SetFPVector3("Position", new FPVector3(
     FPInt64.FromInt(10),
     FPInt64.Zero,
-    FPInt64.FromString("3.5")));
+    FPInt64.Parse("3.5")));
 ```
 
 The integration stores `FPInt64`, `FPVector2`, and `FPVector3` as raw long slots, so BehaviorTree core remains independent of the deterministic math package while network payloads remain bit-stable.

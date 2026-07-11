@@ -157,8 +157,6 @@
 | 确定性 GameplayFramework Actor | 显式 `IInteractionDeterministicPositionProvider` + `GameplayFrameworkDeterministicInteractionExtensions` | 从 `Actor.transform.position` 隐式转换 |
 | UI、调试、统计或结果展示 | `FPVector3.ToInteractionVector3()` 作为展示转换 | 把转换后的 float 再喂回权威判定 |
 
-`InteractionDeterministicMathExtensions.ToFPVector3(InteractionVector3)` 与 `ToDeterministicTargetSnapshot(InteractionTargetSnapshot)` 仅保留给迁移、Editor、诊断或非权威桥接，并已标记为 obsolete，以避免开发者把 float 数据误当成确定性信任源。
-
 CycloneGames integration 通过独立 asmdef 或独立可选包隔离。Interaction 的 Cyclone networking 桥接位于 `CycloneGames.RPGFoundation.Interaction.Networking`，不需要 PlayerSettings scripting define symbols。包内其余 integration 使用自己的 assembly reference，不应通过项目级全局 scripting define symbol 启用。
 
 ---

@@ -18,7 +18,7 @@ namespace CycloneGames.GameplayAbilities.Core
         }
 
         public static GASFixedValue Zero => default;
-        public static GASFixedValue One => FromRaw(FPInt64.One);
+        public static GASFixedValue One => FromRaw(FPInt64.RAW_ONE);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static GASFixedValue FromRaw(long rawValue)

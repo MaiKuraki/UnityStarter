@@ -157,8 +157,6 @@ The built-in `INetworkInteractionSystem` is an adapter contract, and `Interactio
 | GameplayFramework actor in deterministic simulation | Explicit `IInteractionDeterministicPositionProvider` plus `GameplayFrameworkDeterministicInteractionExtensions` | Implicit conversion from `Actor.transform.position` |
 | UI, debug, analytics, or result display | `FPVector3.ToInteractionVector3()` as a presentation conversion | Feeding the converted float value back into authority |
 
-`InteractionDeterministicMathExtensions.ToFPVector3(InteractionVector3)` and `ToDeterministicTargetSnapshot(InteractionTargetSnapshot)` are kept only as migration, editor, diagnostics, or non-authoritative bridges and are marked obsolete to discourage using float data as a deterministic trust source.
-
 CycloneGames integrations are isolated behind dedicated asmdef files or separate optional packages. The Interaction Cyclone networking bridge lives in `CycloneGames.RPGFoundation.Interaction.Networking` and does not require PlayerSettings scripting define symbols. Remaining in-package integrations use their own assembly references instead of project-wide scripting define symbols.
 
 ---

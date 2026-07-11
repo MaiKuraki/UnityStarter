@@ -382,14 +382,14 @@ using CycloneGames.BehaviorTree.Integrations.DeterministicMath;
 using CycloneGames.DeterministicMath;
 
 RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
-    .AddFPInt64("Cooldown", FPInt64.FromString("1.25"))
+    .AddFPInt64("Cooldown", FPInt64.Parse("1.25"))
     .AddFPVector3("Position", RuntimeBlackboardSyncFlags.Networked)
     .Build();
 
 blackboard.SetFPVector3("Position", new FPVector3(
     FPInt64.FromInt(10),
     FPInt64.Zero,
-    FPInt64.FromString("3.5")));
+    FPInt64.Parse("3.5")));
 ```
 
 该 integration 会把 `FPInt64`、`FPVector2` 和 `FPVector3` 存为 raw long 槽位，因此 BehaviorTree 核心不依赖确定性数学包，同时网络 payload 保持 bit-stable。
