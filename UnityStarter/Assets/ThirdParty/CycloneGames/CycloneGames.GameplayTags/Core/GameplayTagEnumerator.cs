@@ -1,4 +1,4 @@
-﻿using System.Collections;
+using System.Collections;
 using System.Collections.Generic;
 
 namespace CycloneGames.GameplayTags.Core
@@ -9,18 +9,28 @@ namespace CycloneGames.GameplayTags.Core
       {
          get
          {
-            return GameplayTagManager.GetTagFromRuntimeIndex(m_Indexes[m_CurrentIndex]);
+            int runtimeIndex = m_Indexes[m_CurrentIndex];
+            return m_Snapshot != null
+               ? m_Snapshot.GetTagFromRuntimeIndex(runtimeIndex)
+               : GameplayTagManager.GetTagFromRuntimeIndex(runtimeIndex);
          }
       }
 
       readonly object IEnumerator.Current => Current;
 
       private List<int> m_Indexes;
+      private TagDataSnapshot m_Snapshot;
       private int m_CurrentIndex;
 
       internal GameplayTagEnumerator(List<int> indices)
+         : this(indices, null)
+      {
+      }
+
+      internal GameplayTagEnumerator(List<int> indices, TagDataSnapshot snapshot)
       {
          m_Indexes = indices;
+         m_Snapshot = snapshot;
          m_CurrentIndex = -1;
       }
 

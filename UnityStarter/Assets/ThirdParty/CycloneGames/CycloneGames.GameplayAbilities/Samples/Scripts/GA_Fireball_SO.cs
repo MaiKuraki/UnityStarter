@@ -26,7 +26,11 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             CLogger.LogInfo($"Activating {Name}");
 
-            CommitAbility(actorInfo, spec);
+            if (!CommitAbility(actorInfo, spec).Succeeded)
+            {
+                EndAbility();
+                return;
+            }
 
             var caster = actorInfo.AvatarGameObject;
             var target = FindTarget(caster);
@@ -71,23 +75,9 @@ namespace CycloneGames.GameplayAbilities.Sample
             return enemy;
         }
 
-        public override GameplayAbility CreatePoolableInstance()
+        public override GameplayAbility CreateRuntimeInstance()
         {
-            var ability = new GA_Fireball(this.fireballDamageEffect, this.burnEffect);
-
-            ability.Initialize(
-                this.Name,
-                this.InstancingPolicy,
-                this.NetExecutionPolicy,
-                this.CostEffectDefinition,
-                this.CooldownEffectDefinition,
-                this.AbilityTags,
-                this.ActivationBlockedTags,
-                this.ActivationRequiredTags,
-                this.CancelAbilitiesWithTag,
-                this.BlockAbilitiesWithTag
-            );
-            return ability;
+            return new GA_Fireball(fireballDamageEffect, burnEffect);
         }
     }
 
@@ -97,25 +87,12 @@ namespace CycloneGames.GameplayAbilities.Sample
         public GameplayEffectSO FireballDamageEffect;
         public GameplayEffectSO BurnEffect;
 
-        public override GameplayAbility CreateAbility()
+        protected override GameplayAbility CreateGameplayAbility()
         {
             var effect_fireball = FireballDamageEffect ? FireballDamageEffect.GetGameplayEffect() : null;
             var effect_burn = BurnEffect ? BurnEffect.GetGameplayEffect() : null;
             var ability = new GA_Fireball(effect_fireball, effect_burn);
-
-            ability.Initialize(
-                AbilityName,
-                InstancingPolicy,
-                NetExecutionPolicy,
-                CostEffect?.GetGameplayEffect(),
-                CooldownEffect?.GetGameplayEffect(),
-                AbilityTags,
-                ActivationBlockedTags,
-                ActivationRequiredTags,
-                CancelAbilitiesWithTag,
-                BlockAbilitiesWithTag
-            );
-
+            InitializeAbility(ability);
             return ability;
         }
     }

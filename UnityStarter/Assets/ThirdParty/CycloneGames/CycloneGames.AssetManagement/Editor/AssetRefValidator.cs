@@ -1,90 +1,79 @@
 #if UNITY_EDITOR
-using UnityEditor;
-using UnityEngine;
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 
+using Stopwatch = System.Diagnostics.Stopwatch;
+
+using UnityEditor;
+using UnityEngine;
+
 namespace CycloneGames.AssetManagement.Editor
 {
     /// <summary>
-    /// High-performance build-time validator for AssetRef / SceneRef references.
-    /// <para>
-    /// Architecture (4-phase pipeline):
-    /// <list type="number">
-    ///   <item>Gather all text-serialised asset paths (main thread, zero-load).</item>
-    ///   <item>Parallel file I/O + text scan for <c>m_GUID:</c> / <c>m_Location:</c> pairs — skips 99% of files instantly.</item>
-    ///   <item>Parallel GUID resolution via <see cref="AssetDatabase.GUIDToAssetPath"/>.</item>
-    ///   <item>SerializedObject write-back only for the handful of files that need healing.</item>
-    /// </list>
-    /// </para>
+    /// Validates serialized AssetRef and SceneRef GUID/location pairs without loading every asset.
+    /// File reads are bounded and streaming. Runtime locations are reported but never rewritten because their
+    /// syntax and rename policy belong to the selected provider and product content pipeline.
     /// </summary>
     public static class AssetRefValidator
     {
-        // ── Markers in Unity YAML ────────────────────────────────────────────
-        // AssetRef serialises as:
-        //   someRef:
-        //     m_Location: Assets/path/to/asset
-        //     m_GUID: a1b2c3d4e5f6...
-        // "m_GUID" (capital) is NOT the same as Unity's built-in "guid" (lowercase) used in object references.
-        private const string GuidMarker     = "m_GUID: ";
-        private const string LocationMarker = "m_Location: ";
+        private const int MAX_SCAN_WORKERS = 4;
+        private const string GUID_MARKER = "m_GUID: ";
+        private const string LOCATION_MARKER = "m_Location: ";
 
-        private struct TextRef
+        private enum FieldKind : byte
         {
-            public int    FileIndex;
-            public string GUID;
-            public string StoredLocation;
+            None = 0,
+            Guid = 1,
+            Location = 2,
+        }
+
+        private readonly struct ParsedField
+        {
+            public readonly FieldKind Kind;
+            public readonly int Indent;
+            public readonly string Value;
+
+            public ParsedField(FieldKind kind, int indent, string value)
+            {
+                Kind = kind;
+                Indent = indent;
+                Value = value;
+            }
+        }
+
+        private readonly struct TextRef
+        {
+            public readonly int FileIndex;
+            public readonly string Guid;
+            public readonly string StoredLocation;
+
+            public TextRef(int fileIndex, string guid, string storedLocation)
+            {
+                FileIndex = fileIndex;
+                Guid = guid;
+                StoredLocation = storedLocation;
+            }
         }
 
         [MenuItem("Tools/CycloneGames/AssetManagement/Validate All AssetRefs")]
         public static void ValidateAll()
         {
-            ValidateAllInternal(heal: true);
+            ValidateAllInternal();
         }
 
-        [MenuItem("Tools/CycloneGames/AssetManagement/Report AssetRefs Without Healing")]
-        public static void ValidateAllReportOnly()
+        private static void ValidateAllInternal()
         {
-            ValidateAllInternal(heal: false);
-        }
-
-        private static void ValidateAllInternal(bool heal)
-        {
-            var sw = System.Diagnostics.Stopwatch.StartNew();
-
+            var stopwatch = Stopwatch.StartNew();
             try
             {
-                // ══════════════════════════════════════════════════════════════
-                // Phase 0 — Collect scannable asset paths (main thread, fast)
-                // ══════════════════════════════════════════════════════════════
-                EditorUtility.DisplayProgressBar("AssetRef Validation", "Collecting asset paths...", 0f);
+                EditorUtility.DisplayProgressBar(
+                    "AssetRef Validation",
+                    "Collecting serialized asset paths...",
+                    0f);
 
-                var allPaths = AssetDatabase.GetAllAssetPaths();
-                var paths    = new List<string>(allPaths.Length / 4);
-
-                for (int i = 0; i < allPaths.Length; i++)
-                {
-                    var p = allPaths[i];
-                    if (!p.StartsWith("Assets/", StringComparison.Ordinal)) continue;
-
-                    // Only text-serialisable types that can contain MonoBehaviour / SO fields
-                    if (p.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".unity", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".asset", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".mat", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".controller", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".overrideController", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".playable", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".signal", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".lighting", StringComparison.OrdinalIgnoreCase) ||
-                        p.EndsWith(".mask", StringComparison.OrdinalIgnoreCase))
-                    {
-                        paths.Add(p);
-                    }
-                }
-
+                List<string> paths = CollectScannableAssetPaths();
                 int totalFiles = paths.Count;
                 if (totalFiles == 0)
                 {
@@ -92,247 +81,306 @@ namespace CycloneGames.AssetManagement.Editor
                     return;
                 }
 
-                // ══════════════════════════════════════════════════════════════
-                // Phase 1 — Parallel file read + text scan
-                //   • File.ReadAllText is thread-safe and I/O-bound — ideal for Parallel.For
-                //   • IndexOf("m_GUID: ") skips files without AssetRef instantly
-                //   • No Unity object loading, no SerializedObject, no deserialization
-                // ══════════════════════════════════════════════════════════════
-                EditorUtility.DisplayProgressBar("AssetRef Validation", $"Scanning {totalFiles} files...", 0.1f);
+                EditorUtility.DisplayProgressBar(
+                    "AssetRef Validation",
+                    $"Scanning {totalFiles} files...",
+                    0.1f);
 
-                // Resolve full disk paths once (needed for File.ReadAllText)
-                var diskPaths = new string[totalFiles];
-                for (int i = 0; i < totalFiles; i++)
-                    diskPaths[i] = Path.GetFullPath(paths[i]);
-
-                // Per-file scan results (null = no AssetRef in this file)
                 var resultsPerFile = new List<TextRef>[totalFiles];
-
-                Parallel.For(0, totalFiles, i =>
+                var scanErrors = new string[totalFiles];
+                var parallelOptions = new ParallelOptions
                 {
-                    string text;
-                    try { text = File.ReadAllText(diskPaths[i]); }
-                    catch { return; } // deleted / locked → skip
+                    MaxDegreeOfParallelism = Math.Max(
+                        1,
+                        Math.Min(Environment.ProcessorCount, MAX_SCAN_WORKERS)),
+                };
 
-                    if (text.Length == 0) return;
-
-                    // ── Fast reject: skip files without our marker ──
-                    if (text.IndexOf(GuidMarker, StringComparison.Ordinal) < 0) return;
-
-                    var hits = new List<TextRef>(4);
-                    int searchFrom = 0;
-
-                    while (searchFrom < text.Length)
+                Parallel.For(0, totalFiles, parallelOptions, fileIndex =>
+                {
+                    try
                     {
-                        int guidPos = text.IndexOf(GuidMarker, searchFrom, StringComparison.Ordinal);
-                        if (guidPos < 0) break;
-
-                        // Extract GUID value (to end of line)
-                        int valStart = guidPos + GuidMarker.Length;
-                        int lineEnd  = text.IndexOf('\n', valStart);
-                        if (lineEnd < 0) lineEnd = text.Length;
-
-                        string guid = text.Substring(valStart, lineEnd - valStart).TrimEnd('\r', ' ');
-                        searchFrom = lineEnd + 1;
-
-                        if (guid.Length < 8) continue; // not a valid GUID
-
-                        // ── Indentation of m_GUID line ──
-                        int guidLineStart = text.LastIndexOf('\n', guidPos);
-                        guidLineStart = guidLineStart < 0 ? 0 : guidLineStart + 1;
-                        int guidIndent = guidPos - guidLineStart;
-
-                        // ── Find m_Location as an immediate neighbor at the same indent ──
-                        // AssetRef has exactly 2 fields, so m_Location must be within 1 line.
-                        string location = null;
-
-                        // Check previous line
-                        if (guidLineStart > 1)
-                        {
-                            int prevLineEnd   = guidLineStart - 1; // '\n' before current line
-                            int prevLineStart = text.LastIndexOf('\n', prevLineEnd - 1);
-                            prevLineStart = prevLineStart < 0 ? 0 : prevLineStart + 1;
-
-                            int prevIndent = -1;
-                            int locIdx     = text.IndexOf(LocationMarker, prevLineStart, prevLineEnd - prevLineStart, StringComparison.Ordinal);
-                            if (locIdx >= 0) prevIndent = locIdx - prevLineStart;
-
-                            if (locIdx >= 0 && prevIndent == guidIndent)
-                            {
-                                int locValStart = locIdx + LocationMarker.Length;
-                                location = text.Substring(locValStart, prevLineEnd - locValStart).TrimEnd('\r', ' ');
-                            }
-                        }
-
-                        // Check next line (field order may vary)
-                        if (location == null && searchFrom < text.Length)
-                        {
-                            int nextLineEnd = text.IndexOf('\n', searchFrom);
-                            if (nextLineEnd < 0) nextLineEnd = text.Length;
-
-                            int nextIndent = -1;
-                            int locIdx     = text.IndexOf(LocationMarker, searchFrom, nextLineEnd - searchFrom, StringComparison.Ordinal);
-                            if (locIdx >= 0) nextIndent = locIdx - searchFrom;
-
-                            if (locIdx >= 0 && nextIndent == guidIndent)
-                            {
-                                int locValStart = locIdx + LocationMarker.Length;
-                                location = text.Substring(locValStart, nextLineEnd - locValStart).TrimEnd('\r', ' ');
-                            }
-                        }
-
-                        // Only record if we found m_Location at the same indent (= real AssetRef struct)
-                        if (location == null) continue;
-
-                        hits.Add(new TextRef
-                        {
-                            FileIndex      = i,
-                            GUID           = guid,
-                            StoredLocation = location
-                        });
+                        resultsPerFile[fileIndex] = ScanFile(
+                            Path.GetFullPath(paths[fileIndex]),
+                            fileIndex);
                     }
-
-                    if (hits.Count > 0)
-                        resultsPerFile[i] = hits;
+                    catch (Exception ex) when (IsExpectedFileReadFailure(ex))
+                    {
+                        scanErrors[fileIndex] = ex.Message;
+                    }
                 });
 
-                // ── Flatten into a contiguous array ──
                 int totalRefs = 0;
+                int scanFailureCount = 0;
                 for (int i = 0; i < totalFiles; i++)
-                    if (resultsPerFile[i] != null) totalRefs += resultsPerFile[i].Count;
+                {
+                    totalRefs += resultsPerFile[i]?.Count ?? 0;
+                    if (!string.IsNullOrEmpty(scanErrors[i]))
+                    {
+                        scanFailureCount++;
+                    }
+                }
 
                 if (totalRefs == 0)
                 {
-                    sw.Stop();
-                    Debug.Log($"[AssetRef Validation] No AssetRef found in {totalFiles} files. ({sw.ElapsedMilliseconds}ms)");
+                    stopwatch.Stop();
+                    LogScanFailures(paths, scanErrors);
+                    LogSummary(
+                        brokenCount: 0,
+                        emptyLocationCount: 0,
+                        scanFailureCount,
+                        totalFiles,
+                        totalRefs,
+                        stopwatch.ElapsedMilliseconds);
                     return;
                 }
 
                 var allRefs = new TextRef[totalRefs];
-                int idx = 0;
+                int targetIndex = 0;
                 for (int i = 0; i < totalFiles; i++)
                 {
-                    if (resultsPerFile[i] == null) continue;
-                    var list = resultsPerFile[i];
-                    for (int j = 0; j < list.Count; j++)
-                        allRefs[idx++] = list[j];
+                    List<TextRef> fileResults = resultsPerFile[i];
+                    int count = fileResults?.Count ?? 0;
+                    for (int j = 0; j < count; j++)
+                    {
+                        allRefs[targetIndex++] = fileResults[j];
+                    }
                 }
-                resultsPerFile = null; // allow GC
 
-                // ══════════════════════════════════════════════════════════════
-                // Phase 2 — GUID resolution (main thread)
-                //   AssetDatabase.GUIDToAssetPath is main-thread only in some
-                //   Unity versions, so we run a simple loop here.
-                //   This is still fast: pure in-memory DB lookup, no disk I/O.
-                // ══════════════════════════════════════════════════════════════
-                EditorUtility.DisplayProgressBar("AssetRef Validation", $"Resolving {totalRefs} GUIDs...", 0.7f);
+                EditorUtility.DisplayProgressBar(
+                    "AssetRef Validation",
+                    $"Resolving {totalRefs} GUIDs...",
+                    0.7f);
 
-                var resolvedPaths = new string[totalRefs];
-                for (int i = 0; i < totalRefs; i++)
-                    resolvedPaths[i] = AssetDatabase.GUIDToAssetPath(allRefs[i].GUID);
-
-                // ══════════════════════════════════════════════════════════════
-                // Phase 3 — Classify + heal
-                //   Only files with stale locations need SerializedObject (rare).
-                // ══════════════════════════════════════════════════════════════
-                EditorUtility.DisplayProgressBar("AssetRef Validation", "Classifying...", 0.85f);
-
-                int broken = 0;
-                int healed = 0;
-                var errors = new List<string>(16);
-
-                // fileIndex → list of (guid, newLocation)
-                var healsPerFile = new Dictionary<int, List<(string guid, string newLocation)>>(8);
-
+                int brokenCount = 0;
+                int emptyLocationCount = 0;
+                var errors = new List<string>(Math.Max(16, scanFailureCount));
                 for (int i = 0; i < totalRefs; i++)
                 {
-                    ref var r = ref allRefs[i];
-                    string resolved = resolvedPaths[i];
-
-                    if (string.IsNullOrEmpty(resolved))
+                    TextRef reference = allRefs[i];
+                    string resolvedPath = AssetDatabase.GUIDToAssetPath(reference.Guid);
+                    if (string.IsNullOrEmpty(resolvedPath))
                     {
-                        broken++;
-                        errors.Add($"[BROKEN] {paths[r.FileIndex]} → missing GUID: {r.GUID}");
+                        brokenCount++;
+                        errors.Add(
+                            $"[BROKEN] {paths[reference.FileIndex]} -> missing GUID: {reference.Guid}");
+                        continue;
                     }
-                    else if (resolved != r.StoredLocation)
+
+                    if (!string.IsNullOrWhiteSpace(reference.StoredLocation))
                     {
-                        healed++;
-                        if (!healsPerFile.TryGetValue(r.FileIndex, out var list))
-                        {
-                            list = new List<(string, string)>(4);
-                            healsPerFile[r.FileIndex] = list;
-                        }
-                        list.Add((r.GUID, resolved));
+                        continue;
                     }
+
+                    emptyLocationCount++;
+                    errors.Add(
+                        $"[EMPTY LOCATION] {paths[reference.FileIndex]} -> GUID {reference.Guid} resolves to {resolvedPath}, but no provider runtime location is stored.");
                 }
 
-                // ══════════════════════════════════════════════════════════════
-                // Phase 4 — Write-back via SerializedObject (only affected files)
-                // ══════════════════════════════════════════════════════════════
-                if (heal && healsPerFile.Count > 0)
+                LogScanFailures(paths, scanErrors, errors);
+                for (int i = 0; i < errors.Count; i++)
                 {
-                    EditorUtility.DisplayProgressBar("AssetRef Validation", $"Healing {healsPerFile.Count} file(s)...", 0.95f);
-
-                    foreach (var kvp in healsPerFile)
-                    {
-                        string assetPath = paths[kvp.Key];
-                        var guidToNewLoc = new Dictionary<string, string>(kvp.Value.Count);
-                        foreach (var (guid, newLoc) in kvp.Value)
-                            guidToNewLoc[guid] = newLoc;
-
-                        var assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
-                        if (assets == null) continue;
-
-                        foreach (var asset in assets)
-                        {
-                            if (asset == null) continue;
-                            var so = new SerializedObject(asset);
-                            var it = so.GetIterator();
-                            bool modified = false;
-
-                            while (it.NextVisible(true))
-                            {
-                                if (it.propertyType != SerializedPropertyType.Generic) continue;
-                                var gp = it.FindPropertyRelative("m_GUID");
-                                var lp = it.FindPropertyRelative("m_Location");
-                                if (gp == null || lp == null) continue;
-                                if (gp.propertyType != SerializedPropertyType.String) continue;
-
-                                if (guidToNewLoc.TryGetValue(gp.stringValue, out string newLoc) && lp.stringValue != newLoc)
-                                {
-                                    lp.stringValue = newLoc;
-                                    modified = true;
-                                }
-                            }
-
-                            if (modified)
-                                so.ApplyModifiedPropertiesWithoutUndo();
-                        }
-                    }
+                    Debug.LogError(errors[i]);
                 }
 
-                sw.Stop();
-
-                string fileStats = $"{totalFiles} files scanned, {totalRefs} ref(s) found";
-                string staleSummary = heal ? $"{healed} healed" : $"{healed} stale";
-                if (broken > 0)
-                {
-                    Debug.LogError($"[AssetRef Validation] {broken} broken, {staleSummary}. ({sw.ElapsedMilliseconds}ms, {fileStats})");
-                    foreach (var err in errors)
-                        Debug.LogError(err);
-                }
-                else if (!heal && healed > 0)
-                {
-                    Debug.LogWarning($"[AssetRef Validation] No broken refs, {staleSummary}. ({sw.ElapsedMilliseconds}ms, {fileStats})");
-                }
-                else
-                {
-                    Debug.Log($"[AssetRef Validation] All valid. {staleSummary}. ({sw.ElapsedMilliseconds}ms, {fileStats})");
-                }
+                stopwatch.Stop();
+                LogSummary(
+                    brokenCount,
+                    emptyLocationCount,
+                    scanFailureCount,
+                    totalFiles,
+                    totalRefs,
+                    stopwatch.ElapsedMilliseconds);
             }
             finally
             {
                 EditorUtility.ClearProgressBar();
+            }
+        }
+
+        private static List<string> CollectScannableAssetPaths()
+        {
+            string[] allPaths = AssetDatabase.GetAllAssetPaths();
+            var paths = new List<string>(Math.Max(16, allPaths.Length / 4));
+            for (int i = 0; i < allPaths.Length; i++)
+            {
+                string path = allPaths[i];
+                if (!path.StartsWith("Assets/", StringComparison.Ordinal) ||
+                    !IsScannableAssetPath(path))
+                {
+                    continue;
+                }
+
+                paths.Add(path);
+            }
+
+            return paths;
+        }
+
+        private static bool IsScannableAssetPath(string path)
+        {
+            return path.EndsWith(".prefab", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".unity", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".asset", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".mat", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".controller", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".overrideController", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".playable", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".signal", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".lighting", StringComparison.OrdinalIgnoreCase) ||
+                   path.EndsWith(".mask", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static List<TextRef> ScanFile(string fullPath, int fileIndex)
+        {
+            List<TextRef> results = null;
+            ParsedField previous = default;
+            using (var stream = new FileStream(
+                       fullPath,
+                       FileMode.Open,
+                       FileAccess.Read,
+                       FileShare.ReadWrite | FileShare.Delete,
+                       bufferSize: 16 * 1024,
+                       useAsync: false))
+            using (var reader = new StreamReader(stream, detectEncodingFromByteOrderMarks: true))
+            {
+                string line;
+                while ((line = reader.ReadLine()) != null)
+                {
+                    ParsedField current = ParseField(line);
+                    if (current.Kind != FieldKind.None &&
+                        previous.Kind != FieldKind.None &&
+                        current.Kind != previous.Kind &&
+                        current.Indent == previous.Indent)
+                    {
+                        string guid = current.Kind == FieldKind.Guid ? current.Value : previous.Value;
+                        string location = current.Kind == FieldKind.Location ? current.Value : previous.Value;
+                        if (IsUnityGuid(guid))
+                        {
+                            results ??= new List<TextRef>(4);
+                            results.Add(new TextRef(fileIndex, guid, location));
+                        }
+                    }
+
+                    previous = current;
+                }
+            }
+
+            return results;
+        }
+
+        private static ParsedField ParseField(string line)
+        {
+            if (string.IsNullOrEmpty(line))
+            {
+                return default;
+            }
+
+            int firstContent = 0;
+            while (firstContent < line.Length && line[firstContent] == ' ')
+            {
+                firstContent++;
+            }
+
+            if (MatchesMarker(line, firstContent, GUID_MARKER))
+            {
+                return new ParsedField(
+                    FieldKind.Guid,
+                    firstContent,
+                    line.Substring(firstContent + GUID_MARKER.Length).TrimEnd());
+            }
+
+            if (MatchesMarker(line, firstContent, LOCATION_MARKER))
+            {
+                return new ParsedField(
+                    FieldKind.Location,
+                    firstContent,
+                    line.Substring(firstContent + LOCATION_MARKER.Length).TrimEnd());
+            }
+
+            return default;
+        }
+
+        private static bool MatchesMarker(string line, int startIndex, string marker)
+        {
+            return line.Length - startIndex >= marker.Length &&
+                   string.CompareOrdinal(line, startIndex, marker, 0, marker.Length) == 0;
+        }
+
+        private static bool IsUnityGuid(string value)
+        {
+            if (value == null || value.Length != 32)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < value.Length; i++)
+            {
+                char character = value[i];
+                bool isHex = (character >= '0' && character <= '9') ||
+                             (character >= 'a' && character <= 'f') ||
+                             (character >= 'A' && character <= 'F');
+                if (!isHex)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool IsExpectedFileReadFailure(Exception exception)
+        {
+            return exception is IOException ||
+                   exception is UnauthorizedAccessException ||
+                   exception is NotSupportedException ||
+                   exception is ArgumentException;
+        }
+
+        private static void LogScanFailures(
+            IReadOnlyList<string> paths,
+            IReadOnlyList<string> scanErrors,
+            List<string> destination = null)
+        {
+            for (int i = 0; i < scanErrors.Count; i++)
+            {
+                string error = scanErrors[i];
+                if (string.IsNullOrEmpty(error))
+                {
+                    continue;
+                }
+
+                string message = $"[UNREADABLE] {paths[i]} -> {error}";
+                if (destination == null)
+                {
+                    Debug.LogError(message);
+                }
+                else
+                {
+                    destination.Add(message);
+                }
+            }
+        }
+
+        private static void LogSummary(
+            int brokenCount,
+            int emptyLocationCount,
+            int scanFailureCount,
+            int totalFiles,
+            int totalRefs,
+            long elapsedMilliseconds)
+        {
+            string summary =
+                $"{totalFiles} files, {totalRefs} refs, {brokenCount} broken, " +
+                $"{emptyLocationCount} empty runtime locations, {scanFailureCount} unreadable " +
+                $"({elapsedMilliseconds} ms).";
+
+            if (brokenCount > 0 || emptyLocationCount > 0 || scanFailureCount > 0)
+            {
+                Debug.LogError($"[AssetRef Validation] {summary}");
+            }
+            else
+            {
+                Debug.Log($"[AssetRef Validation] {summary}");
             }
         }
     }

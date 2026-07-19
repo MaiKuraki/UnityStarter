@@ -41,7 +41,7 @@ namespace CycloneGames.Logger.Editor
             UnityEditorInternal.InternalEditorUtility.OpenFileAtLineExternal(fullPath, lineNumber);
         }
 
-        private static bool IsAllowedLoggerSourcePath(string fullPath)
+        internal static bool IsAllowedLoggerSourcePath(string fullPath)
         {
             if (!IsAbsolutePath(fullPath))
             {
@@ -287,7 +287,7 @@ namespace CycloneGames.Logger.Editor
             return !string.IsNullOrEmpty(path) && Path.IsPathRooted(path);
         }
 
-        private static string NormalizePath(string path)
+        internal static string NormalizePath(string path)
         {
             if (string.IsNullOrEmpty(path)) return path;
             path = path.Replace('\\', '/');

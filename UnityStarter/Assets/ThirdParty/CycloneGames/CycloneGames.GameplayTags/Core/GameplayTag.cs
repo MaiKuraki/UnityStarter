@@ -178,10 +178,17 @@ namespace CycloneGames.GameplayTags.Core
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
       private readonly int GetResolvedRuntimeIndex()
       {
+         return GetResolvedRuntimeIndex(GameplayTagManager.Snapshot);
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      internal readonly int GetResolvedRuntimeIndex(TagDataSnapshot snap)
+      {
          if (string.IsNullOrEmpty(m_Name))
             return 0;
+         if (snap == null)
+            throw new ArgumentNullException(nameof(snap));
 
-         TagDataSnapshot snap = GameplayTagManager.Snapshot;
          int idx = m_RuntimeIndex;
          if (idx > 0 && (uint)idx < (uint)snap.TagNames.Length &&
              string.Equals(snap.TagNames[idx], m_Name, StringComparison.Ordinal))

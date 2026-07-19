@@ -166,7 +166,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="autoSubscribeButtonClick">
         /// Controls whether MenuNavigatorVertical automatically subscribes to button click events.
         /// Default: false
-        /// 
+        ///
         /// When true:
         /// - MenuNavigatorVertical automatically subscribes to Button.OnClickAsObservable() for all buttons
         /// - Button clicks (mouse, keyboard, gamepad) are handled automatically via OnConfirm callback
@@ -174,7 +174,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// - Do NOT use Unity's Button.onClick.AddListener() or Inspector-assigned onClick events when this is true
         /// - Doing so will cause duplicate event handling, duplicate callback invocations, and potential logic errors
         /// - Recommended for simple menus where you want automatic click handling
-        /// 
+        ///
         /// When false (default):
         /// - MenuNavigatorVertical still subscribes to Button.OnClickAsObservable() but only handles keyboard/gamepad confirm
         /// - When a button is currently focused and keyboard/gamepad submit is pressed, OnConfirm callback is invoked
@@ -182,7 +182,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// - Mouse clicks on focused buttons will trigger both OnConfirm (via MenuNavigatorVertical) and your manual subscription
         ///   - You should guard against duplicate handling in your manual subscription (e.g., use a flag)
         /// - Use this option when you need custom mouse click handling but still want keyboard/gamepad to work via OnConfirm
-        /// 
+        ///
         /// Note: Mouse hover focus is always handled automatically via MenuNavigatorPointerHandler component regardless of this setting
         /// <param name="focusIndicatorOnTop">
         /// Controls whether the focus indicator is placed on top (last sibling) or bottom (first sibling) of the focused item's children.
@@ -278,7 +278,7 @@ namespace CycloneGames.InputSystem.Runtime
                         buttonPointerHandler.Initialize(this, index, true, _inputPlayer);
                     }
 
-                    // Toggle pointer handler (no onValueChanged subscription needed - 
+                    // Toggle pointer handler (no onValueChanged subscription needed -
                     // PointerHandler intercepts clicks and prevents automatic isOn changes)
                     if (itemSetup.Toggle != null && itemSetup.Toggle.gameObject != null)
                     {
@@ -842,7 +842,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         private static void LogException(Exception exception)
         {
-            CLogger.LogError($"[MenuNavigatorVertical] Callback failed: {exception.Message}");
+            CLogger.LogError($"[MenuNavigatorVertical] Callback failed ({exception.GetType().Name}).");
         }
     }
 }

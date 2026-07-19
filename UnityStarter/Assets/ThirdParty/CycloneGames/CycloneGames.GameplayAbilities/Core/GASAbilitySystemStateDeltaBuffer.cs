@@ -4,15 +4,17 @@ using CycloneGames.GameplayTags.Core;
 namespace CycloneGames.GameplayAbilities.Core
 {
     /// <summary>
-    /// Reusable buffer for carrying incremental state changes to a single client.
-    /// 
-    /// Owned by the caller (typically the network bridge). Each public array has a
-    /// companion Count field — only indices [0, Count) contain valid data. The
-    /// Reserve method pre-allocates internal arrays so the hot path never allocates
-    /// during state capture. Call ClearCounts() to reuse the same buffer instance.
+    /// Reusable process-local scratch buffer for incremental authority-to-replica reconciliation.
+    /// It contains runtime object references and local IDs, so it is not a wire DTO, an asynchronous
+    /// message, or a production transport protocol.
+    ///
+    /// The caller owns the buffer. Each public array has a companion Count field; only indices
+    /// [0, Count) contain valid data. Reserve pre-allocates internal arrays for capture, and
+    /// ClearCounts resets the counted ranges before reuse.
     /// </summary>
     public sealed class GASAbilitySystemStateDeltaBuffer
     {
+        public ushort SchemaVersion = GASRuntimeDataContract.ReconciliationSchemaVersion;
         public uint Sequence;
         public ulong StateChecksum;
         public ulong BaseVersion;
@@ -22,15 +24,18 @@ namespace CycloneGames.GameplayAbilities.Core
         public GASGrantedAbilityStateData[] GrantedAbilities = Array.Empty<GASGrantedAbilityStateData>();
         public int GrantedAbilityCount;
 
-        public IGASAbilityDefinition[] RemovedAbilityDefinitions = Array.Empty<IGASAbilityDefinition>();
-        public int RemovedAbilityDefinitionCount;
+        public int[] RemovedAbilitySpecHandles = Array.Empty<int>();
+        public int RemovedAbilitySpecHandleCount;
 
         public GASActiveEffectStateData[] ActiveEffects = Array.Empty<GASActiveEffectStateData>();
         public int ActiveEffectCount;
         public GASSetByCallerTagStateData[][] ActiveEffectSetByCallerMagnitudes = Array.Empty<GASSetByCallerTagStateData[]>();
+        public GASSetByCallerNameStateData[][] ActiveEffectSetByCallerNameMagnitudes = Array.Empty<GASSetByCallerNameStateData[]>();
+        public GameplayTag[][] ActiveEffectDynamicGrantedTags = Array.Empty<GameplayTag[]>();
+        public GameplayTag[][] ActiveEffectDynamicAssetTags = Array.Empty<GameplayTag[]>();
 
-        public int[] RemovedEffectNetIds = Array.Empty<int>();
-        public int RemovedEffectNetIdCount;
+        public int[] RemovedEffectReconciliationIds = Array.Empty<int>();
+        public int RemovedEffectReconciliationIdCount;
 
         public GASAttributeStateData[] Attributes = Array.Empty<GASAttributeStateData>();
         public int AttributeCount;
@@ -45,42 +50,52 @@ namespace CycloneGames.GameplayAbilities.Core
 
         public void Reserve(
             int grantedAbilityCapacity,
-            int removedAbilityDefinitionCapacity,
+            int removedAbilitySpecCapacity,
             int activeEffectCapacity,
             int removedEffectCapacity,
             int attributeCapacity,
             int addedTagCapacity,
             int removedTagCapacity,
-            int maxSetByCallerPerEffect = 0)
+            int maxSetByCallerPerEffect = 0,
+            int maxSetByCallerNamesPerEffect = 0,
+            int maxDynamicGrantedTagsPerEffect = 0,
+            int maxDynamicAssetTagsPerEffect = 0)
         {
             EnsureGrantedAbilityCapacity(grantedAbilityCapacity);
-            EnsureRemovedAbilityDefinitionCapacity(removedAbilityDefinitionCapacity);
+            EnsureRemovedAbilitySpecHandleCapacity(removedAbilitySpecCapacity);
             EnsureActiveEffectCapacity(activeEffectCapacity);
-            EnsureRemovedEffectNetIdCapacity(removedEffectCapacity);
+            EnsureRemovedEffectReconciliationIdCapacity(removedEffectCapacity);
             EnsureAttributeCapacity(attributeCapacity);
             EnsureAddedTagCapacity(addedTagCapacity);
             EnsureRemovedTagCapacity(removedTagCapacity);
 
-            if (maxSetByCallerPerEffect > 0)
+            if (maxSetByCallerPerEffect > 0 ||
+                maxSetByCallerNamesPerEffect > 0 ||
+                maxDynamicGrantedTagsPerEffect > 0 ||
+                maxDynamicAssetTagsPerEffect > 0)
             {
                 for (int i = 0; i < activeEffectCapacity; i++)
                 {
                     EnsureActiveEffectSetByCallerCapacity(i, maxSetByCallerPerEffect);
+                    EnsureActiveEffectSetByCallerNameCapacity(i, maxSetByCallerNamesPerEffect);
+                    EnsureActiveEffectDynamicGrantedTagCapacity(i, maxDynamicGrantedTagsPerEffect);
+                    EnsureActiveEffectDynamicAssetTagCapacity(i, maxDynamicAssetTagsPerEffect);
                 }
             }
         }
 
         public void ClearCounts()
         {
+            SchemaVersion = GASRuntimeDataContract.ReconciliationSchemaVersion;
             Sequence = 0;
             StateChecksum = 0;
             BaseVersion = 0;
             CurrentVersion = 0;
             ChangeMask = AbilitySystemStateChangeMask.None;
             GrantedAbilityCount = 0;
-            RemovedAbilityDefinitionCount = 0;
+            RemovedAbilitySpecHandleCount = 0;
             ActiveEffectCount = 0;
-            RemovedEffectNetIdCount = 0;
+            RemovedEffectReconciliationIdCount = 0;
             AttributeCount = 0;
             AddedTagCount = 0;
             RemovedTagCount = 0;
@@ -96,14 +111,14 @@ namespace CycloneGames.GameplayAbilities.Core
             return GrantedAbilities;
         }
 
-        public IGASAbilityDefinition[] EnsureRemovedAbilityDefinitionCapacity(int capacity)
+        public int[] EnsureRemovedAbilitySpecHandleCapacity(int capacity)
         {
-            if (RemovedAbilityDefinitions.Length < capacity)
+            if (RemovedAbilitySpecHandles.Length < capacity)
             {
-                RemovedAbilityDefinitions = new IGASAbilityDefinition[capacity];
+                RemovedAbilitySpecHandles = new int[capacity];
             }
 
-            return RemovedAbilityDefinitions;
+            return RemovedAbilitySpecHandles;
         }
 
         public GASActiveEffectStateData[] EnsureActiveEffectCapacity(int capacity)
@@ -122,6 +137,10 @@ namespace CycloneGames.GameplayAbilities.Core
                     ActiveEffectSetByCallerMagnitudes[i] = existing[i];
                 }
             }
+
+            ResizeJagged(ref ActiveEffectSetByCallerNameMagnitudes, capacity);
+            ResizeJagged(ref ActiveEffectDynamicGrantedTags, capacity);
+            ResizeJagged(ref ActiveEffectDynamicAssetTags, capacity);
 
             return ActiveEffects;
         }
@@ -148,14 +167,68 @@ namespace CycloneGames.GameplayAbilities.Core
             return entries;
         }
 
-        public int[] EnsureRemovedEffectNetIdCapacity(int capacity)
+        public GASSetByCallerNameStateData[] EnsureActiveEffectSetByCallerNameCapacity(int effectIndex, int capacity)
         {
-            if (RemovedEffectNetIds.Length < capacity)
+            if (effectIndex < 0) return Array.Empty<GASSetByCallerNameStateData>();
+            EnsureActiveEffectCapacity(effectIndex + 1);
+            var entries = ActiveEffectSetByCallerNameMagnitudes[effectIndex];
+            if (entries == null || entries.Length < capacity)
             {
-                RemovedEffectNetIds = new int[capacity];
+                entries = new GASSetByCallerNameStateData[capacity];
+                ActiveEffectSetByCallerNameMagnitudes[effectIndex] = entries;
+            }
+            return entries;
+        }
+
+        public GameplayTag[] EnsureActiveEffectDynamicGrantedTagCapacity(int effectIndex, int capacity)
+        {
+            if (effectIndex < 0) return Array.Empty<GameplayTag>();
+            EnsureActiveEffectCapacity(effectIndex + 1);
+            var entries = ActiveEffectDynamicGrantedTags[effectIndex];
+            if (entries == null || entries.Length < capacity)
+            {
+                entries = new GameplayTag[capacity];
+                ActiveEffectDynamicGrantedTags[effectIndex] = entries;
+            }
+            return entries;
+        }
+
+        public GameplayTag[] EnsureActiveEffectDynamicAssetTagCapacity(int effectIndex, int capacity)
+        {
+            if (effectIndex < 0) return Array.Empty<GameplayTag>();
+            EnsureActiveEffectCapacity(effectIndex + 1);
+            var entries = ActiveEffectDynamicAssetTags[effectIndex];
+            if (entries == null || entries.Length < capacity)
+            {
+                entries = new GameplayTag[capacity];
+                ActiveEffectDynamicAssetTags[effectIndex] = entries;
+            }
+            return entries;
+        }
+
+        private static void ResizeJagged<T>(ref T[][] values, int capacity)
+        {
+            if (values.Length >= capacity)
+            {
+                return;
             }
 
-            return RemovedEffectNetIds;
+            T[][] existing = values;
+            values = new T[capacity][];
+            for (int i = 0; i < existing.Length; i++)
+            {
+                values[i] = existing[i];
+            }
+        }
+
+        public int[] EnsureRemovedEffectReconciliationIdCapacity(int capacity)
+        {
+            if (RemovedEffectReconciliationIds.Length < capacity)
+            {
+                RemovedEffectReconciliationIds = new int[capacity];
+            }
+
+            return RemovedEffectReconciliationIds;
         }
 
         public GASAttributeStateData[] EnsureAttributeCapacity(int capacity)

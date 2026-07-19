@@ -51,33 +51,42 @@ namespace CycloneGames.GameplayTags.Core
       }
    }
 
-   public interface IGameplayTagContainer : IEnumerable<GameplayTag>
+   public interface IReadOnlyGameplayTagContainer : IEnumerable<GameplayTag>
    {
       bool IsEmpty { get; }
       int ExplicitTagCount { get; }
       int TagCount { get; }
       GameplayTagContainerIndices Indices { get; }
 
-      void AddTag(GameplayTag gameplayTag);
-      void RemoveTag(GameplayTag gameplayTag);
       GameplayTagEnumerator GetTags();
       GameplayTagEnumerator GetExplicitTags();
-      void AddTags<T>(in T other) where T : IGameplayTagContainer;
       void GetParentTags(GameplayTag tag, List<GameplayTag> parentTags);
       void GetChildTags(GameplayTag tag, List<GameplayTag> childTags);
       void GetExplicitParentTags(GameplayTag tag, List<GameplayTag> parentTags);
       void GetExplicitChildTags(GameplayTag tag, List<GameplayTag> childTags);
-      void RemoveTags<T>(in T other) where T : IGameplayTagContainer;
-      void Clear();
       bool ContainsRuntimeIndex(int runtimeIndex, bool explicitOnly);
+   }
+
+   public interface IGameplayTagContainer : IReadOnlyGameplayTagContainer
+   {
+      void AddTag(GameplayTag gameplayTag);
+      void RemoveTag(GameplayTag gameplayTag);
+      void AddTags<T>(in T other) where T : IReadOnlyGameplayTagContainer;
+      void RemoveTags<T>(in T other) where T : IReadOnlyGameplayTagContainer;
+      void Clear();
+   }
+
+   internal interface IGameplayTagRuntimeIndexView
+   {
+      int RuntimeIndexEpoch { get; }
    }
 
    [Serializable]
    [DebuggerTypeProxy(typeof(GameplayTagContainerDebugView))]
    [DebuggerDisplay("{DebuggerDisplay,nq}")]
-   public class GameplayTagContainer : IGameplayTagContainer, IEnumerable<GameplayTag>
+   public class GameplayTagContainer : IGameplayTagContainer, IGameplayTagRuntimeIndexView, IEnumerable<GameplayTag>
    {
-      private const int k_BitsetActivationTagCount = 64;
+      private const int k_BitsetShrinkRatio = 4;
 
       public static GameplayTagContainer Empty => new();
 
@@ -127,11 +136,21 @@ namespace CycloneGames.GameplayTags.Core
       private int[] m_ExplicitBitset = Array.Empty<int>();
       private int[] m_ImplicitBitset = Array.Empty<int>();
       private bool m_SerializedDirty;
+      private int m_RuntimeIndexEpoch;
+
+      int IGameplayTagRuntimeIndexView.RuntimeIndexEpoch
+      {
+         get
+         {
+            EnsureRuntimeStateInitialized();
+            return m_RuntimeIndexEpoch;
+         }
+      }
 
       public GameplayTagContainer()
       { }
 
-      public GameplayTagContainer(IGameplayTagContainer other)
+      public GameplayTagContainer(IReadOnlyGameplayTagContainer other)
       {
          Copy(this, other);
       }
@@ -143,8 +162,11 @@ namespace CycloneGames.GameplayTags.Core
          return clone;
       }
 
-      public static void Copy<T>(GameplayTagContainer dest, in T src) where T : IGameplayTagContainer
+      public static void Copy<T>(GameplayTagContainer dest, in T src) where T : IReadOnlyGameplayTagContainer
       {
+         if (src is GameplayTagContainer sourceContainer && ReferenceEquals(dest, sourceContainer))
+            return;
+         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(src);
          dest.Clear();
 
          if (src.IsEmpty)
@@ -152,17 +174,18 @@ namespace CycloneGames.GameplayTags.Core
 
          GameplayTagContainerIndices.Create(ref dest.m_Indices);
          src.Indices.CopyTo(dest.m_Indices);
+         dest.m_RuntimeIndexEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
          dest.SyncSerializedExplicitTagsWithRuntime();
       }
 
-      public static GameplayTagContainer Intersection<T, U>(in T lhs, in U rhs) where T : IGameplayTagContainer where U : IGameplayTagContainer
+      public static GameplayTagContainer Intersection<T, U>(in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
       {
          GameplayTagContainer intersection = new();
          intersection.AddIntersection(lhs, rhs);
          return intersection;
       }
 
-      public static void Intersection<T, U>(GameplayTagContainer output, in T lhs, in U rhs) where T : IGameplayTagContainer where U : IGameplayTagContainer
+      public static void Intersection<T, U>(GameplayTagContainer output, in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
       {
          if (output == null)
             throw new ArgumentNullException(nameof(output));
@@ -173,7 +196,7 @@ namespace CycloneGames.GameplayTags.Core
          output.AddIntersection(lhs, rhs);
       }
 
-      internal void AddIntersection<T, U>(in T lhs, in U rhs) where T : IGameplayTagContainer where U : IGameplayTagContainer
+      internal void AddIntersection<T, U>(in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
       {
          static void OrderedListIntersection(List<int> a, List<int> b, List<int> dst)
          {
@@ -201,6 +224,8 @@ namespace CycloneGames.GameplayTags.Core
             }
          }
 
+         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(lhs);
+         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(rhs);
          if (lhs.IsEmpty || rhs.IsEmpty)
             return;
 
@@ -209,12 +234,11 @@ namespace CycloneGames.GameplayTags.Core
             m_Indices = GameplayTagContainerIndices.Create();
 
          OrderedListIntersection(lhs.Indices.Explicit, rhs.Indices.Explicit, m_Indices.Explicit);
-         OrderedListIntersection(lhs.Indices.Implicit, rhs.Indices.Implicit, m_Indices.Implicit);
-         RebuildBitsetsFromIndices();
+         FillImplicitTags();
          SyncSerializedExplicitTagsWithRuntime();
       }
 
-      public static GameplayTagContainer Union<T, U>(in T lhs, in U rhs) where T : IGameplayTagContainer where U : IGameplayTagContainer
+      public static GameplayTagContainer Union<T, U>(in T lhs, in U rhs) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
       {
          static void OrderedListUnion(List<int> a, List<int> b, List<int> dst)
          {
@@ -252,8 +276,11 @@ namespace CycloneGames.GameplayTags.Core
                dst.Add(b[j]);
          }
 
+         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(lhs);
+         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(rhs);
          GameplayTagContainer union = new();
          GameplayTagContainerIndices.Create(ref union.m_Indices);
+         union.m_RuntimeIndexEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
 
          if (lhs.IsEmpty && rhs.IsEmpty)
             return union;
@@ -272,8 +299,9 @@ namespace CycloneGames.GameplayTags.Core
          return union;
       }
 
-      public void GetDiffExplicitTags<T>(T other, List<GameplayTag> added, List<GameplayTag> removed) where T : IGameplayTagContainer
+      public void GetDiffExplicitTags<T>(T other, List<GameplayTag> added, List<GameplayTag> removed) where T : IReadOnlyGameplayTagContainer
       {
+         GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(other);
          GameplayTagContainerIndices otherIndices = other.Indices;
          List<int> currentContainerTagIndices = Indices.Explicit;
          List<int> otherContainerTagIndices = otherIndices.Explicit;
@@ -349,6 +377,18 @@ namespace CycloneGames.GameplayTags.Core
 
       public void Clear()
       {
+         int currentEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
+         if (m_Indices.IsCreated && m_RuntimeIndexEpoch != 0 && m_RuntimeIndexEpoch != currentEpoch)
+         {
+            m_Indices = GameplayTagContainerIndices.Create();
+            m_RuntimeIndexEpoch = currentEpoch;
+            m_ExplicitBitset = Array.Empty<int>();
+            m_ImplicitBitset = Array.Empty<int>();
+            m_SerializedExplicitTags?.Clear();
+            m_SerializedDirty = false;
+            return;
+         }
+
          EnsureRuntimeStateInitialized();
          m_Indices.Clear();
          m_ExplicitBitset = Array.Empty<int>();
@@ -373,7 +413,7 @@ namespace CycloneGames.GameplayTags.Core
          SyncSerializedExplicitTagsWithRuntime();
       }
 
-      public void AddTags<T>(in T container) where T : IGameplayTagContainer
+      public void AddTags<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
          if (container == null || container.IsEmpty)
             return;
@@ -425,7 +465,7 @@ namespace CycloneGames.GameplayTags.Core
          SyncSerializedExplicitTagsWithRuntime();
       }
 
-      public void RemoveTags<T>(in T other) where T : IGameplayTagContainer
+      public void RemoveTags<T>(in T other) where T : IReadOnlyGameplayTagContainer
       {
          EnsureRuntimeStateInitialized();
          if (!m_Indices.IsCreated || other == null || other.IsEmpty)
@@ -460,8 +500,8 @@ namespace CycloneGames.GameplayTags.Core
             return false;
 
          int[] bitset = explicitOnly ? m_ExplicitBitset : m_ImplicitBitset;
-         if (TryCheckBit(bitset, runtimeIndex))
-            return true;
+         if (bitset != null && bitset.Length > 0)
+            return TryCheckBit(bitset, runtimeIndex);
 
          List<int> indices = explicitOnly ? m_Indices.Explicit : m_Indices.Implicit;
          return indices != null && indices.Count > 0 && BinarySearchUtility.Search(indices, runtimeIndex) >= 0;
@@ -469,10 +509,21 @@ namespace CycloneGames.GameplayTags.Core
 
       private void EnsureRuntimeStateInitialized()
       {
-         if (m_Indices.IsCreated)
+         int currentEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
+         if (m_Indices.IsCreated && m_RuntimeIndexEpoch == currentEpoch)
             return;
 
+         if (m_Indices.IsCreated && !m_Indices.IsEmpty &&
+             (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0))
+         {
+            throw new InvalidOperationException(
+               "GameplayTagContainer runtime indices crossed an incompatible registry epoch without serialized tag names.");
+         }
+
          m_Indices = GameplayTagContainerIndices.Create();
+         m_ExplicitBitset = Array.Empty<int>();
+         m_ImplicitBitset = Array.Empty<int>();
+         m_RuntimeIndexEpoch = currentEpoch;
 
          if (m_SerializedExplicitTags == null || m_SerializedExplicitTags.Count == 0)
             return;
@@ -549,22 +600,6 @@ namespace CycloneGames.GameplayTags.Core
                 (bitset[wordIndex] & (1 << (runtimeIndex & 31))) != 0;
       }
 
-      private void EnsureBitsetCapacity(int runtimeIndex)
-      {
-         EnsureBitsetCapacity(ref m_ExplicitBitset, runtimeIndex);
-         EnsureBitsetCapacity(ref m_ImplicitBitset, runtimeIndex);
-      }
-
-      private static void EnsureBitsetCapacity(ref int[] bitset, int runtimeIndex)
-      {
-         if (runtimeIndex <= 0)
-            return;
-
-         int requiredLength = (runtimeIndex + 32) >> 5;
-         if (bitset.Length < requiredLength)
-            Array.Resize(ref bitset, requiredLength);
-      }
-
       private static void SetBit(int[] bitset, int runtimeIndex)
       {
          if (runtimeIndex <= 0)
@@ -575,18 +610,6 @@ namespace CycloneGames.GameplayTags.Core
             return;
 
          bitset[wordIndex] |= 1 << (runtimeIndex & 31);
-      }
-
-      private static void ClearBit(int[] bitset, int runtimeIndex)
-      {
-         if (runtimeIndex <= 0)
-            return;
-
-         int wordIndex = runtimeIndex >> 5;
-         if (wordIndex >= bitset.Length)
-            return;
-
-         bitset[wordIndex] &= ~(1 << (runtimeIndex & 31));
       }
 
       private static void ClearBitset(int[] bitset)
@@ -607,14 +630,21 @@ namespace CycloneGames.GameplayTags.Core
 
       private static void RebuildBitsetIfNeeded(List<int> indices, ref int[] bitset)
       {
-         if (indices == null || indices.Count < k_BitsetActivationTagCount)
+         if (indices == null || indices.Count == 0)
          {
             bitset = Array.Empty<int>();
             return;
          }
 
          int maxRuntimeIndex = indices[indices.Count - 1];
-         EnsureBitsetCapacity(ref bitset, maxRuntimeIndex);
+         if (!GameplayTagContainerUtility.ShouldUseBitset(indices.Count, maxRuntimeIndex, out int requiredLength))
+         {
+            bitset = Array.Empty<int>();
+            return;
+         }
+
+         if (bitset.Length < requiredLength || bitset.Length > requiredLength * k_BitsetShrinkRatio)
+            bitset = new int[requiredLength];
          ClearBitset(bitset);
          for (int i = 0; i < indices.Count; i++)
             SetBit(bitset, indices[i]);
@@ -637,6 +667,8 @@ namespace CycloneGames.GameplayTags.Core
       {
          if (!m_SerializedDirty)
             return;
+
+         EnsureRuntimeStateInitialized();
 
          m_SerializedDirty = false;
 

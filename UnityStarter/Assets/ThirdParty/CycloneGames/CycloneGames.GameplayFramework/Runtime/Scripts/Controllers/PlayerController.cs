@@ -1,149 +1,128 @@
-using CycloneGames.Logger;
-using Cysharp.Threading.Tasks;
+using System;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
+    /// <summary>
+    /// Participant controller facade. LocalPlayer, possession, and view target are independent
+    /// relationships; remote PlayerControllers do not create local camera state.
+    /// </summary>
     public class PlayerController : Controller
     {
         [SerializeField] private bool bAutoManageActiveCameraTarget = true;
 
-        public UniTask InitializationTask { get; private set; } = UniTask.CompletedTask;
-        public bool RuntimeComponentsInitialized { get; private set; }
-
+        private LocalPlayer localPlayer;
         private SpectatorPawn spectatorPawn;
-        public SpectatorPawn GetSpectatorPawn() => spectatorPawn;
         private CameraManager cameraManager;
-        public CameraManager GetCameraManager() => cameraManager;
-        private CycloneGames.GameplayFramework.Runtime.CameraContext cameraContext;
-
+        private CameraContext cameraContext;
         private Actor viewTarget;
         private bool hasExplicitViewTarget;
 
-        #region Spectator
-        public SpectatorPawn SpawnSpectatorPawn()
+        public override bool IsLocalController => localPlayer != null;
+        public LocalPlayer LocalPlayer => localPlayer;
+        public bool RuntimeComponentsInitialized { get; private set; }
+        public bool AutoManageActiveCameraTargetEnabled => bAutoManageActiveCameraTarget;
+
+        public SpectatorPawn GetSpectatorPawn() => spectatorPawn;
+        public CameraManager GetCameraManager() => cameraManager;
+
+        public virtual void InitializePlayer(
+            World targetWorld,
+            PlayerState playerState,
+            LocalPlayer owningLocalPlayer,
+            CameraManager localCameraManager = null,
+            SpectatorPawn initialSpectatorPawn = null)
         {
-            if (spectatorPawn != null) return spectatorPawn;
-
-            spectatorPawn = objectSpawner?.Create(worldSettings?.SpectatorPawnClass) as SpectatorPawn;
-            if (spectatorPawn == null)
+            if (RuntimeComponentsInitialized)
             {
-                CLogger.LogError("[PlayerController] Spawn SpectatorPawn Failed, check spawn pipeline");
-                return null;
+                throw new InvalidOperationException("PlayerController runtime components are already initialized.");
             }
 
-            RefreshActiveCameraTarget();
-            return spectatorPawn;
-        }
-        #endregion
+            base.Initialize(targetWorld, playerState ?? throw new ArgumentNullException(nameof(playerState)));
 
-        #region Camera
-        void SpawnCameraManager()
-        {
-            if (cameraManager != null) return;
-            if (worldSettings?.CameraManagerClass == null) return;
-
-            cameraManager = objectSpawner?.Create(worldSettings.CameraManagerClass) as CameraManager;
-            if (cameraManager == null)
+            if (localCameraManager != null && owningLocalPlayer == null)
             {
-                CLogger.LogError("[PlayerController] Spawn CameraManager Failed, check spawn pipeline");
-                return;
+                throw new InvalidOperationException("Only a local PlayerController can own a CameraManager.");
             }
 
-            cameraManager.SetOwner(this);
-            cameraManager.InitializeFor(this);
-            RefreshActiveCameraTarget();
-        }
-
-        public virtual void InitializeRuntimeComponents()
-        {
-            if (RuntimeComponentsInitialized) return;
-
-            if (!IsInitialized)
+            if (localCameraManager != null && !ReferenceEquals(localCameraManager.World, targetWorld))
             {
-                CLogger.LogError("[PlayerController] InitializeRuntimeComponents called before Initialize");
-                return;
+                throw new InvalidOperationException("CameraManager must belong to the same World.");
             }
 
-            if (GetPlayerState() == null)
+            if (initialSpectatorPawn != null && !ReferenceEquals(initialSpectatorPawn.World, targetWorld))
             {
-                InitPlayerState();
+                throw new InvalidOperationException("SpectatorPawn must belong to the same World.");
             }
 
-            EnsureCameraContextCreated();
-            SpawnCameraManager();
-            SpawnSpectatorPawn();
-            RefreshActiveCameraTarget();
+            localPlayer = owningLocalPlayer;
+            spectatorPawn = initialSpectatorPawn;
+            cameraManager = localCameraManager;
+
+            if (cameraManager != null)
+            {
+                EnsureCameraContextCreated();
+                cameraManager.SetOwner(this);
+                cameraManager.InitializeFor(this);
+            }
+
             RuntimeComponentsInitialized = true;
-            InitializationTask = UniTask.CompletedTask;
+            RefreshActiveCameraTarget();
         }
 
-        public CycloneGames.GameplayFramework.Runtime.CameraContext GetCameraContext()
+        #region Camera context
+        public CameraContext GetCameraContext()
         {
             EnsureCameraContextCreated();
             return cameraContext;
         }
 
-        protected virtual CycloneGames.GameplayFramework.Runtime.IViewTargetPolicy CreateDefaultViewTargetPolicy()
+        protected virtual IViewTargetPolicy CreateDefaultViewTargetPolicy()
         {
-            return new CycloneGames.GameplayFramework.Runtime.DefaultGameplayViewTargetPolicy();
+            return new DefaultGameplayViewTargetPolicy();
         }
 
-        protected virtual CycloneGames.GameplayFramework.Runtime.CameraMode CreateDefaultCameraMode()
+        protected virtual CameraMode CreateDefaultCameraMode()
         {
-            // Keep framework default neutral; project-specific framing belongs in game layer.
-            return new CycloneGames.GameplayFramework.Runtime.ViewTargetCameraMode();
+            return new ViewTargetCameraMode();
         }
 
-        /// <summary>
-        /// Maximum number of stacked CameraModes in <see cref="CycloneGames.GameplayFramework.Runtime.CameraContext"/>.
-        /// Override in project layer for camera-heavy games.
-        /// </summary>
-        protected virtual int GetCameraModeStackCapacity()
-        {
-            return 8;
-        }
+        protected virtual int GetCameraModeStackCapacity() => 8;
 
         private void EnsureCameraContextCreated()
         {
-            if (cameraContext != null) return;
+            if (cameraContext != null)
+            {
+                return;
+            }
 
-            cameraContext = new CycloneGames.GameplayFramework.Runtime.CameraContext(this, GetCameraModeStackCapacity());
+            cameraContext = new CameraContext(this, GetCameraModeStackCapacity());
             cameraContext.SetViewTargetPolicy(CreateDefaultViewTargetPolicy());
             cameraContext.SetBaseCameraMode(CreateDefaultCameraMode());
             cameraContext.SetResolvedViewTarget(GetAutoManagedViewTarget());
             viewTarget = cameraContext.CurrentViewTarget;
         }
 
-        public bool AutoManageActiveCameraTargetEnabled => bAutoManageActiveCameraTarget;
-
-        public virtual void SetViewTargetPolicy(CycloneGames.GameplayFramework.Runtime.IViewTargetPolicy policy)
+        public virtual void SetViewTargetPolicy(IViewTargetPolicy policy)
         {
             GetCameraContext().SetViewTargetPolicy(policy ?? CreateDefaultViewTargetPolicy());
             RefreshActiveCameraTarget();
         }
 
-        public virtual void SetBaseCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
+        public virtual void SetBaseCameraMode(CameraMode cameraMode)
         {
             GetCameraContext().SetBaseCameraMode(cameraMode);
             cameraManager?.NotifyCameraStateChanged();
         }
 
-        public virtual void PushCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
+        public virtual bool PushCameraMode(CameraMode cameraMode)
         {
-            if (cameraMode == null) return;
-
-            if (GetCameraContext().TryPushCameraMode(cameraMode))
+            if (cameraMode == null)
             {
-                cameraManager?.NotifyCameraStateChanged();
+                return false;
             }
-        }
 
-        public virtual bool TryPushCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
-        {
-            if (cameraMode == null) return false;
-
-            bool pushed = GetCameraContext().TryPushCameraMode(cameraMode);
+            bool pushed = GetCameraContext().PushCameraMode(cameraMode);
             if (pushed)
             {
                 cameraManager?.NotifyCameraStateChanged();
@@ -152,11 +131,19 @@ namespace CycloneGames.GameplayFramework.Runtime
             return pushed;
         }
 
-        public virtual bool TryPushOrReplaceOldestCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
-        {
-            if (cameraMode == null) return false;
+        public virtual bool TryPushCameraMode(CameraMode cameraMode) => PushCameraMode(cameraMode);
 
-            bool applied = GetCameraContext().TryPushOrReplaceOldest(cameraMode);
+        public virtual bool TryPushOrReplaceOldestCameraMode(
+            CameraMode cameraMode,
+            out CameraMode replacedMode)
+        {
+            if (cameraMode == null)
+            {
+                replacedMode = null;
+                return false;
+            }
+
+            bool applied = GetCameraContext().TryPushOrReplaceOldest(cameraMode, out replacedMode);
             if (applied)
             {
                 cameraManager?.NotifyCameraStateChanged();
@@ -165,21 +152,28 @@ namespace CycloneGames.GameplayFramework.Runtime
             return applied;
         }
 
-        public virtual bool RemoveCameraMode(CycloneGames.GameplayFramework.Runtime.CameraMode cameraMode)
+        public virtual bool RemoveCameraMode(CameraMode cameraMode)
         {
-            if (cameraMode == null || cameraContext == null) return false;
+            if (cameraMode == null || cameraContext == null)
+            {
+                return false;
+            }
 
             bool removed = cameraContext.RemoveCameraMode(cameraMode);
             if (removed)
             {
                 cameraManager?.NotifyCameraStateChanged();
             }
+
             return removed;
         }
 
         public virtual void SetAutoManageActiveCameraTarget(bool enabled)
         {
-            if (bAutoManageActiveCameraTarget == enabled) return;
+            if (bAutoManageActiveCameraTarget == enabled)
+            {
+                return;
+            }
 
             bAutoManageActiveCameraTarget = enabled;
             if (enabled)
@@ -209,8 +203,12 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         protected virtual void RefreshActiveCameraTarget()
         {
-            EnsureCameraContextCreated();
+            if (!IsLocalController && cameraContext == null)
+            {
+                return;
+            }
 
+            EnsureCameraContextCreated();
             if (hasExplicitViewTarget && viewTarget == null)
             {
                 hasExplicitViewTarget = false;
@@ -238,17 +236,13 @@ namespace CycloneGames.GameplayFramework.Runtime
             EnsureCameraContextCreated();
             viewTarget = target;
             cameraContext.SetResolvedViewTarget(target);
-            if (cameraManager != null)
-            {
-                // Keep CameraManager fallback transform target in sync with Actor view target.
-                // CameraManager primarily consumes CameraContext.CurrentViewTarget, but syncing
-                // PendingViewTargetTF keeps internal state/debug view consistent.
-                cameraManager.SetViewTarget(target != null ? target.transform : null);
-            }
+            cameraManager?.SetViewTarget(target != null ? target.transform : null);
         }
 
         protected virtual void SetViewTargetInternal(Actor newViewTarget, bool isExplicitOverride)
         {
+            ValidateViewTarget(newViewTarget);
+
             EnsureCameraContextCreated();
             hasExplicitViewTarget = isExplicitOverride;
             if (isExplicitOverride)
@@ -259,48 +253,64 @@ namespace CycloneGames.GameplayFramework.Runtime
             {
                 cameraContext.ClearManualViewTargetOverride();
             }
+
             ApplyViewTargetToCameraManager(newViewTarget);
         }
 
-        /// <summary>
-        /// Sets the view target for this player controller's camera system.
-        /// </summary>
-        public virtual void SetViewTarget(Actor NewViewTarget)
+        public virtual void SetViewTarget(Actor newViewTarget)
         {
-            SetViewTargetInternal(NewViewTarget, isExplicitOverride: true);
+            SetViewTargetInternal(newViewTarget, isExplicitOverride: true);
         }
 
-        /// <summary>
-        /// Sets the view target with a blend time for smooth camera transition.
-        /// </summary>
-        public virtual void SetViewTargetWithBlend(Actor NewViewTarget, float BlendTime = 0f)
+        public virtual void SetViewTargetWithBlend(Actor newViewTarget, float blendTime = 0f)
         {
-            cameraManager?.SetNextBlendDuration(BlendTime);
-            SetViewTarget(NewViewTarget);
+            if (float.IsNaN(blendTime) || float.IsInfinity(blendTime) || blendTime < 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(blendTime));
+            }
+
+            // Validate before publishing the one-shot override so a rejected target cannot
+            // leave blend state that would be consumed by a later, unrelated transition.
+            ValidateViewTarget(newViewTarget);
+            cameraManager?.SetNextBlendDuration(blendTime);
+            SetViewTarget(newViewTarget);
+        }
+
+        private void ValidateViewTarget(Actor newViewTarget)
+        {
+            if (newViewTarget != null && World != null && !ReferenceEquals(newViewTarget.World, World))
+            {
+                throw new InvalidOperationException("View target must belong to the same World.");
+            }
         }
 
         public override Actor GetViewTarget()
         {
-            if (cameraContext != null && cameraContext.CurrentViewTarget != null) return cameraContext.CurrentViewTarget;
-            if (viewTarget != null) return viewTarget;
-            return base.GetViewTarget();
+            if (cameraContext != null && cameraContext.CurrentViewTarget != null)
+            {
+                return cameraContext.CurrentViewTarget;
+            }
+
+            return viewTarget != null ? viewTarget : base.GetViewTarget();
         }
 
-        public virtual void AutoManageActiveCameraTarget(Actor SuggestedTarget)
+        public virtual void AutoManageActiveCameraTarget(Actor suggestedTarget)
         {
-            if (!bAutoManageActiveCameraTarget || hasExplicitViewTarget) return;
+            if (!bAutoManageActiveCameraTarget || hasExplicitViewTarget)
+            {
+                return;
+            }
 
-            Actor target = GetCameraContext().ResolveViewTarget(SuggestedTarget != null ? SuggestedTarget : GetAutoManagedViewTarget());
+            Actor target = GetCameraContext().ResolveViewTarget(
+                suggestedTarget != null ? suggestedTarget : GetAutoManagedViewTarget());
             SetViewTargetInternal(target, isExplicitOverride: false);
         }
         #endregion
 
-        #region Initialization
-
-        protected override void OnPossess(Pawn InPawn)
+        protected override void OnPossess(Pawn newPawn)
         {
-            base.OnPossess(InPawn);
-            AutoManageActiveCameraTarget(InPawn);
+            base.OnPossess(newPawn);
+            AutoManageActiveCameraTarget(newPawn);
         }
 
         protected override void OnUnPossess()
@@ -309,36 +319,101 @@ namespace CycloneGames.GameplayFramework.Runtime
             RefreshActiveCameraTarget();
         }
 
+        protected override void OnWorldUnbound(EndPlayReason reason)
+        {
+            World currentWorld = World;
+            CameraManager ownedCameraManager = cameraManager;
+            SpectatorPawn ownedSpectatorPawn = spectatorPawn;
+            try
+            {
+                base.OnWorldUnbound(reason);
+            }
+            finally
+            {
+                ClearPlayerRuntimeRelationships();
+                if (currentWorld != null &&
+                    (currentWorld.LifecycleState == WorldLifecycleState.Initializing ||
+                     currentWorld.LifecycleState == WorldLifecycleState.Playing))
+                {
+                    DestroyAssociatedActor(currentWorld, ownedCameraManager);
+                    DestroyAssociatedActor(currentWorld, ownedSpectatorPawn);
+                }
+            }
+        }
+
         protected override void OnDestroy()
         {
-            cameraManager = null;
-            spectatorPawn = null;
-            cameraContext = null;
-            viewTarget = null;
-            hasExplicitViewTarget = false;
-            RuntimeComponentsInitialized = false;
-            InitializationTask = UniTask.CompletedTask;
+            World currentWorld = World;
+            if (currentWorld != null &&
+                currentWorld.ContainsPlayerController(this) &&
+                currentWorld.GameMode != null)
+            {
+                currentWorld.GameMode.HandleDestroyingPlayerController(this);
+            }
+
+            CameraManager ownedCameraManager = cameraManager;
+            SpectatorPawn ownedSpectatorPawn = spectatorPawn;
+
             base.OnDestroy();
-        }
-        #endregion
+            ClearPlayerRuntimeRelationships();
 
-        #region Migration
-        public override ActorMigrationState CaptureMigrationState(int ownerConnectionId, int instigatorActorId)
-        {
-            return base.CaptureMigrationState(ownerConnectionId, instigatorActorId);
+            if (currentWorld != null)
+            {
+                if (ownedCameraManager != null && currentWorld.IsActorRegistered(ownedCameraManager))
+                {
+                    currentWorld.DestroyActor(ownedCameraManager);
+                }
+
+                if (ownedSpectatorPawn != null && currentWorld.IsActorRegistered(ownedSpectatorPawn))
+                {
+                    currentWorld.DestroyActor(ownedSpectatorPawn);
+                }
+            }
         }
 
-        public override void RestoreMigrationState(in ActorMigrationState state)
+        private void ClearPlayerRuntimeRelationships()
         {
-            base.RestoreMigrationState(state);
-            RuntimeComponentsInitialized = false;
+            LocalPlayer ownedLocalPlayer = localPlayer;
+            try
+            {
+                cameraContext?.Clear();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+            finally
+            {
+                cameraContext = null;
+                cameraManager = null;
+                spectatorPawn = null;
+                viewTarget = null;
+                hasExplicitViewTarget = false;
+                RuntimeComponentsInitialized = false;
+                if (ownedLocalPlayer != null && ReferenceEquals(ownedLocalPlayer.PlayerController, this))
+                {
+                    ownedLocalPlayer.PlayerController = null;
+                }
+
+                localPlayer = null;
+            }
         }
 
-        public override void PostMigration()
+        private static void DestroyAssociatedActor(World currentWorld, Actor actor)
         {
-            base.PostMigration();
-            InitializeRuntimeComponents();
+            if (actor == null || !currentWorld.IsActorRegistered(actor))
+            {
+                return;
+            }
+
+            try
+            {
+                currentWorld.DestroyActor(actor);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, actor);
+            }
         }
-        #endregion
     }
 }

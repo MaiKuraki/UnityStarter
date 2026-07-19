@@ -14,6 +14,13 @@ namespace CycloneGames.Factory.Runtime
         TrimOnDespawn = 1,
     }
 
+    public enum PoolLifecycleState
+    {
+        Ready = 0,
+        Disposing = 1,
+        Disposed = 2,
+    }
+
     public readonly struct PoolCapacitySettings : IEquatable<PoolCapacitySettings>
     {
         public int SoftCapacity { get; }
@@ -27,9 +34,20 @@ namespace CycloneGames.Factory.Runtime
             PoolOverflowPolicy overflowPolicy = PoolOverflowPolicy.Throw,
             PoolTrimPolicy trimPolicy = PoolTrimPolicy.Manual)
         {
-            if (softCapacity < 0) throw new ArgumentOutOfRangeException(nameof(softCapacity));
-            if (hardCapacity == 0 || hardCapacity < -1) throw new ArgumentOutOfRangeException(nameof(hardCapacity));
-            if (hardCapacity > 0 && softCapacity > hardCapacity) throw new ArgumentException("Soft capacity cannot exceed hard capacity.");
+            if (softCapacity < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(softCapacity));
+            }
+
+            if (hardCapacity == 0 || hardCapacity < -1)
+            {
+                throw new ArgumentOutOfRangeException(nameof(hardCapacity));
+            }
+
+            if (hardCapacity > 0 && softCapacity > hardCapacity)
+            {
+                throw new ArgumentException("Soft capacity cannot exceed hard capacity.");
+            }
 
             SoftCapacity = softCapacity;
             HardCapacity = hardCapacity;
@@ -54,14 +72,14 @@ namespace CycloneGames.Factory.Runtime
         {
             unchecked
             {
-                uint h = (uint)SoftCapacity;
-                h = ((h >> 16) ^ h) * 0x45d9f3b;
-                h ^= (uint)HardCapacity * 0x9e3779b9;
-                h = ((h >> 16) ^ h) * 0x45d9f3b;
-                h ^= (uint)OverflowPolicy * 0x27d4eb2d;
-                h ^= (uint)TrimPolicy * 0x9e3779b9;
-                h = (h >> 16) ^ h;
-                return (int)h;
+                uint hash = (uint)SoftCapacity;
+                hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
+                hash ^= (uint)HardCapacity * 0x9e3779b9;
+                hash = ((hash >> 16) ^ hash) * 0x45d9f3b;
+                hash ^= (uint)OverflowPolicy * 0x27d4eb2d;
+                hash ^= (uint)TrimPolicy * 0x9e3779b9;
+                hash = (hash >> 16) ^ hash;
+                return (int)hash;
             }
         }
     }
@@ -70,24 +88,30 @@ namespace CycloneGames.Factory.Runtime
     {
         public int PeakCountActive { get; }
         public int PeakCountAll { get; }
-        public int TotalCreated { get; }
-        public int TotalSpawned { get; }
-        public int TotalDespawned { get; }
-        public int FailedSpawnRollbacks { get; }
-        public int RejectedSpawns { get; }
-        public int InvalidDespawns { get; }
-        public int DestroyedOnTrim { get; }
+        public long TotalCreated { get; }
+        public long TotalSpawned { get; }
+        public long TotalDespawned { get; }
+        public long FailedSpawnRollbacks { get; }
+        public long RejectedSpawns { get; }
+        public long InvalidDespawns { get; }
+        public long TotalDestroyed { get; }
+        public long CallbackFailures { get; }
+        public long QuarantinedItems { get; }
+        public long InvalidatedInactiveItems { get; }
 
         public PoolDiagnostics(
             int peakCountActive,
             int peakCountAll,
-            int totalCreated,
-            int totalSpawned,
-            int totalDespawned,
-            int failedSpawnRollbacks,
-            int rejectedSpawns,
-            int invalidDespawns,
-            int destroyedOnTrim)
+            long totalCreated,
+            long totalSpawned,
+            long totalDespawned,
+            long failedSpawnRollbacks,
+            long rejectedSpawns,
+            long invalidDespawns,
+            long totalDestroyed,
+            long callbackFailures,
+            long quarantinedItems,
+            long invalidatedInactiveItems)
         {
             PeakCountActive = peakCountActive;
             PeakCountAll = peakCountAll;
@@ -97,7 +121,10 @@ namespace CycloneGames.Factory.Runtime
             FailedSpawnRollbacks = failedSpawnRollbacks;
             RejectedSpawns = rejectedSpawns;
             InvalidDespawns = invalidDespawns;
-            DestroyedOnTrim = destroyedOnTrim;
+            TotalDestroyed = totalDestroyed;
+            CallbackFailures = callbackFailures;
+            QuarantinedItems = quarantinedItems;
+            InvalidatedInactiveItems = invalidatedInactiveItems;
         }
     }
 
@@ -106,6 +133,7 @@ namespace CycloneGames.Factory.Runtime
         public int CountAll { get; }
         public int CountActive { get; }
         public int CountInactive { get; }
+        public PoolLifecycleState LifecycleState { get; }
         public PoolCapacitySettings CapacitySettings { get; }
         public PoolDiagnostics Diagnostics { get; }
 
@@ -113,12 +141,14 @@ namespace CycloneGames.Factory.Runtime
             int countAll,
             int countActive,
             int countInactive,
+            PoolLifecycleState lifecycleState,
             PoolCapacitySettings capacitySettings,
             PoolDiagnostics diagnostics)
         {
             CountAll = countAll;
             CountActive = countActive;
             CountInactive = countInactive;
+            LifecycleState = lifecycleState;
             CapacitySettings = capacitySettings;
             Diagnostics = diagnostics;
         }
@@ -130,6 +160,7 @@ namespace CycloneGames.Factory.Runtime
         int CountActive { get; }
         int CountInactive { get; }
         Type ItemType { get; }
+        PoolLifecycleState LifecycleState { get; }
         PoolCapacitySettings CapacitySettings { get; }
         PoolDiagnostics Diagnostics { get; }
         PoolProfile Profile { get; }

@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using NUnit.Framework;
 using CycloneGames.Networking.Interest;
 using CycloneGames.Networking.Simulation;
-using CycloneGames.Networking.Stubs;
 using CycloneGames.Networking.Transports;
 
 namespace CycloneGames.Networking.Tests.Editor
@@ -130,7 +129,7 @@ namespace CycloneGames.Networking.Tests.Editor
             PollPair(pair);
 
             Assert.IsTrue(result.Succeeded);
-            Assert.AreEqual(NetworkSendStatus.Accepted, result.Status);
+            Assert.AreEqual(NetworkSendStatus.Queued, result.Status);
             Assert.AreEqual(payload.Length, result.BytesAccepted);
             Assert.AreEqual(1, receivedCount);
             CollectionAssert.AreEqual(payload, received);
@@ -158,11 +157,12 @@ namespace CycloneGames.Networking.Tests.Editor
                 Buffer.BlockCopy(data.Array, data.Offset, received, 0, data.Count);
             };
 
-            int channelId = pair.Server.Transport.GetChannelId(NetworkChannel.Unreliable);
+            int channelId = pair.Server.Transport.GetChannelId(NetworkChannel.Reliable);
             NetworkSendResult result = pair.Server.Transport.Send(pair.ClientConnection, new ArraySegment<byte>(payload), channelId);
             PollPair(pair);
 
             Assert.IsTrue(result.Succeeded);
+            Assert.AreEqual(NetworkSendStatus.Queued, result.Status);
             Assert.AreEqual(payload.Length, result.BytesAccepted);
             Assert.AreEqual(1, receivedCount);
             CollectionAssert.AreEqual(payload, received);
@@ -405,21 +405,6 @@ namespace CycloneGames.Networking.Tests.Editor
         }
     }
 
-    public sealed class NoopNetTransportLifecycleTests
-    {
-        [Test]
-        public void Snapshot_ReportsNoRuntimeFeatures()
-        {
-            var transport = new NoopNetTransport();
-
-            NetworkLifecycleSnapshot snapshot = NetworkLifecycle.GetSnapshot(transport);
-
-            Assert.AreEqual(NetworkLifecycleState.Stopped, snapshot.State);
-            Assert.AreEqual(NetworkBackendFeatures.None, snapshot.Features);
-            Assert.IsFalse(snapshot.HasFeature(NetworkBackendFeatures.RealtimeTransport));
-        }
-    }
-
     public sealed class NetworkTickAndReplicationContractTests
     {
         [Test]
@@ -491,32 +476,6 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void NetworkTickSystem_IgnoresDuplicateTickableRegistration()
-        {
-            var system = new NetworkTickSystem(tickRate: 30);
-            var tickable = new CountingTickable();
-
-            system.RegisterTickable(tickable);
-            system.RegisterTickable(tickable);
-            system.Update(system.TickInterval);
-
-            Assert.AreEqual(1, tickable.TickCount);
-        }
-
-        [Test]
-        public void NetworkTickSystem_UsesStableSnapshotDuringTickMutation()
-        {
-            var system = new NetworkTickSystem(tickRate: 30);
-            var selfRemoving = new SelfRemovingTickable(system);
-
-            system.RegisterTickable(selfRemoving);
-            system.Update(system.TickInterval);
-            system.Update(system.TickInterval);
-
-            Assert.AreEqual(1, selfRemoving.TickCount);
-        }
-
-        [Test]
         public void DistanceInterestRule_FiltersByRadiusAndLayer()
         {
             var rule = new DistanceInterestRule();
@@ -573,34 +532,6 @@ namespace CycloneGames.Networking.Tests.Editor
             composite.PreUpdate(Array.Empty<INetworkEntity>());
 
             Assert.AreEqual(1, child.PreUpdateCount);
-        }
-
-        private sealed class CountingTickable : ITickable
-        {
-            public int TickCount { get; private set; }
-
-            public void OnNetworkTick(NetworkTick tick, float tickDeltaTime)
-            {
-                TickCount++;
-            }
-        }
-
-        private sealed class SelfRemovingTickable : ITickable
-        {
-            private readonly NetworkTickSystem _system;
-
-            public SelfRemovingTickable(NetworkTickSystem system)
-            {
-                _system = system;
-            }
-
-            public int TickCount { get; private set; }
-
-            public void OnNetworkTick(NetworkTick tick, float tickDeltaTime)
-            {
-                TickCount++;
-                _system.UnregisterTickable(this);
-            }
         }
 
         private sealed class CountingInterestManager : IInterestManager

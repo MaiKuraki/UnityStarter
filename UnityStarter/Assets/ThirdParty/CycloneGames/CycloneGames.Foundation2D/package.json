@@ -2,12 +2,13 @@
   "name": "com.cyclone-games.foundation2d",
   "version": "1.0.0",
   "displayName": "CycloneGames.Foundation2D",
-  "description": "CycloneGames Foundation2D",
+  "description": "Production-oriented sprite-sequence playback for SpriteRenderer and Unity UI, with an optional Burst batch integration and authoring tools.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
     "com.cyclone-games.logger": "1.0.0",
-    "com.cyclone-games.factory": "1.0.0"
+    "com.cyclone-games.factory": "1.0.0",
+    "com.unity.ugui": "1.0.0"
   },
   "keywords": [
     "CycloneGames",
@@ -21,8 +22,8 @@
   },
   "samples": [
     {
-      "displayName": "Pure C# Benchmarks",
-      "description": "Performance benchmarks for pure C# factory and object pooling scenarios",
+      "displayName": "Sprite Sequence Benchmark",
+      "description": "End-to-end MonoUpdate and optional Burst batch measurements for sprite-sequence controllers.",
       "path": "Samples"
     }
   ]

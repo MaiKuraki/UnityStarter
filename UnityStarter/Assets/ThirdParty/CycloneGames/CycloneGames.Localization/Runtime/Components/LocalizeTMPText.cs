@@ -12,7 +12,7 @@ namespace CycloneGames.Localization.Runtime
     [RequireComponent(typeof(TMP_Text))]
     [AddComponentMenu("CycloneGames/Localization/Localize TMP Text")]
     [DisallowMultipleComponent]
-    public sealed class LocalizeTMPText : MonoBehaviour
+    public sealed class LocalizeTMPText : MonoBehaviour, ILocalizationBindingTarget
     {
         [SerializeField] private LocalizedString localizedString;
 
@@ -25,6 +25,7 @@ namespace CycloneGames.Localization.Runtime
         private byte _numericArgumentCount;
         private int _pluralCount;
         private bool _isPluralMode;
+        private bool _subscribed;
 
         public LocalizedString LocalizedString
         {
@@ -104,18 +105,18 @@ namespace CycloneGames.Localization.Runtime
             Refresh();
         }
 
-        public void Bind(ILocalizationService service)
+        public void Bind(in LocalizationBindingContext context)
         {
-            if (_service != null)
-                _service.OnLocaleChanged -= OnLocaleChanged;
+            Unbind();
+            _service = context.Localization;
+            if (isActiveAndEnabled) Subscribe();
+            Refresh();
+        }
 
-            _service = service;
-
-            if (_service != null)
-            {
-                _service.OnLocaleChanged += OnLocaleChanged;
-                Refresh();
-            }
+        public void Unbind()
+        {
+            Unsubscribe();
+            _service = null;
         }
 
         private void Awake()
@@ -123,13 +124,41 @@ namespace CycloneGames.Localization.Runtime
             _text = GetComponent<TMP_Text>();
         }
 
-        private void OnDestroy()
+        private void OnEnable()
         {
-            if (_service != null)
-                _service.OnLocaleChanged -= OnLocaleChanged;
+            Subscribe();
+            Refresh();
         }
 
-        private void OnLocaleChanged(LocaleId _) => Refresh();
+        private void OnDisable()
+        {
+            Unsubscribe();
+        }
+
+        private void OnDestroy()
+        {
+            Unbind();
+        }
+
+        private void OnLocalizationChanged(LocalizationChange change)
+        {
+            if (change.Reason != LocalizationChangeReason.Shutdown)
+                Refresh();
+        }
+
+        private void Subscribe()
+        {
+            if (_subscribed || _service == null) return;
+            _service.Changed += OnLocalizationChanged;
+            _subscribed = true;
+        }
+
+        private void Unsubscribe()
+        {
+            if (!_subscribed) return;
+            _service.Changed -= OnLocalizationChanged;
+            _subscribed = false;
+        }
 
         private void Refresh()
         {

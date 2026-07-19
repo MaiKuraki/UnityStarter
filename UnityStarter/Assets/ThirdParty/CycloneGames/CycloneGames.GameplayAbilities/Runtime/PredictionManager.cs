@@ -5,9 +5,10 @@ using CycloneGames.GameplayAbilities.Core;
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
-    /// Owns prediction windows, pending predicted effects, and closed prediction transaction records.
+    /// Owns ASC-local prediction windows, provisional effects, and closed transaction records.
+    /// This owner-thread state is independent from transport operation identity and replay protection.
     /// </summary>
-    public sealed class PredictionManager
+    internal sealed class PredictionManager
     {
         public const int DefaultTransactionRecordCapacity = 64;
 
@@ -29,11 +30,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int TransactionRecordCount;
         public int LocalPredictionInputSequence;
         public long TotalWindowsOpened;
-        public long TotalWindowsConfirmed;
-        public long TotalWindowsRejected;
+        public long TotalWindowsCommitted;
+        public long TotalWindowsRolledBack;
         public long TotalWindowsTimedOut;
-        public long StalePredictionConfirmCount;
-        public long StalePredictionRejectCount;
+        public long StalePredictionCommitCount;
+        public long StalePredictionRollbackCount;
 
         public IReadOnlyList<GASPredictionWindowData> Windows => _windows;
         public IReadOnlyList<ActiveGameplayEffect> PendingPredictedEffects => _pendingPredictedEffects;
@@ -65,13 +66,29 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public GASPredictionKey CreatePredictionKey(GASEntityId owner)
         {
-            int inputSequence = unchecked(++LocalPredictionInputSequence);
-            if (inputSequence == 0)
+            if (!owner.IsValid)
             {
-                inputSequence = unchecked(++LocalPredictionInputSequence);
+                throw new ArgumentException("A Runtime prediction key requires a non-zero ASC-local owner namespace.", nameof(owner));
             }
 
-            return GASPredictionKey.NewKey(owner, inputSequence);
+            // Reuse after wrap is safe only when the candidate is not open on this ASC.
+            for (int attempt = 0; attempt <= _windows.Count; attempt++)
+            {
+                LocalPredictionInputSequence = LocalPredictionInputSequence == int.MaxValue
+                    ? 1
+                    : LocalPredictionInputSequence + 1;
+
+                var predictionKey = new GASPredictionKey(
+                    LocalPredictionInputSequence,
+                    owner,
+                    LocalPredictionInputSequence);
+                if (!HasOpenWindow(predictionKey))
+                {
+                    return predictionKey;
+                }
+            }
+
+            throw new InvalidOperationException("The prediction key sequence cannot advance without colliding with an open window.");
         }
 
         public bool RegisterWindow(GASPredictionWindowData window)
@@ -162,7 +179,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return false;
         }
 
-        public bool TryGetTimedOutWindow(int currentFrame, out GASPredictionWindowData window)
+        public bool TryGetTimedOutWindow(long currentFrame, out GASPredictionWindowData window)
         {
             for (int i = _windows.Count - 1; i >= 0; i--)
             {
@@ -189,6 +206,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             IncrementWindowCounter(predictionKey, WindowCounterKind.PredictedAttributeSnapshot, 1);
         }
 
+        public void DecrementPredictedAttributeSnapshotCount(GASPredictionKey predictionKey, int count)
+        {
+            int index = FindWindowIndex(predictionKey);
+            if (index < 0 || count <= 0) return;
+            GASPredictionWindowData window = _windows[index];
+            window.PredictedAttributeSnapshotCount = Math.Max(0, window.PredictedAttributeSnapshotCount - count);
+            _windows[index] = window;
+        }
+
         public void IncrementPredictedGameplayCueCount(GASPredictionKey predictionKey, int count = 1)
         {
             IncrementWindowCounter(predictionKey, WindowCounterKind.PredictedGameplayCue, count);
@@ -203,7 +229,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             int parentLinkedCount = 0;
             int expirableCount = 0;
-            int earliestTimeoutFrame = 0;
+            long earliestTimeoutFrame = 0;
             int predictedEffectCount = 0;
             int predictedAttributeSnapshotCount = 0;
             int predictedGameplayCueCount = 0;
@@ -241,11 +267,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 predictedGameplayCueCount,
                 predictedAbilityTaskCount,
                 TotalWindowsOpened,
-                TotalWindowsConfirmed,
-                TotalWindowsRejected,
+                TotalWindowsCommitted,
+                TotalWindowsRolledBack,
                 TotalWindowsTimedOut,
-                StalePredictionConfirmCount,
-                StalePredictionRejectCount,
+                StalePredictionCommitCount,
+                StalePredictionRollbackCount,
                 TransactionRecordCount,
                 TransactionRecords?.Length ?? 0);
         }
@@ -323,7 +349,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GASPredictionWindowData window,
             GASPredictionWindowStatus status,
             GASPredictionRollbackFlags rollbackFlags,
-            int closeFrame)
+            long closeFrame)
         {
             if (TransactionRecords == null || TransactionRecords.Length == 0)
             {
@@ -343,35 +369,35 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        public void RecordStaleTransaction(GASPredictionKey predictionKey, GASPredictionWindowStatus status, int closeFrame)
+        public void RecordStaleTransaction(GASPredictionKey predictionKey, GASPredictionWindowStatus status, long closeFrame)
         {
             if (!predictionKey.IsValid)
             {
                 return;
             }
 
-            if (status == GASPredictionWindowStatus.Confirmed)
+            if (status == GASPredictionWindowStatus.Committed)
             {
-                StalePredictionConfirmCount++;
+                StalePredictionCommitCount++;
             }
-            else if (status == GASPredictionWindowStatus.Rejected)
+            else if (status == GASPredictionWindowStatus.RolledBack)
             {
-                StalePredictionRejectCount++;
+                StalePredictionRollbackCount++;
             }
 
             var window = new GASPredictionWindowData(predictionKey, default, default, 0, 0, 0);
-            RecordTransaction(window, status, GASPredictionRollbackFlags.StaleMessage, closeFrame);
+            RecordTransaction(window, status, GASPredictionRollbackFlags.StaleClosure, closeFrame);
         }
 
         public void IncrementClosedWindowCount(GASPredictionWindowStatus status)
         {
             switch (status)
             {
-                case GASPredictionWindowStatus.Confirmed:
-                    TotalWindowsConfirmed++;
+                case GASPredictionWindowStatus.Committed:
+                    TotalWindowsCommitted++;
                     break;
-                case GASPredictionWindowStatus.Rejected:
-                    TotalWindowsRejected++;
+                case GASPredictionWindowStatus.RolledBack:
+                    TotalWindowsRolledBack++;
                     break;
                 case GASPredictionWindowStatus.TimedOut:
                     TotalWindowsTimedOut++;
@@ -381,10 +407,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void AddPendingPredictedEffect(ActiveGameplayEffect effect)
         {
-            if (effect != null)
+            if (effect != null && !_pendingPredictedEffects.Contains(effect))
             {
                 _pendingPredictedEffects.Add(effect);
             }
+        }
+
+        public bool RemovePendingPredictedEffect(ActiveGameplayEffect effect)
+        {
+            if (effect == null)
+            {
+                return false;
+            }
+
+            for (int i = _pendingPredictedEffects.Count - 1; i >= 0; i--)
+            {
+                if (!ReferenceEquals(_pendingPredictedEffects[i], effect))
+                {
+                    continue;
+                }
+
+                RemovePendingPredictedEffectAt(i);
+                return true;
+            }
+
+            return false;
         }
 
         public int RemovePendingPredictedEffects(GASPredictionKey predictionKey)
@@ -432,45 +479,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return false;
         }
 
-        public ActiveGameplayEffect FindPendingPredictedEffectForReconcile(
-            GameplayEffect effectDef,
-            AbilitySystemComponent source,
-            GASPredictionKey predictionKey)
-        {
-            if (effectDef == null)
-            {
-                return null;
-            }
-
-            for (int i = _pendingPredictedEffects.Count - 1; i >= 0; i--)
-            {
-                var effect = _pendingPredictedEffects[i];
-                if (effect == null ||
-                    effect.IsExpired ||
-                    effect.NetworkId != 0 ||
-                    effect.Spec?.Def != effectDef)
-                {
-                    continue;
-                }
-
-                if (predictionKey.IsValid)
-                {
-                    if (effect.Spec.Context == null || !effect.Spec.Context.PredictionKey.Equals(predictionKey))
-                    {
-                        continue;
-                    }
-                }
-                else if (source != null && effect.Spec.Source != source)
-                {
-                    continue;
-                }
-
-                return effect;
-            }
-
-            return null;
-        }
-
         public bool ValidateIndexes()
         {
             if (_indexByKey.Count != _windows.Count)
@@ -507,11 +515,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
             CurrentPredictionKey = default;
             LocalPredictionInputSequence = 0;
             TotalWindowsOpened = 0;
-            TotalWindowsConfirmed = 0;
-            TotalWindowsRejected = 0;
+            TotalWindowsCommitted = 0;
+            TotalWindowsRolledBack = 0;
             TotalWindowsTimedOut = 0;
-            StalePredictionConfirmCount = 0;
-            StalePredictionRejectCount = 0;
+            StalePredictionCommitCount = 0;
+            StalePredictionRollbackCount = 0;
         }
 
         private void IncrementWindowCounter(GASPredictionKey predictionKey, WindowCounterKind kind, int count)

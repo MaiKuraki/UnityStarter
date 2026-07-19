@@ -15,9 +15,7 @@ namespace CycloneGames.Networking
         // Reserved message ID ranges. Optional packages claim sub-ranges inside the module-owned range.
         public const ushort SystemMsgIdMin = 0;
         public const ushort SystemMsgIdMax = 999;
-        public const ushort RpcMsgIdMin = 1000;
-        public const ushort RpcMsgIdMax = 9999;
-        public const ushort ModuleMsgIdMin = 10000;
+        public const ushort ModuleMsgIdMin = 1000;
         public const ushort ModuleMsgIdMax = 29999;
         public const ushort UserMsgIdMin = 30000;
 

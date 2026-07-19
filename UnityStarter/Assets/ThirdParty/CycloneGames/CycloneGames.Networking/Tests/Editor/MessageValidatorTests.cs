@@ -48,7 +48,8 @@ namespace CycloneGames.Networking.Tests.Editor
                 payload,
                 ReadOnlySpan<byte>.Empty,
                 transportEncrypted: false,
-                currentTime: 0f);
+                currentTime: 0d,
+                rateLimitBytes: NetworkWireProtocol.HeaderLength + payload.Length);
 
             Assert.AreEqual(MessageSecurityResult.Valid, result.Result);
         }
@@ -75,7 +76,8 @@ namespace CycloneGames.Networking.Tests.Editor
                 payload,
                 ReadOnlySpan<byte>.Empty,
                 transportEncrypted: false,
-                currentTime: 0f);
+                currentTime: 0d,
+                rateLimitBytes: NetworkWireProtocol.HeaderLength + payload.Length);
 
             Assert.AreEqual(MessageSecurityResult.DirectionRejected, result.Result);
         }
@@ -102,7 +104,8 @@ namespace CycloneGames.Networking.Tests.Editor
                 payload,
                 ReadOnlySpan<byte>.Empty,
                 transportEncrypted: false,
-                currentTime: 0f);
+                currentTime: 0d,
+                rateLimitBytes: NetworkWireProtocol.HeaderLength + payload.Length);
 
             Assert.AreEqual(MessageSecurityResult.AuthenticationRequired, result.Result);
         }
@@ -128,7 +131,8 @@ namespace CycloneGames.Networking.Tests.Editor
                 payload,
                 ReadOnlySpan<byte>.Empty,
                 transportEncrypted: false,
-                currentTime: 0f);
+                currentTime: 0d,
+                rateLimitBytes: NetworkWireProtocol.HeaderLength + payload.Length);
 
             Assert.AreEqual(MessageSecurityResult.EncryptionRequired, result.Result);
         }
@@ -162,7 +166,8 @@ namespace CycloneGames.Networking.Tests.Editor
                 payload,
                 ReadOnlySpan<byte>.Empty,
                 transportEncrypted: false,
-                currentTime: 0f);
+                currentTime: 0d,
+                rateLimitBytes: NetworkWireProtocol.HeaderLength + payload.Length);
 
             Assert.AreEqual(MessageSecurityResult.PayloadTooLarge, result.Result);
         }
@@ -172,9 +177,53 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             var replayGuard = new NetworkReplayGuard();
 
-            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 1));
-            Assert.IsFalse(replayGuard.TryAccept(1, 1000, 1));
-            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 2));
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 1, 0d));
+            Assert.IsFalse(replayGuard.TryAccept(1, 1000, 1, 0d));
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 2, 0d));
+        }
+
+        [Test]
+        public void NetworkReplayGuard_Allows_Bounded_Reordering_And_Sequence_Wrap()
+        {
+            var replayGuard = new NetworkReplayGuard();
+
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, uint.MaxValue - 1, 0d));
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 1, 0d));
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, uint.MaxValue, 0d));
+            Assert.IsFalse(replayGuard.TryAccept(1, 1000, uint.MaxValue, 0d));
+        }
+
+        [Test]
+        public void NetworkReplayGuard_Rejects_New_Stream_After_Capacity_Is_Exhausted()
+        {
+            var replayGuard = new NetworkReplayGuard(maxConnections: 1, maxStreamsPerConnection: 1);
+
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 1, 1d));
+            Assert.IsFalse(replayGuard.TryAccept(1, 1001, 1, 1d));
+            Assert.IsFalse(replayGuard.TryAccept(2, 1000, 1, 1d));
+        }
+
+        [Test]
+        public void NetworkReplayGuard_Reuses_Expired_Stream_Capacity()
+        {
+            var replayGuard = new NetworkReplayGuard(
+                maxConnections: 1,
+                maxStreamsPerConnection: 1,
+                idleTimeoutSeconds: 2d);
+
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 1, 0d));
+            Assert.IsTrue(replayGuard.TryAccept(1, 1001, 1, 2d));
+            Assert.IsFalse(replayGuard.TryAccept(1, 1000, 2, 2d));
+        }
+
+        [Test]
+        public void NetworkReplayGuard_Rejects_Clock_Regression()
+        {
+            var replayGuard = new NetworkReplayGuard();
+
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 1, 10d));
+            Assert.IsFalse(replayGuard.TryAccept(1, 1000, 2, 9d));
+            Assert.IsTrue(replayGuard.TryAccept(1, 1000, 2, 10d));
         }
 
         [Test]
@@ -236,6 +285,47 @@ namespace CycloneGames.Networking.Tests.Editor
             frame[NetworkWireProtocol.VersionOffset] = unchecked((byte)(NetworkWireProtocol.CurrentVersion + 1));
 
             Assert.AreEqual(NetworkFrameResult.UnsupportedVersion, NetworkFrameCodec.TryReadHeader(new ArraySegment<byte>(frame), out _));
+        }
+
+        [Test]
+        public void NetworkFrameCodec_Rejects_Trailing_Bytes()
+        {
+            byte[] frame = new byte[NetworkWireProtocol.HeaderLength + 1];
+            NetworkFrameCodec.WriteHeader(
+                frame,
+                0,
+                new NetworkEnvelopeHeader(1200, NetworkChannel.Reliable, 0, 1, 0));
+
+            Assert.AreEqual(
+                NetworkFrameResult.InvalidPayloadLength,
+                NetworkFrameCodec.TryReadPayload(new ArraySegment<byte>(frame), out _, out _));
+        }
+
+        [Test]
+        public void NetworkFrameCodec_Rejects_Unknown_Flags_Channel_And_Reserved_Byte()
+        {
+            byte[] frame = new byte[NetworkWireProtocol.HeaderLength];
+            NetworkFrameCodec.WriteHeader(
+                frame,
+                0,
+                new NetworkEnvelopeHeader(1200, NetworkChannel.Reliable, 0, 1, 0));
+
+            frame[NetworkWireProtocol.FlagsOffset + 1] = 0x80;
+            Assert.AreEqual(NetworkFrameResult.InvalidFlags, NetworkFrameCodec.TryReadHeader(frame, out _));
+
+            frame[NetworkWireProtocol.FlagsOffset + 1] = 0;
+            frame[NetworkWireProtocol.ChannelOffset] = byte.MaxValue;
+            Assert.AreEqual(NetworkFrameResult.InvalidChannel, NetworkFrameCodec.TryReadHeader(frame, out _));
+
+            frame[NetworkWireProtocol.ChannelOffset] = (byte)NetworkChannel.Reliable;
+            frame[NetworkWireProtocol.ReservedOffset] = 1;
+            Assert.AreEqual(NetworkFrameResult.InvalidReservedByte, NetworkFrameCodec.TryReadHeader(frame, out _));
+        }
+
+        [Test]
+        public void NetworkFrameCodec_GetFrameLength_Rejects_Integer_Overflow()
+        {
+            Assert.Throws<OverflowException>(() => NetworkFrameCodec.GetFrameLength(int.MaxValue));
         }
 
         private struct TestConnection : INetConnection

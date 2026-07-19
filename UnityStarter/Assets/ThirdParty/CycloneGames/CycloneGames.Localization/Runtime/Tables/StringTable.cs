@@ -25,7 +25,7 @@ namespace CycloneGames.Localization.Runtime
         {
             get
             {
-                // Cache to avoid repeated interning
+                // Cache validation and canonicalization for this authoring asset.
                 if (!_cachedLocale.IsValid && !string.IsNullOrEmpty(localeCode))
                     _cachedLocale = new LocaleId(localeCode);
                 return _cachedLocale;
@@ -49,15 +49,26 @@ namespace CycloneGames.Localization.Runtime
         {
             if (_compiled != null) return _compiled;
 
+            if (string.IsNullOrEmpty(tableId))
+                throw new InvalidOperationException("String table ID is required.");
+            if (!LocaleId.IsValid)
+                throw new InvalidOperationException("String table locale code is invalid.");
+
             var lookup = new Dictionary<string, string>(entries.Count, StringComparer.Ordinal);
+            var keys = new HashSet<string>(StringComparer.Ordinal);
             for (int i = 0; i < entries.Count; i++)
             {
                 var e = entries[i];
-                if (string.IsNullOrEmpty(e.Key)) continue;
-                lookup[e.Key] = e.Value;
+                if (string.IsNullOrEmpty(e.Key))
+                    throw new InvalidOperationException("String table entries must have non-empty keys.");
+                if (!keys.Add(e.Key))
+                    throw new InvalidOperationException("Duplicate string key '" + e.Key + "'.");
+                if (string.IsNullOrWhiteSpace(e.Value))
+                    continue;
+                lookup.Add(e.Key, e.Value ?? string.Empty);
             }
 
-            _compiled = new CompiledStringTable(tableId, LocaleId, lookup);
+            _compiled = new CompiledStringTable(tableId, LocaleId, lookup, true);
             return _compiled;
         }
 

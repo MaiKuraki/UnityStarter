@@ -1,114 +1,205 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Localization.Core;
+using System.Threading;
+using Cysharp.Threading.Tasks;
+using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Runtime;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations.Localization
 {
     /// <summary>
-    /// <see cref="IUIWindowBinder"/> that bridges <see cref="ILocalizationService"/> locale
-    /// changes to every <see cref="ILocaleResponder"/> found within active UIWindows.
-    /// <para>
-    /// Register via <c>IUIService.RegisterWindowBinder(binder)</c>.
-    /// With VContainer: register <see cref="LocalizationWindowBinder"/> as a singleton and
-    /// let the container call <c>RegisterWindowBinder</c> during setup.
-    /// </para>
+    /// Creates transactional, window-scoped localization component bindings.
     /// </summary>
-    public sealed class LocalizationWindowBinder : IUIWindowBinder, IDisposable
+    /// <remarks>
+    /// Construction, binding, and disposal are confined to the Unity main thread. Component
+    /// discovery is performed once for each window instance; locale changes do not rescan the
+    /// hierarchy.
+    /// </remarks>
+    public sealed class LocalizationWindowBinder : IUIWindowBinder
     {
-        private readonly ILocalizationService _service;
-        private readonly List<WindowResponderBinding> _activeWindows = new(16);
+        private const int InitialBehaviourCapacity = 16;
+        private const int InitialTargetCapacity = 8;
+        private const int MaxRetainedBehaviourCapacity = 256;
 
-        // Reusable discovery buffer. Locale changes use the per-window cached responder arrays.
-        private static readonly List<ILocaleResponder> SharedResponderCache = new(32);
+        private readonly LocalizationBindingContext _localizationContext;
+        private List<MonoBehaviour> _behaviourScratch;
+        private readonly int _ownerThreadId;
 
-        private sealed class WindowResponderBinding
+        public LocalizationWindowBinder(
+            ILocalizationService service,
+            IAssetPackage assetPackage = null)
         {
-            public UIWindow Window;
-            public ILocaleResponder[] Responders;
-        }
-
-        public LocalizationWindowBinder(ILocalizationService service)
-        {
-            _service = service ?? throw new ArgumentNullException(nameof(service));
-            _service.OnLocaleChanged += OnLocaleChanged;
-        }
-
-        // IUIWindowBinder
-        public void OnWindowCreated(UIWindow window)
-        {
-            if (window == null) return;
-
-            for (int i = 0; i < _activeWindows.Count; i++)
+            if (!PlayerLoopHelper.IsMainThread)
             {
-                if (_activeWindows[i].Window == window)
-                    return;
+                throw new InvalidOperationException(
+                    "LocalizationWindowBinder must be created on the Unity main thread.");
             }
 
-            var binding = new WindowResponderBinding
-            {
-                Window = window,
-                Responders = BuildResponderCache(window)
-            };
-            _activeWindows.Add(binding);
-            NotifyResponders(binding.Responders, _service.CurrentLocale);
+            _localizationContext = new LocalizationBindingContext(
+                service ?? throw new ArgumentNullException(nameof(service)),
+                assetPackage);
+            _behaviourScratch = new List<MonoBehaviour>(InitialBehaviourCapacity);
+            _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
         }
 
-        public void OnWindowDestroying(UIWindow window)
+        public IUIWindowBinding Bind(UIWindowBindingContext context)
         {
-            for (int i = _activeWindows.Count - 1; i >= 0; i--)
+            EnsureOwnerThread();
+            if (!_localizationContext.Localization.IsInitialized)
             {
-                if (_activeWindows[i].Window == window)
+                throw new InvalidOperationException(
+                    "Initialize the localization service before binding UI windows.");
+            }
+
+            List<MonoBehaviour> behaviours = _behaviourScratch;
+            behaviours.Clear();
+            try
+            {
+                context.Window.GetComponentsInChildren(true, behaviours);
+                return new LocalizationWindowBinding(
+                    in _localizationContext,
+                    behaviours,
+                    _ownerThreadId);
+            }
+            finally
+            {
+                behaviours.Clear();
+                if (ReferenceEquals(_behaviourScratch, behaviours) &&
+                    behaviours.Capacity > MaxRetainedBehaviourCapacity)
                 {
-                    _activeWindows.RemoveAt(i);
-                    return;
+                    // Do not let one atypically large hierarchy pin its scan buffer for the
+                    // composition root's full lifetime.
+                    _behaviourScratch = new List<MonoBehaviour>(InitialBehaviourCapacity);
                 }
             }
         }
 
-        public void OnWindowStateChanged(UIWindow window, WindowStateCallbackType state) { }
-
-        // Locale change propagation
-        private void OnLocaleChanged(LocaleId newLocale)
+        private void EnsureOwnerThread()
         {
-            for (int i = _activeWindows.Count - 1; i >= 0; i--)
+            if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)
             {
-                if (i >= _activeWindows.Count) continue;
-                var binding = _activeWindows[i];
-                if (binding.Window == null)
-                {
-                    _activeWindows.RemoveAt(i);
-                    continue;
-                }
-
-                NotifyResponders(binding.Responders, newLocale);
+                throw new InvalidOperationException(
+                    "LocalizationWindowBinder is confined to its Unity main-thread owner.");
             }
         }
 
-        private static ILocaleResponder[] BuildResponderCache(UIWindow window)
+        private sealed class LocalizationWindowBinding : IUIWindowBinding
         {
-            window.GetComponentsInChildren(true, SharedResponderCache);
-            var responders = SharedResponderCache.Count > 0
-                ? SharedResponderCache.ToArray()
-                : Array.Empty<ILocaleResponder>();
-            SharedResponderCache.Clear();
-            return responders;
-        }
+            private readonly List<ILocalizationBindingTarget> _targets;
+            private readonly int _ownerThreadId;
+            private bool _isDisposed;
 
-        private static void NotifyResponders(ILocaleResponder[] responders, LocaleId locale)
-        {
-            for (int i = 0; i < responders.Length; i++)
-                responders[i].OnLocaleChanged(locale);
-        }
+            public LocalizationWindowBinding(
+                in LocalizationBindingContext localizationContext,
+                List<MonoBehaviour> behaviours,
+                int ownerThreadId)
+            {
+                _ownerThreadId = ownerThreadId;
+                _targets = new List<ILocalizationBindingTarget>(InitialTargetCapacity);
 
-        // Cleanup
-        public void Dispose()
-        {
-            if (_service != null)
-                _service.OnLocaleChanged -= OnLocaleChanged;
-            _activeWindows.Clear();
-            SharedResponderCache.Clear();
+                for (int i = 0; i < behaviours.Count; i++)
+                {
+                    MonoBehaviour behaviour = behaviours[i];
+                    if (behaviour is ILocalizationBindingTarget target)
+                    {
+                        _targets.Add(target);
+                    }
+                }
+
+                int attemptedCount = 0;
+                try
+                {
+                    for (; attemptedCount < _targets.Count; attemptedCount++)
+                    {
+                        _targets[attemptedCount].Bind(in localizationContext);
+                    }
+                }
+                catch (Exception bindingException)
+                {
+                    // Include the target whose Bind call failed so partially acquired state can
+                    // still be released. Unbind implementations are required to be idempotent.
+                    int rollbackStart = Math.Min(attemptedCount, _targets.Count - 1);
+                    Exception rollbackException = UnbindReverse(rollbackStart);
+                    _targets.Clear();
+                    _isDisposed = true;
+
+                    if (rollbackException != null)
+                    {
+                        throw new AggregateException(
+                            "Localization component binding and rollback both failed.",
+                            bindingException,
+                            rollbackException);
+                    }
+
+                    throw;
+                }
+            }
+
+            public void OnWindowStateChanged(WindowStateCallbackType state)
+            {
+            }
+
+            public void Dispose()
+            {
+                EnsureOwnerThread();
+                if (_isDisposed)
+                {
+                    return;
+                }
+
+                _isDisposed = true;
+                Exception failure = UnbindReverse(_targets.Count - 1);
+                _targets.Clear();
+                if (failure != null)
+                {
+                    throw failure;
+                }
+            }
+
+            private Exception UnbindReverse(int startIndex)
+            {
+                List<Exception> failures = null;
+                for (int i = startIndex; i >= 0; i--)
+                {
+                    ILocalizationBindingTarget target = _targets[i];
+                    if (target == null ||
+                        (target is UnityEngine.Object unityObject && unityObject == null))
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        target.Unbind();
+                    }
+                    catch (Exception exception)
+                    {
+                        failures ??= new List<Exception>(2);
+                        failures.Add(exception);
+                    }
+                }
+
+                if (failures == null)
+                {
+                    return null;
+                }
+
+                return failures.Count == 1
+                    ? failures[0]
+                    : new AggregateException(
+                        "Multiple localization binding targets failed to unbind.",
+                        failures);
+            }
+
+            private void EnsureOwnerThread()
+            {
+                if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)
+                {
+                    throw new InvalidOperationException(
+                        "Localization window bindings are confined to the Unity main thread.");
+                }
+            }
         }
     }
 }

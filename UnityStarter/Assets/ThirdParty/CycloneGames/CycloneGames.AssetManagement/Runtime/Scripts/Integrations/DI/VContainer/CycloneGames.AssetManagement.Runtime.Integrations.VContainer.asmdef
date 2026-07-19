@@ -23,16 +23,6 @@
             "define": "CYCLONEGAMES_HAS_VCONTAINER"
         },
         {
-            "name": "com.unity.addressables",
-            "expression": "",
-            "define": "CYCLONEGAMES_HAS_ADDRESSABLES"
-        },
-        {
-            "name": "com.tuyoogame.yooasset",
-            "expression": "",
-            "define": "CYCLONEGAMES_HAS_YOOASSET"
-        },
-        {
             "name": "com.cysharp.unitask",
             "expression": "",
             "define": "CYCLONEGAMES_HAS_VCONTAINER_UNITASK"

@@ -3,7 +3,6 @@
     "rootNamespace": "CycloneGames.GameplayAbilities.Core",
     "references": [
         "CycloneGames.GameplayTags.Core",
-        "CycloneGames.Factory.Runtime",
         "CycloneGames.DeterministicMath.Core",
         "CycloneGames.Hash.Core"
     ],

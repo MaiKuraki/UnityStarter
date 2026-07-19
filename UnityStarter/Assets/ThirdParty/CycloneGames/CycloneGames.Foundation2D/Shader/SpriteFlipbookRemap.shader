@@ -3,7 +3,11 @@ Shader "Sprites/FlipbookRemap"
     Properties
     {
         [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
+        [PerRendererData] _AlphaTex ("External Alpha", 2D) = "white" {}
+        [PerRendererData] _EnableExternalAlpha ("Enable External Alpha", Float) = 0
         _Color ("Tint", Color) = (1,1,1,1)
+        [HideInInspector] _RendererColor ("Renderer Color", Color) = (1,1,1,1)
+        [HideInInspector] _Flip ("Flip", Vector) = (1,1,1,1)
         [MaterialToggle] PixelSnap ("Pixel snap", Float) = 0
 
         [PerRendererData] _FlipbookBaseRect ("Flipbook Base Rect", Vector) = (0,0,1,1)
@@ -34,44 +38,16 @@ Shader "Sprites/FlipbookRemap"
             #pragma target 2.0
             #pragma multi_compile_instancing
             #pragma multi_compile _ PIXELSNAP_ON
+            #pragma multi_compile _ ETC1_EXTERNAL_ALPHA
 
-            #include "UnityCG.cginc"
+            #include "UnitySprites.cginc"
 
-            struct appdata_t
-            {
-                float4 vertex   : POSITION;
-                float4 color    : COLOR;
-                float2 texcoord : TEXCOORD0;
-                UNITY_VERTEX_INPUT_INSTANCE_ID
-            };
-
-            struct v2f
-            {
-                float4 vertex   : SV_POSITION;
-                fixed4 color    : COLOR;
-                float2 texcoord : TEXCOORD0;
-                UNITY_VERTEX_OUTPUT_STEREO
-            };
-
-            sampler2D _MainTex;
-            fixed4 _Color;
             float4 _FlipbookBaseRect;
             float4 _FlipbookTargetRect;
 
             v2f vert(appdata_t IN)
             {
-                v2f OUT;
-                UNITY_SETUP_INSTANCE_ID(IN);
-                UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(OUT);
-                OUT.vertex = UnityObjectToClipPos(IN.vertex);
-                OUT.texcoord = IN.texcoord;
-                OUT.color = IN.color * _Color;
-
-                #ifdef PIXELSNAP_ON
-                OUT.vertex = UnityPixelSnap(OUT.vertex);
-                #endif
-
-                return OUT;
+                return SpriteVert(IN);
             }
 
             fixed4 frag(v2f IN) : SV_Target
@@ -87,7 +63,7 @@ Shader "Sprites/FlipbookRemap"
                 float2 normalizedWithinBase = (IN.texcoord - baseMin) / baseSize;
                 float2 remappedUV = targetMin + normalizedWithinBase * targetSize;
 
-                fixed4 color = tex2D(_MainTex, remappedUV) * IN.color;
+                fixed4 color = SampleSpriteTexture(remappedUV) * IN.color;
                 color.rgb *= color.a;
                 return color;
             }

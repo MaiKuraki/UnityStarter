@@ -3,6 +3,13 @@ using System.Collections.Generic;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
+    public enum AssetCacheEntryKind : byte
+    {
+        Asset = 0,
+        AllAssets = 1,
+        RawFile = 2,
+    }
+
     /// <summary>
     /// Describes how multiple cache retention rules are combined.
     /// </summary>
@@ -17,8 +24,8 @@ namespace CycloneGames.AssetManagement.Runtime
     /// </summary>
     public enum AssetCacheIdleTier : byte
     {
-        Trial = 0,
-        Main = 1,
+        Probation = 0,
+        Protected = 1,
     }
 
     /// <summary>
@@ -26,7 +33,9 @@ namespace CycloneGames.AssetManagement.Runtime
     /// </summary>
     public readonly struct AssetCacheEntryInfo
     {
-        public readonly string CacheKey;
+        public readonly string Location;
+        public readonly Type AssetType;
+        public readonly AssetCacheEntryKind Kind;
         public readonly string Bucket;
         public readonly string Tag;
         public readonly string Owner;
@@ -35,24 +44,100 @@ namespace CycloneGames.AssetManagement.Runtime
         public readonly TimeSpan IdleTime;
         public readonly AssetCacheIdleTier Tier;
 
-        public AssetCacheEntryInfo(
-            string cacheKey,
+        private readonly IReadOnlyList<string> _additionalBuckets;
+        private readonly IReadOnlyList<string> _additionalTags;
+        private readonly IReadOnlyList<string> _additionalOwners;
+
+        internal AssetCacheEntryInfo(
+            Cache.AssetCacheKey cacheKey,
             string bucket,
             string tag,
             string owner,
+            IReadOnlyList<string> additionalBuckets,
+            IReadOnlyList<string> additionalTags,
+            IReadOnlyList<string> additionalOwners,
             int accessCount,
             long estimatedBytes,
             TimeSpan idleTime,
             AssetCacheIdleTier tier)
         {
-            CacheKey = cacheKey;
+            Location = cacheKey.Location;
+            AssetType = cacheKey.AssetType;
+            Kind = cacheKey.Kind;
             Bucket = bucket;
             Tag = tag;
             Owner = owner;
+            _additionalBuckets = additionalBuckets;
+            _additionalTags = additionalTags;
+            _additionalOwners = additionalOwners;
             AccessCount = accessCount;
             EstimatedBytes = estimatedBytes;
             IdleTime = idleTime < TimeSpan.Zero ? TimeSpan.Zero : idleTime;
             Tier = tier;
+        }
+
+        public int BucketAssociationCount => AssociationCount(Bucket, _additionalBuckets);
+        public int TagAssociationCount => AssociationCount(Tag, _additionalTags);
+        public int OwnerAssociationCount => AssociationCount(Owner, _additionalOwners);
+
+        public bool HasBucket(string bucket, bool includeChildren = false)
+        {
+            return MatchesBucket(Bucket, bucket, includeChildren) ||
+                   MatchesAnyBucket(_additionalBuckets, bucket, includeChildren);
+        }
+
+        public bool HasTag(string tag)
+        {
+            return MatchesValue(Tag, _additionalTags, tag);
+        }
+
+        public bool HasOwner(string owner)
+        {
+            return MatchesValue(Owner, _additionalOwners, owner);
+        }
+
+        private static int AssociationCount(string primary, IReadOnlyList<string> additional)
+        {
+            return (string.IsNullOrEmpty(primary) ? 0 : 1) + (additional?.Count ?? 0);
+        }
+
+        private static bool MatchesAnyBucket(
+            IReadOnlyList<string> values,
+            string expected,
+            bool includeChildren)
+        {
+            int count = values?.Count ?? 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (MatchesBucket(values[i], expected, includeChildren)) return true;
+            }
+
+            return false;
+        }
+
+        private static bool MatchesBucket(string value, string expected, bool includeChildren)
+        {
+            if (string.IsNullOrEmpty(value) || string.IsNullOrEmpty(expected)) return false;
+            return includeChildren
+                ? AssetBucketPath.IsPrefixMatch(value, expected)
+                : string.Equals(value, expected, StringComparison.Ordinal);
+        }
+
+        private static bool MatchesValue(
+            string primary,
+            IReadOnlyList<string> additional,
+            string expected)
+        {
+            if (string.IsNullOrEmpty(expected)) return false;
+            if (string.Equals(primary, expected, StringComparison.Ordinal)) return true;
+
+            int count = additional?.Count ?? 0;
+            for (int i = 0; i < count; i++)
+            {
+                if (string.Equals(additional[i], expected, StringComparison.Ordinal)) return true;
+            }
+
+            return false;
         }
     }
 
@@ -71,7 +156,7 @@ namespace CycloneGames.AssetManagement.Runtime
     {
         private static readonly IReadOnlyList<IAssetCacheRetentionRule> EmptyRules = Array.Empty<IAssetCacheRetentionRule>();
         private static readonly IReadOnlyList<IAssetCacheRetentionRule> EvictAllRules =
-            new[] { AssetCacheRetentionRules.EvictAll };
+            Array.AsReadOnly(new[] { AssetCacheRetentionRules.EvictAll });
 
         private readonly IReadOnlyList<IAssetCacheRetentionRule> _evictionRules;
         private readonly IReadOnlyList<IAssetCacheRetentionRule> _preserveRules;
@@ -96,8 +181,14 @@ namespace CycloneGames.AssetManagement.Runtime
             AssetCacheRetentionRuleMode evictionMode = AssetCacheRetentionRuleMode.Any,
             IReadOnlyList<IAssetCacheRetentionRule> preserveRules = null)
         {
-            _evictionRules = evictionRules;
-            _preserveRules = preserveRules;
+            if (evictionMode != AssetCacheRetentionRuleMode.Any &&
+                evictionMode != AssetCacheRetentionRuleMode.All)
+            {
+                throw new ArgumentOutOfRangeException(nameof(evictionMode));
+            }
+
+            _evictionRules = CopyRules(evictionRules, nameof(evictionRules));
+            _preserveRules = CopyRules(preserveRules, nameof(preserveRules));
             EvictionMode = evictionMode;
         }
 
@@ -175,6 +266,27 @@ namespace CycloneGames.AssetManagement.Runtime
 
             return hasRule;
         }
+
+        private static IReadOnlyList<IAssetCacheRetentionRule> CopyRules(
+            IReadOnlyList<IAssetCacheRetentionRule> rules,
+            string parameterName)
+        {
+            int count = rules?.Count ?? 0;
+            if (count == 0)
+            {
+                return EmptyRules;
+            }
+
+            var copy = new IAssetCacheRetentionRule[count];
+            for (int i = 0; i < count; i++)
+            {
+                copy[i] = rules[i] ?? throw new ArgumentException(
+                    "Cache retention rule collections cannot contain null entries.",
+                    parameterName);
+            }
+
+            return Array.AsReadOnly(copy);
+        }
     }
 
     /// <summary>
@@ -250,14 +362,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             public bool ShouldEvict(in AssetCacheEntryInfo entry)
             {
-                if (string.IsNullOrEmpty(_bucket) || string.IsNullOrEmpty(entry.Bucket))
-                {
-                    return false;
-                }
-
-                return _includeChildren
-                    ? AssetBucketPath.IsPrefixMatch(entry.Bucket, _bucket)
-                    : string.Equals(entry.Bucket, _bucket, StringComparison.Ordinal);
+                return entry.HasBucket(_bucket, _includeChildren);
             }
         }
 
@@ -272,7 +377,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             public bool ShouldEvict(in AssetCacheEntryInfo entry)
             {
-                return !string.IsNullOrEmpty(_tag) && string.Equals(entry.Tag, _tag, StringComparison.Ordinal);
+                return entry.HasTag(_tag);
             }
         }
 
@@ -287,7 +392,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             public bool ShouldEvict(in AssetCacheEntryInfo entry)
             {
-                return !string.IsNullOrEmpty(_owner) && string.Equals(entry.Owner, _owner, StringComparison.Ordinal);
+                return entry.HasOwner(_owner);
             }
         }
 
@@ -298,7 +403,30 @@ namespace CycloneGames.AssetManagement.Runtime
 
             public CompositeRule(IReadOnlyList<IAssetCacheRetentionRule> rules, AssetCacheRetentionRuleMode mode)
             {
-                _rules = rules;
+                if (mode != AssetCacheRetentionRuleMode.Any &&
+                    mode != AssetCacheRetentionRuleMode.All)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(mode));
+                }
+
+                int count = rules?.Count ?? 0;
+                if (count == 0)
+                {
+                    _rules = Array.Empty<IAssetCacheRetentionRule>();
+                }
+                else
+                {
+                    var copy = new IAssetCacheRetentionRule[count];
+                    for (int i = 0; i < count; i++)
+                    {
+                        copy[i] = rules[i] ?? throw new ArgumentException(
+                            "Composite cache retention rules cannot contain null entries.",
+                            nameof(rules));
+                    }
+
+                    _rules = Array.AsReadOnly(copy);
+                }
+
                 _mode = mode;
             }
 

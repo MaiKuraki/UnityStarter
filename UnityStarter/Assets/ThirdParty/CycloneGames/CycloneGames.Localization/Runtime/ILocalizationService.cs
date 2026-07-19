@@ -2,28 +2,84 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
-using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.Localization.Runtime
 {
-    public interface ILocalizationService
+    public enum LocalizationChangeReason : byte
+    {
+        Initialized = 0,
+        LocaleChanged = 1,
+        ContentChanged = 2,
+        PseudoModeChanged = 3,
+        Shutdown = 4,
+    }
+
+    public readonly struct LocalizationChange
+    {
+        public LocalizationChange(
+            LocaleId previousLocale,
+            LocaleId currentLocale,
+            LocalizationChangeReason reason,
+            long revision)
+        {
+            PreviousLocale = previousLocale;
+            CurrentLocale = currentLocale;
+            Reason = reason;
+            Revision = revision;
+        }
+
+        public LocaleId PreviousLocale { get; }
+        public LocaleId CurrentLocale { get; }
+        public LocalizationChangeReason Reason { get; }
+        public long Revision { get; }
+    }
+
+    /// <summary>
+    /// Dependencies supplied to a presentation binding. The binding never owns these services.
+    /// </summary>
+    public readonly struct LocalizationBindingContext
+    {
+        public LocalizationBindingContext(
+            ILocalizationService localization,
+            IAssetPackage assetPackage = null)
+        {
+            Localization = localization ?? throw new ArgumentNullException(nameof(localization));
+            AssetPackage = assetPackage;
+        }
+
+        public ILocalizationService Localization { get; }
+        public IAssetPackage AssetPackage { get; }
+    }
+
+    public interface ILocalizationBindingTarget
+    {
+        void Bind(in LocalizationBindingContext context);
+        void Unbind();
+    }
+
+    /// <summary>
+    /// Thread-aware localization facade. Initialize and every mutation are owned by the managed
+    /// thread that calls <see cref="Initialize"/>. Query methods read immutable snapshots and may
+    /// run concurrently. Unity-facing consumers must bind and mutate from the Unity main thread.
+    /// </summary>
+    public interface ILocalizationService : IDisposable
     {
         LocaleId CurrentLocale { get; }
-        IReadOnlyList<Locale> AvailableLocales { get; }
+        IReadOnlyList<LocaleId> AvailableLocales { get; }
         bool IsInitialized { get; }
-
-        /// <summary>
-        /// The active pseudo-localization mode. Set to <see cref="PseudoLocaleMode.None"/> for release.
-        /// Can be changed at runtime for live QA toggling.
-        /// </summary>
+        long Revision { get; }
         PseudoLocaleMode PseudoMode { get; set; }
 
-        event Action<LocaleId> OnLocaleChanged;
+        /// <summary>
+        /// Raised synchronously on the owner thread after a committed state change. Subscriber
+        /// exceptions are isolated and reported through the configured diagnostic sink.
+        /// </summary>
+        event Action<LocalizationChange> Changed;
 
-        UniTask InitializeAsync(LocalizationOptions options);
-        UniTask SetLocaleAsync(LocaleId localeId);
+        void Initialize(LocalizationOptions options);
+        bool TrySetLocale(LocaleId localeId);
+        void Shutdown();
 
-        // String resolution
         string GetString(in LocalizedString localizedString);
         string GetString(string tableId, string entryKey);
         bool TryGetString(in LocalizedString localizedString, out string value);
@@ -31,30 +87,32 @@ namespace CycloneGames.Localization.Runtime
         string GetFormattedString(in LocalizedString localizedString, params object[] args);
         string GetFormattedString(string tableId, string entryKey, params object[] args);
 
-        // Plural string resolution
         string GetPluralString(in LocalizedString baseKey, int count);
         string GetPluralString(in LocalizedString baseKey, int count, params object[] extraArgs);
         string GetPluralString(string tableId, string entryKey, int count);
         string GetPluralString(string tableId, string entryKey, int count, params object[] extraArgs);
 
-        // Asset resolution
         AssetRef ResolveAsset(string tableId, string entryKey);
         AssetRef<T> ResolveAsset<T>(LocalizedAsset<T> localizedAsset) where T : UnityEngine.Object;
 
-        // Metadata
-        /// <summary>
-        /// Returns the max character limit for an entry, or 0 if no limit is set.
-        /// Useful for runtime input validation (e.g. player name fields).
-        /// </summary>
         int GetMaxLength(string tableId, string entryKey);
-        void RegisterMetadata(StringTableMetadata metadata);
-        void UnregisterMetadata(string tableId);
+        bool RegisterMetadata(StringTableMetadata metadata);
+        bool UnregisterMetadata(string tableId);
 
-        // Table management
-        void RegisterStringTable(StringTable table);
-        void UnregisterStringTable(string tableId, LocaleId localeId);
-        void RegisterAssetTable(AssetTable table);
-        void UnregisterAssetTable(string tableId, LocaleId localeId);
-        void RegisterCatalog(LocalizationCatalog catalog);
+        bool RegisterStringTable(StringTable table);
+        bool UnregisterStringTable(string tableId, LocaleId localeId);
+        bool RegisterAssetTable(AssetTable table);
+        bool UnregisterAssetTable(string tableId, LocaleId localeId);
+
+        /// <summary>
+        /// Validates and atomically installs or replaces all content owned by <paramref name="ownerId"/>.
+        /// A failed replacement leaves the previously committed content unchanged.
+        /// </summary>
+        bool TryRegisterCatalog(string ownerId, LocalizationCatalog catalog);
+
+        /// <summary>
+        /// Removes one catalog owner and republishes the remaining content atomically.
+        /// </summary>
+        bool RemoveCatalog(string ownerId);
     }
 }

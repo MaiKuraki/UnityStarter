@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.UIFramework.Tests.PlayMode",
+    "rootNamespace": "CycloneGames.UIFramework.Tests.PlayMode",
+    "references": [
+        "CycloneGames.UIFramework.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

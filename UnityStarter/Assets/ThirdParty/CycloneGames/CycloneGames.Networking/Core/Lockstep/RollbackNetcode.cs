@@ -44,7 +44,12 @@ namespace CycloneGames.Networking.Lockstep
         private readonly TInput[,] _confirmedInputs;    // Actual inputs received
         private readonly TInput[,] _predictedInputs;    // Predicted inputs used for simulation
         private readonly bool[,] _inputConfirmed;       // Whether real input has been received
+        private readonly TInput[,] _predictionBaselines; // Last confirmed input visible before each frame
         private readonly TState[] _stateHistory;         // State snapshots for rollback
+        private readonly int[] _slotFrames;
+        private readonly TInput[] _frameScratch;
+        private readonly TInput[] _rollbackScratch;
+        private readonly TInput[] _rollbackLastKnownScratch;
         private readonly int _bufferSize;
         private readonly int _bufferMask;
 
@@ -62,7 +67,7 @@ namespace CycloneGames.Networking.Lockstep
         public int LastConfirmedFrame => _lastConfirmedFrame;
         public int RollbackCount => _rollbackCount;
         public int MaxRollbackDepth => _maxRollbackDepth;
-        public int FrameAdvantage => _currentFrame - _lastConfirmedFrame;
+        public int FrameAdvantage => _currentFrame - (_lastConfirmedFrame + 1);
 
         /// <summary>
         /// Fixed simulation step derived from the configured tick rate. Callers can use it to drive a fixed-step
@@ -85,6 +90,12 @@ namespace CycloneGames.Networking.Lockstep
                 throw new ArgumentOutOfRangeException(nameof(peerCount));
             if (localPeerId < 0 || localPeerId >= peerCount)
                 throw new ArgumentOutOfRangeException(nameof(localPeerId));
+            if (simulation == null)
+                throw new ArgumentNullException(nameof(simulation));
+            if (maxRollbackFrames <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxRollbackFrames));
+            if (tickRate <= 0)
+                throw new ArgumentOutOfRangeException(nameof(tickRate));
 
             _peerCount = peerCount;
             _localPeerId = localPeerId;
@@ -93,15 +104,45 @@ namespace CycloneGames.Networking.Lockstep
             _maxRollbackFrames = maxRollbackFrames;
             _deltaTime = FPInt64.FromDouble(1.0 / tickRate);
 
-            // Buffer must be at least maxRollbackFrames * 2 and power of 2
+            // Buffer must retain rollback history plus a bounded future-input window.
+            int requiredBufferSize;
+            try
+            {
+                requiredBufferSize = checked(maxRollbackFrames * 4);
+            }
+            catch (OverflowException)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(maxRollbackFrames),
+                    maxRollbackFrames,
+                    "maxRollbackFrames is too large to represent a bounded rollback buffer.");
+            }
+
             _bufferSize = 1;
-            while (_bufferSize < maxRollbackFrames * 4) _bufferSize <<= 1;
+            while (_bufferSize < requiredBufferSize)
+            {
+                if (_bufferSize > int.MaxValue / 2)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(maxRollbackFrames),
+                        maxRollbackFrames,
+                        "maxRollbackFrames requires a rollback buffer larger than the supported frame index space.");
+                }
+
+                _bufferSize <<= 1;
+            }
             _bufferMask = _bufferSize - 1;
 
             _confirmedInputs = new TInput[_bufferSize, peerCount];
             _predictedInputs = new TInput[_bufferSize, peerCount];
             _inputConfirmed = new bool[_bufferSize, peerCount];
+            _predictionBaselines = new TInput[_bufferSize, peerCount];
             _stateHistory = new TState[_bufferSize];
+            _slotFrames = new int[_bufferSize];
+            _frameScratch = new TInput[peerCount];
+            _rollbackScratch = new TInput[peerCount];
+            _rollbackLastKnownScratch = new TInput[peerCount];
+            FillSlotFrames(-1);
 
             _peerLastConfirmedFrame = new int[peerCount];
             _peerLastInput = new TInput[peerCount];
@@ -117,8 +158,15 @@ namespace CycloneGames.Networking.Lockstep
         /// </summary>
         public void AdvanceFrame(in TInput localInput)
         {
+            if (_currentFrame == int.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    "Rollback frame index space is exhausted. Reset or resynchronize before advancing again.");
+            }
+
             int frame = _currentFrame;
             int slot = frame & _bufferMask;
+            PrepareSlot(slot, frame);
 
             // Save state before simulation for potential rollback
             _stateHistory[slot] = _simulation.SaveState();
@@ -131,17 +179,20 @@ namespace CycloneGames.Networking.Lockstep
             _peerLastConfirmedFrame[_localPeerId] = frame;
 
             // For remote peers, use prediction if not yet confirmed
-            Span<TInput> frameInputs = stackalloc TInput[_peerCount];
+            Span<TInput> frameInputs = _frameScratch;
             frameInputs[_localPeerId] = localInput;
 
             for (int i = 0; i < _peerCount; i++)
             {
                 if (i == _localPeerId) continue;
 
+                _predictionBaselines[slot, i] = _peerLastInput[i];
                 if (_inputConfirmed[slot, i])
                 {
                     frameInputs[i] = _confirmedInputs[slot, i];
                     _predictedInputs[slot, i] = _confirmedInputs[slot, i];
+                    _peerLastInput[i] = _confirmedInputs[slot, i];
+                    _peerLastConfirmedFrame[i] = frame;
                 }
                 else
                 {
@@ -155,6 +206,7 @@ namespace CycloneGames.Networking.Lockstep
             // Simulate
             _simulation.Simulate(frameInputs);
             _currentFrame++;
+            UpdateLastConfirmedFrame();
 
             OnFrameAdvanced?.Invoke(_currentFrame);
         }
@@ -166,17 +218,40 @@ namespace CycloneGames.Networking.Lockstep
         public void ReceiveRemoteInput(int peerId, int frame, in TInput input)
         {
             if (peerId < 0 || peerId >= _peerCount || peerId == _localPeerId) return;
-            if (frame <= _currentFrame - _bufferSize || frame >= _currentFrame + _bufferSize) return;
+            if (frame < 0) return;
+
+            long relativeFrame = (long)frame - _currentFrame;
+            if (relativeFrame < -_maxRollbackFrames || relativeFrame >= _bufferSize) return;
 
             int slot = frame & _bufferMask;
+            int existingFrame = _slotFrames[slot];
+            if (existingFrame != -1
+                && existingFrame != frame
+                && (long)existingFrame >= (long)_currentFrame - _maxRollbackFrames)
+            {
+                return;
+            }
+
+            PrepareSlot(slot, frame);
+
+            if (_inputConfirmed[slot, peerId])
+            {
+                // A confirmed input is immutable. Exact duplicates are idempotent; a
+                // conflicting duplicate must not amplify rollback work or rewrite history.
+                return;
+            }
 
             // Store confirmed input
             _confirmedInputs[slot, peerId] = input;
             _inputConfirmed[slot, peerId] = true;
-            _peerLastInput[peerId] = input;
 
-            if (frame > _peerLastConfirmedFrame[peerId])
+            // Future input may arrive before earlier frames. It must not become the
+            // prediction baseline until its frame has reached the simulation timeline.
+            if (frame < _currentFrame && frame > _peerLastConfirmedFrame[peerId])
+            {
+                _peerLastInput[peerId] = input;
                 _peerLastConfirmedFrame[peerId] = frame;
+            }
 
             // Check if this frame was already simulated with a prediction
             if (frame < _currentFrame)
@@ -189,7 +264,7 @@ namespace CycloneGames.Networking.Lockstep
                     int rollbackDepth = _currentFrame - frame;
                     if (rollbackDepth > _maxRollbackFrames)
                     {
-                        // Too far back, can't rollback — log and notify desync
+                        // Too far back: cannot rollback; log and notify desync.
                         _logger.Log(LogLevel.Warning,
                             $"[RollbackNetcode] Rollback depth {rollbackDepth} exceeds max {_maxRollbackFrames}. " +
                             $"Peer {peerId} frame {frame} vs current {_currentFrame}. Possible desync.");
@@ -225,6 +300,7 @@ namespace CycloneGames.Networking.Lockstep
             _maxRollbackDepth = 0;
 
             Array.Clear(_inputConfirmed, 0, _inputConfirmed.Length);
+            FillSlotFrames(-1);
             for (int i = 0; i < _peerCount; i++)
             {
                 _peerLastConfirmedFrame[i] = -1;
@@ -248,24 +324,32 @@ namespace CycloneGames.Networking.Lockstep
             _simulation.LoadState(_stateHistory[targetSlot]);
 
             // Re-simulate from toFrame to currentFrame
-            Span<TInput> inputs = stackalloc TInput[_peerCount];
+            Span<TInput> inputs = _rollbackScratch;
+            Span<TInput> lastKnownInputs = _rollbackLastKnownScratch;
+            for (int i = 0; i < _peerCount; i++)
+                lastKnownInputs[i] = _predictionBaselines[targetSlot, i];
+
             for (int f = toFrame; f < fromFrame; f++)
             {
                 int slot = f & _bufferMask;
+                if (_slotFrames[slot] != f)
+                    throw new InvalidOperationException("Rollback history was overwritten before re-simulation completed.");
 
                 // Re-save state
                 _stateHistory[slot] = _simulation.SaveState();
 
                 for (int i = 0; i < _peerCount; i++)
                 {
+                    _predictionBaselines[slot, i] = lastKnownInputs[i];
                     if (_inputConfirmed[slot, i])
                     {
                         inputs[i] = _confirmedInputs[slot, i];
                         _predictedInputs[slot, i] = _confirmedInputs[slot, i];
+                        lastKnownInputs[i] = _confirmedInputs[slot, i];
                     }
                     else
                     {
-                        inputs[i] = _simulation.PredictInput(i, _peerLastInput[i]);
+                        inputs[i] = _simulation.PredictInput(i, lastKnownInputs[i]);
                         _predictedInputs[slot, i] = inputs[i];
                     }
                 }
@@ -278,15 +362,52 @@ namespace CycloneGames.Networking.Lockstep
 
         private void UpdateLastConfirmedFrame()
         {
-            int minConfirmed = int.MaxValue;
+            int candidate = _lastConfirmedFrame + 1;
+            while (candidate < _currentFrame)
+            {
+                int slot = candidate & _bufferMask;
+                if (_slotFrames[slot] != candidate)
+                    break;
+
+                bool complete = true;
+                for (int i = 0; i < _peerCount; i++)
+                {
+                    if (!_inputConfirmed[slot, i])
+                    {
+                        complete = false;
+                        break;
+                    }
+                }
+
+                if (!complete)
+                    break;
+
+                _lastConfirmedFrame = candidate;
+                candidate++;
+            }
+        }
+
+        private void PrepareSlot(int slot, int frame)
+        {
+            if (_slotFrames[slot] == frame)
+                return;
+
             for (int i = 0; i < _peerCount; i++)
             {
-                if (_peerLastConfirmedFrame[i] < minConfirmed)
-                    minConfirmed = _peerLastConfirmedFrame[i];
+                _inputConfirmed[slot, i] = false;
+                _confirmedInputs[slot, i] = default;
+                _predictedInputs[slot, i] = default;
+                _predictionBaselines[slot, i] = default;
             }
 
-            if (minConfirmed > _lastConfirmedFrame)
-                _lastConfirmedFrame = minConfirmed;
+            _stateHistory[slot] = default;
+            _slotFrames[slot] = frame;
+        }
+
+        private void FillSlotFrames(int value)
+        {
+            for (int i = 0; i < _slotFrames.Length; i++)
+                _slotFrames[i] = value;
         }
     }
 }

@@ -26,6 +26,7 @@ namespace CycloneGames.Networking.Lockstep
         private readonly int _localPeerId;
         private readonly int _inputDelay;         // Frames of command delay (typically 2-4 for RTS)
         private readonly int _maxStallFrames;      // Max frames to wait before timeout
+        private readonly int _maxFramesPerTick;
 
         // Inputs indexed by [frame % bufferSize][peerId]
         private readonly TInput[,] _inputBuffer;
@@ -33,6 +34,7 @@ namespace CycloneGames.Networking.Lockstep
         private readonly int[,] _inputFrames;
         private readonly int _bufferSize;
         private readonly int _bufferMask;
+        private readonly TInput[] _inputScratch;
 
         private int _currentFrame;
         private int _latestInputFrame;             // Highest frame for which we've submitted local input
@@ -48,6 +50,7 @@ namespace CycloneGames.Networking.Lockstep
         public int PeerCount => _peerCount;
         public int LocalPeerId => _localPeerId;
         public int StallCounter => _stallCounter;
+        public int MaxFramesPerTick => _maxFramesPerTick;
         public bool IsStalled => _stallCounter > 0;
 
         public event Action<int> OnFrameAdvanced;
@@ -61,19 +64,26 @@ namespace CycloneGames.Networking.Lockstep
         /// <param name="bufferSize">Must be power of 2, default 256</param>
         /// <param name="maxStallFrames">Max frames to wait before stall event, default 300 (~5s at 60fps)</param>
         public LockstepManager(int peerCount, int localPeerId, int inputDelay = 2,
-            int bufferSize = 256, int maxStallFrames = 300)
+            int bufferSize = 256, int maxStallFrames = 300, int maxFramesPerTick = 8)
         {
             if (peerCount < 1 || peerCount > 64)
                 throw new ArgumentOutOfRangeException(nameof(peerCount));
             if (localPeerId < 0 || localPeerId >= peerCount)
                 throw new ArgumentOutOfRangeException(nameof(localPeerId));
-            if ((bufferSize & (bufferSize - 1)) != 0)
+            if (bufferSize <= 0 || (bufferSize & (bufferSize - 1)) != 0)
                 throw new ArgumentException("bufferSize must be power of 2");
+            if (inputDelay < 0 || inputDelay >= bufferSize)
+                throw new ArgumentOutOfRangeException(nameof(inputDelay));
+            if (maxStallFrames <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxStallFrames));
+            if (maxFramesPerTick <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxFramesPerTick));
 
             _peerCount = peerCount;
             _localPeerId = localPeerId;
             _inputDelay = inputDelay;
             _maxStallFrames = maxStallFrames;
+            _maxFramesPerTick = maxFramesPerTick;
             _bufferSize = bufferSize;
             _bufferMask = bufferSize - 1;
 
@@ -83,8 +93,10 @@ namespace CycloneGames.Networking.Lockstep
             _stateHashes = new ulong[bufferSize];
             _hashReceived = new bool[bufferSize];
             _hashFrames = new int[bufferSize];
+            _inputScratch = new TInput[peerCount];
             FillFrameStamps(_inputFrames, InvalidFrame);
             FillFrameStamps(_hashFrames, InvalidFrame);
+            PrefillInputDelayFrames();
 
             _currentFrame = 0;
             _latestInputFrame = -1;
@@ -116,12 +128,21 @@ namespace CycloneGames.Networking.Lockstep
         {
             if (peerId < 0 || peerId >= _peerCount || peerId == _localPeerId) return;
 
-            // Reject stale frames that are too old (would collide in ring buffer)
-            if (frame <= _currentFrame - _bufferSize) return;
-            // Reject frames too far in the future
-            if (frame >= _currentFrame + _bufferSize) return;
+            // Pure lockstep cannot apply input to an already simulated frame. Rejecting
+            // every past frame also prevents a late packet from aliasing and overwriting
+            // a retained future input in the same ring slot.
+            if (frame < _currentFrame) return;
+
+            long frameOffset = (long)frame - _currentFrame;
+            if (frameOffset >= _bufferSize) return;
 
             int slot = frame & _bufferMask;
+
+            // The first confirmed input for a peer/frame is immutable. Network retries
+            // are idempotent; a conflicting duplicate must not make simulation outcome
+            // depend on packet arrival order.
+            if (_inputReceived[slot, peerId]) return;
+
             _inputBuffer[slot, peerId] = input;
             _inputReceived[slot, peerId] = true;
             _inputFrames[slot, peerId] = frame;
@@ -136,24 +157,25 @@ namespace CycloneGames.Networking.Lockstep
             bool advanced = false;
 
             // Try to advance as many frames as possible in one call
-            while (CanAdvance())
+            int advancedFrames = 0;
+            while (advancedFrames < _maxFramesPerTick && CanAdvance())
             {
                 AdvanceOneFrame();
+                advancedFrames++;
                 advanced = true;
                 _stallCounter = 0;
             }
 
             if (!advanced)
             {
-                _stallCounter++;
-                if (_stallCounter > 0 && _stallCounter % 60 == 0) // Report every ~1s at 60fps
-                {
-                    int missingPeer = FindMissingPeer(_currentFrame);
-                    if (missingPeer >= 0)
-                        OnPeerStall?.Invoke(missingPeer, _currentFrame);
-                }
+                int previousStallCounter = _stallCounter;
+                if (_stallCounter < int.MaxValue)
+                    _stallCounter++;
 
-                if (_stallCounter >= _maxStallFrames)
+                bool reachedThreshold = previousStallCounter < _maxStallFrames
+                    && _stallCounter >= _maxStallFrames;
+                bool periodicReport = _stallCounter > 0 && _stallCounter % 60 == 0;
+                if (reachedThreshold || periodicReport)
                 {
                     int missingPeer = FindMissingPeer(_currentFrame);
                     if (missingPeer >= 0)
@@ -219,6 +241,7 @@ namespace CycloneGames.Networking.Lockstep
             Array.Clear(_hashReceived, 0, _hashReceived.Length);
             FillFrameStamps(_inputFrames, InvalidFrame);
             FillFrameStamps(_hashFrames, InvalidFrame);
+            PrefillInputDelayFrames();
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -238,7 +261,7 @@ namespace CycloneGames.Networking.Lockstep
             int slot = _currentFrame & _bufferMask;
 
             // Gather inputs into contiguous span for simulation callback
-            Span<TInput> inputs = stackalloc TInput[_peerCount];
+            Span<TInput> inputs = _inputScratch;
             for (int i = 0; i < _peerCount; i++)
                 inputs[i] = _inputBuffer[slot, i];
 
@@ -280,25 +303,20 @@ namespace CycloneGames.Networking.Lockstep
             for (int i = 0; i < stamps.Length; i++)
                 stamps[i] = value;
         }
+
+        private void PrefillInputDelayFrames()
+        {
+            for (int frame = 0; frame < _inputDelay; frame++)
+            {
+                int slot = frame & _bufferMask;
+                for (int peer = 0; peer < _peerCount; peer++)
+                {
+                    _inputBuffer[slot, peer] = default;
+                    _inputReceived[slot, peer] = true;
+                    _inputFrames[slot, peer] = frame;
+                }
+            }
+        }
     }
 
-    /// <summary>
-    /// Lockstep input message sent between peers.
-    /// </summary>
-    public struct LockstepInputMessage<TInput> where TInput : unmanaged
-    {
-        public int PeerId;
-        public int Frame;
-        public TInput Input;
-    }
-
-    /// <summary>
-    /// Lockstep state hash message for desync detection.
-    /// </summary>
-    public struct LockstepHashMessage
-    {
-        public int PeerId;
-        public int Frame;
-        public ulong StateHash;
-    }
 }

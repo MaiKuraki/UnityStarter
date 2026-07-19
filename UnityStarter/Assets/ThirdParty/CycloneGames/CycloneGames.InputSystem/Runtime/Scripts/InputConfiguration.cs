@@ -35,10 +35,17 @@ namespace CycloneGames.InputSystem.Runtime
     [YamlObject]
     public partial class InputConfiguration
     {
+        public const int CurrentSchemaVersion = 1;
+
         /// <summary>
-        /// Schema fingerprint stamped at save time. Automatically computed from the [YamlMember] structure
-        /// via <see cref="InputSchemaFingerprint"/>. Changes whenever a field is added, removed, renamed,
-        /// retyped, or an enum value changes — no manual version bumping required.
+        /// Explicit persisted schema version. A missing value deserializes as schema zero and is migrated during validation.
+        /// </summary>
+        [YamlMember("schemaVersion")]
+        public int SchemaVersion { get; set; }
+
+        /// <summary>
+        /// Optional Editor diagnostic stamp. Runtime compatibility is governed exclusively by SchemaVersion
+        /// and InputConfigurationValidator.
         /// </summary>
         [YamlMember("schemaFingerprint")]
         public string SchemaFingerprint { get; set; }
@@ -66,6 +73,18 @@ namespace CycloneGames.InputSystem.Runtime
 
         [YamlMember("contexts")]
         public List<ContextDefinitionConfig> Contexts { get; set; }
+
+        /// <summary>
+        /// Optional Unity Input System control schemes used for deterministic device matching.
+        /// </summary>
+        [YamlMember("controlSchemes")]
+        public List<ControlSchemeConfig> ControlSchemes { get; set; }
+
+        /// <summary>
+        /// Optional preferred control scheme name. Null selects the best successful match.
+        /// </summary>
+        [YamlMember("defaultControlScheme")]
+        public string DefaultControlScheme { get; set; }
     }
 
     [YamlObject]
@@ -79,6 +98,19 @@ namespace CycloneGames.InputSystem.Runtime
 
         [YamlMember("bindings")]
         public List<ActionBindingConfig> Bindings { get; set; }
+
+        /// <summary>
+        /// Higher-priority contexts are evaluated before lower-priority contexts.
+        /// </summary>
+        [YamlMember("priority")]
+        public int Priority { get; set; }
+
+        /// <summary>
+        /// Stops lower-priority contexts from receiving input while this context is active.
+        /// The default is an exclusive context.
+        /// </summary>
+        [YamlMember("blocksLowerPriority")]
+        public bool BlocksLowerPriority { get; set; } = true;
     }
 
     [YamlObject]
@@ -94,9 +126,38 @@ namespace CycloneGames.InputSystem.Runtime
         public List<string> DeviceBindings { get; set; }
 
         /// <summary>
-        /// Input update mode. Auto-detected if not specified:
-        /// - Polling: if bindings contain "/delta" (mouse delta, etc.)
-        /// - EventDriven: otherwise (buttons, discrete inputs)
+        /// Explicit Unity Input System composite bindings. Direct bindings remain available through deviceBindings.
+        /// </summary>
+        [YamlMember("compositeBindings")]
+        public List<CompositeBindingConfig> CompositeBindings { get; set; }
+
+        /// <summary>
+        /// Optional Unity Input System expected control layout, for example "Vector2" or "Button".
+        /// </summary>
+        [YamlMember("expectedControlType")]
+        public string ExpectedControlType { get; set; }
+
+        /// <summary>
+        /// Optional Unity Input System interaction expression.
+        /// </summary>
+        [YamlMember("interactions")]
+        public string Interactions { get; set; }
+
+        /// <summary>
+        /// Optional Unity Input System processor expression.
+        /// </summary>
+        [YamlMember("processors")]
+        public string Processors { get; set; }
+
+        /// <summary>
+        /// Optional semicolon-separated Unity Input System binding groups.
+        /// </summary>
+        [YamlMember("bindingGroups")]
+        public string BindingGroups { get; set; }
+
+        /// <summary>
+        /// Requested input update mode. Vector2 and Float actions with a direct or composite-part
+        /// "/delta" path are always polled so frame-relative values are emitted consistently.
         /// </summary>
         [YamlMember("updateMode")]
         public InputUpdateMode UpdateMode { get; set; } = InputUpdateMode.EventDriven;
@@ -111,6 +172,67 @@ namespace CycloneGames.InputSystem.Runtime
         /// For Float actions: actuation threshold (0-1) for long-press timing. Default 0.5.
         /// </summary>
         [YamlMember("longPressValueThreshold")]
-        public float LongPressValueThreshold { get; set; }
+        public float LongPressValueThreshold { get; set; } = 0.5f;
+    }
+
+    [YamlObject]
+    public partial class ControlSchemeConfig
+    {
+        [YamlMember("name")]
+        public string Name { get; set; }
+
+        [YamlMember("bindingGroup")]
+        public string BindingGroup { get; set; }
+
+        [YamlMember("deviceRequirements")]
+        public List<ControlSchemeDeviceRequirementConfig> DeviceRequirements { get; set; }
+    }
+
+    [YamlObject]
+    public partial class ControlSchemeDeviceRequirementConfig
+    {
+        [YamlMember("controlPath")]
+        public string ControlPath { get; set; }
+
+        [YamlMember("isOptional")]
+        public bool IsOptional { get; set; }
+
+        [YamlMember("isOr")]
+        public bool IsOr { get; set; }
+    }
+
+    [YamlObject]
+    public partial class CompositeBindingConfig
+    {
+        [YamlMember("name")]
+        public string Name { get; set; }
+
+        /// <summary>
+        /// Optional parameter expression without parentheses, for example "mode=2".
+        /// </summary>
+        [YamlMember("parameters")]
+        public string Parameters { get; set; }
+
+        [YamlMember("bindingGroups")]
+        public string BindingGroups { get; set; }
+
+        [YamlMember("parts")]
+        public List<CompositePartBindingConfig> Parts { get; set; }
+    }
+
+    [YamlObject]
+    public partial class CompositePartBindingConfig
+    {
+        [YamlMember("name")]
+        public string Name { get; set; }
+
+        [YamlMember("path")]
+        public string Path { get; set; }
+
+        [YamlMember("processors")]
+        public string Processors { get; set; }
+
+        [YamlMember("interactions")]
+        public string Interactions { get; set; }
     }
 }

@@ -4,6 +4,7 @@
     "references": [
         "NakamaRuntime",
         "CycloneGames.Networking.Core",
+        "CycloneGames.Networking.Unity.Runtime",
         "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],

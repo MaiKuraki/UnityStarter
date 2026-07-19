@@ -148,7 +148,7 @@ These symbols are generated or consumed by integration asmdefs through `versionD
 
 ## Package Manifest Note
 
-This package is stored under `Assets/ThirdParty/CycloneGames/`. Unity does not automatically enable or disable local Asset-folder modules based on `package.json` dependency fields in the same way it does for installed UPM packages. The effective compile boundary is defined by `.asmdef` references, define constraints, version defines, and the files present in the current checkout.
+This package is stored under `Assets/ThirdParty/CycloneGames/`. Unity does not automatically enable or disable local Asset-folder modules based on `package.json` dependency fields in the same way it does for installed UPM packages. The effective compile boundary is defined by `.asmdef` references, define constraints, version defines, and source files present in the project.
 
 ## Persistence
 

@@ -17,6 +17,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public abstract class AbilityTask
     {
+        private GASRuntimeMemory memoryOwner;
+        private bool leaseActive;
+        private bool leaseEverAcquired;
+        private bool isEndingLease;
+        private ulong leaseGeneration;
         /// <summary>
         /// A reference to the GameplayAbility that owns and created this task.
         /// </summary>
@@ -36,9 +41,11 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public bool HasPredictionKey => PredictionKey.IsValid;
 
+        internal ulong LeaseGeneration => leaseGeneration;
+
         /// <summary>
         /// Initializes the task with its owning ability and resets its state.
-        /// Called when a task is retrieved from the pool.
+        /// Called when a task lease is created.
         /// </summary>
         public virtual void InitTask(GameplayAbility ability)
         {
@@ -48,12 +55,57 @@ namespace CycloneGames.GameplayAbilities.Runtime
             PredictionKey = ability?.CurrentActivationInfo.PredictionKey ?? default;
         }
 
+        internal void MarkLeaseAcquired(GASRuntimeMemory owner)
+        {
+            if (leaseActive || leaseEverAcquired)
+            {
+                throw new System.InvalidOperationException($"AbilityTask '{GetType().FullName}' cannot receive another lease.");
+            }
+
+            if (leaseGeneration == ulong.MaxValue)
+            {
+                throw new System.InvalidOperationException(
+                    $"AbilityTask '{GetType().FullName}' lease generation is exhausted.");
+            }
+
+            memoryOwner = owner ?? throw new System.ArgumentNullException(nameof(owner));
+            leaseGeneration++;
+            isEndingLease = false;
+            leaseEverAcquired = true;
+            leaseActive = true;
+        }
+
+        internal bool TryReleaseLease()
+        {
+            if (!leaseActive)
+            {
+                return false;
+            }
+
+            leaseActive = false;
+            return true;
+        }
+
+        internal bool IsCurrentLease(ulong expectedLeaseGeneration)
+        {
+            return leaseActive && leaseGeneration == expectedLeaseGeneration;
+        }
+
+        internal void EndTaskIfCurrentLease(ulong expectedLeaseGeneration)
+        {
+            if (leaseGeneration == expectedLeaseGeneration &&
+                (leaseActive || IsActive || Ability != null))
+            {
+                EndTask();
+            }
+        }
+
         public bool IsBoundToPredictionKey(GASPredictionKey predictionKey)
         {
             return predictionKey.IsValid && PredictionKey.Equals(predictionKey);
         }
 
-        public void AcceptPrediction()
+        public void CommitPrediction()
         {
             PredictionKey = default;
         }
@@ -64,8 +116,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void Activate()
         {
             if (IsActive) return;
+            ulong activationLeaseGeneration = leaseGeneration;
             IsActive = true;
-            OnActivate();
+            try
+            {
+                OnActivate();
+            }
+            catch
+            {
+                EndTaskIfCurrentLease(activationLeaseGeneration);
+                throw;
+            }
         }
 
         /// <summary>
@@ -74,33 +135,72 @@ namespace CycloneGames.GameplayAbilities.Runtime
         protected abstract void OnActivate();
 
         /// <summary>
-        /// Called just before the task is returned to the pool.
+        /// Called just before the task lease is released.
         /// Subclasses must override this to clean up their delegates and other state to prevent memory leaks.
         /// IMPORTANT: Always call base.OnDestroy() at the end of your override.
         /// </summary>
         protected virtual void OnDestroy()
         {
-            // Clear reference to prevent memory leaks when pooled
+            // Clear the owner reference before the task becomes invalid.
             Ability = null;
             PredictionKey = default;
         }
 
         /// <summary>
-        /// Marks the task as complete, notifies the parent ability, and returns the task to the pool.
+        /// Marks the task as complete, notifies the parent ability, and releases the task lease.
         /// </summary>
         public void EndTask()
         {
-            if (!IsActive && Ability == null)
+            if (isEndingLease || (!IsActive && Ability == null))
             {
                 return;
             }
 
+            ulong endingLeaseGeneration = leaseGeneration;
+            bool hadActiveLease = leaseActive;
+            isEndingLease = true;
             IsActive = false;
-            Ability?.OnTaskEnded(this);
+            System.Exception failure = null;
+            try
+            {
+                Ability?.OnTaskEnded(this);
+            }
+            catch (System.Exception exception)
+            {
+                failure = exception;
+            }
 
-            OnDestroy();
+            try
+            {
+                OnDestroy();
+            }
+            catch (System.Exception exception)
+            {
+                failure ??= exception;
+            }
+            finally
+            {
+                bool isSameLease = !hadActiveLease || IsCurrentLease(endingLeaseGeneration);
+                if (isSameLease)
+                {
+                    // Enforce base reference cleanup even if an override fails to call base.OnDestroy().
+                    Ability = null;
+                    PredictionKey = default;
+                    if (hadActiveLease)
+                    {
+                        memoryOwner?.ReleaseTask(this, releaseSucceeded: failure == null);
+                    }
+                    else
+                    {
+                        isEndingLease = false;
+                    }
+                }
+            }
 
-            PoolManager.ReturnTask(this);
+            if (failure != null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(failure).Throw();
+            }
         }
 
         /// <summary>

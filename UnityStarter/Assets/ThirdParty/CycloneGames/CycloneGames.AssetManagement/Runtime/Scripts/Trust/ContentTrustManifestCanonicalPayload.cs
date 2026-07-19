@@ -1,6 +1,5 @@
 using System;
 using System.Buffers;
-using System.Collections.Generic;
 using System.IO;
 using System.Text;
 
@@ -9,12 +8,16 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
     public static class ContentTrustManifestCanonicalPayload
     {
         private const string MAGIC = "CycloneGames.AssetManagement.ContentTrustManifest";
+        internal const int MAX_MATERIALIZED_PAYLOAD_BYTES = 8 * 1024 * 1024;
 
         private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
 
         public static byte[] ToBytes(in ContentTrustManifest manifest)
         {
-            using (var stream = new MemoryStream(EstimateCapacity(in manifest)))
+            ContentTrustManifestValidation.ThrowIfUninitialized(in manifest);
+            int byteCount = GetByteCount(in manifest);
+            ThrowIfMaterializedPayloadTooLarge(byteCount);
+            using (var stream = new MemoryStream(byteCount))
             {
                 WriteTo(in manifest, stream);
                 return stream.ToArray();
@@ -23,13 +26,14 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         public static void WriteTo(
             in ContentTrustManifest manifest,
-            Stream destination,
-            List<ContentTrustFileEntry> sortWorkspace = null)
+            Stream destination)
         {
             if (destination == null)
             {
                 throw new ArgumentNullException(nameof(destination));
             }
+
+            ContentTrustManifestValidation.ThrowIfUninitialized(in manifest);
 
             byte[] utf8Buffer = null;
             try
@@ -37,8 +41,6 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 WriteString(destination, MAGIC, ref utf8Buffer);
                 WriteInt32LittleEndian(destination, ContentTrustManifestCodec.SCHEMA_VERSION);
                 WriteString(destination, manifest.Version, ref utf8Buffer);
-                WriteString(destination, manifest.MinimumClientVersion, ref utf8Buffer);
-                WriteString(destination, manifest.RollbackVersion, ref utf8Buffer);
                 WriteString(destination, manifest.ContentRoot, ref utf8Buffer);
 
                 int count = manifest.Entries?.Count ?? 0;
@@ -48,29 +50,13 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                     return;
                 }
 
-                List<ContentTrustFileEntry> sortedEntries = sortWorkspace ?? new List<ContentTrustFileEntry>(count);
-                sortedEntries.Clear();
-
-                try
+                for (int i = 0; i < count; i++)
                 {
-                    for (int i = 0; i < count; i++)
-                    {
-                        sortedEntries.Add(manifest.Entries[i]);
-                    }
-
-                    sortedEntries.Sort(CompareEntries);
-                    for (int i = 0; i < sortedEntries.Count; i++)
-                    {
-                        ContentTrustFileEntry entry = sortedEntries[i];
-                        WriteString(destination, entry.Location, ref utf8Buffer);
-                        WriteInt64LittleEndian(destination, entry.SizeBytes);
-                        WriteInt32LittleEndian(destination, (int)entry.HashAlgorithm);
-                        WriteString(destination, entry.ExpectedHashHex, ref utf8Buffer);
-                    }
-                }
-                finally
-                {
-                    sortedEntries.Clear();
+                    ContentTrustFileEntry entry = manifest.Entries[i];
+                    WriteString(destination, entry.Location, ref utf8Buffer);
+                    WriteInt64LittleEndian(destination, entry.SizeBytes);
+                    WriteInt32LittleEndian(destination, (int)entry.HashAlgorithm);
+                    WriteString(destination, entry.ExpectedHashHex, ref utf8Buffer);
                 }
             }
             finally
@@ -82,28 +68,45 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             }
         }
 
-        private static int EstimateCapacity(in ContentTrustManifest manifest)
+        internal static int GetByteCount(in ContentTrustManifest manifest)
         {
-            int count = manifest.Entries?.Count ?? 0;
-            return 128 + (count * 96);
+            ContentTrustManifestValidation.ThrowIfUninitialized(in manifest);
+
+            long byteCount = GetStringByteCount(MAGIC) +
+                             sizeof(int) +
+                             GetStringByteCount(manifest.Version) +
+                             GetStringByteCount(manifest.ContentRoot) +
+                             sizeof(int);
+            int entryCount = manifest.Entries.Count;
+            for (int i = 0; i < entryCount; i++)
+            {
+                ContentTrustFileEntry entry = manifest.Entries[i];
+                byteCount += GetStringByteCount(entry.Location) +
+                             sizeof(long) +
+                             sizeof(int) +
+                             GetStringByteCount(entry.ExpectedHashHex);
+            }
+
+            if (byteCount > int.MaxValue)
+            {
+                throw new InvalidOperationException("Canonical content trust manifest payload exceeds the supported byte-array size.");
+            }
+
+            return (int)byteCount;
         }
 
-        private static int CompareEntries(ContentTrustFileEntry x, ContentTrustFileEntry y)
+        internal static void ThrowIfMaterializedPayloadTooLarge(int byteCount)
         {
-            int location = string.CompareOrdinal(x.Location, y.Location);
-            if (location != 0)
+            if (byteCount < 0 || byteCount > MAX_MATERIALIZED_PAYLOAD_BYTES)
             {
-                return location;
+                throw new InvalidOperationException(
+                    $"Materialized canonical payload APIs are limited to {MAX_MATERIALIZED_PAYLOAD_BYTES} bytes. Use WriteTo(Stream) or a streaming canonical signer for larger manifests.");
             }
+        }
 
-            int size = x.SizeBytes.CompareTo(y.SizeBytes);
-            if (size != 0)
-            {
-                return size;
-            }
-
-            int algorithm = x.HashAlgorithm.CompareTo(y.HashAlgorithm);
-            return algorithm != 0 ? algorithm : string.CompareOrdinal(x.ExpectedHashHex, y.ExpectedHashHex);
+        private static int GetStringByteCount(string value)
+        {
+            return sizeof(int) + (value == null ? 0 : Utf8NoBom.GetByteCount(value));
         }
 
         private static void WriteString(Stream stream, string value, ref byte[] utf8Buffer)

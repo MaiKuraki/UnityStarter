@@ -4,7 +4,6 @@
     "references": [
         "CycloneGames.IO.SystemIO",
         "CycloneGames.Logger",
-        "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.UIFramework.Runtime"
     ],
     "includePlatforms": [

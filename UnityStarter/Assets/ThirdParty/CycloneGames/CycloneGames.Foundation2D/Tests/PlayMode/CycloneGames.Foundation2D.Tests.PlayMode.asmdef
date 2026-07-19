@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.Foundation2D.Tests.PlayMode",
+    "rootNamespace": "CycloneGames.Foundation2D.Tests.PlayMode",
+    "references": [
+        "CycloneGames.Foundation2D.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

@@ -1,10 +1,8 @@
 using System;
-using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.GameplayTags.Unity.Runtime;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -20,7 +18,6 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private readonly IGameplayTagSource[] m_SourceFileOptions;
       private readonly string[] m_SourceFileNameOptions;
 
-      private int m_AllSourcesOptionIndex = -1;
       private int m_SelectedSourceFileIndex;
       private string m_ValidationError;
 
@@ -31,37 +28,28 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       {
          m_TagToDelete = tag;
 
-         List<IGameplayTagSource> sources = new();
-
-         foreach (IGameplayTagSource source in tag.Definition.GetAllSources())
+         int deletableSourceCount = 0;
+         for (int i = 0; i < tag.Definition.SourceCount; i++)
          {
-            if (source is IDeleteTagHandler)
-               sources.Add(source);
+            if (tag.Definition.GetSource(i) is IDeleteTagHandler)
+               deletableSourceCount++;
          }
 
-         List<string> sourceFileOptions = new();
-         List<IGameplayTagSource> sourceFileList = new();
-
-         for (int i = 0; i < sources.Count; i++)
+         m_SourceFileNameOptions = new string[deletableSourceCount];
+         m_SourceFileOptions = new IGameplayTagSource[deletableSourceCount];
+         int destinationIndex = 0;
+         for (int i = 0; i < tag.Definition.SourceCount; i++)
          {
-            sourceFileOptions.Add(sources[i].Name);
-            sourceFileList.Add(sources[i]);
+            IGameplayTagSource source = tag.Definition.GetSource(i);
+            if (source is not IDeleteTagHandler)
+               continue;
+
+            m_SourceFileNameOptions[destinationIndex] = source.Name;
+            m_SourceFileOptions[destinationIndex] = source;
+            destinationIndex++;
          }
 
-         if (sources.Count > 1)
-         {
-            sourceFileOptions.Add("All Sources");
-            sourceFileList.Add(null);
-            m_AllSourcesOptionIndex = sourceFileOptions.Count - 1;
-            m_SelectedSourceFileIndex = m_AllSourcesOptionIndex;
-         }
-         else
-         {
-            m_SelectedSourceFileIndex = 0;
-         }
-
-         m_SourceFileNameOptions = sourceFileOptions.ToArray();
-         m_SourceFileOptions = sourceFileList.ToArray();
+         m_SelectedSourceFileIndex = 0;
 
          m_PanelStyle = new GUIStyle(EditorStyles.toolbar)
          {
@@ -110,19 +98,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             {
                try
                {
-                  if (IsAllSourcesSelected())
-                  {
-                     foreach (IDeleteTagHandler source in m_SourceFileOptions)
-                     {
-                        if (source != null)
-                           source.DeleteTag(m_TagToDelete.Name);
-                     }
-                  }
-                  else
-                  {
-                     IDeleteTagHandler source = GetSelectedFileTagSource();
-                     source.DeleteTag(m_TagToDelete.Name);
-                  }
+                  IDeleteTagHandler source = GetSelectedFileTagSource();
+                  source.DeleteTag(m_TagToDelete.Name);
 
                   GameplayTagManager.ReloadTags();
 
@@ -156,16 +133,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
       private IDeleteTagHandler GetSelectedFileTagSource()
       {
-         if (IsAllSourcesSelected())
-            throw new InvalidOperationException("All Sources selected. No single source available.");
-
          IDeleteTagHandler source = (IDeleteTagHandler)m_SourceFileOptions[m_SelectedSourceFileIndex];
          return source;
-      }
-
-      private bool IsAllSourcesSelected()
-      {
-         return m_SelectedSourceFileIndex == m_AllSourcesOptionIndex;
       }
 
       private void ValidateFields()
@@ -178,27 +147,15 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             return;
          }
 
-         if (IsAllSourcesSelected())
+         if (m_SourceFileOptions.Length == 0)
          {
-            bool anyValid = false;
-            foreach (IGameplayTagSource source in m_SourceFileOptions)
-            {
-               if (source != null && source is FileGameplayTagSource fileSource && File.Exists(fileSource.FilePath))
-               {
-                  anyValid = true;
-                  break;
-               }
-            }
-
-            if (!anyValid)
-               m_ValidationError = "No valid sources available to delete from.";
+            m_ValidationError = "No writable source is available for this tag.";
+            return;
          }
-         else
+
+         if (m_SourceFileOptions[m_SelectedSourceFileIndex] is FileGameplayTagSource source && !File.Exists(source.FilePath))
          {
-            if (m_SourceFileOptions[m_SelectedSourceFileIndex] is FileGameplayTagSource source && (source == null || !File.Exists(source.FilePath)))
-            {
-               m_ValidationError = "The selected source file no longer exists.";
-            }
+            m_ValidationError = "The selected source file no longer exists.";
          }
       }
    }

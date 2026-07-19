@@ -44,11 +44,13 @@ CycloneGames.RPGFoundation.Projectile.Networking/
 | `CycloneGames.RPGFoundation.Projectile.Networking.Core` | Projectile protocol, DTOs, validation, reconciliation, snapshot history, authority bridge interfaces, and `CycloneGames.Networking` integration contracts. | No UnityEngine |
 | `CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor` | EditMode coverage for protocol, validator, history, reconciliation, and bridge behavior. | No UnityEngine |
 
-The core assembly follows the existing RPGFoundation networking package style: it lives under `Core/`, its assembly name ends with `.Networking.Core`, and its root namespace remains `CycloneGames.RPGFoundation.Projectile.Networking`. It references `CycloneGames.RPGFoundation.Projectile.Core` and `CycloneGames.Networking.Core`. It does not reference Unity packages, backend SDKs, Unity scene objects, PlayerSettings scripting define symbols, concrete transports, or a DI container.
+`CycloneGames.RPGFoundation.Projectile.Networking.Core` uses the `CycloneGames.RPGFoundation.Projectile.Networking` root namespace and references `CycloneGames.RPGFoundation.Projectile.Core` and `CycloneGames.Networking.Core`. It does not reference Unity packages, backend SDKs, Unity scene objects, PlayerSettings scripting define symbols, concrete transports, or a DI container.
+
+The Core and EditMode test assemblies use `autoReferenced: false`. Consumer asmdefs must reference Core explicitly. No PlayerSettings scripting define is required.
 
 ## CycloneGames.Networking Collaboration
 
-This package is designed to work with `CycloneGames.Networking`, not replace it.
+`CycloneGames.Networking` owns shared networking infrastructure. This package owns projectile protocol metadata, DTOs, validation, reconciliation, snapshot history, and authority bridge contracts.
 
 | Capability | Owner |
 | --- | --- |
@@ -59,11 +61,13 @@ This package is designed to work with `CycloneGames.Networking`, not replace it.
 | Transport, routing, sessions, security pipeline, and backend SDK adapters | Product or `CycloneGames.Networking` runtime packages |
 | Projectile simulation and snapshots | `CycloneGames.RPGFoundation.Projectile.Core` |
 
-The package intentionally does not send packets by itself. A project-specific networking adapter should register the protocol, serialize messages through the chosen transport, validate inbound messages, and forward accepted messages to gameplay systems.
+This package does not send packets. A project-specific networking adapter registers the protocol, serializes messages through the selected transport, validates inbound messages, and forwards accepted messages to gameplay systems.
 
 ## Protocol
 
-`ProjectileNetworkProtocol` owns message ids `17000-17999` in the Cyclone module range.
+`ProjectileNetworkProtocol` owns message IDs `17000-17999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
+
+Every descriptor declares an explicit printable-ASCII `ContractId` such as `ProjectileSpawnMessage:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and coordinate `CurrentVersion` / `MinimumSupportedVersion` across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
 
 | Message | ID | Channel | Payload |
 | --- | ---: | --- | --- |
@@ -93,6 +97,8 @@ public static class ProjectileNetworkInstaller
 ## Validation And Reconciliation
 
 `DefaultProjectileNetworkMessageValidator` validates projectile messages against `ProjectileNetworkValidationContext` and returns `NetworkActionResult`. It checks payload validity, authentication, tick windows, duplicate sequence state, ordered snapshots, velocity budgets, radius budgets, age budgets, and lifecycle flag masks.
+
+Authentication is fail-closed: a missing `Sender` is unauthenticated and produces `Unauthorized`. Trusted in-process paths must still provide an explicit authenticated connection context or use a separately validated project boundary; `null` is never an authentication bypass.
 
 ```csharp
 var context = new ProjectileNetworkValidationContext(
@@ -138,7 +144,7 @@ if (bridge.TryCaptureSnapshot(projectileEntityId, sequence, out ProjectileSnapsh
 }
 ```
 
-Snapshot application is intentionally delegated to project code. Visual interpolation, prediction rollback, presentation-only projectiles, and server-owned projectile worlds require different ownership policies.
+Project code owns snapshot application, including the ownership policy for visual interpolation, prediction rollback, presentation-only projectiles, and server-owned projectile worlds.
 
 ## Synchronization Policy
 
@@ -166,5 +172,3 @@ Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Projectile.Networking.
 Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Projectile.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
 ```
-
-When Unity Editor automation is unavailable, compile the pure C# assemblies with the current branch references and verify no `UnityEngine` reference leaks into `CycloneGames.RPGFoundation.Projectile.Networking.Core`.

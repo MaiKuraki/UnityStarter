@@ -1,546 +1,480 @@
-#if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
+using CycloneGames.UIFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.UIFramework.Runtime;
 
 namespace CycloneGames.UIFramework.Editor
 {
     public sealed class UIPerformanceAuditWindow : EditorWindow
     {
-        private readonly List<Entry> _entries = new List<Entry>(64);
-        private Vector2 _scroll;
-        private bool _showOnlyIssues = true;
-        private string _searchText = string.Empty;
-        private SeverityFilter _severityFilter = SeverityFilter.InfoAndAbove;
-        private SortMode _sortMode = SortMode.WarningCount;
-        private GUIStyle _toolbarSearchFieldStyle;
-        private GUIStyle _chipValueStyle;
-        private GUIStyle _chipTitleStyle;
-        private GUIStyle _metricLabelStyle;
-        private GUIStyle _metricValueStyle;
-        private GUIStyle _entryTitleStyle;
-        private GUIStyle _badgeStyle;
-
-        private enum SeverityFilter
+        private enum ScanStage
         {
-            InfoAndAbove = 0,
-            WarningAndAbove = 1,
-            ErrorsOnly = 2
-        }
-
-        private enum SortMode
-        {
-            WarningCount = 0,
-            Name = 1,
-            GraphicsCount = 2,
-            MaterialVariants = 3
+            None,
+            Discover,
+            Audit,
         }
 
         private sealed class Entry
         {
-            public UIWindowConfiguration Config;
-            public GameObject Prefab;
+            public UIWindowConfiguration Configuration;
             public UIPerformanceAuditUtility.AuditReport Report;
+            public string Error;
+            public string SearchText;
+            public string GraphicsAndRaycasts;
+            public string LayoutsAndFitters;
+            public string MaterialsAndTextures;
+            public string CanvasesAndMasks;
         }
+
+        private const int MaximumRenderedEntries = 250;
+        private const int MaximumStoredEntries = 4096;
+        private const int MaximumAssetsPerUpdate = 4;
+        private const double ScanSliceBudgetSeconds = 0.004d;
+        private static readonly string[] IntCache = BuildIntCache(1024);
+
+        private readonly UIPerformanceAuditUtility _auditor = new UIPerformanceAuditUtility();
+        private readonly List<Entry> _entries = new List<Entry>(64);
+        private Vector2 _scrollPosition;
+        private string _search = string.Empty;
+        private bool _issuesOnly = true;
+        private int _warningCount;
+        private int _errorCount;
+        private int _omittedEntryCount;
+        private string _lastScanDurationText = "Not run";
+        private string _scanProgressText = "Idle";
+        private string _scanError = string.Empty;
+        private string _omittedEntryMessage = string.Empty;
+        private string[] _scanGuids = Array.Empty<string>();
+        private int _scanIndex;
+        private double _scanStarted;
+        private bool _cancelScanRequested;
+        private ScanStage _scanStage;
+
+        private bool IsScanning => _scanStage != ScanStage.None;
 
         [MenuItem("Tools/CycloneGames/UI Framework/Performance Auditor")]
         public static void ShowWindow()
         {
-            UIPerformanceAuditWindow window = GetWindow<UIPerformanceAuditWindow>("UI Perf Auditor");
-            window.minSize = new Vector2(860f, 480f);
-            window.Refresh();
+            UIPerformanceAuditWindow window = GetWindow<UIPerformanceAuditWindow>("UI Performance Auditor");
+            window.minSize = new Vector2(720f, 420f);
+            window.Show();
         }
 
         private void OnEnable()
         {
-            Refresh();
+            titleContent = new GUIContent("UI Performance Auditor");
+        }
+
+        private void OnDisable()
+        {
+            StopScanLoop();
         }
 
         private void OnGUI()
         {
-            EnsureStyles();
-            SortEntries();
-            DrawSummaryBar();
-            DrawToolbar();
-            EditorGUILayout.Space(4);
+            InspectorUiUtility.DrawInspectorTitle(
+                "UI Performance Auditor",
+                "Explicit prefab diagnostics; target-device profiling remains authoritative",
+                InspectorUiUtility.RuntimeColor);
 
-            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+            DrawToolbar();
+            DrawSummary();
+            DrawResults();
+        }
+
+        private void DrawToolbar()
+        {
+            InspectorUiUtility.BeginPanel();
+            EditorGUILayout.BeginHorizontal();
+            string nextSearch = EditorGUILayout.TextField("Search", _search);
+            if (!string.Equals(nextSearch, _search, StringComparison.Ordinal))
+            {
+                _search = nextSearch;
+            }
+
+            _issuesOnly = GUILayout.Toggle(_issuesOnly, "Issues only", EditorStyles.miniButton, GUILayout.Width(92f));
+            if (GUILayout.Button(IsScanning ? "Cancel Scan" : "Scan Project", GUILayout.Width(110f)))
+            {
+                if (IsScanning)
+                {
+                    _cancelScanRequested = true;
+                }
+                else
+                {
+                    BeginProjectScan();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.HelpBox(
+                "Scanning runs only when requested. Findings are bounded heuristics for review; they do not prove DrawCall, Canvas rebuild, overdraw, memory, or device performance.",
+                MessageType.Info);
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawSummary()
+        {
+            InspectorUiUtility.BeginPanel();
+            InspectorUiUtility.DrawStatusRow("Configurations", IntToString(_entries.Count), InspectorUiUtility.AssetColor);
+            InspectorUiUtility.DrawStatusRow("Warnings", IntToString(_warningCount), _warningCount > 0 ? InspectorUiUtility.WarningColor : InspectorUiUtility.SuccessColor);
+            InspectorUiUtility.DrawStatusRow("Errors", IntToString(_errorCount), _errorCount > 0 ? Color.red : InspectorUiUtility.SuccessColor);
+            InspectorUiUtility.DrawStatusRow("Last scan", _lastScanDurationText, InspectorUiUtility.NeutralColor);
+            InspectorUiUtility.DrawStatusRow(
+                "Scan progress",
+                _scanProgressText,
+                IsScanning ? InspectorUiUtility.RuntimeColor : InspectorUiUtility.NeutralColor);
+            if (IsScanning && _scanStage == ScanStage.Audit && _scanGuids.Length > 0)
+            {
+                Rect progressRect = EditorGUILayout.GetControlRect(false, 18f);
+                EditorGUI.ProgressBar(
+                    progressRect,
+                    Mathf.Clamp01((float)_scanIndex / _scanGuids.Length),
+                    _scanProgressText);
+            }
+            if (!string.IsNullOrEmpty(_scanError))
+            {
+                EditorGUILayout.HelpBox(_scanError, MessageType.Error);
+            }
+            if (!string.IsNullOrEmpty(_omittedEntryMessage))
+            {
+                EditorGUILayout.HelpBox(_omittedEntryMessage, MessageType.Info);
+            }
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawResults()
+        {
+            if (_entries.Count == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "Select Scan Project to inspect UIWindowConfiguration assets. No asset is modified by this tool.",
+                    MessageType.Info);
+                return;
+            }
+
+            _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
+            string normalizedSearch = _search.Trim();
+            int rendered = 0;
+            int matched = 0;
             for (int i = 0; i < _entries.Count; i++)
             {
                 Entry entry = _entries[i];
-                if (!ShouldDisplay(entry))
+                if (!Matches(entry, normalizedSearch))
+                {
+                    continue;
+                }
+
+                matched++;
+                if (rendered >= MaximumRenderedEntries)
                 {
                     continue;
                 }
 
                 DrawEntry(entry);
-                EditorGUILayout.Space(4);
+                rendered++;
             }
             EditorGUILayout.EndScrollView();
-        }
 
-        private void DrawSummaryBar()
-        {
-            int visibleEntries = 0;
-            int warnings = 0;
-            int errors = 0;
-            int infos = 0;
-            for (int i = 0; i < _entries.Count; i++)
+            if (matched > rendered)
             {
-                if (!ShouldDisplay(_entries[i])) continue;
-                visibleEntries++;
-                if (_entries[i].Report == null) continue;
-                warnings += _entries[i].Report.WarningCount;
-                errors += _entries[i].Report.ErrorCount;
-                infos += _entries[i].Report.InfoCount;
-            }
-
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            // Title row
-            EditorGUILayout.LabelField("Audit Summary", EditorStyles.boldLabel);
-
-            // Responsive chip row using Rect-based layout
-            const float chipHeight = 42f;
-            const float chipGap = 4f;
-            const int chipCount = 4;
-
-            Rect chipRow = EditorGUILayout.GetControlRect(false, chipHeight);
-            float totalGap = chipGap * (chipCount - 1);
-            float chipWidth = (chipRow.width - totalGap) / chipCount;
-
-            Rect chipRect = new Rect(chipRow.x, chipRow.y, chipWidth, chipHeight);
-            DrawSummaryChipRect(chipRect, "Visible", visibleEntries.ToString(), new Color(0.25f, 0.55f, 0.85f));
-            chipRect.x += chipWidth + chipGap;
-            DrawSummaryChipRect(chipRect, "Warnings", warnings.ToString(), new Color(0.85f, 0.6f, 0.2f));
-            chipRect.x += chipWidth + chipGap;
-            DrawSummaryChipRect(chipRect, "Errors", errors.ToString(), new Color(0.85f, 0.3f, 0.3f));
-            chipRect.x += chipWidth + chipGap;
-            chipRect.width = chipRow.xMax - chipRect.x; // absorb rounding remainder
-            DrawSummaryChipRect(chipRect, "Infos", infos.ToString(), new Color(0.45f, 0.45f, 0.45f));
-
-            EditorGUILayout.Space(2);
-            EditorGUILayout.EndVertical();
-        }
-
-        private void DrawToolbar()
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.toolbar);
-            try
-            {
-                DrawToolbarResponsive();
-            }
-            finally
-            {
-                EditorGUILayout.EndVertical();
+                EditorGUILayout.HelpBox(
+                    $"Showing {rendered} of {matched} matching entries. Narrow the search to keep Editor GUI work bounded.",
+                    MessageType.Info);
             }
         }
 
         private void DrawEntry(Entry entry)
         {
-            if (entry == null) return;
-
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            // Header row
-            Rect headerRow = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight + 4f);
-            headerRow.y += 1f;
-
-            // Severity badge (left-side color strip)
             UIPerformanceAuditUtility.AuditReport report = entry.Report;
-            Color badgeColor = GetSeverityColor(report);
-            Rect strip = new Rect(headerRow.x, headerRow.y - 1f, 3f, headerRow.height + 2f);
-            EditorGUI.DrawRect(strip, badgeColor);
+            bool unresolved = report == null;
+            Color color = unresolved
+                ? InspectorUiUtility.WarningColor
+                : report.HighestSeverity == UIPerformanceAuditUtility.AuditSeverity.Error
+                    ? Color.red
+                    : report.WarningCount > 0
+                        ? InspectorUiUtility.WarningColor
+                        : InspectorUiUtility.SuccessColor;
 
-            // Title
-            Rect titleRect = new Rect(headerRow.x + 8f, headerRow.y, headerRow.width * 0.45f, headerRow.height);
-            GUI.Label(titleRect, entry.Config != null ? entry.Config.name : "<missing config>", _entryTitleStyle ?? EditorStyles.boldLabel);
-
-            // Buttons (right-aligned)
-            const float btnWidth = 86f;
-            const float btnGap = 4f;
-            const float badgeWidth = 88f;
-            float rightEdge = headerRow.xMax;
-
-            if (entry.Prefab != null)
+            InspectorUiUtility.BeginPanel();
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField(entry.Configuration.name, EditorStyles.boldLabel);
+            InspectorUiUtility.DrawStatusBadge(
+                unresolved ? "Unresolved" : report.Issues.Count == 0 ? "Review clean" : "Review",
+                color,
+                88f);
+            if (GUILayout.Button("Ping", EditorStyles.miniButton, GUILayout.Width(48f)))
             {
-                rightEdge -= btnWidth;
-                if (GUI.Button(new Rect(rightEdge, headerRow.y, btnWidth, headerRow.height), "Ping Prefab", EditorStyles.miniButton))
-                {
-                    Selection.activeObject = entry.Prefab;
-                    EditorGUIUtility.PingObject(entry.Prefab);
-                }
-                rightEdge -= btnGap;
+                Selection.activeObject = entry.Configuration;
+                EditorGUIUtility.PingObject(entry.Configuration);
             }
-
-            if (entry.Config != null)
+            if (!unresolved && GUILayout.Button("Prefab", EditorStyles.miniButton, GUILayout.Width(54f)))
             {
-                rightEdge -= btnWidth;
-                if (GUI.Button(new Rect(rightEdge, headerRow.y, btnWidth, headerRow.height), "Ping Config", EditorStyles.miniButton))
-                {
-                    Selection.activeObject = entry.Config;
-                    EditorGUIUtility.PingObject(entry.Config);
-                }
-                rightEdge -= btnGap;
+                Selection.activeObject = report.Prefab;
+                EditorGUIUtility.PingObject(report.Prefab);
             }
+            EditorGUILayout.EndHorizontal();
 
-            // Inline severity badge
-            rightEdge -= badgeWidth;
-            DrawSeverityBadgeRect(new Rect(rightEdge, headerRow.y, badgeWidth, headerRow.height), report);
-
-            if (entry.Prefab == null)
+            if (unresolved)
             {
-                EditorGUILayout.HelpBox("No inspection prefab could be resolved for this window configuration.", MessageType.Info);
-                EditorGUILayout.EndVertical();
+                EditorGUILayout.HelpBox(
+                    string.IsNullOrEmpty(entry.Error)
+                        ? "The prefab cannot be resolved from the direct reference, Editor GUID, or an Assets/ authoring path."
+                        : entry.Error,
+                    string.IsNullOrEmpty(entry.Error) ? MessageType.Warning : MessageType.Error);
+                InspectorUiUtility.EndPanel();
                 return;
             }
 
-            EditorGUILayout.Space(2);
-            DrawMetricsGrid(report);
+            InspectorUiUtility.DrawStatusRow("Graphics / Raycast targets", entry.GraphicsAndRaycasts, InspectorUiUtility.AssetColor);
+            InspectorUiUtility.DrawStatusRow("Layouts / Fitters", entry.LayoutsAndFitters, InspectorUiUtility.SetupColor);
+            InspectorUiUtility.DrawStatusRow("Materials / Textures", entry.MaterialsAndTextures, InspectorUiUtility.RuntimeColor);
+            InspectorUiUtility.DrawStatusRow("Canvases / Masks", entry.CanvasesAndMasks, InspectorUiUtility.NeutralColor);
 
-            if (!report.HasIssues)
+            for (int i = 0; i < report.Issues.Count; i++)
             {
-                EditorGUILayout.Space(2);
-                EditorGUILayout.HelpBox("No major audit issues detected.", MessageType.None);
+                UIPerformanceAuditUtility.AuditIssue issue = report.Issues[i];
+                MessageType type = issue.Severity == UIPerformanceAuditUtility.AuditSeverity.Error
+                    ? MessageType.Error
+                    : issue.Severity == UIPerformanceAuditUtility.AuditSeverity.Warning
+                        ? MessageType.Warning
+                        : MessageType.Info;
+                EditorGUILayout.HelpBox(issue.Message, type);
+            }
+            InspectorUiUtility.EndPanel();
+        }
+
+        private bool Matches(Entry entry, string normalizedSearch)
+        {
+            if (_issuesOnly && entry.Report != null && entry.Report.Issues.Count == 0)
+            {
+                return false;
+            }
+
+            return normalizedSearch.Length == 0 ||
+                   entry.SearchText.IndexOf(normalizedSearch, StringComparison.OrdinalIgnoreCase) >= 0;
+        }
+
+        private void BeginProjectScan()
+        {
+            StopScanLoop();
+            _entries.Clear();
+            _warningCount = 0;
+            _errorCount = 0;
+            _omittedEntryCount = 0;
+            _omittedEntryMessage = string.Empty;
+            _scanError = string.Empty;
+            _scanProgressText = "Preparing project index";
+            _lastScanDurationText = "Running";
+            _scanGuids = Array.Empty<string>();
+            _scanIndex = 0;
+            _cancelScanRequested = false;
+            _scanStarted = EditorApplication.timeSinceStartup;
+            _scanStage = ScanStage.Discover;
+            EditorApplication.update += ContinueProjectScan;
+            Repaint();
+        }
+
+        private void ContinueProjectScan()
+        {
+            if (!IsScanning)
+            {
+                StopScanLoop();
+                return;
+            }
+
+            if (_cancelScanRequested)
+            {
+                FinishProjectScan(cancelled: true, null);
+                return;
+            }
+
+            if (_scanStage == ScanStage.Discover)
+            {
+                try
+                {
+                    _scanGuids = AssetDatabase.FindAssets("t:UIWindowConfiguration");
+                    Array.Sort(_scanGuids, StringComparer.Ordinal);
+                    _scanStage = ScanStage.Audit;
+                    UpdateScanProgressText();
+                    if (_scanGuids.Length == 0)
+                    {
+                        FinishProjectScan(cancelled: false, null);
+                    }
+                }
+                catch (Exception exception)
+                {
+                    FinishProjectScan(cancelled: false, exception.Message);
+                }
+
+                Repaint();
+                return;
+            }
+
+            double sliceStarted = EditorApplication.timeSinceStartup;
+            int processedThisUpdate = 0;
+            try
+            {
+                while (_scanIndex < _scanGuids.Length &&
+                       processedThisUpdate < MaximumAssetsPerUpdate)
+                {
+                    AuditConfiguration(_scanGuids[_scanIndex]);
+                    _scanIndex++;
+                    processedThisUpdate++;
+
+                    if (EditorApplication.timeSinceStartup - sliceStarted >= ScanSliceBudgetSeconds)
+                    {
+                        break;
+                    }
+                }
+            }
+            catch (Exception exception)
+            {
+                FinishProjectScan(cancelled: false, exception.Message);
+                Repaint();
+                return;
+            }
+
+            UpdateScanProgressText();
+            if (_scanIndex >= _scanGuids.Length)
+            {
+                FinishProjectScan(cancelled: false, null);
+            }
+
+            Repaint();
+        }
+
+        private void AuditConfiguration(string guid)
+        {
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            UIWindowConfiguration configuration =
+                AssetDatabase.LoadAssetAtPath<UIWindowConfiguration>(path);
+            if (configuration == null)
+            {
+                return;
+            }
+
+            UIPerformanceAuditUtility.AuditReport report;
+            try
+            {
+                report = _auditor.Audit(configuration);
+            }
+            catch (Exception exception)
+            {
+                _errorCount++;
+                if (_entries.Count >= MaximumStoredEntries)
+                {
+                    _omittedEntryCount++;
+                    return;
+                }
+
+                _entries.Add(new Entry
+                {
+                    Configuration = configuration,
+                    Error = $"Audit failed for '{path}': {exception.Message}",
+                    SearchText = configuration.name + "\n" + path + "\n" + configuration.WindowId,
+                    GraphicsAndRaycasts = "0 / 0",
+                    LayoutsAndFitters = "0 / 0",
+                    MaterialsAndTextures = "0 / 0",
+                    CanvasesAndMasks = "0 / 0",
+                });
+                return;
+            }
+
+            if (report == null)
+            {
+                _warningCount++;
             }
             else
             {
-                EditorGUILayout.Space(2);
-                for (int i = 0; i < report.Issues.Count; i++)
-                {
-                    MessageType type = report.Issues[i].Severity == UIPerformanceAuditUtility.AuditSeverity.Warning
-                        ? MessageType.Warning
-                        : report.Issues[i].Severity == UIPerformanceAuditUtility.AuditSeverity.Error
-                            ? MessageType.Error
-                            : MessageType.None;
-                    EditorGUILayout.HelpBox(report.Issues[i].Message, type);
-                }
+                _warningCount += report.WarningCount;
+                _errorCount += report.ErrorCount;
             }
 
-            EditorGUILayout.Space(2);
-            EditorGUILayout.EndVertical();
-        }
-
-        private void Refresh()
-        {
-            _entries.Clear();
-
-            string[] guids = AssetDatabase.FindAssets("t:UIWindowConfiguration");
-            for (int i = 0; i < guids.Length; i++)
+            if (_entries.Count >= MaximumStoredEntries)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
-                UIWindowConfiguration config = AssetDatabase.LoadAssetAtPath<UIWindowConfiguration>(path);
-                if (config == null) continue;
-
-                GameObject prefab = UIPerformanceAuditUtility.ResolveInspectionPrefab(config);
-                _entries.Add(new Entry
-                {
-                    Config = config,
-                    Prefab = prefab,
-                    Report = UIPerformanceAuditUtility.AuditWindowConfiguration(config)
-                });
-            }
-            SortEntries();
-        }
-
-        private void RefreshSelectionOnly()
-        {
-            _entries.Clear();
-
-            for (int i = 0; i < Selection.objects.Length; i++)
-            {
-                if (Selection.objects[i] is UIWindowConfiguration config)
-                {
-                    GameObject prefab = UIPerformanceAuditUtility.ResolveInspectionPrefab(config);
-                    _entries.Add(new Entry
-                    {
-                        Config = config,
-                        Prefab = prefab,
-                    Report = UIPerformanceAuditUtility.AuditWindowConfiguration(config)
-                    });
-                }
-            }
-            SortEntries();
-        }
-
-        private bool ShouldDisplay(Entry entry)
-        {
-            if (entry == null) return false;
-            if (_showOnlyIssues && (entry.Report == null || !entry.Report.HasIssues)) return false;
-
-            if (!string.IsNullOrEmpty(_searchText))
-            {
-                string target = $"{entry.Config?.name} {entry.Prefab?.name}".ToLowerInvariant();
-                if (!target.Contains(_searchText.ToLowerInvariant()))
-                {
-                    return false;
-                }
+                _omittedEntryCount++;
+                return;
             }
 
-            if (entry.Report == null) return true;
-            return _severityFilter switch
+            _entries.Add(new Entry
             {
-                SeverityFilter.ErrorsOnly => entry.Report.ErrorCount > 0,
-                SeverityFilter.WarningAndAbove => entry.Report.WarningCount > 0 || entry.Report.ErrorCount > 0,
-                _ => true
-            };
-        }
-
-        private void SortEntries()
-        {
-            _entries.Sort((a, b) =>
-            {
-                switch (_sortMode)
-                {
-                    case SortMode.Name:
-                        return string.Compare(a.Config?.name, b.Config?.name, System.StringComparison.OrdinalIgnoreCase);
-                    case SortMode.GraphicsCount:
-                        return (b.Report?.GraphicsCount ?? 0).CompareTo(a.Report?.GraphicsCount ?? 0);
-                    case SortMode.MaterialVariants:
-                        return (b.Report?.MaterialVariantCount ?? 0).CompareTo(a.Report?.MaterialVariantCount ?? 0);
-                    default:
-                        int severityCompare = (b.Report?.WarningCount + b.Report?.ErrorCount * 10 ?? 0)
-                            .CompareTo(a.Report?.WarningCount + a.Report?.ErrorCount * 10 ?? 0);
-                        return severityCompare != 0
-                            ? severityCompare
-                            : string.Compare(a.Config?.name, b.Config?.name, System.StringComparison.OrdinalIgnoreCase);
-                }
+                Configuration = configuration,
+                Report = report,
+                SearchText = configuration.name + "\n" + path + "\n" + configuration.WindowId,
+                GraphicsAndRaycasts = FormatPair(
+                    report?.GraphicsCount ?? 0,
+                    report?.RaycastTargetCount ?? 0),
+                LayoutsAndFitters = FormatPair(
+                    report?.LayoutGroupCount ?? 0,
+                    report?.ContentSizeFitterCount ?? 0),
+                MaterialsAndTextures = FormatPair(
+                    report?.MaterialCount ?? 0,
+                    report?.TextureCount ?? 0),
+                CanvasesAndMasks = FormatPair(
+                    report?.CanvasCount ?? 0,
+                    report == null ? 0 : report.MaskCount + report.RectMaskCount),
             });
         }
 
-        private void DrawToolbarResponsive()
+        private void UpdateScanProgressText()
         {
-            Rect rowRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight + 2f);
-            rowRect.x += 2f;
-            rowRect.width -= 4f;
+            _scanProgressText = _scanGuids.Length == 0
+                ? "No configurations"
+                : $"{_scanIndex} / {_scanGuids.Length}";
+        }
 
-            const float gap = 4f;
-            const float minPopupWidth = 88f;
-            const float maxPopupWidth = 132f;
-            const float minSearchWidth = 110f;
-            const float maxSearchWidth = 260f;
-            const float refreshWidth = 76f;
-            const float issuesWidth = 92f;
-            const float scanWidth = 102f;
-            const float severityLabelWidth = 42f;
-            const float sortLabelWidth = 26f;
-            const float searchLabelWidth = 42f;
-            const float entriesWidth = 58f;
+        private void FinishProjectScan(bool cancelled, string error)
+        {
+            double duration = Math.Max(0d, EditorApplication.timeSinceStartup - _scanStarted);
+            _lastScanDurationText = cancelled
+                ? $"Cancelled after {duration:F3} s"
+                : error == null
+                    ? $"{duration:F3} s"
+                    : $"Failed after {duration:F3} s";
+            _scanProgressText = cancelled
+                ? $"Cancelled at {_scanIndex} / {_scanGuids.Length}"
+                : error == null
+                    ? $"Complete: {_scanIndex} / {_scanGuids.Length}"
+                    : $"Stopped: {_scanIndex} / {_scanGuids.Length}";
+            _scanError = error ?? string.Empty;
+            _omittedEntryMessage = _omittedEntryCount > 0
+                ? $"Detailed results are retained for the first {MaximumStoredEntries} configurations. " +
+                  $"Aggregate counts include {_omittedEntryCount} additional audited configuration(s)."
+                : string.Empty;
+            _scanStage = ScanStage.None;
+            _cancelScanRequested = false;
+            _scanGuids = Array.Empty<string>();
+            EditorApplication.update -= ContinueProjectScan;
+        }
 
-            float popupWidth = Mathf.Clamp((rowRect.width - 520f) * 0.2f + 96f, minPopupWidth, maxPopupWidth);
-            float remaining = rowRect.width
-                              - refreshWidth
-                              - issuesWidth
-                              - scanWidth
-                              - severityLabelWidth
-                              - sortLabelWidth
-                              - searchLabelWidth
-                              - entriesWidth
-                              - popupWidth * 2f
-                              - gap * 9f;
-            float searchWidth = Mathf.Clamp(remaining, minSearchWidth, maxSearchWidth);
+        private void StopScanLoop()
+        {
+            EditorApplication.update -= ContinueProjectScan;
+            _scanStage = ScanStage.None;
+            _cancelScanRequested = false;
+            _scanGuids = Array.Empty<string>();
+        }
 
-            Rect rect = rowRect;
-            rect.width = refreshWidth;
-            if (GUI.Button(rect, "Refresh", EditorStyles.toolbarButton))
+        private static string FormatPair(int first, int second)
+        {
+            return IntToString(first) + " / " + IntToString(second);
+        }
+
+        private static string[] BuildIntCache(int length)
+        {
+            var values = new string[length];
+            for (int i = 0; i < values.Length; i++)
             {
-                Refresh();
+                values[i] = i.ToString();
             }
 
-            rect.x += rect.width + gap;
-            rect.width = issuesWidth;
-            _showOnlyIssues = GUI.Toggle(rect, _showOnlyIssues, "Issues Only", EditorStyles.toolbarButton);
-
-            rect.x += rect.width + gap;
-            rect.width = severityLabelWidth;
-            GUI.Label(rect, "Level", EditorStyles.miniLabel);
-
-            rect.x += rect.width + gap;
-            rect.width = popupWidth;
-            _severityFilter = (SeverityFilter)EditorGUI.EnumPopup(rect, GUIContent.none, _severityFilter, EditorStyles.toolbarPopup);
-
-            rect.x += rect.width + gap;
-            rect.width = sortLabelWidth;
-            GUI.Label(rect, "Sort", EditorStyles.miniLabel);
-
-            rect.x += rect.width + gap;
-            rect.width = popupWidth;
-            _sortMode = (SortMode)EditorGUI.EnumPopup(rect, GUIContent.none, _sortMode, EditorStyles.toolbarPopup);
-
-            rect.x += rect.width + gap;
-            rect.width = searchLabelWidth;
-            GUI.Label(rect, "Search", EditorStyles.miniLabel);
-
-            rect.x += rect.width + gap;
-            rect.width = searchWidth;
-            _searchText = GUI.TextField(rect, _searchText ?? string.Empty, _toolbarSearchFieldStyle);
-
-            rect.x += rect.width + gap;
-            rect.width = scanWidth;
-            if (GUI.Button(rect, "Scan Selection", EditorStyles.toolbarButton))
-            {
-                RefreshSelectionOnly();
-            }
-
-            rect.x += rect.width + gap;
-            rect.width = Mathf.Max(0f, rowRect.xMax - rect.x);
-            GUI.Label(rect, $"Entries {_entries.Count}", EditorStyles.miniLabel);
+            return values;
         }
 
-        private void DrawSummaryChipRect(Rect rect, string title, string value, Color color)
+        private static string IntToString(int value)
         {
-            // Background
-            Color dimmed = new Color(color.r, color.g, color.b, 0.15f);
-            EditorGUI.DrawRect(rect, dimmed);
-
-            // Left accent strip
-            Rect accent = new Rect(rect.x, rect.y, 3f, rect.height);
-            EditorGUI.DrawRect(accent, color);
-
-            // Title (top half)
-            Rect titleRect = new Rect(rect.x + 8f, rect.y + 4f, rect.width - 12f, 14f);
-            GUI.Label(titleRect, title, _chipTitleStyle ?? EditorStyles.centeredGreyMiniLabel);
-
-            // Value (bottom half, larger)
-            Rect valueRect = new Rect(rect.x + 8f, rect.y + 18f, rect.width - 12f, 20f);
-            GUI.Label(valueRect, value, _chipValueStyle ?? EditorStyles.boldLabel);
-        }
-
-        private static Color GetSeverityColor(UIPerformanceAuditUtility.AuditReport report)
-        {
-            if (report == null) return new Color(0.4f, 0.4f, 0.4f);
-            if (report.ErrorCount > 0) return new Color(0.8f, 0.25f, 0.25f);
-            if (report.WarningCount > 0) return new Color(0.85f, 0.6f, 0.2f);
-            if (report.InfoCount > 0) return new Color(0.35f, 0.55f, 0.85f);
-            return new Color(0.25f, 0.65f, 0.4f);
-        }
-
-        private void DrawSeverityBadgeRect(Rect rect, UIPerformanceAuditUtility.AuditReport report)
-        {
-            if (report == null) return;
-
-            string label = report.ErrorCount > 0
-                ? $"Errors: {report.ErrorCount}"
-                : report.WarningCount > 0
-                    ? $"Warn: {report.WarningCount}"
-                    : report.InfoCount > 0
-                        ? $"Info: {report.InfoCount}"
-                        : "Clean";
-
-            Color color = GetSeverityColor(report);
-            Color bg = new Color(color.r, color.g, color.b, 0.2f);
-            EditorGUI.DrawRect(rect, bg);
-
-            // Left accent
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 2f, rect.height), color);
-
-            GUI.Label(rect, label, _badgeStyle ?? EditorStyles.centeredGreyMiniLabel);
-        }
-
-        private void DrawMetricsGrid(UIPerformanceAuditUtility.AuditReport report)
-        {
-            // Use Rect-based grid: 3 columns, 4 rows — all cells equal width
-            const int cols = 3;
-            const int rows = 4;
-            const float cellHeight = 30f;
-            const float cellGap = 2f;
-            float totalHeight = rows * cellHeight + (rows - 1) * cellGap;
-
-            Rect gridArea = EditorGUILayout.GetControlRect(false, totalHeight);
-            float colWidth = (gridArea.width - cellGap * (cols - 1)) / cols;
-
-            // Row data: label, value triples
-            string[,] cells = new string[rows, cols * 2];
-            cells[0, 0] = "Graphics"; cells[0, 1] = report.GraphicsCount.ToString();
-            cells[0, 2] = "Raycasts"; cells[0, 3] = report.RaycastTargets.ToString();
-            cells[0, 4] = "NonInteractive"; cells[0, 5] = report.NonInteractiveRaycastTargets.ToString();
-            cells[1, 0] = "Layout"; cells[1, 1] = $"{report.LayoutGroupCount} / {report.ContentSizeFitterCount}";
-            cells[1, 2] = "Masks"; cells[1, 3] = $"{report.MaskCount} / {report.RectMaskCount}";
-            cells[1, 4] = "ScrollRect"; cells[1, 5] = report.ScrollRectCount.ToString();
-            cells[2, 0] = "Animators"; cells[2, 1] = $"{report.AnimatorCount + report.AnimationCount}";
-            cells[2, 2] = "Materials"; cells[2, 3] = report.MaterialVariantCount.ToString();
-            cells[2, 4] = "Textures"; cells[2, 5] = report.TextureVariantCount.ToString();
-            cells[3, 0] = "Canvas"; cells[3, 1] = $"{report.CanvasCount} ({report.NestedCanvasCount} nested)";
-            cells[3, 2] = "SubCanvas"; cells[3, 3] = report.SuggestedSubCanvasPolicy.ToString();
-            cells[3, 4] = "TMP"; cells[3, 5] = report.HasTextMeshPro ? "Yes" : "No";
-
-            Color cellBg = EditorGUIUtility.isProSkin
-                ? new Color(0.22f, 0.22f, 0.22f, 0.5f)
-                : new Color(0.82f, 0.82f, 0.82f, 0.5f);
-
-            for (int row = 0; row < rows; row++)
-            {
-                float y = gridArea.y + row * (cellHeight + cellGap);
-                for (int col = 0; col < cols; col++)
-                {
-                    float x = gridArea.x + col * (colWidth + cellGap);
-                    Rect cellRect = new Rect(x, y, colWidth, cellHeight);
-
-                    EditorGUI.DrawRect(cellRect, cellBg);
-
-                    string lbl = cells[row, col * 2];
-                    string val = cells[row, col * 2 + 1];
-
-                    Rect labelRect = new Rect(cellRect.x + 6f, cellRect.y + 2f, cellRect.width - 12f, 13f);
-                    Rect valueRect = new Rect(cellRect.x + 6f, cellRect.y + 15f, cellRect.width - 12f, 13f);
-
-                    GUI.Label(labelRect, lbl, _metricLabelStyle ?? EditorStyles.miniLabel);
-                    GUI.Label(valueRect, val, _metricValueStyle ?? EditorStyles.miniBoldLabel);
-                }
-            }
-        }
-
-        private void EnsureStyles()
-        {
-            if (_chipValueStyle != null) return;
-
-            _toolbarSearchFieldStyle =
-                GUI.skin?.FindStyle("ToolbarSearchTextField") ??
-                GUI.skin?.FindStyle("ToolbarSeachTextField") ??
-                EditorStyles.toolbarSearchField ??
-                EditorStyles.textField;
-
-            _chipTitleStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
-            {
-                alignment = TextAnchor.MiddleLeft,
-                fontSize = 10
-            };
-
-            _chipValueStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                alignment = TextAnchor.MiddleLeft,
-                fontSize = 14
-            };
-
-            _metricLabelStyle = new GUIStyle(EditorStyles.miniLabel)
-            {
-                normal = { textColor = EditorGUIUtility.isProSkin
-                    ? new Color(0.6f, 0.6f, 0.6f)
-                    : new Color(0.35f, 0.35f, 0.35f) }
-            };
-
-            _metricValueStyle = new GUIStyle(EditorStyles.miniBoldLabel)
-            {
-                normal = { textColor = EditorGUIUtility.isProSkin
-                    ? new Color(0.85f, 0.85f, 0.85f)
-                    : new Color(0.15f, 0.15f, 0.15f) }
-            };
-
-            _entryTitleStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                fontSize = 12
-            };
-
-            _badgeStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel)
-            {
-                alignment = TextAnchor.MiddleCenter,
-                fontStyle = FontStyle.Bold,
-                normal = { textColor = EditorGUIUtility.isProSkin
-                    ? new Color(0.8f, 0.8f, 0.8f)
-                    : new Color(0.2f, 0.2f, 0.2f) }
-            };
+            return (uint)value < (uint)IntCache.Length ? IntCache[value] : value.ToString();
         }
     }
 }
-#endif

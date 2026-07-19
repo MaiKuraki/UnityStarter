@@ -1,6 +1,7 @@
 using System.Threading;
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.Controls;
 using R3;
 using TouchPhase = UnityEngine.InputSystem.TouchPhase;
 
@@ -85,12 +86,12 @@ namespace CycloneGames.InputSystem.Runtime
                 _ =>
                 {
                     var touchscreen = Touchscreen.current;
-                    if (!HasTouch(touchscreen, touchId))
+                    if (!TryGetTouch(touchscreen, touchId, out TouchControl touch))
                     {
                         return default;
                     }
 
-                    return touchscreen.touches[touchId].phase.value;
+                    return touch.phase.value;
                 },
                 InputSystemFrameProvider.AfterUpdate,
                 cancellationToken
@@ -105,12 +106,12 @@ namespace CycloneGames.InputSystem.Runtime
             return Observable.EveryValueChanged(touchscreen,
                 touchscreen =>
                 {
-                    if (!HasTouch(touchscreen, touchId))
+                    if (!TryGetTouch(touchscreen, touchId, out TouchControl touch))
                     {
                         return default;
                     }
 
-                    return touchscreen.touches[touchId].phase.value;
+                    return touch.phase.value;
                 },
                 InputSystemFrameProvider.AfterUpdate,
                 cancellationToken
@@ -125,12 +126,12 @@ namespace CycloneGames.InputSystem.Runtime
                 _ =>
                 {
                     var touchscreen = Touchscreen.current;
-                    if (!HasTouch(touchscreen, touchId))
+                    if (!TryGetTouch(touchscreen, touchId, out TouchControl touch))
                     {
                         return default;
                     }
 
-                    return touchscreen.touches[touchId].position.value;
+                    return touch.position.value;
                 },
                 InputSystemFrameProvider.AfterUpdate,
                 cancellationToken
@@ -145,12 +146,12 @@ namespace CycloneGames.InputSystem.Runtime
             return Observable.EveryValueChanged(touchscreen,
                 touchscreen =>
                 {
-                    if (!HasTouch(touchscreen, touchId))
+                    if (!TryGetTouch(touchscreen, touchId, out TouchControl touch))
                     {
                         return default;
                     }
 
-                    return touchscreen.touches[touchId].position.value;
+                    return touch.position.value;
                 },
                 InputSystemFrameProvider.AfterUpdate,
                 cancellationToken
@@ -165,12 +166,12 @@ namespace CycloneGames.InputSystem.Runtime
                 _ =>
                 {
                     var touchscreen = Touchscreen.current;
-                    if (!HasTouch(touchscreen, touchId))
+                    if (!TryGetTouch(touchscreen, touchId, out TouchControl touch))
                     {
                         return default;
                     }
 
-                    return touchscreen.touches[touchId].delta.value;
+                    return touch.delta.value;
                 },
                 InputSystemFrameProvider.AfterUpdate,
                 cancellationToken
@@ -181,40 +182,55 @@ namespace CycloneGames.InputSystem.Runtime
         {
             Error.ArgumentNullException(touchscreen);
             Error.ArgumentOutOfRangeException(touchId < 0);
-            
+
             return Observable.EveryValueChanged(touchscreen,
                 touchscreen =>
                 {
-                    if (!HasTouch(touchscreen, touchId))
+                    if (!TryGetTouch(touchscreen, touchId, out TouchControl touch))
                     {
                         return default;
                     }
 
-                    return touchscreen.touches[touchId].delta.value;
+                    return touch.delta.value;
                 },
                 InputSystemFrameProvider.AfterUpdate,
                 cancellationToken
             );
         }
 
-        static bool HasTouch(Touchscreen touchscreen, int touchId)
+        static bool TryGetTouch(Touchscreen touchscreen, int touchId, out TouchControl touch)
         {
-            return touchscreen != null && touchId < touchscreen.touches.Count;
+            if (touchscreen != null)
+            {
+                var touches = touchscreen.touches;
+                for (int i = 0; i < touches.Count; i++)
+                {
+                    TouchControl candidate = touches[i];
+                    if (candidate.touchId.ReadValue() == touchId)
+                    {
+                        touch = candidate;
+                        return true;
+                    }
+                }
+            }
+
+            touch = null;
+            return false;
         }
 
         static bool IsTouchPressedThisFrame(Touchscreen touchscreen, int touchId)
         {
-            return HasTouch(touchscreen, touchId) && touchscreen.touches[touchId].press.wasPressedThisFrame;
+            return TryGetTouch(touchscreen, touchId, out TouchControl touch) && touch.press.wasPressedThisFrame;
         }
 
         static bool IsTouchPressed(Touchscreen touchscreen, int touchId)
         {
-            return HasTouch(touchscreen, touchId) && touchscreen.touches[touchId].press.isPressed;
+            return TryGetTouch(touchscreen, touchId, out TouchControl touch) && touch.press.isPressed;
         }
 
         static bool IsTouchReleasedThisFrame(Touchscreen touchscreen, int touchId)
         {
-            return HasTouch(touchscreen, touchId) && touchscreen.touches[touchId].press.wasReleasedThisFrame;
+            return TryGetTouch(touchscreen, touchId, out TouchControl touch) && touch.press.wasReleasedThisFrame;
         }
     }
 }

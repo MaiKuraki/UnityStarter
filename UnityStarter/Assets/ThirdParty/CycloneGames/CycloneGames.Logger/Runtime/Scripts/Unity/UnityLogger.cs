@@ -55,6 +55,9 @@ namespace CycloneGames.Logger
                 sourcePathCharacters,
                 sourcePathCharacters,
                 FormattingOverheadEstimate);
+#if UNITY_EDITOR
+            estimate = SaturatingAdd(estimate, sourcePathCharacters);
+#endif
             if (!LoggerUpdater.TryReserve(logMessage.Level, estimate, out LoggerUpdater.Reservation reservation))
             {
                 return;
@@ -66,7 +69,11 @@ namespace CycloneGames.Logger
             {
                 formatted = FormatMessage(logMessage);
                 reservationOwned = false;
+#if UNITY_EDITOR
+                LoggerUpdater.Commit(logMessage.Level, formatted, reservation, logMessage.FilePath, logMessage.LineNumber);
+#else
                 LoggerUpdater.Commit(logMessage.Level, formatted, reservation);
+#endif
             }
             finally
             {

@@ -480,10 +480,9 @@ namespace CycloneGames.Networking
             in NetworkMessageDescriptor right)
         {
             return left.MessageId == right.MessageId
-                   && string.Equals(left.Name, right.Name, StringComparison.Ordinal)
+                   && string.Equals(left.ContractId, right.ContractId, StringComparison.Ordinal)
                    && string.Equals(left.Owner, right.Owner, StringComparison.Ordinal)
                    && left.SchemaHash == right.SchemaHash
-                   && left.Kind == right.Kind
                    && left.DefaultChannel == right.DefaultChannel
                    && left.MaxPayloadSize == right.MaxPayloadSize;
         }

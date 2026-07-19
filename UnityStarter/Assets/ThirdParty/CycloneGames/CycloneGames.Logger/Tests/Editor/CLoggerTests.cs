@@ -326,6 +326,14 @@ namespace CycloneGames.Logger.Tests.Editor
         }
 
         [Test]
+        public void UnityConsoleDoubleClickBridge_IsAvailableForCurrentEditor()
+        {
+            Assert.IsTrue(
+                LoggerUnityConsoleBridge.IsAvailable,
+                "The current Unity Editor no longer exposes the Console entry callback contract used for caller navigation.");
+        }
+
+        [Test]
         public void EditorLinkIdentityAndLineParsing_AreIndependentOfCurrentCulture()
         {
             CultureInfo previousCulture = CultureInfo.CurrentCulture;

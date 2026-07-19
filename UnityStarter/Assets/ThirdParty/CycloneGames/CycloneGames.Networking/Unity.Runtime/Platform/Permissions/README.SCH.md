@@ -1,6 +1,6 @@
 # Network Host Permissions
 
-本目录提供面向 Unity Runtime 的平台辅助能力，用于判断当前设备是否适合作为局域网 Listen Server。API 与具体传输层无关，可以在启动 Mirror、Mirage、Nakama 或自定义 `INetTransport` 之前调用。
+本目录提供面向 Unity Runtime 的平台辅助能力，用于判断当前设备是否适合作为局域网 Listen Server。API 与具体传输层无关，可以在启动 Mirror、Mirage 的 LAN Host 或自定义 Listen Server transport 之前调用。
 
 ## 职责
 
@@ -46,16 +46,18 @@ NetworkHostPermissionCheckResult status = service.GetStatus(7777, NetworkTranspo
 if (status.CanRequestAutomatically)
 {
     NetworkHostPermissionRequestResult result = service.RequestSystemConfiguration(7777, NetworkTransportProtocol.Udp);
-    // result.Launched 为 true 表示系统弹窗已弹出；是否真正成功可通过校验或另一台机器连接验证。
+    // result.Launched 为 true 只表示 OS request 已启动；必须单独校验实时规则状态。
 }
 
 // 在 Windows 上不阻塞主线程地校验实时防火墙状态（UniTask + CancellationToken）。
 NetworkHostPermissionCheckResult verified = await service.RefreshStatusAsync(7777, NetworkTransportProtocol.Udp, ct);
 if (verified.IsVerified && !verified.RequiresSystemConfiguration)
 {
-    // 该端口/协议的入站防火墙规则已启用；LAN 对端可以连到本主机。
+    // 该端口/协议的入站规则已启用；listener、routing 和 peer 可达性仍需通过连接测试确认。
 }
 ```
+
+默认初始化的 request result，其 outcome 为 `Unknown` 且 `Launched == false`；只有显式 `Launched` outcome 才表示已启动 OS request。
 
 ```csharp
 using System.Collections.Generic;

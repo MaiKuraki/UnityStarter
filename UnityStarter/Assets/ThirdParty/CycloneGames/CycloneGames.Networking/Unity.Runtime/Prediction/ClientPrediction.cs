@@ -1,4 +1,4 @@
-using CycloneGames.Networking.Simulation;
+using System;
 
 namespace CycloneGames.Networking.Prediction
 {
@@ -28,8 +28,8 @@ namespace CycloneGames.Networking.Prediction
     }
 
     /// <summary>
-    /// Manages prediction + reconciliation loop for an IPredictable entity.
-    /// Zero-allocation at steady state.
+    /// Manages prediction + reconciliation loop for an IPredictable entity using preallocated
+    /// ring history. Allocation behavior also depends on the target callbacks and must be measured.
     /// </summary>
     public sealed class ClientPredictionSystem<TInput, TState>
         where TInput : unmanaged
@@ -38,16 +38,16 @@ namespace CycloneGames.Networking.Prediction
         private readonly IPredictable<TInput, TState> _target;
         private readonly PredictionBuffer<TInput> _inputBuffer;
         private readonly PredictionBuffer<TState> _stateBuffer;
-        private NetworkTick _lastServerTick;
+        private NetworkTickId _lastServerTick = NetworkTickId.Invalid;
         private int _mispredictionCount;
 
         public int MispredictionCount => _mispredictionCount;
-        public NetworkTick LastServerTick => _lastServerTick;
+        public NetworkTickId LastServerTick => _lastServerTick;
         public PredictionBuffer<TInput> InputBuffer => _inputBuffer;
 
         public ClientPredictionSystem(IPredictable<TInput, TState> target, int bufferSize = NetworkConstants.MaxSnapshotBufferSize)
         {
-            _target = target;
+            _target = target ?? throw new ArgumentNullException(nameof(target));
             _inputBuffer = new PredictionBuffer<TInput>(bufferSize);
             _stateBuffer = new PredictionBuffer<TState>(bufferSize);
         }
@@ -55,7 +55,7 @@ namespace CycloneGames.Networking.Prediction
         /// <summary>
         /// Record input and predicted state for a tick. Call after SimulateStep on client.
         /// </summary>
-        public void RecordPrediction(NetworkTick tick, in TInput input)
+        public void RecordPrediction(NetworkTickId tick, in TInput input)
         {
             _inputBuffer.Set(tick, input);
             _stateBuffer.Set(tick, _target.CaptureState());
@@ -65,8 +65,13 @@ namespace CycloneGames.Networking.Prediction
         /// Process server authoritative state. Triggers reconciliation if mismatch detected.
         /// Returns true if rollback occurred.
         /// </summary>
-        public bool ProcessServerState(NetworkTick serverTick, in TState serverState, NetworkTick currentTick, float tickDeltaTime)
+        public bool ProcessServerState(NetworkTickId serverTick, in TState serverState, NetworkTickId currentTick, float tickDeltaTime)
         {
+            if (!serverTick.IsValid)
+                throw new ArgumentOutOfRangeException(nameof(serverTick));
+            if (!currentTick.IsValid)
+                throw new ArgumentOutOfRangeException(nameof(currentTick));
+
             _lastServerTick = serverTick;
 
             if (!_stateBuffer.TryGet(serverTick, out var predictedState))
@@ -80,21 +85,22 @@ namespace CycloneGames.Networking.Prediction
             _target.ApplyState(serverState);
 
             // Re-simulate from serverTick+1 to currentTick
-            uint replayStart = serverTick.Value + 1;
-            uint replayEnd = currentTick.Value;
-
-            // Guard against overflow and excessively large replays
-            if (replayStart > replayEnd || replayEnd - replayStart > (uint)_inputBuffer.Capacity)
+            long replayCount = currentTick.Value - serverTick.Value;
+            if (replayCount <= 0L || replayCount > _inputBuffer.Capacity)
                 return true;
 
-            for (uint t = replayStart; t <= replayEnd; t++)
+            long replayEnd = currentTick.Value;
+            for (long t = serverTick.Value + 1L; ; t++)
             {
-                var tick = new NetworkTick(t);
+                var tick = new NetworkTickId(t);
                 if (_inputBuffer.TryGet(tick, out var input))
                 {
                     _target.SimulateStep(input, tickDeltaTime);
                     _stateBuffer.Set(tick, _target.CaptureState());
                 }
+
+                if (t == replayEnd)
+                    break;
             }
 
             return true;
@@ -105,7 +111,7 @@ namespace CycloneGames.Networking.Prediction
             _inputBuffer.Clear();
             _stateBuffer.Clear();
             _mispredictionCount = 0;
-            _lastServerTick = NetworkTick.Zero;
+            _lastServerTick = NetworkTickId.Invalid;
         }
     }
 }

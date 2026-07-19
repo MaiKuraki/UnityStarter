@@ -7,6 +7,7 @@ using Handles = UnityEditor.Handles;
 namespace CycloneGames.DataTable.Unity.Editor
 {
     [CustomEditor(typeof(DataTableLubanSettings), true)]
+    [CanEditMultipleObjects]
     public class DataTableLubanSettingsEditor : UnityEditor.Editor
     {
         private const float SectionSpacing = 8f;
@@ -23,12 +24,20 @@ namespace CycloneGames.DataTable.Unity.Editor
         private string _cachedValidationError;
         private string[] _cachedScripts = Array.Empty<string>();
         private string[] _cachedSettingsPaths = Array.Empty<string>();
+        private SerializedProperty[] _extensionProperties = Array.Empty<SerializedProperty>();
+        private string _cachedSettingsAssetLabel;
+        private string _cachedSettingsCountLabel;
+        private string _cachedTimeoutLabel;
+        private bool _cachedProjectRootExists;
+        private bool _cachedWorkingDirectoryExists;
+        private bool _cachedScriptExists;
         private int _lastTargetHash;
 
         private bool _settingsFoldout = true;
         private bool _pathsFoldout = true;
         private bool _diagnosticsFoldout = true;
         private bool _actionsFoldout = true;
+        private bool _extensionsFoldout = true;
 
         private static readonly GUIContent ProjectDirLabel = new GUIContent("Luban Project Dir");
         private static readonly GUIContent ScriptNameLabel = new GUIContent("Luban Script Name");
@@ -45,6 +54,8 @@ namespace CycloneGames.DataTable.Unity.Editor
         private static readonly Color ValidationHeaderCollapsedColor = new Color(0.3960f, 0.3240f, 0.1656f);
         private static readonly Color ActionsHeaderColor = new Color(0.42f, 0.42f, 0.48f);
         private static readonly Color ActionsHeaderCollapsedColor = new Color(0.3024f, 0.3024f, 0.3456f);
+        private static readonly Color ExtensionsHeaderColor = new Color(0.42f, 0.34f, 0.56f);
+        private static readonly Color ExtensionsHeaderCollapsedColor = new Color(0.3024f, 0.2448f, 0.4032f);
 
         protected virtual void OnEnable()
         {
@@ -53,6 +64,10 @@ namespace CycloneGames.DataTable.Unity.Editor
             _scriptArguments = serializedObject.FindProperty("LubanScriptArguments");
             _timeoutSeconds = serializedObject.FindProperty("LubanTimeoutSeconds");
             _autoRefreshAssets = serializedObject.FindProperty("RefreshAssetsAfterLubanBuild");
+            _extensionProperties = FindExtensionProperties();
+            _cachedSettingsAssetLabel = serializedObject.isEditingMultipleObjects
+                ? targets.Length + " assets selected"
+                : AssetDatabase.GetAssetPath(target);
             RefreshValidationCache();
         }
 
@@ -88,7 +103,14 @@ namespace CycloneGames.DataTable.Unity.Editor
             EditorGUILayout.Space(SectionSpacing);
             DrawActions();
             EditorGUILayout.Space(SectionSpacing);
+            EditorGUI.BeginChangeCheck();
             DrawExtensionFields();
+            if (EditorGUI.EndChangeCheck())
+            {
+                serializedObject.ApplyModifiedProperties();
+                RefreshValidationCache();
+                serializedObject.Update();
+            }
 
             serializedObject.ApplyModifiedProperties();
         }
@@ -100,15 +122,18 @@ namespace CycloneGames.DataTable.Unity.Editor
                 "Visible project-level Luban generation settings. Default tooling discovers this asset by type; keep exactly one DataTableLubanSettings asset in the project.",
                 MessageType.Info);
 
-            var assetPath = AssetDatabase.GetAssetPath(target);
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Settings Asset",
-                string.IsNullOrEmpty(assetPath) ? "(unsaved)" : assetPath,
-                string.IsNullOrEmpty(assetPath) ? DataTableStatusKind.Warning : DataTableStatusKind.Info);
+                string.IsNullOrEmpty(_cachedSettingsAssetLabel) ? "(unsaved)" : _cachedSettingsAssetLabel,
+                string.IsNullOrEmpty(_cachedSettingsAssetLabel) ? DataTableStatusKind.Warning : DataTableStatusKind.Info);
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Build Status",
-                string.IsNullOrEmpty(_cachedValidationError) ? "Ready" : "Needs Attention",
-                string.IsNullOrEmpty(_cachedValidationError) ? DataTableStatusKind.Success : DataTableStatusKind.Warning);
+                serializedObject.isEditingMultipleObjects
+                    ? "Multiple Selection"
+                    : string.IsNullOrEmpty(_cachedValidationError) ? "Ready" : "Needs Attention",
+                serializedObject.isEditingMultipleObjects
+                    ? DataTableStatusKind.Info
+                    : string.IsNullOrEmpty(_cachedValidationError) ? DataTableStatusKind.Success : DataTableStatusKind.Warning);
         }
 
         protected virtual void DrawSettingsFields()
@@ -136,9 +161,12 @@ namespace CycloneGames.DataTable.Unity.Editor
             buttonRect.xMin = fieldRect.xMax + ButtonGap;
 
             EditorGUI.PropertyField(fieldRect, _lubanProjectDir, ProjectDirLabel);
-            if (GUI.Button(buttonRect, BrowseLabel, EditorStyles.miniButton))
+            using (new EditorGUI.DisabledScope(serializedObject.isEditingMultipleObjects))
             {
-                BrowseProjectDirectory();
+                if (GUI.Button(buttonRect, BrowseLabel, EditorStyles.miniButton))
+                {
+                    BrowseProjectDirectory();
+                }
             }
         }
 
@@ -151,6 +179,14 @@ namespace CycloneGames.DataTable.Unity.Editor
                 PathsHeaderCollapsedColor);
             if (!_pathsFoldout)
             {
+                return;
+            }
+
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                EditorGUILayout.HelpBox(
+                    "Resolved paths are hidden while multiple settings assets are selected because derived settings can resolve different project roots.",
+                    MessageType.Info);
                 return;
             }
 
@@ -181,30 +217,35 @@ namespace CycloneGames.DataTable.Unity.Editor
                 return;
             }
 
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                EditorGUILayout.HelpBox(
+                    "Select one settings asset to validate resolved paths. Shared serialized fields can still be edited above.",
+                    MessageType.Info);
+                return;
+            }
+
             var request = GetCachedRequest();
-            var projectRootExists = Directory.Exists(request.ProjectRoot);
-            var workingDirectoryExists = Directory.Exists(request.WorkingDirectory);
-            var scriptExists = !string.IsNullOrEmpty(request.ScriptPath) && File.Exists(request.ScriptPath);
 
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Project Root",
-                projectRootExists ? request.ProjectRoot : "Missing",
-                projectRootExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
+                _cachedProjectRootExists ? request.ProjectRoot : "Missing",
+                _cachedProjectRootExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Luban Directory",
-                workingDirectoryExists ? request.WorkingDirectory : "Missing",
-                workingDirectoryExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
+                _cachedWorkingDirectoryExists ? request.WorkingDirectory : "Missing",
+                _cachedWorkingDirectoryExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Build Script",
-                scriptExists ? Path.GetFileName(request.ScriptPath) : "Missing",
-                scriptExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
+                _cachedScriptExists ? Path.GetFileName(request.ScriptPath) : "Missing",
+                _cachedScriptExists ? DataTableStatusKind.Success : DataTableStatusKind.Error);
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Settings Count",
-                _cachedSettingsPaths.Length <= 1 ? "Single" : _cachedSettingsPaths.Length + " assets found",
+                _cachedSettingsCountLabel,
                 _cachedSettingsPaths.Length <= 1 ? DataTableStatusKind.Success : DataTableStatusKind.Warning);
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Timeout",
-                request.TimeoutMilliseconds <= 0 ? "Unlimited" : request.TimeoutMilliseconds + " ms",
+                _cachedTimeoutLabel,
                 DataTableStatusKind.Info);
             DataTableInspectorUiUtility.DrawStatusRow(
                 "Asset Refresh",
@@ -245,8 +286,28 @@ namespace CycloneGames.DataTable.Unity.Editor
                 return;
             }
 
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                EditorGUILayout.HelpBox(
+                    "Build and filesystem actions require a single settings asset selection.",
+                    MessageType.Info);
+                return;
+            }
+
             DrawButtonRow("Refresh", RefreshValidationCache, "Reveal Settings", RevealSettingsAsset);
             DrawButtonRow("Open Directory", OpenProjectDirectory, "Validate Paths", RefreshValidationCache);
+
+            if (DataTableLubanRunner.IsRunning)
+            {
+                EditorGUILayout.HelpBox(
+                    "A Luban build is already running. Only the owning caller or editor shutdown can request cancellation.",
+                    MessageType.Info);
+                return;
+            }
+
+            EditorGUILayout.HelpBox(
+                "The runner is synchronous and blocks editor interaction while Luban runs, so Inspector cancellation is not available. Shutdown/domain-reload cancellation is best-effort; the positive process timeout is the bounded fallback.",
+                MessageType.Info);
 
             var rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
             using (new EditorGUI.DisabledScope(!string.IsNullOrEmpty(_cachedValidationError)))
@@ -263,6 +324,25 @@ namespace CycloneGames.DataTable.Unity.Editor
         /// </summary>
         protected virtual void DrawExtensionFields()
         {
+            if (_extensionProperties.Length == 0)
+            {
+                return;
+            }
+
+            _extensionsFoldout = DataTableInspectorUiUtility.DrawFoldoutHeader(
+                "Project Extensions",
+                _extensionsFoldout,
+                ExtensionsHeaderColor,
+                ExtensionsHeaderCollapsedColor);
+            if (!_extensionsFoldout)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _extensionProperties.Length; i++)
+            {
+                EditorGUILayout.PropertyField(_extensionProperties[i], true);
+            }
         }
 
         protected virtual DataTableLubanRunRequest CreatePreviewRequest()
@@ -276,6 +356,13 @@ namespace CycloneGames.DataTable.Unity.Editor
             _cachedValidationError = DataTableLubanRunner.ValidateRequest(_cachedRequest);
             _cachedScripts = FindBuildScripts(_cachedRequest.WorkingDirectory);
             _cachedSettingsPaths = FindSettingsAssetPaths();
+            _cachedSettingsCountLabel = _cachedSettingsPaths.Length <= 1
+                ? "Single"
+                : _cachedSettingsPaths.Length + " assets found";
+            _cachedTimeoutLabel = _cachedRequest.TimeoutMilliseconds + " ms";
+            _cachedProjectRootExists = Directory.Exists(_cachedRequest.ProjectRoot);
+            _cachedWorkingDirectoryExists = Directory.Exists(_cachedRequest.WorkingDirectory);
+            _cachedScriptExists = !string.IsNullOrEmpty(_cachedRequest.ScriptPath) && File.Exists(_cachedRequest.ScriptPath);
             _lastTargetHash = ComputeTargetHash();
         }
 
@@ -291,7 +378,7 @@ namespace CycloneGames.DataTable.Unity.Editor
 
         private void DrawScriptSuggestions()
         {
-            if (_cachedScripts.Length == 0)
+            if (serializedObject.isEditingMultipleObjects || _cachedScripts.Length == 0)
             {
                 return;
             }
@@ -325,7 +412,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             var request = GetCachedRequest();
             var startDirectory = Directory.Exists(request.WorkingDirectory)
                 ? request.WorkingDirectory
-                : request.ProjectRoot;
+                : Directory.Exists(request.ProjectRoot) ? request.ProjectRoot : Application.dataPath;
             var selected = EditorUtility.OpenFolderPanel("Select Luban Project Directory", startDirectory, string.Empty);
             if (string.IsNullOrEmpty(selected))
             {
@@ -381,6 +468,35 @@ namespace CycloneGames.DataTable.Unity.Editor
             {
                 EditorGUILayout.PropertyField(property, label);
             }
+        }
+
+        private SerializedProperty[] FindExtensionProperties()
+        {
+            var properties = new System.Collections.Generic.List<SerializedProperty>();
+            var iterator = serializedObject.GetIterator();
+            var enterChildren = true;
+            while (iterator.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+                if (IsBaseProperty(iterator.propertyPath))
+                {
+                    continue;
+                }
+
+                properties.Add(iterator.Copy());
+            }
+
+            return properties.ToArray();
+        }
+
+        private static bool IsBaseProperty(string propertyPath)
+        {
+            return propertyPath == "m_Script" ||
+                   propertyPath == "LubanProjectDir" ||
+                   propertyPath == "LubanScriptName" ||
+                   propertyPath == "LubanScriptArguments" ||
+                   propertyPath == "LubanTimeoutSeconds" ||
+                   propertyPath == "RefreshAssetsAfterLubanBuild";
         }
 
         private static void DrawButtonRow(

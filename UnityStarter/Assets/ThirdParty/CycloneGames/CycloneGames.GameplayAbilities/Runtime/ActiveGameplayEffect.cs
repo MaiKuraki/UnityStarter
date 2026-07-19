@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 
@@ -7,10 +8,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// Represents a stateful instance of a GameplayEffect currently active on an ASC.
     /// Tracks state such as remaining time and stack count.
-    /// Pooled via GASPool for zero-allocation runtime.
+    /// Released instances are invalidated and discarded.
     /// </summary>
-    public class ActiveGameplayEffect : IGASPoolable
+    public class ActiveGameplayEffect : IGASLeasedObject
     {
+        private const int MaxInhibitionObservers = 64;
+        private GASRuntimeMemory memoryOwner;
+        private bool leaseActive;
+        private bool leaseEverAcquired;
+        private List<Action<bool>> inhibitionObservers;
         public GameplayEffectSpec Spec { get; private set; }
         public float TimeRemaining => GASFixedValue.FromRaw(TimeRemainingRaw).ToFloat();
         public float PeriodTimeRemaining => periodTimerRaw >= 0L ? GASFixedValue.FromRaw(periodTimerRaw).ToFloat() : -1f;
@@ -26,20 +32,61 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool IsInhibited { get; internal set; }
 
         /// <summary>
-        /// Stable identifier assigned by the server when this effect is replicated.
-        /// 0 means unassigned (local-only effect). Used by IGASNetworkBridge for effect removal messages.
+        /// ASC-owned process-local reconciliation identifier.
+        /// It is assigned monotonically for the effect lifetime and is never a stable wire identity.
         /// </summary>
-        public int NetworkId { get; internal set; }
+        public int ReconciliationId { get; internal set; }
+
+        /// <summary>
+        /// Process-local handle of the live source ability spec, or 0 when the effect was not
+        /// created by an ability. The handle is retained without keeping the ability instance alive.
+        /// </summary>
+        public int SourceAbilitySpecHandle { get; private set; }
+
+        /// <summary>
+        /// Execution policy captured from the source ability before the effect releases its borrowed
+        /// ability-instance reference. It remains Invalid when the effect did not originate from an ability.
+        /// </summary>
+        public EAbilityExecutionPolicy SourceAbilityExecutionPolicy { get; private set; }
 
         /// <summary>
         /// Fired when the inhibition state changes (true = now inhibited, false = no longer inhibited).
         /// UE5: OnInhibitionChanged delegate.
         /// </summary>
-        public event Action<bool> OnInhibitionChanged;
+        public event Action<bool> OnInhibitionChanged
+        {
+            add
+            {
+                if (value == null) return;
+                inhibitionObservers ??= new List<Action<bool>>(2);
+                if (inhibitionObservers.Count >= MaxInhibitionObservers)
+                {
+                    throw new InvalidOperationException(
+                        $"ActiveGameplayEffect supports at most {MaxInhibitionObservers} inhibition observers.");
+                }
+                inhibitionObservers.Add(value);
+            }
+            remove
+            {
+                if (value == null || inhibitionObservers == null) return;
+                inhibitionObservers.Remove(value);
+            }
+        }
 
         internal void NotifyInhibitionChanged(bool inhibited)
         {
-            OnInhibitionChanged?.Invoke(inhibited);
+            if (inhibitionObservers == null) return;
+            for (int i = 0; i < inhibitionObservers.Count; i++)
+            {
+                try
+                {
+                    inhibitionObservers[i]?.Invoke(inhibited);
+                }
+                catch (Exception exception)
+                {
+                    GASLog.Error($"ActiveGameplayEffect inhibition observer failed: {exception.Message}");
+                }
+            }
         }
 
         private long timeRemainingRaw;
@@ -49,42 +96,101 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public ActiveGameplayEffect() { }
 
-        #region IGASPoolable Implementation
-
-        void IGASPoolable.OnGetFromPool()
+        bool IGASLeasedObject.TryAcquireLease()
         {
-            // Initialization happens in Initialize()
+            if (leaseActive || leaseEverAcquired) return false;
+            leaseEverAcquired = true;
+            leaseActive = true;
+            return true;
         }
 
-        void IGASPoolable.OnReturnToPool()
+        bool IGASLeasedObject.TryReleaseLease()
         {
-            Spec?.ReturnToPool();
+            if (!leaseActive) return false;
+            leaseActive = false;
+            return true;
+        }
+
+        void IGASLeasedObject.OnLeaseAcquired()
+        {
+            ResetState();
+        }
+
+        void IGASLeasedObject.OnLeaseReleased()
+        {
+            try
+            {
+                Spec?.ReleaseRuntimeLease();
+            }
+            finally
+            {
+                ResetState();
+            }
+        }
+
+        private void ResetState()
+        {
             Spec = null;
             timeRemainingRaw = 0L;
             StackCount = 0;
             IsExpired = false;
             IsInhibited = false;
-            NetworkId = 0;
-            OnInhibitionChanged = null;
+            ReconciliationId = 0;
+            SourceAbilitySpecHandle = 0;
+            SourceAbilityExecutionPolicy = EAbilityExecutionPolicy.Invalid;
+            inhibitionObservers?.Clear();
             periodTimerRaw = -1L;
             cachedPeriodRaw = 0L;
             cachedDurationPolicy = default;
         }
 
-        #endregion
+        internal void SetMemoryOwner(GASRuntimeMemory owner) => memoryOwner = owner;
+
+        internal void SetReconciledSourceAbilitySpecHandle(int specHandle)
+        {
+            if (!leaseActive || Spec == null)
+            {
+                throw new InvalidOperationException(
+                    "Cannot assign reconciled source provenance to an inactive GameplayEffect lease.");
+            }
+            if (specHandle < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(specHandle), specHandle,
+                    "A reconciled source ability spec handle cannot be negative.");
+            }
+
+            SourceAbilitySpecHandle = specHandle;
+        }
 
         #region Factory
 
-        public static ActiveGameplayEffect Create(GameplayEffectSpec spec)
+        internal static ActiveGameplayEffect Create(GameplayEffectSpec spec)
         {
-            var activeEffect = GASPool<ActiveGameplayEffect>.Shared.Get();
-            activeEffect.Initialize(spec);
-            return activeEffect;
+            if (spec?.Target == null)
+            {
+                throw new ArgumentException("An active effect requires a spec with an assigned target.", nameof(spec));
+            }
+
+            spec.TransferToActiveEffect();
+            var activeEffect = spec.Target.RuntimeContext.Memory.AcquireActiveEffect();
+            try
+            {
+                activeEffect.Initialize(spec);
+                return activeEffect;
+            }
+            catch
+            {
+                activeEffect.ReleaseRuntimeLease();
+                throw;
+            }
         }
 
         private void Initialize(GameplayEffectSpec spec)
         {
             Spec = spec;
+            SourceAbilitySpecHandle = spec.Context?.AbilityInstance?.Spec?.Handle ?? 0;
+            SourceAbilityExecutionPolicy =
+                spec.Context?.AbilityInstance?.ExecutionPolicy ?? EAbilityExecutionPolicy.Invalid;
             timeRemainingRaw = spec.DurationRaw;
             StackCount = 1;
             IsExpired = false;
@@ -105,9 +211,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        public void ReturnToPool()
+        internal void ReleaseRuntimeLease()
         {
-            GASPool<ActiveGameplayEffect>.Shared.Return(this);
+            memoryOwner?.ReleaseActiveEffect(this);
         }
 
         #endregion
@@ -117,7 +223,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Called when a new stack is successfully applied.
         /// </summary>
-        public void OnStackApplied()
+        internal void OnStackApplied()
         {
             StackCount = Math.Min(StackCount + 1, Spec.Def.Stacking.Limit);
 
@@ -135,7 +241,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Removes a single stack. Used by EGameplayEffectStackingExpirationPolicy.RemoveSingleStackAndRefreshDuration.
         /// </summary>
-        public void RemoveStack()
+        internal void RemoveStack()
         {
             if (StackCount > 0)
             {
@@ -146,7 +252,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Clears the expired flag so the effect can continue living (used after removing a single stack).
         /// </summary>
-        public void ClearExpired()
+        internal void ClearExpired()
         {
             IsExpired = false;
         }
@@ -154,7 +260,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// <summary>
         /// Refreshes duration without modifying stack count.
         /// </summary>
-        public void RefreshDurationAndPeriod()
+        internal void RefreshDurationAndPeriod()
         {
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
@@ -171,33 +277,48 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Sets the remaining duration to a specific value.
         /// UE5: Section 4.5.16 - Changing Active Gameplay Effect Duration.
         /// </summary>
-        public void SetRemainingDuration(float newDuration)
+        internal void SetRemainingDuration(float newDuration)
         {
+            if (float.IsNaN(newDuration) || float.IsInfinity(newDuration) || newDuration < 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(newDuration), newDuration, "Remaining duration must be finite and non-negative.");
+            }
+
             SetRemainingDurationRaw(GASFixedValue.FromFloat(newDuration).RawValue);
         }
 
-        public void SetRemainingDurationRaw(long newDurationRaw)
+        internal void SetRemainingDurationRaw(long newDurationRaw)
         {
+            if (newDurationRaw < 0L)
+            {
+                throw new ArgumentOutOfRangeException(nameof(newDurationRaw), newDurationRaw, "Remaining duration cannot be negative.");
+            }
+
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                timeRemainingRaw = Math.Max(0L, newDurationRaw);
+                timeRemainingRaw = newDurationRaw;
             }
         }
 
-        public void SetReplicatedStackCount(int newStackCount)
+        internal void SetReplicatedStackCount(int newStackCount)
         {
-            int clampedStackCount = Math.Max(1, newStackCount);
-            int limit = Spec?.Def?.Stacking.Limit ?? 0;
-            if (limit > 0)
-            {
-                clampedStackCount = Math.Min(clampedStackCount, limit);
-            }
+            ValidateReplicatedStackCount(newStackCount);
 
-            StackCount = clampedStackCount;
+            StackCount = newStackCount;
             IsExpired = false;
         }
 
-        public void ApplyReplicatedState(
+        private void ValidateReplicatedStackCount(int newStackCount)
+        {
+            int limit = Spec?.Def?.Stacking.Limit ?? 0;
+            int effectiveLimit = limit > 0 ? limit : 1;
+            if (newStackCount <= 0 || newStackCount > effectiveLimit)
+            {
+                throw new ArgumentOutOfRangeException(nameof(newStackCount), newStackCount, $"Stack count must be between 1 and {effectiveLimit}.");
+            }
+        }
+
+        internal void ApplyReplicatedState(
             int level,
             int stackCount,
             float duration,
@@ -209,15 +330,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (Spec == null || Spec.Def == null)
             {
-                return;
+                throw new InvalidOperationException("Cannot apply replicated state to an inactive effect lease.");
             }
 
+            bool invalidPeriodTimer = cachedPeriodRaw > 0L
+                ? periodTimeRemaining < 0f
+                : periodTimeRemaining != -1f;
+            if (float.IsNaN(timeRemaining) || float.IsInfinity(timeRemaining) || timeRemaining < 0f ||
+                float.IsNaN(periodTimeRemaining) || float.IsInfinity(periodTimeRemaining) || invalidPeriodTimer)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeRemaining), "Replicated timers must be finite and non-negative.");
+            }
+
+            ValidateReplicatedStackCount(stackCount);
             Spec.ApplyReplicatedState(level, duration, setByCallerTags, setByCallerValues, setByCallerCount);
             SetReplicatedStackCount(stackCount);
 
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                timeRemainingRaw = Math.Max(0L, GASFixedValue.FromFloat(timeRemaining).RawValue);
+                timeRemainingRaw = GASFixedValue.FromFloat(timeRemaining).RawValue;
             }
 
             if (cachedPeriodRaw > 0L)
@@ -232,7 +363,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             IsExpired = false;
         }
 
-        public void ApplyReplicatedStateRaw(
+        internal void ApplyReplicatedStateRaw(
             int level,
             int stackCount,
             long durationRaw,
@@ -244,15 +375,24 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (Spec == null || Spec.Def == null)
             {
-                return;
+                throw new InvalidOperationException("Cannot apply replicated state to an inactive effect lease.");
             }
 
+            bool invalidPeriodTimer = cachedPeriodRaw > 0L
+                ? periodTimeRemainingRaw < 0L
+                : periodTimeRemainingRaw != -1L;
+            if (timeRemainingRaw < 0L || invalidPeriodTimer)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeRemainingRaw), "Replicated timers must be non-negative.");
+            }
+
+            ValidateReplicatedStackCount(stackCount);
             Spec.ApplyReplicatedStateRaw(level, durationRaw, setByCallerTags, setByCallerValuesRaw, setByCallerCount);
             SetReplicatedStackCount(stackCount);
 
             if (cachedDurationPolicy == EDurationPolicy.HasDuration)
             {
-                this.timeRemainingRaw = Math.Max(0L, timeRemainingRaw);
+                this.timeRemainingRaw = timeRemainingRaw;
             }
 
             if (cachedPeriodRaw > 0L)
@@ -267,6 +407,63 @@ namespace CycloneGames.GameplayAbilities.Runtime
             IsExpired = false;
         }
 
+        internal void ApplyReplicatedStateRaw(
+            int level,
+            int stackCount,
+            long durationRaw,
+            long timeRemainingRaw,
+            long periodTimeRemainingRaw,
+            GameplayTag[] setByCallerTags,
+            long[] setByCallerValuesRaw,
+            int setByCallerCount,
+            string[] setByCallerNames,
+            long[] setByCallerNameValuesRaw,
+            int setByCallerNameCount,
+            GameplayTag[] dynamicGrantedTags,
+            int dynamicGrantedTagCount,
+            GameplayTag[] dynamicAssetTags,
+            int dynamicAssetTagCount)
+        {
+            if (Spec == null || Spec.Def == null)
+            {
+                throw new InvalidOperationException("Cannot apply replicated state to an inactive effect lease.");
+            }
+
+            bool invalidPeriodTimer = cachedPeriodRaw > 0L
+                ? periodTimeRemainingRaw < 0L
+                : periodTimeRemainingRaw != -1L;
+            if (timeRemainingRaw < 0L || invalidPeriodTimer)
+            {
+                throw new ArgumentOutOfRangeException(nameof(timeRemainingRaw), "Replicated timers must be non-negative.");
+            }
+
+            ValidateReplicatedStackCount(stackCount);
+            Spec.ApplyReplicatedStateRaw(
+                level,
+                durationRaw,
+                setByCallerTags,
+                setByCallerValuesRaw,
+                setByCallerCount,
+                setByCallerNames,
+                setByCallerNameValuesRaw,
+                setByCallerNameCount,
+                dynamicGrantedTags,
+                dynamicGrantedTagCount,
+                dynamicAssetTags,
+                dynamicAssetTagCount);
+            SetReplicatedStackCount(stackCount);
+
+            if (cachedDurationPolicy == EDurationPolicy.HasDuration)
+            {
+                this.timeRemainingRaw = timeRemainingRaw;
+            }
+
+            periodTimerRaw = cachedPeriodRaw > 0L
+                ? Math.Max(0L, Math.Min(periodTimeRemainingRaw, cachedPeriodRaw))
+                : -1L;
+            IsExpired = false;
+        }
+
         #endregion
 
         #region Tick
@@ -275,7 +472,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// Ticks the effect's duration and period timer.
         /// </summary>
         /// <returns>True if the effect expired this tick.</returns>
-        public bool Tick(float deltaTime, AbilitySystemComponent asc)
+        internal bool Tick(float deltaTime, AbilitySystemComponent asc)
         {
             long deltaTimeRaw = GASFixedValue.FromFloat(deltaTime).RawValue;
 
@@ -296,13 +493,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (!IsExpired && !IsInhibited && cachedPeriodRaw > 0L)
             {
                 periodTimerRaw -= deltaTimeRaw;
-                while (periodTimerRaw <= 0L)
+                int executionBudget = asc?.Limits.MaxPeriodicEffectExecutionsPerTick
+                    ?? GASRuntimeLimits.Default.MaxPeriodicEffectExecutionsPerTick;
+                for (int executionCount = 0;
+                     executionCount < executionBudget && periodTimerRaw <= 0L;
+                     executionCount++)
                 {
-                    asc.ExecuteInstantEffect(this.Spec);
-                    // Carry over leftover time to prevent drift; the while loop ensures we
-                    // fire once per elapsed period and leave periodTimer in [0, cachedPeriod).
+                    asc.ExecutePeriodicEffect(this);
+                    // Preserve elapsed-time remainder. If the budget is exhausted, the
+                    // non-positive timer carries deterministic backlog into later ticks.
                     periodTimerRaw += cachedPeriodRaw;
-                    if (cachedPeriodRaw <= 0L) break; // safety: avoid infinite loop if period is zero
                 }
             }
 

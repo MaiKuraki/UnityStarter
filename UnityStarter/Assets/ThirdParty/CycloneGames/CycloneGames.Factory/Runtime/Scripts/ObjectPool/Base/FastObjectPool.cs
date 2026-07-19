@@ -1,3 +1,5 @@
+using System;
+
 namespace CycloneGames.Factory.Runtime
 {
     /// <summary>
@@ -51,13 +53,23 @@ namespace CycloneGames.Factory.Runtime
 
             try
             {
-                OnSpawn(item);
+                BeginLifecycleCallback();
+                try
+                {
+                    OnSpawn(item);
+                }
+                finally
+                {
+                    EndLifecycleCallback();
+                }
+
                 return true;
             }
-            catch
+            catch (Exception spawnFailure)
             {
-                RollbackSpawn(item);
-                throw;
+                Exception cleanupFailure = RollbackSpawn(item);
+                RethrowSpawnFailure(spawnFailure, cleanupFailure);
+                return false;
             }
         }
     }

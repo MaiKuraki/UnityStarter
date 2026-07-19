@@ -1,0 +1,31 @@
+{
+    "name": "CycloneGames.DataTable.Tests.Editor.Integrations.Luban",
+    "rootNamespace": "CycloneGames.DataTable.Tests.Editor.Integrations.Luban",
+    "references": [
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.DataTable.Unity.Runtime.Integrations.Luban",
+        "Luban.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "LUBAN"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.code-philosophy.luban",
+            "expression": "[1.2.0,2.0.0)",
+            "define": "LUBAN"
+        }
+    ],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

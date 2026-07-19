@@ -14,6 +14,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public Action OnCancel;
 
         private bool resolved;
+        private bool terminalCallbackStarted;
+
+        public override void InitTask(GameplayAbility ability)
+        {
+            base.InitTask(ability);
+            terminalCallbackStarted = false;
+        }
 
         /// <summary>
         /// Creates a WaitConfirmCancel task.
@@ -35,10 +42,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public void Confirm()
         {
-            if (!IsActive || IsCancelled || resolved) return;
+            if (!IsActive || IsCancelled || resolved ||
+                !AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
             resolved = true;
-            OnConfirm?.Invoke();
-            EndTask();
+            try
+            {
+                OnConfirm?.Invoke();
+            }
+            finally
+            {
+                EndTaskIfCurrentLease(leaseGeneration);
+            }
         }
 
         /// <summary>
@@ -47,19 +64,33 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void Cancel()
         {
             if (!IsActive || resolved) return;
-            resolved = true;
-            OnCancel?.Invoke();
-            CancelTask();
+            CancelInternal();
         }
 
         public override void CancelTask()
         {
-            if (!resolved)
+            CancelInternal();
+        }
+
+        private void CancelInternal()
+        {
+            if (resolved ||
+                !AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            resolved = true;
+            try
             {
-                resolved = true;
                 OnCancel?.Invoke();
             }
-            base.CancelTask();
+            finally
+            {
+                if (IsCurrentLease(leaseGeneration))
+                {
+                    base.CancelTask();
+                }
+            }
         }
 
         protected override void OnDestroy()

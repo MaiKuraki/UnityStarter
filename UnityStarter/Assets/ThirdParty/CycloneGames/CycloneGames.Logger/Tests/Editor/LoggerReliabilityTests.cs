@@ -775,6 +775,25 @@ namespace CycloneGames.Logger.Tests.Editor
         }
 
         [Test]
+        public void UnityQueue_EditorSourcePathParticipatesInRetainedCharacterBudget()
+        {
+            ResetUnityLoggerState();
+            LoggerUpdater.Configure(CreateOptions(4, 512));
+            Assert.IsTrue(LoggerUpdater.TryReserve(LogLevel.Info, 4, out LoggerUpdater.Reservation undersized));
+            Assert.IsFalse(LoggerUpdater.Commit(LogLevel.Info, "a", undersized, "path", 1));
+
+            Assert.IsTrue(LoggerUpdater.TryReserve(LogLevel.Info, 5, out LoggerUpdater.Reservation exact));
+            Assert.IsTrue(LoggerUpdater.Commit(LogLevel.Info, "a", exact, "path", 1));
+
+            UnityLoggerStatistics statistics = LoggerUpdater.GetStatistics();
+            Assert.AreEqual(1, statistics.QueuedCount);
+            Assert.AreEqual(5, statistics.QueuedCharacters);
+            Assert.AreEqual(1, statistics.DroppedMessageCount);
+            LoggerUpdater.Shutdown(false);
+            ResetUnityLoggerState();
+        }
+
+        [Test]
         public void UnityFormatting_UsesCultureInvariantLineNumberWithoutAllocationPolicyExpansion()
         {
             CultureInfo previousCulture = CultureInfo.CurrentCulture;

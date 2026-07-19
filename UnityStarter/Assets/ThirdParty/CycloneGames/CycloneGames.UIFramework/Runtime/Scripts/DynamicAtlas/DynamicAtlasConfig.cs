@@ -1,15 +1,10 @@
 using System;
-using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
-    /// <summary>
-    /// Configuration for Dynamic Atlas Service.
-    /// Supports custom texture formats, block alignment, and platform-specific optimizations.
-    /// </summary>
     [Serializable]
-    public class DynamicAtlasConfig
+    public sealed class DynamicAtlasConfig
     {
         public enum PlatformTier
         {
@@ -19,245 +14,297 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             WebGL = 3,
         }
 
-        [Tooltip("Page size in pixels (0 = auto-detect based on device capabilities)")]
-        public int pageSize = 0;
+        public const int MinimumPageSize = 64;
+        public const int MaximumPageSize = 8192;
+        public const int MaximumPageCount = 64;
+        public const int MaximumEntryCount = 65535;
+        public const int MaximumKeyLength = 1024;
 
-        [Tooltip("Automatically scale textures that exceed page size")]
-        public bool autoScaleLargeTextures = true;
+        [Min(MinimumPageSize)]
+        [Tooltip("Power-of-two atlas page size in pixels.")]
+        public int pageSize = 1024;
 
-        [Tooltip("Target texture format for atlas pages (RGBA32 = uncompressed, ASTC_4x4 = compressed)")]
-        public TextureFormat targetFormat = TextureFormat.RGBA32;
+        [Range(1, MaximumPageCount)]
+        [Tooltip("Hard page-count limit. Runtime allocation never exceeds this value or the memory budget.")]
+        public int maxPages = 2;
 
-        [Tooltip("Enable block alignment for compressed formats (required for ASTC/ETC/BC)")]
-        public bool enableBlockAlignment = true;
+        [Range(0, MaximumPageCount)]
+        [Tooltip("Empty pages retained to absorb predictable UI churn without reallocating textures.")]
+        public int minRetainedPages;
 
-        [Tooltip("Padding between sprites in pixels")]
+        [Min(1)]
+        [Tooltip("Hard limit for all active and retained atlas entries.")]
+        public int maxEntries = 512;
+
+        [Min(1)]
+        [Tooltip("Hard limit for entries stored on one page.")]
+        public int maxEntriesPerPage = 384;
+
+        [Min(1)]
+        [Tooltip("Maximum accepted cache-key length.")]
+        public int maxKeyLength = 256;
+
+        [Min(1)]
+        [Tooltip("Combined estimated CPU and GPU texture-memory budget in bytes.")]
+        public long memoryBudgetBytes = 16L * 1024L * 1024L;
+
+        [Range(0, 8)]
+        [Tooltip("Transparent separation on every side of an entry, in pixels.")]
         public int padding = 2;
 
-        [Tooltip("Enable edge bleeding (gutter pixels) to prevent texture sampling artifacts at sprite boundaries")]
+        [Tooltip("Copies a one-pixel edge gutter into padding to prevent bilinear sampling artifacts.")]
         public bool enableBleed = true;
 
-        [Tooltip("Enable platform-specific optimizations (NativeArray, unsafe code, etc.)")]
-        public bool enablePlatformOptimizations = true;
+        [Tooltip("Filtering used by generated atlas pages.")]
+        public FilterMode filterMode = FilterMode.Bilinear;
 
-        [Tooltip("Maximum number of atlas pages (0 = unlimited)")]
-        public int maxPages = 0;
+        [Tooltip("Controls whether zero-reference entries are removed immediately or retained within hard limits.")]
+        public DynamicAtlasRetentionPolicy retentionPolicy = DynamicAtlasRetentionPolicy.RetainUntilCapacityPressure;
 
-        [Tooltip("Enable mipmap generation for atlas pages (needed for world-space UI or camera distance filtering)")]
-        public bool enableMipmap = false;
+        [Tooltip("Controls whether oversized inputs are rejected or explicitly downscaled.")]
+        public DynamicAtlasOversizePolicy oversizePolicy = DynamicAtlasOversizePolicy.Reject;
 
-        [Tooltip("Allow CPU fallback copy paths (ReadPixels / RenderTexture bridge) when GPU copy and raw buffer copy are unavailable.")]
-        public bool allowCpuReadPixelsFallback = true;
+        [Tooltip("Permission boundary used after the preferred direct GPU copy path is unavailable. CPU raw copy still requires a readable, format-compatible source.")]
+        public DynamicAtlasCopyFallback copyFallback = DynamicAtlasCopyFallback.AllowCpuRawCopy;
 
-        [Tooltip("Allow CPU-side bleed generation on fallback paths. Disable this on constrained platforms to avoid GetPixels/SetPixels overhead.")]
-        public bool allowCpuBleedFallback = true;
+        [Min(0.01f)]
+        [Tooltip("Pixels-per-unit used for sprites created from textures or regions.")]
+        public float defaultPixelsPerUnit = 100f;
 
-        [Tooltip("Custom texture loader (null = Resources.Load)")]
+        [NonSerialized]
         public Func<string, Texture2D> loadFunc;
 
-        [Tooltip("Custom texture unloader (null = Resources.UnloadAsset)")]
+        [NonSerialized]
         public Action<string, Texture2D> unloadFunc;
 
-        [Tooltip("Async texture loader for non-blocking I/O (optional, used by GetSpriteAsync)")]
-        public Func<string, UniTask<Texture2D>> loadFuncAsync;
-
-        public DynamicAtlasConfig()
-        {
-        }
-
-        public DynamicAtlasConfig(int pageSize, bool autoScaleLargeTextures = true)
-        {
-            this.pageSize = pageSize;
-            this.autoScaleLargeTextures = autoScaleLargeTextures;
-        }
-
-        public DynamicAtlasConfig(
-            Func<string, Texture2D> loadFunc,
-            Action<string, Texture2D> unloadFunc,
-            int pageSize = 0,
-            bool autoScaleLargeTextures = true)
-        {
-            this.loadFunc = loadFunc;
-            this.unloadFunc = unloadFunc;
-            this.pageSize = pageSize;
-            this.autoScaleLargeTextures = autoScaleLargeTextures;
-        }
-
-        /// <summary>
-        /// Creates a configuration optimized for the current platform.
-        /// </summary>
-        public static DynamicAtlasConfig CreatePlatformOptimized(
-            Func<string, Texture2D> loadFunc = null,
-            Action<string, Texture2D> unloadFunc = null,
-            bool useCompression = false)
-        {
-            var config = new DynamicAtlasConfig
-            {
-                loadFunc = loadFunc,
-                unloadFunc = unloadFunc,
-                enablePlatformOptimizations = true,
-                enableBlockAlignment = true
-            };
-
-            if (useCompression)
-            {
-                config.targetFormat = TextureFormatHelper.GetRecommendedCompressedFormat();
-            }
-            else
-            {
-                config.targetFormat = TextureFormatHelper.GetRecommendedUncompressedFormat();
-            }
-
-            // Auto-detect page size based on device
-            config.pageSize = 0;
-            config.autoScaleLargeTextures = true;
-
-            return config;
-        }
-
-        /// <summary>
-        /// Creates a configuration tuned for a specific runtime capability tier.
-        /// </summary>
         public static DynamicAtlasConfig CreateForTier(
             PlatformTier tier,
             Func<string, Texture2D> loadFunc = null,
-            Action<string, Texture2D> unloadFunc = null,
-            bool useCompression = false)
+            Action<string, Texture2D> unloadFunc = null)
         {
             var config = new DynamicAtlasConfig
             {
                 loadFunc = loadFunc,
                 unloadFunc = unloadFunc,
-                autoScaleLargeTextures = true,
-                enablePlatformOptimizations = tier != PlatformTier.WebGL,
-                enableBlockAlignment = useCompression,
-                targetFormat = useCompression ? TextureFormatHelper.GetRecommendedCompressedFormat() : TextureFormatHelper.GetRecommendedUncompressedFormat()
             };
 
             switch (tier)
             {
                 case PlatformTier.DesktopHighEnd:
-                    config.pageSize = 4096;
-                    config.maxPages = 0;
-                    config.enableBleed = true;
-                    config.enableMipmap = false;
-                    config.allowCpuReadPixelsFallback = true;
-                    config.allowCpuBleedFallback = true;
+                    config.pageSize = 2048;
+                    config.maxPages = 4;
+                    config.minRetainedPages = 1;
+                    config.maxEntries = 4096;
+                    config.maxEntriesPerPage = 2048;
+                    config.memoryBudgetBytes = 64L * 1024L * 1024L;
+                    config.copyFallback = DynamicAtlasCopyFallback.GpuOnly;
                     break;
 
                 case PlatformTier.MobileHighEnd:
                     config.pageSize = 2048;
-                    config.maxPages = 8;
-                    config.enableBleed = true;
-                    config.enableMipmap = false;
-                    config.allowCpuReadPixelsFallback = true;
-                    config.allowCpuBleedFallback = false;
+                    config.maxPages = 2;
+                    config.minRetainedPages = 1;
+                    config.maxEntries = 2048;
+                    config.maxEntriesPerPage = 1024;
+                    config.memoryBudgetBytes = 32L * 1024L * 1024L;
+                    config.copyFallback = DynamicAtlasCopyFallback.GpuOnly;
                     break;
 
                 case PlatformTier.MobileLowEnd:
                     config.pageSize = 1024;
-                    config.maxPages = 4;
-                    config.enableBleed = false;
-                    config.enableMipmap = false;
-                    config.targetFormat = TextureFormatHelper.GetRecommendedUncompressedFormat();
-                    config.enableBlockAlignment = false;
-                    config.allowCpuReadPixelsFallback = false;
-                    config.allowCpuBleedFallback = false;
+                    config.maxPages = 2;
+                    config.minRetainedPages = 0;
+                    config.maxEntries = 768;
+                    config.maxEntriesPerPage = 512;
+                    config.memoryBudgetBytes = 16L * 1024L * 1024L;
+                    config.copyFallback = DynamicAtlasCopyFallback.AllowCpuRawCopy;
                     break;
 
                 case PlatformTier.WebGL:
                     config.pageSize = 1024;
                     config.maxPages = 2;
-                    config.enableBleed = false;
-                    config.enableMipmap = false;
-                    config.targetFormat = TextureFormat.RGBA32;
-                    config.enablePlatformOptimizations = false;
-                    config.enableBlockAlignment = false;
-                    config.allowCpuReadPixelsFallback = false;
-                    config.allowCpuBleedFallback = false;
+                    config.minRetainedPages = 0;
+                    config.maxEntries = 512;
+                    config.maxEntriesPerPage = 384;
+                    config.memoryBudgetBytes = 20L * 1024L * 1024L;
+                    config.copyFallback = DynamicAtlasCopyFallback.AllowCpuRawCopy;
                     break;
+
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(tier), tier, "Unknown dynamic atlas platform tier.");
             }
 
             return config;
         }
 
-        /// <summary>
-        /// Creates a configuration based on the current runtime platform class.
-        /// </summary>
         public static DynamicAtlasConfig CreateForCurrentPlatform(
+            bool preferLowMemoryProfile = false,
             Func<string, Texture2D> loadFunc = null,
-            Action<string, Texture2D> unloadFunc = null,
-            bool useCompression = false,
-            bool preferLowMemoryProfile = false)
+            Action<string, Texture2D> unloadFunc = null)
         {
 #if UNITY_WEBGL
-            return CreateForTier(PlatformTier.WebGL, loadFunc, unloadFunc, false);
+            return CreateForTier(PlatformTier.WebGL, loadFunc, unloadFunc);
 #elif UNITY_ANDROID || UNITY_IOS || UNITY_TVOS
-            return CreateForTier(preferLowMemoryProfile ? PlatformTier.MobileLowEnd : PlatformTier.MobileHighEnd, loadFunc, unloadFunc, useCompression);
+            return CreateForTier(
+                preferLowMemoryProfile ? PlatformTier.MobileLowEnd : PlatformTier.MobileHighEnd,
+                loadFunc,
+                unloadFunc);
+#elif UNITY_STANDALONE
+            return CreateForTier(
+                preferLowMemoryProfile ? PlatformTier.MobileHighEnd : PlatformTier.DesktopHighEnd,
+                loadFunc,
+                unloadFunc);
 #else
-            return CreateForTier(preferLowMemoryProfile ? PlatformTier.MobileHighEnd : PlatformTier.DesktopHighEnd, loadFunc, unloadFunc, useCompression);
+            // Unknown and future platforms start from the bounded compatibility baseline.
+            // Products should replace it with an explicitly measured platform profile.
+            return new DynamicAtlasConfig
+            {
+                loadFunc = loadFunc,
+                unloadFunc = unloadFunc,
+            };
 #endif
         }
 
-        /// <summary>
-        /// Gets the block size for the target format.
-        /// </summary>
-        public int GetBlockSize()
+        public static DynamicAtlasConfig CreatePlatformOptimized(
+            Func<string, Texture2D> loadFunc = null,
+            Action<string, Texture2D> unloadFunc = null)
         {
-            return TextureFormatHelper.GetBlockSize(targetFormat);
+            return CreateForCurrentPlatform(loadFunc: loadFunc, unloadFunc: unloadFunc);
         }
 
-        /// <summary>
-        /// Checks if the target format requires block alignment.
-        /// </summary>
-        public bool RequiresBlockAlignment()
-        {
-            return enableBlockAlignment && TextureFormatHelper.RequiresBlockAlignment(targetFormat);
-        }
-
-        /// <summary>
-        /// Validates the configuration for the current platform.
-        /// </summary>
         public bool Validate(out string errorMessage)
         {
-            if (!TextureFormatHelper.IsFormatSupported(targetFormat))
+            if (pageSize < MinimumPageSize || pageSize > MaximumPageSize || !Mathf.IsPowerOfTwo(pageSize))
             {
-                errorMessage = $"Texture format {targetFormat} is not supported on this platform.";
+                errorMessage = $"Page size must be a power of two in [{MinimumPageSize}, {MaximumPageSize}].";
                 return false;
             }
 
-            if (pageSize > 0 && pageSize > SystemInfo.maxTextureSize)
+            if (maxPages < 1 || maxPages > MaximumPageCount)
             {
-                errorMessage = $"Page size {pageSize} exceeds maximum texture size {SystemInfo.maxTextureSize}.";
+                errorMessage = $"Max pages must be in [1, {MaximumPageCount}].";
                 return false;
             }
 
-            if (padding < 0 || padding > 16)
+            if (minRetainedPages < 0 || minRetainedPages > maxPages)
             {
-                errorMessage = $"Padding {padding} is out of valid range (0-16).";
+                errorMessage = "Minimum retained pages must be in [0, maxPages].";
                 return false;
             }
 
-            if (enableBleed && padding < 2 && !TextureFormatHelper.RequiresBlockAlignment(targetFormat))
+            if (maxEntries < 1 || maxEntries > MaximumEntryCount)
             {
-                errorMessage = $"enableBleed requires padding >= 2 to avoid inter-sprite bleed overlap. Current padding: {padding}.";
+                errorMessage = $"Max entries must be in [1, {MaximumEntryCount}].";
                 return false;
             }
 
-            if (maxPages < 0)
+            if (maxEntriesPerPage < 1 || maxEntriesPerPage > maxEntries)
             {
-                errorMessage = $"maxPages {maxPages} cannot be negative.";
+                errorMessage = "Max entries per page must be in [1, maxEntries].";
                 return false;
             }
 
-            if (!allowCpuReadPixelsFallback && allowCpuBleedFallback)
+            if (maxKeyLength < 1 || maxKeyLength > MaximumKeyLength)
             {
-                errorMessage = "allowCpuBleedFallback requires allowCpuReadPixelsFallback because CPU bleed depends on CPU-side atlas writes.";
+                errorMessage = $"Max key length must be in [1, {MaximumKeyLength}].";
+                return false;
+            }
+
+            if (padding < 0 || padding > 8)
+            {
+                errorMessage = "Padding must be in [0, 8].";
+                return false;
+            }
+
+            if (enableBleed && padding < 1)
+            {
+                errorMessage = "Edge bleed requires at least one pixel of padding.";
+                return false;
+            }
+
+            if (filterMode != FilterMode.Point &&
+                filterMode != FilterMode.Bilinear &&
+                filterMode != FilterMode.Trilinear)
+            {
+                errorMessage = "Filter mode is not supported.";
+                return false;
+            }
+
+            if (retentionPolicy != DynamicAtlasRetentionPolicy.RemoveWhenUnused &&
+                retentionPolicy != DynamicAtlasRetentionPolicy.RetainUntilCapacityPressure)
+            {
+                errorMessage = "Retention policy is not supported.";
+                return false;
+            }
+
+            if (oversizePolicy != DynamicAtlasOversizePolicy.Reject &&
+                oversizePolicy != DynamicAtlasOversizePolicy.ScaleDown)
+            {
+                errorMessage = "Oversize policy is not supported.";
+                return false;
+            }
+
+            if (copyFallback != DynamicAtlasCopyFallback.GpuOnly &&
+                copyFallback != DynamicAtlasCopyFallback.AllowSynchronousReadback &&
+                copyFallback != DynamicAtlasCopyFallback.AllowCpuRawCopy)
+            {
+                errorMessage = "Copy fallback is not supported.";
+                return false;
+            }
+
+            if (float.IsNaN(defaultPixelsPerUnit) || float.IsInfinity(defaultPixelsPerUnit) || defaultPixelsPerUnit <= 0f)
+            {
+                errorMessage = "Default pixels-per-unit must be finite and greater than zero.";
+                return false;
+            }
+
+            if (memoryBudgetBytes < TextureFormatHelper.EstimatePageBytes(pageSize, copyFallback))
+            {
+                errorMessage = "Memory budget must be large enough for at least one atlas page.";
+                return false;
+            }
+
+            if (oversizePolicy == DynamicAtlasOversizePolicy.ScaleDown &&
+                copyFallback != DynamicAtlasCopyFallback.AllowSynchronousReadback)
+            {
+                errorMessage = "ScaleDown requires the synchronous readback fallback.";
+                return false;
+            }
+
+            if ((loadFunc == null) != (unloadFunc == null))
+            {
+                errorMessage = "A custom synchronous loader and unloader must be configured as an ownership pair.";
                 return false;
             }
 
             errorMessage = null;
             return true;
+        }
+
+        internal DynamicAtlasConfig Copy()
+        {
+            return (DynamicAtlasConfig)MemberwiseClone();
+        }
+
+        internal bool IsEquivalentTo(DynamicAtlasConfig other)
+        {
+            return other != null &&
+                   pageSize == other.pageSize &&
+                   maxPages == other.maxPages &&
+                   minRetainedPages == other.minRetainedPages &&
+                   maxEntries == other.maxEntries &&
+                   maxEntriesPerPage == other.maxEntriesPerPage &&
+                   maxKeyLength == other.maxKeyLength &&
+                   memoryBudgetBytes == other.memoryBudgetBytes &&
+                   padding == other.padding &&
+                   enableBleed == other.enableBleed &&
+                   filterMode == other.filterMode &&
+                   retentionPolicy == other.retentionPolicy &&
+                   oversizePolicy == other.oversizePolicy &&
+                   copyFallback == other.copyFallback &&
+                   Mathf.Approximately(defaultPixelsPerUnit, other.defaultPixelsPerUnit) &&
+                   loadFunc == other.loadFunc &&
+                   unloadFunc == other.unloadFunc;
         }
     }
 }

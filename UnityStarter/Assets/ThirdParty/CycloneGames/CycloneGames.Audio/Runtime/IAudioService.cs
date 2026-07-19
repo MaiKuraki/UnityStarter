@@ -8,12 +8,13 @@ namespace CycloneGames.Audio.Runtime
     /// <summary>
     /// Primary service interface for the CycloneGames audio system.
     /// <para>
-    /// Supports both static access (<c>AudioManager.PlayEvent</c>) and constructor injection
-    /// (<c>IAudioService</c>) for full compatibility with DI containers (VContainer, Zenject, etc.).
+    /// Supports static access through <c>AudioManager</c> and explicit injection through
+    /// <c>IAudioService</c>. The composition root owns service initialization and lifetime.
     /// </para>
     /// <para>
-    /// All playback methods are thread-safe. Calls originating from worker threads are
-    /// automatically deferred to the main thread via a lock-free command queue.
+    /// This interface does not define blanket thread safety. <c>AudioManager</c> owns Unity audio
+    /// state on the main thread. Only entry points explicitly documented as queued submissions may
+    /// be called from worker threads; all other calls require the main thread.
     /// </para>
     /// </summary>
     public interface IAudioService

@@ -1,30 +1,23 @@
 using System;
 using System.Collections.Generic;
-using System.Runtime.CompilerServices;
 using CycloneGames.Localization.Core;
 
 namespace CycloneGames.Localization.Runtime
 {
     /// <summary>
-    /// Builds a flattened, deduplicated fallback chain from a Locale's hierarchy.
-    /// Cached per locale to avoid repeated traversal.
+    /// Owner-thread cache for immutable fallback chains, keyed by locale asset identity.
     /// </summary>
     public sealed class FallbackChain
     {
-        private readonly Dictionary<string, LocaleId[]> _cache =
-            new Dictionary<string, LocaleId[]>(8, StringComparer.Ordinal);
+        private readonly Dictionary<Locale, LocaleId[]> _cache = new Dictionary<Locale, LocaleId[]>();
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public LocaleId[] Resolve(Locale locale)
+        public LocaleId[] Resolve(Locale locale, int maxLocales = LocaleFallbackChainBuilder.DefaultMaxLocales)
         {
             if (locale == null) return Array.Empty<LocaleId>();
+            if (_cache.TryGetValue(locale, out LocaleId[] chain)) return chain;
 
-            string key = locale.Id.Code;
-            if (string.IsNullOrEmpty(key)) return Array.Empty<LocaleId>();
-            if (_cache.TryGetValue(key, out var chain)) return chain;
-
-            chain = LocaleFallbackChainBuilder.Build(locale);
-            _cache[key] = chain;
+            chain = LocaleFallbackChainBuilder.Build(locale, maxLocales);
+            _cache.Add(locale, chain);
             return chain;
         }
 

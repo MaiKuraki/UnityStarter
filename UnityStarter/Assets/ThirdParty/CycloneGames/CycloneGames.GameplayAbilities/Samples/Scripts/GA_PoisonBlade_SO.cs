@@ -17,8 +17,11 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            // This ability is now cast by an Enemy, so we commit it first.
-            CommitAbility(actorInfo, spec);
+            if (!CommitAbility(actorInfo, spec).Succeeded)
+            {
+                EndAbility();
+                return;
+            }
             
             var caster = actorInfo.AvatarGameObject;
             
@@ -61,10 +64,9 @@ namespace CycloneGames.GameplayAbilities.Sample
             return GameObject.Find("Player");
         }
 
-        public override GameplayAbility CreatePoolableInstance()
+        public override GameplayAbility CreateRuntimeInstance()
         {
-            // CHANGED: Pass both effects to the new instance.
-            return new GA_PoisonBlade(this.impactDamageEffect, this.poisonEffect);
+            return new GA_PoisonBlade(impactDamageEffect, poisonEffect);
         }
     }
 
@@ -77,25 +79,13 @@ namespace CycloneGames.GameplayAbilities.Sample
         [Tooltip("The lingering Damage-over-Time effect applied after the initial impact.")]
         public GameplayEffectSO PoisonEffect;
 
-        public override GameplayAbility CreateAbility()
+        protected override GameplayAbility CreateGameplayAbility()
         {
             var impactDamage = ImpactDamageEffect ? ImpactDamageEffect.GetGameplayEffect() : null;
             var poison = PoisonEffect ? PoisonEffect.GetGameplayEffect() : null;
-            
+
             var ability = new GA_PoisonBlade(impactDamage, poison);
-            
-            ability.Initialize(
-                AbilityName,
-                InstancingPolicy,
-                NetExecutionPolicy,
-                CostEffect?.GetGameplayEffect(),
-                CooldownEffect?.GetGameplayEffect(),
-                AbilityTags,
-                ActivationBlockedTags,
-                ActivationRequiredTags,
-                CancelAbilitiesWithTag,
-                BlockAbilitiesWithTag
-            );
+            InitializeAbility(ability);
             return ability;
         }
     }

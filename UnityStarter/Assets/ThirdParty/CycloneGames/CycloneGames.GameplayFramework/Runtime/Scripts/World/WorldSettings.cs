@@ -5,52 +5,106 @@ using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
-    public enum WorldSettingsReferenceSource
+    public enum WorldSettingsReferenceSource : byte
     {
         DirectReference = 0,
         AssetReference = 1,
         PathLocation = 2,
     }
 
-    public interface IWorldSettings
-    {
-        GameMode GameModeClass { get; }
-        PlayerController PlayerControllerClass { get; }
-        Pawn PawnClass { get; }
-        PlayerState PlayerStateClass { get; }
-        CameraManager CameraManagerClass { get; }
-        SpectatorPawn SpectatorPawnClass { get; }
-    }
-
-    public interface IResolvableWorldSettings
-    {
-        bool UsesExternalReferences { get; }
-        UniTask<bool> ResolveReferencesAsync(CancellationToken cancellationToken = default, bool logWarnings = true);
-        void ClearResolvedReferences();
-    }
-
+    /// <summary>
+    /// Resolves external authoring references. Implementations are composed explicitly by
+    /// <see cref="GameInstance"/>; the framework does not use a global resolver registry.
+    /// </summary>
     public interface IWorldSettingsReferenceResolver
     {
         bool Supports(WorldSettingsReferenceSource source);
-        UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(string location, CancellationToken cancellationToken) where T : UnityEngine.Object;
+
+        UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
+            string location,
+            CancellationToken cancellationToken) where T : UnityEngine.Object;
     }
 
-    public static class WorldSettingsExtensions
+    /// <summary>
+    /// Immutable runtime view of a <see cref="WorldSettings"/> asset. The world owns this
+    /// object and disposes it when the world stops, releasing every external asset lease in
+    /// reverse acquisition order.
+    /// </summary>
+    public sealed class WorldDefinition : IDisposable
     {
-        public static UniTask<bool> ResolveReferencesAsync(this IWorldSettings worldSettings, CancellationToken cancellationToken = default, bool logWarnings = true)
+        private readonly IDisposable[] leases;
+        private readonly int ownerThreadId;
+        private int leaseCount;
+        private bool isDisposed;
+
+        internal WorldDefinition(
+            GameMode gameModeClass,
+            PlayerController playerControllerClass,
+            Pawn pawnClass,
+            PlayerState playerStateClass,
+            CameraManager cameraManagerClass,
+            SpectatorPawn spectatorPawnClass,
+            IDisposable[] leases,
+            int leaseCount)
         {
-            if (worldSettings is IResolvableWorldSettings resolvableWorldSettings)
+            GameModeClass = gameModeClass;
+            PlayerControllerClass = playerControllerClass;
+            PawnClass = pawnClass;
+            PlayerStateClass = playerStateClass;
+            CameraManagerClass = cameraManagerClass;
+            SpectatorPawnClass = spectatorPawnClass;
+            this.leases = leases ?? Array.Empty<IDisposable>();
+            this.leaseCount = leaseCount;
+            ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+        }
+
+        public GameMode GameModeClass { get; }
+        public PlayerController PlayerControllerClass { get; }
+        public Pawn PawnClass { get; }
+        public PlayerState PlayerStateClass { get; }
+        public CameraManager CameraManagerClass { get; }
+        public SpectatorPawn SpectatorPawnClass { get; }
+        public bool IsDisposed => isDisposed;
+
+        public void Dispose()
+        {
+            if (isDisposed)
             {
-                return resolvableWorldSettings.ResolveReferencesAsync(cancellationToken, logWarnings);
+                return;
             }
 
-            return UniTask.FromResult(true);
+            if (Thread.CurrentThread.ManagedThreadId != ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    "WorldDefinition must be disposed on the thread that resolved it.");
+            }
+
+            isDisposed = true;
+            for (int i = leaseCount - 1; i >= 0; i--)
+            {
+                try
+                {
+                    leases[i]?.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
+                finally
+                {
+                    leases[i] = null;
+                }
+            }
+
+            leaseCount = 0;
         }
     }
 
     [CreateAssetMenu(fileName = "WorldSettings", menuName = "CycloneGames/GameplayFramework/WorldSettings")]
-    public class WorldSettings : ScriptableObject, IWorldSettings, IResolvableWorldSettings
+    public sealed class WorldSettings : ScriptableObject
     {
+        private const int ReferenceCount = 6;
+
         [Header("Game Mode")]
         [SerializeField] private GameMode gameModeClass;
         [SerializeField] private WorldSettingsReferenceSource gameModeSource = WorldSettingsReferenceSource.DirectReference;
@@ -85,26 +139,13 @@ namespace CycloneGames.GameplayFramework.Runtime
         [SerializeField] private string spectatorPawnAssetLocation;
         [SerializeField] private string spectatorPawnAssetGuid;
 
-        [NonSerialized] private GameMode resolvedGameModeClass;
-        [NonSerialized] private PlayerController resolvedPlayerControllerClass;
-        [NonSerialized] private Pawn resolvedPawnClass;
-        [NonSerialized] private PlayerState resolvedPlayerStateClass;
-        [NonSerialized] private CameraManager resolvedCameraManagerClass;
-        [NonSerialized] private SpectatorPawn resolvedSpectatorPawnClass;
-
-        [NonSerialized] private IDisposable resolvedGameModeLease;
-        [NonSerialized] private IDisposable resolvedPlayerControllerLease;
-        [NonSerialized] private IDisposable resolvedPawnLease;
-        [NonSerialized] private IDisposable resolvedPlayerStateLease;
-        [NonSerialized] private IDisposable resolvedCameraManagerLease;
-        [NonSerialized] private IDisposable resolvedSpectatorPawnLease;
-
-        public GameMode GameModeClass => GetResolvedReference(gameModeSource, gameModeClass, resolvedGameModeClass);
-        public PlayerController PlayerControllerClass => GetResolvedReference(playerControllerSource, playerControllerClass, resolvedPlayerControllerClass);
-        public Pawn PawnClass => GetResolvedReference(pawnSource, pawnClass, resolvedPawnClass);
-        public PlayerState PlayerStateClass => GetResolvedReference(playerStateSource, playerStateClass, resolvedPlayerStateClass);
-        public CameraManager CameraManagerClass => GetResolvedReference(cameraManagerSource, cameraManagerClass, resolvedCameraManagerClass);
-        public SpectatorPawn SpectatorPawnClass => GetResolvedReference(spectatorPawnSource, spectatorPawnClass, resolvedSpectatorPawnClass);
+        // These properties expose authoring data only. Runtime code consumes WorldDefinition.
+        public GameMode GameModeClass => gameModeClass;
+        public PlayerController PlayerControllerClass => playerControllerClass;
+        public Pawn PawnClass => pawnClass;
+        public PlayerState PlayerStateClass => playerStateClass;
+        public CameraManager CameraManagerClass => cameraManagerClass;
+        public SpectatorPawn SpectatorPawnClass => spectatorPawnClass;
 
         public WorldSettingsReferenceSource GameModeSource => gameModeSource;
         public WorldSettingsReferenceSource PlayerControllerSource => playerControllerSource;
@@ -135,74 +176,206 @@ namespace CycloneGames.GameplayFramework.Runtime
         public bool HasConfiguredCameraManager => IsReferenceConfigured(cameraManagerSource, cameraManagerClass, cameraManagerAssetLocation);
         public bool HasConfiguredSpectatorPawn => IsReferenceConfigured(spectatorPawnSource, spectatorPawnClass, spectatorPawnAssetLocation);
 
-        public async UniTask<bool> ResolveReferencesAsync(CancellationToken cancellationToken = default, bool logWarnings = true)
-        {
-            if (!UsesExternalReferences)
-            {
-                return true;
-            }
-
-            bool valid = true;
-            valid &= await ResolveReferenceAsync<GameMode>("GameModeClass", gameModeSource, gameModeAssetLocation, SetResolvedGameMode, cancellationToken, logWarnings);
-            valid &= await ResolveReferenceAsync<PlayerController>("PlayerControllerClass", playerControllerSource, playerControllerAssetLocation, SetResolvedPlayerController, cancellationToken, logWarnings);
-            valid &= await ResolveReferenceAsync<Pawn>("PawnClass", pawnSource, pawnAssetLocation, SetResolvedPawn, cancellationToken, logWarnings);
-            valid &= await ResolveReferenceAsync<PlayerState>("PlayerStateClass", playerStateSource, playerStateAssetLocation, SetResolvedPlayerState, cancellationToken, logWarnings);
-            valid &= await ResolveReferenceAsync<CameraManager>("CameraManagerClass", cameraManagerSource, cameraManagerAssetLocation, SetResolvedCameraManager, cancellationToken, logWarnings);
-            valid &= await ResolveReferenceAsync<SpectatorPawn>("SpectatorPawnClass", spectatorPawnSource, spectatorPawnAssetLocation, SetResolvedSpectatorPawn, cancellationToken, logWarnings);
-            return valid;
-        }
-
-        public void ClearResolvedReferences()
-        {
-            ClearResolvedReference(ref resolvedGameModeClass, ref resolvedGameModeLease);
-            ClearResolvedReference(ref resolvedPlayerControllerClass, ref resolvedPlayerControllerLease);
-            ClearResolvedReference(ref resolvedPawnClass, ref resolvedPawnLease);
-            ClearResolvedReference(ref resolvedPlayerStateClass, ref resolvedPlayerStateLease);
-            ClearResolvedReference(ref resolvedCameraManagerClass, ref resolvedCameraManagerLease);
-            ClearResolvedReference(ref resolvedSpectatorPawnClass, ref resolvedSpectatorPawnLease);
-        }
-
-        private void OnDisable()
-        {
-            ClearResolvedReferences();
-        }
-
         /// <summary>
-        /// Validates that all required references are assigned.
-        /// Call this explicitly when the WorldSettings is about to be used (e.g., at game startup).
+        /// Resolves this authoring asset into an immutable runtime definition. Expected
+        /// configuration failures throw <see cref="InvalidOperationException"/>; cancellation
+        /// is propagated unchanged. Every partially acquired lease is released before failure.
         /// </summary>
+        public async UniTask<WorldDefinition> ResolveDefinitionAsync(
+            IWorldSettingsReferenceResolver resolver = null,
+            CancellationToken cancellationToken = default)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            await UniTask.SwitchToMainThread(cancellationToken);
+
+            var leases = new IDisposable[ReferenceCount];
+            int leaseCount = 0;
+
+            try
+            {
+                ResolvedReference<GameMode> gameMode = await ResolveRequiredReferenceAsync(
+                    "GameModeClass", gameModeSource, gameModeClass, gameModeAssetLocation, resolver, cancellationToken);
+                AddLease(gameMode.Lease, leases, ref leaseCount);
+
+                ResolvedReference<PlayerController> playerController = await ResolveRequiredReferenceAsync(
+                    "PlayerControllerClass", playerControllerSource, playerControllerClass, playerControllerAssetLocation, resolver, cancellationToken);
+                AddLease(playerController.Lease, leases, ref leaseCount);
+
+                ResolvedReference<Pawn> pawn = await ResolveRequiredReferenceAsync(
+                    "PawnClass", pawnSource, pawnClass, pawnAssetLocation, resolver, cancellationToken);
+                AddLease(pawn.Lease, leases, ref leaseCount);
+
+                ResolvedReference<PlayerState> playerState = await ResolveRequiredReferenceAsync(
+                    "PlayerStateClass", playerStateSource, playerStateClass, playerStateAssetLocation, resolver, cancellationToken);
+                AddLease(playerState.Lease, leases, ref leaseCount);
+
+                ResolvedReference<CameraManager> cameraManager = await ResolveOptionalReferenceAsync(
+                    "CameraManagerClass", cameraManagerSource, cameraManagerClass, cameraManagerAssetLocation, resolver, cancellationToken);
+                AddLease(cameraManager.Lease, leases, ref leaseCount);
+
+                ResolvedReference<SpectatorPawn> spectatorPawn = await ResolveOptionalReferenceAsync(
+                    "SpectatorPawnClass", spectatorPawnSource, spectatorPawnClass, spectatorPawnAssetLocation, resolver, cancellationToken);
+                AddLease(spectatorPawn.Lease, leases, ref leaseCount);
+
+                return new WorldDefinition(
+                    gameMode.Asset,
+                    playerController.Asset,
+                    pawn.Asset,
+                    playerState.Asset,
+                    cameraManager.Asset,
+                    spectatorPawn.Asset,
+                    leases,
+                    leaseCount);
+            }
+            catch
+            {
+                // An arbitrary resolver may fault or cancel from a worker thread. Rollback owns
+                // Unity-related leases, so cleanup must return to the main thread first.
+                await UniTask.SwitchToMainThread();
+                DisposeLeases(leases, leaseCount);
+                throw;
+            }
+        }
+
         public bool Validate(bool logWarnings = true)
         {
             bool valid = true;
             valid &= ValidateReference("GameModeClass", gameModeSource, gameModeClass, gameModeAssetLocation, true, logWarnings);
             valid &= ValidateReference("PlayerControllerClass", playerControllerSource, playerControllerClass, playerControllerAssetLocation, true, logWarnings);
             valid &= ValidateReference("PawnClass", pawnSource, pawnClass, pawnAssetLocation, true, logWarnings);
-            valid &= ValidateReference("PlayerStateClass", playerStateSource, playerStateClass, playerStateAssetLocation, false, logWarnings);
+            valid &= ValidateReference("PlayerStateClass", playerStateSource, playerStateClass, playerStateAssetLocation, true, logWarnings);
             valid &= ValidateReference("CameraManagerClass", cameraManagerSource, cameraManagerClass, cameraManagerAssetLocation, false, logWarnings);
             valid &= ValidateReference("SpectatorPawnClass", spectatorPawnSource, spectatorPawnClass, spectatorPawnAssetLocation, false, logWarnings);
             return valid;
         }
 
-#if UNITY_EDITOR
-        private void OnValidate()
+        private async UniTask<ResolvedReference<T>> ResolveRequiredReferenceAsync<T>(
+            string label,
+            WorldSettingsReferenceSource source,
+            T directReference,
+            string location,
+            IWorldSettingsReferenceResolver resolver,
+            CancellationToken cancellationToken) where T : UnityEngine.Object
         {
-            ClearDirectReferenceWhenUsingAssetSource(gameModeSource, ref gameModeClass);
-            ClearDirectReferenceWhenUsingAssetSource(playerControllerSource, ref playerControllerClass);
-            ClearDirectReferenceWhenUsingAssetSource(pawnSource, ref pawnClass);
-            ClearDirectReferenceWhenUsingAssetSource(playerStateSource, ref playerStateClass);
-            ClearDirectReferenceWhenUsingAssetSource(cameraManagerSource, ref cameraManagerClass);
-            ClearDirectReferenceWhenUsingAssetSource(spectatorPawnSource, ref spectatorPawnClass);
+            ResolvedReference<T> result = await ResolveReferenceAsync(
+                label, source, directReference, location, resolver, cancellationToken, optional: false);
 
-            if (!Application.isPlaying)
+            if (result.Asset == null)
             {
-                ClearResolvedReferences();
+                result.Lease?.Dispose();
+                throw new InvalidOperationException($"WorldSettings '{name}' requires a valid {label}.");
+            }
+
+            return result;
+        }
+
+        private UniTask<ResolvedReference<T>> ResolveOptionalReferenceAsync<T>(
+            string label,
+            WorldSettingsReferenceSource source,
+            T directReference,
+            string location,
+            IWorldSettingsReferenceResolver resolver,
+            CancellationToken cancellationToken) where T : UnityEngine.Object
+        {
+            return ResolveReferenceAsync(label, source, directReference, location, resolver, cancellationToken, optional: true);
+        }
+
+        private async UniTask<ResolvedReference<T>> ResolveReferenceAsync<T>(
+            string label,
+            WorldSettingsReferenceSource source,
+            T directReference,
+            string location,
+            IWorldSettingsReferenceResolver resolver,
+            CancellationToken cancellationToken,
+            bool optional) where T : UnityEngine.Object
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (source == WorldSettingsReferenceSource.DirectReference)
+            {
+                if (!optional && directReference == null)
+                {
+                    throw new InvalidOperationException($"WorldSettings '{name}' has no direct reference for {label}.");
+                }
+
+                return new ResolvedReference<T>(directReference, null);
+            }
+
+            if (string.IsNullOrWhiteSpace(location))
+            {
+                if (optional)
+                {
+                    return default;
+                }
+
+                throw new InvalidOperationException(
+                    $"WorldSettings '{name}' has no external location for required {label}.");
+            }
+
+            if (resolver == null || !resolver.Supports(source))
+            {
+                throw new InvalidOperationException(
+                    $"WorldSettings '{name}' requires a resolver for source '{source}' ({label}).");
+            }
+
+            WorldSettingsAssetLoadResult<T> loadResult = await resolver.ResolveAsync<T>(location, cancellationToken);
+            IDisposable pendingLease = loadResult.Lease;
+            try
+            {
+                // Resolver implementations may complete on a worker thread. Validation touches
+                // UnityEngine.Object and cleanup may release Unity-owned resources, so marshal
+                // without cancellation before inspecting or transferring the returned lease.
+                await UniTask.SwitchToMainThread();
+                cancellationToken.ThrowIfCancellationRequested();
+
+                if (!loadResult.Success || loadResult.Asset == null)
+                {
+                    string error = string.IsNullOrWhiteSpace(loadResult.Error)
+                        ? "Unknown resolver failure."
+                        : loadResult.Error;
+                    throw new InvalidOperationException(
+                        $"WorldSettings '{name}' could not resolve {label} from '{location}': {error}");
+                }
+
+                var resolved = new ResolvedReference<T>(loadResult.Asset, pendingLease);
+                pendingLease = null;
+                return resolved;
+            }
+            finally
+            {
+                if (pendingLease != null)
+                {
+                    try
+                    {
+                        pendingLease.Dispose();
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogException(exception);
+                    }
+                }
             }
         }
-#endif
 
-        private static T GetResolvedReference<T>(WorldSettingsReferenceSource source, T directReference, T resolvedReference) where T : UnityEngine.Object
+        private bool ValidateReference<T>(
+            string label,
+            WorldSettingsReferenceSource source,
+            T directReference,
+            string assetLocation,
+            bool required,
+            bool logWarnings) where T : UnityEngine.Object
         {
-            return source == WorldSettingsReferenceSource.DirectReference ? directReference : resolvedReference;
+            if (IsReferenceConfigured(source, directReference, assetLocation) || !required)
+            {
+                return true;
+            }
+
+            if (logWarnings)
+            {
+                Debug.LogWarning($"[WorldSettings] '{name}': required reference {label} is not configured.", this);
+            }
+
+            return false;
         }
 
         private static bool UsesExternalReference(WorldSettingsReferenceSource source)
@@ -210,169 +383,60 @@ namespace CycloneGames.GameplayFramework.Runtime
             return source != WorldSettingsReferenceSource.DirectReference;
         }
 
-        private static bool IsReferenceConfigured<T>(WorldSettingsReferenceSource source, T directReference, string assetLocation) where T : UnityEngine.Object
+        private static bool IsReferenceConfigured<T>(
+            WorldSettingsReferenceSource source,
+            T directReference,
+            string assetLocation) where T : UnityEngine.Object
         {
             return source == WorldSettingsReferenceSource.DirectReference
                 ? directReference != null
                 : !string.IsNullOrWhiteSpace(assetLocation);
         }
 
-        private bool ValidateReference<T>(string label, WorldSettingsReferenceSource source, T directReference, string assetLocation, bool required, bool logWarnings) where T : UnityEngine.Object
+        private static void AddLease(IDisposable lease, IDisposable[] leases, ref int leaseCount)
         {
-            if (IsReferenceConfigured(source, directReference, assetLocation))
+            if (lease == null)
             {
-                return true;
+                return;
             }
 
-            if (!required)
-            {
-                return true;
-            }
-
-            if (logWarnings)
-            {
-                string sourceLabel = GetSourceDescription(source);
-                Debug.LogWarning($"[WorldSettings] '{name}': {label} is not assigned for {sourceLabel} mode.");
-            }
-
-            return false;
+            leases[leaseCount++] = lease;
         }
 
-        private async UniTask<bool> ResolveReferenceAsync<T>(
-            string label,
-            WorldSettingsReferenceSource source,
-            string assetLocation,
-            Action<T, IDisposable> assignResolvedReference,
-            CancellationToken cancellationToken,
-            bool logWarnings) where T : UnityEngine.Object
+        private static void DisposeLeases(IDisposable[] leases, int leaseCount)
         {
-            if (source == WorldSettingsReferenceSource.DirectReference)
+            for (int i = leaseCount - 1; i >= 0; i--)
             {
-                assignResolvedReference(null, null);
-                return true;
-            }
-
-            if (string.IsNullOrWhiteSpace(assetLocation))
-            {
-                assignResolvedReference(null, null);
-                if (logWarnings)
+                try
                 {
-                    Debug.LogWarning($"[WorldSettings] '{name}': {label} is set to {GetSourceDescription(source)} mode but no location is configured.");
+                    leases[i]?.Dispose();
                 }
-                return false;
-            }
-
-            WorldSettingsAssetLoadResult<T> result = await WorldSettingsReferenceResolverRegistry.ResolveAsync<T>(source, assetLocation, cancellationToken);
-
-            if (result.Success)
-            {
-                if (result.Asset == null)
+                catch (Exception exception)
                 {
-                    result.Lease?.Dispose();
-                    assignResolvedReference(null, null);
-                    if (logWarnings)
-                    {
-                        Debug.LogWarning($"[WorldSettings] '{name}': Resolver returned success for {label} from '{assetLocation}' but the asset was null.");
-                    }
-                    return false;
+                    Debug.LogException(exception);
                 }
-
-                assignResolvedReference(result.Asset, result.Lease);
-                return true;
+                finally
+                {
+                    leases[i] = null;
+                }
             }
+        }
 
-            result.Lease?.Dispose();
-            assignResolvedReference(null, null);
-
-            if (logWarnings)
+        private readonly struct ResolvedReference<T> where T : UnityEngine.Object
+        {
+            public ResolvedReference(T asset, IDisposable lease)
             {
-                Debug.LogWarning($"[WorldSettings] '{name}': Failed to resolve {label} from '{assetLocation}'. {result.Error}");
+                Asset = asset;
+                Lease = lease;
             }
 
-            return false;
-        }
-
-        private void SetResolvedGameMode(GameMode asset, IDisposable lease)
-        {
-            ReplaceResolvedReference(asset, lease, ref resolvedGameModeClass, ref resolvedGameModeLease);
-        }
-
-        private void SetResolvedPlayerController(PlayerController asset, IDisposable lease)
-        {
-            ReplaceResolvedReference(asset, lease, ref resolvedPlayerControllerClass, ref resolvedPlayerControllerLease);
-        }
-
-        private void SetResolvedPawn(Pawn asset, IDisposable lease)
-        {
-            ReplaceResolvedReference(asset, lease, ref resolvedPawnClass, ref resolvedPawnLease);
-        }
-
-        private void SetResolvedPlayerState(PlayerState asset, IDisposable lease)
-        {
-            ReplaceResolvedReference(asset, lease, ref resolvedPlayerStateClass, ref resolvedPlayerStateLease);
-        }
-
-        private void SetResolvedCameraManager(CameraManager asset, IDisposable lease)
-        {
-            ReplaceResolvedReference(asset, lease, ref resolvedCameraManagerClass, ref resolvedCameraManagerLease);
-        }
-
-        private void SetResolvedSpectatorPawn(SpectatorPawn asset, IDisposable lease)
-        {
-            ReplaceResolvedReference(asset, lease, ref resolvedSpectatorPawnClass, ref resolvedSpectatorPawnLease);
-        }
-
-        private static void ReplaceResolvedReference<T>(T asset, IDisposable lease, ref T resolvedReference, ref IDisposable resolvedLease) where T : UnityEngine.Object
-        {
-            if (!ReferenceEquals(resolvedLease, lease))
-            {
-                resolvedLease?.Dispose();
-            }
-
-            resolvedReference = asset;
-            resolvedLease = lease;
-        }
-
-        private static void ClearResolvedReference<T>(ref T resolvedReference, ref IDisposable resolvedLease) where T : UnityEngine.Object
-        {
-            resolvedReference = null;
-            resolvedLease?.Dispose();
-            resolvedLease = null;
-        }
-
-#if UNITY_EDITOR
-        private static void ClearDirectReferenceWhenUsingAssetSource<T>(WorldSettingsReferenceSource source, ref T directReference) where T : UnityEngine.Object
-        {
-            if (source != WorldSettingsReferenceSource.DirectReference)
-            {
-                directReference = null;
-            }
-        }
-#endif
-
-        private static string GetSourceDescription(WorldSettingsReferenceSource source)
-        {
-            switch (source)
-            {
-                case WorldSettingsReferenceSource.DirectReference:
-                    return "direct reference";
-                case WorldSettingsReferenceSource.AssetReference:
-                    return "asset reference location";
-                case WorldSettingsReferenceSource.PathLocation:
-                    return "path location";
-                default:
-                    return "external reference";
-            }
+            public T Asset { get; }
+            public IDisposable Lease { get; }
         }
     }
 
     public readonly struct WorldSettingsAssetLoadResult<T> where T : UnityEngine.Object
     {
-        public readonly bool Success;
-        public readonly T Asset;
-        public readonly string Error;
-        public readonly IDisposable Lease;
-
         public WorldSettingsAssetLoadResult(bool success, T asset, string error, IDisposable lease = null)
         {
             Success = success;
@@ -380,72 +444,10 @@ namespace CycloneGames.GameplayFramework.Runtime
             Error = error;
             Lease = lease;
         }
-    }
 
-    public static class WorldSettingsReferenceResolverRegistry
-    {
-        private static readonly System.Collections.Generic.List<IWorldSettingsReferenceResolver> resolvers = new System.Collections.Generic.List<IWorldSettingsReferenceResolver>();
-        private static readonly object resolverLock = new object();
-
-        public static void Register(IWorldSettingsReferenceResolver resolver)
-        {
-            if (resolver == null)
-            {
-                return;
-            }
-
-            lock (resolverLock)
-            {
-                if (!resolvers.Contains(resolver))
-                {
-                    resolvers.Add(resolver);
-                }
-            }
-        }
-
-        public static void Unregister(IWorldSettingsReferenceResolver resolver)
-        {
-            if (resolver == null)
-            {
-                return;
-            }
-
-            lock (resolverLock)
-            {
-                resolvers.Remove(resolver);
-            }
-        }
-
-        public static bool HasResolver(WorldSettingsReferenceSource source)
-        {
-            return FindResolver(source) != null;
-        }
-
-        internal static async UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(WorldSettingsReferenceSource source, string location, CancellationToken cancellationToken) where T : UnityEngine.Object
-        {
-            IWorldSettingsReferenceResolver resolver = FindResolver(source);
-            if (resolver != null)
-            {
-                return await resolver.ResolveAsync<T>(location, cancellationToken);
-            }
-
-            return new WorldSettingsAssetLoadResult<T>(false, null, $"No resolver registered for source mode '{source}'.");
-        }
-
-        private static IWorldSettingsReferenceResolver FindResolver(WorldSettingsReferenceSource source)
-        {
-            lock (resolverLock)
-            {
-                for (int i = resolvers.Count - 1; i >= 0; i--)
-                {
-                    if (resolvers[i] != null && resolvers[i].Supports(source))
-                    {
-                        return resolvers[i];
-                    }
-                }
-            }
-
-            return null;
-        }
+        public bool Success { get; }
+        public T Asset { get; }
+        public string Error { get; }
+        public IDisposable Lease { get; }
     }
 }

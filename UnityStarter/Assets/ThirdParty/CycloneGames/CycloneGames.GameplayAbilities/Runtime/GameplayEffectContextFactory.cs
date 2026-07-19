@@ -1,16 +1,20 @@
-using CycloneGames.Factory.Runtime;
-
 namespace CycloneGames.GameplayAbilities.Runtime
 {
+    public interface IGameplayEffectContextFactory
+    {
+        GameplayEffectContext Create(AbilitySystemComponent owner);
+    }
+
     /// <summary>
     /// The default factory for creating GameplayEffectContext objects.
-    /// Uses GASPool for zero-allocation pooling.
+    /// Uses the owner's runtime memory scope.
     /// </summary>
-    public class GameplayEffectContextFactory : IFactory<IGameplayEffectContext>
+    public sealed class GameplayEffectContextFactory : IGameplayEffectContextFactory
     {
-        public IGameplayEffectContext Create()
+        public GameplayEffectContext Create(AbilitySystemComponent owner)
         {
-            return GASPool<GameplayEffectContext>.Shared.Get();
+            if (owner == null) throw new System.ArgumentNullException(nameof(owner));
+            return owner.RuntimeContext.Memory.AcquireEffectContext();
         }
     }
 }

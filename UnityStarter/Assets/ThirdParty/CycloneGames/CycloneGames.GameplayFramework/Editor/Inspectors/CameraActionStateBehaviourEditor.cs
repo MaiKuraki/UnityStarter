@@ -36,6 +36,10 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private static readonly GUIContent ProgressLabel    = new GUIContent("Progress");
         private static readonly GUIContent DurationLabel    = new GUIContent("Duration");
 
+        private const string ProgressCapacityMessage =
+            "Progress tracking supports up to 8 concurrent Animator/layer pairs per behaviour. " +
+            "When full, enter and exit actions continue; additional progress triggers resume after a slot is released.";
+
         private static readonly Color enterColor    = new Color(0.30f, 0.55f, 0.45f);
         private static readonly Color exitColor     = new Color(0.55f, 0.35f, 0.35f);
         private static readonly Color progressColor = new Color(0.35f, 0.45f, 0.65f);
@@ -63,14 +67,14 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             EnsureStyles();
             serializedObject.Update();
 
-            // ── Enter ────────────────────────────────────────────────────────
+            // Enter
             DrawSectionHeader(EnterLabel, enterColor);
             EditorGUILayout.PropertyField(_onEnterActionKey);
             EditorGUILayout.PropertyField(_allowEnterTriggerInTransition);
 
             EditorGUILayout.Space(4f);
 
-            // ── Exit ─────────────────────────────────────────────────────────
+            // Exit
             DrawSectionHeader(ExitLabel, exitColor);
             EditorGUILayout.PropertyField(_onExitMode);
 
@@ -88,7 +92,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             EditorGUILayout.Space(4f);
 
-            // ── Progress ─────────────────────────────────────────────────────
+            // Progress
             DrawSectionHeader(ProgressLabel, progressColor);
             EditorGUILayout.PropertyField(_onProgressActionKey);
 
@@ -105,13 +109,17 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             {
                 EditorGUILayout.HelpBox("Set On Progress Action Key to enable mid-state threshold triggering.", MessageType.None);
             }
+            else
+            {
+                EditorGUILayout.HelpBox(ProgressCapacityMessage, MessageType.Info);
+            }
 
             EditorGUILayout.Space(4f);
 
-            // ── Duration ─────────────────────────────────────────────────────
+            // Duration
             DrawSectionHeader(DurationLabel, durationColor);
             EditorGUILayout.PropertyField(_durationOverride);
-            EditorGUILayout.HelpBox("Applied to enter, exit, and progress actions. ≤ 0 uses the preset's own duration.", MessageType.None);
+            EditorGUILayout.HelpBox("Applied to enter, exit, and progress actions. <= 0 uses the preset's own duration.", MessageType.None);
 
             serializedObject.ApplyModifiedProperties();
         }

@@ -78,12 +78,17 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             var package = new RecordingAssetPackage();
             var scope = new AssetBucketScope(package, "SceneBucket");
 
-            scope.LoadSceneAsync("Scenes/Main", LoadSceneMode.Additive, SceneActivationMode.Manual, 25);
+            var loadParameters = new LoadSceneParameters(LoadSceneMode.Additive)
+            {
+                localPhysicsMode = LocalPhysicsMode.Physics3D
+            };
+            scope.LoadSceneAsync("Scenes/Main", loadParameters, SceneActivationMode.Manual, 25);
 
-            Assert.AreEqual("LoadSceneAsyncManual", package.LastCall);
+            Assert.AreEqual("LoadSceneAsyncParameters", package.LastCall);
             Assert.AreEqual("Scenes/Main", package.LastLocation);
             Assert.AreEqual("SceneBucket", package.LastBucket);
             Assert.AreEqual(LoadSceneMode.Additive, package.LastLoadMode);
+            Assert.AreEqual(LocalPhysicsMode.Physics3D, package.LastLocalPhysicsMode);
             Assert.AreEqual(SceneActivationMode.Manual, package.LastActivationMode);
             Assert.AreEqual(25, package.LastPriority);
         }

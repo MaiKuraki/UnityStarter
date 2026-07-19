@@ -7,8 +7,8 @@ namespace CycloneGames.Networking.Editor.Diagnostics
         public readonly NetworkBootstrapPreset Preset;
         public readonly NetworkBackendFeatures RequiredFeatures;
         public readonly bool RequireCycloneTransport;
-        public readonly bool RequireSingleNetworkManager;
-        public readonly bool RequireRuntimeContextForCycloneManagers;
+        public readonly bool RequireSingleMessageEndpoint;
+        public readonly bool RequireRuntimeContextForMessageEndpoints;
         public readonly bool CheckOptionalSdkPackages;
 
         public NetworkBootstrapContext(NetworkBootstrapPreset preset)
@@ -16,8 +16,8 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             Preset = preset;
             RequiredFeatures = preset != null ? preset.RequiredFeatures : NetworkBackendFeatures.RealtimeTransport;
             RequireCycloneTransport = preset == null || preset.RequireCycloneTransport;
-            RequireSingleNetworkManager = preset == null || preset.RequireSingleNetworkManager;
-            RequireRuntimeContextForCycloneManagers = preset == null || preset.RequireRuntimeContextForCycloneManagers;
+            RequireSingleMessageEndpoint = preset == null || preset.RequireSingleMessageEndpoint;
+            RequireRuntimeContextForMessageEndpoints = preset == null || preset.RequireRuntimeContextForMessageEndpoints;
             CheckOptionalSdkPackages = preset == null || preset.CheckOptionalSdkPackages;
         }
     }

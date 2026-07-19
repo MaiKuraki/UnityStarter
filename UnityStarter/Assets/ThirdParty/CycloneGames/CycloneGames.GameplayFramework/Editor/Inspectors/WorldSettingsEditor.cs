@@ -7,11 +7,20 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
     [CustomEditor(typeof(WorldSettings), true)]
     public class WorldSettingsEditor : UnityEditor.Editor
     {
+        private enum ReferenceValidationState : byte
+        {
+            Missing = 0,
+            Configured = 1,
+            Unresolved = 2,
+            Invalid = 3,
+        }
+
         private static readonly Color editableHeaderColor = new Color(0.50f, 0.58f, 0.38f);
         private static readonly Color validationHeaderColor = new Color(0.30f, 0.50f, 0.70f);
         private static readonly Color ValidColor = new Color(0.7f, 1f, 0.7f);
         private static readonly Color WarningColor = new Color(1f, 0.9f, 0.5f);
         private static readonly Color ErrorColor = new Color(1f, 0.6f, 0.6f);
+        private static readonly string[] ReferenceModeLabels = { "Direct Ref", "Asset Ref", "Path" };
 
         private bool showValidation = true;
         private bool showConfiguration = true;
@@ -83,26 +92,22 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         {
             serializedObject.Update();
             var ws = (WorldSettings)target;
-            bool assetReferenceResolverAvailable = WorldSettingsReferenceResolverRegistry.HasResolver(WorldSettingsReferenceSource.AssetReference);
-
             showValidation = InspectorUiUtility.DrawFoldoutHeader("Validation Overview", showValidation, validationHeaderColor);
             if (showValidation)
             {
                 EditorGUILayout.BeginVertical(GUI.skin.box);
-                InspectorUiUtility.DrawSectionHeader("Configuration Status", "Direct references remain supported. Asset reference mode stores location strings and resolves them through a registered IWorldSettingsReferenceResolver.", new Color(0.42f, 0.78f, 1f, 1f));
+                InspectorUiUtility.DrawSectionHeader("Configuration Status", "WorldSettings is authoring-only. GameInstance resolves external locations through its explicitly composed IWorldSettingsReferenceResolver and owns the resulting lease.", new Color(0.42f, 0.78f, 1f, 1f));
                 DrawRequirementLegend();
-                DrawValidationStatus("GameMode", ws.HasConfiguredGameMode, true, ws.GameModeSource);
-                DrawValidationStatus("PlayerController", ws.HasConfiguredPlayerController, true, ws.PlayerControllerSource);
-                DrawValidationStatus("Pawn", ws.HasConfiguredPawn, true, ws.PawnSource);
-                DrawValidationStatus("PlayerState", ws.HasConfiguredPlayerState, false, ws.PlayerStateSource);
-                DrawValidationStatus("CameraManager", ws.HasConfiguredCameraManager, false, ws.CameraManagerSource);
-                DrawValidationStatus("SpectatorPawn", ws.HasConfiguredSpectatorPawn, false, ws.SpectatorPawnSource);
+                DrawValidationStatus("GameMode", GetValidationState(gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp), true, GetSource(gameModeSourceProp));
+                DrawValidationStatus("PlayerController", GetValidationState(playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp), true, GetSource(playerControllerSourceProp));
+                DrawValidationStatus("Pawn", GetValidationState(pawnSourceProp, pawnClassProp, pawnAssetLocationProp), true, GetSource(pawnSourceProp));
+                DrawValidationStatus("PlayerState", GetValidationState(playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp), true, GetSource(playerStateSourceProp));
+                DrawValidationStatus("CameraManager", GetValidationState(cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp), false, GetSource(cameraManagerSourceProp));
+                DrawValidationStatus("SpectatorPawn", GetValidationState(spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp), false, GetSource(spectatorPawnSourceProp));
                 EditorGUILayout.Space(4f);
                 EditorGUILayout.HelpBox(
-                    assetReferenceResolverAvailable
-                        ? "An Asset Reference resolver is registered. Path mode can be resolved by a custom IWorldSettingsReferenceResolver."
-                        : "Asset Reference mode requires a registered IWorldSettingsReferenceResolver. The AssetManagement integration registers one at runtime when that assembly is present.",
-                    assetReferenceResolverAvailable ? MessageType.Info : MessageType.Warning);
+                    "External modes require an IWorldSettingsReferenceResolver passed to the GameInstance constructor. Resolver availability is a runtime composition decision and is not stored globally.",
+                    MessageType.Info);
                 EditorGUILayout.EndVertical();
             }
 
@@ -112,37 +117,57 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             if (showConfiguration)
             {
                 EditorGUILayout.BeginVertical(GUI.skin.box);
-                InspectorUiUtility.DrawSectionHeader("Reference Strategy", "Choose Direct Reference for legacy drag-and-drop, Asset Reference for CycloneGames.AssetManagement-backed loading, or Path for any custom address-based resource manager.", new Color(1f, 0.76f, 0.38f, 1f));
-                DrawReferenceEntry<GameMode>("GameMode", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, gameModeAssetGuidProp, true, assetReferenceResolverAvailable);
-                DrawReferenceEntry<PlayerController>("PlayerController", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, playerControllerAssetGuidProp, true, assetReferenceResolverAvailable);
-                DrawReferenceEntry<Pawn>("Pawn", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, pawnAssetGuidProp, true, assetReferenceResolverAvailable);
-                DrawReferenceEntry<PlayerState>("PlayerState", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, playerStateAssetGuidProp, false, assetReferenceResolverAvailable);
-                DrawReferenceEntry<CameraManager>("CameraManager", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, cameraManagerAssetGuidProp, false, assetReferenceResolverAvailable);
-                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, spectatorPawnAssetGuidProp, false, assetReferenceResolverAvailable);
+                InspectorUiUtility.DrawSectionHeader("Reference Strategy", "Choose Direct Reference for project-owned prefab assets, Asset Reference for CycloneGames.AssetManagement-backed loading, or Path for a custom address-based resource manager.", new Color(1f, 0.76f, 0.38f, 1f));
+                DrawReferenceEntry<GameMode>("GameMode", gameModeSourceProp, gameModeClassProp, gameModeAssetLocationProp, gameModeAssetGuidProp, true);
+                DrawReferenceEntry<PlayerController>("PlayerController", playerControllerSourceProp, playerControllerClassProp, playerControllerAssetLocationProp, playerControllerAssetGuidProp, true);
+                DrawReferenceEntry<Pawn>("Pawn", pawnSourceProp, pawnClassProp, pawnAssetLocationProp, pawnAssetGuidProp, true);
+                DrawReferenceEntry<PlayerState>("PlayerState", playerStateSourceProp, playerStateClassProp, playerStateAssetLocationProp, playerStateAssetGuidProp, true);
+                DrawReferenceEntry<CameraManager>("CameraManager", cameraManagerSourceProp, cameraManagerClassProp, cameraManagerAssetLocationProp, cameraManagerAssetGuidProp, false);
+                DrawReferenceEntry<SpectatorPawn>("SpectatorPawn", spectatorPawnSourceProp, spectatorPawnClassProp, spectatorPawnAssetLocationProp, spectatorPawnAssetGuidProp, false);
                 EditorGUILayout.EndVertical();
             }
 
             if (GUILayout.Button("Validate Configuration"))
             {
+                serializedObject.ApplyModifiedProperties();
                 bool valid = ws.Validate();
                 if (valid)
                 {
-                    Debug.Log($"[WorldSettings] '{ws.name}': Required references are valid. Optional references (PlayerState/CameraManager/SpectatorPawn) may be left empty.");
+                    Debug.Log($"[WorldSettings] '{ws.name}': Required references are valid. CameraManager and SpectatorPawn are optional.");
                 }
+
+                serializedObject.Update();
             }
 
             EditorGUILayout.Space(8);
-            serializedObject.ApplyModifiedProperties();
+            if (serializedObject.ApplyModifiedProperties())
+            {
+                Repaint();
+            }
         }
 
-        private static void DrawValidationStatus(string label, bool configured, bool required, WorldSettingsReferenceSource source)
+        private static void DrawValidationStatus(
+            string label,
+            ReferenceValidationState state,
+            bool required,
+            WorldSettingsReferenceSource source)
         {
             string modeLabel = GetModeLabel(source);
 
-            if (configured)
+            if (state == ReferenceValidationState.Configured)
             {
                 GUI.color = ValidColor;
                 EditorGUILayout.LabelField($"  \u2713 {label} [{modeLabel}]", EditorStyles.miniLabel);
+            }
+            else if (state == ReferenceValidationState.Unresolved)
+            {
+                GUI.color = ErrorColor;
+                EditorGUILayout.LabelField($"  ! {label} [{modeLabel}] (Unresolved)", EditorStyles.miniBoldLabel);
+            }
+            else if (state == ReferenceValidationState.Invalid)
+            {
+                GUI.color = ErrorColor;
+                EditorGUILayout.LabelField($"  ! {label} [{modeLabel}] (Prefab Required)", EditorStyles.miniBoldLabel);
             }
             else if (required)
             {
@@ -164,8 +189,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             SerializedProperty directReferenceProp,
             SerializedProperty assetLocationProp,
             SerializedProperty assetGuidProp,
-            bool required,
-            bool assetReferenceResolverAvailable) where T : Object
+            bool required) where T : Component
         {
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
             EditorGUILayout.LabelField(label, EditorStyles.boldLabel);
@@ -179,7 +203,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 }
             }
 
-            WorldSettingsReferenceSource source = (WorldSettingsReferenceSource)sourceProp.enumValueIndex;
+            WorldSettingsReferenceSource source = GetSource(sourceProp);
             EditorGUILayout.BeginHorizontal();
             EditorGUILayout.LabelField("Mode", GUILayout.Width(80f));
             WorldSettingsReferenceSource nextSource = DrawModeToolbar(source);
@@ -187,32 +211,36 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             {
                 sourceProp.enumValueIndex = (int)nextSource;
                 source = nextSource;
-                if (source == WorldSettingsReferenceSource.DirectReference)
-                {
-                    assetLocationProp.stringValue = string.Empty;
-                    assetGuidProp.stringValue = string.Empty;
-                }
-                else
-                {
-                    directReferenceProp.objectReferenceValue = null;
-                }
             }
             EditorGUILayout.EndHorizontal();
 
             if (source == WorldSettingsReferenceSource.DirectReference)
             {
-                EditorGUILayout.PropertyField(directReferenceProp, new GUIContent("Prefab"));
+                DrawDirectPrefabField<T>(directReferenceProp);
             }
             else if (source == WorldSettingsReferenceSource.AssetReference)
             {
-                DrawAssetReferenceField<T>(assetLocationProp, assetGuidProp, assetReferenceResolverAvailable);
+                DrawAssetReferenceField<T>(assetLocationProp, assetGuidProp);
             }
             else
             {
                 DrawPathReferenceField(assetLocationProp);
             }
 
-            if (required && !IsConfigured(source, directReferenceProp, assetLocationProp))
+            ReferenceValidationState state = GetValidationState(sourceProp, directReferenceProp, assetLocationProp);
+            if (state == ReferenceValidationState.Unresolved)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{label} has a serialized reference, but Unity cannot resolve its component. Fix script compilation errors, wait for domain reload, and reimport the prefab.",
+                    MessageType.Error);
+            }
+            else if (state == ReferenceValidationState.Invalid)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{label} must reference a component on a prefab asset. Scene objects are not valid WorldSettings authoring references.",
+                    MessageType.Error);
+            }
+            else if (required && state == ReferenceValidationState.Missing)
             {
                 EditorGUILayout.HelpBox($"{label} is required.", MessageType.Warning);
             }
@@ -226,7 +254,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             EditorGUILayout.HelpBox("Legend: Required entries must be configured to boot the gameplay loop. Optional entries may be omitted depending on your project architecture.", MessageType.None);
         }
 
-        private void DrawAssetReferenceField<T>(SerializedProperty assetLocationProp, SerializedProperty assetGuidProp, bool assetReferenceResolverAvailable) where T : Object
+        private void DrawAssetReferenceField<T>(SerializedProperty assetLocationProp, SerializedProperty assetGuidProp) where T : Object
         {
             T currentAsset = LoadAssetAtPath<T>(assetLocationProp.stringValue);
             T selectedAsset = (T)EditorGUILayout.ObjectField("Asset", currentAsset, typeof(T), false);
@@ -246,23 +274,92 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 EditorGUILayout.HelpBox("The stored asset location is set, but the asset could not be found in the AssetDatabase. Runtime loading may still work if the provider resolves this address virtually.", MessageType.Warning);
             }
 
-            if (!assetReferenceResolverAvailable)
-            {
-                EditorGUILayout.HelpBox("Asset Reference mode is configured, but no Asset Reference resolver is currently registered.", MessageType.Warning);
-            }
+            EditorGUILayout.HelpBox("Resolve this location with the IWorldSettingsReferenceResolver passed to GameInstance.", MessageType.Info);
         }
 
         private static void DrawPathReferenceField(SerializedProperty assetLocationProp)
         {
             EditorGUILayout.PropertyField(assetLocationProp, new GUIContent("Path"));
-            EditorGUILayout.HelpBox("Use Path mode for xAsset or any custom address-based loader. Register an IWorldSettingsReferenceResolver for PathLocation to resolve these entries at runtime.", MessageType.Info);
+            EditorGUILayout.HelpBox("Use Path mode for a custom address-based loader. Pass an IWorldSettingsReferenceResolver that supports PathLocation to GameInstance.", MessageType.Info);
         }
 
-        private static bool IsConfigured(WorldSettingsReferenceSource source, SerializedProperty directReferenceProp, SerializedProperty assetLocationProp)
+        private static void DrawDirectPrefabField<T>(SerializedProperty directReferenceProp) where T : Component
         {
-            return source == WorldSettingsReferenceSource.DirectReference
-                ? directReferenceProp.objectReferenceValue != null
-                : !string.IsNullOrWhiteSpace(assetLocationProp.stringValue);
+            ReferenceValidationState state = GetDirectReferenceState(directReferenceProp);
+            if (state == ReferenceValidationState.Unresolved)
+            {
+                EditorGUILayout.PropertyField(directReferenceProp, new GUIContent("Prefab"));
+                return;
+            }
+
+            T currentComponent = directReferenceProp.objectReferenceValue as T;
+            GameObject currentPrefab = currentComponent != null ? currentComponent.gameObject : null;
+
+            EditorGUI.BeginChangeCheck();
+            GameObject selectedPrefab = (GameObject)EditorGUILayout.ObjectField(
+                "Prefab",
+                currentPrefab,
+                typeof(GameObject),
+                allowSceneObjects: false);
+            if (!EditorGUI.EndChangeCheck())
+            {
+                return;
+            }
+
+            if (selectedPrefab == null)
+            {
+                directReferenceProp.objectReferenceValue = null;
+                return;
+            }
+
+            if (!PrefabUtility.IsPartOfPrefabAsset(selectedPrefab))
+            {
+                Debug.LogWarning($"WorldSettings direct references require prefab assets. '{selectedPrefab.name}' was not assigned.");
+                return;
+            }
+
+            T[] components = selectedPrefab.GetComponents<T>();
+            if (components.Length != 1)
+            {
+                Debug.LogWarning(
+                    $"WorldSettings expected exactly one {typeof(T).Name} component on prefab '{selectedPrefab.name}', but found {components.Length}. The existing reference was preserved.",
+                    selectedPrefab);
+                return;
+            }
+
+            directReferenceProp.objectReferenceValue = components[0];
+        }
+
+        private static ReferenceValidationState GetValidationState(
+            SerializedProperty sourceProp,
+            SerializedProperty directReferenceProp,
+            SerializedProperty assetLocationProp)
+        {
+            return GetSource(sourceProp) == WorldSettingsReferenceSource.DirectReference
+                ? GetDirectReferenceState(directReferenceProp)
+                : string.IsNullOrWhiteSpace(assetLocationProp.stringValue)
+                    ? ReferenceValidationState.Missing
+                    : ReferenceValidationState.Configured;
+        }
+
+        private static ReferenceValidationState GetDirectReferenceState(SerializedProperty directReferenceProp)
+        {
+            Object directReference = directReferenceProp.objectReferenceValue;
+            if (directReference != null)
+            {
+                return PrefabUtility.IsPartOfPrefabAsset(directReference)
+                    ? ReferenceValidationState.Configured
+                    : ReferenceValidationState.Invalid;
+            }
+
+            return directReferenceProp.objectReferenceInstanceIDValue != 0
+                ? ReferenceValidationState.Unresolved
+                : ReferenceValidationState.Missing;
+        }
+
+        private static WorldSettingsReferenceSource GetSource(SerializedProperty sourceProp)
+        {
+            return (WorldSettingsReferenceSource)sourceProp.intValue;
         }
 
         private static T LoadAssetAtPath<T>(string assetPath) where T : Object
@@ -292,7 +389,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private static WorldSettingsReferenceSource DrawModeToolbar(WorldSettingsReferenceSource source)
         {
             int selectedIndex = source == WorldSettingsReferenceSource.PathLocation ? 2 : (int)source;
-            int nextIndex = GUILayout.Toolbar(selectedIndex, new[] { "Direct Ref", "Asset Ref", "Path" });
+            int nextIndex = GUILayout.Toolbar(selectedIndex, ReferenceModeLabels);
 
             switch (nextIndex)
             {

@@ -7,62 +7,83 @@ namespace CycloneGames.Foundation2D.Runtime
     [RequireComponent(typeof(Graphic))]
     public sealed class FlipbookUVMeshEffect : BaseMeshEffect
     {
+        internal const AdditionalCanvasShaderChannels RequiredCanvasChannels =
+            AdditionalCanvasShaderChannels.TexCoord1 |
+            AdditionalCanvasShaderChannels.TexCoord2;
+
         [SerializeField, HideInInspector] private Vector4 baseUVRect = new(0f, 0f, 1f, 1f);
         [SerializeField, HideInInspector] private Vector4 targetUVRect = new(0f, 0f, 1f, 1f);
 
         public void SetFlipbookRects(in Vector4 baseRect, in Vector4 targetRect)
         {
-            if (baseUVRect == baseRect && targetUVRect == targetRect)
+            Graphic targetGraphic = graphic;
+            if (targetGraphic == null ||
+                (baseUVRect == baseRect && targetUVRect == targetRect))
             {
                 return;
             }
 
             baseUVRect = baseRect;
             targetUVRect = targetRect;
-            EnsureCanvasChannels();
-            graphic?.SetVerticesDirty();
+            targetGraphic.SetVerticesDirty();
         }
 
         public override void ModifyMesh(VertexHelper vh)
         {
-            if (!IsActive())
+            if (!IsActive() || vh == null || !HasRequiredCanvasChannels())
             {
                 return;
             }
 
-            EnsureCanvasChannels();
-
             int count = vh.currentVertCount;
+            UIVertex vertex = default;
             for (int i = 0; i < count; i++)
             {
-                UIVertex v = default;
-                vh.PopulateUIVertex(ref v, i);
-                v.uv1 = baseUVRect;
-                v.uv2 = targetUVRect;
-                vh.SetUIVertex(v, i);
+                vh.PopulateUIVertex(ref vertex, i);
+                vertex.uv1 = baseUVRect;
+                vertex.uv2 = targetUVRect;
+                vh.SetUIVertex(vertex, i);
             }
         }
 
         protected override void OnEnable()
         {
             base.OnEnable();
-            EnsureCanvasChannels();
+            graphic?.SetVerticesDirty();
         }
 
-        private void EnsureCanvasChannels()
+        internal bool IsReadyFor(Graphic expectedGraphic)
         {
-            if (graphic == null || graphic.canvas == null)
-            {
-                return;
-            }
+            return expectedGraphic != null &&
+                   graphic == expectedGraphic &&
+                   HasRequiredCanvasChannels();
+        }
 
-            var required = AdditionalCanvasShaderChannels.TexCoord1 |
-                           AdditionalCanvasShaderChannels.TexCoord2;
+        internal bool HasRequiredCanvasChannels()
+        {
+            Graphic targetGraphic = graphic;
+            Canvas canvas = targetGraphic != null ? targetGraphic.canvas : null;
+            return canvas != null &&
+                   (canvas.additionalShaderChannels & RequiredCanvasChannels) == RequiredCanvasChannels;
+        }
 
-            if ((graphic.canvas.additionalShaderChannels & required) != required)
-            {
-                graphic.canvas.additionalShaderChannels |= required;
-            }
+        internal void GetFlipbookRects(out Vector4 baseRect, out Vector4 targetRect)
+        {
+            baseRect = baseUVRect;
+            targetRect = targetUVRect;
+        }
+
+        internal bool HasFlipbookRects(in Vector4 baseRect, in Vector4 targetRect)
+        {
+            return Exactly(baseUVRect, baseRect) && Exactly(targetUVRect, targetRect);
+        }
+
+        private static bool Exactly(in Vector4 a, in Vector4 b)
+        {
+            return a.x.Equals(b.x) &&
+                   a.y.Equals(b.y) &&
+                   a.z.Equals(b.z) &&
+                   a.w.Equals(b.w);
         }
     }
 }

@@ -1,390 +1,206 @@
-using UnityEngine;
-using Cysharp.Threading.Tasks;
+using System;
 using System.Threading;
-using CycloneGames.Logger;
+using Cysharp.Threading.Tasks;
+using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime
 {
+    internal interface IUIWindowLifetimeObserver
+    {
+        void OnWindowDestroyed(UIWindow window);
+    }
+
+    [DisallowMultipleComponent]
     public class UIWindow : MonoBehaviour
     {
-        // [NOTE] localPriority is commented out as we currently prefer to set Priority only in UIWindowConfiguration.
-        // However, in some special cases, developers may want to place UI prefabs directly in the scene hierarchy
-        // (as children under the UIFramework's layer objects) without creating them via code (UIManager.OpenWindow).
-        // In such cases, these scene-placed windows won't have a UIWindowConfiguration, and localPriority would be needed.
-        // To re-enable: uncomment the field below and update the Priority property to fallback to _localPriority.
-        // 
-        // [SerializeField, Header("Local Priority (used when no Configuration)"), Range(-100, 400)] 
-        // private int _localPriority = 0;
-        
         private UIWindowConfiguration _configuration;
-        
-        /// <summary>
-        /// Priority from Configuration. Returns 0 if no Configuration is set.
-        /// Note: If you need to support scene-placed windows without Configuration,
-        /// uncomment _localPriority above and change this to: _configuration != null ? _configuration.Priority : _localPriority
-        /// </summary>
-        public int Priority => _configuration?.Priority ?? 0;
-        
-        /// <summary>
-        /// Sets the UIWindowConfiguration for this window (called by UIManager).
-        /// </summary>
-        public void SetConfiguration(UIWindowConfiguration config) => _configuration = config;
+        private string _windowId;
+        private UILayer _parentLayer;
+        private CanvasGroup _canvasGroup;
+        private UIWindowState _state = UIWindowState.Created;
+        private bool _initialized;
+        private bool _isSceneBound;
+        private int _boundSceneHandle = -1;
 
-        private string windowNameInternal;
-        public string WindowName => windowNameInternal;
-
-        private IUIWindowState currentState;
-        private bool _stateRequiresUpdate;
-        private CancellationTokenSource openCts;
-        private CancellationTokenSource closeCts;
-        private IUIWindowTransitionDriver _transitionDriver; // Optional external transition driver
-        internal IUIWindowBinder[] _binders; // Injected by UIManager for lifecycle hooks
-
-        // Shared state instances to avoid per-open allocations
-        private static readonly OpeningState OpeningStateShared = new OpeningState();
-        private static readonly OpenedState OpenedStateShared = new OpenedState();
-        private static readonly ClosingState ClosingStateShared = new ClosingState();
-        private static readonly ClosedState ClosedStateShared = new ClosedState();
-        private UILayer parentLayerInternal;
-        public UILayer ParentLayer => parentLayerInternal; // Public getter
-
-        private CanvasGroup canvasGroup;
-        private string sourceAssetPath;
-        public System.Action<string> OnReleaseAssetReference;
-        private bool isSceneBound;
-        private int boundSceneHandle = -1;
-
-        public void SetSourceAssetPath(string path) => sourceAssetPath = path;
-        public bool IsSceneBound => isSceneBound;
-        public int BoundSceneHandle => boundSceneHandle;
-
-        public void ConfigureSceneBinding(bool sceneBound, int sceneHandle)
-        {
-            isSceneBound = sceneBound;
-            boundSceneHandle = sceneBound ? sceneHandle : -1;
-        }
-
-        private bool _isDestroying = false; // Flag to prevent multiple destruction logic paths
-
-        /// <summary>
-        /// The current window state. Used by UIManager to check if the window is closing/closed.
-        /// </summary>
-        public IUIWindowState CurrentState => currentState;
-
-        /// <summary>
-        /// Sets the logical name for this UI window.
-        /// This name is used by UIManager and UILayer for identification.
-        /// </summary>
-        public void SetWindowName(string newWindowName)
-        {
-            if (string.IsNullOrEmpty(newWindowName))
-            {
-                CLogger.LogError("[UIWindow] Window name cannot be null or empty.");
-                // Fallback to GameObject name if newWindowName is invalid, though this should be avoided.
-                windowNameInternal = gameObject.name;
-                return;
-            }
-            windowNameInternal = newWindowName;
-            gameObject.name = newWindowName; // Consider if this is always desired
-        }
-
-        /// <summary>
-        /// Sets the parent UILayer for this window.
-        /// </summary>
-        public void SetUILayer(UILayer layer)
-        {
-            parentLayerInternal = layer;
-        }
-
-        /// <summary>
-        /// Initiates the process of closing and destroying this window.
-        /// </summary>
-        internal void Close()
-        {
-            if (_isDestroying) return;
-
-            if (currentState is ClosingState || currentState is ClosedState)
-            {
-                return;
-            }
-
-            OnStartClose();
-            OnFinishedClose();
-        }
-
-        /// <summary>
-        /// Closes the window asynchronously with cancellation.
-        /// </summary>
-        public async UniTask CloseAsync(CancellationToken externalToken)
-        {
-            if (_isDestroying) return;
-            if (currentState is ClosingState || currentState is ClosedState) return;
-
-            // cancel any ongoing open
-            openCts?.Cancel();
-            openCts?.Dispose();
-            openCts = null;
-
-            closeCts?.Dispose();
-            closeCts = externalToken == CancellationToken.None
-                ? new CancellationTokenSource()
-                : CancellationTokenSource.CreateLinkedTokenSource(externalToken);
-            var ct = closeCts.Token;
-
-            OnStartClose();
-            if (_transitionDriver != null)
-            {
-                await _transitionDriver.PlayCloseAsync(this, ct);
-            }
-            if (ct.IsCancellationRequested) return;
-            OnFinishedClose();
-        }
-
-        /// <summary>
-        /// Assigns an external transition driver (e.g., DOTween/Animator based) for open/close.
-        /// </summary>
-        public void SetTransitionDriver(IUIWindowTransitionDriver driver)
-        {
-            _transitionDriver = driver;
-        }
-
-        private void ChangeState(IUIWindowState newState)
-        {
-            if (currentState == newState && newState != null) return; // Avoid re-entering the same state if logic allows
-
-            currentState?.OnExit(this);
-            currentState = newState;
-            _stateRequiresUpdate = newState != null && newState.RequiresUpdate;
-            // Debug.Log($"[UIWindow] {WindowName} changing state to {newState?.GetType().Name ?? "null"}", this);
-            currentState?.OnEnter(this);
-        }
-
-        protected virtual void OnStartOpen()
-        {
-            if (_isDestroying) return;
-            ChangeState(OpeningStateShared);
-            if (_binders != null)
-            {
-                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnStartOpen);
-            }
-        }
-
-        protected virtual void OnFinishedOpen()
-        {
-            if (_isDestroying) return;
-            ChangeState(OpenedStateShared);
-            if (_binders != null)
-            {
-                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnFinishedOpen);
-            }
-        }
-
-        protected virtual void OnStartClose()
-        {
-            // Check if already closing or closed to prevent duplicate close operations
-            if (_isDestroying) return;
-            if (currentState is ClosingState || currentState is ClosedState)
-            {
-                return;
-            }
-            ChangeState(ClosingStateShared);
-            if (_binders != null)
-            {
-                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnStartClose);
-            }
-        }
-
-        protected virtual void OnFinishedClose()
-        {
-            if (_isDestroying && currentState is ClosedState) return;
-            if (_isDestroying && !(currentState is ClosingState)) return;
-
-            ChangeState(ClosedStateShared);
-            if (_binders != null)
-            {
-                for (int i = 0; i < _binders.Length; i++) _binders[i].OnWindowStateChanged(this, WindowStateCallbackType.OnFinishedClose);
-            }
-
-            _isDestroying = true;
-            if (gameObject) Destroy(gameObject);
-        }
+        public string WindowId => _windowId ?? string.Empty;
+        public int Priority => _configuration != null ? _configuration.Priority : 0;
+        public UIWindowConfiguration Configuration => _configuration;
+        public UILayer ParentLayer => _parentLayer;
+        public UIWindowState State => _state;
+        public bool IsSceneBound => _isSceneBound;
+        public int BoundSceneHandle => _boundSceneHandle;
+        public CanvasGroup CanvasGroup => _canvasGroup;
 
         protected virtual void Awake()
         {
-            // If not set by UIManager, it might fallback to GameObject's name or be null.
-            if (string.IsNullOrEmpty(windowNameInternal))
-            {
-                windowNameInternal = gameObject.name; // Fallback, but UIManager should set it.
-            }
-            canvasGroup = GetComponent<CanvasGroup>();
+            _canvasGroup = GetComponent<CanvasGroup>();
         }
 
-        /// <summary>
-        /// Sets the visibility of the window using CanvasGroup if available, otherwise SetActive.
-        /// This is more performant than SetActive for frequent toggling.
-        /// </summary>
+        internal void InitializeRuntime(
+            string windowId,
+            UIWindowConfiguration configuration,
+            bool isSceneBound,
+            int sceneHandle,
+            IUIWindowLifetimeObserver lifetimeObserver)
+        {
+            if (_initialized)
+            {
+                throw new InvalidOperationException($"Window '{name}' is already initialized.");
+            }
+
+            if (string.IsNullOrWhiteSpace(windowId))
+            {
+                throw new ArgumentException("Window id cannot be empty.", nameof(windowId));
+            }
+
+            _windowId = windowId;
+            _configuration = configuration ?? throw new ArgumentNullException(nameof(configuration));
+            if (_canvasGroup == null)
+            {
+                _canvasGroup = GetComponent<CanvasGroup>();
+            }
+            _isSceneBound = isSceneBound;
+            _boundSceneHandle = isSceneBound ? sceneHandle : -1;
+            UIWindowLifetimeRelay lifetimeRelay = GetComponent<UIWindowLifetimeRelay>();
+            if (lifetimeRelay == null)
+            {
+                lifetimeRelay = gameObject.AddComponent<UIWindowLifetimeRelay>();
+            }
+
+            lifetimeRelay.Initialize(this, lifetimeObserver);
+            _state = UIWindowState.Created;
+            _initialized = true;
+            gameObject.name = windowId;
+        }
+
+        internal void SetLayer(UILayer layer) => _parentLayer = layer;
+
+        internal async UniTask RunOpenAsync(
+            IUIWindowTransitionDriver transitionDriver,
+            CancellationToken cancellationToken)
+        {
+            TransitionTo(UIWindowState.Opening);
+            OnOpening();
+
+            if (transitionDriver != null)
+            {
+                await transitionDriver.PlayOpenAsync(this, cancellationToken);
+                await UniTask.SwitchToMainThread();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            TransitionTo(UIWindowState.Open);
+            OnOpened();
+        }
+
+        internal async UniTask RunCloseAsync(
+            IUIWindowTransitionDriver transitionDriver,
+            CancellationToken cancellationToken)
+        {
+            if (_state == UIWindowState.Closed)
+            {
+                return;
+            }
+
+            TransitionTo(UIWindowState.Closing);
+            OnClosing();
+
+            if (transitionDriver != null)
+            {
+                await transitionDriver.PlayCloseAsync(this, cancellationToken);
+                await UniTask.SwitchToMainThread();
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            TransitionTo(UIWindowState.Closed);
+            OnClosed();
+        }
+
+        internal void ForceClosed()
+        {
+            if (_state == UIWindowState.Closed)
+            {
+                return;
+            }
+
+            Exception firstException = null;
+            if (_state != UIWindowState.Closing)
+            {
+                _state = UIWindowState.Closing;
+                try
+                {
+                    OnClosing();
+                }
+                catch (Exception exception)
+                {
+                    firstException = exception;
+                }
+            }
+
+            _state = UIWindowState.Closed;
+            try
+            {
+                OnClosed();
+            }
+            catch (Exception exception)
+            {
+                if (firstException == null)
+                {
+                    firstException = exception;
+                }
+                else
+                {
+                    throw new AggregateException(
+                        "UIWindow forced-close callbacks failed.",
+                        firstException,
+                        exception);
+                }
+            }
+
+            if (firstException != null)
+            {
+                throw firstException;
+            }
+        }
+
         public virtual void SetVisible(bool visible)
         {
-            if (canvasGroup != null)
+            if (_canvasGroup != null)
             {
-                canvasGroup.alpha = visible ? 1f : 0f;
-                canvasGroup.interactable = visible;
-                canvasGroup.blocksRaycasts = visible;
+                _canvasGroup.alpha = visible ? 1f : 0f;
+                _canvasGroup.interactable = visible;
+                _canvasGroup.blocksRaycasts = visible;
+                return;
             }
-            else
-            {
-                gameObject.SetActive(visible);
-            }
+
+            gameObject.SetActive(visible);
         }
 
-        [ContextMenu("Optimize Hierarchy (Disable RaycastTargets)")]
-        public void OptimizeHierarchy()
+        protected virtual void OnOpening() { }
+        protected virtual void OnOpened() { }
+        protected virtual void OnClosing() { }
+        protected virtual void OnClosed() { }
+
+        private void TransitionTo(UIWindowState next)
         {
-            var graphics = GetComponentsInChildren<UnityEngine.UI.Graphic>(true);
-            foreach (var g in graphics)
+            bool valid = (_state == UIWindowState.Created && next == UIWindowState.Opening) ||
+                         (_state == UIWindowState.Opening && (next == UIWindowState.Open || next == UIWindowState.Closing)) ||
+                         (_state == UIWindowState.Open && next == UIWindowState.Closing) ||
+                         (_state == UIWindowState.Closing && next == UIWindowState.Closed);
+
+            if (!valid)
             {
-                // Skip if it's a button or explicitly interactive (rough heuristic)
-                if (g.GetComponent<UnityEngine.UI.Button>() != null ||
-                    g.GetComponent<UnityEngine.UI.InputField>() != null ||
-                    g.GetComponent<UnityEngine.UI.Toggle>() != null ||
-                    g.GetComponent<UnityEngine.UI.ScrollRect>() != null ||
-                    g.GetComponent<UnityEngine.UI.Slider>() != null ||
-                    g.GetComponent<UnityEngine.UI.Dropdown>() != null)
-                {
-                    continue;
-                }
-
-                // If it's just an Image or Text serving as decoration
-                g.raycastTarget = false;
-            }
-#if UNITY_EDITOR
-            UnityEditor.EditorUtility.SetDirty(this);
-#endif
-        }
-
-        /// <summary>
-        /// Asynchronously opens the window. This method should be called by the UIManager after instantiation.
-        /// It handles the transition through OpeningState and into OpenedState.
-        /// Override this method to implement custom opening animations.
-        /// </summary>
-        /// <returns>A UniTask that completes when the window's opening transition is finished.</returns>
-        internal virtual async Cysharp.Threading.Tasks.UniTask Open()
-        {
-            // cancel any closing in progress
-            closeCts?.Cancel();
-            closeCts?.Dispose();
-            closeCts = null;
-            // set new open CTS
-            openCts?.Dispose();
-            openCts = new CancellationTokenSource();
-            var ct = openCts.Token;
-
-            // The opening process starts.
-            OnStartOpen();
-
-            // --- Animation Hook ---
-            // The opening animation or transition should happen here.
-            // For this example, we simulate an instant transition.
-            // In a real implementation, you might await a DOTween sequence, a Unity animation, or a simple delay.
-            // e.g., await Cysharp.Threading.Tasks.UniTask.Delay(System.TimeSpan.FromSeconds(0.5f));
-            if (_transitionDriver != null)
-            {
-                await _transitionDriver.PlayOpenAsync(this, ct);
+                throw new InvalidOperationException(
+                    $"Window '{WindowId}' cannot transition from {_state} to {next}.");
             }
 
-            // Allow derived classes to await custom animations; here it's immediate
-            if (ct.IsCancellationRequested) return;
-            OnFinishedOpen();
-        }
-
-        /// <summary>
-        /// Opens the window with an external cancellation token.
-        /// </summary>
-        public async UniTask OpenAsync(CancellationToken externalToken)
-        {
-            // cancel any closing in progress
-            closeCts?.Cancel();
-            closeCts?.Dispose();
-            closeCts = null;
-
-            openCts?.Dispose();
-            if (externalToken == CancellationToken.None)
-            {
-                openCts = new CancellationTokenSource();
-            }
-            else
-            {
-                openCts = CancellationTokenSource.CreateLinkedTokenSource(externalToken);
-            }
-            var ct = openCts.Token;
-
-            OnStartOpen();
-            if (_transitionDriver != null)
-            {
-                await _transitionDriver.PlayOpenAsync(this, ct);
-            }
-            if (ct.IsCancellationRequested) return;
-            OnFinishedOpen();
-        }
-
-        // Opens the window through its full state lifecycle and notifies binders, but skips
-        // any transition driver animation. Used by the coordinated transition path so the
-        // entering window is ready and positioned before both animations fire simultaneously.
-        internal UniTask OpenSilentAsync(CancellationToken ct)
-        {
-            closeCts?.Cancel();
-            closeCts?.Dispose();
-            closeCts = null;
-            openCts?.Dispose();
-            openCts = ct == CancellationToken.None
-                ? new CancellationTokenSource()
-                : CancellationTokenSource.CreateLinkedTokenSource(ct);
-
-            OnStartOpen();
-            if (openCts.Token.IsCancellationRequested) return UniTask.CompletedTask;
-            OnFinishedOpen(); // Immediately mark as open — animator will take over from coordinator
-            return UniTask.CompletedTask;
-        }
-
-        protected virtual void Update()
-        {
-            if (_isDestroying || !_stateRequiresUpdate) return;
-            currentState?.Update(this);
+            _state = next;
         }
 
         protected virtual void OnDestroy()
         {
-            _isDestroying = true; // Ensure flag is set if destruction is initiated externally (e.g., scene unload)
-            openCts?.Cancel();
-            openCts?.Dispose();
-            openCts = null;
-            closeCts?.Cancel();
-            closeCts?.Dispose();
-            closeCts = null;
-
-            // Debug.Log($"[UIWindow] OnDestroy called for {WindowName}", this);
-
-            // Notify the parent layer that this window is actually destroyed
-            // so it can clean up its internal list of windows.
-            parentLayerInternal?.NotifyWindowDestroyed(this);
-            parentLayerInternal = null; // Clear reference to prevent further calls
-
-            // Notify UIManager to release asset reference
-            if (!string.IsNullOrEmpty(sourceAssetPath))
-            {
-                OnReleaseAssetReference?.Invoke(sourceAssetPath);
-                OnReleaseAssetReference = null;
-            }
-
-            // Ensure the current state's OnExit is called if it hasn't been through a normal close.
-            // This is important if the GameObject is destroyed externally without going through Close().
-            if (currentState != null && !(currentState is ClosedState))
-            {
-                // Debug.LogWarning($"[UIWindow] {WindowName} destroyed externally, attempting OnExit for state {currentState.GetType().Name}", this);
-                currentState.OnExit(this); // Graceful exit for the current state
-            }
-            currentState = null; // Nullify state
-            _stateRequiresUpdate = false;
+            _state = UIWindowState.Closed;
+            _parentLayer = null;
         }
     }
 }

@@ -1,9 +1,11 @@
 #if CYCLONEGAMES_HAS_VCONTAINER
 using System;
 using System.Threading;
+
 using Cysharp.Threading.Tasks;
 using VContainer;
 using VContainer.Unity;
+
 using CycloneGames.AssetManagement.Runtime.CacheRetention;
 
 namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
@@ -13,15 +15,15 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
     ///
     /// Usage in your LifetimeScope.Configure():
     /// <code>
-    /// var installer = new AssetManagementVContainerInstaller();                    // auto-detect provider
-    /// var installer = new AssetManagementVContainerInstaller(r => new MyMod());   // custom factory
+    /// var installer = new AssetManagementVContainerInstaller();                   // Resources provider
+    /// var installer = new AssetManagementVContainerInstaller(r => new MyMod());  // explicit provider factory
     /// installer.Install(builder);
     /// </code>
     ///
     /// The installer registers:
-    ///   - IAssetModule as Singleton (auto-detected or custom factory)
+    ///   - IAssetModule as Singleton (Resources or an explicit provider factory)
     ///   - IAsyncStartable entry point that calls InitializeAsync (VContainer lifecycle-safe)
-    ///   - Dispose callback that starts DestroyAsync when the LifetimeScope is destroyed
+    /// Scope owners must await IAssetModule.DestroyAsync before disposing the LifetimeScope.
     /// </summary>
     public class AssetManagementVContainerInstaller : IInstaller
     {
@@ -34,8 +36,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
         /// Creates an installer with optional custom module factory and options.
         /// </summary>
         /// <param name="moduleFactory">
-        /// Custom factory for creating the IAssetModule. If null, the default provider is auto-detected
-        /// via conditional compilation (YooAsset > Addressables > Resources).
+        /// Custom factory for creating the IAssetModule. If null, ResourcesModule is used.
         /// </param>
         /// <param name="options">Global options passed to InitializeAsync.</param>
         /// <param name="cacheRetentionOptions">
@@ -44,9 +45,7 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
         /// <see cref="AssetCacheRetentionScheduler"/> is registered as a VContainer entry point.
         /// </param>
         /// <param name="packageResolver">
-        /// Resolves the package the scheduler should trim. If null, the scheduler falls back to
-        /// <see cref="AssetManagementLocator.DefaultPackage"/>. Provide a resolver when the package is
-        /// registered in the container or created outside the locator.
+        /// Resolves the package the scheduler should trim. This is required when cache retention is enabled.
         /// </param>
         public AssetManagementVContainerInstaller(
             Func<IObjectResolver, IAssetModule> moduleFactory = null,
@@ -62,6 +61,17 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
 
         public void Install(IContainerBuilder builder)
         {
+            if (builder == null)
+            {
+                throw new ArgumentNullException(nameof(builder));
+            }
+
+            if (_cacheRetentionOptions.Enabled && _packageResolver == null)
+            {
+                throw new InvalidOperationException(
+                    "Cache retention requires an explicit packageResolver. Global package location is intentionally unsupported.");
+            }
+
             // Register IAssetModule.
             if (_moduleFactory != null)
             {
@@ -86,9 +96,9 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
                 builder.RegisterEntryPoint(
                     resolver =>
                     {
-                        Func<IAssetPackage> provider = packageResolver != null
-                            ? () => packageResolver(resolver)
-                            : () => AssetManagementLocator.DefaultPackage;
+                        Func<IAssetPackage> provider = () =>
+                            packageResolver(resolver) ??
+                            throw new InvalidOperationException("The configured packageResolver returned null.");
                         var scheduler = new AssetCacheRetentionScheduler(
                             provider,
                             retention.Policy,
@@ -99,47 +109,20 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
                     Lifetime.Singleton);
             }
 
-            // Deterministic cleanup when LifetimeScope is destroyed.
-            builder.RegisterDisposeCallback(resolver =>
-            {
-                if (resolver.TryResolve<IAssetModule>(out var module))
-                {
-                    module.DestroyAsync().Forget();
-                }
-            });
+            // VContainer's synchronous scope-disposal callback cannot await provider shutdown.
+            // The composition root owns the explicit await before disposing this scope.
         }
 
         private static IAssetModule CreateDefaultModule()
         {
-#if CYCLONEGAMES_HAS_YOOASSET
-            var yooAssetModule = TryCreateModule("CycloneGames.AssetManagement.Runtime.YooAssetModule, CycloneGames.AssetManagement.Runtime.Providers.YooAsset");
-            if (yooAssetModule != null)
-            {
-                return yooAssetModule;
-            }
-#endif
-
-#if CYCLONEGAMES_HAS_ADDRESSABLES
-            var addressablesModule = TryCreateModule("CycloneGames.AssetManagement.Runtime.AddressablesModule, CycloneGames.AssetManagement.Runtime.Providers.Addressables");
-            if (addressablesModule != null)
-            {
-                return addressablesModule;
-            }
-#endif
-
             return new ResourcesModule();
-        }
-
-        private static IAssetModule TryCreateModule(string assemblyQualifiedTypeName)
-        {
-            var type = Type.GetType(assemblyQualifiedTypeName, throwOnError: false);
-            return type == null ? null : Activator.CreateInstance(type) as IAssetModule;
         }
     }
 
     /// <summary>
     /// Internal entry point that initializes the asset module during VContainer's
-    /// IAsyncStartable lifecycle: fully awaited, exception-safe, cancellation-aware.
+    /// IAsyncStartable lifecycle. Cancellation is observed before provider-global initialization begins;
+    /// an initialization already in progress completes according to the selected provider contract.
     /// </summary>
     internal sealed class AssetModuleStartable : IAsyncStartable
     {
@@ -162,18 +145,20 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
 #endif
             StartAsync(CancellationToken cancellation = default)
         {
+            cancellation.ThrowIfCancellationRequested();
             await _module.InitializeAsync(_options);
         }
     }
 
     /// <summary>
     /// Configuration for the optional cache retention scheduler registered by <see cref="AssetManagementVContainerInstaller"/>.
-    /// Default value has <see cref="Enabled"/> == false, so the installer behaves exactly as before unless a caller opts in.
+    /// Disabled by default. Enabling it also requires an explicit package resolver.
     /// </summary>
     public readonly struct AssetCacheRetentionOptions
     {
         private const double DEFAULT_CHECK_INTERVAL_SECONDS = 30d;
         private const double DEFAULT_MINIMUM_IDLE_SECONDS = 120d;
+        private const double MAXIMUM_RETENTION_SECONDS = 365d * 24d * 60d * 60d;
 
         public readonly bool Enabled;
         public readonly AssetCacheRetentionPolicy Policy;
@@ -190,15 +175,18 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.VContainer
             Policy = enabled && policy.EvictionRules.Count == 0 && policy.PreserveRules.Count == 0
                 ? AssetCacheRetentionPolicy.IdleForAtLeast(TimeSpan.FromSeconds(DEFAULT_MINIMUM_IDLE_SECONDS))
                 : policy;
-            CheckIntervalSeconds = IsInvalidInterval(checkIntervalSeconds)
-                ? DEFAULT_CHECK_INTERVAL_SECONDS
-                : checkIntervalSeconds;
+            CheckIntervalSeconds = NormalizeInterval(checkIntervalSeconds);
             LogEvictions = logEvictions;
         }
 
-        private static bool IsInvalidInterval(double seconds)
+        private static double NormalizeInterval(double seconds)
         {
-            return double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds <= 0d;
+            if (double.IsNaN(seconds) || double.IsInfinity(seconds) || seconds <= 0d)
+            {
+                return DEFAULT_CHECK_INTERVAL_SECONDS;
+            }
+
+            return Math.Min(seconds, MAXIMUM_RETENTION_SECONDS);
         }
     }
 

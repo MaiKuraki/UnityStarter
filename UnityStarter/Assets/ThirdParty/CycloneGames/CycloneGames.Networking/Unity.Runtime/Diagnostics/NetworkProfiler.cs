@@ -7,7 +7,8 @@ namespace CycloneGames.Networking.Diagnostics
 {
     /// <summary>
     /// Collects per-tick network performance metrics for profiling and debugging.
-    /// All operations are thread-safe and zero-allocation at steady state.
+    /// Recording and snapshot operations are thread-safe. Known message IDs reuse a pre-sized
+    /// table entry; concrete runtime allocation behavior still requires profiling. Diagnostic map snapshots allocate.
     /// </summary>
     public sealed class NetworkProfiler
     {
@@ -15,47 +16,82 @@ namespace CycloneGames.Networking.Diagnostics
         private long _totalBytesReceived;
         private long _totalPacketsSent;
         private long _totalPacketsReceived;
-        private long _totalMessagesHandled;
         private long _totalErrors;
         private long _totalRateLimitHits;
 
-        // Per-second sliding window
-        private int _currentSecondBytesSent;
-        private int _currentSecondBytesReceived;
-        private int _currentSecondPacketsSent;
-        private int _currentSecondPacketsReceived;
-        private float _lastSecondReset;
+        private const int DefaultMaxTrackedMessageTypes = 1024;
+
+        // Active counters are atomically exchanged when a complete sampling window closes.
+        private long _windowBytesSent;
+        private long _windowBytesReceived;
+        private long _windowPacketsSent;
+        private long _windowPacketsReceived;
+        private long _publishedBytesSentPerSecond;
+        private long _publishedBytesReceivedPerSecond;
+        private long _publishedPacketsSentPerSecond;
+        private long _publishedPacketsReceivedPerSecond;
+        private double _lastWindowTime;
+        private long _droppedMessageTypeSamples;
 
         // Per-message-type tracking
-        private readonly Dictionary<ushort, MessageTypeStats> _messageStats =
-            new Dictionary<ushort, MessageTypeStats>(64);
+        private readonly Dictionary<ushort, MessageTypeStats> _messageStats;
+        private readonly int _maxTrackedMessageTypes;
+
+        public NetworkProfiler(int maxTrackedMessageTypes = DefaultMaxTrackedMessageTypes)
+        {
+            if (maxTrackedMessageTypes <= 0 || maxTrackedMessageTypes > ushort.MaxValue + 1)
+                throw new ArgumentOutOfRangeException(nameof(maxTrackedMessageTypes));
+
+            _maxTrackedMessageTypes = maxTrackedMessageTypes;
+            _messageStats = new Dictionary<ushort, MessageTypeStats>(maxTrackedMessageTypes);
+        }
 
         public long TotalBytesSent => Interlocked.Read(ref _totalBytesSent);
         public long TotalBytesReceived => Interlocked.Read(ref _totalBytesReceived);
         public long TotalPacketsSent => Interlocked.Read(ref _totalPacketsSent);
         public long TotalPacketsReceived => Interlocked.Read(ref _totalPacketsReceived);
-        public int BytesSentPerSecond => _currentSecondBytesSent;
-        public int BytesReceivedPerSecond => _currentSecondBytesReceived;
-        public int PacketsSentPerSecond => _currentSecondPacketsSent;
-        public int PacketsReceivedPerSecond => _currentSecondPacketsReceived;
+        public long BytesSentPerSecond => Interlocked.Read(ref _publishedBytesSentPerSecond);
+        public long BytesReceivedPerSecond => Interlocked.Read(ref _publishedBytesReceivedPerSecond);
+        public long PacketsSentPerSecond => Interlocked.Read(ref _publishedPacketsSentPerSecond);
+        public long PacketsReceivedPerSecond => Interlocked.Read(ref _publishedPacketsReceivedPerSecond);
+        public long DroppedMessageTypeSamples => Interlocked.Read(ref _droppedMessageTypeSamples);
+        public int MaxTrackedMessageTypes => _maxTrackedMessageTypes;
+        public int TrackedMessageTypeCount
+        {
+            get
+            {
+                lock (_messageStats)
+                    return _messageStats.Count;
+            }
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void RecordSend(ushort msgId, int bytes)
         {
+            if (bytes < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Byte count cannot be negative.");
+            }
+
             Interlocked.Add(ref _totalBytesSent, bytes);
             Interlocked.Increment(ref _totalPacketsSent);
-            Interlocked.Increment(ref _currentSecondBytesSent);
-            Interlocked.Increment(ref _currentSecondPacketsSent);
+            Interlocked.Add(ref _windowBytesSent, bytes);
+            Interlocked.Increment(ref _windowPacketsSent);
             RecordMessageStat(msgId, bytes, true);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void RecordReceive(ushort msgId, int bytes)
         {
+            if (bytes < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(bytes), bytes, "Byte count cannot be negative.");
+            }
+
             Interlocked.Add(ref _totalBytesReceived, bytes);
             Interlocked.Increment(ref _totalPacketsReceived);
-            Interlocked.Increment(ref _currentSecondBytesReceived);
-            Interlocked.Increment(ref _currentSecondPacketsReceived);
+            Interlocked.Add(ref _windowBytesReceived, bytes);
+            Interlocked.Increment(ref _windowPacketsReceived);
             RecordMessageStat(msgId, bytes, false);
         }
 
@@ -63,18 +99,32 @@ namespace CycloneGames.Networking.Diagnostics
         public void RecordRateLimitHit() => Interlocked.Increment(ref _totalRateLimitHits);
 
         /// <summary>
-        /// Call once per second (or frame) to slide the per-second window.
+        /// Call from one diagnostics owner to publish a normalized completed window.
+        /// Recording can continue concurrently, so the independently exchanged byte/packet
+        /// counters are approximate telemetry rather than an atomic accounting boundary.
         /// </summary>
-        public void Update(float time)
+        public void Update(double time)
         {
-            if (time - _lastSecondReset >= 1f)
-            {
-                _lastSecondReset = time;
-                Interlocked.Exchange(ref _currentSecondBytesSent, 0);
-                Interlocked.Exchange(ref _currentSecondBytesReceived, 0);
-                Interlocked.Exchange(ref _currentSecondPacketsSent, 0);
-                Interlocked.Exchange(ref _currentSecondPacketsReceived, 0);
-            }
+            if (time < 0d || double.IsNaN(time) || double.IsInfinity(time))
+                return;
+
+            double observedReset = Volatile.Read(ref _lastWindowTime);
+            double elapsed = time - observedReset;
+            if (elapsed < 1d)
+                return;
+
+            if (Interlocked.CompareExchange(ref _lastWindowTime, time, observedReset) != observedReset)
+                return;
+
+            long bytesSent = Interlocked.Exchange(ref _windowBytesSent, 0L);
+            long bytesReceived = Interlocked.Exchange(ref _windowBytesReceived, 0L);
+            long packetsSent = Interlocked.Exchange(ref _windowPacketsSent, 0L);
+            long packetsReceived = Interlocked.Exchange(ref _windowPacketsReceived, 0L);
+
+            Interlocked.Exchange(ref _publishedBytesSentPerSecond, ToPerSecond(bytesSent, elapsed));
+            Interlocked.Exchange(ref _publishedBytesReceivedPerSecond, ToPerSecond(bytesReceived, elapsed));
+            Interlocked.Exchange(ref _publishedPacketsSentPerSecond, ToPerSecond(packetsSent, elapsed));
+            Interlocked.Exchange(ref _publishedPacketsReceivedPerSecond, ToPerSecond(packetsReceived, elapsed));
         }
 
         public ProfilerSnapshot TakeSnapshot()
@@ -94,7 +144,17 @@ namespace CycloneGames.Networking.Diagnostics
             };
         }
 
-        public IReadOnlyDictionary<ushort, MessageTypeStats> GetMessageStats() => _messageStats;
+        /// <summary>
+        /// Creates a stable point-in-time copy of the per-message statistics.
+        /// This diagnostics call allocates and must not be used in a network hot path.
+        /// </summary>
+        public IReadOnlyDictionary<ushort, MessageTypeStats> GetMessageStats()
+        {
+            lock (_messageStats)
+            {
+                return new Dictionary<ushort, MessageTypeStats>(_messageStats);
+            }
+        }
 
         private void RecordMessageStat(ushort msgId, int bytes, bool isSend)
         {
@@ -102,6 +162,12 @@ namespace CycloneGames.Networking.Diagnostics
             {
                 if (!_messageStats.TryGetValue(msgId, out var stats))
                 {
+                    if (_messageStats.Count >= _maxTrackedMessageTypes)
+                    {
+                        Interlocked.Increment(ref _droppedMessageTypeSamples);
+                        return;
+                    }
+
                     stats = new MessageTypeStats { MessageId = msgId };
                     _messageStats[msgId] = stats;
                 }
@@ -129,7 +195,29 @@ namespace CycloneGames.Networking.Diagnostics
             Interlocked.Exchange(ref _totalPacketsReceived, 0);
             Interlocked.Exchange(ref _totalErrors, 0);
             Interlocked.Exchange(ref _totalRateLimitHits, 0);
-            lock (_messageStats) { _messageStats.Clear(); }
+            Interlocked.Exchange(ref _windowBytesSent, 0L);
+            Interlocked.Exchange(ref _windowBytesReceived, 0L);
+            Interlocked.Exchange(ref _windowPacketsSent, 0L);
+            Interlocked.Exchange(ref _windowPacketsReceived, 0L);
+            Interlocked.Exchange(ref _publishedBytesSentPerSecond, 0L);
+            Interlocked.Exchange(ref _publishedBytesReceivedPerSecond, 0L);
+            Interlocked.Exchange(ref _publishedPacketsSentPerSecond, 0L);
+            Interlocked.Exchange(ref _publishedPacketsReceivedPerSecond, 0L);
+            Interlocked.Exchange(ref _lastWindowTime, 0d);
+            Interlocked.Exchange(ref _droppedMessageTypeSamples, 0L);
+            lock (_messageStats)
+            {
+                _messageStats.Clear();
+            }
+        }
+
+        private static long ToPerSecond(long count, double elapsedSeconds)
+        {
+            if (count <= 0L)
+                return 0L;
+
+            double rate = count / elapsedSeconds;
+            return rate >= long.MaxValue ? long.MaxValue : (long)Math.Round(rate, MidpointRounding.AwayFromZero);
         }
     }
 
@@ -139,15 +227,15 @@ namespace CycloneGames.Networking.Diagnostics
         public long TotalBytesReceived;
         public long TotalPacketsSent;
         public long TotalPacketsReceived;
-        public int BytesSentPerSecond;
-        public int BytesReceivedPerSecond;
-        public int PacketsSentPerSecond;
-        public int PacketsReceivedPerSecond;
+        public long BytesSentPerSecond;
+        public long BytesReceivedPerSecond;
+        public long PacketsSentPerSecond;
+        public long PacketsReceivedPerSecond;
         public long TotalErrors;
         public long TotalRateLimitHits;
 
-        public float SendBandwidthKBps => BytesSentPerSecond / 1024f;
-        public float ReceiveBandwidthKBps => BytesReceivedPerSecond / 1024f;
+        public double SendBandwidthKBps => BytesSentPerSecond / 1024d;
+        public double ReceiveBandwidthKBps => BytesReceivedPerSecond / 1024d;
     }
 
     public struct MessageTypeStats

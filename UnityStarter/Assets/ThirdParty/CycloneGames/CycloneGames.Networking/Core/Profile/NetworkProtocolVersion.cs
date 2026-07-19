@@ -46,11 +46,6 @@ namespace CycloneGames.Networking
             return MinimumSupported <= remote.Current && remote.MinimumSupported <= Current;
         }
 
-        public static NetworkProtocolVersion Create(byte current, byte minimumSupported = 1)
-        {
-            return new NetworkProtocolVersion(current, minimumSupported);
-        }
-
         public bool Equals(NetworkProtocolVersion other)
         {
             return Current == other.Current && MinimumSupported == other.MinimumSupported;

@@ -68,7 +68,6 @@ namespace CycloneGames.UIFramework.Runtime
             if (window == null || ct.IsCancellationRequested) return;
 
             var context = CreateContext(window);
-            KillExistingTweens(context);
             SetupInitialState(context, OpenConfig, true);
             if (!context.GameObject.activeSelf) context.GameObject.SetActive(true);
 
@@ -85,7 +84,6 @@ namespace CycloneGames.UIFramework.Runtime
             if (window == null || ct.IsCancellationRequested) return;
 
             var context = CreateContext(window);
-            KillExistingTweens(context);
             context.CanvasGroup.interactable = false;
             context.CanvasGroup.blocksRaycasts = false;
 
@@ -117,7 +115,9 @@ namespace CycloneGames.UIFramework.Runtime
         /// </summary>
         protected virtual Sequence CreateAnimationSequence(TransitionContext ctx, TransitionConfigBase config, bool isOpen, Ease ease)
         {
-            var sequence = DOTween.Sequence().SetUpdate(true);
+            var sequence = DOTween.Sequence()
+                .SetUpdate(true)
+                .SetLink(ctx.GameObject, LinkBehaviour.KillOnDestroy);
 
             switch (config)
             {
@@ -161,8 +161,10 @@ namespace CycloneGames.UIFramework.Runtime
         /// <summary>Override to customize slide tween creation.</summary>
         protected virtual Tween CreateSlideTween(TransitionContext ctx, SlideConfig config, bool isOpen, Ease ease)
         {
-            // DOTween reads current value as 'from' by default — seamless mid-interrupt
-            Vector2 to = isOpen ? ctx.OriginalPosition : GetSlideOffset(ctx.RectTransform, config);
+            // DOTween reads the current value as the source for interruption-safe transitions.
+            Vector2 to = isOpen
+                ? ctx.OriginalPosition
+                : GetSlideOffset(ctx.RectTransform, config, ctx.OriginalPosition);
             return ctx.RectTransform.DOAnchorPos(to, config.Duration).SetEase(ease);
         }
 
@@ -186,14 +188,8 @@ namespace CycloneGames.UIFramework.Runtime
             catch (System.OperationCanceledException)
             {
                 sequence.Kill();
+                throw;
             }
-        }
-
-        protected virtual void KillExistingTweens(TransitionContext ctx)
-        {
-            ctx.CanvasGroup.DOKill();
-            ctx.Transform.DOKill();
-            if (ctx.RectTransform != null) ctx.RectTransform.DOKill();
         }
 
         protected virtual void SetupInitialState(TransitionContext ctx, TransitionConfigBase config, bool isOpen)
@@ -232,16 +228,20 @@ namespace CycloneGames.UIFramework.Runtime
                 ctx.RectTransform.anchoredPosition = ctx.OriginalPosition;
         }
 
-        protected Vector2 GetSlideOffset(RectTransform rt, SlideConfig config)
+        protected Vector2 GetSlideOffset(
+            RectTransform rt,
+            SlideConfig config,
+            Vector2? origin = null)
         {
             var rect = rt.rect;
+            Vector2 start = origin ?? rt.anchoredPosition;
             return config.Direction switch
             {
-                SlideDirection.Left => rt.anchoredPosition + new Vector2(-rect.width * config.Offset, 0),
-                SlideDirection.Right => rt.anchoredPosition + new Vector2(rect.width * config.Offset, 0),
-                SlideDirection.Top => rt.anchoredPosition + new Vector2(0, rect.height * config.Offset),
-                SlideDirection.Bottom => rt.anchoredPosition + new Vector2(0, -rect.height * config.Offset),
-                _ => rt.anchoredPosition
+                SlideDirection.Left => start + new Vector2(-rect.width * config.Offset, 0),
+                SlideDirection.Right => start + new Vector2(rect.width * config.Offset, 0),
+                SlideDirection.Top => start + new Vector2(0, rect.height * config.Offset),
+                SlideDirection.Bottom => start + new Vector2(0, -rect.height * config.Offset),
+                _ => start
             };
         }
 

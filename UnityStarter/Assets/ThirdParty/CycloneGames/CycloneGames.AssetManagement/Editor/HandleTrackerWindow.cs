@@ -17,6 +17,9 @@ namespace CycloneGames.AssetManagement.Editor
         private const float RESIZE_HANDLE_WIDTH = 7f;
         private const float MAX_COLUMN_WIDTH = 1600f;
         private const string MISSING_TEXT = "-";
+        private const int MAX_AUTOMATIC_HANDLES = 4_096;
+        private const int MAX_AUTOMATIC_CACHE_ROWS_PER_TIER = 4_096;
+        private const double AUTO_REFRESH_INTERVAL_SECONDS = 0.5d;
 
         private const int COL_ID = 0;
         private const int COL_PACKAGE = 1;
@@ -25,22 +28,23 @@ namespace CycloneGames.AssetManagement.Editor
         private const int COL_TAG = 4;
         private const int COL_OWNER = 5;
         private const int COL_STATUS = 6;
-        private const int COL_REGISTERED = 7;
+        private const int COL_ACTIVE_SINCE = 7;
         private const int COL_DURATION = 8;
 
         private readonly List<HandleTracker.HandleInfo> _snapshot = new List<HandleTracker.HandleInfo>(256);
         private readonly List<HandleRowView> _views = new List<HandleRowView>(256);
         private readonly List<int> _filteredIndices = new List<int>(256);
 
-        private readonly HashSet<string> _idleCacheLocations = new HashSet<string>();
-        private readonly Dictionary<string, (string Tag, string Owner)> _tagOwnerMap
-            = new Dictionary<string, (string, string)>(256, StringComparer.Ordinal);
+        private readonly HashSet<long> _idleCacheHandleIds = new HashSet<long>();
+        private readonly Dictionary<long, (string Tag, string Owner)> _tagOwnerMap
+            = new Dictionary<long, (string, string)>(256);
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _diagActive
             = new List<AssetCacheService.CacheDiagnosticEntry>(512);
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _diagTrial
             = new List<AssetCacheService.CacheDiagnosticEntry>(256);
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _diagMain
             = new List<AssetCacheService.CacheDiagnosticEntry>(256);
+        private readonly List<AssetCacheService> _cacheInstances = new List<AssetCacheService>(4);
 
         private string _searchFilter = string.Empty;
         private string _lastSearchFilter = "\0";
@@ -48,6 +52,11 @@ namespace CycloneGames.AssetManagement.Editor
         private Vector2 _scrollPos;
         private double _nextRepaint;
         private bool _hasSnapshot;
+        private bool _isVisible = true;
+        private bool _handleSnapshotTruncated;
+        private bool _cacheDiagnosticsTruncated;
+        private bool _idleCacheCorrelationIncomplete;
+        private int _activeHandleTotal;
 
         private string _totalText = "  Total: 0";
         private string _filteredText = string.Empty;
@@ -55,8 +64,13 @@ namespace CycloneGames.AssetManagement.Editor
         private string _cachedPill = "Cached (idle pool): 0";
         private string _persistentPill = string.Empty;
         private string _leakPill = string.Empty;
+        private string _reviewPill = string.Empty;
+        private string _registryPill = "Registry: 0 / 0";
+        private string _droppedPill = string.Empty;
         private int _persistentCount;
         private int _leakCount;
+        private int _reviewCount;
+        private long _droppedRegistrationCount;
         private readonly GUIContent _cell = new GUIContent();
         private readonly StringBuilder _copyBuilder = new StringBuilder(4096);
 
@@ -64,8 +78,8 @@ namespace CycloneGames.AssetManagement.Editor
         private int _resizingColumnIndex = -1;
         private float _resizeStartMouseX;
         private float _resizeStartWidth;
-        private readonly HashSet<int> _selectedHandleIds = new HashSet<int>();
-        private readonly List<int> _handleSelectionPruneList = new List<int>(32);
+        private readonly HashSet<long> _selectedHandleIds = new HashSet<long>();
+        private readonly List<long> _handleSelectionPruneList = new List<long>(32);
         private int _lastSelectedHandleVisibleIndex = -1;
         private string _selectedHandleText = string.Empty;
 
@@ -78,11 +92,15 @@ namespace CycloneGames.AssetManagement.Editor
 
         private const string CachedTooltip =
             "Handle is long-lived because AssetCacheService is intentionally keeping this\n" +
-            "asset in its Trial/Main idle pool for fast re-use. Not a leak.";
+            "asset in its Probation/Protected idle cache for fast reuse. Not a leak.";
 
         private const string PersistentTooltip =
-            "Marked persistent (intentionally long-lived, e.g. DontDestroyOnLoad, bootstrap, or main-scene assets).\n" +
-            "Excluded from leak heuristics. Right-click to unmark.";
+            "This exact tracked handle is marked intentionally long-lived for the current runtime session.\n" +
+            "It is excluded from leak heuristics until unmarked or the subsystem resets.";
+
+        private const string IndeterminateTooltip =
+            "The bounded cache snapshot could not establish this long-lived handle's exact cache identity.\n" +
+            "The handle is not classified as a leak until a complete cache correlation is available.";
 
         private GUIStyle _monoStyle;
         private GUIStyle _rowStyle;
@@ -104,6 +122,8 @@ namespace CycloneGames.AssetManagement.Editor
         private static readonly Color PersistentTextColor = new Color(0.35f, 0.85f, 0.70f);
         private static Color DimColor => IsPro ? new Color(0.45f, 0.45f, 0.45f) : new Color(0.5f, 0.5f, 0.5f);
         private static readonly Color NormalPillColor = new Color(0.3f, 0.75f, 0.3f);
+        private static readonly Color DroppedPillColor = new Color(1.0f, 0.55f, 0.2f);
+        private static readonly Color ReviewTextColor = new Color(1.0f, 0.72f, 0.2f);
         private static Color SeparatorColor => IsPro ? new Color(0.12f, 0.12f, 0.12f, 1f) : new Color(0.62f, 0.62f, 0.62f, 1f);
 
         [MenuItem("Tools/CycloneGames/AssetManagement/Asset Handle Tracker")]
@@ -116,25 +136,45 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void OnEnable()
         {
+            _isVisible = true;
+            _nextRepaint = 0d;
             EditorApplication.update += OnEditorUpdate;
-            RefreshSnapshot();
+            if (Application.isPlaying && HandleTracker.Enabled)
+                RefreshSnapshot();
+            else
+                _hasSnapshot = false;
         }
 
         private void OnDisable()
         {
+            _isVisible = false;
             EditorApplication.update -= OnEditorUpdate;
+            _cacheInstances.Clear();
+        }
+
+        private void OnBecameVisible()
+        {
+            _isVisible = true;
+            _nextRepaint = 0d;
+            _hasSnapshot = false;
+        }
+
+        private void OnBecameInvisible()
+        {
+            _isVisible = false;
+            _cacheInstances.Clear();
         }
 
         private void OnEditorUpdate()
         {
-            if (!HandleTracker.Enabled)
+            if (!_isVisible || !Application.isPlaying || !HandleTracker.Enabled)
             {
                 return;
             }
 
             if (EditorApplication.timeSinceStartup >= _nextRepaint)
             {
-                _nextRepaint = EditorApplication.timeSinceStartup + 0.1;
+                _nextRepaint = EditorApplication.timeSinceStartup + AUTO_REFRESH_INTERVAL_SECONDS;
                 RefreshSnapshot();
                 Repaint();
             }
@@ -194,9 +234,19 @@ namespace CycloneGames.AssetManagement.Editor
             BuildStyles();
             DrawTopControls();
 
+            if (!Application.isPlaying)
+            {
+                DrawPlaceholder(
+                    "Run the game to inspect handle lifetimes. To observe bootstrap handles, enable HandleTracker in the earliest composition root before creating packages or assets; Edit Mode window state is not runtime configuration.",
+                    MessageType.Info);
+                return;
+            }
+
             if (!HandleTracker.Enabled)
             {
-                DrawPlaceholder("Tracking is disabled. Enable it to see active handles.", MessageType.Info);
+                DrawPlaceholder(
+                    "Tracking is disabled. Enabling it here observes only handles created afterward; enable it in the earliest composition root when complete bootstrap coverage is required.",
+                    MessageType.Info);
                 return;
             }
 
@@ -218,11 +268,44 @@ namespace CycloneGames.AssetManagement.Editor
 
             DrawStatsBar();
 
+            if (HandleTracker.ObservationIncomplete)
+            {
+                EditorGUILayout.HelpBox(
+                    "Handle tracking started after handles may already have existed, or the live registry was cleared. " +
+                    "Counts are exact only for the current observation epoch. Complete bootstrap coverage requires the earliest " +
+                    "composition root to enable tracking before package or asset creation.",
+                    MessageType.Warning);
+            }
+
+            if (_handleSnapshotTruncated)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Handle rows are capped at {MAX_AUTOMATIC_HANDLES:N0}. Registry totals are exact; " +
+                    "filtering and status counts apply to the captured sample.",
+                    MessageType.Warning);
+            }
+
+            if (_cacheDiagnosticsTruncated)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Cache correlation is capped at {MAX_AUTOMATIC_CACHE_ROWS_PER_TIER:N0} rows per tier. " +
+                    "Tag, owner, and cached-state metadata are derived from the bounded sample.",
+                    MessageType.Warning);
+            }
+
+            if (_idleCacheCorrelationIncomplete)
+            {
+                EditorGUILayout.HelpBox(
+                    "Idle-cache correlation is incomplete. Long-lived handles without an exact cache match are " +
+                    "shown as Review instead of leak suspects.",
+                    MessageType.Warning);
+            }
+
             if (_filteredIndices.Count == 0)
             {
                 GUILayout.Space(16f);
                 EditorGUILayout.LabelField(
-                    _snapshot.Count == 0 ? "No active handles." : "No handles match the current filter.",
+                    _snapshot.Count == 0 ? "No tracked handles in the current observation epoch." : "No handles match the current filter.",
                     EditorStyles.centeredGreyMiniLabel);
                 return;
             }
@@ -252,21 +335,24 @@ namespace CycloneGames.AssetManagement.Editor
 
                 GUILayout.Space(8f);
 
-                bool wasEnabled = HandleTracker.Enabled;
-                HandleTracker.Enabled = GUILayout.Toggle(wasEnabled, "  Enable Tracking", EditorStyles.toolbarButton, GUILayout.Width(130f));
-                HandleTracker.EnableStackTrace = GUILayout.Toggle(HandleTracker.EnableStackTrace, "  Stack Traces (slow)", EditorStyles.toolbarButton, GUILayout.Width(130f));
-
-                GUILayout.Space(8f);
-                if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60f)))
+                using (new EditorGUI.DisabledScope(!Application.isPlaying))
                 {
-                    RefreshSnapshot();
-                }
+                    bool wasEnabled = HandleTracker.Enabled;
+                    HandleTracker.Enabled = GUILayout.Toggle(wasEnabled, "  Enable Tracking", EditorStyles.toolbarButton, GUILayout.Width(130f));
+                    HandleTracker.EnableStackTrace = GUILayout.Toggle(HandleTracker.EnableStackTrace, "  Stack Traces (slow)", EditorStyles.toolbarButton, GUILayout.Width(130f));
 
-                if (HandleTracker.HasPersistentEntries && GUILayout.Button("Clear Persistent", EditorStyles.toolbarButton, GUILayout.Width(104f)))
-                {
-                    HandleTracker.ClearPersistent();
-                    RefreshSnapshot();
-                    Repaint();
+                    GUILayout.Space(8f);
+                    if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(60f)))
+                    {
+                        RefreshSnapshot();
+                    }
+
+                    if (HandleTracker.HasPersistentEntries && GUILayout.Button("Clear Persistent", EditorStyles.toolbarButton, GUILayout.Width(104f)))
+                    {
+                        HandleTracker.ClearPersistent();
+                        RefreshSnapshot();
+                        Repaint();
+                    }
                 }
 
                 GUILayout.FlexibleSpace();
@@ -311,6 +397,14 @@ namespace CycloneGames.AssetManagement.Editor
                 }
 
                 GUILayout.Space(8f);
+                DrawPill(_registryPill, CachedTextColor);
+                GUILayout.Space(4f);
+                if (_droppedRegistrationCount > 0L)
+                {
+                    DrawPill(_droppedPill, DroppedPillColor);
+                    GUILayout.Space(4f);
+                }
+
                 DrawPill(_normalPill, NormalPillColor);
                 GUILayout.Space(4f);
                 DrawPill(_cachedPill, CachedTextColor);
@@ -325,6 +419,12 @@ namespace CycloneGames.AssetManagement.Editor
                 if (_leakCount > 0)
                 {
                     DrawPill(_leakPill, LeakTextColor);
+                    GUILayout.Space(4f);
+                }
+
+                if (_reviewCount > 0)
+                {
+                    DrawPill(_reviewPill, ReviewTextColor);
                 }
 
                 GUILayout.FlexibleSpace();
@@ -337,12 +437,13 @@ namespace CycloneGames.AssetManagement.Editor
             Normal,
             Cached,
             Leaked,
-            Persistent
+            Persistent,
+            Indeterminate
         }
 
-        private HandleStatus ClassifyHandle(HandleTracker.HandleInfo info, DateTime nowUtc)
+        private HandleStatus ClassifyHandle(HandleTracker.HandleInfo info, long nowTimestamp)
         {
-            double lifeSeconds = (nowUtc - info.RegistrationTime).TotalSeconds;
+            double lifeSeconds = HandleTracker.GetActiveDurationSeconds(in info, nowTimestamp);
             if (lifeSeconds < 300.0)
             {
                 return HandleStatus.Normal;
@@ -355,15 +456,19 @@ namespace CycloneGames.AssetManagement.Editor
                 return HandleStatus.Normal;
             }
 
-            string location = ExtractLocation(info.Description);
-            if (location != null && _idleCacheLocations.Contains(location))
+            if (_idleCacheHandleIds.Contains(info.Id))
             {
                 return HandleStatus.Cached;
             }
 
-            if (location != null && HandleTracker.IsPersistent(location))
+            if (HandleTracker.IsPersistent(info.Id))
             {
                 return HandleStatus.Persistent;
+            }
+
+            if (_idleCacheCorrelationIncomplete)
+            {
+                return HandleStatus.Indeterminate;
             }
 
             return HandleStatus.Leaked;
@@ -437,7 +542,7 @@ namespace CycloneGames.AssetManagement.Editor
             DrawTextCell(NextCell(ref x, rowRect, COL_TAG), view.HasTag ? view.Tag : MISSING_TEXT, _rowStyle, view.HasTag ? new Color(0.6f, 0.9f, 0.6f) : DimColor, view.Tag);
             DrawTextCell(NextCell(ref x, rowRect, COL_OWNER), view.HasOwner ? view.Owner : MISSING_TEXT, _rowStyle, view.HasOwner ? new Color(0.85f, 0.75f, 1.0f) : DimColor, view.Owner);
             DrawTextCell(NextCell(ref x, rowRect, COL_STATUS), view.StatusText, _rowStyle, GetStatusColor(view.Status), view.StatusTooltip);
-            DrawTextCell(NextCell(ref x, rowRect, COL_REGISTERED), view.RegisteredText, _rowStyle, Color.white, null);
+            DrawTextCell(NextCell(ref x, rowRect, COL_ACTIVE_SINCE), view.ActiveSinceText, _rowStyle, Color.white, null);
             DrawTextCell(NextCell(ref x, rowRect, COL_DURATION), view.DurationText, _numericStyle, view.Status == (byte)HandleStatus.Leaked ? LeakTextColor : Color.white, null);
 
             HandleRowInput(rowRect, view, rowIndex);
@@ -477,25 +582,40 @@ namespace CycloneGames.AssetManagement.Editor
             EditorGUI.SelectableLabel(traceRect, stackTrace, _monoStyle);
         }
 
-        private readonly HashSet<int> _expandedIds = new HashSet<int>();
+        private readonly HashSet<long> _expandedIds = new HashSet<long>();
 
-        private void RebuildIdleLocationSet()
+        private void RebuildCacheCorrelation()
         {
-            _idleCacheLocations.Clear();
+            _idleCacheHandleIds.Clear();
             _tagOwnerMap.Clear();
+            _cacheDiagnosticsTruncated = false;
+            _idleCacheCorrelationIncomplete = false;
 
-            var instances = AssetCacheService.GlobalInstances;
-            if (instances == null)
-            {
-                return;
-            }
+            AssetCacheService.CopyGlobalInstancesTo(_cacheInstances);
 
-            for (int i = 0; i < instances.Count; i++)
+            int activeCaptured = 0;
+            int trialCaptured = 0;
+            int mainCaptured = 0;
+
+            for (int i = 0; i < _cacheInstances.Count; i++)
             {
                 _diagActive.Clear();
                 _diagTrial.Clear();
                 _diagMain.Clear();
-                instances[i].GetDiagnostics(_diagActive, _diagTrial, _diagMain);
+                AssetCacheService.CacheDiagnosticCapture capture = _cacheInstances[i].GetDiagnostics(
+                    _diagActive,
+                    _diagTrial,
+                    _diagMain,
+                    Math.Max(0, MAX_AUTOMATIC_CACHE_ROWS_PER_TIER - activeCaptured),
+                    Math.Max(0, MAX_AUTOMATIC_CACHE_ROWS_PER_TIER - trialCaptured),
+                    Math.Max(0, MAX_AUTOMATIC_CACHE_ROWS_PER_TIER - mainCaptured));
+                activeCaptured += _diagActive.Count;
+                trialCaptured += _diagTrial.Count;
+                mainCaptured += _diagMain.Count;
+                _cacheDiagnosticsTruncated |= capture.IsTruncated;
+                _idleCacheCorrelationIncomplete |=
+                    capture.ProbationCaptured < capture.ProbationTotal ||
+                    capture.ProtectedCaptured < capture.ProtectedTotal;
 
                 for (int j = 0; j < _diagActive.Count; j++)
                 {
@@ -514,46 +634,55 @@ namespace CycloneGames.AssetManagement.Editor
 
                 for (int j = 0; j < _diagTrial.Count; j++)
                 {
-                    _idleCacheLocations.Add(_diagTrial[j].Location);
+                    AddIdleHandleIdentity(_diagTrial[j]);
                 }
 
                 for (int j = 0; j < _diagMain.Count; j++)
                 {
-                    _idleCacheLocations.Add(_diagMain[j].Location);
+                    AddIdleHandleIdentity(_diagMain[j]);
                 }
             }
         }
 
         private void AddToTagOwnerMap(AssetCacheService.CacheDiagnosticEntry entry)
         {
-            if (string.IsNullOrEmpty(entry.Location))
+            if (entry.HandleId <= 0L)
             {
                 return;
             }
 
-            if (!_tagOwnerMap.TryGetValue(entry.Location, out var existing)
+            if (!_tagOwnerMap.TryGetValue(entry.HandleId, out var existing)
                 || (string.IsNullOrEmpty(existing.Tag) && !string.IsNullOrEmpty(entry.Tag))
                 || (string.IsNullOrEmpty(existing.Owner) && !string.IsNullOrEmpty(entry.Owner)))
             {
-                _tagOwnerMap[entry.Location] = (entry.Tag, entry.Owner);
+                _tagOwnerMap[entry.HandleId] = (entry.Tag, entry.Owner);
             }
+        }
+
+        private void AddIdleHandleIdentity(AssetCacheService.CacheDiagnosticEntry entry)
+        {
+            if (entry.HandleId <= 0L)
+            {
+                _idleCacheCorrelationIncomplete = true;
+                return;
+            }
+
+            _idleCacheHandleIds.Add(entry.HandleId);
         }
 
         private void RefreshSnapshot()
         {
-            RebuildIdleLocationSet();
+            RebuildCacheCorrelation();
             _snapshot.Clear();
             _views.Clear();
 
-            var active = HandleTracker.GetActiveHandles();
-            DateTime nowUtc = DateTime.UtcNow;
-            if (active != null)
+            _activeHandleTotal = HandleTracker.CopyActiveHandlesTo(_snapshot, MAX_AUTOMATIC_HANDLES);
+            _handleSnapshotTruncated = _snapshot.Count < _activeHandleTotal;
+            _droppedRegistrationCount = HandleTracker.DroppedRegistrationCount;
+            long nowTimestamp = HandleTracker.GetMonotonicTimestamp();
+            for (int i = 0; i < _snapshot.Count; i++)
             {
-                for (int i = 0; i < active.Count; i++)
-                {
-                    _snapshot.Add(active[i]);
-                    _views.Add(BuildView(active[i], nowUtc));
-                }
+                _views.Add(BuildView(_snapshot[i], nowTimestamp));
             }
 
             PruneHandleSelection();
@@ -561,12 +690,12 @@ namespace CycloneGames.AssetManagement.Editor
             _hasSnapshot = true;
         }
 
-        private HandleRowView BuildView(HandleTracker.HandleInfo info, DateTime nowUtc)
+        private HandleRowView BuildView(HandleTracker.HandleInfo info, long nowTimestamp)
         {
-            byte status = (byte)ClassifyHandle(info, nowUtc);
-            double lifeSeconds = (nowUtc - info.RegistrationTime).TotalSeconds;
+            byte status = (byte)ClassifyHandle(info, nowTimestamp);
+            double lifeSeconds = HandleTracker.GetActiveDurationSeconds(in info, nowTimestamp);
             string location = ExtractLocation(info.Description);
-            _tagOwnerMap.TryGetValue(location ?? string.Empty, out var tagOwner);
+            _tagOwnerMap.TryGetValue(info.Id, out var tagOwner);
 
             return new HandleRowView
             {
@@ -582,7 +711,7 @@ namespace CycloneGames.AssetManagement.Editor
                 Status = status,
                 StatusText = GetStatusText(status),
                 StatusTooltip = GetStatusTooltip(status),
-                RegisteredText = info.RegistrationTime.ToLocalTime().ToString("HH:mm:ss"),
+                ActiveSinceText = info.ActiveSince.ToLocalTime().ToString("HH:mm:ss"),
                 DurationText = FormatDuration(lifeSeconds),
                 StackTrace = info.StackTrace
             };
@@ -596,6 +725,7 @@ namespace CycloneGames.AssetManagement.Editor
             int cached = 0;
             int leaked = 0;
             int persistent = 0;
+            int review = 0;
 
             for (int i = 0; i < _views.Count; i++)
             {
@@ -618,6 +748,10 @@ namespace CycloneGames.AssetManagement.Editor
                 {
                     persistent++;
                 }
+                else if (status == (byte)HandleStatus.Indeterminate)
+                {
+                    review++;
+                }
                 else
                 {
                     normal++;
@@ -626,12 +760,21 @@ namespace CycloneGames.AssetManagement.Editor
 
             _leakCount = leaked;
             _persistentCount = persistent;
-            _totalText = "  Total: " + _snapshot.Count;
+            _reviewCount = review;
+            _totalText = _handleSnapshotTruncated
+                ? "  Captured: " + _snapshot.Count + " / " + _activeHandleTotal
+                : "  Total: " + _activeHandleTotal;
             _filteredText = hasFilter ? "  Filtered: " + _filteredIndices.Count : string.Empty;
             _normalPill = "Normal: " + normal;
             _cachedPill = "Cached (idle pool): " + cached;
             _persistentPill = persistent > 0 ? "Persistent: " + persistent : string.Empty;
             _leakPill = leaked > 0 ? "Leak suspect: " + leaked : string.Empty;
+            _reviewPill = review > 0 ? "Review: " + review : string.Empty;
+            _registryPill = (HandleTracker.ObservationIncomplete ? "Registry (incomplete): " : "Registry: ") +
+                _activeHandleTotal + " / " + HandleTracker.Capacity;
+            _droppedPill = _droppedRegistrationCount > 0L
+                ? "Dropped registrations: " + _droppedRegistrationCount
+                : string.Empty;
             _displayDirty = false;
         }
 
@@ -676,8 +819,8 @@ namespace CycloneGames.AssetManagement.Editor
                 new TableColumn("Tag", 96f, 68f, "Tag resolved from AssetCacheService diagnostics."),
                 new TableColumn("Owner", 120f, 86f, "Owner resolved from AssetCacheService diagnostics."),
                 new TableColumn("Status", 96f, 72f, "Leak/cache/persistent classification."),
-                new TableColumn("Registered", 84f, 72f, "Local registration time."),
-                new TableColumn("Duration", 78f, 64f, "Current handle lifetime.")
+                new TableColumn("Active Since", 84f, 72f, "Local start time of the current active ownership epoch."),
+                new TableColumn("Duration", 78f, 64f, "Current active ownership duration.")
             };
         }
 
@@ -816,7 +959,7 @@ namespace CycloneGames.AssetManagement.Editor
             evt.Use();
         }
 
-        private void SelectHandleRow(int id, int visibleIndex, Event evt)
+        private void SelectHandleRow(long id, int visibleIndex, Event evt)
         {
             bool additive = evt.control || evt.command;
             if (evt.shift && _lastSelectedHandleVisibleIndex >= 0)
@@ -848,7 +991,7 @@ namespace CycloneGames.AssetManagement.Editor
             UpdateHandleSelectionText();
         }
 
-        private void SelectSingleHandleRow(int id, int visibleIndex)
+        private void SelectSingleHandleRow(long id, int visibleIndex)
         {
             _selectedHandleIds.Clear();
             _selectedHandleIds.Add(id);
@@ -884,7 +1027,7 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             _handleSelectionPruneList.Clear();
-            foreach (int id in _selectedHandleIds)
+            foreach (long id in _selectedHandleIds)
             {
                 if (!ContainsHandleId(id))
                 {
@@ -905,7 +1048,7 @@ namespace CycloneGames.AssetManagement.Editor
             UpdateHandleSelectionText();
         }
 
-        private bool ContainsHandleId(int id)
+        private bool ContainsHandleId(long id)
         {
             for (int i = 0; i < _views.Count; i++)
             {
@@ -942,7 +1085,7 @@ namespace CycloneGames.AssetManagement.Editor
             AddCopyValue(menu, "Copy/Tag", view.Tag);
             AddCopyValue(menu, "Copy/Owner", view.Owner);
             AddCopyValue(menu, "Copy/Status", view.StatusText);
-            AddCopyValue(menu, "Copy/Registered Time", view.RegisteredText);
+            AddCopyValue(menu, "Copy/Active Since", view.ActiveSinceText);
             AddCopyValue(menu, "Copy/Duration", view.DurationText);
             AddCopyValue(menu, "Copy/Stack Trace", view.StackTrace);
 
@@ -962,29 +1105,30 @@ namespace CycloneGames.AssetManagement.Editor
             menu.AddItem(new GUIContent("Copy Visible Rows/As TSV"), false, () => CopyToClipboard(BuildVisibleHandleRowsTsv()));
             menu.AddItem(new GUIContent("Copy Visible Rows/As JSON"), false, () => CopyToClipboard(BuildVisibleHandleRowsJson()));
 
+            long capturedHandleId = view.Id;
+            menu.AddSeparator(string.Empty);
+            if (HandleTracker.IsPersistent(capturedHandleId))
+            {
+                menu.AddItem(new GUIContent("Actions/Unmark Persistent"), false, () =>
+                {
+                    HandleTracker.UnmarkPersistent(capturedHandleId);
+                    RefreshSnapshot();
+                    Repaint();
+                });
+            }
+            else
+            {
+                menu.AddItem(new GUIContent("Actions/Mark Persistent (ignore leak)"), false, () =>
+                {
+                    HandleTracker.MarkPersistent(capturedHandleId);
+                    RefreshSnapshot();
+                    Repaint();
+                });
+            }
+
             if (!string.IsNullOrEmpty(view.Location))
             {
                 string capturedLocation = view.Location;
-                menu.AddSeparator(string.Empty);
-                if (HandleTracker.IsPersistent(capturedLocation))
-                {
-                    menu.AddItem(new GUIContent("Actions/Unmark Persistent"), false, () =>
-                    {
-                        HandleTracker.UnmarkPersistent(capturedLocation);
-                        RefreshSnapshot();
-                        Repaint();
-                    });
-                }
-                else
-                {
-                    menu.AddItem(new GUIContent("Actions/Mark Persistent (ignore leak)"), false, () =>
-                    {
-                        HandleTracker.MarkPersistent(capturedLocation);
-                        RefreshSnapshot();
-                        Repaint();
-                    });
-                }
-
                 if (IsProjectAssetPath(capturedLocation))
                 {
                     menu.AddItem(new GUIContent("Actions/Ping Asset"), false, () => PingAsset(capturedLocation));
@@ -994,7 +1138,7 @@ namespace CycloneGames.AssetManagement.Editor
             if (!string.IsNullOrEmpty(view.StackTrace))
             {
                 bool expanded = _expandedIds.Contains(view.Id);
-                int capturedId = view.Id;
+                long capturedId = view.Id;
                 menu.AddItem(new GUIContent(expanded ? "Actions/Collapse Stack Trace" : "Actions/Expand Stack Trace"), false, () =>
                 {
                     if (_expandedIds.Contains(capturedId))
@@ -1036,7 +1180,7 @@ namespace CycloneGames.AssetManagement.Editor
             _copyBuilder.AppendLine("Tag: " + SafeText(view.Tag));
             _copyBuilder.AppendLine("Owner: " + SafeText(view.Owner));
             _copyBuilder.AppendLine("Status: " + SafeText(view.StatusText));
-            _copyBuilder.AppendLine("Registered: " + SafeText(view.RegisteredText));
+            _copyBuilder.AppendLine("Active Since: " + SafeText(view.ActiveSinceText));
             _copyBuilder.AppendLine("Duration: " + SafeText(view.DurationText));
             if (!string.IsNullOrEmpty(view.StackTrace))
             {
@@ -1056,7 +1200,7 @@ namespace CycloneGames.AssetManagement.Editor
                 SanitizeTsv(view.Tag) + "\t" +
                 SanitizeTsv(view.Owner) + "\t" +
                 SanitizeTsv(view.StatusText) + "\t" +
-                SanitizeTsv(view.RegisteredText) + "\t" +
+                SanitizeTsv(view.ActiveSinceText) + "\t" +
                 SanitizeTsv(view.DurationText);
         }
 
@@ -1070,7 +1214,7 @@ namespace CycloneGames.AssetManagement.Editor
         private string BuildVisibleHandleRowsTsv()
         {
             _copyBuilder.Length = 0;
-            _copyBuilder.AppendLine("ID\tPackage\tDescription\tLocation\tTag\tOwner\tStatus\tRegistered\tDuration");
+            _copyBuilder.AppendLine("ID\tPackage\tDescription\tLocation\tTag\tOwner\tStatus\tActive Since\tDuration");
             for (int i = 0; i < _filteredIndices.Count; i++)
             {
                 _copyBuilder.AppendLine(BuildHandleRowTsv(_views[_filteredIndices[i]]));
@@ -1102,7 +1246,7 @@ namespace CycloneGames.AssetManagement.Editor
         private string BuildSelectedHandleRowsTsv()
         {
             _copyBuilder.Length = 0;
-            _copyBuilder.AppendLine("ID\tPackage\tDescription\tLocation\tTag\tOwner\tStatus\tRegistered\tDuration");
+            _copyBuilder.AppendLine("ID\tPackage\tDescription\tLocation\tTag\tOwner\tStatus\tActive Since\tDuration");
             for (int i = 0; i < _filteredIndices.Count; i++)
             {
                 var view = _views[_filteredIndices[i]];
@@ -1153,7 +1297,7 @@ namespace CycloneGames.AssetManagement.Editor
             AppendJsonProperty(builder, "tag", view.Tag, true);
             AppendJsonProperty(builder, "owner", view.Owner, true);
             AppendJsonProperty(builder, "status", view.StatusText, true);
-            AppendJsonProperty(builder, "registered", view.RegisteredText, true);
+            AppendJsonProperty(builder, "activeSince", view.ActiveSinceText, true);
             AppendJsonProperty(builder, "duration", view.DurationText, true);
             builder.Append('}');
         }
@@ -1171,7 +1315,7 @@ namespace CycloneGames.AssetManagement.Editor
             AppendJsonString(builder, value ?? string.Empty);
         }
 
-        private static void AppendJsonProperty(StringBuilder builder, string name, int value, bool prependComma)
+        private static void AppendJsonProperty(StringBuilder builder, string name, long value, bool prependComma)
         {
             if (prependComma)
             {
@@ -1235,6 +1379,8 @@ namespace CycloneGames.AssetManagement.Editor
                     return "Leak?";
                 case HandleStatus.Persistent:
                     return "Persistent";
+                case HandleStatus.Indeterminate:
+                    return "Review";
                 default:
                     return "Normal";
             }
@@ -1250,6 +1396,8 @@ namespace CycloneGames.AssetManagement.Editor
                     return LeakTooltip;
                 case HandleStatus.Persistent:
                     return PersistentTooltip;
+                case HandleStatus.Indeterminate:
+                    return IndeterminateTooltip;
                 default:
                     return "Handle is active and below the long-lived threshold.";
             }
@@ -1265,6 +1413,8 @@ namespace CycloneGames.AssetManagement.Editor
                     return LeakTextColor;
                 case HandleStatus.Persistent:
                     return PersistentTextColor;
+                case HandleStatus.Indeterminate:
+                    return ReviewTextColor;
                 default:
                     return DimColor;
             }
@@ -1356,7 +1506,7 @@ namespace CycloneGames.AssetManagement.Editor
 
         private struct HandleRowView
         {
-            public int Id;
+            public long Id;
             public string IdText;
             public string Package;
             public string Description;
@@ -1366,7 +1516,7 @@ namespace CycloneGames.AssetManagement.Editor
             public byte Status;
             public string StatusText;
             public string StatusTooltip;
-            public string RegisteredText;
+            public string ActiveSinceText;
             public string DurationText;
             public string StackTrace;
             public bool HasTag;

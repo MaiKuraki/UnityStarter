@@ -1,0 +1,28 @@
+{
+    "name": "CycloneGames.Networking.Adapter.Nakama.Editor",
+    "rootNamespace": "CycloneGames.Networking.Adapter.Nakama.Editor",
+    "references": [
+        "CycloneGames.Networking.Adapter.Nakama",
+        "CycloneGames.Networking.Core",
+        "NakamaRuntime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONE_NETWORKING_HAS_NAKAMA"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.heroiclabs.nakama-unity",
+            "expression": "",
+            "define": "CYCLONE_NETWORKING_HAS_NAKAMA"
+        }
+    ],
+    "noEngineReferences": false
+}

@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Text;
 using UnityEditor;
 using UnityEngine;
+using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.AssetManagement.Runtime.Cache;
 
 namespace CycloneGames.AssetManagement.Editor
@@ -15,6 +16,8 @@ namespace CycloneGames.AssetManagement.Editor
         private const float RESIZE_HANDLE_WIDTH = 7f;
         private const float MAX_COLUMN_WIDTH = 1600f;
         private const string MISSING_TEXT = "-";
+        private const int MAX_AUTOMATIC_ROWS_PER_TIER = 4_096;
+        private const double AUTO_REFRESH_INTERVAL_SECONDS = 0.5d;
 
         private const int COL_LOCATION = 0;
         private const int COL_REFS = 1;
@@ -26,12 +29,13 @@ namespace CycloneGames.AssetManagement.Editor
         private const int COL_TIER = 7;
         private const int COL_MEMORY = 8;
 
-        private static readonly string[] _tabs = { "Active (ARC)", "Trial (LRU)", "Main (LFU/LRU)", "Buckets", "Summary" };
+        private static readonly string[] _tabs = { "Active", "Probation (LRU)", "Protected (LRU)", "Buckets", "Summary" };
         private int _selectedTab;
 
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _activeList = new List<AssetCacheService.CacheDiagnosticEntry>(512);
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _trialList = new List<AssetCacheService.CacheDiagnosticEntry>(256);
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _mainList = new List<AssetCacheService.CacheDiagnosticEntry>(256);
+        private readonly List<AssetCacheService> _cacheInstances = new List<AssetCacheService>(4);
 
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _allList = new List<AssetCacheService.CacheDiagnosticEntry>(1024);
         private readonly List<CacheRowView> _allViews = new List<CacheRowView>(1024);
@@ -39,6 +43,10 @@ namespace CycloneGames.AssetManagement.Editor
         private int _activeCount;
         private int _trialCount;
         private int _mainCount;
+        private int _activeTotal;
+        private int _trialTotal;
+        private int _mainTotal;
+        private bool _diagnosticsTruncated;
 
         private long _idleBytesApprox;
         private long _maxIdleBytesBudget;
@@ -54,8 +62,8 @@ namespace CycloneGames.AssetManagement.Editor
         private string _trialTitle;
         private string _mainTitle;
         private string _pillActive = "  Active: 0  ";
-        private string _pillTrial = "  Trial: 0  ";
-        private string _pillMain = "  Main: 0  ";
+        private string _pillTrial = "  Probation: 0  ";
+        private string _pillMain = "  Protected: 0  ";
         private string _pillTotal = "  Total: 0  ";
 
         private string _sumTotal;
@@ -69,6 +77,22 @@ namespace CycloneGames.AssetManagement.Editor
         private string _sumBudget;
         private string _sumIdleBarLabel;
         private float _sumIdlePct;
+        private AssetRuntimeCacheSnapshot _runtimeSnapshot;
+        private string _sumLookups;
+        private string _sumHitRatio;
+        private string _sumActiveHits;
+        private string _sumIdleHits;
+        private string _sumMisses;
+        private string _sumAdmissions;
+        private string _sumAdmissionRejections;
+        private string _sumEvictions;
+        private string _sumEvictionReasons;
+        private string _sumEvictedBytes;
+        private string _sumPeakActive;
+        private string _sumPeakIdle;
+        private string _sumPeakIdleBytes;
+        private string _sumEstimatorFailures;
+        private string _sumReleaseFailures;
         private string _sumYoo;
         private string _sumAddr;
         private string _sumRes;
@@ -99,8 +123,8 @@ namespace CycloneGames.AssetManagement.Editor
         private int _resizingColumnIndex = -1;
         private float _resizeStartMouseX;
         private float _resizeStartWidth;
-        private readonly HashSet<string> _selectedCacheKeys = new HashSet<string>(StringComparer.Ordinal);
-        private readonly List<string> _cacheSelectionPruneList = new List<string>(32);
+        private readonly HashSet<long> _selectedCacheIds = new HashSet<long>();
+        private readonly List<long> _cacheSelectionPruneList = new List<long>(32);
         private int _lastSelectedCacheVisibleIndex = -1;
         private string _selectedCacheText = string.Empty;
 
@@ -109,11 +133,11 @@ namespace CycloneGames.AssetManagement.Editor
         private bool _layoutOptionsBuilt;
 
         private const string TrialZeroTooltip =
-            "RefCount = 0 - asset is in the Trial (probation) idle pool.\n" +
+            "RefCount = 0 - asset is in the Probation idle segment.\n" +
             "AssetCacheService is holding it for fast re-use.\nNot a leak.";
 
         private const string MainZeroTooltip =
-            "RefCount = 0 - asset is in the Main (hot) idle pool.\n" +
+            "RefCount = 0 - asset is in the Protected idle segment.\n" +
             "Promoted due to high access frequency; kept resident for instant re-use.\nNot a leak.";
 
         private static bool IsPro => EditorGUIUtility.isProSkin;
@@ -131,6 +155,7 @@ namespace CycloneGames.AssetManagement.Editor
         private GUIStyle _monoStyle;
         private GUIStyle _typeBadgeStyle;
         private bool _stylesBuilt;
+        private bool _isVisible = true;
 
         [MenuItem("Tools/CycloneGames/AssetManagement/Asset Cache Debugger")]
         public static void ShowWindow()
@@ -142,27 +167,44 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void OnEnable()
         {
+            _isVisible = true;
+            _nextRepaint = 0d;
             EditorApplication.update += OnEditorUpdate;
             RefreshSnapshot();
         }
 
         private void OnDisable()
         {
+            _isVisible = false;
             EditorApplication.update -= OnEditorUpdate;
+            _cacheInstances.Clear();
+        }
+
+        private void OnBecameVisible()
+        {
+            _isVisible = true;
+            _nextRepaint = 0d;
+            _hasSnapshot = false;
+        }
+
+        private void OnBecameInvisible()
+        {
+            _isVisible = false;
+            _cacheInstances.Clear();
         }
 
         private double _nextRepaint;
 
         private void OnEditorUpdate()
         {
-            if (!Application.isPlaying)
+            if (!_isVisible || !Application.isPlaying)
             {
                 return;
             }
 
             if (EditorApplication.timeSinceStartup >= _nextRepaint)
             {
-                _nextRepaint = EditorApplication.timeSinceStartup + 0.1;
+                _nextRepaint = EditorApplication.timeSinceStartup + AUTO_REFRESH_INTERVAL_SECONDS;
                 RefreshSnapshot();
                 Repaint();
             }
@@ -230,14 +272,14 @@ namespace CycloneGames.AssetManagement.Editor
                 return;
             }
 
-            var instances = AssetCacheService.GlobalInstances;
-            if (instances == null || instances.Count == 0)
+            AssetCacheService.CopyGlobalInstancesTo(_cacheInstances);
+            if (_cacheInstances.Count == 0)
             {
                 DrawPlaceholder("No active AssetCacheService instances found.", MessageType.Warning);
                 return;
             }
 
-            DrawInstanceSelector(instances);
+            DrawInstanceSelector(_cacheInstances);
 
             if (!_hasSnapshot)
             {
@@ -245,6 +287,14 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             DrawTopBar();
+
+            if (_diagnosticsTruncated)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Detailed rows are capped at {MAX_AUTOMATIC_ROWS_PER_TIER:N0} per tier. " +
+                    "Tier totals and runtime aggregate counters are exact; row-derived breakdowns are a bounded sample.",
+                    MessageType.Warning);
+            }
 
             GUILayout.Space(4f);
             int newSelectedTab = GUILayout.Toolbar(_selectedTab, _tabs, EditorStyles.toolbarButton, GUILayout.Height(22f));
@@ -322,9 +372,16 @@ namespace CycloneGames.AssetManagement.Editor
             _activeCount = 0;
             _trialCount = 0;
             _mainCount = 0;
+            _activeTotal = 0;
+            _trialTotal = 0;
+            _mainTotal = 0;
+            _diagnosticsTruncated = false;
+            _idleBytesApprox = 0L;
+            _maxIdleBytesBudget = 0L;
+            _runtimeSnapshot = default;
 
-            var instances = AssetCacheService.GlobalInstances;
-            if (instances == null || instances.Count == 0)
+            AssetCacheService.CopyGlobalInstancesTo(_cacheInstances);
+            if (_cacheInstances.Count == 0)
             {
                 BuildBuckets();
                 BuildSummary();
@@ -333,11 +390,22 @@ namespace CycloneGames.AssetManagement.Editor
                 return;
             }
 
-            _selectedInstanceIndex = Mathf.Clamp(_selectedInstanceIndex, 0, instances.Count - 1);
-            var service = instances[_selectedInstanceIndex];
-            service.GetDiagnostics(_activeList, _trialList, _mainList);
-            _idleBytesApprox = service.IdleBytesApprox;
-            _maxIdleBytesBudget = service.MaxIdleBytesBudget;
+            _selectedInstanceIndex = Mathf.Clamp(_selectedInstanceIndex, 0, _cacheInstances.Count - 1);
+            var service = _cacheInstances[_selectedInstanceIndex];
+            AssetCacheService.CacheDiagnosticCapture capture = service.GetDiagnostics(
+                _activeList,
+                _trialList,
+                _mainList,
+                MAX_AUTOMATIC_ROWS_PER_TIER,
+                MAX_AUTOMATIC_ROWS_PER_TIER,
+                MAX_AUTOMATIC_ROWS_PER_TIER);
+            _activeTotal = capture.ActiveTotal;
+            _trialTotal = capture.ProbationTotal;
+            _mainTotal = capture.ProtectedTotal;
+            _diagnosticsTruncated = capture.IsTruncated;
+            _runtimeSnapshot = service.CreateRuntimeSnapshot(string.Empty, string.Empty);
+            _idleBytesApprox = _runtimeSnapshot.IdleBytesApprox;
+            _maxIdleBytesBudget = _runtimeSnapshot.IdleBytesBudget;
 
             for (int i = 0; i < _activeList.Count; i++)
             {
@@ -382,7 +450,13 @@ namespace CycloneGames.AssetManagement.Editor
                 refsTooltip = "RefCount = " + entry.RefCount + " is unusually high.\nVerify that all callers are correctly calling Dispose().";
             }
 
-            string tier = tierKind == 0 ? "Active" : tierKind == 1 ? "Trial" : "Main";
+            string tier = entry.IsGenerationDetached
+                ? "Detached"
+                : tierKind == 0
+                    ? "Active"
+                    : tierKind == 1
+                        ? "Probation"
+                        : "Protected";
             string memoryText = FormatBytes(entry.EstimatedBytes);
 
             return new CacheRowView
@@ -440,13 +514,13 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void BuildSummary()
         {
-            _activeTitle = "Active Handles (RefCount > 0)  [" + _activeCount + "]";
-            _trialTitle = "Trial Pool - new assets on probation (W-LRU)  [" + _trialCount + "]";
-            _mainTitle = "Main Pool - promoted assets (LFU+LRU)  [" + _mainCount + "]";
-            _pillActive = "  Active: " + _activeCount + "  ";
-            _pillTrial = "  Trial: " + _trialCount + "  ";
-            _pillMain = "  Main: " + _mainCount + "  ";
-            _pillTotal = "  Total: " + _allList.Count + "  ";
+            _activeTitle = "Active Handles (RefCount > 0)  " + FormatCaptureCount(_activeCount, _activeTotal);
+            _trialTitle = "Probation Segment - first-use idle assets  " + FormatCaptureCount(_trialCount, _trialTotal);
+            _mainTitle = "Protected Segment - reused idle assets  " + FormatCaptureCount(_mainCount, _mainTotal);
+            _pillActive = "  Active: " + _activeTotal + "  ";
+            _pillTrial = "  Probation: " + _trialTotal + "  ";
+            _pillMain = "  Protected: " + _mainTotal + "  ";
+            _pillTotal = "  Total: " + (_activeTotal + _trialTotal + _mainTotal) + "  ";
 
             int yoo = 0;
             int addressables = 0;
@@ -511,10 +585,10 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             _sumHasAnomalies = _anomalyRefs.Count > 0;
-            _sumTotal = _allList.Count.ToString();
-            _sumActive = _activeCount.ToString();
-            _sumTrial = _trialCount.ToString();
-            _sumMain = _mainCount.ToString();
+            _sumTotal = (_activeTotal + _trialTotal + _mainTotal).ToString();
+            _sumActive = _activeTotal.ToString();
+            _sumTrial = _trialTotal.ToString();
+            _sumMain = _mainTotal.ToString();
             _sumRefs = totalRefs.ToString();
             _sumMaxHits = maxHits.ToString();
             _sumActiveBytes = FormatBytes(activeBytes);
@@ -522,6 +596,29 @@ namespace CycloneGames.AssetManagement.Editor
             _sumBudget = FormatBytes(_maxIdleBytesBudget);
             _sumIdlePct = (float)_idleBytesApprox / Mathf.Max(1, _maxIdleBytesBudget);
             _sumIdleBarLabel = "  Idle budget used: " + (_sumIdlePct * 100f).ToString("F1") + "%";
+            _sumLookups = _runtimeSnapshot.CacheLookupCount.ToString();
+            _sumHitRatio = (_runtimeSnapshot.CacheHitRatio * 100d).ToString("F1") + "%";
+            _sumActiveHits = _runtimeSnapshot.ActiveHitCount.ToString();
+            _sumIdleHits = _runtimeSnapshot.IdleHitCount.ToString();
+            _sumMisses = _runtimeSnapshot.CacheMissCount.ToString();
+            _sumAdmissions = _runtimeSnapshot.IdleAdmissionCount.ToString();
+            _sumAdmissionRejections = _runtimeSnapshot.AdmissionRejectionCount +
+                " (failed=" + _runtimeSnapshot.FailedOperationRejectionCount +
+                ", metadata=" + _runtimeSnapshot.MetadataOverflowRejectionCount +
+                ", unknown=" + _runtimeSnapshot.UnknownFootprintRejectionCount +
+                ", oversize=" + _runtimeSnapshot.OversizeRejectionCount + ")";
+            _sumEvictions = _runtimeSnapshot.EvictionCount.ToString();
+            _sumEvictionReasons =
+                "capacity=" + _runtimeSnapshot.CapacityEvictionCount +
+                ", memory=" + _runtimeSnapshot.MemoryBudgetEvictionCount +
+                ", retention=" + _runtimeSnapshot.RetentionEvictionCount +
+                ", explicit=" + _runtimeSnapshot.ExplicitEvictionCount;
+            _sumEvictedBytes = FormatBytes(_runtimeSnapshot.EvictedBytesApprox);
+            _sumPeakActive = _runtimeSnapshot.PeakActiveCount.ToString();
+            _sumPeakIdle = _runtimeSnapshot.PeakIdleCount.ToString();
+            _sumPeakIdleBytes = FormatBytes(_runtimeSnapshot.PeakIdleBytesApprox);
+            _sumEstimatorFailures = _runtimeSnapshot.FootprintEstimationFailureCount.ToString();
+            _sumReleaseFailures = _runtimeSnapshot.ProviderReleaseFailureCount.ToString();
             _sumYoo = yoo.ToString();
             _sumAddr = addressables.ToString();
             _sumRes = resources.ToString();
@@ -571,7 +668,7 @@ namespace CycloneGames.AssetManagement.Editor
 
                 GUILayout.FlexibleSpace();
 
-                if (_selectedCacheKeys.Count > 0)
+                if (_selectedCacheIds.Count > 0)
                 {
                     GUILayout.Label(_selectedCacheText, EditorStyles.miniLabel);
                     if (GUILayout.Button("Copy Selected", EditorStyles.toolbarButton, GUILayout.Width(94f)))
@@ -643,7 +740,7 @@ namespace CycloneGames.AssetManagement.Editor
 
             EnsureColumns();
 
-            Color rowBg = IsCacheSelected(item.CacheKey)
+            Color rowBg = IsCacheSelected(item.DiagnosticId)
                 ? RowSelected
                 : view.RefKind == 2
                     ? RowHighRef
@@ -854,10 +951,31 @@ namespace CycloneGames.AssetManagement.Editor
             {
                 DrawSummaryRow("Total cached assets", _sumTotal);
                 DrawSummaryRow("Active (in-use, RefCount > 0)", _sumActive);
-                DrawSummaryRow("Trial pool (idle probation)", _sumTrial);
-                DrawSummaryRow("Main pool (idle hot cache)", _sumMain);
+                DrawSummaryRow("Probation segment (idle)", _sumTrial);
+                DrawSummaryRow("Protected segment (idle)", _sumMain);
                 DrawSummaryRow("Total live ref-count sum", _sumRefs);
                 DrawSummaryRow("Highest AccessCount (hottest asset)", _sumMaxHits);
+            }
+
+            GUILayout.Space(8f);
+            EditorGUILayout.LabelField("Lifetime Cache Activity", EditorStyles.boldLabel);
+            using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
+            {
+                DrawSummaryRow("Cache lookups", _sumLookups);
+                DrawSummaryRow("Cache hit ratio", _sumHitRatio);
+                DrawSummaryRow("Active hits", _sumActiveHits);
+                DrawSummaryRow("Idle reuses", _sumIdleHits);
+                DrawSummaryRow("Cache misses", _sumMisses);
+                DrawSummaryRow("Idle admissions", _sumAdmissions);
+                DrawSummaryRow("Admission rejections", _sumAdmissionRejections);
+                DrawSummaryRow("Evictions", _sumEvictions);
+                DrawSummaryRow("Eviction reasons", _sumEvictionReasons);
+                DrawSummaryRow("Evicted bytes (approx.)", _sumEvictedBytes);
+                DrawSummaryRow("Peak active handles", _sumPeakActive);
+                DrawSummaryRow("Peak idle handles", _sumPeakIdle);
+                DrawSummaryRow("Peak idle bytes (approx.)", _sumPeakIdleBytes);
+                DrawSummaryRow("Footprint estimator failures", _sumEstimatorFailures);
+                DrawSummaryRow("Provider release failures", _sumReleaseFailures);
             }
 
             GUILayout.Space(8f);
@@ -939,8 +1057,8 @@ namespace CycloneGames.AssetManagement.Editor
             if (total > 0)
             {
                 DrawProgressBar("Active", _activeCount, total, new Color(0.2f, 0.7f, 0.3f));
-                DrawProgressBar("Trial", _trialCount, total, new Color(0.9f, 0.6f, 0.1f));
-                DrawProgressBar("Main", _mainCount, total, new Color(0.2f, 0.5f, 1.0f));
+                DrawProgressBar("Probation", _trialCount, total, new Color(0.9f, 0.6f, 0.1f));
+                DrawProgressBar("Protected", _mainCount, total, new Color(0.2f, 0.5f, 1.0f));
             }
         }
 
@@ -1099,7 +1217,7 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             var menu = new GenericMenu();
-            if (_selectedCacheKeys.Count > 0)
+            if (_selectedCacheIds.Count > 0)
             {
                 menu.AddItem(new GUIContent("Copy Selected Rows/As TSV"), false, () => CopyToClipboard(BuildSelectedCacheRowsTsv()));
                 menu.AddItem(new GUIContent("Copy Selected Rows/As JSON"), false, () => CopyToClipboard(BuildSelectedCacheRowsJson()));
@@ -1109,7 +1227,7 @@ namespace CycloneGames.AssetManagement.Editor
             menu.AddItem(new GUIContent("Copy Visible Rows/As TSV"), false, () => CopyToClipboard(BuildVisibleCacheRowsTsv()));
             menu.AddItem(new GUIContent("Copy Visible Rows/As JSON"), false, () => CopyToClipboard(BuildVisibleCacheRowsJson()));
             menu.AddSeparator(string.Empty);
-            if (_selectedCacheKeys.Count > 0)
+            if (_selectedCacheIds.Count > 0)
             {
                 menu.AddItem(new GUIContent("Clear Selection"), false, () =>
                 {
@@ -1133,7 +1251,7 @@ namespace CycloneGames.AssetManagement.Editor
 
             if (evt.button == 0)
             {
-                SelectCacheRow(item.CacheKey, visibleIndex, evt);
+                SelectCacheRow(item.DiagnosticId, visibleIndex, evt);
                 Repaint();
                 evt.Use();
                 return;
@@ -1144,23 +1262,23 @@ namespace CycloneGames.AssetManagement.Editor
                 return;
             }
 
-            if (!IsCacheSelected(item.CacheKey))
+            if (!IsCacheSelected(item.DiagnosticId))
             {
-                SelectSingleCacheRow(item.CacheKey, visibleIndex);
+                SelectSingleCacheRow(item.DiagnosticId, visibleIndex);
             }
 
             ShowRowContextMenu(item, view);
             evt.Use();
         }
 
-        private bool IsCacheSelected(string cacheKey)
+        private bool IsCacheSelected(long diagnosticId)
         {
-            return !string.IsNullOrEmpty(cacheKey) && _selectedCacheKeys.Contains(cacheKey);
+            return diagnosticId != 0 && _selectedCacheIds.Contains(diagnosticId);
         }
 
-        private void SelectCacheRow(string cacheKey, int visibleIndex, Event evt)
+        private void SelectCacheRow(long diagnosticId, int visibleIndex, Event evt)
         {
-            if (string.IsNullOrEmpty(cacheKey))
+            if (diagnosticId == 0)
             {
                 return;
             }
@@ -1170,7 +1288,7 @@ namespace CycloneGames.AssetManagement.Editor
             {
                 if (!additive)
                 {
-                    _selectedCacheKeys.Clear();
+                    _selectedCacheIds.Clear();
                 }
 
                 SelectVisibleCacheRange(_lastSelectedCacheVisibleIndex, visibleIndex);
@@ -1180,27 +1298,27 @@ namespace CycloneGames.AssetManagement.Editor
 
             if (additive)
             {
-                if (!_selectedCacheKeys.Add(cacheKey))
+                if (!_selectedCacheIds.Add(diagnosticId))
                 {
-                    _selectedCacheKeys.Remove(cacheKey);
+                    _selectedCacheIds.Remove(diagnosticId);
                 }
             }
             else
             {
-                _selectedCacheKeys.Clear();
-                _selectedCacheKeys.Add(cacheKey);
+                _selectedCacheIds.Clear();
+                _selectedCacheIds.Add(diagnosticId);
             }
 
             _lastSelectedCacheVisibleIndex = visibleIndex;
             UpdateCacheSelectionText();
         }
 
-        private void SelectSingleCacheRow(string cacheKey, int visibleIndex)
+        private void SelectSingleCacheRow(long diagnosticId, int visibleIndex)
         {
-            _selectedCacheKeys.Clear();
-            if (!string.IsNullOrEmpty(cacheKey))
+            _selectedCacheIds.Clear();
+            if (diagnosticId != 0)
             {
-                _selectedCacheKeys.Add(cacheKey);
+                _selectedCacheIds.Add(diagnosticId);
             }
 
             _lastSelectedCacheVisibleIndex = visibleIndex;
@@ -1216,43 +1334,43 @@ namespace CycloneGames.AssetManagement.Editor
 
             for (int i = min; i <= max; i++)
             {
-                string cacheKey = _allList[_visibleCacheIndices[i]].CacheKey;
-                if (!string.IsNullOrEmpty(cacheKey))
+                long diagnosticId = _allList[_visibleCacheIndices[i]].DiagnosticId;
+                if (diagnosticId != 0)
                 {
-                    _selectedCacheKeys.Add(cacheKey);
+                    _selectedCacheIds.Add(diagnosticId);
                 }
             }
         }
 
         private void ClearCacheSelection()
         {
-            _selectedCacheKeys.Clear();
+            _selectedCacheIds.Clear();
             _lastSelectedCacheVisibleIndex = -1;
             UpdateCacheSelectionText();
         }
 
         private void PruneCacheSelection()
         {
-            if (_selectedCacheKeys.Count == 0)
+            if (_selectedCacheIds.Count == 0)
             {
                 return;
             }
 
             _cacheSelectionPruneList.Clear();
-            foreach (string key in _selectedCacheKeys)
+            foreach (long diagnosticId in _selectedCacheIds)
             {
-                if (!ContainsCacheKey(key))
+                if (!ContainsDiagnosticId(diagnosticId))
                 {
-                    _cacheSelectionPruneList.Add(key);
+                    _cacheSelectionPruneList.Add(diagnosticId);
                 }
             }
 
             for (int i = 0; i < _cacheSelectionPruneList.Count; i++)
             {
-                _selectedCacheKeys.Remove(_cacheSelectionPruneList[i]);
+                _selectedCacheIds.Remove(_cacheSelectionPruneList[i]);
             }
 
-            if (_selectedCacheKeys.Count == 0)
+            if (_selectedCacheIds.Count == 0)
             {
                 _lastSelectedCacheVisibleIndex = -1;
             }
@@ -1260,11 +1378,11 @@ namespace CycloneGames.AssetManagement.Editor
             UpdateCacheSelectionText();
         }
 
-        private bool ContainsCacheKey(string cacheKey)
+        private bool ContainsDiagnosticId(long diagnosticId)
         {
             for (int i = 0; i < _allList.Count; i++)
             {
-                if (string.Equals(_allList[i].CacheKey, cacheKey, StringComparison.Ordinal))
+                if (_allList[i].DiagnosticId == diagnosticId)
                 {
                     return true;
                 }
@@ -1275,7 +1393,7 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void UpdateCacheSelectionText()
         {
-            _selectedCacheText = _selectedCacheKeys.Count > 0 ? "Selected: " + _selectedCacheKeys.Count : string.Empty;
+            _selectedCacheText = _selectedCacheIds.Count > 0 ? "Selected: " + _selectedCacheIds.Count : string.Empty;
         }
 
         private void ShowRowContextMenu(AssetCacheService.CacheDiagnosticEntry item, CacheRowView view)
@@ -1301,7 +1419,7 @@ namespace CycloneGames.AssetManagement.Editor
             AddCopyValue(menu, "Copy/Memory", view.MemoryText);
 
             menu.AddSeparator(string.Empty);
-            if (_selectedCacheKeys.Count > 0)
+            if (_selectedCacheIds.Count > 0)
             {
                 menu.AddItem(new GUIContent("Copy Selected Rows/As TSV"), false, () => CopyToClipboard(BuildSelectedCacheRowsTsv()));
                 menu.AddItem(new GUIContent("Copy Selected Rows/As JSON"), false, () => CopyToClipboard(BuildSelectedCacheRowsJson()));
@@ -1433,7 +1551,7 @@ namespace CycloneGames.AssetManagement.Editor
             for (int i = 0; i < _visibleCacheIndices.Count; i++)
             {
                 int index = _visibleCacheIndices[i];
-                if (_selectedCacheKeys.Contains(_allList[index].CacheKey))
+                if (_selectedCacheIds.Contains(_allList[index].DiagnosticId))
                 {
                     AppendCacheRow(index, json, builder, ref first);
                 }
@@ -1650,6 +1768,13 @@ namespace CycloneGames.AssetManagement.Editor
             return (bytes / (1024.0 * 1024.0 * 1024.0)).ToString("F2") + " GB";
         }
 
+        private static string FormatCaptureCount(int captured, int total)
+        {
+            return captured == total
+                ? "[" + total + "]"
+                : "[" + captured + " captured / " + total + "]";
+        }
+
         private static Color GetProviderColor(string provider)
         {
             switch (provider)
@@ -1671,9 +1796,11 @@ namespace CycloneGames.AssetManagement.Editor
             {
                 case "Active":
                     return new Color(0.2f, 0.85f, 0.4f);
-                case "Trial":
+                case "Detached":
+                    return new Color(0.75f, 0.55f, 1.0f);
+                case "Probation":
                     return new Color(1.0f, 0.75f, 0.1f);
-                case "Main":
+                case "Protected":
                     return new Color(0.3f, 0.6f, 1.0f);
                 default:
                     return Color.white;
@@ -1686,10 +1813,12 @@ namespace CycloneGames.AssetManagement.Editor
             {
                 case "Active":
                     return "Asset is actively in use (RefCount > 0). A handle caller is holding a reference.";
-                case "Trial":
-                    return "Asset is in the Trial (W-LRU) idle pool.\nRefCount = 0 - no caller holds it, but AssetCacheService keeps it loaded for fast re-use.\nEvicted if the pool is full and a new asset arrives.";
-                case "Main":
-                    return "Asset is in the Main (LFU+LRU) hot cache.\nRefCount = 0 - promoted here due to high access frequency.\nKept resident for instant re-use. Not a leak.";
+                case "Detached":
+                    return "Asset is still caller-owned but detached from keyed lookup after a provider catalog or manifest generation change.\nA new load resolves against the current generation; this lease remains valid until final release or package shutdown.";
+                case "Probation":
+                    return "Asset is in the Probation idle segment.\nRefCount = 0 - no caller holds it, but AssetCacheService keeps it for reuse.\nEvicted first when the segment or byte budget is full.";
+                case "Protected":
+                    return "Asset is in the Protected idle segment after reuse.\nRefCount = 0 - no caller holds it.\nCapacity pressure demotes it to Probation before eviction.";
                 default:
                     return string.Empty;
             }

@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.data-table",
   "version": "1.0.0",
   "displayName": "CycloneGames.DataTable",
-  "description": "Designer-facing data table pipeline with optional Luban, MessagePack, and CycloneGames.AssetManagement integrations.",
+  "description": "Immutable typed data tables, bounded loading contracts, and an Editor generation pipeline with optional backend integrations.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {},

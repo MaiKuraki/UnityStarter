@@ -1,6 +1,6 @@
-#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using CycloneGames.UIFramework.DynamicAtlas;
 using UnityEditor;
 using UnityEditor.U2D;
 using UnityEngine;
@@ -8,50 +8,64 @@ using UnityEngine.U2D;
 
 namespace CycloneGames.UIFramework.Editor.DynamicAtlas
 {
-    /// <summary>
-    /// Professional editor window for validating SpriteAtlas format compatibility 
-    /// with CompressedDynamicAtlasService. Optimized for zero-GC performance.
-    /// </summary>
     public sealed class SpriteAtlasFormatValidator : EditorWindow
     {
-        // === Cached Content (zero-GC) ===
-        private static readonly GUIContent s_WindowTitle = new GUIContent("Atlas Format Validator");
-        private static readonly GUIContent s_ScanAllContent = new GUIContent("Scan All");
-        private static readonly GUIContent s_ScanSelectedContent = new GUIContent("Scan Selected");
-        private static readonly GUIContent s_ClearContent = new GUIContent("Clear");
-        private static readonly GUIContent s_SelectContent = new GUIContent("Select");
-        private static readonly GUIContent s_HelpContent = new GUIContent("?");
-
-        // === Colors ===
-        private static readonly Color s_ValidColor = new Color(0.3f, 0.75f, 0.3f);
-        private static readonly Color s_InvalidColor = new Color(1.0f, 0.65f, 0.2f);
-
-        // === State ===
-        private Vector2 _scrollPos;
-        private readonly List<ValidationResult> _results = new List<ValidationResult>(64);
-        private BuildTarget _selectedPlatform;
-        private bool _showOnlyIssues;
-        private int _validCount;
-        private int _invalidCount;
-
-        // === Reusable Arrays (zero-GC) ===
-        private Sprite[] _spriteBuffer = new Sprite[1];
-
-        private struct ValidationResult
+        internal enum Compatibility
         {
-            public string Path;
-            public string Name;
-            public TextureFormat Format;
-            public int BlockSize;
-            public bool IsValid;
+            FastPathCandidate = 0,
+            FastPathWithCpuFallback = 1,
+            ReadbackRequired = 2,
+            UnsupportedPacking = 3,
         }
 
-        [MenuItem("Tools/CycloneGames/Dynamic Atlas/Atlas Format Validator")]
+        private readonly struct ValidationResult
+        {
+            internal readonly string Path;
+            internal readonly string Name;
+            internal readonly string FormatName;
+            internal readonly bool Readable;
+            internal readonly bool RotationEnabled;
+            internal readonly bool TightPackingEnabled;
+            internal readonly Compatibility Compatibility;
+
+            internal ValidationResult(
+                string path,
+                string name,
+                string formatName,
+                bool readable,
+                bool rotationEnabled,
+                bool tightPackingEnabled,
+                Compatibility compatibility)
+            {
+                Path = path;
+                Name = name;
+                FormatName = formatName;
+                Readable = readable;
+                RotationEnabled = rotationEnabled;
+                TightPackingEnabled = tightPackingEnabled;
+                Compatibility = compatibility;
+            }
+        }
+
+        private static readonly GUIContent ScanAllContent = new GUIContent("Scan All SpriteAtlases", "Runs an explicit project-wide AssetDatabase scan.");
+        private static readonly GUIContent ScanSelectedContent = new GUIContent("Scan Selection", "Validates only selected SpriteAtlas assets.");
+
+        private readonly List<ValidationResult> _results = new List<ValidationResult>(64);
+        private BuildTarget _selectedPlatform;
+        private Vector2 _scrollPosition;
+        private bool _issuesOnly;
+        private int _fastPathCount;
+        private int _cpuFallbackCount;
+        private int _readbackCount;
+        private int _unsupportedCount;
+        private Sprite[] _spriteBuffer = new Sprite[1];
+
+        [MenuItem("Tools/CycloneGames/UI Framework/SpriteAtlas Compatibility Validator")]
         public static void ShowWindow()
         {
-            var window = GetWindow<SpriteAtlasFormatValidator>();
-            window.titleContent = s_WindowTitle;
-            window.minSize = new Vector2(500, 350);
+            SpriteAtlasFormatValidator window = GetWindow<SpriteAtlasFormatValidator>();
+            window.titleContent = new GUIContent("Atlas Validator");
+            window.minSize = new Vector2(620f, 400f);
             window.Show();
         }
 
@@ -60,161 +74,180 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
             _selectedPlatform = EditorUserBuildSettings.activeBuildTarget;
         }
 
+        private void OnDisable()
+        {
+            ClearSpriteBuffer();
+        }
+
         private void OnGUI()
         {
-            EditorGUILayout.Space(6);
-
-            // Header
             EditorGUILayout.HelpBox(
-                "Validates SpriteAtlas compression formats for CompressedDynamicAtlasService.\n" +
-                "Source atlases and dynamic atlas must use the same TextureFormat.",
+                "Dynamic UI atlas pages prefer direct GPU copy. This validator identifies same-format GPU candidates, readable sources that can also use the bounded CPU raw fallback, sources that require explicit synchronous readback, and unsupported packed geometry.",
                 MessageType.Info);
 
-            EditorGUILayout.Space(8);
-
-            // Settings Row
             EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Platform:", GUILayout.Width(60));
-            var newPlatform = (BuildTarget)EditorGUILayout.EnumPopup(_selectedPlatform, GUILayout.Width(160));
-            if (newPlatform != _selectedPlatform)
+            EditorGUILayout.LabelField("Target Platform", GUILayout.Width(96f));
+            BuildTarget nextPlatform = (BuildTarget)EditorGUILayout.EnumPopup(
+                _selectedPlatform,
+                GUILayout.Width(190f));
+            if (nextPlatform != _selectedPlatform)
             {
-                _selectedPlatform = newPlatform;
-                if (_results.Count > 0) ScanAllAtlases();
+                _selectedPlatform = nextPlatform;
+                ClearResults();
             }
+
             GUILayout.FlexibleSpace();
-            _showOnlyIssues = EditorGUILayout.ToggleLeft("Issues Only", _showOnlyIssues, GUILayout.Width(90));
+            _issuesOnly = EditorGUILayout.ToggleLeft("Fallback / Unsupported Only", _issuesOnly, GUILayout.Width(184f));
             EditorGUILayout.EndHorizontal();
 
-            EditorGUILayout.Space(6);
-
-            // Buttons Row
+            EditorGUILayout.Space(4f);
             EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button(s_ScanAllContent, GUILayout.Height(26)))
+            if (GUILayout.Button(ScanSelectedContent, GUILayout.Height(26f)))
             {
-                ScanAllAtlases();
+                ScanSelection();
             }
-            if (GUILayout.Button(s_ScanSelectedContent, GUILayout.Height(26)))
+
+            if (GUILayout.Button(ScanAllContent, GUILayout.Height(26f)))
             {
-                ScanSelectedAtlases();
+                ScanAll();
             }
-            GUI.enabled = _results.Count > 0;
-            if (GUILayout.Button(s_ClearContent, GUILayout.Height(26), GUILayout.Width(55)))
+
+            using (new EditorGUI.DisabledScope(_results.Count == 0))
             {
-                _results.Clear();
-                _validCount = _invalidCount = 0;
+                if (GUILayout.Button("Clear", GUILayout.Width(58f), GUILayout.Height(26f)))
+                {
+                    ClearResults();
+                }
             }
-            GUI.enabled = true;
+
             EditorGUILayout.EndHorizontal();
 
-            EditorGUILayout.Space(6);
+            DrawSummary();
+            DrawResults();
+        }
 
-            // Summary
-            if (_results.Count > 0)
+        private void DrawSummary()
+        {
+            if (_results.Count == 0)
             {
-                EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-                EditorGUILayout.LabelField($"Total: {_results.Count}", EditorStyles.boldLabel, GUILayout.Width(70));
-                var c = GUI.contentColor;
-                GUI.contentColor = s_ValidColor;
-                EditorGUILayout.LabelField($"✓ {_validCount}", GUILayout.Width(50));
-                GUI.contentColor = s_InvalidColor;
-                EditorGUILayout.LabelField($"⚠ {_invalidCount}", GUILayout.Width(50));
-                GUI.contentColor = c;
-                GUILayout.FlexibleSpace();
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.Space(4);
+                return;
             }
 
-            // Results List
-            DrawResults();
+            EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
+            EditorGUILayout.LabelField($"Total: {_results.Count}", EditorStyles.boldLabel, GUILayout.Width(82f));
+            EditorGUILayout.LabelField($"GPU only: {_fastPathCount}", GUILayout.Width(104f));
+            EditorGUILayout.LabelField($"GPU + CPU: {_cpuFallbackCount}", GUILayout.Width(112f));
+            EditorGUILayout.LabelField($"Readback: {_readbackCount}", GUILayout.Width(100f));
+            EditorGUILayout.LabelField($"Unsupported: {_unsupportedCount}", GUILayout.Width(112f));
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
         }
 
         private void DrawResults()
         {
             if (_results.Count == 0)
             {
-                EditorGUILayout.HelpBox("Click 'Scan All' or 'Scan Selected' to validate SpriteAtlas assets.", MessageType.None);
+                EditorGUILayout.HelpBox("No cached results. A project-wide scan runs only when requested.", MessageType.None);
                 return;
             }
 
-            _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos);
-
-            for (int i = 0, count = _results.Count; i < count; i++)
+            _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
+            for (int i = 0; i < _results.Count; i++)
             {
-                var r = _results[i];
-                if (_showOnlyIssues && r.IsValid) continue;
+                ValidationResult result = _results[i];
+                if (_issuesOnly && result.Compatibility == Compatibility.FastPathCandidate)
+                {
+                    continue;
+                }
 
-                EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-
-                // Name + Format
-                EditorGUILayout.BeginVertical();
-                EditorGUILayout.LabelField(r.Name, EditorStyles.boldLabel);
-                EditorGUILayout.LabelField(r.Path, EditorStyles.miniLabel);
-                EditorGUILayout.EndVertical();
-
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField(result.Name, EditorStyles.boldLabel);
                 GUILayout.FlexibleSpace();
-
-                // Status
-                EditorGUILayout.BeginVertical(GUILayout.Width(100));
-                var c = GUI.contentColor;
-                if (r.IsValid)
+                DrawCompatibilityLabel(result.Compatibility);
+                if (GUILayout.Button("Select", GUILayout.Width(56f)))
                 {
-                    GUI.contentColor = s_ValidColor;
-                    EditorGUILayout.LabelField($"✓ {r.Format}", EditorStyles.boldLabel);
-                    EditorGUILayout.LabelField($"Block: {r.BlockSize}×{r.BlockSize}", EditorStyles.miniLabel);
-                }
-                else
-                {
-                    GUI.contentColor = s_InvalidColor;
-                    EditorGUILayout.LabelField($"⚠ {r.Format}", EditorStyles.boldLabel);
-                    EditorGUILayout.LabelField("Uncompressed", EditorStyles.miniLabel);
-                }
-                GUI.contentColor = c;
-                EditorGUILayout.EndVertical();
-
-                // Actions
-                EditorGUILayout.BeginVertical(GUILayout.Width(60));
-                if (GUILayout.Button(s_SelectContent, GUILayout.Height(20)))
-                {
-                    var asset = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(r.Path);
+                    UnityEngine.Object asset = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(result.Path);
                     Selection.activeObject = asset;
                     EditorGUIUtility.PingObject(asset);
                 }
-                if (!r.IsValid && GUILayout.Button(s_HelpContent, GUILayout.Height(20)))
-                {
-                    ShowFormatRecommendation();
-                }
-                EditorGUILayout.EndVertical();
 
                 EditorGUILayout.EndHorizontal();
+                EditorGUILayout.LabelField(result.Path, EditorStyles.miniLabel);
+                EditorGUILayout.LabelField(
+                    $"{_selectedPlatform}: {result.FormatName}  |  Readable: {(result.Readable ? "On" : "Off")}  |  Rotation: {(result.RotationEnabled ? "On" : "Off")}  |  Tight Packing: {(result.TightPackingEnabled ? "On" : "Off")}",
+                    EditorStyles.miniLabel);
+
+                switch (result.Compatibility)
+                {
+                    case Compatibility.FastPathCandidate:
+                        EditorGUILayout.HelpBox("Direct GPU-copy candidate. Runtime GraphicsFormat equality and target-device CopyTexture support still require Player validation. CPU raw fallback is unavailable because the packed texture is not readable.", MessageType.None);
+                        break;
+                    case Compatibility.FastPathWithCpuFallback:
+                        EditorGUILayout.HelpBox("Direct GPU copy remains the preferred path. If the running device cannot use it, AllowCpuRawCopy may use this readable RGBA32 source with a CPU-backed page and its larger memory budget.", MessageType.Info);
+                        break;
+                    case Compatibility.ReadbackRequired:
+                        EditorGUILayout.HelpBox("The imported source format does not match the RGBA32 page. CPU raw copy cannot convert formats. Provide a matching uncompressed source variant or explicitly permit synchronous readback only on a measured loading path.", MessageType.Warning);
+                        break;
+                    case Compatibility.UnsupportedPacking:
+                        EditorGUILayout.HelpBox("Disable rotation and Tight Packing. Runtime rectangular copying cannot preserve rotated or tight sprite mesh geometry.", MessageType.Error);
+                        break;
+                }
+
+                EditorGUILayout.EndVertical();
             }
 
             EditorGUILayout.EndScrollView();
         }
 
-        private void ScanAllAtlases()
+        private static void DrawCompatibilityLabel(Compatibility compatibility)
         {
-            _results.Clear();
-            _validCount = _invalidCount = 0;
-
-            var guids = AssetDatabase.FindAssets("t:SpriteAtlas");
-            for (int i = 0, len = guids.Length; i < len; i++)
+            Color previous = GUI.contentColor;
+            switch (compatibility)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
-                var atlas = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(path);
-                if (atlas != null) AddResult(atlas, path);
+                case Compatibility.FastPathCandidate:
+                    GUI.contentColor = new Color(0.35f, 0.85f, 0.45f);
+                    EditorGUILayout.LabelField("GPU Candidate", EditorStyles.boldLabel, GUILayout.Width(104f));
+                    break;
+                case Compatibility.FastPathWithCpuFallback:
+                    GUI.contentColor = new Color(0.3f, 0.78f, 0.9f);
+                    EditorGUILayout.LabelField("GPU + CPU", EditorStyles.boldLabel, GUILayout.Width(88f));
+                    break;
+                case Compatibility.ReadbackRequired:
+                    GUI.contentColor = new Color(1f, 0.72f, 0.24f);
+                    EditorGUILayout.LabelField("Readback", EditorStyles.boldLabel, GUILayout.Width(76f));
+                    break;
+                default:
+                    GUI.contentColor = new Color(1f, 0.35f, 0.35f);
+                    EditorGUILayout.LabelField("Unsupported", EditorStyles.boldLabel, GUILayout.Width(92f));
+                    break;
             }
-            Repaint();
+
+            GUI.contentColor = previous;
         }
 
-        private void ScanSelectedAtlases()
+        private void ScanAll()
         {
-            _results.Clear();
-            _validCount = _invalidCount = 0;
-
-            var selection = Selection.objects;
-            for (int i = 0, len = selection.Length; i < len; i++)
+            ClearResults();
+            string[] guids = AssetDatabase.FindAssets("t:SpriteAtlas");
+            for (int i = 0; i < guids.Length; i++)
             {
-                if (selection[i] is SpriteAtlas atlas)
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                SpriteAtlas atlas = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(path);
+                if (atlas != null)
+                {
+                    AddResult(atlas, path);
+                }
+            }
+        }
+
+        private void ScanSelection()
+        {
+            ClearResults();
+            UnityEngine.Object[] selectedObjects = Selection.objects;
+            for (int i = 0; i < selectedObjects.Length; i++)
+            {
+                if (selectedObjects[i] is SpriteAtlas atlas)
                 {
                     AddResult(atlas, AssetDatabase.GetAssetPath(atlas));
                 }
@@ -222,122 +255,170 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
 
             if (_results.Count == 0)
             {
-                EditorUtility.DisplayDialog("Atlas Format Validator",
-                    "No SpriteAtlas selected.\nSelect SpriteAtlas assets in Project window first.", "OK");
+                EditorUtility.DisplayDialog(
+                    "SpriteAtlas Compatibility Validator",
+                    "Select one or more SpriteAtlas assets in the Project window.",
+                    "OK");
             }
-            Repaint();
         }
 
         private void AddResult(SpriteAtlas atlas, string path)
         {
-            var format = GetAtlasFormat(atlas);
-            int blockSize = UIFramework.DynamicAtlas.TextureFormatHelper.GetBlockSize(format);
-            bool isValid = blockSize > 1;
+            SpriteAtlasPackingSettings packing = atlas.GetPackingSettings();
+            SpriteAtlasTextureSettings textureSettings = atlas.GetTextureSettings();
+            GetAtlasFormat(atlas, out string formatName, out bool isExplicitRgba32);
+            Compatibility compatibility = ClassifyCompatibility(
+                packing.enableRotation,
+                packing.enableTightPacking,
+                isExplicitRgba32,
+                textureSettings.readable);
+            IncrementCompatibilityCount(compatibility);
 
-            _results.Add(new ValidationResult
-            {
-                Path = path,
-                Name = atlas.name,
-                Format = format,
-                BlockSize = blockSize,
-                IsValid = isValid
-            });
-
-            if (isValid) _validCount++; else _invalidCount++;
+            _results.Add(new ValidationResult(
+                path,
+                atlas.name,
+                formatName,
+                textureSettings.readable,
+                packing.enableRotation,
+                packing.enableTightPacking,
+                compatibility));
         }
 
-        private TextureFormat GetAtlasFormat(SpriteAtlas atlas)
+        internal static Compatibility ClassifyCompatibility(
+            bool rotationEnabled,
+            bool tightPackingEnabled,
+            bool isExplicitRgba32,
+            bool readable)
+        {
+            if (rotationEnabled || tightPackingEnabled)
+            {
+                return Compatibility.UnsupportedPacking;
+            }
+
+            if (!isExplicitRgba32)
+            {
+                return Compatibility.ReadbackRequired;
+            }
+
+            return readable
+                ? Compatibility.FastPathWithCpuFallback
+                : Compatibility.FastPathCandidate;
+        }
+
+        private void IncrementCompatibilityCount(Compatibility compatibility)
+        {
+            switch (compatibility)
+            {
+                case Compatibility.FastPathCandidate:
+                    _fastPathCount++;
+                    break;
+                case Compatibility.FastPathWithCpuFallback:
+                    _cpuFallbackCount++;
+                    break;
+                case Compatibility.ReadbackRequired:
+                    _readbackCount++;
+                    break;
+                default:
+                    _unsupportedCount++;
+                    break;
+            }
+        }
+
+        private void GetAtlasFormat(SpriteAtlas atlas, out string formatName, out bool isExplicitRgba32)
         {
             string assetPath = AssetDatabase.GetAssetPath(atlas);
-            var importer = AssetImporter.GetAtPath(assetPath) as SpriteAtlasImporter;
-
+            SpriteAtlasImporter importer = AssetImporter.GetAtPath(assetPath) as SpriteAtlasImporter;
             if (importer != null)
             {
-                string platformName = GetPlatformName(_selectedPlatform);
-                var settings = importer.GetPlatformSettings(platformName);
-                if (settings.overridden) return ConvertFormat(settings.format);
-                return ConvertFormat(importer.GetPlatformSettings("DefaultTexturePlatform").format);
+                TextureImporterPlatformSettings platformSettings = importer.GetPlatformSettings(GetPlatformName(_selectedPlatform));
+                if (!platformSettings.overridden)
+                {
+                    platformSettings = importer.GetPlatformSettings("DefaultTexturePlatform");
+                }
+
+                formatName = platformSettings.format.ToString();
+                isExplicitRgba32 = platformSettings.format == TextureImporterFormat.RGBA32;
+                return;
             }
 
             int count = atlas.spriteCount;
             if (count > 0)
             {
-                if (_spriteBuffer.Length < count) _spriteBuffer = new Sprite[count];
-                atlas.GetSprites(_spriteBuffer);
-                if (_spriteBuffer[0]?.texture != null) return _spriteBuffer[0].texture.format;
+                if (_spriteBuffer.Length < count)
+                {
+                    _spriteBuffer = new Sprite[count];
+                }
+
+                try
+                {
+                    int copiedCount = atlas.GetSprites(_spriteBuffer);
+                    if (copiedCount > 0 && _spriteBuffer[0] != null && _spriteBuffer[0].texture != null)
+                    {
+                        TextureFormat runtimeFormat = _spriteBuffer[0].texture.format;
+                        formatName = runtimeFormat.ToString();
+                        isExplicitRgba32 = runtimeFormat == TextureFormat.RGBA32;
+                        return;
+                    }
+                }
+                finally
+                {
+                    Array.Clear(_spriteBuffer, 0, Mathf.Min(count, _spriteBuffer.Length));
+                }
             }
-            return TextureFormat.RGBA32;
+
+            formatName = "Unknown";
+            isExplicitRgba32 = false;
         }
 
-        private static TextureFormat ConvertFormat(TextureImporterFormat f)
+        private void ClearResults()
         {
-            switch (f)
+            _results.Clear();
+            _fastPathCount = 0;
+            _cpuFallbackCount = 0;
+            _readbackCount = 0;
+            _unsupportedCount = 0;
+        }
+
+        private void ClearSpriteBuffer()
+        {
+            if (_spriteBuffer != null)
             {
-                case TextureImporterFormat.ASTC_4x4: return TextureFormat.ASTC_4x4;
-                case TextureImporterFormat.ASTC_5x5: return TextureFormat.ASTC_5x5;
-                case TextureImporterFormat.ASTC_6x6: return TextureFormat.ASTC_6x6;
-                case TextureImporterFormat.ASTC_8x8: return TextureFormat.ASTC_8x8;
-                case TextureImporterFormat.ASTC_10x10: return TextureFormat.ASTC_10x10;
-                case TextureImporterFormat.ASTC_12x12: return TextureFormat.ASTC_12x12;
-                case TextureImporterFormat.ETC_RGB4: return TextureFormat.ETC_RGB4;
-                case TextureImporterFormat.ETC2_RGB4: return TextureFormat.ETC2_RGB;
-                case TextureImporterFormat.ETC2_RGBA8: return TextureFormat.ETC2_RGBA8;
-                case TextureImporterFormat.DXT1: return TextureFormat.DXT1;
-                case TextureImporterFormat.DXT5: return TextureFormat.DXT5;
-                case TextureImporterFormat.BC7: return TextureFormat.BC7;
-                case TextureImporterFormat.BC6H: return TextureFormat.BC6H;
-                case TextureImporterFormat.BC4: return TextureFormat.BC4;
-                case TextureImporterFormat.BC5: return TextureFormat.BC5;
-                case TextureImporterFormat.RGBA32: return TextureFormat.RGBA32;
-                case TextureImporterFormat.RGB24: return TextureFormat.RGB24;
-                case TextureImporterFormat.ARGB32: return TextureFormat.ARGB32;
-                case TextureImporterFormat.Alpha8: return TextureFormat.Alpha8;
-                default: return TextureFormat.RGBA32;
+                Array.Clear(_spriteBuffer, 0, _spriteBuffer.Length);
             }
         }
 
-        private static string GetPlatformName(BuildTarget t)
+        private static string GetPlatformName(BuildTarget target)
         {
-            switch (t)
+            switch (target)
             {
                 case BuildTarget.StandaloneWindows:
                 case BuildTarget.StandaloneWindows64:
                 case BuildTarget.StandaloneOSX:
-                case BuildTarget.StandaloneLinux64: return "Standalone";
-                case BuildTarget.iOS: return "iPhone";
-                case BuildTarget.Android: return "Android";
-                case BuildTarget.WebGL: return "WebGL";
-                default: return "Standalone";
+                case BuildTarget.StandaloneLinux64:
+                    return "Standalone";
+                case BuildTarget.iOS:
+                    return "iPhone";
+                case BuildTarget.Android:
+                    return "Android";
+                case BuildTarget.WebGL:
+                    return "WebGL";
+                default:
+                    return "DefaultTexturePlatform";
             }
         }
 
-        private void ShowFormatRecommendation()
+        [MenuItem("Assets/CycloneGames/Validate SpriteAtlas Compatibility", true)]
+        private static bool CanValidateSelection()
         {
-            string rec = _selectedPlatform switch
-            {
-                BuildTarget.iOS => "Recommended: ASTC 4x4 or ASTC 6x6",
-                BuildTarget.Android => "Recommended: ASTC 4x4 or ETC2 RGBA8",
-                BuildTarget.StandaloneWindows or BuildTarget.StandaloneWindows64 or
-                BuildTarget.StandaloneOSX or BuildTarget.StandaloneLinux64 => "Recommended: BC7 or DXT5",
-                BuildTarget.WebGL => "WebGL does not support compressed dynamic atlas.",
-                _ => "Select a compressed format."
-            };
-
-            EditorUtility.DisplayDialog("Format Recommendation",
-                $"Platform: {_selectedPlatform}\n\n{rec}\n\n" +
-                "1. Select the SpriteAtlas\n2. Enable platform override\n3. Choose compressed format", "OK");
+            return Selection.activeObject is SpriteAtlas;
         }
 
-        [MenuItem("Assets/Validate Atlas Format", true)]
-        private static bool ValidateMenuCheck() => Selection.activeObject is SpriteAtlas;
-
-        [MenuItem("Assets/Validate Atlas Format")]
-        private static void ValidateFromMenu()
+        [MenuItem("Assets/CycloneGames/Validate SpriteAtlas Compatibility")]
+        private static void ValidateSelectionFromMenu()
         {
-            var w = GetWindow<SpriteAtlasFormatValidator>();
-            w.Show();
-            w.ScanSelectedAtlases();
+            SpriteAtlasFormatValidator window = GetWindow<SpriteAtlasFormatValidator>();
+            window.Show();
+            window.ScanSelection();
         }
     }
 }
-#endif

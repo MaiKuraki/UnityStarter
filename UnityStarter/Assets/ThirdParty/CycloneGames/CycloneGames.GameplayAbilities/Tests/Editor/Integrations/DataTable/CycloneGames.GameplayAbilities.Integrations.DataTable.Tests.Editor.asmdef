@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.GameplayTags.Core",
         "CycloneGames.DataTable.Core",
         "CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable"
     ],
@@ -21,7 +22,7 @@
     "versionDefines": [
         {
             "name": "com.cyclone-games.data-table",
-            "expression": "",
+            "expression": "[1.0.0,2.0.0)",
             "define": "CYCLONEGAMES_HAS_DATA_TABLE"
         }
     ],

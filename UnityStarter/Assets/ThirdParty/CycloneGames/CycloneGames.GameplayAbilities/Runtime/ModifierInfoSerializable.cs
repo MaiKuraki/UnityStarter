@@ -63,7 +63,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("SetByCaller GameplayTag key. Prefer this for replicated effects.")]
         public GameplayTag SetByCallerDataTag;
 
-        [Tooltip("SetByCaller name key. This is intended for local/legacy code paths; GameplayTag is preferred for networking.")]
+        [Tooltip("SetByCaller name key for non-replicated local workflows. Use GameplayTag keys for networked effects.")]
         public string SetByCallerDataName;
 
         [Tooltip("Fallback value when SetByCaller data is missing.")]

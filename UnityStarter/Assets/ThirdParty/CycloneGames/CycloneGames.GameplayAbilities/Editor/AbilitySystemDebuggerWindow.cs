@@ -28,7 +28,7 @@ namespace CycloneGames.GameplayAbilities.Editor
     /// - Attribute change history tracking
     /// - Search and filtering capabilities
     /// - Advanced performance and GC monitoring
-    /// - Persistent UI state
+    /// - Selection-driven ASC discovery
     /// </summary>
     public class AbilitySystemDebuggerWindow : EditorWindow
     {
@@ -50,7 +50,6 @@ namespace CycloneGames.GameplayAbilities.Editor
             public static readonly Color BarFill = new Color(0.2f, 0.6f, 0.85f, 1f);
             public static readonly Color BarCooldown = new Color(0.9f, 0.55f, 0.15f, 1f);
             public static readonly Color BarHealth = new Color(0.25f, 0.75f, 0.35f, 1f);
-            public static readonly Color BarPool = new Color(0.45f, 0.65f, 0.85f, 1f);
             
             public static readonly Color Warning = new Color(1f, 0.8f, 0.2f, 1f);
             public static readonly Color Error = new Color(1f, 0.3f, 0.3f, 1f);
@@ -63,7 +62,6 @@ namespace CycloneGames.GameplayAbilities.Editor
         private static GUIStyle s_SearchBoxStyle;
         private static bool s_StylesInitialized;
         
-        private const int MaxHistoryEntries = 200;
         private const int MaxAttributeHistoryPerAttribute = 50;
         private const float MinRepaintInterval = 0.02f;
 
@@ -79,20 +77,6 @@ namespace CycloneGames.GameplayAbilities.Editor
             public float Value;
             public float BaseValue;
             public double Timestamp;
-        }
-
-        /// <summary>
-        /// Tracks effect application events
-        /// </summary>
-        private struct EffectEventRecord
-        {
-            public enum EventType { Applied, Removed, Modified, Inhibited, Restored }
-            
-            public EventType Type;
-            public string EffectName;
-            public double Timestamp;
-            public float Duration;
-            public int StackCount;
         }
 
         /// <summary>
@@ -124,7 +108,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         private bool showAbilities = true;
         private bool showTags = true;
         private bool showImmunityTags = false;
-        private bool showPoolStats = false;
+        private bool showLeaseStats = false;
         private bool showEventLog = false;
         private bool showAttributeHistory = false;
         private bool showEffectRelations = false;
@@ -144,13 +128,13 @@ namespace CycloneGames.GameplayAbilities.Editor
         private bool showExpiredOnly = false;
 
         // Event log and history tracking
-        private readonly List<EffectEventRecord> effectHistory = new List<EffectEventRecord>(MaxHistoryEntries);
-        private readonly Dictionary<string, List<AttributeHistory>> attributeHistories = 
+        private readonly Dictionary<string, List<AttributeHistory>> attributeHistories =
             new Dictionary<string, List<AttributeHistory>>(32);
         private readonly List<string> eventLog = new List<string>(128);
         private const int MaxEventLogEntries = 64;
         private Vector2 eventLogScroll;
         private bool subscribedToEvents;
+        private AbilitySystemComponent subscribedASC;
 
         // Performance monitoring
         private double lastGCCollectionTime;
@@ -166,9 +150,10 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         // ASC picker
         private readonly List<AbilitySystemComponent> sceneASCs = new List<AbilitySystemComponent>();
+        private readonly List<GameObject> sceneASCOwners = new List<GameObject>();
         private readonly List<string> sceneASCNames = new List<string>();
+        private string[] sceneASCNameOptions = System.Array.Empty<string>();
         private int selectedASCIndex = -1;
-        private double lastASCScanTime;
 
         // UI state
         private int viewMode = 0; // 0: Single, 1: Comparison, 2: Network
@@ -199,7 +184,71 @@ namespace CycloneGames.GameplayAbilities.Editor
                 EditorUtility.DisplayDialog("GAS Overlay", "The runtime overlay is only available in Play Mode.", "OK");
                 return;
             }
-            Runtime.GASDebugOverlay.Toggle();
+
+            if (Runtime.GASDebugOverlay.IsActive)
+            {
+                Runtime.GASDebugOverlay.SetEnabled(false);
+                return;
+            }
+
+            GameObject[] selectedObjects = Selection.gameObjects;
+            var selectedASCs = new List<AbilitySystemComponent>(selectedObjects.Length);
+            var selectedOwners = new List<GameObject>(selectedObjects.Length);
+            for (int i = 0; i < selectedObjects.Length; i++)
+            {
+                GameObject selected = selectedObjects[i];
+                AbilitySystemComponent asc = FindASCOnGameObject(selected);
+                if (asc == null || asc.IsDisposed)
+                {
+                    continue;
+                }
+
+                bool duplicate = false;
+                for (int targetIndex = 0; targetIndex < selectedASCs.Count; targetIndex++)
+                {
+                    if (ReferenceEquals(selectedASCs[targetIndex], asc))
+                    {
+                        duplicate = true;
+                        break;
+                    }
+                }
+
+                if (!duplicate)
+                {
+                    selectedASCs.Add(asc);
+                    selectedOwners.Add(selected);
+                }
+            }
+
+            if (selectedASCs.Count == 0)
+            {
+                EditorUtility.DisplayDialog(
+                    "GAS Overlay",
+                    "Select one or more GameObjects that expose live AbilitySystemComponents before enabling the overlay.",
+                    "OK");
+                return;
+            }
+
+            Runtime.GASDebugOverlay.ClearTargets();
+            int addedCount = 0;
+            int rejectedCount = 0;
+            for (int i = 0; i < selectedASCs.Count; i++)
+            {
+                if (Runtime.GASDebugOverlay.TryAddTarget(selectedASCs[i], selectedOwners[i]))
+                {
+                    addedCount++;
+                }
+                else
+                {
+                    rejectedCount++;
+                }
+            }
+
+            Runtime.GASDebugOverlay.SetEnabled(true);
+            if (rejectedCount > 0)
+            {
+                Debug.LogWarning($"[GAS Overlay] {rejectedCount} selected target(s) exceeded the configured panel capacity and were not bound.");
+            }
         }
 
         [MenuItem(GameplayAbilitiesEditorMenuPaths.OverlayToggle, true)]
@@ -216,7 +265,12 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             EditorApplication.playModeStateChanged += OnPlayModeChanged;
             EditorApplication.update += OnEditorUpdate;
-            LoadUIState();
+
+            if (EditorApplication.isPlaying)
+            {
+                selectedGameObject = Selection.activeGameObject;
+                RefreshSelectedASC();
+            }
         }
 
         private void OnDisable()
@@ -224,7 +278,6 @@ namespace CycloneGames.GameplayAbilities.Editor
             EditorApplication.playModeStateChanged -= OnPlayModeChanged;
             EditorApplication.update -= OnEditorUpdate;
             UnsubscribeFromEvents();
-            SaveUIState();
         }
 
         private void OnPlayModeChanged(PlayModeStateChange state)
@@ -234,13 +287,16 @@ namespace CycloneGames.GameplayAbilities.Editor
                 UnsubscribeFromEvents();
                 selectedASC = null;
                 comparisonTargets.Clear();
-                sceneASCs.Clear();
-                sceneASCNames.Clear();
+                ClearSceneASCList();
                 eventLog.Clear();
-                effectHistory.Clear();
                 attributeHistories.Clear();
                 selectedASCIndex = -1;
                 expandedEffects.Clear();
+            }
+            else if (state == PlayModeStateChange.EnteredPlayMode)
+            {
+                selectedGameObject = Selection.activeGameObject;
+                RefreshSelectedASC();
             }
             Repaint();
         }
@@ -249,7 +305,8 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             if (EditorApplication.isPlaying)
             {
-                TryFindASC();
+                selectedGameObject = Selection.activeGameObject;
+                RefreshSelectedASC();
                 Repaint();
             }
         }
@@ -264,7 +321,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (timeSinceLastRefresh > refreshInterval)
             {
                 lastRefreshTime = EditorApplication.timeSinceStartup;
-                avgFrameTime = (float)(timeSinceLastRefresh / frameCountSinceLastUpdate);
+                avgFrameTime = (float)(timeSinceLastRefresh * 1000.0 / frameCountSinceLastUpdate);
                 frameCountSinceLastUpdate = 0;
                 Repaint();
             }
@@ -364,7 +421,7 @@ namespace CycloneGames.GameplayAbilities.Editor
                 // Optional panels
                 if (showAttributeHistory) DrawAttributeHistoryPanel();
                 if (showEffectRelations) DrawEffectRelationsPanel();
-                if (showPoolStats) DrawPoolStatistics();
+                if (showLeaseStats) DrawLeaseStatistics();
                 if (showPerformanceStats) DrawPerformanceStatistics();
                 if (showEventLog) DrawEventLog();
             }
@@ -382,8 +439,8 @@ namespace CycloneGames.GameplayAbilities.Editor
             EditorGUILayout.BeginHorizontal();
             if (GUILayout.Button("+ Add Target", EditorStyles.miniButton, GUILayout.Width(100)))
             {
-                ScanSceneASCs();
-                // Could show a dropdown or picker here
+                RefreshSelectedASC();
+                AddSelectedComparisonTarget();
             }
             EditorGUILayout.EndHorizontal();
 
@@ -449,8 +506,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             // Refresh button
             if (GUILayout.Button("Refresh", EditorStyles.toolbarButton, GUILayout.Width(55)))
             {
-                ScanSceneASCs();
-                TryFindASC();
+                RefreshSelectedASC();
                 ClearCaches();
             }
 
@@ -473,7 +529,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             DrawToolbarDivider();
             showAttributeHistory = GUILayout.Toggle(showAttributeHistory, "Hist", EditorStyles.toolbarButton, GUILayout.Width(40));
             showEffectRelations = GUILayout.Toggle(showEffectRelations, "Rel", EditorStyles.toolbarButton, GUILayout.Width(35));
-            showPoolStats = GUILayout.Toggle(showPoolStats, "Pools", EditorStyles.toolbarButton, GUILayout.Width(45));
+            showLeaseStats = GUILayout.Toggle(showLeaseStats, "Leases", EditorStyles.toolbarButton, GUILayout.Width(52));
             showPerformanceStats = GUILayout.Toggle(showPerformanceStats, "Perf", EditorStyles.toolbarButton, GUILayout.Width(40));
             showEventLog = GUILayout.Toggle(showEventLog, "Log", EditorStyles.toolbarButton, GUILayout.Width(35));
 
@@ -517,62 +573,94 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         private void DrawASCPicker()
         {
-            EditorGUILayout.HelpBox("Select a GameObject with an AbilitySystemComponent, or pick one from the scene.", MessageType.Info);
+            EditorGUILayout.HelpBox(
+                "Select a GameObject that exposes an AbilitySystemComponent. Observed ASCs are cached when their GameObjects are selected; use Refresh Selection after changing a holder at runtime.",
+                MessageType.Info);
 
             EditorGUILayout.Space(4);
 
             // Manual object field
             EditorGUI.BeginChangeCheck();
             selectedGameObject = EditorGUILayout.ObjectField("Target GameObject", selectedGameObject, typeof(GameObject), true) as GameObject;
-            if (EditorGUI.EndChangeCheck() && selectedGameObject != null)
+            if (EditorGUI.EndChangeCheck())
             {
-                TryFindASC();
+                RefreshSelectedASC();
             }
 
             EditorGUILayout.Space(4);
 
-            // Scene ASC dropdown
-            if (EditorApplication.timeSinceStartup - lastASCScanTime > 1.0)
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Refresh Selection", EditorStyles.miniButton, GUILayout.Width(120)))
             {
-                ScanSceneASCs();
+                RefreshSelectedASC();
             }
+            if (sceneASCs.Count > 0 && GUILayout.Button("Clear Observed", EditorStyles.miniButton, GUILayout.Width(100)))
+            {
+                ClearSceneASCList();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(4);
 
             if (sceneASCs.Count > 0)
             {
-                EditorGUILayout.LabelField("Scene ASCs", EditorStyles.boldLabel);
-                int newIndex = EditorGUILayout.Popup("Pick ASC", selectedASCIndex, sceneASCNames.ToArray());
+                EditorGUILayout.LabelField("Observed ASCs", EditorStyles.boldLabel);
+                int newIndex = EditorGUILayout.Popup("Pick ASC", selectedASCIndex, sceneASCNameOptions);
                 if (newIndex != selectedASCIndex && newIndex >= 0 && newIndex < sceneASCs.Count)
                 {
-                    selectedASCIndex = newIndex;
-                    selectedASC = sceneASCs[newIndex];
-                    SubscribeToEvents();
+                    SelectASC(sceneASCs[newIndex], sceneASCOwners[newIndex]);
                 }
             }
             else
             {
-                EditorGUILayout.LabelField("No AbilitySystemComponents found in scene.", EditorStyles.centeredGreyMiniLabel);
+                EditorGUILayout.LabelField("No AbilitySystemComponents observed yet.", EditorStyles.centeredGreyMiniLabel);
             }
         }
 
-        private void ScanSceneASCs()
+        private void RefreshSelectedASC()
         {
-            lastASCScanTime = EditorApplication.timeSinceStartup;
-            sceneASCs.Clear();
-            sceneASCNames.Clear();
+            RemoveStaleSceneASCs();
 
-            if (!EditorApplication.isPlaying) return;
-
-            foreach (var mb in Object.FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None))
+            if (!EditorApplication.isPlaying || selectedGameObject == null)
             {
-                if (mb == null) continue;
-                var asc = FindASCOnComponent(mb);
-                if (asc != null && !sceneASCs.Contains(asc))
+                ClearSelectedASC();
+                return;
+            }
+
+            AbilitySystemComponent asc = FindASCOnGameObject(selectedGameObject);
+            if (asc == null)
+            {
+                ClearSelectedASC();
+                return;
+            }
+
+            SelectASC(asc, selectedGameObject);
+        }
+
+        private static AbilitySystemComponent FindASCOnGameObject(GameObject gameObject)
+        {
+            if (gameObject == null)
+            {
+                return null;
+            }
+
+            MonoBehaviour[] components = gameObject.GetComponents<MonoBehaviour>();
+            for (int i = 0; i < components.Length; i++)
+            {
+                MonoBehaviour component = components[i];
+                if (component == null)
                 {
-                    sceneASCs.Add(asc);
-                    string ownerName = asc.OwnerActor != null ? asc.OwnerActor.ToString() : mb.gameObject.name;
-                    sceneASCNames.Add(ownerName);
+                    continue;
+                }
+
+                AbilitySystemComponent asc = FindASCOnComponent(component);
+                if (asc != null && !asc.IsDisposed)
+                {
+                    return asc;
                 }
             }
+
+            return null;
         }
 
         private static AbilitySystemComponent FindASCOnComponent(MonoBehaviour mb)
@@ -582,40 +670,183 @@ namespace CycloneGames.GameplayAbilities.Editor
             {
                 if (prop.PropertyType == typeof(AbilitySystemComponent) && prop.CanRead)
                 {
-                    var asc = prop.GetValue(mb) as AbilitySystemComponent;
-                    if (asc != null) return asc;
+                    try
+                    {
+                        var asc = prop.GetValue(mb) as AbilitySystemComponent;
+                        if (asc != null) return asc;
+                    }
+                    catch
+                    {
+                        // A debugger must not break Play Mode because a user property getter failed.
+                    }
                 }
             }
             foreach (var field in type.GetFields(BindingFlags.Public | BindingFlags.Instance))
             {
                 if (field.FieldType == typeof(AbilitySystemComponent))
                 {
-                    var asc = field.GetValue(mb) as AbilitySystemComponent;
-                    if (asc != null) return asc;
+                    try
+                    {
+                        var asc = field.GetValue(mb) as AbilitySystemComponent;
+                        if (asc != null) return asc;
+                    }
+                    catch
+                    {
+                        // Keep discovery isolated from user component failures.
+                    }
                 }
             }
             return null;
         }
 
-        private void TryFindASC()
+        private void SelectASC(AbilitySystemComponent asc, GameObject owner)
         {
-            if (Selection.activeGameObject != null)
-                selectedGameObject = Selection.activeGameObject;
-
-            if (selectedGameObject == null) { selectedASC = null; return; }
-
-            foreach (var mb in selectedGameObject.GetComponents<MonoBehaviour>())
+            if (asc == null)
             {
-                if (mb == null) continue;
-                var asc = FindASCOnComponent(mb);
-                if (asc != null)
+                ClearSelectedASC();
+                return;
+            }
+
+            AddOrUpdateObservedASC(asc, owner);
+            int observedIndex = IndexOfASC(asc);
+
+            if (ReferenceEquals(selectedASC, asc))
+            {
+                selectedGameObject = owner != null ? owner : selectedGameObject;
+                selectedASCIndex = observedIndex;
+                if (!ReferenceEquals(subscribedASC, asc))
                 {
-                    selectedASC = asc;
                     SubscribeToEvents();
+                }
+                return;
+            }
+
+            UnsubscribeFromEvents();
+            selectedASC = asc;
+            selectedGameObject = owner != null ? owner : selectedGameObject;
+            selectedASCIndex = observedIndex;
+            SubscribeToEvents();
+        }
+
+        private void ClearSelectedASC()
+        {
+            UnsubscribeFromEvents();
+            selectedASC = null;
+            selectedASCIndex = -1;
+        }
+
+        private void AddOrUpdateObservedASC(AbilitySystemComponent asc, GameObject owner)
+        {
+            int index = IndexOfASC(asc);
+            string ownerName = asc.OwnerActor != null
+                ? asc.OwnerActor.ToString()
+                : owner != null ? owner.name : "<ASC>";
+            bool optionsChanged = false;
+
+            if (index >= 0)
+            {
+                sceneASCOwners[index] = owner;
+                if (sceneASCNames[index] != ownerName)
+                {
+                    sceneASCNames[index] = ownerName;
+                    optionsChanged = true;
+                }
+            }
+            else
+            {
+                sceneASCs.Add(asc);
+                sceneASCOwners.Add(owner);
+                sceneASCNames.Add(ownerName);
+                optionsChanged = true;
+            }
+
+            if (optionsChanged)
+            {
+                RebuildSceneASCNameOptions();
+            }
+        }
+
+        private int IndexOfASC(AbilitySystemComponent asc)
+        {
+            for (int i = 0; i < sceneASCs.Count; i++)
+            {
+                if (ReferenceEquals(sceneASCs[i], asc))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void RemoveStaleSceneASCs()
+        {
+            bool changed = false;
+            for (int i = sceneASCs.Count - 1; i >= 0; i--)
+            {
+                if (sceneASCs[i] != null && sceneASCOwners[i] != null)
+                {
+                    continue;
+                }
+
+                sceneASCs.RemoveAt(i);
+                sceneASCOwners.RemoveAt(i);
+                sceneASCNames.RemoveAt(i);
+                changed = true;
+            }
+
+            if (changed)
+            {
+                selectedASCIndex = IndexOfASC(selectedASC);
+                RebuildSceneASCNameOptions();
+            }
+        }
+
+        private void RebuildSceneASCNameOptions()
+        {
+            int count = sceneASCNames.Count;
+            if (sceneASCNameOptions.Length != count)
+            {
+                sceneASCNameOptions = new string[count];
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                sceneASCNameOptions[i] = sceneASCNames[i];
+            }
+        }
+
+        private void ClearSceneASCList()
+        {
+            sceneASCs.Clear();
+            sceneASCOwners.Clear();
+            sceneASCNames.Clear();
+            sceneASCNameOptions = System.Array.Empty<string>();
+            selectedASCIndex = -1;
+        }
+
+        private void AddSelectedComparisonTarget()
+        {
+            if (selectedASC == null)
+            {
+                return;
+            }
+
+            for (int i = 0; i < comparisonTargets.Count; i++)
+            {
+                if (ReferenceEquals(comparisonTargets[i].ASC, selectedASC))
+                {
                     return;
                 }
             }
-            selectedASC = null;
+
+            comparisonTargets.Add(new ComparisonTarget
+            {
+                ASC = selectedASC,
+                Owner = selectedGameObject,
+                IsActive = true,
+                LastUpdateTime = EditorApplication.timeSinceStartup
+            });
         }
 
         #endregion
@@ -631,9 +862,7 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             if (GUILayout.Button("Clear", EditorStyles.miniButton, GUILayout.Width(45)))
             {
-                UnsubscribeFromEvents();
-                selectedASC = null;
-                selectedASCIndex = -1;
+                ClearSelectedASC();
             }
 
             EditorGUILayout.EndHorizontal();
@@ -1097,80 +1326,88 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         #endregion
 
-        #region Pool Statistics
+        #region Runtime Lease Statistics
 
-        private void DrawPoolStatistics()
+        private void DrawLeaseStatistics()
         {
             EditorGUILayout.Space(4);
             DrawHorizontalLine();
-            EditorGUILayout.LabelField("Pool Statistics", s_SectionHeader);
+            EditorGUILayout.LabelField("Runtime Lease Statistics", s_SectionHeader);
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
 
-            DrawPoolCard("EffectSpec", GASPool<GameplayEffectSpec>.Shared.GetStatistics());
-            DrawPoolCard("ActiveEffect", GASPool<ActiveGameplayEffect>.Shared.GetStatistics());
-            DrawPoolCard("Context", GASPool<GameplayEffectContext>.Shared.GetStatistics());
-            DrawPoolCard("AbilitySpec", GASPool<GameplayAbilitySpec>.Shared.GetStatistics());
+            if (selectedASC == null || selectedASC.IsDisposed)
+            {
+                EditorGUILayout.HelpBox("Select a live AbilitySystemComponent to inspect its runtime context memory.", MessageType.Info);
+                EditorGUILayout.EndVertical();
+                return;
+            }
 
-            EditorGUILayout.Space(4);
+            GASRuntimeContext runtimeContext = selectedASC.RuntimeContext;
+            if (System.Threading.Thread.CurrentThread.ManagedThreadId != runtimeContext.OwnerThreadId)
+            {
+                EditorGUILayout.HelpBox("Runtime memory statistics are available only on the runtime context owner thread.", MessageType.Warning);
+                EditorGUILayout.EndVertical();
+                return;
+            }
 
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Warm All (32)", EditorStyles.miniButton))
-            {
-                GASPool<GameplayEffectSpec>.Shared.Warm(32);
-                GASPool<ActiveGameplayEffect>.Shared.Warm(32);
-                GASPool<GameplayEffectContext>.Shared.Warm(32);
-                GASPool<GameplayAbilitySpec>.Shared.Warm(32);
-            }
-            if (GUILayout.Button("Shrink All", EditorStyles.miniButton))
-            {
-                GASPoolRegistry.AggressiveShrinkAll();
-            }
-            if (GUILayout.Button("Reset Stats", EditorStyles.miniButton))
-            {
-                GASPool<GameplayEffectSpec>.Shared.ResetStatistics();
-                GASPool<ActiveGameplayEffect>.Shared.ResetStatistics();
-                GASPool<GameplayEffectContext>.Shared.ResetStatistics();
-                GASPool<GameplayAbilitySpec>.Shared.ResetStatistics();
-            }
-            EditorGUILayout.EndHorizontal();
+            GASRuntimeMemoryStatistics memoryStats = runtimeContext.GetMemoryStatistics();
+            DrawLeaseCard("EffectSpec", memoryStats.EffectSpecs);
+            DrawLeaseCard("ActiveEffect", memoryStats.ActiveEffects);
+            DrawLeaseCard("EffectContext", memoryStats.EffectContexts);
+            DrawLeaseCard("AbilitySpec", memoryStats.AbilitySpecs);
+            DrawLeaseCard("AbilityTask", memoryStats.Tasks);
+            DrawLeaseCard("Runtime Ability", memoryStats.Abilities);
+            DrawLeaseCard("TargetData", memoryStats.TargetData);
+
+            sb.Clear();
+            sb.Append("Outstanding leases: ").Append(memoryStats.OutstandingLeases);
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.boldLabel);
+
+            DrawBackingCacheCard(runtimeContext);
 
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawPoolCard(string name, GASPoolStatistics stats)
+        private void DrawBackingCacheCard(GASRuntimeContext runtimeContext)
         {
+            GASRuntimeCacheStatistics cacheStats = runtimeContext.GetCacheStatistics();
+
             EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField("EffectSpec Backing Cache", EditorStyles.boldLabel);
 
-            // Header
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField(name, EditorStyles.boldLabel, GUILayout.Width(100));
-
-            // Hit rate bar
-            float hitRate = stats.HitRate;
-            Color hitColor = hitRate > 0.9f ? ColorTheme.BarHealth : hitRate > 0.5f ? ColorTheme.CooldownActive : ColorTheme.EffectExpired;
             sb.Clear();
-            sb.Append("Hit: ").Append((hitRate * 100f).ToString("F0")).Append('%');
-            Rect hitRect = EditorGUILayout.GetControlRect(false, 14, GUILayout.Width(100));
-            DrawMiniBar(hitRect, hitRate, hitColor);
-            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel, GUILayout.Width(60));
-
-            EditorGUILayout.EndHorizontal();
-
-            // Stats row
-            sb.Clear();
-            sb.Append("Pool: ").Append(stats.PoolSize)
-              .Append("  Active: ").Append(stats.ActiveCount)
-              .Append("  Peak: ").Append(stats.PeakActive)
-              .Append("  Gets: ").Append(stats.TotalGets)
-              .Append("  Misses: ").Append(stats.TotalMisses);
+            sb.Append("Retained: ").Append(cacheStats.Retained)
+              .Append("  Capacity: ").Append(cacheStats.Capacity);
             EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
 
-            // Capacity row
             sb.Clear();
-            sb.Append("Target Cap: ").Append(stats.TargetCapacity)
-              .Append("  Peak Cap: ").Append(stats.PeakCapacity)
-              .Append("  Max Cap: ").Append(stats.MaxCapacity)
-              .Append("  Discards: ").Append(stats.TotalDiscards);
+            sb.Append("Hits: ").Append(cacheStats.Hits)
+              .Append("  Misses: ").Append(cacheStats.Misses)
+              .Append("  Discards: ").Append(cacheStats.Discards);
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+
+            if (GUILayout.Button("Trim Backing Cache"))
+            {
+                runtimeContext.TrimCaches();
+                Repaint();
+            }
+
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawLeaseCard(string name, GASRuntimeLeaseStatistics stats)
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            EditorGUILayout.LabelField(name, EditorStyles.boldLabel);
+            sb.Clear();
+            sb.Append("Active: ").Append(stats.Active)
+              .Append("  Peak: ").Append(stats.PeakActive)
+              .Append("  Acquisitions: ").Append(stats.Acquisitions);
+            EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
+
+            sb.Clear();
+            sb.Append("Invalid releases: ").Append(stats.InvalidReleases)
+              .Append("  Release failures: ").Append(stats.ReleaseFailures);
             EditorGUILayout.LabelField(sb.ToString(), EditorStyles.miniLabel);
 
             EditorGUILayout.EndVertical();
@@ -1189,17 +1426,24 @@ namespace CycloneGames.GameplayAbilities.Editor
             selectedASC.OnGameplayEffectRemovedFromSelf += OnEffectRemoved;
             selectedASC.OnAbilityActivated += OnAbilityActivated;
             selectedASC.OnAbilityEndedEvent += OnAbilityEnded;
+            subscribedASC = selectedASC;
             subscribedToEvents = true;
         }
 
         private void UnsubscribeFromEvents()
         {
-            if (!subscribedToEvents || selectedASC == null) return;
+            if (!subscribedToEvents || subscribedASC == null)
+            {
+                subscribedASC = null;
+                subscribedToEvents = false;
+                return;
+            }
 
-            selectedASC.OnGameplayEffectAppliedToSelf -= OnEffectApplied;
-            selectedASC.OnGameplayEffectRemovedFromSelf -= OnEffectRemoved;
-            selectedASC.OnAbilityActivated -= OnAbilityActivated;
-            selectedASC.OnAbilityEndedEvent -= OnAbilityEnded;
+            subscribedASC.OnGameplayEffectAppliedToSelf -= OnEffectApplied;
+            subscribedASC.OnGameplayEffectRemovedFromSelf -= OnEffectRemoved;
+            subscribedASC.OnAbilityActivated -= OnAbilityActivated;
+            subscribedASC.OnAbilityEndedEvent -= OnAbilityEnded;
+            subscribedASC = null;
             subscribedToEvents = false;
         }
 
@@ -1611,18 +1855,6 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             effectNameCache.Clear();
             attributeRowWidthCache.Clear();
-        }
-
-        private void LoadUIState()
-        {
-            // Load persisted UI state from EditorPrefs
-            // TODO: Implement EditorPrefs loading for fold states
-        }
-
-        private void SaveUIState()
-        {
-            // Save UI state to EditorPrefs for next session
-            // TODO: Implement EditorPrefs saving for fold states
         }
 
         #endregion

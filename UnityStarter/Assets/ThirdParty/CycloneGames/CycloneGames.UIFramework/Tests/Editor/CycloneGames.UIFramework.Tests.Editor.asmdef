@@ -3,9 +3,13 @@
     "rootNamespace": "CycloneGames.UIFramework.Tests.Editor",
     "references": [
         "CycloneGames.UIFramework.Runtime",
+        "CycloneGames.UIFramework.Editor",
+        "CycloneGames.UIFramework.Editor.Integrations.Localization",
+        "CycloneGames.UIFramework.Runtime.Integrations.Localization",
+        "CycloneGames.Localization.Core",
+        "CycloneGames.Localization.Runtime",
         "CycloneGames.AssetManagement.Runtime",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.Service.Runtime",
+        "Unity.TextMeshPro",
         "UniTask"
     ],
     "includePlatforms": [

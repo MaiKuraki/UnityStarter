@@ -24,9 +24,17 @@ namespace CycloneGames.GameplayAbilities.Sample
         private GameObject logTextGORef;
         private CLogger _loggerOwner;
         private UILogger _uiLogger;
+        private GASRuntimeContext runtimeContext;
+        private AbilitySystemComponent playerDebugTarget;
+        private AbilitySystemComponent enemyDebugTarget;
+        private bool ownsDebugOverlayLifetime;
 
         private void Awake()
         {
+            runtimeContext = new GASRuntimeContext();
+            InitializeCharacter(Player);
+            InitializeCharacter(Enemy);
+
             DetailBtn.onClick.AddListener(ToggleGASInfoDetail);
             logTextGORef = LogText?.gameObject;
             if (LogText != null)
@@ -65,7 +73,36 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         void ToggleGASInfoDetail()
         {
-            GASDebugOverlay.Toggle();
+            if (GASDebugOverlay.IsActive)
+            {
+                GASDebugOverlay.SetEnabled(false);
+                return;
+            }
+
+            bool overlayWasInitialized = GASDebugOverlay.IsInitialized;
+            bool hasTarget = TryAddDebugTarget(Player, ref playerDebugTarget);
+            hasTarget |= TryAddDebugTarget(Enemy, ref enemyDebugTarget);
+            ownsDebugOverlayLifetime |= !overlayWasInitialized && GASDebugOverlay.IsInitialized;
+            GASDebugOverlay.SetEnabled(hasTarget);
+        }
+
+        private static bool TryAddDebugTarget(
+            Character character,
+            ref AbilitySystemComponent registeredTarget)
+        {
+            if (character == null)
+            {
+                return false;
+            }
+
+            AbilitySystemComponent asc = character.AbilitySystemComponent;
+            if (asc == null || asc.IsDisposed || !GASDebugOverlay.TryAddTarget(asc, character.gameObject))
+            {
+                return false;
+            }
+
+            registeredTarget = asc;
+            return true;
         }
 
         void Update()
@@ -146,18 +183,52 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private void OnDestroy()
         {
-            if (_uiLogger == null || _loggerOwner == null)
+            if (DetailBtn != null)
             {
-                return;
+                DetailBtn.onClick.RemoveListener(ToggleGASInfoDetail);
             }
 
-            if (_loggerOwner.RemoveLogger(_uiLogger, 2000))
+            GASDebugOverlay.RemoveTarget(playerDebugTarget);
+            GASDebugOverlay.RemoveTarget(enemyDebugTarget);
+            playerDebugTarget = null;
+            enemyDebugTarget = null;
+            if (ownsDebugOverlayLifetime && GASDebugOverlay.BoundTargetCount == 0)
             {
-                _uiLogger.Dispose();
+                GASDebugOverlay.Cleanup();
+            }
+            ownsDebugOverlayLifetime = false;
+
+            if (_uiLogger != null && _loggerOwner != null)
+            {
+                if (_loggerOwner.RemoveLogger(_uiLogger, 2000))
+                {
+                    _uiLogger.Dispose();
+                }
             }
 
             _uiLogger = null;
             _loggerOwner = null;
+
+            ShutdownCharacter(Player);
+            ShutdownCharacter(Enemy);
+            runtimeContext?.Dispose();
+            runtimeContext = null;
+        }
+
+        private void InitializeCharacter(Character character)
+        {
+            if (character != null && character.TryGetComponent(out AbilitySystemComponentHolder holder))
+            {
+                holder.Initialize(runtimeContext);
+            }
+        }
+
+        private static void ShutdownCharacter(Character character)
+        {
+            if (character != null && character.TryGetComponent(out AbilitySystemComponentHolder holder))
+            {
+                holder.Shutdown();
+            }
         }
 
         string GetCharacterStatus(Character character)

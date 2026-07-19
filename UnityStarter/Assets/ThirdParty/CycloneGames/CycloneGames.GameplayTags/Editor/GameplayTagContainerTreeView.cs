@@ -72,6 +72,12 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             AddTag(tag);
         }
 
+        protected override void OnCatalogChanged()
+        {
+            m_ExplicitTagsProperty.serializedObject.Update();
+            UpdateIncludedTags();
+        }
+
         private void AddTag(GameplayTag tag)
         {
             if (!tag.IsValid)
@@ -105,22 +111,6 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                 }
             }
 
-            m_ExplicitTagsProperty.serializedObject.ApplyModifiedProperties();
-            m_ExplicitTagsProperty.serializedObject.Update();
-            UpdateIncludedTags();
-        }
-
-        protected override void OnTagDeleted(GameplayTag tag)
-        {
-            for (int i = 0; i < m_ExplicitTagsProperty.arraySize; i++)
-            {
-                SerializedProperty element = m_ExplicitTagsProperty.GetArrayElementAtIndex(i);
-                if (string.Equals(element.stringValue, tag.Name, StringComparison.Ordinal))
-                {
-                    m_ExplicitTagsProperty.DeleteArrayElementAtIndex(i);
-                    break;
-                }
-            }
             m_ExplicitTagsProperty.serializedObject.ApplyModifiedProperties();
             m_ExplicitTagsProperty.serializedObject.Update();
             UpdateIncludedTags();

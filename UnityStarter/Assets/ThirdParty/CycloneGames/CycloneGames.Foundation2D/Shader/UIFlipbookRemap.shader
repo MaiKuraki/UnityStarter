@@ -3,6 +3,8 @@ Shader "UI/FlipbookRemap"
     Properties
     {
         [PerRendererData] _MainTex ("Sprite Texture", 2D) = "white" {}
+        [PerRendererData] _AlphaTex ("External Alpha", 2D) = "white" {}
+        [PerRendererData] _EnableExternalAlpha ("Enable External Alpha", Float) = 0
         _Color ("Tint", Color) = (1,1,1,1)
 
         _StencilComp ("Stencil Comparison", Float) = 8
@@ -52,6 +54,7 @@ Shader "UI/FlipbookRemap"
             #pragma vertex vert
             #pragma fragment frag
             #pragma target 2.0
+            #pragma multi_compile _ ETC1_EXTERNAL_ALPHA
 
             #include "UnityCG.cginc"
             #include "UnityUI.cginc"
@@ -71,18 +74,20 @@ Shader "UI/FlipbookRemap"
 
             struct v2f
             {
-                float4 vertex   : SV_POSITION;
-                fixed4 color    : COLOR;
-                float2 texcoord : TEXCOORD0;
-                float4 baseRect : TEXCOORD1;
+                float4 vertex     : SV_POSITION;
+                fixed4 color      : COLOR;
+                float2 texcoord   : TEXCOORD0;
+                float4 baseRect   : TEXCOORD1;
                 float4 targetRect : TEXCOORD2;
-                float4 worldPos : TEXCOORD3;
+                float4 worldPos   : TEXCOORD3;
                 UNITY_VERTEX_OUTPUT_STEREO
             };
 
             sampler2D _MainTex;
+            sampler2D _AlphaTex;
             fixed4 _Color;
             fixed4 _TextureSampleAdd;
+            float _EnableExternalAlpha;
             float4 _ClipRect;
             float4 _MainTex_ST;
             float4 _FlipbookBaseRect;
@@ -107,7 +112,7 @@ Shader "UI/FlipbookRemap"
                 float4 baseRect = IN.baseRect;
                 float4 targetRect = IN.targetRect;
 
-                // 顶点通道未写入时回退到材质参数，便于兼容标准 Image 路径。
+                // Material values keep the shader safe when custom vertex channels are absent.
                 if (baseRect.z <= 0.0 || baseRect.w <= 0.0)
                 {
                     baseRect = _FlipbookBaseRect;
@@ -128,6 +133,11 @@ Shader "UI/FlipbookRemap"
 
                 fixed4 color = (tex2D(_MainTex, remappedUV) + _TextureSampleAdd) * IN.color;
 
+                #if ETC1_EXTERNAL_ALPHA
+                fixed externalAlpha = tex2D(_AlphaTex, remappedUV).r;
+                color.a = lerp(color.a, externalAlpha, _EnableExternalAlpha);
+                #endif
+
                 #ifdef UNITY_UI_CLIP_RECT
                 color.a *= UnityGet2DClipping(IN.worldPos.xy, _ClipRect);
                 #endif
@@ -136,6 +146,7 @@ Shader "UI/FlipbookRemap"
                 clip(color.a - 0.001);
                 #endif
 
+                color.rgb *= color.a;
                 return color;
             }
             ENDCG

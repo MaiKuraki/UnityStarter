@@ -12,6 +12,23 @@ namespace CycloneGames.GameplayTags.Core
    /// </summary>
    public sealed class TagDataSnapshot
    {
+      /// <summary>
+      /// Monotonically increasing identifier for the registry state represented by this snapshot.
+      /// Runtime-index based caches must not be used with a different generation.
+      /// </summary>
+      public int Generation { get; }
+
+      /// <summary>
+      /// Changes only when existing runtime indices may have been reordered or removed.
+      /// </summary>
+      public int RuntimeIndexEpoch { get; }
+
+      /// <summary>Number of registered tags, excluding <see cref="GameplayTag.None"/>.</summary>
+      public int TagCount => Math.Max(0, TotalTagCount - 1);
+
+      /// <summary>Stable hash of the ordered tag dictionary used by replication handshakes.</summary>
+      public ulong RegistryManifestHash => ManifestHash;
+
       internal readonly struct TagRange
       {
          public readonly int Start;
@@ -57,15 +74,23 @@ namespace CycloneGames.GameplayTags.Core
       internal readonly Dictionary<ulong, int> StableIdToRuntimeIndex;
       internal readonly GameplayTagDefinition[] Definitions;
 
-      internal TagDataSnapshot(List<GameplayTagDefinition> definitions, Dictionary<string, GameplayTagDefinition> definitionsByName)
+      internal TagDataSnapshot(List<GameplayTagDefinition> definitions, int generation, int runtimeIndexEpoch)
       {
+         if (definitions == null)
+            throw new ArgumentNullException(nameof(definitions));
+         if (definitions.Count == 0 || !definitions[0].IsNone())
+            throw new ArgumentException("The definition list must start with GameplayTag.None.", nameof(definitions));
+
+         Generation = generation;
+         RuntimeIndexEpoch = runtimeIndexEpoch;
          TotalTagCount = definitions.Count;
          int tagCount = Math.Max(0, TotalTagCount - 1);
 
          // Build name->index lookup
          NameToRuntimeIndex = new Dictionary<string, int>(TotalTagCount, StringComparer.Ordinal);
          StableIdToRuntimeIndex = new Dictionary<ulong, int>(TotalTagCount);
-         ulong manifestHash = GameplayTagUtility.FnvOffsetBasis64;
+         string[] manifestTagNames = new string[tagCount];
+         int manifestTagNameCount = 0;
          for (int i = 0; i < TotalTagCount; i++)
          {
             GameplayTagDefinition def = definitions[i];
@@ -79,8 +104,18 @@ namespace CycloneGames.GameplayTags.Core
                }
 
                StableIdToRuntimeIndex.Add(def.StableId, def.RuntimeIndex);
-               manifestHash = GameplayTagUtility.CombineStableHash(manifestHash, def.StableId);
+               manifestTagNames[manifestTagNameCount++] = def.TagName;
             }
+         }
+
+         Array.Sort(manifestTagNames, 0, manifestTagNameCount, StringComparer.Ordinal);
+         ulong manifestHash = GameplayTagUtility.FnvOffsetBasis64;
+         for (int i = 0; i < manifestTagNameCount; i++)
+         {
+            int runtimeIndex = NameToRuntimeIndex[manifestTagNames[i]];
+            manifestHash = GameplayTagUtility.CombineStableHash(
+               manifestHash,
+               definitions[runtimeIndex].StableId);
          }
          ManifestHash = manifestHash;
 
@@ -154,9 +189,9 @@ namespace CycloneGames.GameplayTags.Core
             hierarchyOffset += hierarchyTags.Length;
          }
 
-         // After snapshot is built, optimize definition storage
          for (int i = 1; i < TotalTagCount; i++)
-            definitions[i].OptimizeRuntimeStorage();
+            definitions[i].OptimizeRuntimeStorage(this);
+
       }
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -169,6 +204,14 @@ namespace CycloneGames.GameplayTags.Core
       internal bool TryGetRuntimeIndex(ulong stableId, out int runtimeIndex)
       {
          return StableIdToRuntimeIndex.TryGetValue(stableId, out runtimeIndex);
+      }
+
+      [MethodImpl(MethodImplOptions.AggressiveInlining)]
+      internal GameplayTag GetTagFromRuntimeIndex(int runtimeIndex)
+      {
+         return (uint)runtimeIndex < (uint)Definitions.Length
+            ? Definitions[runtimeIndex].Tag
+            : GameplayTag.None;
       }
 
       [MethodImpl(MethodImplOptions.AggressiveInlining)]

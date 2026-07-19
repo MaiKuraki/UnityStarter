@@ -50,7 +50,6 @@ namespace CycloneGames.UIFramework.Runtime
             if (window == null || ct.IsCancellationRequested) return;
 
             var context = CreateContext(window);
-            KillExistingTweens(context);
             SetupInitialState(context, OpenConfig, true);
             if (!context.GameObject.activeSelf) context.GameObject.SetActive(true);
 
@@ -67,7 +66,6 @@ namespace CycloneGames.UIFramework.Runtime
             if (window == null || ct.IsCancellationRequested) return;
 
             var context = CreateContext(window);
-            KillExistingTweens(context);
             context.CanvasGroup.interactable = false;
             context.CanvasGroup.blocksRaycasts = false;
 
@@ -78,12 +76,24 @@ namespace CycloneGames.UIFramework.Runtime
 
         protected virtual async UniTask PlayOpenCoreAsync(TransitionContext ctx, TransitionConfigBase config, CancellationToken ct)
         {
+            if (config is CompositeConfig composite)
+            {
+                await AnimateCompositeAsync(ctx, composite, true, EaseIn, ct);
+                return;
+            }
+
             var tween = CreateAnimationTween(ctx, config, true, EaseIn);
             await AwaitTweenAsync(tween, ct);
         }
 
         protected virtual async UniTask PlayCloseCoreAsync(TransitionContext ctx, TransitionConfigBase config, CancellationToken ct)
         {
+            if (config is CompositeConfig composite)
+            {
+                await AnimateCompositeAsync(ctx, composite, false, EaseOut, ct);
+                return;
+            }
+
             var tween = CreateAnimationTween(ctx, config, false, EaseOut);
             await AwaitTweenAsync(tween, ct);
         }
@@ -100,8 +110,8 @@ namespace CycloneGames.UIFramework.Runtime
                     if (ctx.RectTransform != null)
                         return CreateSlideTween(ctx, slide, isOpen, ease);
                     return default;
-                case CompositeConfig composite:
-                    return CreateCompositeTween(ctx, composite, isOpen, ease);
+                case CompositeConfig:
+                    return default;
                 default:
                     return CreateFadeTween(ctx, config.Duration, isOpen, ease);
             }
@@ -121,26 +131,54 @@ namespace CycloneGames.UIFramework.Runtime
 
         protected virtual Tween CreateSlideTween(TransitionContext ctx, SlideConfig config, bool isOpen, Ease ease)
         {
-            Vector2 to = isOpen ? ctx.OriginalPosition : GetSlideOffset(ctx.RectTransform, config);
+            Vector2 to = isOpen
+                ? ctx.OriginalPosition
+                : GetSlideOffset(ctx.RectTransform, config, ctx.OriginalPosition);
             return Tween.UIAnchoredPosition(ctx.RectTransform, to, config.Duration, ease, useUnscaledTime: true);
         }
 
         /// <summary>
-        /// Creates a composite animation. In PrimeTween, Sequence and Tween are separate types
-        /// with no implicit conversion, so we fire all sub-tweens simultaneously (they animate
-        /// different properties — alpha, scale, position — so there is no conflict) and return
-        /// a dummy delay tween that matches the composite duration for await purposes.
+        /// Starts every configured property tween and awaits the owned tweens as one operation.
         /// </summary>
-        protected virtual Tween CreateCompositeTween(TransitionContext ctx, CompositeConfig config, bool isOpen, Ease ease)
+        protected virtual async UniTask AnimateCompositeAsync(
+            TransitionContext ctx,
+            CompositeConfig config,
+            bool isOpen,
+            Ease ease,
+            CancellationToken cancellationToken)
         {
-            if (config.UseFade)
-                CreateFadeTween(ctx, config.Duration, isOpen, ease);
-            if (config.Scale != null)
-                CreateScaleTween(ctx, config.Scale, isOpen, ease);
-            if (config.Slide != null && ctx.RectTransform != null)
-                CreateSlideTween(ctx, config.Slide, isOpen, ease);
+            int taskCount = (config.UseFade ? 1 : 0) +
+                            (config.Scale != null ? 1 : 0) +
+                            (config.Slide != null && ctx.RectTransform != null ? 1 : 0);
+            if (taskCount == 0)
+            {
+                return;
+            }
 
-            return Tween.Delay(config.Duration, useUnscaledTime: true);
+            var tasks = new UniTask[taskCount];
+            int index = 0;
+            if (config.UseFade)
+            {
+                tasks[index++] = AwaitTweenAsync(
+                    CreateFadeTween(ctx, config.Duration, isOpen, ease),
+                    cancellationToken);
+            }
+
+            if (config.Scale != null)
+            {
+                tasks[index++] = AwaitTweenAsync(
+                    CreateScaleTween(ctx, config.Scale, isOpen, ease),
+                    cancellationToken);
+            }
+
+            if (config.Slide != null && ctx.RectTransform != null)
+            {
+                tasks[index] = AwaitTweenAsync(
+                    CreateSlideTween(ctx, config.Slide, isOpen, ease),
+                    cancellationToken);
+            }
+
+            await UniTask.WhenAll(tasks);
         }
 
         private static async UniTask AwaitTweenAsync(Tween tween, CancellationToken ct)
@@ -149,7 +187,7 @@ namespace CycloneGames.UIFramework.Runtime
 
             var tcs = new UniTaskCompletionSource();
             // Capture tween reference in a one-element array to avoid struct-copy staleness
-            // across the async boundary — the tween struct may have been replaced by .OnComplete().
+            // across the async boundary; the tween struct may have been replaced by .OnComplete().
             var tweenHolder = new Tween[1];
             tweenHolder[0] = tween.OnComplete(tcs, static state => state.TrySetResult());
 
@@ -163,14 +201,6 @@ namespace CycloneGames.UIFramework.Runtime
                     tweenHolder[0].Stop();
                 throw;
             }
-        }
-
-        protected virtual void KillExistingTweens(TransitionContext ctx)
-        {
-            Tween.StopAll(onTarget: ctx.CanvasGroup);
-            Tween.StopAll(onTarget: ctx.Transform);
-            if (ctx.RectTransform != null)
-                Tween.StopAll(onTarget: ctx.RectTransform);
         }
 
         protected virtual void SetupInitialState(TransitionContext ctx, TransitionConfigBase config, bool isOpen)
@@ -209,16 +239,20 @@ namespace CycloneGames.UIFramework.Runtime
                 ctx.RectTransform.anchoredPosition = ctx.OriginalPosition;
         }
 
-        protected Vector2 GetSlideOffset(RectTransform rt, SlideConfig config)
+        protected Vector2 GetSlideOffset(
+            RectTransform rt,
+            SlideConfig config,
+            Vector2? origin = null)
         {
             var rect = rt.rect;
+            Vector2 start = origin ?? rt.anchoredPosition;
             return config.Direction switch
             {
-                SlideDirection.Left => rt.anchoredPosition + new Vector2(-rect.width * config.Offset, 0),
-                SlideDirection.Right => rt.anchoredPosition + new Vector2(rect.width * config.Offset, 0),
-                SlideDirection.Top => rt.anchoredPosition + new Vector2(0, rect.height * config.Offset),
-                SlideDirection.Bottom => rt.anchoredPosition + new Vector2(0, -rect.height * config.Offset),
-                _ => rt.anchoredPosition
+                SlideDirection.Left => start + new Vector2(-rect.width * config.Offset, 0),
+                SlideDirection.Right => start + new Vector2(rect.width * config.Offset, 0),
+                SlideDirection.Top => start + new Vector2(0, rect.height * config.Offset),
+                SlideDirection.Bottom => start + new Vector2(0, -rect.height * config.Offset),
+                _ => start
             };
         }
 

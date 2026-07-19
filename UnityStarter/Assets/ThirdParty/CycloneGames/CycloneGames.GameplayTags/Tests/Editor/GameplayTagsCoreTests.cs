@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Reflection;
 using CycloneGames.GameplayTags.Core;
 using NUnit.Framework;
 
@@ -94,6 +95,81 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
+        public void Container_SiblingIntersectionDoesNotRetainImplicitParent()
+        {
+            RegisterTestTags();
+            GameplayTagContainer lhs = new();
+            lhs.AddTag(GameplayTagManager.RequestTag("Test.Ability.Damage.Fire"));
+            GameplayTagContainer rhs = new();
+            rhs.AddTag(GameplayTagManager.RequestTag("Test.Ability.Damage.Ice"));
+
+            GameplayTagContainer intersection = GameplayTagContainer.Intersection(lhs, rhs);
+
+            Assert.That(intersection.IsEmpty, Is.True);
+            Assert.That(intersection.ExplicitTagCount, Is.Zero);
+            Assert.That(intersection.TagCount, Is.Zero);
+        }
+
+        [Test]
+        public void ReadOnlySnapshot_HasAnyDoesNotMatchOnlyACommonImplicitParent()
+        {
+            RegisterTestTags();
+            GameplayTag fire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
+            GameplayTag ice = GameplayTagManager.RequestTag("Test.Ability.Damage.Ice");
+
+            GameplayTagContainer fireContainer = new();
+            fireContainer.AddTag(fire);
+            GameplayTagContainer iceContainer = new();
+            iceContainer.AddTag(ice);
+
+            ReadOnlyGameplayTagContainer fireSnapshot = fireContainer.CreateSnapshot();
+            ReadOnlyGameplayTagContainer iceSnapshot = iceContainer.CreateSnapshot();
+
+            Assert.That(fireSnapshot.HasAny(iceSnapshot), Is.False);
+            Assert.That(
+                GameplayTagContainerExtensionMethods.HasAny(fireSnapshot, iceSnapshot),
+                Is.False);
+        }
+
+        [Test]
+        public void Container_ParentAndChildQueriesDoNotRequireAdjacentRuntimeIndices()
+        {
+            GameplayTagManager.RegisterDynamicTags(new[]
+            {
+                "Test.Status.Alpha.Child",
+                "Test.Status.Other",
+                "Test.Status.Stun"
+            });
+            GameplayTagManager.InitializeIfNeeded();
+
+            GameplayTag status = GameplayTagManager.RequestTag("Test.Status");
+            GameplayTag stun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag other = GameplayTagManager.RequestTag("Test.Status.Other");
+            GameplayTagContainer parentSource = new();
+            parentSource.AddTag(status);
+            parentSource.AddTag(other);
+            List<GameplayTag> parents = new();
+
+            parentSource.GetExplicitParentTags(stun, parents);
+
+            Assert.That(parents, Does.Contain(status));
+
+            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => true;
+            GameplayTagManager.RegisterDynamicTag("Other.Unrelated");
+            GameplayTagManager.RegisterDynamicTag("Test.Status.LateChild");
+            GameplayTagContainer childSource = new();
+            childSource.AddTag(GameplayTagManager.RequestTag("Test.Status.Alpha.Child"));
+            childSource.AddTag(GameplayTagManager.RequestTag("Other.Unrelated"));
+            childSource.AddTag(GameplayTagManager.RequestTag("Test.Status.LateChild"));
+            List<GameplayTag> children = new();
+
+            childSource.GetExplicitChildTags(status, children);
+
+            Assert.That(children, Does.Contain(GameplayTagManager.RequestTag("Test.Status.Alpha.Child")));
+            Assert.That(children, Does.Contain(GameplayTagManager.RequestTag("Test.Status.LateChild")));
+        }
+
+        [Test]
         public void CountContainer_TracksExplicitAndImplicitCounts()
         {
             RegisterTestTags();
@@ -115,6 +191,194 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(container.GetTagCount(damage), Is.EqualTo(0));
             Assert.That(anyChangeCount, Is.EqualTo(4));
             Assert.That(newOrRemovedCount, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void CountContainer_StorageScalesWithActiveTagsInsteadOfHighestRuntimeIndex()
+        {
+            RegisterTestTags();
+            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagCountContainer container = new();
+
+            container.AddTag(leaf);
+
+            FieldInfo explicitField = typeof(GameplayTagCountContainer).GetField(
+                "m_ExplicitTagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
+            FieldInfo totalField = typeof(GameplayTagCountContainer).GetField(
+                "m_TagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
+            Dictionary<int, int> explicitCounts = (Dictionary<int, int>)explicitField.GetValue(container);
+            Dictionary<int, int> totalCounts = (Dictionary<int, int>)totalField.GetValue(container);
+            Assert.That(explicitCounts.Count, Is.EqualTo(1));
+            Assert.That(totalCounts.Count, Is.EqualTo(leaf.HierarchyLevel));
+            FieldInfo[] instanceFields = typeof(GameplayTagCountContainer).GetFields(
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(Array.Exists(instanceFields, field => field.FieldType == typeof(int[])), Is.False);
+        }
+
+        [Test]
+        public void CountContainer_OverflowAndUnderflowValidationIsAtomic()
+        {
+            RegisterTestTags();
+            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagCountContainer container = new();
+            container.AddTag(leaf);
+
+            FieldInfo explicitField = typeof(GameplayTagCountContainer).GetField(
+                "m_ExplicitTagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
+            Dictionary<int, int> explicitCounts = (Dictionary<int, int>)explicitField.GetValue(container);
+            explicitCounts[leaf.RuntimeIndex] = int.MaxValue;
+            int previousHierarchicalCount = container.GetTagCount(leaf);
+
+            Assert.Throws<OverflowException>(() => container.AddTag(leaf));
+            Assert.That(container.GetExplicitTagCount(leaf), Is.EqualTo(int.MaxValue));
+            Assert.That(container.GetTagCount(leaf), Is.EqualTo(previousHierarchicalCount));
+
+            GameplayTagCountContainer empty = new();
+            Assert.Throws<InvalidOperationException>(() => empty.RemoveTag(leaf));
+            Assert.That(empty.IsEmpty, Is.True);
+        }
+
+        [Test]
+        public void CountContainer_BatchValidationFailureDoesNotMutateNotifyOrRetainScratch()
+        {
+            RegisterTestTags();
+            GameplayTag overflowTag = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTag unaffectedTag = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
+            GameplayTagCountContainer container = new();
+            container.AddTag(overflowTag);
+
+            FieldInfo explicitField = typeof(GameplayTagCountContainer).GetField(
+                "m_ExplicitTagCounts", BindingFlags.Instance | BindingFlags.NonPublic);
+            Dictionary<int, int> explicitCounts = (Dictionary<int, int>)explicitField.GetValue(container);
+            explicitCounts[overflowTag.RuntimeIndex] = int.MaxValue;
+            int previousOverflowTotal = container.GetTagCount(overflowTag);
+            int callbackCount = 0;
+            container.OnAnyTagCountChange += (_, _) => callbackCount++;
+
+            GameplayTagContainer batch = new();
+            batch.AddTag(overflowTag);
+            batch.AddTag(unaffectedTag);
+
+            Assert.Throws<OverflowException>(() => container.AddTags(batch));
+            Assert.That(container.GetExplicitTagCount(overflowTag), Is.EqualTo(int.MaxValue));
+            Assert.That(container.GetTagCount(overflowTag), Is.EqualTo(previousOverflowTotal));
+            Assert.That(container.GetExplicitTagCount(unaffectedTag), Is.Zero);
+            Assert.That(container.GetTagCount(unaffectedTag), Is.Zero);
+            Assert.That(callbackCount, Is.Zero);
+            Assert.That(container.HasRetainedMutationScratch, Is.False);
+        }
+
+        [Test]
+        public void CountContainer_CallbackFailuresAreAggregatedAfterCommitAndReentryFailsFast()
+        {
+            RegisterTestTags();
+            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagCountContainer container = new();
+            Exception reentryFailure = null;
+            int laterSubscriberCalls = 0;
+            container.OnAnyTagCountChange += (_, _) => throw new InvalidOperationException("subscriber failure");
+            container.OnAnyTagCountChange += (_, _) =>
+            {
+                try
+                {
+                    container.AddTag(leaf);
+                }
+                catch (Exception exception)
+                {
+                    reentryFailure = exception;
+                }
+            };
+            container.OnAnyTagCountChange += (_, _) => laterSubscriberCalls++;
+
+            AggregateException callbackFailure = Assert.Throws<AggregateException>(() => container.AddTag(leaf));
+            Assert.That(callbackFailure.Message, Does.Contain("state was committed"));
+            Assert.That(callbackFailure.InnerExceptions.Count, Is.EqualTo(leaf.HierarchyLevel));
+            Assert.That(reentryFailure, Is.TypeOf<InvalidOperationException>());
+            Assert.That(laterSubscriberCalls, Is.EqualTo(leaf.HierarchyLevel));
+            Assert.That(container.GetExplicitTagCount(leaf), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void CountContainer_ReloadDuringCallbackUsesOperationSnapshotAndClearReentryFailsFast()
+        {
+            const string initialSourceName = "Test.CountSnapshot.Initial";
+            const string replacementSourceName = "Test.CountSnapshot.Replacement";
+            GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+                initialSourceName,
+                "Mutation.Alpha.Leaf",
+                "Mutation.Zulu.Leaf"));
+            GameplayTagManager.InitializeIfNeeded();
+
+            GameplayTagContainer added = new();
+            added.AddTag(GameplayTagManager.RequestTag("Mutation.Alpha.Leaf"));
+            added.AddTag(GameplayTagManager.RequestTag("Mutation.Zulu.Leaf"));
+            List<string> expectedNotifications = new();
+            foreach (GameplayTag tag in added.GetTags())
+            {
+                expectedNotifications.Add(tag.Name);
+            }
+
+            GameplayTagCountContainer counts = new();
+            List<string> actualNotifications = new();
+            Exception clearReentryFailure = null;
+            bool reloaded = false;
+            counts.OnAnyTagCountChange += (tag, _) =>
+            {
+                actualNotifications.Add(tag.Name);
+                if (reloaded)
+                {
+                    return;
+                }
+
+                reloaded = true;
+                GameplayTagRuntimePlatform.UnregisterProjectTagSource(initialSourceName);
+                GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+                    replacementSourceName,
+                    "Aardvark.Inserted",
+                    "Mutation.Alpha.Leaf",
+                    "Mutation.Zulu.Leaf"));
+                GameplayTagManager.ReloadTags();
+                try
+                {
+                    counts.Clear();
+                }
+                catch (Exception exception)
+                {
+                    clearReentryFailure = exception;
+                }
+            };
+
+            Assert.DoesNotThrow(() => counts.AddTags(added));
+            Assert.That(actualNotifications, Is.EqualTo(expectedNotifications));
+            Assert.That(clearReentryFailure, Is.TypeOf<InvalidOperationException>());
+            Assert.Throws<InvalidOperationException>(() => _ = counts.IsEmpty);
+            Assert.DoesNotThrow(counts.Clear);
+            Assert.That(counts.IsEmpty, Is.True);
+        }
+
+        [Test]
+        public void CountContainer_RemoveAllCallbacksReleasesPerTagAndGlobalSubscribers()
+        {
+            RegisterTestTags();
+            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagCountContainer container = new();
+            int perTagCalls = 0;
+            int globalCountCalls = 0;
+            int globalPresenceCalls = 0;
+
+            container.RegisterTagEventCallback(
+                leaf,
+                GameplayTagEventType.AnyCountChange,
+                (_, _) => perTagCalls++);
+            container.OnAnyTagCountChange += (_, _) => globalCountCalls++;
+            container.OnAnyTagNewOrRemove += (_, _) => globalPresenceCalls++;
+
+            container.RemoveAllTagEventCallbacks();
+            container.AddTag(leaf);
+
+            Assert.That(perTagCalls, Is.Zero);
+            Assert.That(globalCountCalls, Is.Zero);
+            Assert.That(globalPresenceCalls, Is.Zero);
         }
 
         [Test]
@@ -221,25 +485,6 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
-        public void Mask_UsesRuntimeIndexBitsForSetOperations()
-        {
-            RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag damageIce = GameplayTagManager.RequestTag("Test.Ability.Damage.Ice");
-
-            GameplayTagMask a = GameplayTagMask.FromTag(damageFire);
-            GameplayTagMask b = GameplayTagMask.FromTag(damageIce);
-            GameplayTagMask union = GameplayTagMask.Union(a, b);
-            GameplayTagMask intersection = GameplayTagMask.Intersection(a, b);
-
-            Assert.That(a.HasTag(damageFire), Is.True);
-            Assert.That(a.HasTag(damageIce), Is.False);
-            Assert.That(union.HasTag(damageFire), Is.True);
-            Assert.That(union.HasTag(damageIce), Is.True);
-            Assert.That(intersection.IsEmpty, Is.True);
-        }
-
-        [Test]
         public void Containers_RejectNoneAndInvalidTags()
         {
             GameplayTagContainer container = new();
@@ -298,119 +543,400 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
-        public void Mask_IgnoresOutOfRangeBitAccess()
+        public void RegistryManifest_IgnoresNonAuthoritativeMetadataButTracksIdentity()
         {
-            GameplayTagMask mask = default;
+            GameplayTagManager.RegisterDynamicTag("Manifest.Tag", "First description", GameplayTagFlags.None);
+            GameplayTagManager.InitializeIfNeeded();
+            ulong firstManifest = GameplayTagManager.CurrentManifestHash;
 
-            mask.SetBit(-1);
-            mask.SetBit(GameplayTagMask.MaxTags);
-            mask.ClearBit(-1);
-            mask.ClearBit(GameplayTagMask.MaxTags);
+            GameplayTagManager.ResetForTests();
+            GameplayTagManager.RegisterDynamicTag(
+                "Manifest.Tag", "Changed editor description", GameplayTagFlags.HideInEditor);
+            GameplayTagManager.InitializeIfNeeded();
+            ulong metadataChangedManifest = GameplayTagManager.CurrentManifestHash;
 
-            Assert.That(mask.IsEmpty, Is.True);
-            Assert.That(mask.GetWord(-1), Is.EqualTo(0UL));
-            Assert.That(mask.GetWord(4), Is.EqualTo(0UL));
+            GameplayTagManager.RegisterDynamicTag("Manifest.Other");
+
+            Assert.That(metadataChangedManifest, Is.EqualTo(firstManifest));
+            Assert.That(GameplayTagManager.CurrentManifestHash, Is.Not.EqualTo(firstManifest));
         }
 
         [Test]
-        public void NetSerializer_RoundTripsFullAndDeltaPackets()
+        public void RegistryManifest_IsIndependentOfDynamicRegistrationHistory()
+        {
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTagManager.RegisterDynamicTag("Manifest.Order.Z");
+            GameplayTagManager.RegisterDynamicTag("Manifest.Order.A");
+            ulong zThenAManifest = GameplayTagManager.CurrentManifestHash;
+            int firstZIndex = GameplayTagManager.RequestTag("Manifest.Order.Z").RuntimeIndex;
+            int firstAIndex = GameplayTagManager.RequestTag("Manifest.Order.A").RuntimeIndex;
+
+            GameplayTagManager.ResetForTests();
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTagManager.RegisterDynamicTag("Manifest.Order.A");
+            GameplayTagManager.RegisterDynamicTag("Manifest.Order.Z");
+            ulong aThenZManifest = GameplayTagManager.CurrentManifestHash;
+            int secondAIndex = GameplayTagManager.RequestTag("Manifest.Order.A").RuntimeIndex;
+            int secondZIndex = GameplayTagManager.RequestTag("Manifest.Order.Z").RuntimeIndex;
+
+            Assert.That(firstZIndex, Is.LessThan(firstAIndex));
+            Assert.That(secondAIndex, Is.LessThan(secondZIndex));
+            Assert.That(aThenZManifest, Is.EqualTo(zThenAManifest));
+        }
+
+        [Test]
+        public void RedirectBatch_RejectsUnboundedInputWithoutPublishing()
+        {
+            Assert.Throws<InvalidOperationException>(() =>
+                GameplayTagRedirector.AddRedirects(EnumerateUnboundedRedirectBatch()));
+
+            Assert.That(GameplayTagRedirector.HasRedirect("Redirect.Unbounded.Legacy"), Is.False);
+        }
+
+        [Test]
+        public void RedirectBatch_RejectsOversizedCollectionWithoutPublishing()
+        {
+            KeyValuePair<string, string>[] oversizedBatch =
+                new KeyValuePair<string, string>[GameplayTagRedirector.MaxRedirectCount + 1];
+            for (int i = 0; i < oversizedBatch.Length; i++)
+            {
+                oversizedBatch[i] = new KeyValuePair<string, string>(
+                    "Redirect.Oversized.Legacy",
+                    "Redirect.Oversized.Current");
+            }
+
+            Assert.Throws<InvalidOperationException>(() =>
+                GameplayTagRedirector.AddRedirects(oversizedBatch));
+
+            Assert.That(GameplayTagRedirector.HasRedirect("Redirect.Oversized.Legacy"), Is.False);
+        }
+
+        [Test]
+        public void RedirectBatch_PreservesMutationPerformedDuringMaterialization()
+        {
+            GameplayTagRedirector.AddRedirects(EnumerateRedirectBatchWithReentrantMutation());
+
+            Assert.That(
+                GameplayTagRedirector.Resolve("Redirect.Reentrant.Legacy"),
+                Is.EqualTo("Redirect.Reentrant.Current"));
+            Assert.That(
+                GameplayTagRedirector.Resolve("Redirect.Batch.Legacy"),
+                Is.EqualTo("Redirect.Batch.Current"));
+        }
+
+        [Test]
+        public void RedirectBatch_InvalidEntryFailsAtomically()
+        {
+            GameplayTagRedirector.AddRedirect("Redirect.Existing.Legacy", "Redirect.Existing.Current");
+            KeyValuePair<string, string>[] invalidBatch =
+            {
+                new("Redirect.Valid.Legacy", "Redirect.Valid.Current"),
+                new("Redirect..Invalid", "Redirect.Invalid.Current")
+            };
+
+            Assert.Throws<ArgumentException>(() => GameplayTagRedirector.AddRedirects(invalidBatch));
+
+            Assert.That(
+                GameplayTagRedirector.Resolve("Redirect.Existing.Legacy"),
+                Is.EqualTo("Redirect.Existing.Current"));
+            Assert.That(GameplayTagRedirector.HasRedirect("Redirect.Valid.Legacy"), Is.False);
+        }
+
+        [Test]
+        public void CountContainer_BatchScratchIsContainerOwnedAndDropsOversizedPeak()
+        {
+            int tagCount = GameplayTagCountContainer.MaxRetainedMutationScratchEntries + 1;
+            string[] names = new string[tagCount];
+            for (int i = 0; i < names.Length; i++)
+                names[i] = $"Scratch.Tag{i:000}";
+
+            GameplayTagManager.RegisterDynamicTags(names);
+            GameplayTagManager.InitializeIfNeeded();
+
+            GameplayTagContainer largeBatch = new();
+            for (int i = 0; i < names.Length; i++)
+                largeBatch.AddTag(GameplayTagManager.RequestTag(names[i]));
+
+            GameplayTagCountContainer owner = new();
+            GameplayTagCountContainer unrelated = new();
+            owner.AddTags(largeBatch);
+
+            Assert.That(owner.ExplicitTagCount, Is.EqualTo(tagCount));
+            Assert.That(owner.HasRetainedMutationScratch, Is.False);
+            Assert.That(unrelated.HasRetainedMutationScratch, Is.False);
+
+            GameplayTagContainer smallBatch = new();
+            smallBatch.AddTag(GameplayTagManager.RequestTag(names[0]));
+            smallBatch.AddTag(GameplayTagManager.RequestTag(names[1]));
+            owner.RemoveTags(smallBatch);
+
+            Assert.That(owner.HasRetainedMutationScratch, Is.True);
+            Assert.That(unrelated.HasRetainedMutationScratch, Is.False);
+
+            owner.Clear();
+            Assert.That(owner.IsEmpty, Is.True);
+            Assert.That(owner.HasRetainedMutationScratch, Is.False);
+        }
+
+        [Test]
+        public void BitsetPolicy_RequiresEnoughDensityForRetainedMemory()
+        {
+            Assert.That(
+                GameplayTagContainerUtility.ShouldUseBitset(64, 64, out int denseWordCount),
+                Is.True);
+            Assert.That(denseWordCount, Is.EqualTo(3));
+
+            Assert.That(
+                GameplayTagContainerUtility.ShouldUseBitset(
+                    64,
+                    GameplayTagUtility.MaxRegisteredTagCount,
+                    out int sparseWordCount),
+                Is.False);
+            Assert.That(sparseWordCount, Is.EqualTo(2048));
+        }
+
+        [Test]
+        public void RegistrationContext_ImplicitParentCapacityFailureIsAtomicAndTerminal()
+        {
+            GameplayTagRegistrationContext context = new(
+                maxRegisteredTagCount: 3,
+                maxRegistrationAttemptCount: 6,
+                maxRetainedDiagnosticCount: 4);
+            Assert.That(context.RegisterTag(
+                "CapacityA.Leaf", string.Empty, GameplayTagFlags.None), Is.True);
+            Assert.That(context.RegisterTag(
+                "CapacityB.Leaf", string.Empty, GameplayTagFlags.None), Is.True);
+
+            List<GameplayTagDefinition> definitions = context.GenerateDefinitions(addNoneTag: true);
+
+            Assert.That(definitions, Is.Null);
+            Assert.That(context.IsRegistrationTerminated, Is.True);
+            Assert.That(context.RegisteredTagCount, Is.EqualTo(2),
+                "Implicit parents must not be partially committed after capacity validation fails.");
+            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(2));
+            Assert.That(context.RegistrationErrorCount, Is.EqualTo(1));
+            Assert.That(context.RegisterTag(
+                "CapacityC.Leaf", string.Empty, GameplayTagFlags.None), Is.False);
+            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(2),
+                "A terminal context must stop accepting registration attempts.");
+        }
+
+        [Test]
+        public void RegistrationContext_BoundsAttemptsAndRetainedDiagnostics()
+        {
+            Assert.That(
+                GameplayTagRegistrationContext.DefaultMaxRegistrationAttemptCount,
+                Is.EqualTo(GameplayTagUtility.MaxRegisteredTagCount * 2));
+            Assert.That(
+                GameplayTagRegistrationContext.DefaultMaxRetainedDiagnosticCount,
+                Is.EqualTo(128));
+
+            GameplayTagRegistrationContext context = new(
+                maxRegisteredTagCount: 4,
+                maxRegistrationAttemptCount: 5,
+                maxRetainedDiagnosticCount: 2);
+            for (int i = 0; i < 5; i++)
+            {
+                Assert.That(context.RegisterTag(
+                    "Invalid..Tag" + i, string.Empty, GameplayTagFlags.None), Is.False);
+            }
+
+            Assert.That(context.IsRegistrationTerminated, Is.False);
+            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(5));
+            Assert.That(context.RegistrationErrorCount, Is.EqualTo(5));
+            Assert.That(context.SuppressedRegistrationErrorCount, Is.EqualTo(3));
+
+            Assert.That(context.RegisterTag(
+                "AttemptLimit.Tag", string.Empty, GameplayTagFlags.None), Is.False);
+            Assert.That(context.IsRegistrationTerminated, Is.True);
+            Assert.That(context.RegistrationAttemptCount, Is.EqualTo(5));
+            Assert.That(context.RegistrationErrorCount, Is.EqualTo(6));
+
+            int retainedDiagnosticCount = 0;
+            foreach (GameplayTagRegistrationError _ in context.GetRegistrationErrors())
+            {
+                retainedDiagnosticCount++;
+            }
+            Assert.That(retainedDiagnosticCount, Is.EqualTo(3),
+                "Two detailed diagnostics plus one terminal diagnostic must be retained.");
+        }
+
+        [Test]
+        public void RegisterDynamicTags_BoundsNonCountableInputBeforeMutation()
+        {
+            GameplayTagManager.RegisterDynamicTag("DynamicBudget.Baseline");
+            GameplayTagManager.InitializeIfNeeded();
+            int generation = GameplayTagManager.CurrentGeneration;
+            int yieldedCount = 0;
+
+            IEnumerable<string> EnumerateUnboundedEmptyTags()
+            {
+                while (true)
+                {
+                    yieldedCount++;
+                    yield return string.Empty;
+                }
+            }
+
+            Assert.Throws<InvalidOperationException>(() =>
+                GameplayTagManager.RegisterDynamicTags(EnumerateUnboundedEmptyTags()));
+            Assert.That(
+                yieldedCount,
+                Is.EqualTo(GameplayTagRegistrationContext.DefaultMaxRegistrationAttemptCount + 1));
+            Assert.That(GameplayTagManager.CurrentGeneration, Is.EqualTo(generation));
+        }
+
+        [Test]
+        public void Query_RejectsCyclesAndAmbiguousNodes()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
-            GameplayTag damageIce = GameplayTagManager.RequestTag("Test.Ability.Damage.Ice");
-            GameplayTag statusStun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagQueryExpression cycle = new()
+            {
+                Operator = EGameplayTagQueryExprOperator.All,
+                Expressions = new List<GameplayTagQueryExpression>()
+            };
+            cycle.Expressions.Add(cycle);
+            GameplayTagQuery cyclicQuery = new() { RootExpression = cycle };
+            Assert.Throws<InvalidOperationException>(() => cyclicQuery.Matches(new GameplayTagContainer()));
 
-            GameplayTagContainer source = new();
-            source.AddTag(damageFire);
-            source.AddTag(statusStun);
-
-            byte[] fullPacket = GameplayTagNetSerializer.SerializeFull(source);
-            GameplayTagContainer fullTarget = new();
-            GameplayTagNetSerializer.DeserializeFull(fullTarget, fullPacket);
-
-            Assert.That(fullTarget.HasTagExact(damageFire), Is.True);
-            Assert.That(fullTarget.HasTagExact(statusStun), Is.True);
-
-            GameplayTagContainer next = source.Clone();
-            next.RemoveTag(statusStun);
-            next.AddTag(damageIce);
-
-            byte[] deltaPacket = GameplayTagNetSerializer.SerializeDelta(next, source);
-            GameplayTagNetSerializer.ApplyDelta(fullTarget, deltaPacket);
-
-            Assert.That(fullTarget.HasTagExact(damageFire), Is.True);
-            Assert.That(fullTarget.HasTagExact(damageIce), Is.True);
-            Assert.That(fullTarget.HasTagExact(statusStun), Is.False);
+            GameplayTagContainer tags = new();
+            tags.AddTag(GameplayTagManager.RequestTag("Test.Status.Stun"));
+            GameplayTagQuery ambiguousQuery = new()
+            {
+                RootExpression = new GameplayTagQueryExpression
+                {
+                    Operator = EGameplayTagQueryExprOperator.All,
+                    Tags = tags,
+                    Expressions = new List<GameplayTagQueryExpression> { GameplayTagQueryExpression.All() }
+                }
+            };
+            Assert.Throws<InvalidOperationException>(() => ambiguousQuery.Matches(tags));
         }
 
         [Test]
-        public void NetSerializer_DetectsPacketKindsWithoutDeserializing()
+        public void Query_RejectsNullChildSlotsBeyondNodeBudget()
         {
             RegisterTestTags();
+            List<GameplayTagQueryExpression> nullChildren =
+                new(GameplayTagQuery.MaxExpressionNodes + 1);
+            for (int i = 0; i <= GameplayTagQuery.MaxExpressionNodes; i++)
+            {
+                nullChildren.Add(null);
+            }
 
-            GameplayTagContainer source = new();
-            byte[] fullPacket = GameplayTagNetSerializer.SerializeFull(source);
-            byte[] deltaPacket = GameplayTagNetSerializer.SerializeDelta(source, source);
+            GameplayTagQuery query = new()
+            {
+                RootExpression = new GameplayTagQueryExpression
+                {
+                    Operator = EGameplayTagQueryExprOperator.Any,
+                    Expressions = nullChildren
+                }
+            };
 
-            Assert.That(GameplayTagNetSerializer.TryGetPacketKind(fullPacket, 0, out GameplayTagNetPacketKind fullKind), Is.True);
-            Assert.That(fullKind, Is.EqualTo(GameplayTagNetPacketKind.Full));
-            Assert.That(GameplayTagNetSerializer.IsFullPacket(fullPacket), Is.True);
-
-            Assert.That(GameplayTagNetSerializer.TryGetPacketKind(deltaPacket, 0, out GameplayTagNetPacketKind deltaKind), Is.True);
-            Assert.That(deltaKind, Is.EqualTo(GameplayTagNetPacketKind.Delta));
-            Assert.That(GameplayTagNetSerializer.IsDeltaPacket(deltaPacket), Is.True);
-
-            fullPacket[1] = 0;
-            Assert.That(GameplayTagNetSerializer.TryGetPacketKind(fullPacket, 0, out _), Is.False);
+            Assert.Throws<InvalidOperationException>(() =>
+                query.Matches(new GameplayTagContainer()));
         }
 
         [Test]
-        public void NetSerializer_RejectsTruncatedPackets()
+        public void Reload_RuntimePreservesIndicesAndDefersRemovalUntilResetEpoch()
+        {
+            const string sourceName = "Test.RuntimeReload";
+            GameplayTagRuntimePlatform.RegisterProjectTagSource(
+                new StaticGameplayTagSource(sourceName, "Runtime.Reload.Keep"));
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag original = GameplayTagManager.RequestTag("Runtime.Reload.Keep");
+            int originalEpoch = GameplayTagManager.CurrentRuntimeIndexEpoch;
+
+            GameplayTagRuntimePlatform.UnregisterProjectTagSource(sourceName);
+            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => true;
+            GameplayTagManager.ReloadTags();
+
+            Assert.That(GameplayTagManager.RequestTag("Runtime.Reload.Keep").RuntimeIndex, Is.EqualTo(original.RuntimeIndex));
+            Assert.That(GameplayTagManager.CurrentRuntimeIndexEpoch, Is.EqualTo(originalEpoch));
+
+            GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
+            GameplayTagManager.ReloadTags();
+            Assert.That(GameplayTagManager.TryRequestTag("Runtime.Reload.Keep", out _), Is.False);
+            Assert.That(GameplayTagManager.CurrentRuntimeIndexEpoch, Is.Not.EqualTo(originalEpoch));
+        }
+
+        [Test]
+        public void RuntimeReset_InvalidatesIndexOwnersButAllowsSafeClear()
         {
             RegisterTestTags();
+            GameplayTag stun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagContainer container = new();
+            container.AddTag(stun);
+            GameplayTagCountContainer counts = new();
+            counts.AddTag(stun);
 
-            GameplayTagContainer target = new();
+            GameplayTagManager.ResetForTests();
+            GameplayTagManager.RegisterDynamicTag("Reset.Other.Tag");
+            GameplayTagManager.InitializeIfNeeded();
 
-            Assert.Throws<ArgumentException>(() => GameplayTagNetSerializer.DeserializeFull(target, new byte[] { GameplayTagNetSerializer.CurrentProtocolVersion, 0xFE }));
+            Assert.Throws<InvalidOperationException>(() => _ = container.IsEmpty);
+            Assert.Throws<InvalidOperationException>(() => _ = counts.IsEmpty);
+            Assert.DoesNotThrow(container.Clear);
+            Assert.DoesNotThrow(counts.Clear);
+            Assert.That(container.IsEmpty, Is.True);
+            Assert.That(counts.IsEmpty, Is.True);
         }
 
         [Test]
-        public void NetSerializer_RejectsUnsupportedProtocolVersion()
+        public void ReadOnlySnapshot_RejectsAllCrossEpochTagOperations()
         {
             RegisterTestTags();
+            GameplayTag stun = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagContainer mutable = new();
+            mutable.AddTag(stun);
+            ReadOnlyGameplayTagContainer snapshot = mutable.CreateSnapshot();
 
-            GameplayTagContainer source = new();
-            byte[] packet = GameplayTagNetSerializer.SerializeFull(source);
-            packet[0] = unchecked((byte)(GameplayTagNetSerializer.CurrentProtocolVersion + 1));
+            GameplayTagManager.ResetForTests();
+            GameplayTagManager.RegisterDynamicTag("Reset.Other.Tag");
+            GameplayTagManager.InitializeIfNeeded();
 
-            GameplayTagContainer target = new();
-            Assert.That(GameplayTagNetSerializer.IsSupportedProtocolVersion(GameplayTagNetSerializer.CurrentProtocolVersion), Is.True);
-            Assert.That(GameplayTagNetSerializer.IsSupportedProtocolVersion(packet[0]), Is.False);
-            Assert.Throws<NotSupportedException>(() => GameplayTagNetSerializer.DeserializeFull(target, packet));
+            Assert.That(snapshot.IsCompatibleWithCurrentRegistry, Is.False);
+            Assert.Throws<InvalidOperationException>(() => snapshot.HasTag(stun));
+            Assert.Throws<InvalidOperationException>(() => snapshot.GetExplicitTags());
+            IReadOnlyGameplayTagContainer readOnlyView = snapshot;
+            Assert.Throws<InvalidOperationException>(() => readOnlyView.HasTag(stun));
+            Assert.Throws<InvalidOperationException>(() =>
+                GameplayTagContainer.Copy(new GameplayTagContainer(), snapshot));
         }
 
         [Test]
-        public void NetSerializer_RejectsInvalidTagsBeforeSerialization()
+        public void PublishedDefinition_RemainsBoundToItsImmutableSnapshot()
         {
-            List<GameplayTag> added = new() { GameplayTag.None };
+            const string sourceName = "Test.DefinitionSnapshot";
+            GameplayTagRuntimePlatform.RegisterProjectTagSource(new StaticGameplayTagSource(
+                sourceName,
+                "DefinitionSnapshot.Root.Child"));
+            GameplayTagManager.InitializeIfNeeded();
+            GameplayTag child = GameplayTagManager.RequestTag("DefinitionSnapshot.Root.Child");
+            GameplayTag parent = GameplayTagManager.RequestTag("DefinitionSnapshot.Root");
+            GameplayTagDefinition definition = child.Definition;
 
-            Assert.Throws<ArgumentException>(() => GameplayTagNetSerializer.SerializeDelta(added, null));
+            GameplayTagRuntimePlatform.UnregisterProjectTagSource(sourceName);
+            GameplayTagManager.ReloadTags();
+
+            Assert.That(GameplayTagManager.TryRequestTag("DefinitionSnapshot.Root.Child", out _), Is.False);
+            Assert.That(definition.ParentTags.Length, Is.EqualTo(2));
+            Assert.That(definition.ParentTags[1].m_Name, Is.EqualTo("DefinitionSnapshot.Root"));
+            Assert.That(definition.IsChildOf(parent), Is.True);
         }
 
         [Test]
-        public void NetSerializer_RejectsManifestMismatch()
+        public void Reload_InvalidCandidatePreservesPublishedSnapshot()
         {
             RegisterTestTags();
-            GameplayTag damageFire = GameplayTagManager.RequestTag("Test.Ability.Damage.Fire");
+            int generation = GameplayTagManager.CurrentGeneration;
+            ulong manifestHash = GameplayTagManager.CurrentManifestHash;
+            GameplayTagRuntimePlatform.RegisterProjectTagSource(new InvalidGameplayTagSource());
 
-            GameplayTagContainer source = new();
-            source.AddTag(damageFire);
-            byte[] packet = GameplayTagNetSerializer.SerializeFull(source);
-
-            GameplayTagManager.RegisterDynamicTag("Test.Network.NewTag", "Added after packet serialization.");
-
-            GameplayTagContainer target = new();
-            Assert.Throws<InvalidOperationException>(() => GameplayTagNetSerializer.DeserializeFull(target, packet));
+            Assert.Throws<InvalidOperationException>(GameplayTagManager.ReloadTags);
+            Assert.That(GameplayTagManager.CurrentGeneration, Is.EqualTo(generation));
+            Assert.That(GameplayTagManager.CurrentManifestHash, Is.EqualTo(manifestHash));
+            Assert.That(GameplayTagManager.RequestTag("Test.Status.Stun").IsValid, Is.True);
         }
 
         [Test]
@@ -436,7 +962,14 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         [Test]
         public void BuildGameplayTagSource_RegistersValidBinaryData()
         {
-            byte[] data = CreateBuildTagData("Build.Ability.Fire", "Build.Status.Stun");
+            byte[] data = CreateBuildTagDataWithMetadata(
+                ("Build.Ability", "Ability category", GameplayTagFlags.HideInEditor),
+                ("Build.Ability.Fire", "Fire ability", GameplayTagFlags.None),
+                ("Build.Status.Stun", "Stun status", GameplayTagFlags.None));
+            Assert.That(data[0], Is.EqualTo((byte)'C'));
+            Assert.That(data[1], Is.EqualTo((byte)'G'));
+            Assert.That(data[2], Is.EqualTo((byte)'T'));
+            Assert.That(data[3], Is.EqualTo((byte)'G'));
             GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
 
             GameplayTagRegistrationContext context = new();
@@ -445,6 +978,24 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 
             Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Ability.Fire"), Is.True);
             Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Status.Stun"), Is.True);
+            GameplayTagDefinition ability = definitions.Find(static definition => definition.TagName == "Build.Ability");
+            Assert.That(ability.Description, Is.EqualTo("Ability category"));
+            Assert.That(ability.Flags, Is.EqualTo(GameplayTagFlags.HideInEditor));
+        }
+
+        [Test]
+        public void BuildGameplayTagSource_RejectsMissingEmptyAndZeroTagData()
+        {
+            GameplayTagRegistrationContext context = new();
+            GameplayTagRuntimePlatform.LoadBuildTagData = static () => null;
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
+
+            GameplayTagRuntimePlatform.LoadBuildTagData = static () => Array.Empty<byte>();
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
+
+            byte[] zeroTagData = CreateBuildTagData();
+            GameplayTagRuntimePlatform.LoadBuildTagData = () => zeroTagData;
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
         }
 
         [Test]
@@ -455,10 +1006,51 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
 
             GameplayTagRegistrationContext context = new();
-            new BuildGameplayTagSource().RegisterTags(context);
-            List<GameplayTagDefinition> definitions = context.GenerateDefinitions(true);
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
+        }
 
-            Assert.That(definitions.Exists(static definition => definition.TagName == "Build.Ability.Fire"), Is.False);
+        [Test]
+        public void BuildGameplayTagSource_RejectsInvalidSignature()
+        {
+            byte[] data = CreateBuildTagData("Build.Ability.Fire");
+            data[0] ^= 0xFF;
+            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+
+            GameplayTagRegistrationContext context = new();
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
+        }
+
+        [Test]
+        public void BuildGameplayTagSource_RejectsTruncatedBinaryData()
+        {
+            byte[] data = CreateBuildTagData("Build.Ability.Fire");
+            Array.Resize(ref data, data.Length - 1);
+            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+
+            GameplayTagRegistrationContext context = new();
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
+        }
+
+        [Test]
+        public void BuildGameplayTagSource_RejectsTrailingBytes()
+        {
+            byte[] data = CreateBuildTagData("Build.Ability.Fire");
+            Array.Resize(ref data, data.Length + 1);
+            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+
+            GameplayTagRegistrationContext context = new();
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
+        }
+
+        [Test]
+        public void BuildGameplayTagSource_RejectsDuplicateTags()
+        {
+            byte[] data = CreateBuildTagData("Build.Ability.Fire", "Build.Ability.Fire");
+            GameplayTagRuntimePlatform.LoadBuildTagData = () => data;
+
+            GameplayTagRegistrationContext context = new();
+            Assert.Throws<InvalidDataException>(() => new BuildGameplayTagSource().RegisterTags(context));
+            Assert.That(context.GenerateDefinitions(false), Is.Empty);
         }
 
         private static void RegisterTestTags()
@@ -490,28 +1082,78 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             }
         }
 
+        private sealed class InvalidGameplayTagSource : IGameplayTagSource
+        {
+            public string Name => "Test.Invalid";
+
+            public void RegisterTags(GameplayTagRegistrationContext context)
+            {
+                context.RegisterTag("Invalid..Tag", string.Empty, GameplayTagFlags.None, this);
+            }
+        }
+
         private static byte[] CreateBuildTagData(params string[] tagNames)
         {
             using MemoryStream memoryStream = new();
             using BinaryWriter writer = new(memoryStream);
 
-            writer.Write(BuildTagBinaryFormat.CurrentFormatVersion);
+            writer.Write(BuildTagBinaryFormat.FileSignature);
             writer.Write(tagNames.Length);
-
-            long dataStart = memoryStream.Position;
             for (int i = 0; i < tagNames.Length; i++)
             {
                 writer.Write(tagNames[i]);
+                writer.Write(string.Empty);
+                writer.Write((int)GameplayTagFlags.None);
             }
 
-            long dataEnd = memoryStream.Position;
             writer.Flush();
-
             byte[] dataWithoutHash = memoryStream.ToArray();
-            ulong payloadHash = BuildTagBinaryFormat.ComputePayloadHash64(dataWithoutHash, (int)dataStart, (int)(dataEnd - dataStart));
-            writer.Write(payloadHash);
+            writer.Write(BuildTagBinaryFormat.ComputeContentHash64(dataWithoutHash, 0, dataWithoutHash.Length));
 
             return memoryStream.ToArray();
+        }
+
+        private static byte[] CreateBuildTagDataWithMetadata(
+            params (string Name, string Description, GameplayTagFlags Flags)[] entries)
+        {
+            using MemoryStream memoryStream = new();
+            using BinaryWriter writer = new(memoryStream);
+
+            writer.Write(BuildTagBinaryFormat.FileSignature);
+            writer.Write(entries.Length);
+            for (int i = 0; i < entries.Length; i++)
+            {
+                BuildTagBinaryFormat.ValidateEntry(entries[i].Name, entries[i].Description, entries[i].Flags);
+                writer.Write(entries[i].Name);
+                writer.Write(entries[i].Description ?? string.Empty);
+                writer.Write((int)entries[i].Flags);
+            }
+
+            writer.Flush();
+            byte[] dataWithoutHash = memoryStream.ToArray();
+            writer.Write(BuildTagBinaryFormat.ComputeContentHash64(
+                dataWithoutHash, 0, dataWithoutHash.Length));
+            return memoryStream.ToArray();
+        }
+
+        private static IEnumerable<KeyValuePair<string, string>> EnumerateUnboundedRedirectBatch()
+        {
+            while (true)
+            {
+                yield return new KeyValuePair<string, string>(
+                    "Redirect.Unbounded.Legacy",
+                    "Redirect.Unbounded.Current");
+            }
+        }
+
+        private static IEnumerable<KeyValuePair<string, string>> EnumerateRedirectBatchWithReentrantMutation()
+        {
+            GameplayTagRedirector.AddRedirect(
+                "Redirect.Reentrant.Legacy",
+                "Redirect.Reentrant.Current");
+            yield return new KeyValuePair<string, string>(
+                "Redirect.Batch.Legacy",
+                "Redirect.Batch.Current");
         }
     }
 }

@@ -5,6 +5,23 @@ using UnityEngine;
 
 namespace CycloneGames.Localization.Runtime
 {
+    public enum TranslationStatus : byte
+    {
+        Missing = 0,
+        Draft = 1,
+        NeedsReview = 2,
+        Approved = 3,
+        Stale = 4,
+    }
+
+    [Serializable]
+    public struct LocaleTranslationState
+    {
+        public string LocaleCode;
+        public TranslationStatus Status;
+        public int TranslatedSourceRevision;
+    }
+
     /// <summary>
     /// Distinguishes metadata for string tables vs asset tables.
     /// Allows the same table ID to have separate metadata per type.
@@ -31,6 +48,17 @@ namespace CycloneGames.Localization.Runtime
         /// The entry key this metadata is attached to.
         /// </summary>
         public string Key;
+
+        /// <summary>
+        /// Monotonic revision of the authoring/source text used to detect stale translations.
+        /// </summary>
+        public int SourceRevision;
+
+        /// <summary>
+        /// Per-locale translation workflow state. Authoring tools enforce
+        /// <see cref="StringTableMetadata.MaxLocaleStatusesPerEntry"/>.
+        /// </summary>
+        public List<LocaleTranslationState> LocaleStatuses;
 
         /// <summary>
         /// Translator notes describing context, tone, or constraints.
@@ -77,6 +105,8 @@ namespace CycloneGames.Localization.Runtime
     [CreateAssetMenu(fileName = "StringTableMetadata", menuName = "CycloneGames/Localization/String Table Metadata")]
     public sealed class StringTableMetadata : ScriptableObject
     {
+        public const int MaxLocaleStatusesPerEntry = 128;
+
         [SerializeField] private string tableId;
         [SerializeField] private TableType tableType;
         [SerializeField] private List<EntryMetadata> entries = new List<EntryMetadata>();
@@ -138,13 +168,26 @@ namespace CycloneGames.Localization.Runtime
             {
                 var e = entries[i];
                 if (!string.IsNullOrEmpty(e.Key))
-                    _indexLookup[e.Key] = i;
+                {
+                    if (_indexLookup.ContainsKey(e.Key))
+                    {
+                        _indexLookup = null;
+                        throw new InvalidOperationException(
+                            "Duplicate metadata key '" + e.Key + "' in table '" + tableId + "'.");
+                    }
+
+                    _indexLookup.Add(e.Key, i);
+                }
             }
         }
 
         private void OnEnable()
         {
-            // Force rebuild on hot-reload
+            _indexLookup = null;
+        }
+
+        private void OnValidate()
+        {
             _indexLookup = null;
         }
 
@@ -187,9 +230,7 @@ namespace CycloneGames.Localization.Runtime
         {
             if (index < 0 || index >= entries.Count) return;
             entries[index] = metadata;
-            // Update key mapping if key changed
-            if (_indexLookup != null)
-                _indexLookup[metadata.Key] = index;
+            _indexLookup = null;
         }
         #endif
     }

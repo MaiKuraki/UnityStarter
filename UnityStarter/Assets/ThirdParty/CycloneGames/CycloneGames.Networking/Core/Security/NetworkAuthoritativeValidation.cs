@@ -5,10 +5,11 @@ namespace CycloneGames.Networking.Security
 {
     public enum NetworkAuthorityValidationStatus : byte
     {
-        Accepted,
-        Rejected,
-        Corrected,
-        Deferred
+        Invalid = 0,
+        Accepted = 1,
+        Rejected = 2,
+        Corrected = 3,
+        Deferred = 4
     }
 
     public readonly struct NetworkAuthorityValidationContext
@@ -147,8 +148,7 @@ namespace CycloneGames.Networking.Security
             for (int i = 0; i < _validators.Count; i++)
             {
                 NetworkAuthorityValidationResult result = _validators[i].Validate(connection, command, serverState, context);
-                if (result.Status == NetworkAuthorityValidationStatus.Rejected
-                    || result.Status == NetworkAuthorityValidationStatus.Deferred)
+                if (!result.IsAccepted)
                 {
                     return result;
                 }

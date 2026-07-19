@@ -1,39 +1,41 @@
-using System;
-
 namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
-    /// Defines how children of a closing node are handled.
+    /// Defines how direct children are handled when a navigation node is removed.
     /// </summary>
     public enum ChildClosePolicy
     {
-        /// <summary>Surviving children are re-parented to the closing node's opener.</summary>
+        /// <summary>Reconnect children to the removed node's active opener.</summary>
         Reparent,
-        /// <summary>All children (and their descendants) are forcibly closed.</summary>
+
+        /// <summary>Remove the complete descendant subtree.</summary>
         Cascade,
-        /// <summary>Children are fully detached and become roots with no back-navigation target.</summary>
+
+        /// <summary>Keep children active and make them root nodes.</summary>
         Detach,
     }
 
     /// <summary>
-    /// An immutable snapshot of a single UI navigation node in the navigation graph.
-    /// Stored by value to avoid heap allocations per entry.
+    /// Immutable value snapshot of an active navigation node.
     /// </summary>
     public readonly struct UINavigationEntry
     {
-        public readonly string WindowName;
-        public readonly string OpenerName;  // null means this window was opened as a root
-        public readonly object Context;     // optional payload passed by the opener
-        public readonly DateTime OpenedAt;
+        public string WindowId { get; }
+        public string OpenerId { get; }
+        public object Context { get; }
+        public long Sequence { get; }
 
-        public UINavigationEntry(string windowName, string openerName, object context)
+        public UINavigationEntry(string windowId, string openerId, object context, long sequence)
         {
-            WindowName = windowName;
-            OpenerName = openerName;
-            Context    = context;
-            OpenedAt   = DateTime.UtcNow;
+            WindowId = windowId;
+            OpenerId = openerId;
+            Context = context;
+            Sequence = sequence;
         }
 
-        public override string ToString() => $"{OpenerName ?? "ROOT"} → {WindowName}";
+        public override string ToString()
+        {
+            return $"{OpenerId ?? "ROOT"} -> {WindowId} ({Sequence})";
+        }
     }
 }

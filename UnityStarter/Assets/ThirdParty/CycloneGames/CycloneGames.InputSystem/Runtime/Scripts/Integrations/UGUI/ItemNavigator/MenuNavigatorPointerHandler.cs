@@ -12,7 +12,7 @@ namespace CycloneGames.InputSystem.Runtime
     ///   The Toggle's isOn value is preserved; user manually controls it in OnConfirm callback
     /// - For CustomTransform: OnPointerEnter sets focus, OnPointerClick triggers OnConfirm directly
     ///   This enables click-to-confirm for non-Selectable navigable items like SelectionSwitcher
-    /// 
+    ///
     /// Touch Confirmation Gate:
     /// When transitioning from Gamepad to Touchscreen input, the first touch only focuses the element.
     /// A second touch is required to confirm the action. This prevents accidental triggers when
@@ -75,13 +75,13 @@ namespace CycloneGames.InputSystem.Runtime
             _focusedIndexOnFirstTouch = -1;
 
             _previousDeviceKind = _inputPlayer.ActiveDeviceKind.CurrentValue;
-            
+
             // If starting in Gamepad mode, first pointer event should be blocked
             if (_previousDeviceKind == InputDeviceKind.Gamepad)
             {
                 _touchConfirmationRequired = true;
             }
-            
+
             _deviceKindSubscription = _inputPlayer.ActiveDeviceKind.Subscribe(OnDeviceKindChanged);
         }
 
@@ -108,10 +108,10 @@ namespace CycloneGames.InputSystem.Runtime
         {
             _toggle = GetComponent<Toggle>();
             _button = GetComponent<Button>();
-            
+
             // Determine if this is a CustomTransform item (no Selectable component)
             _isCustomTransformItem = _toggle == null && _button == null && GetComponent<Slider>() == null;
-            
+
             if (_toggle != null && _interceptToggleClick)
             {
                 _cachedToggleValue = _toggle.isOn;
@@ -122,21 +122,21 @@ namespace CycloneGames.InputSystem.Runtime
         private void OnToggleValueChanged(bool newValue)
         {
             if (!_isInitialized || !_interceptToggleClick || _isProcessingToggleChange) return;
-            
+
             _isProcessingToggleChange = true;
             try
             {
                 // Restore the cached value to prevent automatic isOn change
                 _toggle.SetIsOnWithoutNotify(_cachedToggleValue);
-                
+
                 // Check touch confirmation gate
                 if (ShouldBlockTouchConfirmation())
                 {
-                    // First touch after gamepad→touch: focus only, don't confirm
+                    // First touch after gamepad-to-touch transition: focus only, do not confirm.
                     _focusedIndexOnFirstTouch = _index;
                     return;
                 }
-                
+
                 // Trigger confirm selection so user can manually control isOn in OnConfirm callback
                 if (_horizontalNavigator != null)
                 {
@@ -146,10 +146,10 @@ namespace CycloneGames.InputSystem.Runtime
                 {
                     _verticalNavigator.ConfirmSelection();
                 }
-                
+
                 // After OnConfirm, update cached value to reflect any changes made by user
                 _cachedToggleValue = _toggle.isOn;
-                
+
                 // Reset gate after successful confirmation
                 ResetTouchConfirmationGate();
             }
@@ -193,13 +193,13 @@ namespace CycloneGames.InputSystem.Runtime
         }
 
         /// <summary>
-        /// Checks if touch confirmation should be blocked (first touch after gamepad→touchscreen transition)
+        /// Checks if touch confirmation should be blocked after a gamepad-to-touchscreen transition.
         /// </summary>
         private bool ShouldBlockTouchConfirmation()
         {
             if (_inputPlayer == null) return false;
             if (!_touchConfirmationRequired) return false;
-            
+
             // Only block for touchscreen input
             if (_inputPlayer.ActiveDeviceKind.CurrentValue != InputDeviceKind.Touchscreen) return false;
 
@@ -277,7 +277,7 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (_inputPlayer == null) return false;
             if (!_touchConfirmationRequired) return false;
-            
+
             // Block for both touchscreen and mouse input (Steam Deck touch = mouse)
             var currentKind = _inputPlayer.ActiveDeviceKind.CurrentValue;
             return currentKind == InputDeviceKind.Touchscreen || currentKind == InputDeviceKind.KeyboardMouse;
@@ -286,7 +286,7 @@ namespace CycloneGames.InputSystem.Runtime
         public void OnPointerClick(PointerEventData eventData)
         {
             if (!IsNavigatorValid()) return;
-            
+
             // For CustomTransform items, handle click-to-confirm here since there's no Button/Toggle subscription
             // For Buttons, confirmation is handled by MenuNavigator's OnClickAsObservable subscription
             // For Toggles, confirmation is handled via onValueChanged subscription in SetupComponents()
@@ -295,7 +295,7 @@ namespace CycloneGames.InputSystem.Runtime
                 // Check touch confirmation gate
                 if (ShouldBlockTouchConfirmation())
                 {
-                    // First touch after gamepad→touch: focus only, don't confirm
+                    // First touch after gamepad-to-touch transition: focus only, do not confirm.
                     _focusedIndexOnFirstTouch = _index;
                     return;
                 }

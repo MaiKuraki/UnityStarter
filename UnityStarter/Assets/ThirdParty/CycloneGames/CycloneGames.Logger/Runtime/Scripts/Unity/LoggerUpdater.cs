@@ -65,7 +65,16 @@ namespace CycloneGames.Logger
         {
             internal LogLevel Level;
             internal string Message;
+#if UNITY_EDITOR
+            internal string SourcePath;
+            internal int LineNumber;
+            internal int RetainedCharacters;
+#endif
         }
+
+#if UNITY_EDITOR
+        internal delegate bool EditorConsoleWriter(LogLevel level, string message, string sourcePath, int lineNumber);
+#endif
 
         private const int DefaultPumpItems = 256;
         private const int CorePumpBudgetMilliseconds = 1;
@@ -99,6 +108,9 @@ namespace CycloneGames.Logger
         private static bool _quitStarted;
         private static bool _quitting;
         private static volatile bool _initializationBlocked;
+#if UNITY_EDITOR
+        private static EditorConsoleWriter _editorConsoleWriter;
+#endif
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetStaticState()
@@ -305,7 +317,16 @@ namespace CycloneGames.Logger
             }
         }
 
-        internal static bool Commit(LogLevel level, string message, Reservation reservation)
+        internal static bool Commit(
+            LogLevel level,
+            string message,
+            Reservation reservation
+#if UNITY_EDITOR
+            ,
+            string sourcePath = null,
+            int lineNumber = 0
+#endif
+        )
         {
             lock (QueueLock)
             {
@@ -322,12 +343,17 @@ namespace CycloneGames.Logger
                     return false;
                 }
 
-                int characters = message?.Length ?? 0;
-                if (characters > _maxQueuedCharacters)
+                long actualCharacters = message?.Length ?? 0;
+#if UNITY_EDITOR
+                actualCharacters += sourcePath?.Length ?? 0;
+#endif
+                if (actualCharacters > _maxQueuedCharacters)
                 {
                     RecordDropNoLock(level);
                     return false;
                 }
+
+                int characters = (int)actualCharacters;
 
                 if (characters > reservation.Characters)
                 {
@@ -347,6 +373,11 @@ namespace CycloneGames.Logger
                 int tail = (_head + _count) % _entries.Length;
                 _entries[tail].Level = level;
                 _entries[tail].Message = message;
+#if UNITY_EDITOR
+                _entries[tail].SourcePath = sourcePath;
+                _entries[tail].LineNumber = lineNumber;
+                _entries[tail].RetainedCharacters = characters;
+#endif
                 _count++;
                 _queuedCharacters += characters;
                 int retainedCount = _count + _inFlightCount;
@@ -375,6 +406,13 @@ namespace CycloneGames.Logger
                 }
             }
         }
+
+#if UNITY_EDITOR
+        internal static void SetEditorConsoleWriter(EditorConsoleWriter writer)
+        {
+            Volatile.Write(ref _editorConsoleWriter, writer);
+        }
+#endif
 
         internal static UnityLoggerStatistics GetStatistics()
         {
@@ -507,11 +545,15 @@ namespace CycloneGames.Logger
             {
                 try
                 {
+#if UNITY_EDITOR
+                    LogToUnity(entry.Level, entry.Message, entry.SourcePath, entry.LineNumber);
+#else
                     LogToUnity(entry.Level, entry.Message);
+#endif
                 }
                 finally
                 {
-                    CompleteProcessing(entry.Message?.Length ?? 0);
+                    CompleteProcessing(GetRetainedCharacters(entry));
                 }
 
                 processed++;
@@ -523,8 +565,33 @@ namespace CycloneGames.Logger
         }
 
         [HideInCallstack]
-        private static void LogToUnity(LogLevel level, string message)
+        private static void LogToUnity(
+            LogLevel level,
+            string message
+#if UNITY_EDITOR
+            , string sourcePath,
+            int lineNumber
+#endif
+        )
         {
+#if UNITY_EDITOR
+            EditorConsoleWriter editorWriter = Volatile.Read(ref _editorConsoleWriter);
+            if (editorWriter != null)
+            {
+                try
+                {
+                    if (editorWriter(level, message, sourcePath, lineNumber))
+                    {
+                        return;
+                    }
+                }
+                catch
+                {
+                    // The public Unity logging path remains the non-lossy fallback when Editor internals change.
+                }
+            }
+#endif
+
             LogType logType;
             switch (level)
             {
@@ -565,7 +632,7 @@ namespace CycloneGames.Logger
                 _entries[_head] = default;
                 _head = (_head + 1) % _entries.Length;
                 _count--;
-                int characters = entry.Message?.Length ?? 0;
+                int characters = GetRetainedCharacters(entry);
                 _queuedCharacters -= characters;
                 _inFlightCount++;
                 _inFlightCharacters += characters;
@@ -655,7 +722,7 @@ namespace CycloneGames.Logger
                 _entries[_head] = default;
                 _head = (_head + 1) % _entries.Length;
                 _count--;
-                _queuedCharacters -= removed.Message?.Length ?? 0;
+                _queuedCharacters -= GetRetainedCharacters(removed);
                 return removed;
             }
 
@@ -669,8 +736,17 @@ namespace CycloneGames.Logger
             int tail = (_head + _count - 1) % _entries.Length;
             _entries[tail] = default;
             _count--;
-            _queuedCharacters -= removed.Message?.Length ?? 0;
+            _queuedCharacters -= GetRetainedCharacters(removed);
             return removed;
+        }
+
+        private static int GetRetainedCharacters(LogEntry entry)
+        {
+#if UNITY_EDITOR
+            return entry.RetainedCharacters;
+#else
+            return entry.Message?.Length ?? 0;
+#endif
         }
 
         private static void ReleaseReservationNoLock(int reservedCharacters)

@@ -1,146 +1,52 @@
 # CycloneGames.Hash
 
-[简体中文](README.SCH.md)
+[English | 简体中文](README.SCH.md)
 
-Large games repeatedly move the same logical data through authoring tools, build pipelines, Runtime systems, caches, save files, network protocols, replay tools, and servers. Those systems need a compact way to answer whether a definition, payload, schema, or state snapshot is the same without retaining or comparing the complete source every time.
+CycloneGames.Hash provides deterministic, non-cryptographic hashing primitives for Unity projects, build pipelines, and pure C# services. It packages FNV-1a (32/64-bit), XXH64, stable non-zero identifiers, and explicit byte-order helpers behind a pure C# core with no `UnityEngine` dependency, so the same hashing contract produces identical digests across Runtime, Editor, CLI, headless, and server environments.
 
-CycloneGames.Hash is the deterministic fingerprint layer for that job. An owning system converts meaningful data into a canonical ordered byte sequence; this module turns those bytes into a fixed-width, non-cryptographic digest. The owner then uses the digest for lookup, comparison, invalidation, compatibility checks, or diagnostics.
+## Table of Contents
 
-The module is designed for Unity Runtime code, Editor tools, command-line tests, headless processes, and server composition. Its Runtime assembly does not reference `UnityEngine`, perform file I/O, allocate native memory, create threads, or retain global state.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [Usage Guide](#usage-guide)
+- [Advanced Topics](#advanced-topics)
+- [Common Scenarios](#common-scenarios)
+- [Performance and Memory](#performance-and-memory)
+- [Troubleshooting](#troubleshooting)
 
-## 1. Why this module exists
+## Overview
 
-### Role in a game framework
+A hash function answers one question: given the same algorithm and the same input bytes, what fixed-width digest should every producer compute? CycloneGames.Hash answers that question with a small set of focused algorithms, each exposing its contract (algorithm, seed, byte order) explicitly at the call site.
 
-CycloneGames.Hash sits after data definition and canonical serialization, but before the owner's decision:
+The module exists for the moments when a project needs a compact fingerprint of canonical data: asset content, build inputs, protocol schemas, deterministic-state snapshots, named definitions, or cache keys. The owner decides what bytes to hash; this module turns those bytes into a stable digest that can be compared, cached, transmitted, or logged.
 
-```mermaid
-flowchart LR
-    Source["Domain data, content, schema, or state"] --> Owner["Owner defines canonical bytes"]
-    Owner --> Hash["CycloneGames.Hash computes a digest"]
-    Hash --> Compare["Compare or look up"]
-    Hash --> Cache["Build or cache key"]
-    Hash --> Protocol["Protocol or manifest field"]
-    Hash --> Diagnose["Desynchronization diagnostic"]
-    Compare --> Action["Owner decides what to do"]
-    Cache --> Action
-    Protocol --> Action
-    Diagnose --> Action
-```
+Use this module when:
 
-The module does not decide which fields matter, how objects are serialized, whether a collision is acceptable, or what action follows a mismatch. Those decisions belong to the gameplay, content, networking, save, or build system that owns the data.
+- Authoring tools, build pipelines, or Runtime code need a compact, repeatable fingerprint of ordered data.
+- The same logical value must produce the same digest across machines, processes, and Unity backends.
+- You want span-based, allocation-free hashing on hot paths.
 
-This separation gives every environment the same small hashing core while allowing each owner to define its own canonical data contract.
+Do not use this module for cryptographic authentication, tamper resistance, password storage, or guaranteed-unique identifiers. Those concerns belong to a security-owned layer with a cryptographic digest plus a signature or MAC.
 
-### Application scenarios
+### Key features
 
-| Scenario | Problem being solved | Role of CycloneGames.Hash | Typical API |
-| --- | --- | --- | --- |
-| Stable named definitions | Authoring uses readable names, while Runtime lookup needs compact numeric keys | Hashes the canonical name; the owner retains the name and checks collisions | `StableHash64.ComputeUtf16Ordinal` or explicit UTF-8 bytes |
-| Asset and content fingerprints | Tools need to know whether meaningful content changed | Hashes canonical content or metadata bytes for fast comparison | `XxHash64.Compute` |
-| Build and cache invalidation | Expensive generated output may be reused only when every relevant input is identical | Hashes ordered inputs and settings into a cache key | `XxHash64` streaming or `Fnv1a64` composition |
-| Content manifests and update catalogs | Client and server need a compact fingerprint for the same manifest entry | Produces the manifest digest; authenticity remains the security layer's responsibility | `XxHash64` plus explicit byte-order output |
-| Protocol and schema checks | Peers must reject incompatible layouts before interpreting payloads | Hashes the canonical field/type description used by the handshake | `Fnv1a64` ordered composition |
-| Deterministic state diagnostics | Client, server, replay, or simulation tools need to locate the first divergent checkpoint | Hashes a canonical snapshot for comparison and logging | `XxHash64` |
-| Large files or streamed payloads | Data arrives in chunks and should not be copied into one large buffer | Maintains incremental state across ordered chunks | `XxHash64.Create` and `Append` |
-| Fast equality filtering | Full byte comparison is expensive and most candidates differ | Rejects unequal candidates by digest, then lets the owner perform exact comparison when required | `XxHash64.Compute` |
+- **FNV-1a 32-bit and 64-bit** for ordered composition of small fields and bytes.
+- **XXH64** one-shot and streaming for fast digests of larger payloads.
+- **StableHash32 / StableHash64** that reserve `0` as an unset sentinel.
+- **HashByteOrder** explicit little-endian and big-endian read/write helpers.
+- **Pure C# core** with `noEngineReferences: true`, span-based APIs, and zero module-owned heap allocation on the hot paths.
 
-#### Example: content cache
+## Architecture
 
-```text
-Source asset + import settings + dependency identifiers
-    -> canonical input bytes
-    -> XXH64 digest
-    -> cache key
-    -> reuse output when the key matches
-    -> rebuild output when the key differs
-```
+The module is one assembly plus its tests:
 
-#### Example: deterministic-state diagnostics
-
-```text
-Authoritative state at checkpoint N
-    -> canonical snapshot bytes
-    -> XXH64 digest
-    -> compare client/server/replay values
-    -> capture detailed field diagnostics when values differ
-```
-
-Hashing detects that canonical bytes differ; it does not explain the difference or make the simulation deterministic. The owning diagnostic system decides which fields to capture and how to report them.
-
-### How to decide whether to use it
-
-| Question | Decision |
-| --- | --- |
-| Do you need a compact, repeatable fingerprint of ordered data? | Use this module after defining the exact input bytes |
-| Can two producers serialize the same logical value differently? | Define canonicalization first; hashing alone cannot fix the mismatch |
-| Must the identifier be absolutely unique? | Use an owner-assigned stable ID, or retain canonical keys and reject collisions |
-| Must the result prove trust or resist malicious manipulation? | Use a cryptographic digest with signature or MAC in the security layer |
-| Must equality be mathematically certain? | Use the digest as a fast filter, then compare canonical bytes |
-| Does data arrive in ordered chunks? | Use incremental `XxHash64` without concatenating the chunks |
-
-Two consequences are important:
-
-- Different digests prove that the algorithm contract or input bytes differ.
-- Equal non-cryptographic digests are strong comparison evidence, but not a proof of equality because collisions exist.
-
-Do not use Runtime `GetHashCode()` as a persisted, networked, or cross-tool data contract. Use an explicitly selected CycloneGames.Hash algorithm and canonical input definition.
-
-### Design objectives
-
-The module is designed around these properties:
-
-- **Deterministic contract:** algorithm, seed, input order, encoding, and byte order remain visible.
-- **Pure C# core:** domain, Editor, client, server, and headless code can share the same implementation.
-- **Low-allocation execution:** span-based APIs and inline XXH64 state avoid module-owned heap allocation.
-- **Explicit ownership:** callers own input memory, mutable state, threading, storage, and failure actions.
-- **Cross-platform representation:** integer and digest byte order are explicit.
-- **Focused API:** concrete algorithm entry points make the selected contract visible at the call site.
-- **Testable behavior:** known vectors, chunk boundaries, allocation, and performance paths have dedicated tests.
-- **Clear safety boundary:** collision handling and cryptographic trust remain explicit owner responsibilities.
-
-### Core responsibility
-
-A hash function answers a focused question:
-
-> Given the same algorithm contract and exactly the same input bytes, what fixed-width digest should every producer calculate?
-
-CycloneGames.Hash provides:
-
-- FNV-1a 32-bit and 64-bit byte hashing;
-- deterministic ordinal hashing of .NET UTF-16 code units;
-- stable non-zero 32-bit and 64-bit helpers for systems that reserve `0` as an unset value;
-- XXH64 one-shot and incremental hashing;
-- explicit 32-bit and 64-bit little-endian and big-endian conversion;
-- allocation and throughput tests for the primary hot paths.
-
-### Non-goals
-
-The module does not provide:
-
-- cryptographic authentication, encryption, signatures, or password hashing;
-- guaranteed-unique identifiers;
-- automatic object serialization;
-- Unicode normalization or text encoding;
-- file, stream, network, or save-system ownership;
-- a global hash registry, cache, worker pool, or job scheduler.
-
-These boundaries keep the hashing contract independent from Unity lifecycle, storage, transport, and security policy.
-
-### Recommended learning path
-
-- First integration: read sections 2, 3, and 4.
-- Deterministic data design: continue with sections 5, 6, 7, and 9.
-- High-throughput Runtime work: focus on sections 8, 11, and 12.
-- Persistence, networking, and security review: use sections 10, 13, and 15.
-
-## 2. Architecture and package structure
-
-| Assembly | Path | Responsibility | Availability |
-| --- | --- | --- | --- |
-| `CycloneGames.Hash.Core` | `Core/` | Pure C# algorithms, state, and byte-order helpers | All platforms; no assembly dependencies; `noEngineReferences=true` |
-| `CycloneGames.Hash.Tests.Editor` | `Tests/Editor/` | Known vectors, boundaries, contract behavior, and allocation tests | Unity EditMode |
-| `CycloneGames.Hash.Tests.Performance` | `Tests/Performance/` | Structured throughput and managed-GC measurements | Unity Editor when Performance Testing is installed |
+| Assembly | Path | Purpose |
+| --- | --- | --- |
+| `CycloneGames.Hash.Core` | `Core/` | Algorithms, state, and byte-order helpers. No `UnityEngine` reference. |
+| `CycloneGames.Hash.Tests.Editor` | `Tests/Editor/` | Known vectors, chunk-boundary, contract, and allocation tests. |
+| `CycloneGames.Hash.Tests.Performance` | `Tests/Performance/` | Throughput and managed-GC measurements (requires Performance Testing package). |
 
 ```mermaid
 flowchart LR
@@ -159,35 +65,13 @@ flowchart LR
     Order --> Contract["Manifest, packet, save, cache, or diagnostic record"]
 ```
 
-Code compiled by a custom asmdef should reference `CycloneGames.Hash.Core`. Source files then import:
+The owner converts meaningful data into canonical bytes; the module turns those bytes into a digest; the owner decides what to do with the result. Algorithm choice, seed, field order, encoding, and byte order are visible at the call site, never hidden behind ambient configuration.
+
+## Quick Start
+
+Add an asmdef reference to `CycloneGames.Hash.Core`, then import the namespace:
 
 ```csharp
-using CycloneGames.Hash.Core;
-```
-
-## 3. Selecting the right API
-
-Choose the narrowest API that matches the data contract:
-
-| Requirement | Recommended API | Reason |
-| --- | --- | --- |
-| Fast digest for a complete byte payload | `XxHash64.Compute` | Simple one-shot entry point |
-| Large payload arriving in ordered chunks | `XxHash64.Create`, `Append`, `GetDigest` | Fixed inline state; no concatenation buffer |
-| Ordered composition of small integer fields and bytes | `Fnv1a64` | Direct running-state composition |
-| Compact 32-bit field with collision handling | `Fnv1a32` or `StableHash32` | Use only when the contract requires 32 bits |
-| Non-zero 64-bit identifier | `StableHash64` | Reserves `0` as an unset sentinel |
-| Ordinal .NET string identifier | `ComputeUtf16Ordinal` | Hashes each UTF-16 code unit once |
-| Cross-language text or protocol data | Encode canonical bytes, then use FNV-1a or XXH64 | Makes encoding and normalization explicit |
-| Serialize a numeric digest | `HashByteOrder` or `TryWriteHash*` | Prevents machine-endian ambiguity |
-
-Algorithm count is not a measure of module quality. A production contract benefits more from a precise input definition, explicit byte order, collision handling, tests, and stable ownership than from interchangeable algorithms with unclear semantics.
-
-## 4. Quick start
-
-The following examples assume:
-
-```csharp
-using System;
 using CycloneGames.Hash.Core;
 ```
 
@@ -200,9 +84,9 @@ public static ulong ComputePayloadHash(ReadOnlySpan<byte> payload)
 }
 ```
 
-The result is a numeric `ulong` digest. The same bytes and seed produce the same numeric value.
+The same bytes and seed produce the same `ulong` digest across every environment.
 
-### Create a stable non-zero identifier
+### Hash a string identifier
 
 ```csharp
 public static ulong ComputeAbilityId(string canonicalName)
@@ -211,9 +95,9 @@ public static ulong ComputeAbilityId(string canonicalName)
 }
 ```
 
-This example defines the input as an ordinal sequence of .NET UTF-16 code units. Use it when every producer follows that exact rule.
+`StableHash64` maps a final zero digest to a non-zero fallback, so `0` can be reserved as an "unset" sentinel.
 
-### Hash an ordered payload without concatenation
+### Hash ordered chunks without concatenation
 
 ```csharp
 public static ulong ComputePacketHash(
@@ -229,20 +113,30 @@ public static ulong ComputePacketHash(
 }
 ```
 
-Appending `A`, then `B`, then `C` is equivalent to hashing the exact byte concatenation `A || B || C`.
+Appending `A`, then `B`, then `C` produces the same digest as hashing the concatenated byte sequence `A || B || C`.
 
-## 5. Deterministic hash contracts
+## Core Concepts
 
-A numeric digest is deterministic only when the complete input contract is deterministic. Persisted, networked, or cross-process data should define all of these properties:
+### Algorithm selection
 
-| Term | Meaning |
-| --- | --- |
-| Input bytes | The exact ordered byte sequence consumed by the algorithm |
-| Digest | The fixed-width numeric result |
-| Seed | The initial numeric state selected by the contract |
-| Canonical form | The one permitted byte representation of a logical value |
-| Collision | Two different inputs producing the same digest |
-| Running state | An intermediate accumulator that can accept more ordered input |
+Choose the narrowest API that matches the data contract:
+
+| Requirement | Recommended API | Reason |
+| --- | --- | --- |
+| Fast digest of a complete byte payload | `XxHash64.Compute` | One-shot entry point |
+| Large payload arriving in ordered chunks | `XxHash64.Create` + `Append` + `GetDigest` | Fixed inline state; no concatenation buffer |
+| Ordered composition of small integer fields | `Fnv1a64` | Direct running-state composition |
+| Compact 32-bit field with collision handling | `Fnv1a32` or `StableHash32` | Only when the contract requires 32 bits |
+| Non-zero 64-bit identifier | `StableHash64` | Reserves `0` as an unset sentinel |
+| Ordinal .NET string identifier | `ComputeUtf16Ordinal` | One XOR/multiply per UTF-16 code unit |
+| Cross-language text or protocol data | Encode canonical bytes, then FNV-1a or XXH64 | Makes encoding and normalization explicit |
+| Serialize a numeric digest | `HashByteOrder` or `TryWriteHash*` | Prevents machine-endian ambiguity |
+
+Algorithm count is not a measure of quality. A reliable contract benefits more from a precise input definition, explicit byte order, and collision handling than from interchangeable algorithms with unclear semantics.
+
+### Deterministic contracts
+
+A numeric digest is deterministic only when the entire input contract is deterministic. Persisted, networked, or cross-process data should fix every property in this list:
 
 1. Algorithm and digest width.
 2. Initial seed or running state.
@@ -254,20 +148,18 @@ A numeric digest is deterministic only when the complete input contract is deter
 8. Null, empty, missing, and default-value rules.
 9. Schema or protocol revision.
 
-For example, these two field sequences are ambiguous if no boundaries are encoded:
+For example, without an encoded boundary, these two field sequences collapse to the same input bytes:
 
 ```text
 ["ab", "c"]  -> "abc"
 ["a", "bc"]  -> "abc"
 ```
 
-Add a fixed-width length before variable data, or hash a canonical serializer output, so distinct logical values cannot collapse into the same input byte sequence before hashing.
+Add a fixed-width length prefix before variable data, or hash the output of a canonical serializer, so distinct logical values cannot collide before the hash even runs.
 
 ### Seed semantics
 
-`XxHash64` accepts a numeric seed that initializes the algorithm.
-
-The seed overloads on `Fnv1a32.Compute` and `Fnv1a64.Compute` accept the current running FNV state. They support ordered incremental composition:
+`XxHash64` accepts a numeric seed that initializes the algorithm. The seed overloads on `Fnv1a32.Compute` and `Fnv1a64.Compute` accept a running FNV state, which is what makes ordered incremental composition work:
 
 ```csharp
 public static ulong ComputeManifestHash(
@@ -283,43 +175,31 @@ public static ulong ComputeManifestHash(
 }
 ```
 
-An FNV running state is not a secret key and does not provide protection against malicious input.
+An FNV running state is not a secret key and provides no protection against malicious input.
 
-## 6. Hashing text correctly
+## Usage Guide
 
-Text must have an explicit contract. Visually identical strings can contain different Unicode code points, normalization forms, case, line endings, or whitespace.
+### Hashing text
 
-### Ordinal UTF-16 identifiers
+Text must have an explicit contract. Visually identical strings can differ in Unicode code points, normalization form, case, line endings, or whitespace.
 
-`ComputeUtf16Ordinal` performs one XOR/multiply step for each .NET `char`. It does not encode the string as UTF-8 or UTF-16LE bytes.
+**Ordinal UTF-16 identifiers** — `ComputeUtf16Ordinal` performs one XOR/multiply step per .NET `char`. It does not encode the string as UTF-8 or UTF-16LE bytes. Use it when every producer uses the same .NET UTF-16 code-unit definition and ordinal case-sensitive behavior is acceptable.
 
-Use this API when:
-
-- all producers use the same .NET UTF-16 code-unit definition;
-- ordinal case-sensitive behavior is required;
-- the identifier is not exchanged with a producer that uses a different text representation.
-
-### UTF-8 text for interchange
-
-For network, file, toolchain, or cross-language data, define normalization and encode text explicitly:
+**UTF-8 for interchange** — for network, file, toolchain, or cross-language data, define normalization explicitly and encode text as UTF-8 bytes before hashing:
 
 ```csharp
 using System.Text;
 
 public static ulong ComputeCanonicalTextHash(string text)
 {
-    if (text == null)
-    {
-        throw new ArgumentNullException(nameof(text));
-    }
-
+    if (text == null) throw new ArgumentNullException(nameof(text));
     string normalized = text.Normalize(NormalizationForm.FormC);
     byte[] utf8 = Encoding.UTF8.GetBytes(normalized);
     return XxHash64.Compute(utf8);
 }
 ```
 
-This beginner-friendly example allocates the normalized string and UTF-8 array. In a hot path, normalize during authoring or ingestion and let the caller supply scratch memory:
+This beginner-friendly example allocates the normalized string and UTF-8 array. On a hot path, normalize during authoring or ingestion and let the caller supply scratch memory:
 
 ```csharp
 using System.Text;
@@ -342,11 +222,9 @@ public static bool TryComputeUtf8Hash(
 }
 ```
 
-The scratch-memory example does not normalize text. Its caller must provide text that already follows the contract.
+### Hashing structured data
 
-## 7. Hashing structured and cross-platform data
-
-Do not hash object memory, reflection order, `GetHashCode()`, Unity instance IDs, or arbitrary serializer output. First convert the meaningful fields into canonical bytes.
+Never hash object memory, reflection order, `GetHashCode()`, Unity instance IDs, or arbitrary serializer output. Convert the meaningful fields into canonical bytes first:
 
 ```csharp
 public static ulong ComputeStateRecordHash(
@@ -358,18 +236,10 @@ public static ulong ComputeStateRecordHash(
     const int HEADER_SIZE = 20;
     Span<byte> header = stackalloc byte[HEADER_SIZE];
 
-    HashByteOrder.WriteUInt32LittleEndian(
-        header.Slice(0, 4),
-        contractRevision);
-    HashByteOrder.WriteUInt64LittleEndian(
-        header.Slice(4, 8),
-        entityId);
-    HashByteOrder.WriteUInt32LittleEndian(
-        header.Slice(12, 4),
-        stateFlags);
-    HashByteOrder.WriteUInt32LittleEndian(
-        header.Slice(16, 4),
-        checked((uint)payload.Length));
+    HashByteOrder.WriteUInt32LittleEndian(header.Slice(0, 4), contractRevision);
+    HashByteOrder.WriteUInt64LittleEndian(header.Slice(4, 8), entityId);
+    HashByteOrder.WriteUInt32LittleEndian(header.Slice(12, 4), stateFlags);
+    HashByteOrder.WriteUInt32LittleEndian(header.Slice(16, 4), checked((uint)payload.Length));
 
     XxHash64 hash = XxHash64.Create();
     hash.Append(header);
@@ -380,48 +250,40 @@ public static ulong ComputeStateRecordHash(
 
 The length field gives the payload an unambiguous boundary. The byte-order helpers make the integer representation independent of machine endianness.
 
-### Canonicalization checklist
+#### Canonicalization checklist
 
 Before hashing structured data, define:
 
-- sorting for dictionaries, sets, entities, and components;
-- fixed field order;
-- width and signedness for every integer;
-- representation of enums and flags;
-- handling of null and missing values;
-- text encoding, normalization, case, and line endings;
-- path separator and case policy;
-- float quantization and handling of `NaN`, infinities, `-0`, and `+0`;
-- inclusion or exclusion of timestamps and transient fields.
+- Sorting for dictionaries, sets, entities, and components.
+- Fixed field order.
+- Width and signedness for every integer.
+- Representation of enums and flags.
+- Handling of null and missing values.
+- Text encoding, normalization, case, and line endings.
+- Path separator and case policy.
+- Float quantization and handling of `NaN`, infinities, `-0`, and `+0`.
+- Inclusion or exclusion of timestamps and transient fields.
 
 Hashing detects byte differences. It does not make simulation, serialization, or floating-point calculations deterministic.
 
-## 8. One-shot, streaming, and state reuse
+### Streaming and state reuse
 
-Use one-shot hashing when the complete payload already exists as contiguous memory:
+Use one-shot hashing when the complete payload is already contiguous:
 
 ```csharp
 ulong digest = XxHash64.Compute(payloadBytes, seed: 0UL);
 ```
 
-Use streaming when data arrives in chunks or when concatenating it would require an extra buffer:
+Use streaming when data arrives in chunks or when concatenating would require an extra buffer:
 
 ```csharp
 using System.IO;
 
 public static ulong ComputeStreamHash(Stream stream, byte[] buffer)
 {
-    if (stream == null)
-    {
-        throw new ArgumentNullException(nameof(stream));
-    }
-
+    if (stream == null) throw new ArgumentNullException(nameof(stream));
     if (buffer == null || buffer.Length == 0)
-    {
-        throw new ArgumentException(
-            "A non-empty caller-owned buffer is required.",
-            nameof(buffer));
-    }
+        throw new ArgumentException("A non-empty caller-owned buffer is required.", nameof(buffer));
 
     XxHash64 hash = XxHash64.Create();
     int bytesRead;
@@ -429,21 +291,20 @@ public static ulong ComputeStreamHash(Stream stream, byte[] buffer)
     {
         hash.Append(buffer, 0, bytesRead);
     }
-
     return hash.GetDigest();
 }
 ```
 
 The I/O and buffer belong to the caller. `XxHash64` only consumes the bytes provided to `Append`.
 
-### State behavior
+State behavior:
 
 - `Create(seed)` initializes a new state.
 - `default(XxHash64)` is a valid seed-0 state.
 - `Append` processes bytes in call order.
 - `GetDigest` is non-destructive; more bytes may be appended afterward.
 - `Reset(seed)` clears the state and its inline tail buffer for reuse.
-- Copying the struct creates an independent snapshot of the accumulators and buffered bytes.
+- Copying the struct creates an independent snapshot of accumulators and buffered bytes.
 
 ```csharp
 XxHash64 hash = XxHash64.Create();
@@ -455,15 +316,15 @@ hash.Append(secondPayload);
 ulong secondDigest = hash.GetDigest();
 ```
 
-Use `ref` when passing a mutable state repeatedly through helper methods and snapshot semantics are not required.
+Pass a mutable state by `ref` when calling helpers repeatedly and snapshot semantics are not required.
 
-## 9. Digest serialization and byte order
+### Serializing digests
 
-The numeric `ulong` digest and its eight serialized bytes are separate contracts.
+The numeric `ulong` digest and its eight serialized bytes are separate contracts:
 
-- Canonical xxHash byte representation is big-endian.
-- Interoperable FNV byte vectors use little-endian.
-- A project-local format may choose another order only when the format defines it explicitly.
+- Canonical XXH64 byte representation is **big-endian**.
+- Interoperable FNV byte vectors use **little-endian**.
+- A project-local format may choose another order, but only when the format defines it explicitly.
 
 ```csharp
 Span<byte> xxHashBytes = stackalloc byte[XxHash64.HashSizeInBytes];
@@ -471,33 +332,27 @@ XxHash64 state = XxHash64.Create();
 state.Append(payload);
 
 bool written = state.TryWriteHashBigEndian(xxHashBytes);
-if (!written)
-{
-    throw new InvalidOperationException("The digest buffer is too small.");
-}
+if (!written) throw new InvalidOperationException("Digest buffer too small.");
 
-ulong receivedDigest =
-    HashByteOrder.ReadUInt64BigEndian(xxHashBytes);
+ulong receivedDigest = HashByteOrder.ReadUInt64BigEndian(xxHashBytes);
 ```
 
-`TryWriteHash` writes the canonical big-endian representation. `TryWriteHashBigEndian` states the same contract explicitly. `TryWriteHashLittleEndian` writes the numeric digest in little-endian order.
+`TryWriteHash` writes the canonical big-endian representation. `TryWriteHashBigEndian` states the same contract explicitly. `TryWriteHashLittleEndian` writes the numeric digest in little-endian order. All `TryWriteHash*` methods return `false` without writing when the destination is shorter than eight bytes.
 
-All `TryWriteHash*` methods return `false` without writing when the destination is shorter than eight bytes. `HashByteOrder` read/write methods use the standard span range behavior for undersized inputs.
-
-## 10. Stable identifiers and collision management
+### Stable identifiers and collision handling
 
 A non-cryptographic hash is a compact fingerprint, not a proof of uniqueness. For uniformly distributed values, the birthday approximation gives:
 
-| Width | About 1% probability of at least one collision | About 50% probability |
+| Width | ~1% probability of at least one collision | ~50% probability |
 | --- | ---: | ---: |
 | 32-bit | 9,300 distinct values | 77,000 distinct values |
 | 64-bit | 609 million distinct values | 5.06 billion distinct values |
 
 Use 32-bit identifiers only when storage or protocol constraints require them and the owner detects collisions. Prefer 64-bit identifiers for large registries.
 
-`StableHash32` and `StableHash64` map a final zero digest to `NonZeroFallback`. This lets a system reserve `0` as "unset," but it does not create uniqueness and adds one collision with the fallback value.
+`StableHash32` and `StableHash64` map a final zero digest to `NonZeroFallback`. This lets a system reserve `0` as "unset", but it does not create uniqueness and adds one collision with the fallback value.
 
-Cold-path registries should retain the canonical key:
+Cold-path registries should retain the canonical key alongside the hash:
 
 ```csharp
 using System.Collections.Generic;
@@ -510,15 +365,8 @@ public static ulong RegisterAbilityId(
 
     if (registry.TryGetValue(id, out string registeredName))
     {
-        if (!string.Equals(
-                registeredName,
-                canonicalName,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "A stable hash collision was detected.");
-        }
-
+        if (!string.Equals(registeredName, canonicalName, StringComparison.Ordinal))
+            throw new InvalidOperationException("A stable hash collision was detected.");
         return id;
     }
 
@@ -527,168 +375,117 @@ public static ulong RegisterAbilityId(
 }
 ```
 
-Reserve and validate such registries during authoring, loading, or composition instead of performing discovery in a per-frame hot path.
+Reserve and validate such registries during authoring, loading, or composition, not in a per-frame hot path.
 
-## 11. Performance, memory, and cache behavior
+## Advanced Topics
 
-| Path | Time complexity | Module-owned managed allocation | Working state |
+### Combining digests from independent partitions
+
+Digest values from independent partitions cannot be combined arbitrarily. Hashing `A` and `B` separately, then hashing their digests, is **not** equivalent to hashing `A || B`. Preserve input order, or define a separate tree-hash contract in the owning system.
+
+### Cross-language contracts
+
+When a digest must match a non-.NET producer (a C++ server, a Rust tool, a Python build script), the contract must fix every property listed in [Deterministic contracts](#deterministic-contracts). The most common pitfalls are:
+
+- .NET strings are UTF-16; many other languages default to UTF-8.
+- .NET `BitConverter` uses machine endianness; explicit `HashByteOrder` calls avoid ambiguity.
+- `GetHashCode()` is not stable across machines, processes, or .NET versions. Never persist or transmit it.
+
+### When to use a cryptographic digest instead
+
+Switch to a cryptographic digest (SHA-256 with a signature or MAC) when the hashed data crosses a trust boundary:
+
+- Remote executable content or paid content.
+- Account data or anti-cheat evidence.
+- Trusted updates delivered over an untrusted channel.
+
+FNV-1a and XXH64 detect accidental differences. They do not prove origin, prevent tampering, or resist deliberate collision construction.
+
+## Common Scenarios
+
+### Content cache invalidation
+
+A build tool wants to reuse expensive generated output only when every relevant input is identical:
+
+```text
+Source asset + import settings + dependency identifiers
+    -> canonical input bytes
+    -> XXH64 digest
+    -> cache key
+    -> reuse output when the key matches
+    -> rebuild output when the key differs
+```
+
+Use `XxHash64` streaming when inputs are large or arrive in chunks.
+
+### Deterministic-state diagnostics
+
+Client, server, replay, or simulation tools need to locate the first divergent checkpoint:
+
+```text
+Authoritative state at checkpoint N
+    -> canonical snapshot bytes
+    -> XXH64 digest
+    -> compare client/server/replay values
+    -> capture detailed field diagnostics when values differ
+```
+
+Hashing detects that canonical bytes differ; it does not explain the difference or make the simulation deterministic. The owning diagnostic system decides which fields to capture and how to report them.
+
+### Protocol and schema checks
+
+Peers must reject incompatible layouts before interpreting payloads. Hash the canonical field/type description used by the handshake:
+
+```csharp
+public static ulong ComputeSchemaHash(uint revision, ReadOnlySpan<byte> schemaBytes)
+{
+    ulong hash = Fnv1a64.OffsetBasis;
+    hash = Fnv1a64.CombineUInt32LittleEndian(hash, revision);
+    hash = Fnv1a64.Compute(schemaBytes, hash);
+    return hash;
+}
+```
+
+### Stable named definitions
+
+Authoring uses readable names; Runtime lookup needs compact numeric keys:
+
+```csharp
+public static ulong ComputeTagId(string canonicalName)
+{
+    return StableHash64.ComputeUtf16Ordinal(canonicalName);
+}
+```
+
+The owner retains the canonical name and rejects collisions during authoring.
+
+## Performance and Memory
+
+| Path | Time complexity | Module-owned allocation | Working state |
 | --- | --- | --- | --- |
 | FNV-1a byte or UTF-16 hashing | `O(n)` | 0 bytes | Numeric accumulator |
-| XXH64 one-shot | `O(n)` | 0 bytes | Value state with inline tail storage |
+| XXH64 one-shot | `O(n)` | 0 bytes | Value state with inline 32-byte tail |
 | XXH64 streaming | `O(n)` across all chunks | 0 bytes | Caller-owned mutable state |
 | Byte-order read/write | `O(1)` | 0 bytes | None |
 
 The span-based core paths do not allocate managed memory. XXH64 processes 32-byte stripes and keeps up to 31 unprocessed bytes in an inline 32-byte buffer.
 
-The module does not cache:
+The module does not cache input buffers, strings, paths, digests, reflection results, or encoding buffers. This avoids cache invalidation, retained-memory growth, synchronization, and cleanup ownership. Reuse `XxHash64` with `Reset` rather than pooling its small value state.
 
-- input buffers or strings;
-- paths or file metadata;
-- digests or formatted hexadecimal strings;
-- reflection results;
-- encoding buffers.
-
-This avoids cache invalidation, retained-memory growth, synchronization, and cleanup ownership. Reuse `XxHash64` with `Reset` rather than pooling its small value state.
-
-Caller code can still allocate through:
-
-- `Encoding.GetBytes(string)`;
-- new arrays and collection growth;
-- LINQ, delegates, closures, and iterators;
-- stream or task wrappers;
-- `ToString` and hexadecimal formatting.
-
-Performance must be measured in the owning workload. The included performance assembly covers 64-byte and 1 MiB XXH64, 4 KiB streaming chunks, 1 MiB FNV-1a 64-bit, and managed GC. Release acceptance should define throughput, latency, allocation, code-size, and warm-up budgets for every target device class.
-
-## 12. Threading, ownership, and platform behavior
+Caller code can still allocate through `Encoding.GetBytes(string)`, new arrays and collection growth, LINQ, delegates, closures, iterators, stream/task wrappers, `ToString`, and hexadecimal formatting. Profile the complete call path before attributing allocations to the hashing layer.
 
 ### Threading
 
 - `Fnv1a32`, `Fnv1a64`, `StableHash32`, `StableHash64`, and `HashByteOrder` have no mutable static state and may be called concurrently.
-- A mutable `XxHash64` value has one mutation owner.
-- Do not call `Append` or `Reset` concurrently on the same state.
+- A mutable `XxHash64` value has one mutation owner. Do not call `Append` or `Reset` concurrently on the same state.
 - Independent `XxHash64` values can run on separate workers without locks.
 - The module does not create threads, choose schedulers, or introduce synchronization.
 
-Digest values from independent partitions cannot be combined arbitrarily. Hashing `A` and `B` separately, then hashing their digests, is not equivalent to hashing `A || B`. Preserve input order or define a separate tree-hash contract in the owning system.
-
 ### Platform behavior
 
-The Runtime assembly:
+The Runtime assembly is enabled for all Unity platforms, has no `UnityEngine` or platform SDK reference, uses portable integer arithmetic, spans, and `BinaryPrimitives`, uses explicit endianness, uses no unsafe code, native plugin, reflection, or dynamic code generation, and owns no thread, file, socket, handle, or native container. Release validation should run the same known vectors and chunk-boundary tests under the target scripting backend, followed by target-specific performance and allocation measurements.
 
-- is enabled for all Unity platforms;
-- has no `UnityEngine` or platform SDK reference;
-- uses portable integer arithmetic, spans, and `BinaryPrimitives`;
-- uses explicit endianness;
-- uses no unsafe code, native plugin, reflection, or dynamic code generation;
-- owns no thread, file, socket, handle, or native container.
-
-This design avoids operating-system and CPU-specific control flow in the core algorithm. Platform release validation should run the same known vectors and chunk-boundary tests under the target scripting backend, followed by target-specific performance and allocation measurements.
-
-## 13. Persistence, networking, security, and integration
-
-CycloneGames.Hash writes no files, assets, project preferences, player preferences, registry entries, or hidden cache data. The consumer owns storage paths, atomic writes, schema revision, format evolution, corruption recovery, and cleanup.
-
-For persisted or transmitted digests, store or freeze:
-
-| Contract field | Example |
-| --- | --- |
-| Algorithm | `XXH64` |
-| Digest width | `64` |
-| Seed | `0` |
-| Text representation | `UTF-8, NFC, case-sensitive` |
-| Integer order | `Little-endian` |
-| Digest order | `Big-endian` |
-| Field layout | Fixed order with length-prefixed variable fields |
-| Contract revision | Owned by the manifest, save, or protocol |
-
-Changing one of these fields changes the data contract. Give the owning format a distinct contract revision, and let its reader or adapter select the matching contract before interpreting bytes.
-
-### Security boundary
-
-FNV-1a and XXH64 are non-cryptographic. They are appropriate for accidental-difference detection, caches, local lookup, diagnostics, and desynchronization reports. They do not prove origin, prevent tampering, protect secrets, or resist deliberate collision construction.
-
-Remote executable content, paid content, account data, anti-cheat evidence, and trusted updates require a security-owned design such as a cryptographic digest plus an authenticated signature or MAC.
-
-### Integration boundary
-
-Keep domain and platform concerns outside the core:
-
-```text
-File/Network/Unity adapter
-    -> canonical bytes
-    -> CycloneGames.Hash
-    -> numeric or serialized digest
-    -> owner-defined storage, comparison, logging, or security action
-```
-
-Adapters may provide stream reading, asset traversal, Native container conversion, job scheduling, or protocol framing. They should not change the algorithm contract implicitly.
-
-## 14. Public API reference
-
-### `Fnv1a32`
-
-- `Compute(ReadOnlySpan<byte>)`: hashes bytes from `OffsetBasis`.
-- `Compute(ReadOnlySpan<byte>, uint seed)`: continues from a running FNV state.
-- `ComputeUtf16Ordinal(ReadOnlySpan<char>)`: hashes UTF-16 code units from `OffsetBasis`.
-- `ComputeUtf16Ordinal(ReadOnlySpan<char>, uint seed)`: continues the ordinal text contract.
-- `CombineUInt32LittleEndian`: folds four bytes, low byte first.
-
-### `Fnv1a64`
-
-- `Compute(ReadOnlySpan<byte>)` and the running-state overload.
-- `ComputeUtf16Ordinal(ReadOnlySpan<char>)` and the running-state overload.
-- `CombineUInt32LittleEndian`: folds a 32-bit field into a 64-bit state.
-- `CombineUInt64LittleEndian`: folds an eight-byte field, low byte first.
-
-### `StableHash32` and `StableHash64`
-
-- `ComputeBytes`: applies FNV and maps a final zero digest.
-- `ComputeUtf16Ordinal`: hashes ordinal UTF-16 text and maps a final zero digest.
-- `EnsureNonZero`: maps `0` to `NonZeroFallback`.
-- `CombineUInt32LittleEndian` or `CombineUInt64LittleEndian`: forwards ordered field composition without applying the final zero mapping.
-
-The `string` overloads reject `null` with `ArgumentNullException`. Span overloads represent an empty span as valid empty input.
-
-### `XxHash64`
-
-- `Create(seed)`: creates initialized state.
-- `Reset(seed)`: clears and reinitializes state.
-- `Append(ReadOnlySpan<byte>)`: appends a span.
-- `Append(byte[], offset, count)`: appends an array slice with standard range validation.
-- `GetDigest()`: reads the digest without consuming state.
-- `Compute(data, seed)`: one-shot hashing.
-- `HashToUInt64(data, seed)`: one-shot numeric-digest alias.
-- `TryWriteHash` and `TryWriteHashBigEndian`: canonical big-endian bytes.
-- `TryWriteHashLittleEndian`: explicit little-endian numeric bytes.
-- `HashSizeInBytes`: required digest destination size.
-
-### `HashByteOrder`
-
-Provides 32-bit and 64-bit read/write methods for little-endian and big-endian numeric values. Destination or source spans must contain at least four or eight bytes for the selected width.
-
-## 15. Validation and troubleshooting
-
-### Compile checks
-
-Unity-generated project files can be used for local compile checks:
-
-```bash
-dotnet build UnityStarter/CycloneGames.Hash.Core.csproj -v:minimal
-dotnet build UnityStarter/CycloneGames.Hash.Tests.Editor.csproj -v:minimal
-dotnet build UnityStarter/CycloneGames.Hash.Tests.Performance.csproj -v:minimal
-```
-
-### Unity validation
-
-1. Open `<repo-root>/UnityStarter` with the Unity release recorded in `ProjectSettings/ProjectVersion.txt`.
-2. Refresh scripts and confirm that the Console contains no compilation errors.
-3. Run `CycloneGames.Hash.Tests.Editor` in EditMode.
-4. Run `CycloneGames.Hash.Tests.Performance` when Performance Testing is installed.
-5. Run tests for every consumer whose persisted, networked, or public contract uses the changed hash path.
-6. Run known vectors and performance checks in each release Player and scripting backend.
-
-### Troubleshooting
+## Troubleshooting
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
@@ -699,6 +496,16 @@ dotnet build UnityStarter/CycloneGames.Hash.Tests.Performance.csproj -v:minimal
 | A hot path allocates | Encoding, buffers, enumeration, or formatting allocates in caller code | Profile the complete call path and supply reusable spans/buffers |
 | Different platforms report different state hashes | Canonical serialization or simulation differs before hashing | Compare serialized bytes at field boundaries before inspecting the hash |
 | A digest is being used as proof of trust | A non-cryptographic hash crossed a security boundary | Use a cryptographic digest with signature or MAC in the security owner |
+
+## Validation
+
+Run focused tests from Unity Test Runner:
+
+```text
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Hash.Tests.Editor -testResults <result-path> -quit
+```
+
+When `com.unity.test-framework.performance` is installed, also run `CycloneGames.Hash.Tests.Performance`. Run known vectors and performance checks in each release Player and scripting backend that consumes the contract.
 
 ## References
 

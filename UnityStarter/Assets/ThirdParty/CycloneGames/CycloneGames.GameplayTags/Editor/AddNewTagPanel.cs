@@ -4,7 +4,6 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.GameplayTags.Unity.Runtime;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -172,6 +171,12 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          if (!GameplayTagUtility.IsNameValid(m_NewTagName, out m_ValidationError))
             return;
 
+         if (m_NewTagComment != null && m_NewTagComment.Length > FileGameplayTagSource.MaxCommentLength)
+         {
+            m_ValidationError = $"Comment cannot exceed {FileGameplayTagSource.MaxCommentLength} UTF-16 code units.";
+            return;
+         }
+
          if (m_SelectedSourceFileIndex == k_NewFileOptionIndex)
          {
             if (m_NewSourceFileName.Length == 0)
@@ -197,15 +202,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                return;
             }
 
-            if (!IsPathInsideDirectory(filePath, FileGameplayTagSource.DirectoryPath))
-            {
-               m_ValidationError = $"Source file must be created inside the '{FileGameplayTagSource.DirectoryPath}' directory.";
-               return;
-            }
-
-            string directory = Path.GetDirectoryName(filePath);
-            if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-               Directory.CreateDirectory(directory);
+            FileGameplayTagSource.ValidateSourcePath(filePath);
          }
          else
          {
@@ -224,19 +221,5 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          }
       }
 
-      private static bool IsPathInsideDirectory(string filePath, string directoryPath)
-      {
-         string fullFilePath = Path.GetFullPath(filePath);
-         string fullDirectoryPath = Path.GetFullPath(directoryPath);
-         if (!fullDirectoryPath.EndsWith(Path.DirectorySeparatorChar.ToString()) &&
-             !fullDirectoryPath.EndsWith(Path.AltDirectorySeparatorChar.ToString()))
-         {
-            fullDirectoryPath += Path.DirectorySeparatorChar;
-         }
-
-         StringComparison comparison =
-            Path.DirectorySeparatorChar == '\\' ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-         return fullFilePath.StartsWith(fullDirectoryPath, comparison);
-      }
    }
 }

@@ -3,24 +3,27 @@ using System;
 using System.Buffers;
 using System.Text;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Serialization;
 using CycloneGames.Networking.Serialization;
 
 namespace CycloneGames.Networking.Serializer.NewtonsoftJson
 {
     /// <summary>
     /// Newtonsoft.Json serializer adapter for network messages.
-    /// Provides full JSON feature support including Dictionary, polymorphism, and custom converters.
+    /// Provides JSON support including Dictionary, custom converters, and allow-listed polymorphism.
     /// </summary>
     /// <remarks>
     /// <para>
     /// This adapter is recommended when:
     /// - You need Dictionary/HashSet serialization (JsonUtility doesn't support these)
-    /// - You need polymorphic type handling with $type
+    /// - You need polymorphic type handling with an explicit allow-list binder
     /// - You need to communicate with non-Unity backends
     /// - You need custom JsonConverter support
     /// </para>
     /// <para>
-    /// For maximum performance with binary format, consider using MessagePackSerializerAdapter instead.
+    /// Binary serializers such as <c>MessagePackSerializerAdapter</c> have different payload,
+    /// allocation, compatibility, and AOT tradeoffs. Benchmark the selected serializer and schema
+    /// on each target Player before assigning a hot-path budget.
     /// </para>
     /// </remarks>
     public sealed class NewtonsoftJsonSerializerAdapter : INetSerializer
@@ -51,7 +54,8 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
         /// <param name="settings">Custom Newtonsoft.Json settings.</param>
         public NewtonsoftJsonSerializerAdapter(JsonSerializerSettings settings)
         {
-            _settings = settings ?? CreateDefaultSettings();
+            _settings = settings ?? throw new ArgumentNullException(nameof(settings));
+            ValidateTypeHandlingConfiguration(_settings, nameof(settings));
         }
 
         private static JsonSerializerSettings CreateDefaultSettings()
@@ -69,21 +73,29 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
         }
 
         /// <summary>
-        /// Creates an adapter with polymorphic type support enabled.
+        /// Creates an adapter with allow-listed polymorphic type support enabled.
         /// </summary>
+        /// <param name="serializationBinder">Binder that allow-lists every type that may be materialized from network data.</param>
         /// <remarks>
-        /// Warning: TypeNameHandling can be a security risk if deserializing untrusted data.
-        /// Only use with trusted message sources.
+        /// Type-name handling is rejected unless a binder is supplied. The binder remains
+        /// responsible for rejecting every assembly and type name outside the protocol schema.
         /// </remarks>
-        public static NewtonsoftJsonSerializerAdapter CreateWithTypeHandling()
+        public static NewtonsoftJsonSerializerAdapter CreateWithTypeHandling(ISerializationBinder serializationBinder)
         {
+            if (serializationBinder == null)
+            {
+                throw new ArgumentNullException(nameof(serializationBinder));
+            }
+
             var settings = CreateDefaultSettings();
             settings.TypeNameHandling = TypeNameHandling.Auto;
+            settings.SerializationBinder = serializationBinder;
             return new NewtonsoftJsonSerializerAdapter(settings);
         }
 
         public void Serialize<T>(in T value, byte[] buffer, int offset, out int writtenBytes) where T : struct
         {
+            EnsureTypeHandlingConfigurationIsSafe();
             string json = JsonConvert.SerializeObject(value, _settings);
             int byteCount = _encoding.GetByteCount(json);
 
@@ -103,12 +115,14 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
                 throw new ArgumentNullException(nameof(writer));
             }
 
+            EnsureTypeHandlingConfigurationIsSafe();
             string json = JsonConvert.SerializeObject(value, _settings);
             WriteUtf8String(json, writer);
         }
 
         public T Deserialize<T>(ReadOnlySpan<byte> data) where T : struct
         {
+            EnsureTypeHandlingConfigurationIsSafe();
             string json = _encoding.GetString(data);
             return JsonConvert.DeserializeObject<T>(json, _settings);
         }
@@ -145,6 +159,25 @@ namespace CycloneGames.Networking.Serializer.NewtonsoftJson
             finally
             {
                 ArrayPool<byte>.Shared.Return(rented);
+            }
+        }
+
+        private static void ValidateTypeHandlingConfiguration(JsonSerializerSettings settings, string parameterName)
+        {
+            if (settings.TypeNameHandling != TypeNameHandling.None && settings.SerializationBinder == null)
+            {
+                throw new ArgumentException(
+                    "TypeNameHandling for network payloads requires an explicit allow-list ISerializationBinder.",
+                    parameterName);
+            }
+        }
+
+        private void EnsureTypeHandlingConfigurationIsSafe()
+        {
+            if (_settings.TypeNameHandling != TypeNameHandling.None && _settings.SerializationBinder == null)
+            {
+                throw new InvalidOperationException(
+                    "TypeNameHandling for network payloads requires an explicit allow-list ISerializationBinder.");
             }
         }
     }

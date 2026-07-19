@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.gameplay-framework",
   "version": "1.0.0",
   "displayName": "CycloneGames.GameplayFramework",
-  "description": "A simple gameplay framework similiar with Unreal Engine's GameplayFramework code structure.",
+  "description": "A World-scoped Unity gameplay foundation for Actor lifecycle, player admission, possession, participant state, camera orchestration, and optional integrations.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
@@ -11,6 +11,7 @@
     "com.unity.cinemachine": "3.0.0",
     "com.cysharp.unitask": "2.0.0",
     "com.cyclone-games.factory": "1.0.0",
+    "com.cyclone-games.gameplay-tags": "1.0.0",
     "com.cyclone-games.logger": "1.0.0"
   },
   "keywords": [
@@ -26,7 +27,7 @@
   "samples": [
     {
       "displayName": "Gameplay Framework Samples",
-      "description": "All samples under the Samples folder.",
+      "description": "Runtime composition, Actor Tick, and camera workflow samples.",
       "path": "Samples"
     }
   ]

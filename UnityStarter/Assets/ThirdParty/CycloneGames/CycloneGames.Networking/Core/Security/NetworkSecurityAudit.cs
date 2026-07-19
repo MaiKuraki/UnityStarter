@@ -157,10 +157,8 @@ namespace CycloneGames.Networking.Security
     /// delivery. This is a configuration-time audit, not a runtime hot path; allocations are acceptable.
     /// </summary>
     /// <remarks>
-    /// The audit deliberately does not bundle a concrete cipher. Transport-level encryption (TLS/DTLS/WSS)
-    /// is the primary confidentiality mechanism across all target platforms, including WebGL where managed
-    /// AEAD ciphers are unavailable. Configure <see cref="INetworkCryptoProvider"/> only when an
-    /// application-layer cipher is genuinely required and verified on every shipping platform.
+    /// Transport-level encryption (TLS/DTLS/WSS) is the confidentiality mechanism audited across all target
+    /// platforms, including WebGL.
     /// </remarks>
     public static class NetworkSecurityAudit
     {
@@ -176,18 +174,19 @@ namespace CycloneGames.Networking.Security
             var issues = new List<NetworkSecurityAuditIssue>(8);
 
             bool signerEnabled = options.MessageSigner != null && options.MessageSigner.IsEnabled;
-            bool cryptoEnabled = options.CryptoProvider != null && options.CryptoProvider.IsEnabled;
-            bool confidentiality = environment.TransportEncrypted || cryptoEnabled;
+            bool confidentiality = environment.TransportEncrypted;
 
-            MessageSecurityPolicy defaultPolicy = (options.MessagePolicies ?? new MessageSecurityPolicyRegistry()).DefaultPolicy;
+            MessageSecurityPolicyRegistry policies = options.MessagePolicies
+                ?? throw new ArgumentException("Message policies must be explicitly configured.", nameof(options));
+            MessageSecurityPolicy defaultPolicy = policies.DefaultPolicy;
 
             if (environment.IsReleaseBuild && !confidentiality)
             {
                 issues.Add(new NetworkSecurityAuditIssue(
                     NetworkSecurityAuditIds.UnencryptedReleaseTraffic,
                     NetworkSecurityAuditSeverity.Critical,
-                    "Release build transmits network payloads without transport-level or application-level encryption.",
-                    "Enable an encrypted transport (TLS/DTLS/WSS) or configure an INetworkCryptoProvider verified on every shipping platform."));
+                    "Release build transmits network payloads without transport-level encryption.",
+                    "Enable an authenticated encrypted transport such as TLS, DTLS, or WSS."));
             }
 
             if (environment.IsReleaseBuild && !signerEnabled)
@@ -224,30 +223,30 @@ namespace CycloneGames.Networking.Security
                 issues.Add(new NetworkSecurityAuditIssue(
                     NetworkSecurityAuditIds.EncryptionRequiredButUnavailable,
                     NetworkSecurityAuditSeverity.Critical,
-                    "Default message policy requires encrypted transport but neither transport encryption nor a crypto provider is available; matching messages will be rejected.",
-                    "Enable an encrypted transport or an INetworkCryptoProvider, or relax MessageSecurityPolicy.RequireEncryptedTransport."));
+                    "Default message policy requires encrypted transport but transport encryption is unavailable; matching messages will be rejected.",
+                    "Enable an encrypted transport or relax MessageSecurityPolicy.RequireEncryptedTransport."));
             }
 
             if (environment.IsServer)
             {
-                bool rateLimitingActive = options.EnableRateLimiting && options.RateLimiter != null;
+                bool rateLimitingActive = options.RateLimiter != null;
                 if (!rateLimitingActive)
                 {
                     issues.Add(new NetworkSecurityAuditIssue(
                         NetworkSecurityAuditIds.RateLimitingDisabled,
                         NetworkSecurityAuditSeverity.Warning,
                         "Server has no active inbound rate limiter; a single connection can exhaust message processing budget.",
-                        "Assign a configured RateLimiter and set EnableRateLimiting = true with a per-connection byte budget."));
+                        "Assign a configured RateLimiter with a per-connection byte budget."));
                 }
             }
 
-            if (options.ReplayProtector == null)
+            if (options.ReplayGuard == null)
             {
                 issues.Add(new NetworkSecurityAuditIssue(
                     NetworkSecurityAuditIds.ReplayProtectionMissing,
                     NetworkSecurityAuditSeverity.Warning,
-                    "No replay protector is configured; replayed sequences cannot be rejected.",
-                    "Assign a NetworkReplayGuardProtector (or equivalent) to ReplayProtector."));
+                    "No replay guard is configured; replayed sequences cannot be rejected.",
+                    "Assign a bounded NetworkReplayGuard to ReplayGuard."));
             }
 
             if (environment.IsServer

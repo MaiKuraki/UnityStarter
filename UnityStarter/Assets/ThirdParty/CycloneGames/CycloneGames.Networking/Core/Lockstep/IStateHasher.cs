@@ -7,9 +7,10 @@ namespace CycloneGames.Networking.Lockstep
     /// <summary>
     /// Pluggable hash algorithm for deterministic state hashing.
     /// Implement as a <c>struct</c> and use with <see cref="DesyncDetector{THasher}"/>
-    /// to get zero-cost abstraction (JIT monomorphizes each struct type).
+    /// to avoid interface boxing in the normal generic call path. Verify JIT/AOT codegen
+    /// and throughput on each shipping backend before making performance claims.
     ///
-    /// <para><b>Built-in:</b> <see cref="Fnv1aHasher"/> (default, fastest for per-frame desync detection).</para>
+    /// <para><b>Built-in:</b> <see cref="Fnv1aHasher"/> (the default non-cryptographic implementation).</para>
     /// <para><b>Custom:</b> Wrap xxHash64, CRC32, or any non-cryptographic hash by implementing this interface.</para>
     /// </summary>
     public interface IStateHasher
@@ -36,9 +37,9 @@ namespace CycloneGames.Networking.Lockstep
     /// <summary>
     /// FNV-1a 64-bit hasher. Default implementation for <see cref="DesyncDetector{THasher}"/>.
     ///
-    /// <para>Excellent for per-frame desync detection: ~1-2 ns per value, zero allocations,
-    /// deterministic across all platforms. Not cryptographically secure — use SHA-256
-    /// for tamper-proof scenarios (replay file signing, resource integrity).</para>
+    /// <para>The integer/byte folding algorithm is stable and non-cryptographic. It can
+    /// detect accidental divergence but cannot authenticate replay files or resources;
+    /// tamper resistance requires a product-owned keyed MAC or digital signature.</para>
     /// </summary>
     public struct Fnv1aHasher : IStateHasher
     {

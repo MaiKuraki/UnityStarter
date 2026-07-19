@@ -79,7 +79,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
         {
             get
             {
-                return Sender == null || Sender.IsAuthenticated;
+                return Sender != null && Sender.IsAuthenticated;
             }
         }
 

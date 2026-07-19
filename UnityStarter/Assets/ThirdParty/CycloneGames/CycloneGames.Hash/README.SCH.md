@@ -1,197 +1,81 @@
 # CycloneGames.Hash
 
-[English](README.md)
+[English | 简体中文](README.md)
 
-大型游戏会让同一份逻辑数据反复经过 Authoring Tool、Build Pipeline、Runtime System、Cache、Save、Network Protocol、Replay Tool 和 Server。这些系统需要一种紧凑方式判断 Definition、Payload、Schema 或 State Snapshot 是否相同，而不是每次都保留并完整比较源数据。
+CycloneGames.Hash 为 Unity 项目、构建管线和纯 C# 服务提供确定性的非加密哈希原语。它在无 `UnityEngine` 依赖的纯 C# 核心中封装了 FNV-1a（32/64 位）、XXH64、稳定的非零标识符以及显式字节序辅助方法，使同一套哈希契约在 Runtime、Editor、CLI、headless 和服务端环境中产生完全相同的摘要。
 
-CycloneGames.Hash 就是为此服务的确定性指纹层。拥有数据的系统先把有意义的数据转换为 Canonical Ordered Bytes；本模块再把这些字节转换为固定宽度的非密码学摘要；最后由 Owner 使用该摘要完成 Lookup、Comparison、Invalidation、Compatibility Check 或 Diagnostics。
+## 目录
 
-该模块面向 Unity Runtime、Editor 工具、命令行测试、Headless 进程和服务器组合。Runtime 程序集不引用 `UnityEngine`，不执行文件 I/O，不分配 Native 内存，不创建线程，也不保留全局状态。
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
-## 1. 为什么需要这个模块
+## 概述
 
-### 在游戏框架中的位置
+哈希函数回答一个问题：给定相同算法和相同输入字节，每个生产者应该计算出什么固定宽度的摘要？CycloneGames.Hash 用一组聚焦的算法回答这个问题，每条 API 在调用处显式暴露契约（算法、种子、字节序）。
 
-CycloneGames.Hash 位于数据定义和 Canonical Serialization 之后，位于 Owner 的业务决策之前：
+本模块适用于项目需要对规范数据进行紧凑指纹采集的时机：资产内容、构建输入、协议 schema、确定性状态快照、命名定义或缓存键。所有者决定要哈希哪些字节，本模块把这些字节转换成可以比较、缓存、传输或记录的稳定摘要。
 
-```mermaid
-flowchart LR
-    Source["Domain Data、Content、Schema 或 State"] --> Owner["Owner 定义 Canonical Bytes"]
-    Owner --> Hash["CycloneGames.Hash 计算摘要"]
-    Hash --> Compare["Comparison 或 Lookup"]
-    Hash --> Cache["Build 或 Cache Key"]
-    Hash --> Protocol["Protocol 或 Manifest Field"]
-    Hash --> Diagnose["Desynchronization Diagnostic"]
-    Compare --> Action["Owner 决定后续操作"]
-    Cache --> Action
-    Protocol --> Action
-    Diagnose --> Action
-```
+适用场景：
 
-模块不决定哪些字段有意义、Object 如何序列化、Collision 是否可以接受，或者发现不一致后应该执行什么操作。这些决策属于拥有数据的 Gameplay、Content、Networking、Save 或 Build System。
+- 创作工具、构建管线或 Runtime 代码需要对有序数据的紧凑可重复指纹。
+- 同一逻辑值需要在不同机器、进程和 Unity 后端之间产生相同摘要。
+- 需要基于 span、热路径零分配的哈希能力。
 
-这一边界让不同运行环境共享同一个小型 Hash Core，同时允许每个 Owner 定义自己的 Canonical Data Contract。
+不要用于加密认证、防篡改、密码存储或保证唯一的标识符。这些职责属于带签名或 MAC 的加密摘要层。
 
-### 应用情景
+### 主要特性
 
-| 应用情景 | 需要解决的问题 | CycloneGames.Hash 承担的职责 | 常用 API |
-| --- | --- | --- | --- |
-| 稳定命名 Definition | Authoring 使用可读名称，Runtime Lookup 需要紧凑数值 Key | 对 Canonical Name 计算 Hash；Owner 保留名称并检查 Collision | `StableHash64.ComputeUtf16Ordinal` 或显式 UTF-8 Bytes |
-| Asset 与 Content 指纹 | Tool 需要判断有意义的内容是否发生变化 | 对 Canonical Content 或 Metadata Bytes 计算 Hash，用于快速比较 | `XxHash64.Compute` |
-| Build 与 Cache 失效 | 只有全部相关输入相同时，昂贵的生成结果才能复用 | 把有序 Input 与 Setting 计算为 Cache Key | `XxHash64` Streaming 或 `Fnv1a64` Composition |
-| Content Manifest 与 Update Catalog | Client 与 Server 需要同一 Manifest Entry 的紧凑指纹 | 生成 Manifest Digest；Authenticity 仍由 Security Layer 负责 | `XxHash64` 加显式字节序输出 |
-| Protocol 与 Schema 检查 | Peer 必须在解释 Payload 前拒绝不兼容的 Layout | 对 Handshake 使用的 Canonical Field/Type Description 计算 Hash | `Fnv1a64` Ordered Composition |
-| 确定性状态诊断 | Client、Server、Replay 或 Simulation Tool 需要定位第一个分歧检查点 | 对 Canonical Snapshot 计算 Hash，用于比较与日志 | `XxHash64` |
-| 大型 File 或 Streaming Payload | 数据按 Chunk 到达，不应复制到一个大型 Buffer | 在有序 Chunk 之间维护增量状态 | `XxHash64.Create` 与 `Append` |
-| 快速 Equality Filtering | 完整字节比较成本较高，并且大多数候选数据并不相同 | 先按 Digest 排除不同候选；需要绝对相等时由 Owner 再逐字节比较 | `XxHash64.Compute` |
+- **FNV-1a 32 位与 64 位**：适合有序组合少量字段与字节。
+- **XXH64**：一次性与流式两种用法，适合较大负载的快速摘要。
+- **StableHash32 / StableHash64**：将 `0` 保留为"未设置"哨兵值。
+- **HashByteOrder**：显式小端和大端的读写辅助方法。
+- **纯 C# 核心**：`noEngineReferences: true`，基于 span 的 API，热路径零模块级堆分配。
 
-#### 示例：Content Cache
+## 架构
 
-```text
-Source Asset + Import Setting + Dependency Identifier
-    -> Canonical Input Bytes
-    -> XXH64 Digest
-    -> Cache Key
-    -> Key 相同时复用 Output
-    -> Key 不同时重新生成 Output
-```
+本模块由一个程序集及其测试组成：
 
-#### 示例：确定性状态诊断
-
-```text
-Checkpoint N 的 Authoritative State
-    -> Canonical Snapshot Bytes
-    -> XXH64 Digest
-    -> 比较 Client/Server/Replay Value
-    -> Value 不同时采集详细字段诊断
-```
-
-Hash 可以检测 Canonical Bytes 是否不同，但不能解释差异，也不能让 Simulation 自动具备确定性。拥有诊断流程的系统负责决定采集哪些字段以及如何报告。
-
-### 如何判断是否应该使用
-
-| 问题 | 决策 |
-| --- | --- |
-| 是否需要有序数据的紧凑、可重复指纹？ | 先定义精确 Input Bytes，再使用本模块 |
-| 两个 Producer 是否可能把同一逻辑值序列化为不同 Bytes？ | 先定义 Canonicalization；Hash 本身无法修复差异 |
-| Identifier 是否必须绝对唯一？ | 使用 Owner Assigned Stable ID，或者保留 Canonical Key 并拒绝 Collision |
-| 结果是否必须证明可信或抵抗恶意篡改？ | 在 Security Layer 使用 Cryptographic Digest 加 Signature 或 MAC |
-| 是否必须从数学上确认数据相等？ | 用 Digest 快速过滤，再比较 Canonical Bytes |
-| 数据是否按有序 Chunk 到达？ | 使用增量 `XxHash64`，无需拼接 Chunk |
-
-需要特别理解两个结论：
-
-- Digest 不同时，可以确认 Algorithm Contract 或 Input Bytes 不同。
-- 非密码学 Digest 相同时，只能作为很强的比较证据；因为存在 Collision，它不是绝对相等证明。
-
-不要把 Runtime `GetHashCode()` 用作持久化、网络或跨 Tool 的数据契约。应显式选择 CycloneGames.Hash Algorithm，并定义 Canonical Input。
-
-### 设计目标
-
-本模块围绕以下性质设计：
-
-- **确定性契约：** Algorithm、Seed、Input Order、Encoding 和 Byte Order 都保持可见。
-- **纯 C# Core：** Domain、Editor、Client、Server 和 Headless Code 共享同一实现。
-- **低分配执行：** Span API 和 Inline XXH64 State 避免模块拥有的 Heap Allocation。
-- **显式所有权：** 调用方拥有 Input Memory、Mutable State、Threading、Storage 和 Failure Action。
-- **跨平台表示：** Integer 与 Digest Byte Order 显式定义。
-- **聚焦的 API：** 具体 Algorithm Entry Point 让调用点直接表达所选契约。
-- **可测试行为：** Known Vector、Chunk Boundary、Allocation 与 Performance Path 都有专用测试。
-- **清晰安全边界：** Collision Handling 与 Cryptographic Trust 明确属于 Owner。
-
-### 核心职责
-
-Hash 函数解决一个明确的问题：
-
-> 当算法契约和输入字节完全一致时，所有生产者应计算出哪个固定宽度的摘要？
-
-CycloneGames.Hash 提供：
-
-- FNV-1a 32-bit 和 64-bit 字节 Hash；
-- 对 .NET UTF-16 code unit 进行确定性 ordinal Hash；
-- 为需要保留 `0` 作为未设置值的系统提供稳定非零 32-bit 和 64-bit helper；
-- XXH64 one-shot 和增量 Hash；
-- 显式 32-bit 与 64-bit little-endian、big-endian 转换；
-- 主要热路径的分配与吞吐测试。
-
-### 非目标
-
-该模块不提供：
-
-- 密码学认证、加密、签名或密码 Hash；
-- 绝对唯一的标识符；
-- 自动对象序列化；
-- Unicode normalization 或文本编码；
-- File、Stream、Network 或 Save System 的所有权；
-- 全局 Hash Registry、Cache、Worker Pool 或 Job Scheduler。
-
-这些边界使 Hash 契约与 Unity 生命周期、存储、传输和安全策略保持解耦。
-
-### 推荐阅读顺序
-
-- 第一次接入：阅读第 2、3、4 节。
-- 设计确定性数据：继续阅读第 5、6、7、9 节。
-- 高吞吐 Runtime 工作：重点阅读第 8、11、12 节。
-- 持久化、网络与安全评审：阅读第 10、13、15 节。
-
-## 2. 架构与包结构
-
-| 程序集 | 路径 | 职责 | 可用条件 |
-| --- | --- | --- | --- |
-| `CycloneGames.Hash.Core` | `Core/` | 纯 C# 算法、状态和字节序 helper | 所有平台；无程序集依赖；`noEngineReferences=true` |
-| `CycloneGames.Hash.Tests.Editor` | `Tests/Editor/` | Known Vector、边界、契约行为和分配测试 | Unity EditMode |
-| `CycloneGames.Hash.Tests.Performance` | `Tests/Performance/` | 结构化吞吐与 Managed GC 测量 | 安装 Performance Testing 时在 Unity Editor 中启用 |
+| 程序集 | 路径 | 用途 |
+| --- | --- | --- |
+| `CycloneGames.Hash.Core` | `Core/` | 算法、状态与字节序辅助方法。不引用 `UnityEngine`。 |
+| `CycloneGames.Hash.Tests.Editor` | `Tests/Editor/` | 已知向量、分块边界、契约与分配测试。 |
+| `CycloneGames.Hash.Tests.Performance` | `Tests/Performance/` | 吞吐量与托管 GC 测量（需要 Performance Testing 包）。 |
 
 ```mermaid
 flowchart LR
-    Input["Canonical 输入字节"] --> Select["选择算法"]
+    Input["Canonical input bytes"] --> Select["Select an algorithm"]
     Select --> FNV32["Fnv1a32"]
     Select --> FNV64["Fnv1a64"]
     Select --> XXH64["XxHash64"]
     FNV32 --> Stable32["StableHash32"]
     FNV64 --> Stable64["StableHash64"]
-    FNV32 --> Digest["数值摘要"]
+    FNV32 --> Digest["Numeric digest"]
     FNV64 --> Digest
     Stable32 --> Digest
     Stable64 --> Digest
     XXH64 --> Digest
-    Digest --> Order["HashByteOrder 或 TryWriteHash*"]
-    Order --> Contract["Manifest、Packet、Save、Cache 或诊断记录"]
+    Digest --> Order["HashByteOrder or TryWriteHash*"]
+    Order --> Contract["Manifest, packet, save, cache, or diagnostic record"]
 ```
 
-由自定义 asmdef 编译的代码应引用 `CycloneGames.Hash.Core`。源码随后导入：
+所有者把有意义的数据转换成规范字节，本模块把这些字节转换成摘要，所有者再决定如何使用结果。算法选择、种子、字段顺序、编码和字节序都在调用处可见，绝不隐藏在隐式配置背后。
+
+## 快速上手
+
+在 asmdef 中添加对 `CycloneGames.Hash.Core` 的引用，然后导入命名空间：
 
 ```csharp
 using CycloneGames.Hash.Core;
 ```
 
-## 3. 选择正确的 API
-
-选择与数据契约匹配的最窄 API：
-
-| 需求 | 推荐 API | 原因 |
-| --- | --- | --- |
-| 对完整字节 Payload 快速计算摘要 | `XxHash64.Compute` | 简单的 one-shot 入口 |
-| 大型 Payload 以有序 Chunk 到达 | `XxHash64.Create`、`Append`、`GetDigest` | 固定 inline state，不需要拼接 Buffer |
-| 有序组合小型整数字段与字节 | `Fnv1a64` | 可直接组合 running state |
-| 带 Collision 检查的紧凑 32-bit 字段 | `Fnv1a32` 或 `StableHash32` | 仅在契约要求 32-bit 时使用 |
-| 非零 64-bit 标识符 | `StableHash64` | 保留 `0` 作为未设置值 |
-| Ordinal .NET String 标识符 | `ComputeUtf16Ordinal` | 每个 UTF-16 code unit 参与一次计算 |
-| 跨语言文本或协议数据 | 先编码 canonical bytes，再使用 FNV-1a 或 XXH64 | 显式确定编码与 normalization |
-| 序列化数值摘要 | `HashByteOrder` 或 `TryWriteHash*` | 消除本机字节序歧义 |
-
-算法数量不是模块质量指标。生产级契约更依赖精确输入定义、显式字节序、Collision 处理、测试和稳定所有权，而不是语义不清的可互换算法。
-
-## 4. 快速上手
-
-以下示例默认包含：
-
-```csharp
-using System;
-using CycloneGames.Hash.Core;
-```
-
-### 对字节 Payload 计算 Hash
+### 哈希字节负载
 
 ```csharp
 public static ulong ComputePayloadHash(ReadOnlySpan<byte> payload)
@@ -200,9 +84,9 @@ public static ulong ComputePayloadHash(ReadOnlySpan<byte> payload)
 }
 ```
 
-返回值是数值形式的 `ulong` 摘要。相同字节和相同 Seed 会产生相同数值。
+相同的字节和种子在每个环境中产生相同的 `ulong` 摘要。
 
-### 创建稳定的非零标识符
+### 哈希字符串标识符
 
 ```csharp
 public static ulong ComputeAbilityId(string canonicalName)
@@ -211,9 +95,9 @@ public static ulong ComputeAbilityId(string canonicalName)
 }
 ```
 
-该示例把输入定义为有序的 .NET UTF-16 code unit 序列。所有生产者都遵守这一规则时才使用它。
+`StableHash64` 会将最终的零摘要映射到非零回退值，因此可以把 `0` 保留为"未设置"哨兵。
 
-### 在不拼接 Buffer 的情况下计算有序 Payload
+### 不拼接直接哈希有序分块
 
 ```csharp
 public static ulong ComputePacketHash(
@@ -229,45 +113,53 @@ public static ulong ComputePacketHash(
 }
 ```
 
-依次追加 `A`、`B`、`C`，等价于对精确字节拼接 `A || B || C` 计算 Hash。
+依次追加 `A`、`B`、`C`，与哈希拼接后的字节序列 `A || B || C` 产生相同的摘要。
 
-## 5. 确定性 Hash 契约
+## 核心概念
 
-只有完整输入契约具备确定性时，数值摘要才具备确定性。持久化、网络或跨进程数据应定义以下全部属性：
+### 算法选择
 
-| 术语 | 含义 |
-| --- | --- |
-| 输入字节 | 算法按顺序消费的精确字节序列 |
-| 摘要 | 固定宽度的数值结果 |
-| Seed | 由契约选择的初始数值状态 |
-| Canonical Form | 一个逻辑值唯一允许的字节表示 |
-| Collision | 两个不同输入产生相同摘要 |
-| Running State | 可以继续接收有序输入的中间 Accumulator |
+选择与数据契约最匹配的最窄 API：
 
-1. 算法与摘要位宽。
-2. 初始 Seed 或 Running State。
+| 需求 | 推荐 API | 原因 |
+| --- | --- | --- |
+| 完整字节负载的快速摘要 | `XxHash64.Compute` | 一次性入口 |
+| 大负载分块到达 | `XxHash64.Create` + `Append` + `GetDigest` | 内联状态固定，无需拼接缓冲区 |
+| 少量整数字段的有序组合 | `Fnv1a64` | 直接基于运行状态组合 |
+| 32 位紧凑字段且处理碰撞 | `Fnv1a32` 或 `StableHash32` | 仅在契约要求 32 位时使用 |
+| 非零 64 位标识符 | `StableHash64` | 把 `0` 保留为未设置哨兵 |
+| .NET 序号字符串标识符 | `ComputeUtf16Ordinal` | 每个 UTF-16 code unit 一次 XOR/multiply |
+| 跨语言文本或协议数据 | 编码为规范字节后用 FNV-1a 或 XXH64 | 显式化编码与归一化 |
+| 序列化数值摘要 | `HashByteOrder` 或 `TryWriteHash*` | 避免机器字节序歧义 |
+
+算法数量并不是质量的衡量标准。可靠的契约更依赖于精确的输入定义、显式字节序和碰撞处理，而不是语义不清的同类互换算法。
+
+### 确定性契约
+
+数值摘要只有在整个输入契约确定时才确定。持久化、网络或跨进程数据应固定以下每一项：
+
+1. 算法与摘要宽度。
+2. 初始种子或运行状态。
 3. 字段顺序。
 4. 字段边界或长度前缀。
-5. 文本编码与 Unicode normalization。
-6. 整数和浮点数表示。
+5. 文本编码与 Unicode 归一化。
+6. 整数与浮点数表示。
 7. 摘要字节序。
-8. Null、Empty、Missing 和 Default Value 规则。
-9. Schema 或 Protocol 修订号。
+8. null、空、缺失与默认值规则。
+9. Schema 或协议版本。
 
-如果没有编码边界，以下两组字段会产生歧义：
+例如，没有编码边界时，下面两组字段序列会塌缩为相同的输入字节：
 
 ```text
 ["ab", "c"]  -> "abc"
 ["a", "bc"]  -> "abc"
 ```
 
-应在可变长度数据之前加入固定宽度长度，或者对 Canonical Serializer 的输出计算 Hash，避免不同逻辑值在 Hash 之前就变成相同输入字节。
+在可变长度数据前加固定宽度长度前缀，或哈希规范序列化器的输出，避免不同逻辑值在哈希之前就碰撞。
 
-### Seed 语义
+### 种子语义
 
-`XxHash64` 接受用于初始化算法的数值 Seed。
-
-`Fnv1a32.Compute` 和 `Fnv1a64.Compute` 的 Seed overload 接受当前 FNV Running State，用于有序增量组合：
+`XxHash64` 接受一个数值种子初始化算法。`Fnv1a32.Compute` 与 `Fnv1a64.Compute` 的种子重载接受当前 FNV 运行状态，从而支持有序增量组合：
 
 ```csharp
 public static ulong ComputeManifestHash(
@@ -283,43 +175,31 @@ public static ulong ComputeManifestHash(
 }
 ```
 
-FNV Running State 不是密钥，不能防御恶意输入。
+FNV 运行状态不是密钥，对恶意输入没有防护能力。
 
-## 6. 正确处理文本
+## 使用指南
 
-文本必须拥有明确契约。视觉上相同的字符串可能具有不同 Unicode code point、normalization form、大小写、换行或空白。
+### 哈希文本
 
-### Ordinal UTF-16 标识符
+文本必须有显式契约。视觉上相同的字符串可能包含不同的 Unicode code point、归一化形式、大小写、行尾或空白。
 
-`ComputeUtf16Ordinal` 会对每个 .NET `char` 执行一次 XOR/multiply。它不会把字符串编码为 UTF-8 或 UTF-16LE bytes。
+**序号 UTF-16 标识符** —— `ComputeUtf16Ordinal` 对每个 .NET `char` 执行一次 XOR/multiply，不会把字符串编码为 UTF-8 或 UTF-16LE 字节。当所有生产者使用相同的 .NET UTF-16 code-unit 定义、且需要序号区分大小写行为时使用。
 
-适合使用该 API 的条件：
-
-- 所有生产者都使用相同的 .NET UTF-16 code-unit 定义；
-- 需要 ordinal、区分大小写的行为；
-- 标识符不会与使用其他文本表示的生产者交换。
-
-### 用于交换的 UTF-8 文本
-
-对于 Network、File、Toolchain 或跨语言数据，应先定义 normalization 并显式编码文本：
+**用于交换的 UTF-8** —— 网络、文件、工具链或跨语言数据，需显式定义归一化，再把文本编码为 UTF-8 字节后哈希：
 
 ```csharp
 using System.Text;
 
 public static ulong ComputeCanonicalTextHash(string text)
 {
-    if (text == null)
-    {
-        throw new ArgumentNullException(nameof(text));
-    }
-
+    if (text == null) throw new ArgumentNullException(nameof(text));
     string normalized = text.Normalize(NormalizationForm.FormC);
     byte[] utf8 = Encoding.UTF8.GetBytes(normalized);
     return XxHash64.Compute(utf8);
 }
 ```
 
-这个入门示例会分配 normalized string 和 UTF-8 array。热路径应在 Authoring 或 Ingestion 阶段完成 normalization，并由调用方提供 Scratch Memory：
+此示例为入门用法，会分配归一化字符串和 UTF-8 数组。热路径上应在创作或导入阶段完成归一化，由调用方提供 scratch 内存：
 
 ```csharp
 using System.Text;
@@ -342,11 +222,9 @@ public static bool TryComputeUtf8Hash(
 }
 ```
 
-Scratch Memory 示例不会执行 normalization。调用方必须提供已经符合契约的文本。
+### 哈希结构化数据
 
-## 7. 处理结构化与跨平台数据
-
-不要对 Object Memory、Reflection Order、`GetHashCode()`、Unity Instance ID 或任意 Serializer 输出直接计算 Hash。应先把有意义的字段转换为 Canonical Bytes。
+不要哈希对象内存、反射顺序、`GetHashCode()`、Unity 实例 ID 或任意序列化器输出。先把有意义的字段转换成规范字节：
 
 ```csharp
 public static ulong ComputeStateRecordHash(
@@ -358,18 +236,10 @@ public static ulong ComputeStateRecordHash(
     const int HEADER_SIZE = 20;
     Span<byte> header = stackalloc byte[HEADER_SIZE];
 
-    HashByteOrder.WriteUInt32LittleEndian(
-        header.Slice(0, 4),
-        contractRevision);
-    HashByteOrder.WriteUInt64LittleEndian(
-        header.Slice(4, 8),
-        entityId);
-    HashByteOrder.WriteUInt32LittleEndian(
-        header.Slice(12, 4),
-        stateFlags);
-    HashByteOrder.WriteUInt32LittleEndian(
-        header.Slice(16, 4),
-        checked((uint)payload.Length));
+    HashByteOrder.WriteUInt32LittleEndian(header.Slice(0, 4), contractRevision);
+    HashByteOrder.WriteUInt64LittleEndian(header.Slice(4, 8), entityId);
+    HashByteOrder.WriteUInt32LittleEndian(header.Slice(12, 4), stateFlags);
+    HashByteOrder.WriteUInt32LittleEndian(header.Slice(16, 4), checked((uint)payload.Length));
 
     XxHash64 hash = XxHash64.Create();
     hash.Append(header);
@@ -378,50 +248,42 @@ public static ulong ComputeStateRecordHash(
 }
 ```
 
-长度字段为 Payload 提供无歧义边界。字节序 helper 使整数表示不依赖机器字节序。
+长度字段给负载明确的边界。字节序辅助方法让整数表示与机器字节序无关。
 
-### Canonicalization 检查清单
+#### 规范化清单
 
-在处理结构化数据前，应定义：
+哈希结构化数据前，需定义：
 
-- Dictionary、Set、Entity 和 Component 的排序；
-- 固定字段顺序；
-- 每个整数的位宽和 Signedness；
-- Enum 与 Flag 的表示；
-- Null 与 Missing Value 的处理；
-- 文本编码、normalization、大小写和换行；
-- Path Separator 与大小写规则；
-- 浮点数量化，以及 `NaN`、Infinity、`-0` 和 `+0` 的处理；
-- 是否包含 Timestamp 和 Transient Field。
+- 字典、集合、实体与组件的排序。
+- 固定字段顺序。
+- 每个整数的宽度与符号。
+- 枚举与标志的表示。
+- null 与缺失值的处理。
+- 文本编码、归一化、大小写与行尾。
+- 路径分隔符与大小写策略。
+- 浮点数量化与 `NaN`、无穷、`-0`、`+0` 的处理。
+- 时间戳与瞬态字段的取舍。
 
-Hash 可以检测字节差异，但不能让 Simulation、Serialization 或 Floating-Point Calculation 自动具备确定性。
+哈希能检测字节差异，但不能让模拟、序列化或浮点计算变确定性。
 
-## 8. One-shot、Streaming 与状态复用
+### 流式与状态复用
 
-完整 Payload 已经位于连续内存中时，使用 One-shot：
+负载已经连续存放时使用一次性哈希：
 
 ```csharp
 ulong digest = XxHash64.Compute(payloadBytes, seed: 0UL);
 ```
 
-数据按 Chunk 到达，或者拼接数据需要额外 Buffer 时，使用 Streaming：
+数据分块到达或拼接需要额外缓冲时使用流式：
 
 ```csharp
 using System.IO;
 
 public static ulong ComputeStreamHash(Stream stream, byte[] buffer)
 {
-    if (stream == null)
-    {
-        throw new ArgumentNullException(nameof(stream));
-    }
-
+    if (stream == null) throw new ArgumentNullException(nameof(stream));
     if (buffer == null || buffer.Length == 0)
-    {
-        throw new ArgumentException(
-            "A non-empty caller-owned buffer is required.",
-            nameof(buffer));
-    }
+        throw new ArgumentException("A non-empty caller-owned buffer is required.", nameof(buffer));
 
     XxHash64 hash = XxHash64.Create();
     int bytesRead;
@@ -429,21 +291,20 @@ public static ulong ComputeStreamHash(Stream stream, byte[] buffer)
     {
         hash.Append(buffer, 0, bytesRead);
     }
-
     return hash.GetDigest();
 }
 ```
 
-I/O 和 Buffer 由调用方拥有。`XxHash64` 只消费传递给 `Append` 的字节。
+I/O 与缓冲区归调用方所有。`XxHash64` 只消费传给 `Append` 的字节。
 
-### 状态行为
+状态行为：
 
 - `Create(seed)` 初始化新状态。
-- `default(XxHash64)` 是合法的 Seed-0 状态。
+- `default(XxHash64)` 是合法的 seed-0 状态。
 - `Append` 按调用顺序处理字节。
-- `GetDigest` 不会消耗状态；之后仍可继续追加数据。
-- `Reset(seed)` 清理状态和 inline tail buffer，以便复用。
-- 复制 Struct 会创建 Accumulator 与 Buffered Bytes 的独立快照。
+- `GetDigest` 不破坏状态，之后可以继续追加字节。
+- `Reset(seed)` 清空状态与内联尾部缓冲区以便复用。
+- 复制 struct 会创建累加器与缓冲字节的独立快照。
 
 ```csharp
 XxHash64 hash = XxHash64.Create();
@@ -455,15 +316,15 @@ hash.Append(secondPayload);
 ulong secondDigest = hash.GetDigest();
 ```
 
-Mutable State 需要反复传递给 Helper Method 且不需要快照语义时，使用 `ref` 传递。
+需要重复通过辅助方法调用同一可变状态且不需要快照语义时，按 `ref` 传递。
 
-## 9. 摘要序列化与字节序
+### 序列化摘要
 
-数值形式的 `ulong` 摘要与它的 8 个序列化字节属于两个不同契约。
+数值 `ulong` 摘要与其 8 字节序列化形式是两份独立契约：
 
-- Canonical xxHash byte representation 使用 big-endian。
-- 可互操作的 FNV byte vector 使用 little-endian。
-- 项目内部格式只有在显式定义时才能选择其他字节序。
+- XXH64 规范字节表示为**大端**。
+- 互操作 FNV 字节向量使用**小端**。
+- 项目本地格式可以选择其他字节序，但必须在格式中显式定义。
 
 ```csharp
 Span<byte> xxHashBytes = stackalloc byte[XxHash64.HashSizeInBytes];
@@ -471,33 +332,27 @@ XxHash64 state = XxHash64.Create();
 state.Append(payload);
 
 bool written = state.TryWriteHashBigEndian(xxHashBytes);
-if (!written)
-{
-    throw new InvalidOperationException("The digest buffer is too small.");
-}
+if (!written) throw new InvalidOperationException("Digest buffer too small.");
 
-ulong receivedDigest =
-    HashByteOrder.ReadUInt64BigEndian(xxHashBytes);
+ulong receivedDigest = HashByteOrder.ReadUInt64BigEndian(xxHashBytes);
 ```
 
-`TryWriteHash` 写入 canonical big-endian representation。`TryWriteHashBigEndian` 显式表达相同契约。`TryWriteHashLittleEndian` 以 little-endian 写入数值摘要。
+`TryWriteHash` 写入规范的大端表示。`TryWriteHashBigEndian` 显式声明同一契约。`TryWriteHashLittleEndian` 按小端写入数值摘要。所有 `TryWriteHash*` 方法在目标缓冲区小于 8 字节时返回 `false` 且不写入。
 
-当 Destination 少于 8 bytes 时，所有 `TryWriteHash*` 都返回 `false` 且不写入。`HashByteOrder` read/write method 对过短输入遵循标准 Span Range 行为。
+### 稳定标识符与碰撞处理
 
-## 10. 稳定标识符与 Collision 管理
+非加密哈希是紧凑指纹，不是唯一性证明。对于均匀分布的值，生日近似给出：
 
-非密码学 Hash 是紧凑指纹，不是唯一性证明。对于均匀分布值，Birthday Approximation 为：
-
-| 位宽 | 至少发生一次 Collision 的概率约为 1% | 概率约为 50% |
+| 宽度 | 至少一次碰撞的 ~1% 概率 | ~50% 概率 |
 | --- | ---: | ---: |
-| 32-bit | 9,300 个不同值 | 77,000 个不同值 |
-| 64-bit | 6.09 亿个不同值 | 50.6 亿个不同值 |
+| 32 位 | 9,300 个不同值 | 77,000 个不同值 |
+| 64 位 | 6.09 亿个不同值 | 50.6 亿个不同值 |
 
-只有 Storage 或 Protocol 强制要求时才使用 32-bit 标识符，并由 Owner 检测 Collision。大型 Registry 应优先使用 64-bit 标识符。
+仅在存储或协议约束要求且所有者处理碰撞时使用 32 位标识符。大型注册表优先使用 64 位。
 
-`StableHash32` 和 `StableHash64` 会把最终 Zero Digest 映射到 `NonZeroFallback`。这样系统可以保留 `0` 表示 "未设置"，但不会获得唯一性，并会与 Fallback Value 额外产生一次 Collision。
+`StableHash32` 与 `StableHash64` 把最终零摘要映射到 `NonZeroFallback`。这让系统可以把 `0` 保留为"未设置"，但不会创造唯一性，并增加一个与回退值的碰撞。
 
-冷路径 Registry 应保留 Canonical Key：
+冷路径注册表应同时保留规范键：
 
 ```csharp
 using System.Collections.Generic;
@@ -510,15 +365,8 @@ public static ulong RegisterAbilityId(
 
     if (registry.TryGetValue(id, out string registeredName))
     {
-        if (!string.Equals(
-                registeredName,
-                canonicalName,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "A stable hash collision was detected.");
-        }
-
+        if (!string.Equals(registeredName, canonicalName, StringComparison.Ordinal))
+            throw new InvalidOperationException("A stable hash collision was detected.");
         return id;
     }
 
@@ -527,180 +375,139 @@ public static ulong RegisterAbilityId(
 }
 ```
 
-应在 Authoring、Loading 或 Composition 阶段建立并校验 Registry，不要在每帧热路径执行 Discovery。
+在创作、加载或组合阶段完成注册与校验，不要放在逐帧热路径上。
 
-## 11. 性能、内存与 Cache 行为
+## 进阶主题
 
-| 路径 | 时间复杂度 | 模块拥有的 Managed Allocation | 工作状态 |
+### 合并独立分区的摘要
+
+独立分区的摘要不能任意合并。分别哈希 `A` 与 `B`，再哈希它们的摘要，**不等价于**哈希 `A || B`。保留输入顺序，或由所属系统定义独立的 tree-hash 契约。
+
+### 跨语言契约
+
+摘要需要与非 .NET 生产者（C++ 服务端、Rust 工具、Python 构建脚本）匹配时，契约必须固定 [确定性契约](#确定性契约) 中列出的每一项。最常见的陷阱：
+
+- .NET 字符串是 UTF-16；许多其他语言默认 UTF-8。
+- .NET `BitConverter` 使用机器字节序；显式 `HashByteOrder` 调用避免歧义。
+- `GetHashCode()` 在不同机器、进程或 .NET 版本之间不稳定。不要持久化或传输它。
+
+### 何时改用加密摘要
+
+当哈希数据跨越信任边界时，改用带签名或 MAC 的加密摘要（如 SHA-256）：
+
+- 远程可执行内容或付费内容。
+- 账号数据或反作弊证据。
+- 通过不可信通道分发的可信更新。
+
+FNV-1a 与 XXH64 检测意外差异，不证明来源、不防篡改、不抗刻意碰撞构造。
+
+## 常见场景
+
+### 内容缓存失效
+
+构建工具希望只在每个相关输入完全相同时复用昂贵的生成输出：
+
+```text
+Source asset + import settings + dependency identifiers
+    -> canonical input bytes
+    -> XXH64 digest
+    -> cache key
+    -> reuse output when the key matches
+    -> rebuild output when the key differs
+```
+
+输入较大或分块到达时使用 `XxHash64` 流式 API。
+
+### 确定性状态诊断
+
+客户端、服务端、回放或模拟工具需要定位第一个分歧检查点：
+
+```text
+Authoritative state at checkpoint N
+    -> canonical snapshot bytes
+    -> XXH64 digest
+    -> compare client/server/replay values
+    -> capture detailed field diagnostics when values differ
+```
+
+哈希能检测规范字节的差异，不解释差异本身，也不让模拟变确定性。所属诊断系统决定捕获哪些字段以及如何上报。
+
+### 协议与 Schema 校验
+
+通信双方在解释负载前必须拒绝不兼容的布局。对握手使用的规范字段/类型描述进行哈希：
+
+```csharp
+public static ulong ComputeSchemaHash(uint revision, ReadOnlySpan<byte> schemaBytes)
+{
+    ulong hash = Fnv1a64.OffsetBasis;
+    hash = Fnv1a64.CombineUInt32LittleEndian(hash, revision);
+    hash = Fnv1a64.Compute(schemaBytes, hash);
+    return hash;
+}
+```
+
+### 稳定的命名定义
+
+创作使用可读名称，Runtime 查找需要紧凑数值键：
+
+```csharp
+public static ulong ComputeTagId(string canonicalName)
+{
+    return StableHash64.ComputeUtf16Ordinal(canonicalName);
+}
+```
+
+所有者保留规范名称，并在创作阶段拒绝碰撞。
+
+## 性能与内存
+
+| 路径 | 时间复杂度 | 模块级分配 | 工作状态 |
 | --- | --- | --- | --- |
-| FNV-1a Byte 或 UTF-16 Hash | `O(n)` | 0 bytes | 数值 Accumulator |
-| XXH64 One-shot | `O(n)` | 0 bytes | 带 Inline Tail Storage 的 Value State |
-| XXH64 Streaming | 所有 Chunk 合计 `O(n)` | 0 bytes | 调用方拥有的 Mutable State |
-| 字节序 Read/Write | `O(1)` | 0 bytes | 无 |
+| FNV-1a 字节或 UTF-16 哈希 | `O(n)` | 0 字节 | 数值累加器 |
+| XXH64 一次性 | `O(n)` | 0 字节 | 含内联 32 字节尾部的值状态 |
+| XXH64 流式 | 跨所有分块 `O(n)` | 0 字节 | 调用方拥有的可变状态 |
+| 字节序读写 | `O(1)` | 0 字节 | 无 |
 
-基于 Span 的 Core 路径不分配 Managed Memory。XXH64 按 32-byte stripe 处理数据，并在 inline 32-byte buffer 中保留最多 31 个未处理字节。
+基于 span 的核心路径不分配托管内存。XXH64 处理 32 字节 stripe，并在内联 32 字节缓冲区中保留至多 31 字节未处理数据。
 
-模块不会缓存：
+本模块不缓存输入缓冲区、字符串、路径、摘要、反射结果或编码缓冲区。这避免了缓存失效、保留内存增长、同步与清理归属问题。用 `Reset` 复用 `XxHash64` 而不是池化其小型值状态。
 
-- Input Buffer 或 String；
-- Path 或 File Metadata；
-- Digest 或格式化后的 Hex String；
-- Reflection Result；
-- Encoding Buffer。
-
-因此不存在 Cache Invalidation、Retained Memory Growth、Synchronization 和 Cleanup Ownership。应使用 `Reset` 复用 `XxHash64`，而不是池化这个小型 Value State。
-
-调用方仍可能通过以下操作产生分配：
-
-- `Encoding.GetBytes(string)`；
-- 新建 Array 与 Collection 扩容；
-- LINQ、Delegate、Closure 和 Iterator；
-- Stream 或 Task Wrapper；
-- `ToString` 和 Hex Formatting。
-
-性能必须在 Owner Workload 中测量。内置 Performance Assembly 覆盖 64-byte 与 1 MiB XXH64、4 KiB Streaming Chunk、1 MiB FNV-1a 64-bit 和 Managed GC。发布验收应为每类目标设备定义 Throughput、Latency、Allocation、Code Size 和 Warm-up Budget。
-
-## 12. 线程、所有权与平台行为
+调用方代码仍可能通过 `Encoding.GetBytes(string)`、新增数组与集合扩容、LINQ、委托、闭包、迭代器、stream/task 包装、`ToString` 与十六进制格式化产生分配。归因到哈希层之前，先 profile 完整调用路径。
 
 ### 线程
 
-- `Fnv1a32`、`Fnv1a64`、`StableHash32`、`StableHash64` 和 `HashByteOrder` 没有 Mutable Static State，可以并发调用。
-- 一个 Mutable `XxHash64` Value 只有一个 Mutation Owner。
-- 不要对同一个 State 并发调用 `Append` 或 `Reset`。
-- 独立 `XxHash64` Value 可以在不同 Worker 上运行，不需要锁。
-- 模块不创建线程、不选择 Scheduler，也不引入 Synchronization。
-
-不能任意组合不同 Partition 的 Digest。分别 Hash `A` 与 `B`，再 Hash 两个 Digest，不等价于 Hash `A || B`。应保留输入顺序，或者由 Owner System 定义独立的 Tree-Hash 契约。
+- `Fnv1a32`、`Fnv1a64`、`StableHash32`、`StableHash64` 与 `HashByteOrder` 无可变静态状态，可并发调用。
+- 可变 `XxHash64` 值只有一个修改者。不要在同一状态上并发调用 `Append` 或 `Reset`。
+- 独立的 `XxHash64` 值可以在不同 worker 上无锁运行。
+- 本模块不创建线程、不选择调度器、不引入同步。
 
 ### 平台行为
 
-Runtime 程序集：
+Runtime 程序集在所有 Unity 平台启用，不引用 `UnityEngine` 或平台 SDK，使用可移植整数运算、span 与 `BinaryPrimitives`，使用显式字节序，不使用 unsafe 代码、原生插件、反射或动态代码生成，不持有线程、文件、socket、句柄或原生容器。发布验证应在目标脚本后端下运行相同的已知向量与分块边界测试，再做目标相关的性能与分配测量。
 
-- 对所有 Unity 平台启用；
-- 不引用 `UnityEngine` 或平台 SDK；
-- 使用可移植整数运算、Span 和 `BinaryPrimitives`；
-- 使用显式字节序；
-- 不使用 Unsafe Code、Native Plugin、Reflection 或 Dynamic Code Generation；
-- 不拥有 Thread、File、Socket、Handle 或 Native Container。
+## 故障排查
 
-该设计避免在 Core Algorithm 中引入操作系统与 CPU 特定控制流。平台发布验证应在目标 Scripting Backend 下运行相同 Known Vector 和 Chunk Boundary Test，再执行目标平台的性能与分配测量。
+| 现象 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| 相同可见文本哈希结果不同 | 编码、归一化、大小写、空白或行尾规则不同 | 比对规范文本契约，对显式字节做哈希 |
+| 数值摘要相同但序列化字节不同 | 生产者使用不同字节序 | 使用显式 `HashByteOrder` 或 `TryWriteHash*` |
+| 一次性与流式 XXH64 结果不同 | 种子、顺序、偏移、数量或分块覆盖不同 | 校验分块恰好覆盖字节序列一次且按顺序 |
+| 稳定标识符碰撞 | 所有者把指纹当作唯一键 | 保留规范键、检测碰撞、使用更宽契约 |
+| 热路径产生分配 | 调用方代码中的编码、缓冲区、枚举或格式化分配 | Profile 完整调用路径，提供可复用 span/buffer |
+| 不同平台状态哈希不同 | 哈希之前的规范序列化或模拟不同 | 在检查哈希之前先比对字段边界处的序列化字节 |
+| 摘要被当作信任证明 | 非加密哈希跨越了安全边界 | 在安全所有者中使用带签名或 MAC 的加密摘要 |
 
-## 13. 持久化、网络、安全与 Integration
+## 验证
 
-CycloneGames.Hash 不写入 File、Asset、Project Preference、Player Preference、Registry Entry 或 Hidden Cache Data。Consumer 负责 Storage Path、Atomic Write、Schema Revision、Format Evolution、Corruption Recovery 和 Cleanup。
-
-持久化或传输 Digest 时，应保存或冻结：
-
-| 契约字段 | 示例 |
-| --- | --- |
-| Algorithm | `XXH64` |
-| Digest Width | `64` |
-| Seed | `0` |
-| Text Representation | `UTF-8, NFC, case-sensitive` |
-| Integer Order | `Little-endian` |
-| Digest Order | `Big-endian` |
-| Field Layout | 固定顺序，可变字段带长度前缀 |
-| Contract Revision | 由 Manifest、Save 或 Protocol 拥有 |
-
-改变任意字段都会改变数据契约。Owner Format 应使用不同 Contract Revision，并由 Reader 或 Adapter 在解释字节前选择匹配的契约。
-
-### 安全边界
-
-FNV-1a 和 XXH64 都是非密码学算法，适合意外差异检测、Cache、本地 Lookup、Diagnostics 和 Desynchronization Report。它们不能证明来源、阻止篡改、保护 Secret，也不能抵抗故意构造 Collision。
-
-Remote Executable Content、Paid Content、Account Data、Anti-Cheat Evidence 和 Trusted Update 需要由 Security Owner 设计，例如 Cryptographic Digest 加 Authenticated Signature 或 MAC。
-
-### Integration 边界
-
-Domain 与 Platform 关注点应保留在 Core 之外：
+通过 Unity Test Runner 运行聚焦测试：
 
 ```text
-File/Network/Unity Adapter
-    -> Canonical Bytes
-    -> CycloneGames.Hash
-    -> Numeric 或 Serialized Digest
-    -> Owner 定义的 Storage、Comparison、Logging 或 Security Action
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Hash.Tests.Editor -testResults <result-path> -quit
 ```
 
-Adapter 可以负责 Stream Reading、Asset Traversal、Native Container Conversion、Job Scheduling 或 Protocol Framing，但不能隐式改变算法契约。
+安装 `com.unity.test-framework.performance` 后，也运行 `CycloneGames.Hash.Tests.Performance`。在每个消费该契约的发布 Player 与脚本后端中运行已知向量与性能检查。
 
-## 14. Public API 参考
+## 参考
 
-### `Fnv1a32`
-
-- `Compute(ReadOnlySpan<byte>)`：从 `OffsetBasis` 开始计算 Byte Hash。
-- `Compute(ReadOnlySpan<byte>, uint seed)`：从 Running FNV State 继续计算。
-- `ComputeUtf16Ordinal(ReadOnlySpan<char>)`：从 `OffsetBasis` 开始计算 UTF-16 Code Unit Hash。
-- `ComputeUtf16Ordinal(ReadOnlySpan<char>, uint seed)`：继续 Ordinal Text Contract。
-- `CombineUInt32LittleEndian`：按 Low Byte First 合并 4 bytes。
-
-### `Fnv1a64`
-
-- `Compute(ReadOnlySpan<byte>)` 及其 Running State overload。
-- `ComputeUtf16Ordinal(ReadOnlySpan<char>)` 及其 Running State overload。
-- `CombineUInt32LittleEndian`：把 32-bit 字段合并到 64-bit State。
-- `CombineUInt64LittleEndian`：按 Low Byte First 合并 8-byte 字段。
-
-### `StableHash32` 与 `StableHash64`
-
-- `ComputeBytes`：应用 FNV，并映射最终 Zero Digest。
-- `ComputeUtf16Ordinal`：计算 Ordinal UTF-16 Text Hash，并映射最终 Zero Digest。
-- `EnsureNonZero`：把 `0` 映射为 `NonZeroFallback`。
-- `CombineUInt32LittleEndian` 或 `CombineUInt64LittleEndian`：继续有序字段组合，不应用最终 Zero Mapping。
-
-`string` overload 对 `null` 抛出 `ArgumentNullException`。Span overload 把 Empty Span 视为合法空输入。
-
-### `XxHash64`
-
-- `Create(seed)`：创建已初始化 State。
-- `Reset(seed)`：清理并重新初始化 State。
-- `Append(ReadOnlySpan<byte>)`：追加 Span。
-- `Append(byte[], offset, count)`：追加 Array Slice，并使用标准 Range Validation。
-- `GetDigest()`：读取 Digest，不消耗 State。
-- `Compute(data, seed)`：One-shot Hash。
-- `HashToUInt64(data, seed)`：One-shot Numeric Digest Alias。
-- `TryWriteHash` 与 `TryWriteHashBigEndian`：Canonical Big-endian Bytes。
-- `TryWriteHashLittleEndian`：显式 Little-endian Numeric Bytes。
-- `HashSizeInBytes`：Digest Destination 所需长度。
-
-### `HashByteOrder`
-
-提供 32-bit 和 64-bit 数值的 Little-endian、Big-endian Read/Write Method。Source 或 Destination Span 必须至少包含所选位宽需要的 4 或 8 bytes。
-
-## 15. 验证与故障排查
-
-### 编译检查
-
-可以使用 Unity 生成的 Project File 执行本地编译检查：
-
-```bash
-dotnet build UnityStarter/CycloneGames.Hash.Core.csproj -v:minimal
-dotnet build UnityStarter/CycloneGames.Hash.Tests.Editor.csproj -v:minimal
-dotnet build UnityStarter/CycloneGames.Hash.Tests.Performance.csproj -v:minimal
-```
-
-### Unity 验证
-
-1. 使用 `ProjectSettings/ProjectVersion.txt` 记录的 Unity release 打开 `<repo-root>/UnityStarter`。
-2. Refresh Script，并确认 Console 没有 Compilation Error。
-3. 在 EditMode 运行 `CycloneGames.Hash.Tests.Editor`。
-4. 安装 Performance Testing 后运行 `CycloneGames.Hash.Tests.Performance`。
-5. 对 Persisted、Networked 或 Public Contract 使用变更 Hash 路径的所有 Consumer 运行测试。
-6. 在每个 Release Player 和 Scripting Backend 中运行 Known Vector 与性能检查。
-
-### 故障排查
-
-| 现象 | 常见原因 | 处理方式 |
-| --- | --- | --- |
-| 视觉上相同的文本得到不同 Hash | Encoding、Normalization、Case、Whitespace 或 Line Ending 不同 | 对比 Canonical Text Contract，并 Hash 显式 Bytes |
-| 数值 Digest 相同但序列化 Bytes 不同 | Producer 使用不同字节序 | 使用显式 `HashByteOrder` 或 `TryWriteHash*` |
-| One-shot 与 Streaming XXH64 不同 | Seed、顺序、Offset、Count 或 Chunk Coverage 不同 | 确认 Chunk 按顺序且仅一次覆盖精确字节序列 |
-| 稳定标识符发生 Collision | Owner 把指纹当成了唯一 Key | 保存 Canonical Key、检测 Collision，并使用更宽契约 |
-| 热路径出现 Allocation | 调用方 Encoding、Buffer、Enumeration 或 Formatting 产生分配 | Profile 完整调用路径，并提供可复用 Span/Buffer |
-| 不同平台报告不同 State Hash | Hash 之前的 Canonical Serialization 或 Simulation 不同 | 在检查 Hash 前，按字段边界比较序列化 Bytes |
-| Digest 被用作可信证明 | 非密码学 Hash 越过了安全边界 | 在 Security Owner 中使用 Cryptographic Digest 加 Signature 或 MAC |
-
-## 参考资料
-
-- [xxHash reference implementation](https://github.com/Cyan4973/xxHash)
-- [IETF FNV draft](https://datatracker.ietf.org/doc/draft-eastlake-fnv/)
+- [xxHash 参考实现](https://github.com/Cyan4973/xxHash)
+- [IETF FNV 草案](https://datatracker.ietf.org/doc/draft-eastlake-fnv/)

@@ -1,9 +1,11 @@
 namespace CycloneGames.Factory.Runtime
 {
     /// <summary>
-    /// A marker interface for all factory types.
+    /// Marks a type as an explicit object-creation boundary.
     /// </summary>
-    public interface IFactory { }
+    public interface IFactory
+    {
+    }
 
     /// <summary>
     /// Defines a factory that creates objects of a specific type.
@@ -33,26 +35,4 @@ namespace CycloneGames.Factory.Runtime
         TValue Create(TArg arg);
     }
 
-    /// <summary>
-    /// Defines a factory specialized in spawning <see cref="UnityEngine.Object"/> instances.
-    /// </summary>
-    public interface IUnityObjectSpawner : IFactory
-    {
-        /// <summary>
-        /// Creates a new instance of a <see cref="UnityEngine.Object"/>.
-        /// </summary>
-        /// <param name="origin">The original object to clone or instantiate.</param>
-        /// <typeparam name="T">The type of the object, constrained to <see cref="UnityEngine.Object"/>.</typeparam>
-        /// <returns>A new instance of the object.</returns>
-        T Create<T>(T origin) where T : UnityEngine.Object;
-
-        /// <summary>
-        /// Creates a new instance of a <see cref="UnityEngine.Object"/> with a parent.
-        /// </summary>
-        /// <param name="origin">The original object to clone or instantiate.</param>
-        /// <param name="parent">The parent transform to assign to the new object.</param>
-        /// <typeparam name="T">The type of the object, constrained to <see cref="UnityEngine.Object"/>.</typeparam>
-        /// <returns>A new instance of the object.</returns>
-        T Create<T>(T origin, UnityEngine.Transform parent) where T : UnityEngine.Object;
-    }
 }
