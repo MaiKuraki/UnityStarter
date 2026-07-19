@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.Networking.Core",
         "CycloneGames.Networking.Unity.Runtime",
+        "CycloneGames.Networking.Platform.Permissions",
         "CycloneGames.DeterministicMath.Core"
     ],
     "includePlatforms": [

@@ -1,5 +1,4 @@
 using System;
-using System.Buffers;
 using System.Collections.Generic;
 
 namespace CycloneGames.GameplayTags.Core
@@ -34,8 +33,12 @@ namespace CycloneGames.GameplayTags.Core
     /// This allows for nested logic like (A AND B) OR (C AND NOT D).
     /// </summary>
     [Serializable]
-    public class GameplayTagQuery
+    public sealed class GameplayTagQuery
     {
+        public const int MaxExpressionDepth = 32;
+        public const int MaxExpressionNodes = 1024;
+        public const int MaxReferencedTags = 4096;
+
         // The root expression of the query tree.
         public GameplayTagQueryExpression RootExpression;
 
@@ -47,6 +50,9 @@ namespace CycloneGames.GameplayTags.Core
 
         [NonSerialized]
         private GameplayTagQueryExpression m_CompiledRootExpression;
+
+        [NonSerialized]
+        private int m_CompiledRegistryGeneration;
 
         /// <summary>
         /// Evaluates this query against the given tag container.
@@ -63,8 +69,14 @@ namespace CycloneGames.GameplayTags.Core
             return Matches<GameplayTagContainer>(container);
         }
 
-        public bool Matches<T>(in T container) where T : IGameplayTagContainer
+        public bool Matches<T>(in T container) where T : IReadOnlyGameplayTagContainer
         {
+            if (container == null)
+            {
+                return false;
+            }
+
+            GameplayTagContainerUtility.EnsureCurrentRuntimeIndexEpoch(container);
             if (RootExpression == null)
             {
                 return false;
@@ -115,18 +127,24 @@ namespace CycloneGames.GameplayTags.Core
 
         private void EnsureCompiled()
         {
-            if (m_TokenStream != null && ReferenceEquals(m_CompiledRootExpression, RootExpression))
+            int registryGeneration = GameplayTagManager.CurrentGeneration;
+            if (m_TokenStream != null &&
+                ReferenceEquals(m_CompiledRootExpression, RootExpression) &&
+                m_CompiledRegistryGeneration == registryGeneration)
             {
                 return;
             }
 
             List<int> tokenStream = new(24);
             List<int> tagIndices = new(16);
-            CompileExpression(RootExpression, tokenStream, tagIndices);
+            HashSet<GameplayTagQueryExpression> activeExpressions = new();
+            int nodeCount = 0;
+            CompileExpression(RootExpression, tokenStream, tagIndices, activeExpressions, 0, ref nodeCount);
 
             m_TokenStream = tokenStream.ToArray();
             m_CompiledTagIndices = tagIndices.ToArray();
             m_CompiledRootExpression = RootExpression;
+            m_CompiledRegistryGeneration = registryGeneration;
         }
 
         /// <summary>
@@ -138,50 +156,78 @@ namespace CycloneGames.GameplayTags.Core
             m_TokenStream = null;
             m_CompiledTagIndices = null;
             m_CompiledRootExpression = null;
+            m_CompiledRegistryGeneration = 0;
         }
 
         private static void CompileExpression(
             GameplayTagQueryExpression expression,
             List<int> tokenStream,
-            List<int> tagIndices)
+            List<int> tagIndices,
+            HashSet<GameplayTagQueryExpression> activeExpressions,
+            int depth,
+            ref int nodeCount)
         {
+            if (++nodeCount > MaxExpressionNodes)
+                throw new InvalidOperationException($"Gameplay tag query node count exceeds {MaxExpressionNodes}.");
+
             if (expression == null)
             {
                 tokenStream.Add((int)GameplayTagQueryOpcode.PushFalse);
                 return;
             }
 
-            if (expression.Tags != null && !expression.Tags.IsEmpty)
+            if (depth > MaxExpressionDepth)
+                throw new InvalidOperationException($"Gameplay tag query depth exceeds {MaxExpressionDepth}.");
+            if (!activeExpressions.Add(expression))
+                throw new InvalidOperationException("Gameplay tag query contains an expression cycle.");
+
+            bool hasTags = expression.Tags != null && !expression.Tags.IsEmpty;
+            bool hasExpressions = expression.Expressions != null && expression.Expressions.Count > 0;
+            if (hasTags && hasExpressions)
+                throw new InvalidOperationException("A gameplay tag query expression cannot contain both tags and child expressions.");
+
+            if (hasTags)
             {
                 int tagStart = tagIndices.Count;
                 foreach (GameplayTag tag in expression.Tags.GetExplicitTags())
                 {
                     tagIndices.Add(tag.RuntimeIndex);
+                    if (tagIndices.Count > MaxReferencedTags)
+                        throw new InvalidOperationException($"Gameplay tag query references more than {MaxReferencedTags} tags.");
                 }
 
                 int tagCount = tagIndices.Count - tagStart;
                 tokenStream.Add((int)GetTagOpcode(expression.Operator));
                 tokenStream.Add(tagStart);
                 tokenStream.Add(tagCount);
+                activeExpressions.Remove(expression);
                 return;
             }
 
-            if (expression.Expressions != null && expression.Expressions.Count > 0)
+            if (hasExpressions)
             {
                 int childCount = expression.Expressions.Count;
                 for (int i = 0; i < childCount; i++)
                 {
-                    CompileExpression(expression.Expressions[i], tokenStream, tagIndices);
+                    CompileExpression(
+                        expression.Expressions[i],
+                        tokenStream,
+                        tagIndices,
+                        activeExpressions,
+                        depth + 1,
+                        ref nodeCount);
                 }
 
                 tokenStream.Add((int)GetExprOpcode(expression.Operator));
                 tokenStream.Add(childCount);
+                activeExpressions.Remove(expression);
                 return;
             }
 
             tokenStream.Add(expression.Operator == EGameplayTagQueryExprOperator.Any
                 ? (int)GameplayTagQueryOpcode.PushFalse
                 : (int)GameplayTagQueryOpcode.PushTrue);
+            activeExpressions.Remove(expression);
         }
 
         private static GameplayTagQueryOpcode GetTagOpcode(EGameplayTagQueryExprOperator op)
@@ -204,67 +250,56 @@ namespace CycloneGames.GameplayTags.Core
             }
         }
 
-        private bool EvaluateNode<T>(in T container, int nodeIndex) where T : IGameplayTagContainer
+        private bool EvaluateNode<T>(in T container, int nodeIndex) where T : IReadOnlyGameplayTagContainer
         {
-            bool[] rentedStack = null;
-            Span<bool> stack = m_TokenStream.Length <= 128
-                ? stackalloc bool[128]
-                : (rentedStack = ArrayPool<bool>.Shared.Rent(m_TokenStream.Length));
+            // A compiled expression can push at most one result per expression node.
+            // The compile-time MaxExpressionNodes budget therefore bounds this fixed
+            // operation-local scratch to 1 KiB without a shared pool or heap lease.
+            Span<bool> stack = stackalloc bool[MaxExpressionNodes];
+            int stackCount = 0;
 
-            try
+            for (int i = 0; i < m_TokenStream.Length;)
             {
-                int stackCount = 0;
-
-                for (int i = 0; i < m_TokenStream.Length;)
+                GameplayTagQueryOpcode opcode = (GameplayTagQueryOpcode)m_TokenStream[i++];
+                switch (opcode)
                 {
-                    GameplayTagQueryOpcode opcode = (GameplayTagQueryOpcode)m_TokenStream[i++];
-                    switch (opcode)
+                    case GameplayTagQueryOpcode.PushTrue:
+                        stack[stackCount++] = true;
+                        break;
+
+                    case GameplayTagQueryOpcode.PushFalse:
+                        stack[stackCount++] = false;
+                        break;
+
+                    case GameplayTagQueryOpcode.EvalAllTags:
+                    case GameplayTagQueryOpcode.EvalAnyTags:
+                    case GameplayTagQueryOpcode.EvalNoTags:
                     {
-                        case GameplayTagQueryOpcode.PushTrue:
-                            stack[stackCount++] = true;
-                            break;
-
-                        case GameplayTagQueryOpcode.PushFalse:
-                            stack[stackCount++] = false;
-                            break;
-
-                        case GameplayTagQueryOpcode.EvalAllTags:
-                        case GameplayTagQueryOpcode.EvalAnyTags:
-                        case GameplayTagQueryOpcode.EvalNoTags:
-                        {
-                            int tagStart = m_TokenStream[i++];
-                            int tagCount = m_TokenStream[i++];
-                            stack[stackCount++] = EvaluateTags(container, opcode, tagStart, tagCount);
-                            break;
-                        }
-
-                        case GameplayTagQueryOpcode.EvalAllExpr:
-                        case GameplayTagQueryOpcode.EvalAnyExpr:
-                        case GameplayTagQueryOpcode.EvalNoExpr:
-                        {
-                            int childCount = m_TokenStream[i++];
-                            bool result = EvaluateExpression(opcode, stack, ref stackCount, childCount);
-                            stack[stackCount++] = result;
-                            break;
-                        }
-
-                        default:
-                            return false;
+                        int tagStart = m_TokenStream[i++];
+                        int tagCount = m_TokenStream[i++];
+                        stack[stackCount++] = EvaluateTags(container, opcode, tagStart, tagCount);
+                        break;
                     }
-                }
 
-                return stackCount > 0 && stack[stackCount - 1];
-            }
-            finally
-            {
-                if (rentedStack != null)
-                {
-                    ArrayPool<bool>.Shared.Return(rentedStack);
+                    case GameplayTagQueryOpcode.EvalAllExpr:
+                    case GameplayTagQueryOpcode.EvalAnyExpr:
+                    case GameplayTagQueryOpcode.EvalNoExpr:
+                    {
+                        int childCount = m_TokenStream[i++];
+                        bool result = EvaluateExpression(opcode, stack, ref stackCount, childCount);
+                        stack[stackCount++] = result;
+                        break;
+                    }
+
+                    default:
+                        return false;
                 }
             }
+
+            return stackCount > 0 && stack[stackCount - 1];
         }
 
-        private bool EvaluateTags<T>(in T container, GameplayTagQueryOpcode opcode, int tagStart, int tagCount) where T : IGameplayTagContainer
+        private bool EvaluateTags<T>(in T container, GameplayTagQueryOpcode opcode, int tagStart, int tagCount) where T : IReadOnlyGameplayTagContainer
         {
             switch (opcode)
             {

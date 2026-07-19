@@ -64,13 +64,23 @@ namespace CycloneGames.Factory.Runtime
 
             try
             {
-                item.OnSpawned(param, this);
+                BeginLifecycleCallback();
+                try
+                {
+                    item.OnSpawned(param, this);
+                }
+                finally
+                {
+                    EndLifecycleCallback();
+                }
+
                 return true;
             }
-            catch
+            catch (Exception spawnFailure)
             {
-                RollbackSpawn(item);
-                throw;
+                Exception cleanupFailure = RollbackSpawn(item);
+                RethrowSpawnFailure(spawnFailure, cleanupFailure);
+                return false;
             }
         }
     }

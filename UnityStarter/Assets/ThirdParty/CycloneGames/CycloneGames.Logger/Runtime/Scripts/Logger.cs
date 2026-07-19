@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
@@ -8,48 +9,228 @@ using CycloneGames.Logger.Util;
 namespace CycloneGames.Logger
 {
     /// <summary>
-    /// Central logging manager.
-    ///
-    /// Responsibilities:
-    /// - Provides static convenience APIs (LogTrace..LogFatal) with string and builder overloads
-    /// - Filters by severity and category before allocating work
-    /// - Queues messages into a pluggable processing strategy (threaded or single-threaded)
-    /// - Dispatches to registered <see cref="ILogger"/> implementations
-    ///
-    /// Performance/GC:
-    /// - Builder overloads avoid intermediate string allocations when logging is disabled
-    /// - Messages are pooled via <see cref="LogMessagePool"/>
-    /// - Formatting helpers reuse <see cref="Util.StringBuilderPool"/>
-    ///
-    /// Thread-safety:
-    /// - Logger registration is protected by a <see cref="ReaderWriterLockSlim"/>
-    /// - Dispatch occurs inside a read-lock to minimize contention
-    ///
-    /// Platform notes:
-    /// - Single-threaded processing requires calling <see cref="Pump"/> regularly (e.g., once per frame)
-    /// - Threaded processing ignores Pump() and drains in a background worker
+    /// Bounded logging facade and sink owner. The static facade is optional; callers may
+    /// explicitly construct an instance through <see cref="CLoggerFactory"/>.
     /// </summary>
     public sealed class CLogger : ICLogger
     {
-        private static Func<CLogger, ILogProcessor> _processorFactory = owner => new ThreadedLogProcessor(owner);
-        private static Func<DateTime> _timestampProvider = () => DateTime.Now;
-        private static readonly object _instanceLock = new();
+        private sealed class SinkRegistration
+        {
+            private const int RetiredMask = 1;
+            private const int UsageIncrement = 2;
+
+            internal readonly ILogger Sink;
+            internal int ActiveCountReleased;
+            internal int ConsecutiveFailures;
+            internal int QuarantinedByFailure;
+
+            private readonly object _quiescenceLock = new object();
+            private int _usageState;
+
+            internal SinkRegistration(ILogger sink)
+            {
+                Sink = sink;
+            }
+
+            internal bool TryEnter()
+            {
+                while (true)
+                {
+                    int current = Volatile.Read(ref _usageState);
+                    if ((current & RetiredMask) != 0)
+                    {
+                        return false;
+                    }
+
+                    if (Interlocked.CompareExchange(ref _usageState, current + UsageIncrement, current) == current)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            internal bool IsRetired => (Volatile.Read(ref _usageState) & RetiredMask) != 0;
+
+            internal void Exit()
+            {
+                int current = Interlocked.Add(ref _usageState, -UsageIncrement);
+                if ((current & ~RetiredMask) != 0)
+                {
+                    return;
+                }
+
+                lock (_quiescenceLock)
+                {
+                    Monitor.PulseAll(_quiescenceLock);
+                }
+            }
+
+            internal bool Retire()
+            {
+                while (true)
+                {
+                    int current = Volatile.Read(ref _usageState);
+                    if ((current & RetiredMask) != 0)
+                    {
+                        return false;
+                    }
+
+                    if (Interlocked.CompareExchange(ref _usageState, current | RetiredMask, current) == current)
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            internal bool WaitForQuiescence(int timeoutMs)
+            {
+                int startTick = Environment.TickCount;
+                lock (_quiescenceLock)
+                {
+                    while ((Volatile.Read(ref _usageState) & ~RetiredMask) != 0)
+                    {
+                        int remaining = timeoutMs < 0
+                            ? Timeout.Infinite
+                            : timeoutMs - unchecked(Environment.TickCount - startTick);
+                        if (remaining <= 0)
+                        {
+                            return false;
+                        }
+
+                        Monitor.Wait(_quiescenceLock, remaining);
+                    }
+
+                    return true;
+                }
+            }
+        }
+
+        private sealed class SinkReferenceComparer : IEqualityComparer<ILogger>
+        {
+            internal static readonly SinkReferenceComparer Instance = new SinkReferenceComparer();
+
+            public bool Equals(ILogger left, ILogger right)
+            {
+                return ReferenceEquals(left, right);
+            }
+
+            public int GetHashCode(ILogger value)
+            {
+                return RuntimeHelpers.GetHashCode(value);
+            }
+        }
+
+        private const int DefaultSinkQuiescenceTimeoutMs = 1000;
+        private const int MaxOwnedSinks = 256;
+        private const int SinkDisposeAttemptCount = 3;
+
+        private static readonly object InstanceLock = new object();
+        private static Func<CLogger, LoggerProcessingOptions, ILogProcessor> _processorFactory = CreatePlatformDefaultProcessor;
+        private static LoggerProcessingOptions _globalProcessingOptions = new LoggerProcessingOptions();
+        private static Func<DateTime> _timestampProvider = () => DateTime.UtcNow;
+        private static volatile CLogger _instance;
+        private static volatile bool _shutdownInProgress;
         private static volatile bool _suppressGlobalStaticLogging;
-        private static CLogger _instance;
+        private static volatile bool _globalCreationBlocked;
+
+        private readonly ReaderWriterLockSlim _sinksLock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
+        private readonly List<SinkRegistration> _sinks = new List<SinkRegistration>();
+        private readonly Dictionary<ILogger, SinkRegistration> _retiredRegistrations =
+            new Dictionary<ILogger, SinkRegistration>(SinkReferenceComparer.Instance);
+        private readonly HashSet<ILogger> _disposingSinks = new HashSet<ILogger>(SinkReferenceComparer.Instance);
+        private readonly object _dispatchStateLock = new object();
+        private readonly object _filterMutationLock = new object();
+        private readonly object _shutdownLock = new object();
+        private readonly object _sinkDisposalQueueLock = new object();
+        private readonly ILogger[] _sinkDisposalQueue = new ILogger[MaxOwnedSinks];
+        private readonly ILogger[] _pendingSinkDisposals = new ILogger[MaxOwnedSinks];
+        private readonly ILogProcessor _processor;
+        private readonly Func<DateTime> _instanceTimestampProvider;
+        private readonly LoggerProcessingOptions _processingOptions;
+
+        private volatile SinkRegistration[] _sinkSnapshot = Array.Empty<SinkRegistration>();
+        private volatile HashSet<string> _whiteListSnapshot = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private volatile HashSet<string> _blackListSnapshot = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        private volatile LogLevel _currentLogLevel = LogLevel.Info;
+        private volatile LogFilter _currentLogFilter = LogFilter.LogAll;
+#if !UNITY_WEBGL || UNITY_EDITOR
+        private Thread _sinkDisposalThread;
+#endif
+        private bool _sinkDisposalWorkerOwnsQueue;
+        private bool _sinkDisposalStopRequested;
+        private int _sinkDisposalQueueHead;
+        private int _sinkDisposalQueueCount;
+        private int _pendingSinkDisposalCount;
+        private int _activeDispatchCount;
+        private int _sinkDisposalsOutstanding;
+        private int _ownedSinkCount;
+        private int _activeSinkCount;
+        private int _lifecycleState;
+        private LoggerShutdownResult _lastShutdownResult;
+        private bool _shutdownProcessorStopped;
+        private bool _shutdownFlushAttempted;
+        private bool _shutdownSinksFlushed = true;
+        private bool _shutdownSinksDetached;
+        private long _shutdownDroppedMessageCount;
+        private long _sinkFailureCount;
+        private long _sinkDisposalFailureCount;
+        private long _rejectedFilterMutationCount;
+        private long _timestampProviderFailureCount;
+        private long _messageBuilderFailureCount;
+        private int _quarantinedSinkCount;
+        private int _filterCategoryCount;
+        private int _filterCharacters;
+        private int _timestampProviderFailed;
+        private int _messageBuilderFailureEmergencyReported;
 
         public static CLogger Instance
         {
             get
             {
-                var instance = _instance;
-                if (instance != null) return instance;
-
-                lock (_instanceLock)
+                CLogger current = _instance;
+                if (current != null)
                 {
+                    return current;
+                }
+
+                lock (InstanceLock)
+                {
+                    while (_shutdownInProgress)
+                    {
+                        Monitor.Wait(InstanceLock);
+                    }
+
+                    if (_globalCreationBlocked)
+                    {
+                        throw new InvalidOperationException("Global logger creation is blocked until the next runtime subsystem reset.");
+                    }
+
                     _suppressGlobalStaticLogging = false;
-                    return _instance ??= new CLogger(_processorFactory, _timestampProvider);
+                    return _instance ??= new CLogger(_processorFactory, _globalProcessingOptions, _timestampProvider);
                 }
             }
+        }
+
+        public CLogger()
+            : this(CreatePlatformDefaultProcessor, new LoggerProcessingOptions(), _timestampProvider)
+        {
+        }
+
+        public CLogger(LoggerProcessingOptions processingOptions)
+            : this(CreatePlatformDefaultProcessor, processingOptions, _timestampProvider)
+        {
+        }
+
+        internal CLogger(
+            Func<CLogger, LoggerProcessingOptions, ILogProcessor> processorFactory,
+            LoggerProcessingOptions processingOptions,
+            Func<DateTime> timestampProvider)
+        {
+            _processingOptions = LoggerProcessingOptions.CreateValidated(processingOptions);
+            _instanceTimestampProvider = timestampProvider ?? (() => DateTime.UtcNow);
+            LogMessagePool.Prewarm();
+            StringBuilderPool.Prewarm();
+            _processor = (processorFactory ?? throw new ArgumentNullException(nameof(processorFactory)))(this, _processingOptions);
         }
 
         internal static bool TryGetInstance(out CLogger instance)
@@ -58,582 +239,749 @@ namespace CycloneGames.Logger
             return instance != null;
         }
 
-        private List<ILogger> _loggers = new();
-        private volatile ILogger[] _loggerSnapshot = Array.Empty<ILogger>();
-        private readonly HashSet<Type> _loggerTypes = new();
-        private readonly ReaderWriterLockSlim _loggersLock = new(LockRecursionPolicy.NoRecursion);
-        private readonly object _dispatchStateLock = new();
-        private int _activeDispatchCount;
-        private const int LoggerDisposeWaitMs = 1000;
-
-        // Processing strategy decoupled from platform specifics; no Unity macros here.
-        private readonly ILogProcessor _processor;
-        private readonly Func<DateTime> _instanceTimestampProvider;
-
-        private volatile LogLevel _currentLogLevel = LogLevel.Info; // Default log level.
-        private volatile LogFilter _currentLogFilter = LogFilter.LogAll; // Default filter.
-        private readonly HashSet<string> _whiteList = new(StringComparer.OrdinalIgnoreCase);
-        private readonly HashSet<string> _blackList = new(StringComparer.OrdinalIgnoreCase);
-        private readonly object _filterLock = new(); // Protects filter mode and lists.
-        private volatile bool _disposed;
-#if UNITY_EDITOR
-        private readonly int _mainThreadId;
-#endif
-
-        public CLogger()
-            : this(_processorFactory, _timestampProvider)
+        internal static bool ConfigureProcessorFactory(
+            Func<CLogger, LoggerProcessingOptions, ILogProcessor> factory,
+            LoggerProcessingOptions processingOptions)
         {
-        }
-
-        public CLogger(LoggerProcessingOptions processingOptions)
-            : this(owner => new ThreadedLogProcessor(owner, LoggerProcessingOptions.CreateValidated(processingOptions)), _timestampProvider)
-        {
-        }
-
-        public CLogger(Func<CLogger, ILogProcessor> processorFactory)
-            : this(processorFactory, _timestampProvider)
-        {
-        }
-
-        public CLogger(Func<CLogger, ILogProcessor> processorFactory, Func<DateTime> timestampProvider)
-        {
-#if UNITY_EDITOR
-            _mainThreadId = Environment.CurrentManagedThreadId;
-#endif
-            _instanceTimestampProvider = timestampProvider ?? (() => DateTime.Now);
-            try
+            if (factory == null)
             {
-                _processor = (processorFactory ?? (o => new ThreadedLogProcessor(o)))(this);
-            }
-            catch (ArgumentException)
-            {
-                throw;
-            }
-            catch
-            {
-                _processor = new SingleThreadLogProcessor(this);
+                return false;
             }
 
-            LogMessagePool.Prewarm();
-            Util.StringBuilderPool.Prewarm();
-        }
-
-        /// <summary>
-        /// Configure the processor factory before the first access to Instance to fully decouple platform specifics.
-        /// Advanced: intended for infrastructure code. Most projects should prefer
-        /// <see cref="ConfigureSingleThreadedProcessing"/> or <see cref="ConfigureThreadedProcessing"/>.
-        /// </summary>
-        internal static bool ConfigureProcessorFactory(Func<CLogger, ILogProcessor> factory)
-        {
-            if (factory == null) return false;
-
-            lock (_instanceLock)
+            lock (InstanceLock)
             {
-                if (_instance != null)
+                if (_instance != null || _shutdownInProgress || _globalCreationBlocked)
                 {
-                    Console.Error.WriteLine("[WARNING] CLogger: Processing configuration ignored because the global instance already exists.");
+                    EmergencyLogger.TryWrite("Processing configuration was ignored because the global logger is already active.");
                     return false;
                 }
 
                 _processorFactory = factory;
+                _globalProcessingOptions = LoggerProcessingOptions.CreateValidated(processingOptions);
                 return true;
             }
         }
 
-        /// <summary>
-        /// Force single-threaded processing (manual Pump). Call this before first use of Instance.
-        /// Suitable for platforms without background threads (e.g., Web/WASM).
-        /// </summary>
-        public static void ConfigureSingleThreadedProcessing(LoggerProcessingOptions options = null)
+        public static bool ConfigureSingleThreadedProcessing(LoggerProcessingOptions options = null)
         {
-            var capturedOptions = LoggerProcessingOptions.CreateValidated(options);
-            if (ConfigureProcessorFactory(o => new SingleThreadLogProcessor(o, capturedOptions)))
-            {
-                LoggerUpdater.Configure(capturedOptions);
-            }
+            LoggerProcessingOptions capturedOptions = LoggerProcessingOptions.CreateValidated(options);
+            return ConfigureProcessorFactory((owner, configured) => new SingleThreadLogProcessor(owner, configured), capturedOptions);
         }
 
-        /// <summary>
-        /// Force threaded processing. Call this before first use of Instance.
-        /// </summary>
-        public static void ConfigureThreadedProcessing(LoggerProcessingOptions options = null)
+        public static bool ConfigureThreadedProcessing(LoggerProcessingOptions options = null)
         {
-            var capturedOptions = LoggerProcessingOptions.CreateValidated(options);
-            if (ConfigureProcessorFactory(o => new ThreadedLogProcessor(o, capturedOptions)))
-            {
-                LoggerUpdater.Configure(capturedOptions);
-            }
+#if UNITY_WEBGL && !UNITY_EDITOR
+            throw new PlatformNotSupportedException("Threaded logger processing is unavailable in WebGL players. Use ConfigureSingleThreadedProcessing.");
+#else
+            LoggerProcessingOptions capturedOptions = LoggerProcessingOptions.CreateValidated(options);
+            return ConfigureProcessorFactory((owner, configured) => new ThreadedLogProcessor(owner, configured), capturedOptions);
+#endif
         }
 
-        public static void ConfigureTimestampProvider(Func<DateTime> timestampProvider)
+        public static bool ConfigureTimestampProvider(Func<DateTime> timestampProvider)
         {
-            if (timestampProvider == null) throw new ArgumentNullException(nameof(timestampProvider));
-
-            lock (_instanceLock)
+            if (timestampProvider == null)
             {
-                if (_instance != null)
+                throw new ArgumentNullException(nameof(timestampProvider));
+            }
+
+            lock (InstanceLock)
+            {
+                if (_instance != null || _shutdownInProgress || _globalCreationBlocked)
                 {
-                    Console.Error.WriteLine("[WARNING] CLogger: Timestamp provider configuration ignored because the global instance already exists.");
-                    return;
+                    EmergencyLogger.TryWrite("Timestamp provider configuration was ignored because the global logger is already active.");
+                    return false;
                 }
 
                 _timestampProvider = timestampProvider;
+                return true;
             }
         }
 
-        /// <summary>
-        /// Disposes the global logger instance and allows a later access to create a fresh one.
-        /// </summary>
-        public static void Shutdown()
+        public static LoggerShutdownResult Shutdown(LogFlushMode flushMode = LogFlushMode.Buffered)
         {
             CLogger instance;
-            lock (_instanceLock)
+            bool preserveSuppression;
+            lock (InstanceLock)
             {
+                while (_shutdownInProgress)
+                {
+                    Monitor.Wait(InstanceLock);
+                }
+
+                _shutdownInProgress = true;
+                preserveSuppression = _suppressGlobalStaticLogging || _globalCreationBlocked;
+                _suppressGlobalStaticLogging = true;
                 instance = _instance;
                 _instance = null;
-                _suppressGlobalStaticLogging = false;
             }
 
-            instance?.Dispose();
-            LoggerUpdater.Shutdown();
+            LoggerShutdownResult result = default;
+            try
+            {
+                result = instance == null
+                    ? new LoggerShutdownResult(LoggerShutdownStatus.NotStarted, 0, true)
+                    : instance.ShutdownInstance(flushMode);
+            }
+            finally
+            {
+                lock (InstanceLock)
+                {
+                    if (instance != null && !result.IsComplete && _instance == null)
+                    {
+                        _instance = instance;
+                    }
+
+                    _shutdownInProgress = false;
+                    _suppressGlobalStaticLogging = preserveSuppression || _globalCreationBlocked;
+                    Monitor.PulseAll(InstanceLock);
+                }
+            }
+
+            return result;
+        }
+
+        internal static LoggerShutdownResult ResetForUnitySubsystemRegistration()
+        {
+            lock (InstanceLock)
+            {
+                _globalCreationBlocked = true;
+                _suppressGlobalStaticLogging = true;
+            }
+
+            LoggerShutdownResult result = Shutdown(LogFlushMode.Buffered);
+            if (!result.IsComplete && result.Status != LoggerShutdownStatus.NotStarted)
+            {
+                EmergencyLogger.TryWrite("Unity subsystem reset could not stop the previous logger within its timeout.");
+                return result;
+            }
+
+            lock (InstanceLock)
+            {
+                _processorFactory = CreatePlatformDefaultProcessor;
+                _globalProcessingOptions = new LoggerProcessingOptions();
+                _timestampProvider = () => DateTime.UtcNow;
+                _suppressGlobalStaticLogging = true;
+            }
+
+            LogMessagePool.Clear();
+            StringBuilderPool.Clear();
+            return result;
+        }
+
+        internal static void CompleteUnitySubsystemRegistrationReset(bool initializationAllowed)
+        {
+            lock (InstanceLock)
+            {
+                _globalCreationBlocked = !initializationAllowed;
+                _suppressGlobalStaticLogging = true;
+                Monitor.PulseAll(InstanceLock);
+            }
         }
 
         internal static void ConfigureGlobalStaticLoggingSuppressed(bool suppress)
         {
-            lock (_instanceLock)
+            lock (InstanceLock)
             {
-                if (_instance != null) return;
-                _suppressGlobalStaticLogging = suppress;
+                if (_instance == null)
+                {
+                    _suppressGlobalStaticLogging = suppress;
+                }
             }
         }
 
-        public void SetLogLevel(LogLevel level) => _currentLogLevel = level;
-        public LogLevel GetLogLevel() => _currentLogLevel;
+        internal static LoggerShutdownResult ShutdownForApplicationQuit()
+        {
+            lock (InstanceLock)
+            {
+                _globalCreationBlocked = true;
+                _suppressGlobalStaticLogging = true;
+            }
+
+            return Shutdown(LogFlushMode.Buffered);
+        }
+
+        public void SetLogLevel(LogLevel level)
+        {
+            if (level < LogLevel.Trace || level > LogLevel.None)
+            {
+                throw new ArgumentOutOfRangeException(nameof(level));
+            }
+
+            _currentLogLevel = level;
+        }
+
+        public LogLevel GetLogLevel()
+        {
+            return _currentLogLevel;
+        }
 
         public void SetLogFilter(LogFilter filter)
         {
-            lock (_filterLock) { _currentLogFilter = filter; }
+            if (filter < LogFilter.LogAll || filter > LogFilter.LogNoBlackList)
+            {
+                throw new ArgumentOutOfRangeException(nameof(filter));
+            }
+
+            _currentLogFilter = filter;
         }
 
-        public void AddLogger(ILogger logger)
+        public bool AddLogger(ILogger logger)
         {
-            if (logger == null) throw new ArgumentNullException(nameof(logger));
-            _loggersLock.EnterWriteLock();
+            if (logger == null)
+            {
+                throw new ArgumentNullException(nameof(logger));
+            }
+
+            ThrowIfStopping();
+            _sinksLock.EnterWriteLock();
             try
             {
-                if (!_loggers.Contains(logger))
+                ThrowIfStopping();
+                for (int i = 0; i < _sinks.Count; i++)
                 {
-                    _loggers.Add(logger);
-                    _loggerTypes.Add(logger.GetType());
-                    PublishLoggerSnapshot();
+                    if (ReferenceEquals(_sinks[i].Sink, logger))
+                    {
+                        return false;
+                    }
                 }
+
+                if (_retiredRegistrations.ContainsKey(logger) || _disposingSinks.Contains(logger))
+                {
+                    return false;
+                }
+
+                if (!HasSinkOwnershipCapacityNoLock())
+                {
+                    return false;
+                }
+
+                var registration = new SinkRegistration(logger);
+                SinkRegistration[] snapshot = CreateSnapshotWithAddedSinkNoLock(registration);
+                _sinks.Add(registration);
+                _sinkSnapshot = snapshot;
+                Interlocked.Increment(ref _activeSinkCount);
+                Interlocked.Increment(ref _ownedSinkCount);
+                return true;
             }
-            finally { _loggersLock.ExitWriteLock(); }
+            finally
+            {
+                _sinksLock.ExitWriteLock();
+            }
         }
 
         /// <summary>
-        /// Adds a logger only if no logger of the same exact type already exists.
+        /// Adds a sink when no sink of the same exact type is registered. A rejected new
+        /// instance is disposed so callers can safely use AddLoggerUnique(new Sink()).
         /// </summary>
-        public void AddLoggerUnique(ILogger logger)
+        public bool AddLoggerUnique(ILogger logger)
         {
-            if (logger == null) throw new ArgumentNullException(nameof(logger));
-            Type loggerType = logger.GetType();
-
-            _loggersLock.EnterWriteLock();
-            try
+            if (logger == null)
             {
-                if (_loggerTypes.Contains(loggerType)) return;
-
-                _loggers.Add(logger);
-                _loggerTypes.Add(loggerType);
-                PublishLoggerSnapshot();
+                throw new ArgumentNullException(nameof(logger));
             }
-            finally { _loggersLock.ExitWriteLock(); }
-        }
 
-        public void RemoveLogger(ILogger logger)
-        {
-            if (logger == null) return;
-            _loggersLock.EnterWriteLock();
+            ThrowIfStopping();
+            bool disposeRejected = false;
+            _sinksLock.EnterWriteLock();
             try
             {
-                if (_loggers.Remove(logger))
+                ThrowIfStopping();
+                Type type = logger.GetType();
+                for (int i = 0; i < _sinks.Count; i++)
                 {
-                    RebuildLoggerTypes();
-                    PublishLoggerSnapshot();
+                    if (!_sinks[i].IsRetired && _sinks[i].Sink.GetType() == type)
+                    {
+                        disposeRejected = !ReferenceEquals(_sinks[i].Sink, logger);
+                        return false;
+                    }
+                }
+
+                if (_retiredRegistrations.ContainsKey(logger) || _disposingSinks.Contains(logger))
+                {
+                    return false;
+                }
+
+                if (!HasSinkOwnershipCapacityNoLock())
+                {
+                    disposeRejected = true;
+                    return false;
+                }
+
+                var registration = new SinkRegistration(logger);
+                SinkRegistration[] snapshot = CreateSnapshotWithAddedSinkNoLock(registration);
+                _sinks.Add(registration);
+                _sinkSnapshot = snapshot;
+                Interlocked.Increment(ref _activeSinkCount);
+                Interlocked.Increment(ref _ownedSinkCount);
+                return true;
+            }
+            finally
+            {
+                _sinksLock.ExitWriteLock();
+                if (disposeRejected)
+                {
+                    TryDisposeSink(logger);
                 }
             }
-            finally { _loggersLock.ExitWriteLock(); }
         }
 
         /// <summary>
-        /// Removes all loggers and disposes them. This operation is optimized to avoid extra list allocations.
+        /// Removes a sink from future dispatch. A true result means all earlier dispatches
+        /// have quiesced and sink ownership has transferred back to the caller. A false
+        /// result means the caller must not dispose the sink because it was not registered,
+        /// another owner already claimed it, or dispatches have not quiesced yet.
         /// </summary>
+        public bool RemoveLogger(ILogger logger, int quiescenceTimeoutMs = DefaultSinkQuiescenceTimeoutMs)
+        {
+            if (logger == null)
+            {
+                return true;
+            }
+
+            SinkRegistration removed = null;
+            _sinksLock.EnterWriteLock();
+            try
+            {
+                for (int i = 0; i < _sinks.Count; i++)
+                {
+                    if (!ReferenceEquals(_sinks[i].Sink, logger))
+                    {
+                        continue;
+                    }
+
+                    removed = _sinks[i];
+                    SinkRegistration[] snapshot = CreateSnapshotWithoutSinkNoLock(i);
+                    _retiredRegistrations.Add(logger, removed);
+                    if (!removed.Retire())
+                    {
+                        _retiredRegistrations.Remove(logger);
+                        removed = null;
+                        break;
+                    }
+
+                    if (Interlocked.Exchange(ref removed.ActiveCountReleased, 1) == 0)
+                    {
+                        Interlocked.Decrement(ref _activeSinkCount);
+                    }
+
+                    _sinks.RemoveAt(i);
+                    _sinkSnapshot = snapshot;
+                    break;
+                }
+
+                if (removed == null)
+                {
+                    _retiredRegistrations.TryGetValue(logger, out removed);
+                }
+            }
+            finally
+            {
+                _sinksLock.ExitWriteLock();
+            }
+
+            if (removed == null)
+            {
+                return false;
+            }
+
+            if (!removed.WaitForQuiescence(quiescenceTimeoutMs))
+            {
+                return false;
+            }
+
+            _sinksLock.EnterWriteLock();
+            bool ownershipTransferred = false;
+            try
+            {
+                if (_retiredRegistrations.TryGetValue(logger, out SinkRegistration tracked)
+                    && ReferenceEquals(tracked, removed))
+                {
+                    _retiredRegistrations.Remove(logger);
+                    Interlocked.Decrement(ref _ownedSinkCount);
+                    ownershipTransferred = true;
+                }
+            }
+            finally
+            {
+                _sinksLock.ExitWriteLock();
+            }
+
+            return ownershipTransferred;
+        }
+
         public void ClearLoggers()
         {
+            lock (_shutdownLock)
+            {
+                ThrowIfStopping();
+                DetachAllLoggers();
+                WaitForActiveDispatches(DefaultSinkQuiescenceTimeoutMs);
+            }
+        }
+
+        private void DetachAllLoggers()
+        {
             List<ILogger> toDispose;
-            _loggersLock.EnterWriteLock();
+            _sinksLock.EnterWriteLock();
             try
             {
-                toDispose = _loggers;
-                _loggers = new List<ILogger>();
-                _loggerTypes.Clear();
-                _loggerSnapshot = Array.Empty<ILogger>();
-            }
-            finally { _loggersLock.ExitWriteLock(); }
-
-            if (!WaitForActiveDispatches(LoggerDisposeWaitMs))
-            {
-                Console.Error.WriteLine("[WARNING] CLogger: ClearLoggers skipped sink disposal because dispatch did not become idle.");
-                return;
-            }
-
-            for (int i = 0; i < toDispose.Count; i++)
-            {
-                try { toDispose[i].Dispose(); }
-                catch (Exception ex)
+                toDispose = new List<ILogger>(_sinks.Count + _retiredRegistrations.Count);
+                for (int i = 0; i < _sinks.Count; i++)
                 {
-                    Console.Error.WriteLine($"[ERROR] CLogger: Failed to dispose logger {toDispose[i].GetType().Name}. {ex.Message}");
+                    toDispose.Add(_sinks[i].Sink);
                 }
+
+                foreach (KeyValuePair<ILogger, SinkRegistration> pair in _retiredRegistrations)
+                {
+                    toDispose.Add(pair.Key);
+                }
+
+                int disposingAdded = 0;
+                try
+                {
+                    for (int i = 0; i < toDispose.Count; i++)
+                    {
+                        if (!_disposingSinks.Add(toDispose[i]))
+                        {
+                            throw new InvalidOperationException("A sink cannot enter disposal ownership more than once.");
+                        }
+
+                        disposingAdded++;
+                    }
+                }
+                catch
+                {
+                    for (int i = 0; i < disposingAdded; i++)
+                    {
+                        _disposingSinks.Remove(toDispose[i]);
+                    }
+
+                    throw;
+                }
+
+                for (int i = 0; i < _sinks.Count; i++)
+                {
+                    _sinks[i].Retire();
+                    Interlocked.Exchange(ref _sinks[i].ActiveCountReleased, 1);
+                }
+
+                foreach (KeyValuePair<ILogger, SinkRegistration> pair in _retiredRegistrations)
+                {
+                    pair.Value.Retire();
+                }
+
+                _sinks.Clear();
+                _retiredRegistrations.Clear();
+                _sinkSnapshot = Array.Empty<SinkRegistration>();
+                Volatile.Write(ref _activeSinkCount, 0);
             }
+            finally
+            {
+                _sinksLock.ExitWriteLock();
+            }
+
+            ScheduleSinkDisposals(toDispose);
         }
 
         public void AddToWhiteList(string category)
         {
-            if (string.IsNullOrEmpty(category)) return;
-            lock (_filterLock) { _whiteList.Add(category); }
+            MutateCategorySet(category, true, true);
         }
+
         public void RemoveFromWhiteList(string category)
         {
-            if (string.IsNullOrEmpty(category)) return;
-            lock (_filterLock) { _whiteList.Remove(category); }
+            MutateCategorySet(category, true, false);
         }
 
         public void AddToBlackList(string category)
         {
-            if (string.IsNullOrEmpty(category)) return;
-            lock (_filterLock) { _blackList.Add(category); }
+            MutateCategorySet(category, false, true);
         }
+
         public void RemoveFromBlackList(string category)
         {
-            if (string.IsNullOrEmpty(category)) return;
-            lock (_filterLock) { _blackList.Remove(category); }
+            MutateCategorySet(category, false, false);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public void Log(LogLevel level, string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-            => EnqueueMessage(level, message, category, filePath, lineNumber, memberName);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public void Log(LogLevel level, Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-            => EnqueueMessage(level, messageBuilder, category, filePath, lineNumber, memberName);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public void Log<T>(LogLevel level, T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-            => EnqueueMessage(level, state, messageBuilder, category, filePath, lineNumber, memberName);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool ShouldLog(LogLevel logLevel, string category)
+        public void Log(
+            LogLevel level,
+            string message,
+            string category = null,
+            [CallerFilePath] string filePath = "",
+            [CallerLineNumber] int lineNumber = 0,
+            [CallerMemberName] string memberName = "")
         {
-            if (logLevel < _currentLogLevel) return false;
+            EnqueueMessage(level, message, category, filePath, lineNumber, memberName);
+        }
 
-            LogFilter currentFilter = _currentLogFilter;
-            if (currentFilter == LogFilter.LogAll) return true;
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Log(
+            LogLevel level,
+            Action<StringBuilder> messageBuilder,
+            string category = null,
+            [CallerFilePath] string filePath = "",
+            [CallerLineNumber] int lineNumber = 0,
+            [CallerMemberName] string memberName = "")
+        {
+            EnqueueMessage(level, messageBuilder, category, filePath, lineNumber, memberName);
+        }
 
-            lock (_filterLock)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public void Log<T>(
+            LogLevel level,
+            T state,
+            Action<T, StringBuilder> messageBuilder,
+            string category = null,
+            [CallerFilePath] string filePath = "",
+            [CallerLineNumber] int lineNumber = 0,
+            [CallerMemberName] string memberName = "")
+        {
+            EnqueueMessage(level, state, messageBuilder, category, filePath, lineNumber, memberName);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void LogGlobal(
+            LogLevel level,
+            string message,
+            string category = null,
+            [CallerFilePath] string filePath = "",
+            [CallerLineNumber] int lineNumber = 0,
+            [CallerMemberName] string memberName = "")
+        {
+            if (TryGetGlobalInstanceForLogging(out CLogger logger))
             {
-                currentFilter = _currentLogFilter;
-                switch (currentFilter)
+                logger.EnqueueMessage(level, message, category, filePath, lineNumber, memberName);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void LogGlobal(
+            LogLevel level,
+            Action<StringBuilder> messageBuilder,
+            string category = null,
+            [CallerFilePath] string filePath = "",
+            [CallerLineNumber] int lineNumber = 0,
+            [CallerMemberName] string memberName = "")
+        {
+            if (TryGetGlobalInstanceForLogging(out CLogger logger))
+            {
+                logger.EnqueueMessage(level, messageBuilder, category, filePath, lineNumber, memberName);
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal static void LogGlobal<T>(
+            LogLevel level,
+            T state,
+            Action<T, StringBuilder> messageBuilder,
+            string category = null,
+            [CallerFilePath] string filePath = "",
+            [CallerLineNumber] int lineNumber = 0,
+            [CallerMemberName] string memberName = "")
+        {
+            if (TryGetGlobalInstanceForLogging(out CLogger logger))
+            {
+                logger.EnqueueMessage(level, state, messageBuilder, category, filePath, lineNumber, memberName);
+            }
+        }
+
+        public static void LogTrace(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Trace, message, category, filePath, lineNumber, memberName);
+        public static void LogDebug(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Debug, message, category, filePath, lineNumber, memberName);
+        public static void LogInfo(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Info, message, category, filePath, lineNumber, memberName);
+        public static void LogWarning(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Warning, message, category, filePath, lineNumber, memberName);
+        public static void LogError(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Error, message, category, filePath, lineNumber, memberName);
+        public static void LogFatal(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Fatal, message, category, filePath, lineNumber, memberName);
+
+        public static void LogTrace(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Trace, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogDebug(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Debug, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogInfo(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Info, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogWarning(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Warning, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogError(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Error, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogFatal(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Fatal, messageBuilder, category, filePath, lineNumber, memberName);
+
+        public static void LogTrace<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Trace, state, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogDebug<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Debug, state, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogInfo<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Info, state, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogWarning<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Warning, state, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogError<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Error, state, messageBuilder, category, filePath, lineNumber, memberName);
+        public static void LogFatal<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "") => LogGlobal(LogLevel.Fatal, state, messageBuilder, category, filePath, lineNumber, memberName);
+
+        internal void EnqueueMessage(LogLevel level, string message, string category, string filePath, int lineNumber, string memberName)
+        {
+            if (!CanAccept(level, category))
+            {
+                return;
+            }
+
+            int estimate = EstimateRetainedCharacters(message?.Length ?? 0, category, filePath, memberName);
+            if (!_processor.TryReserve(level, estimate, true, out int reservedCharacters))
+            {
+                return;
+            }
+
+            LogMessage entry = null;
+            bool reservationOwned = true;
+            try
+            {
+                entry = LogMessagePool.Get();
+                entry.Initialize(
+                    GetTimestampSafely(),
+                    level,
+                    message,
+                    null,
+                    category,
+                    filePath,
+                    lineNumber,
+                    memberName,
+                    _processingOptions.MaxMessageCharacters,
+                    _processingOptions.MaxCategoryCharacters,
+                    _processingOptions.MaxSourcePathCharacters,
+                    _processingOptions.MaxMemberNameCharacters);
+                reservationOwned = false;
+                if (_processor.TryCommit(entry, reservedCharacters, entry.GetRetainedCharacterCount()))
                 {
-                    case LogFilter.LogWhiteList when string.IsNullOrEmpty(category): return false;
-                    case LogFilter.LogNoBlackList when string.IsNullOrEmpty(category): return true;
-                    case LogFilter.LogWhiteList: return _whiteList.Contains(category);
-                    case LogFilter.LogNoBlackList: return !_blackList.Contains(category);
-                    default: return true;
+                    entry = null;
+                }
+            }
+            catch
+            {
+                if (reservationOwned)
+                {
+                    _processor.CancelReservation(reservedCharacters);
+                }
+
+                throw;
+            }
+            finally
+            {
+                if (entry != null)
+                {
+                    LogMessagePool.Return(entry);
                 }
             }
         }
 
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private bool HasLoggers()
-        {
-            return _loggerSnapshot.Length != 0;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        private static bool TryGetGlobalInstanceForLogging(out CLogger logger)
-        {
-            logger = _instance;
-            if (logger != null) return true;
-            if (_suppressGlobalStaticLogging) return false;
-
-            logger = Instance;
-            return true;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        internal static void LogGlobal(LogLevel level, string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(level, message, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        internal static void LogGlobal(LogLevel level, Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(level, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        internal static void LogGlobal<T>(LogLevel level, T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(level, state, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogTrace(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Trace, message, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogDebug(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Debug, message, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogInfo(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Info, message, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogWarning(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Warning, message, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogError(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Error, message, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogFatal(string message, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Fatal, message, category, filePath, lineNumber, memberName);
-        }
-
-        // Builder-based overloads to avoid intermediate string allocations when logging is disabled or to minimize GC.
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogTrace(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Trace, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogDebug(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Debug, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogInfo(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Info, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogWarning(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Warning, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogError(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Error, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogFatal(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Fatal, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [UnityEngine.HideInCallstack]
-        internal void EnqueueMessage(LogLevel level, string originalMessage, string category, string filePath, int lineNumber, string memberName)
-        {
-            if (_disposed) return;
-            if (!ShouldLog(level, category)) return;
-            if (!HasLoggers()) return;
-
-            LogMessage logEntry = null;
-            try
-            {
-                logEntry = LogMessagePool.Get();
-                logEntry.Initialize(_instanceTimestampProvider(), level, originalMessage, null, category, filePath, lineNumber, memberName);
-                DispatchEditorUnityLoggersImmediate(logEntry);
-                _processor.Enqueue(logEntry);
-                logEntry = null;
-            }
-            catch
-            {
-                if (logEntry != null) LogMessagePool.Return(logEntry);
-                throw;
-            }
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         internal void EnqueueMessage(LogLevel level, Action<StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
-            if (_disposed) return;
-            if (!ShouldLog(level, category)) return;
-            if (!HasLoggers()) return;
-
-            StringBuilder sb = StringBuilderPool.Get();
-            LogMessage logEntry = null;
-            bool ownsBuilder = true;
-            try
-            {
-                messageBuilder?.Invoke(sb);
-                logEntry = LogMessagePool.Get();
-                logEntry.Initialize(_instanceTimestampProvider(), level, null, sb, category, filePath, lineNumber, memberName);
-                ownsBuilder = false;
-                DispatchEditorUnityLoggersImmediate(logEntry);
-                _processor.Enqueue(logEntry);
-                logEntry = null;
-            }
-            catch
-            {
-                if (logEntry != null)
-                {
-                    LogMessagePool.Return(logEntry);
-                }
-                else if (ownsBuilder)
-                {
-                    StringBuilderPool.Return(sb);
-                }
-                throw;
-            }
+            EnqueueMessage(level, messageBuilder, InvokeMessageBuilder, category, filePath, lineNumber, memberName);
         }
 
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogTrace<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Trace, state, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogDebug<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Debug, state, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogInfo<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Info, state, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogWarning<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Warning, state, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogError<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Error, state, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
-        public static void LogFatal<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
-        {
-            if (TryGetGlobalInstanceForLogging(out var logger)) logger.EnqueueMessage(LogLevel.Fatal, state, messageBuilder, category, filePath, lineNumber, memberName);
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         internal void EnqueueMessage<T>(LogLevel level, T state, Action<T, StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
-            if (_disposed) return;
-            if (!ShouldLog(level, category)) return;
-            if (!HasLoggers()) return;
+            if (!CanAccept(level, category))
+            {
+                return;
+            }
 
-            StringBuilder sb = StringBuilderPool.Get();
-            LogMessage logEntry = null;
-            bool ownsBuilder = true;
+            // Reserve the largest queue-owned payload before invoking user code. The callback
+            // itself remains caller-controlled, but concurrent logger-owned builders cannot
+            // oversubscribe the configured retained queue budget.
+            int estimate = EstimateRetainedCharacters(_processingOptions.MaxMessageCharacters, category, filePath, memberName);
+            if (!_processor.TryReserve(level, estimate, false, out int reservedCharacters))
+            {
+                return;
+            }
+
+            StringBuilder builder = null;
+            string boundedMessage = null;
+            bool builderTruncated = false;
+            LogMessage entry = null;
+            bool reservationOwned = true;
             try
             {
-                messageBuilder?.Invoke(state, sb);
-                logEntry = LogMessagePool.Get();
-                logEntry.Initialize(_instanceTimestampProvider(), level, null, sb, category, filePath, lineNumber, memberName);
-                ownsBuilder = false;
-                DispatchEditorUnityLoggersImmediate(logEntry);
-                _processor.Enqueue(logEntry);
-                logEntry = null;
+                DateTime timestamp = GetTimestampSafely();
+                builder = StringBuilderPool.Get();
+                try
+                {
+                    messageBuilder?.Invoke(state, builder);
+                }
+                catch (Exception exception) when (!(exception is OutOfMemoryException))
+                {
+                    Interlocked.Increment(ref _messageBuilderFailureCount);
+                    builder.Clear();
+                    builder.Append("[log message builder failed: ");
+                    builder.Append(exception.GetType().Name);
+                    builder.Append(']');
+                    if (Interlocked.CompareExchange(ref _messageBuilderFailureEmergencyReported, 1, 0) == 0)
+                    {
+                        EmergencyLogger.TryWrite(
+                            "A log message builder callback failed; bounded diagnostic entries will be emitted and further emergency reports are suppressed.",
+                            exception);
+                    }
+                }
+
+                DetachOversizedBuilder(ref builder, out boundedMessage, out builderTruncated);
+                entry = LogMessagePool.Get();
+                entry.Initialize(
+                    timestamp,
+                    level,
+                    boundedMessage,
+                    builder,
+                    category,
+                    filePath,
+                    lineNumber,
+                    memberName,
+                    _processingOptions.MaxMessageCharacters,
+                    _processingOptions.MaxCategoryCharacters,
+                    _processingOptions.MaxSourcePathCharacters,
+                    _processingOptions.MaxMemberNameCharacters,
+                    builderTruncated);
+                builder = null;
+                reservationOwned = false;
+                if (_processor.TryCommit(entry, reservedCharacters, entry.GetRetainedCharacterCount()))
+                {
+                    entry = null;
+                }
             }
-            catch
+            finally
             {
-                if (logEntry != null)
+                if (reservationOwned)
                 {
-                    LogMessagePool.Return(logEntry);
+                    _processor.CancelReservation(reservedCharacters);
                 }
-                else if (ownsBuilder)
+
+                if (entry != null)
                 {
-                    StringBuilderPool.Return(sb);
+                    LogMessagePool.Return(entry);
                 }
-                throw;
+                else if (builder != null)
+                {
+                    StringBuilderPool.Return(builder);
+                }
             }
         }
 
-        internal void DispatchToLoggers(LogMessage logMessage)
+        internal void DispatchToLoggers(LogMessage message)
         {
-            var loggers = _loggerSnapshot;
             BeginDispatch();
+            SinkRegistration[] snapshot = _sinkSnapshot;
             try
             {
-                for (int i = 0; i < loggers.Length; i++)
+                for (int i = 0; i < snapshot.Length; i++)
                 {
-#if UNITY_EDITOR
-                    if (logMessage.EditorUnityConsoleLogged && loggers[i] is UnityLogger) continue;
-#endif
+                    SinkRegistration registration = snapshot[i];
+                    if (!registration.TryEnter())
+                    {
+                        continue;
+                    }
+
                     try
                     {
-                        loggers[i].Log(logMessage);
+                        try
+                        {
+                            registration.Sink.Log(message);
+                            Volatile.Write(ref registration.ConsecutiveFailures, 0);
+                        }
+                        catch (Exception exception)
+                        {
+                            RecordSinkFailure(registration, exception);
+                        }
                     }
-                    catch (Exception ex)
+                    finally
                     {
-                        Console.Error.WriteLine($"[CRITICAL] CLogger: Logger {loggers[i].GetType().Name} failed. {ex.Message}");
+                        registration.Exit();
                     }
                 }
             }
@@ -643,18 +991,438 @@ namespace CycloneGames.Logger
             }
         }
 
-        private void PublishLoggerSnapshot()
+        internal void PerformSinkMaintenance()
         {
-            _loggerSnapshot = _loggers.Count == 0 ? Array.Empty<ILogger>() : _loggers.ToArray();
+            BeginDispatch();
+            SinkRegistration[] snapshot = _sinkSnapshot;
+            try
+            {
+                for (int i = 0; i < snapshot.Length; i++)
+                {
+                    SinkRegistration registration = snapshot[i];
+                    if (!(registration.Sink is IMaintainableLogger maintainable)
+                        || !registration.TryEnter())
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        try
+                        {
+                            maintainable.PerformMaintenance();
+                        }
+                        catch (Exception exception)
+                        {
+                            RecordSinkFailure(registration, exception);
+                        }
+                    }
+                    finally
+                    {
+                        registration.Exit();
+                    }
+                }
+            }
+            finally
+            {
+                EndDispatch();
+            }
         }
 
-        private void RebuildLoggerTypes()
+        public void Pump(int maxItems = 256)
         {
-            _loggerTypes.Clear();
-            for (int i = 0; i < _loggers.Count; i++)
+            _processor.Pump(maxItems, -1);
+        }
+
+        internal void PumpWithinBudget(int maxItems, int budgetMilliseconds)
+        {
+            _processor.Pump(maxItems, Math.Max(budgetMilliseconds, 0));
+        }
+
+        public bool TryFlush(LogFlushMode mode = LogFlushMode.Buffered, int timeoutMs = -1)
+        {
+            if (timeoutMs < 0)
             {
-                _loggerTypes.Add(_loggers[i].GetType());
+                timeoutMs = _processingOptions.ShutdownDrainTimeoutMs;
             }
+
+            long startTimestamp = Stopwatch.GetTimestamp();
+            if (!_processor.TryFlush(GetRemainingTimeout(startTimestamp, timeoutMs))
+                || !WaitForActiveDispatches(GetRemainingTimeout(startTimestamp, timeoutMs)))
+            {
+                return false;
+            }
+
+            return FlushSinks(mode);
+        }
+
+        public LogProcessingStatistics GetProcessingStatistics()
+        {
+            return _processor.GetStatistics().WithSinkStatistics(
+                Interlocked.Read(ref _sinkFailureCount),
+                Interlocked.Read(ref _sinkDisposalFailureCount),
+                Volatile.Read(ref _sinkDisposalsOutstanding),
+                Volatile.Read(ref _quarantinedSinkCount),
+                Volatile.Read(ref _filterCategoryCount),
+                Volatile.Read(ref _filterCharacters),
+                Interlocked.Read(ref _rejectedFilterMutationCount),
+                Interlocked.Read(ref _timestampProviderFailureCount),
+                Interlocked.Read(ref _messageBuilderFailureCount));
+        }
+
+        internal int MessageBuilderFailureEmergencyReportCount =>
+            Volatile.Read(ref _messageBuilderFailureEmergencyReported);
+
+        internal bool IsSinkDisposalExecutorRunning
+        {
+            get
+            {
+#if UNITY_WEBGL && !UNITY_EDITOR
+                return false;
+#else
+                lock (_sinkDisposalQueueLock)
+                {
+                    return _sinkDisposalWorkerOwnsQueue;
+                }
+#endif
+            }
+        }
+
+#if UNITY_INCLUDE_TESTS
+        internal Action SinkDisposalBeforeExitTestHook;
+#endif
+
+        public static LoggerMemoryStatistics GetMemoryStatistics()
+        {
+            LogMessagePool.PoolStatistics messages = LogMessagePool.GetStatistics();
+            StringBuilderPool.PoolStatistics builders = StringBuilderPool.GetStatistics();
+            return new LoggerMemoryStatistics(
+                messages.CurrentSize,
+                messages.PeakSize,
+                messages.TotalMisses,
+                messages.TotalDiscards,
+                messages.InvalidReturns,
+                builders.CurrentSize,
+                builders.PeakSize,
+                builders.TotalMisses,
+                builders.TotalDiscards);
+        }
+
+        public LoggerShutdownResult ShutdownInstance(LogFlushMode flushMode = LogFlushMode.Buffered, int timeoutMs = -1)
+        {
+            lock (InstanceLock)
+            {
+                if (ReferenceEquals(_instance, this) && !_shutdownInProgress)
+                {
+                    throw new InvalidOperationException("Use static CLogger.Shutdown when stopping the global logger instance.");
+                }
+            }
+
+            lock (_shutdownLock)
+            {
+                if (timeoutMs < 0)
+                {
+                    timeoutMs = _processingOptions.ShutdownDrainTimeoutMs;
+                }
+
+                long startTimestamp = Stopwatch.GetTimestamp();
+
+                int state = Interlocked.CompareExchange(ref _lifecycleState, 1, 0);
+                if (state == 2)
+                {
+                    return _lastShutdownResult;
+                }
+
+                if (!_shutdownProcessorStopped)
+                {
+                    LoggerShutdownResult processorResult = _processor.Shutdown(
+                        GetRemainingTimeout(startTimestamp, timeoutMs));
+                    _shutdownDroppedMessageCount = Math.Max(
+                        _shutdownDroppedMessageCount,
+                        processorResult.DroppedMessageCount);
+                    if (!processorResult.IsComplete || !_processor.IsStopped)
+                    {
+                        return new LoggerShutdownResult(
+                            LoggerShutdownStatus.TimedOut,
+                            _shutdownDroppedMessageCount,
+                            _shutdownFlushAttempted && _shutdownSinksFlushed);
+                    }
+
+                    _shutdownProcessorStopped = true;
+                }
+
+                if (!_shutdownFlushAttempted)
+                {
+                    _shutdownSinksFlushed = FlushSinks(flushMode);
+                    _shutdownFlushAttempted = true;
+                }
+
+                if (!_shutdownSinksDetached)
+                {
+                    DetachAllLoggers();
+                    _shutdownSinksDetached = true;
+                }
+
+                bool dispatchesCompleted = WaitForActiveDispatches(
+                    GetRemainingTimeout(startTimestamp, timeoutMs));
+                bool disposalExecutorStopped = StopSinkDisposalExecutor(
+                    dispatchesCompleted ? GetRemainingTimeout(startTimestamp, timeoutMs) : 0);
+                if (!dispatchesCompleted || !disposalExecutorStopped)
+                {
+                    return new LoggerShutdownResult(
+                        LoggerShutdownStatus.TimedOut,
+                        _shutdownDroppedMessageCount,
+                        _shutdownSinksFlushed);
+                }
+
+                _processor.Dispose();
+                bool hasFailures = !_shutdownSinksFlushed
+                    || Interlocked.Read(ref _sinkDisposalFailureCount) != 0;
+                LoggerShutdownStatus status = hasFailures
+                    ? LoggerShutdownStatus.CompletedWithFailures
+                    : _shutdownDroppedMessageCount > 0
+                        ? LoggerShutdownStatus.CompletedWithDrops
+                        : LoggerShutdownStatus.Completed;
+                _lastShutdownResult = new LoggerShutdownResult(
+                    status,
+                    _shutdownDroppedMessageCount,
+                    _shutdownSinksFlushed);
+                Volatile.Write(ref _lifecycleState, 2);
+                return _lastShutdownResult;
+            }
+        }
+
+        public void Dispose()
+        {
+            bool detachedGlobal = false;
+            lock (InstanceLock)
+            {
+                while (_shutdownInProgress)
+                {
+                    Monitor.Wait(InstanceLock);
+                }
+
+                if (ReferenceEquals(_instance, this))
+                {
+                    _shutdownInProgress = true;
+                    _suppressGlobalStaticLogging = true;
+                    _instance = null;
+                    detachedGlobal = true;
+                }
+            }
+
+            if (!detachedGlobal)
+            {
+                LoggerShutdownResult explicitResult = ShutdownInstance();
+                if (!explicitResult.IsComplete)
+                {
+                    EmergencyLogger.TryWrite("CLogger.Dispose timed out. Keep the instance and retry ShutdownInstance after releasing blocked sinks.");
+                }
+
+                return;
+            }
+
+            LoggerShutdownResult result = default;
+            try
+            {
+                result = ShutdownInstance();
+            }
+            finally
+            {
+                lock (InstanceLock)
+                {
+                    if (!result.IsComplete && _instance == null)
+                    {
+                        _instance = this;
+                    }
+
+                    _shutdownInProgress = false;
+                    _suppressGlobalStaticLogging = false;
+                    Monitor.PulseAll(InstanceLock);
+                }
+            }
+
+            if (!result.IsComplete)
+            {
+                EmergencyLogger.TryWrite("Global CLogger.Dispose timed out; the global instance was restored for an explicit shutdown retry.");
+            }
+        }
+
+        private static void InvokeMessageBuilder(Action<StringBuilder> append, StringBuilder builder)
+        {
+            append?.Invoke(builder);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool CanAccept(LogLevel level, string category)
+        {
+            return Volatile.Read(ref _lifecycleState) == 0
+                && Volatile.Read(ref _activeSinkCount) > 0
+                && ShouldLog(level, category);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool ShouldLog(LogLevel level, string category)
+        {
+            if (level < LogLevel.Trace || level >= LogLevel.None || level < _currentLogLevel)
+            {
+                return false;
+            }
+
+            LogFilter filter = _currentLogFilter;
+            if (filter == LogFilter.LogAll)
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(category)
+                && category.Length > _processingOptions.MaxCategoryCharacters)
+            {
+                return false;
+            }
+
+            if (filter == LogFilter.LogWhiteList)
+            {
+                return !string.IsNullOrEmpty(category) && _whiteListSnapshot.Contains(category);
+            }
+
+            return string.IsNullOrEmpty(category) || !_blackListSnapshot.Contains(category);
+        }
+
+        private static bool TryGetGlobalInstanceForLogging(out CLogger logger)
+        {
+            logger = _instance;
+            if (logger != null)
+            {
+                return true;
+            }
+
+            if (_suppressGlobalStaticLogging || _shutdownInProgress || _globalCreationBlocked)
+            {
+                return false;
+            }
+
+            lock (InstanceLock)
+            {
+                if (_suppressGlobalStaticLogging || _shutdownInProgress || _globalCreationBlocked)
+                {
+                    logger = null;
+                    return false;
+                }
+
+                logger = _instance ??= new CLogger(_processorFactory, _globalProcessingOptions, _timestampProvider);
+                return true;
+            }
+        }
+
+        private static ILogProcessor CreatePlatformDefaultProcessor(CLogger owner, LoggerProcessingOptions options)
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return new SingleThreadLogProcessor(owner, options);
+#else
+            return new ThreadedLogProcessor(owner, options);
+#endif
+        }
+
+        private void MutateCategorySet(string category, bool whiteList, bool add)
+        {
+            if (string.IsNullOrEmpty(category))
+            {
+                return;
+            }
+
+            lock (_filterMutationLock)
+            {
+                HashSet<string> current = whiteList ? _whiteListSnapshot : _blackListSnapshot;
+                if (current.TryGetValue(category, out string storedCategory))
+                {
+                    if (add)
+                    {
+                        return;
+                    }
+
+                    var reduced = new HashSet<string>(current, StringComparer.OrdinalIgnoreCase);
+                    reduced.Remove(category);
+                    _filterCategoryCount--;
+                    _filterCharacters -= storedCategory.Length;
+                    if (whiteList)
+                    {
+                        _whiteListSnapshot = reduced;
+                    }
+                    else
+                    {
+                        _blackListSnapshot = reduced;
+                    }
+
+                    return;
+                }
+
+                if (!add)
+                {
+                    return;
+                }
+
+                if (category.Length > _processingOptions.MaxCategoryCharacters)
+                {
+                    Interlocked.Increment(ref _rejectedFilterMutationCount);
+                    throw new ArgumentOutOfRangeException(
+                        nameof(category),
+                        "Filter categories cannot exceed the configured MaxCategoryCharacters limit.");
+                }
+
+                if (_filterCategoryCount >= _processingOptions.MaxFilterCategories
+                    || (long)_filterCharacters + category.Length > _processingOptions.MaxFilterCharacters)
+                {
+                    Interlocked.Increment(ref _rejectedFilterMutationCount);
+                    throw new InvalidOperationException("The configured logger category-filter memory budget was exhausted.");
+                }
+
+                var updated = new HashSet<string>(current, StringComparer.OrdinalIgnoreCase);
+                updated.Add(category);
+                _filterCategoryCount++;
+                _filterCharacters += category.Length;
+                if (whiteList)
+                {
+                    _whiteListSnapshot = updated;
+                }
+                else
+                {
+                    _blackListSnapshot = updated;
+                }
+            }
+        }
+
+        private SinkRegistration[] CreateSnapshotWithAddedSinkNoLock(SinkRegistration registration)
+        {
+            var snapshot = new SinkRegistration[_sinks.Count + 1];
+            _sinks.CopyTo(snapshot, 0);
+            snapshot[snapshot.Length - 1] = registration;
+            return snapshot;
+        }
+
+        private SinkRegistration[] CreateSnapshotWithoutSinkNoLock(int removedIndex)
+        {
+            if (_sinks.Count == 1)
+            {
+                return Array.Empty<SinkRegistration>();
+            }
+
+            var snapshot = new SinkRegistration[_sinks.Count - 1];
+            int destination = 0;
+            for (int i = 0; i < _sinks.Count; i++)
+            {
+                if (i != removedIndex)
+                {
+                    snapshot[destination++] = _sinks[i];
+                }
+            }
+
+            return snapshot;
+        }
+
+        private bool HasSinkOwnershipCapacityNoLock()
+        {
+            return Volatile.Read(ref _ownedSinkCount) < MaxOwnedSinks;
         }
 
         private void BeginDispatch()
@@ -664,59 +1432,162 @@ namespace CycloneGames.Logger
 
         private void EndDispatch()
         {
-            if (Interlocked.Decrement(ref _activeDispatchCount) != 0) return;
+            if (Interlocked.Decrement(ref _activeDispatchCount) != 0)
+            {
+                return;
+            }
 
+            bool useSynchronousFallback = false;
             lock (_dispatchStateLock)
             {
-                Monitor.PulseAll(_dispatchStateLock);
+                if (_pendingSinkDisposalCount > 0)
+                {
+                    lock (_sinkDisposalQueueLock)
+                    {
+                        for (int i = 0; i < _pendingSinkDisposalCount; i++)
+                        {
+                            EnqueueSinkDisposalNoLock(_pendingSinkDisposals[i]);
+                            _pendingSinkDisposals[i] = null;
+                        }
+
+                        _pendingSinkDisposalCount = 0;
+                        if (_sinkDisposalStopRequested)
+                        {
+                            useSynchronousFallback = !HasSinkDisposalWorkerNoLock();
+                        }
+                        else
+                        {
+                            useSynchronousFallback = !TryEnsureSinkDisposalThreadNoLock();
+                        }
+
+                        Monitor.PulseAll(_sinkDisposalQueueLock);
+                    }
+                }
+                else
+                {
+                    Monitor.PulseAll(_dispatchStateLock);
+                }
+            }
+
+            if (useSynchronousFallback)
+            {
+                DrainSinkDisposalQueueSynchronously();
             }
         }
 
         private bool WaitForActiveDispatches(int timeoutMs)
         {
-            if (Volatile.Read(ref _activeDispatchCount) == 0) return true;
-
+            int startTick = Environment.TickCount;
             lock (_dispatchStateLock)
             {
-                if (timeoutMs < 0)
+                while (Volatile.Read(ref _activeDispatchCount) != 0 || _sinkDisposalsOutstanding != 0)
                 {
-                    while (Volatile.Read(ref _activeDispatchCount) != 0)
+                    int remaining = timeoutMs < 0
+                        ? Timeout.Infinite
+                        : timeoutMs - unchecked(Environment.TickCount - startTick);
+                    if (remaining <= 0)
                     {
-                        Monitor.Wait(_dispatchStateLock);
+                        return false;
                     }
 
-                    return true;
-                }
-
-                int startTick = Environment.TickCount;
-                while (Volatile.Read(ref _activeDispatchCount) != 0)
-                {
-                    int elapsed = unchecked(Environment.TickCount - startTick);
-                    int remaining = timeoutMs - elapsed;
-                    if (remaining <= 0) return false;
                     Monitor.Wait(_dispatchStateLock, remaining);
                 }
-            }
 
-            return true;
+                return true;
+            }
         }
 
-        [UnityEngine.HideInCallstack]
-        private void DispatchEditorUnityLoggersImmediate(LogMessage logMessage)
+        private void RecordSinkFailure(SinkRegistration registration, Exception exception)
         {
-#if UNITY_EDITOR
-            if (Environment.CurrentManagedThreadId != _mainThreadId) return;
+            Interlocked.Increment(ref _sinkFailureCount);
+            int failures = Interlocked.Increment(ref registration.ConsecutiveFailures);
+            if (failures < _processingOptions.SinkFailureThreshold)
+            {
+                return;
+            }
 
-            var loggers = _loggerSnapshot;
-            BeginDispatch();
+            var disposalBatch = new List<ILogger>(1) { registration.Sink };
+
+            _sinksLock.EnterWriteLock();
+            bool removed = false;
             try
             {
-                for (int i = 0; i < loggers.Length; i++)
+                int registrationIndex = _sinks.IndexOf(registration);
+                if (registrationIndex >= 0
+                    && Volatile.Read(ref registration.QuarantinedByFailure) == 0)
                 {
-                    if (loggers[i] is UnityLogger unityLogger)
+                    SinkRegistration[] snapshot = CreateSnapshotWithoutSinkNoLock(registrationIndex);
+                    if (!_disposingSinks.Add(registration.Sink))
                     {
-                        unityLogger.LogImmediate(logMessage);
-                        logMessage.EditorUnityConsoleLogged = true;
+                        return;
+                    }
+
+                    if (!registration.Retire()
+                        || Interlocked.CompareExchange(ref registration.QuarantinedByFailure, 1, 0) != 0)
+                    {
+                        _disposingSinks.Remove(registration.Sink);
+                        return;
+                    }
+
+                    _sinks.RemoveAt(registrationIndex);
+                    _sinkSnapshot = snapshot;
+                    Interlocked.Increment(ref _quarantinedSinkCount);
+                    if (Interlocked.Exchange(ref registration.ActiveCountReleased, 1) == 0)
+                    {
+                        Interlocked.Decrement(ref _activeSinkCount);
+                    }
+
+                    removed = true;
+                }
+            }
+            finally
+            {
+                _sinksLock.ExitWriteLock();
+            }
+
+            if (!removed)
+            {
+                return;
+            }
+
+            ScheduleSinkDisposals(disposalBatch);
+
+            EmergencyLogger.TryWrite(
+                "A failing log sink was quarantined: " + registration.Sink.GetType().FullName
+                + " (" + exception.GetType().Name + ").");
+        }
+
+        private bool FlushSinks(LogFlushMode mode)
+        {
+            bool success = true;
+            BeginDispatch();
+            SinkRegistration[] snapshot = _sinkSnapshot;
+            try
+            {
+                for (int i = 0; i < snapshot.Length; i++)
+                {
+                    SinkRegistration registration = snapshot[i];
+                    if (!(registration.Sink is IFlushableLogger flushable)
+                        || !registration.TryEnter())
+                    {
+                        continue;
+                    }
+
+                    try
+                    {
+                        try
+                        {
+                            success &= flushable.TryFlush(mode);
+                        }
+                        catch (Exception exception)
+                        {
+                            success = false;
+                            RecordSinkFailure(registration, exception);
+                        }
+                    }
+                    finally
+                    {
+                        registration.Exit();
                     }
                 }
             }
@@ -724,58 +1595,380 @@ namespace CycloneGames.Logger
             {
                 EndDispatch();
             }
-#endif
+
+            return success;
         }
 
-        /// <summary>
-        /// Processes queued log messages.
-        /// - Single-threaded processing: call regularly (e.g., once per frame) to avoid stalls.
-        /// - Threaded processing: this is a no-op and can be left in place for portability.
-        /// </summary>
-        /// <param name="maxItems">Upper bound to the number of messages processed in this call.</param>
-        public void Pump(int maxItems = 256) => _processor.Pump(maxItems);
-
-        public LogProcessingStatistics GetProcessingStatistics()
+        private void ScheduleSinkDisposals(List<ILogger> sinks)
         {
-            return _processor is ILogProcessorDiagnostics diagnostics
-                ? diagnostics.GetStatistics()
-                : default;
-        }
-
-        public void Dispose()
-        {
-            if (_disposed) return;
-            _disposed = true;
-            bool disposedGlobalInstance = false;
-
-            Console.WriteLine("[INFO] CLogger: Dispose called. Shutting down...");
-
-            _processor.Dispose();
-            if (!(_processor is ILogProcessorDiagnostics diagnostics) || diagnostics.IsStopped)
+            if (sinks == null || sinks.Count == 0)
             {
-                ClearLoggers();
-                _loggersLock.Dispose();
-            }
-            else
-            {
-                Console.Error.WriteLine("[WARNING] CLogger: Processor did not stop; logger sinks were left undisposed to avoid use-after-dispose.");
+                return;
             }
 
-            lock (_instanceLock)
+            bool disposeImmediately;
+            lock (_dispatchStateLock)
             {
-                if (ReferenceEquals(_instance, this))
+                if (_sinkDisposalsOutstanding > MaxOwnedSinks - sinks.Count)
                 {
-                    _instance = null;
-                    disposedGlobalInstance = true;
+                    throw new InvalidOperationException("Sink disposal ownership capacity was exceeded.");
+                }
+
+                _sinkDisposalsOutstanding += sinks.Count;
+                disposeImmediately = Volatile.Read(ref _activeDispatchCount) == 0;
+                if (!disposeImmediately)
+                {
+                    if (_pendingSinkDisposalCount > _pendingSinkDisposals.Length - sinks.Count)
+                    {
+                        _sinkDisposalsOutstanding -= sinks.Count;
+                        throw new InvalidOperationException("Pending sink disposal capacity was exceeded.");
+                    }
+
+                    for (int i = 0; i < sinks.Count; i++)
+                    {
+                        _pendingSinkDisposals[_pendingSinkDisposalCount++] = sinks[i];
+                    }
                 }
             }
 
-            if (disposedGlobalInstance)
+            if (!disposeImmediately)
             {
-                LoggerUpdater.Shutdown();
+                return;
             }
 
-            Console.WriteLine("[INFO] CLogger: Shutdown complete.");
+            QueueSinkDisposals(sinks);
+        }
+
+        private void CompleteSinkDisposal(ILogger sink)
+        {
+            _sinksLock.EnterWriteLock();
+            try
+            {
+                _disposingSinks.Remove(sink);
+            }
+            finally
+            {
+                _sinksLock.ExitWriteLock();
+            }
+
+            lock (_dispatchStateLock)
+            {
+                _sinkDisposalsOutstanding--;
+                if (_sinkDisposalsOutstanding < 0)
+                {
+                    _sinkDisposalsOutstanding = 0;
+                }
+
+                int ownedCount = Interlocked.Decrement(ref _ownedSinkCount);
+                if (ownedCount < 0)
+                {
+                    Interlocked.Exchange(ref _ownedSinkCount, 0);
+                }
+
+                Monitor.PulseAll(_dispatchStateLock);
+            }
+        }
+
+        private void QueueSinkDisposals(List<ILogger> sinks)
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            for (int i = 0; i < sinks.Count; i++)
+            {
+                TryDisposeSink(sinks[i]);
+                CompleteSinkDisposal(sinks[i]);
+            }
+#else
+            bool useSynchronousFallback;
+            lock (_sinkDisposalQueueLock)
+            {
+                for (int i = 0; i < sinks.Count; i++)
+                {
+                    EnqueueSinkDisposalNoLock(sinks[i]);
+                }
+
+                if (_sinkDisposalStopRequested)
+                {
+                    useSynchronousFallback = !HasSinkDisposalWorkerNoLock();
+                }
+                else
+                {
+                    useSynchronousFallback = !TryEnsureSinkDisposalThreadNoLock();
+                }
+
+                Monitor.PulseAll(_sinkDisposalQueueLock);
+            }
+
+            if (useSynchronousFallback)
+            {
+                DrainSinkDisposalQueueSynchronously();
+            }
+#endif
+        }
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+        private void ProcessSinkDisposals()
+        {
+            try
+            {
+                while (true)
+                {
+                    ILogger sink;
+                    lock (_sinkDisposalQueueLock)
+                    {
+                        while (_sinkDisposalQueueCount == 0 && !_sinkDisposalStopRequested)
+                        {
+                            Monitor.Wait(_sinkDisposalQueueLock);
+                        }
+
+                        if (_sinkDisposalQueueCount == 0)
+                        {
+#if UNITY_INCLUDE_TESTS
+                            SinkDisposalBeforeExitTestHook?.Invoke();
+#endif
+                            ReleaseSinkDisposalWorkerOwnershipNoLock();
+                            return;
+                        }
+
+                        sink = DequeueSinkDisposalNoLock();
+                    }
+
+                    TryDisposeSink(sink);
+                    CompleteSinkDisposal(sink);
+                }
+            }
+            finally
+            {
+                lock (_sinkDisposalQueueLock)
+                {
+                    if (ReferenceEquals(_sinkDisposalThread, Thread.CurrentThread))
+                    {
+                        ReleaseSinkDisposalWorkerOwnershipNoLock();
+                    }
+                }
+            }
+        }
+#endif
+
+        private void EnqueueSinkDisposalNoLock(ILogger sink)
+        {
+            if (_sinkDisposalQueueCount >= _sinkDisposalQueue.Length)
+            {
+                throw new InvalidOperationException("Sink disposal queue capacity was exceeded.");
+            }
+
+            int tail = (_sinkDisposalQueueHead + _sinkDisposalQueueCount) % _sinkDisposalQueue.Length;
+            _sinkDisposalQueue[tail] = sink;
+            _sinkDisposalQueueCount++;
+        }
+
+        private ILogger DequeueSinkDisposalNoLock()
+        {
+            ILogger sink = _sinkDisposalQueue[_sinkDisposalQueueHead];
+            _sinkDisposalQueue[_sinkDisposalQueueHead] = null;
+            _sinkDisposalQueueHead = (_sinkDisposalQueueHead + 1) % _sinkDisposalQueue.Length;
+            _sinkDisposalQueueCount--;
+            return sink;
+        }
+
+        private bool TryEnsureSinkDisposalThreadNoLock()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return false;
+#else
+            if (_sinkDisposalWorkerOwnsQueue)
+            {
+                return true;
+            }
+
+            try
+            {
+                _sinkDisposalThread = new Thread(ProcessSinkDisposals)
+                {
+                    Name = "CLogger.SinkDisposal",
+                    IsBackground = true
+                };
+                _sinkDisposalWorkerOwnsQueue = true;
+                _sinkDisposalThread.Start();
+                return true;
+            }
+            catch (Exception exception)
+            {
+                _sinkDisposalWorkerOwnsQueue = false;
+                _sinkDisposalThread = null;
+                EmergencyLogger.TryWrite("Sink disposal executor was unavailable; disposal is running synchronously.", exception);
+                return false;
+            }
+#endif
+        }
+
+        private bool HasSinkDisposalWorkerNoLock()
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return false;
+#else
+            return _sinkDisposalWorkerOwnsQueue;
+#endif
+        }
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+        private void ReleaseSinkDisposalWorkerOwnershipNoLock()
+        {
+            _sinkDisposalWorkerOwnsQueue = false;
+            if (ReferenceEquals(_sinkDisposalThread, Thread.CurrentThread))
+            {
+                _sinkDisposalThread = null;
+            }
+
+            Monitor.PulseAll(_sinkDisposalQueueLock);
+        }
+#endif
+
+        private void DrainSinkDisposalQueueSynchronously()
+        {
+            while (true)
+            {
+                ILogger sink;
+                lock (_sinkDisposalQueueLock)
+                {
+                    if (_sinkDisposalQueueCount == 0)
+                    {
+                        return;
+                    }
+
+                    sink = DequeueSinkDisposalNoLock();
+                }
+
+                TryDisposeSink(sink);
+                CompleteSinkDisposal(sink);
+            }
+        }
+        private bool StopSinkDisposalExecutor(int timeoutMs)
+        {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            return true;
+#else
+            Thread disposalThread;
+            lock (_sinkDisposalQueueLock)
+            {
+                _sinkDisposalStopRequested = true;
+                disposalThread = _sinkDisposalThread;
+                Monitor.PulseAll(_sinkDisposalQueueLock);
+            }
+
+            if (disposalThread == null || !disposalThread.IsAlive)
+            {
+                return true;
+            }
+
+            if (ReferenceEquals(disposalThread, Thread.CurrentThread))
+            {
+                return false;
+            }
+
+            return disposalThread.Join(timeoutMs);
+#endif
+        }
+
+        private void TryDisposeSink(ILogger sink)
+        {
+            Exception lastException = null;
+            int attemptCount = sink is IIdempotentLoggerSinkDisposal ? SinkDisposeAttemptCount : 1;
+            for (int attempt = 0; attempt < attemptCount; attempt++)
+            {
+                try
+                {
+                    sink.Dispose();
+                    return;
+                }
+                catch (Exception exception)
+                {
+                    lastException = exception;
+                }
+            }
+
+            Interlocked.Increment(ref _sinkDisposalFailureCount);
+            EmergencyLogger.TryWrite("A log sink failed all bounded disposal attempts.", lastException);
+        }
+
+        private void ThrowIfStopping()
+        {
+            if (Volatile.Read(ref _lifecycleState) != 0)
+            {
+                throw new ObjectDisposedException(nameof(CLogger));
+            }
+        }
+
+        private static int GetRemainingTimeout(long startTimestamp, int timeoutMs)
+        {
+            if (timeoutMs < 0)
+            {
+                return Timeout.Infinite;
+            }
+
+            long elapsedTicks = Stopwatch.GetTimestamp() - startTimestamp;
+            long elapsedSeconds = elapsedTicks / Stopwatch.Frequency;
+            if (elapsedSeconds >= int.MaxValue / 1000L)
+            {
+                return 0;
+            }
+
+            long remainder = elapsedTicks % Stopwatch.Frequency;
+            long elapsedMilliseconds = elapsedSeconds * 1000L
+                + remainder * 1000L / Stopwatch.Frequency;
+            if (elapsedMilliseconds >= timeoutMs)
+            {
+                return 0;
+            }
+
+            return timeoutMs - (int)elapsedMilliseconds;
+        }
+
+        private DateTime GetTimestampSafely()
+        {
+            if (Volatile.Read(ref _timestampProviderFailed) != 0)
+            {
+                return DateTime.UtcNow;
+            }
+
+            try
+            {
+                return _instanceTimestampProvider();
+            }
+            catch (Exception exception) when (!(exception is OutOfMemoryException))
+            {
+                if (Interlocked.CompareExchange(ref _timestampProviderFailed, 1, 0) == 0)
+                {
+                    Interlocked.Increment(ref _timestampProviderFailureCount);
+                    EmergencyLogger.TryWrite("The logger timestamp provider failed and was quarantined; UTC system time will be used.", exception);
+                }
+
+                return DateTime.UtcNow;
+            }
+        }
+
+        private int EstimateRetainedCharacters(int messageCharacters, string category, string filePath, string memberName)
+        {
+            long total = Math.Min(Math.Max(messageCharacters, 0), _processingOptions.MaxMessageCharacters);
+            total += Math.Min(category?.Length ?? 0, _processingOptions.MaxCategoryCharacters);
+            total += Math.Min(filePath?.Length ?? 0, _processingOptions.MaxSourcePathCharacters);
+            total += Math.Min(memberName?.Length ?? 0, _processingOptions.MaxMemberNameCharacters);
+            return total >= int.MaxValue ? int.MaxValue : (int)total;
+        }
+
+        private void DetachOversizedBuilder(ref StringBuilder builder, out string boundedMessage, out bool truncated)
+        {
+            boundedMessage = null;
+            truncated = false;
+            if (builder == null || builder.Capacity <= _processingOptions.MaxMessageCharacters)
+            {
+                return;
+            }
+
+            int length = Math.Min(builder.Length, _processingOptions.MaxMessageCharacters);
+            truncated = builder.Length > length;
+            boundedMessage = builder.ToString(0, length);
+            StringBuilderPool.Return(builder);
+            builder = null;
         }
     }
 }

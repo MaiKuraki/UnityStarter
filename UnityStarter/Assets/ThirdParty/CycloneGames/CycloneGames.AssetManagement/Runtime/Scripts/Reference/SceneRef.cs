@@ -8,7 +8,7 @@ namespace CycloneGames.AssetManagement.Runtime
     /// <para>
     /// Identical storage layout to <see cref="AssetRef"/> but carries scene-specific semantics:
     /// the Editor PropertyDrawer filters for <c>SceneAsset</c> and the extension method bridges to
-    /// <see cref="IAssetPackage.LoadSceneAsync"/> instead of <see cref="IAssetPackage.LoadAssetAsync{TAsset}"/>.
+    /// <see cref="IAssetSceneLoader.LoadSceneAsync(string, LoadSceneMode, bool, int, string)"/> instead of <see cref="IAssetPackage.LoadAssetAsync{TAsset}"/>.
     /// </para>
     /// <para>
     /// SceneAsset is editor-only. At runtime, only <see cref="Location"/> is used as the scene address.

@@ -3,7 +3,9 @@
     "rootNamespace": "CycloneGames.AssetManagement.Tests.Editor",
     "references": [
         "CycloneGames.AssetManagement.Runtime",
-        "UniTask"
+        "CycloneGames.AssetManagement.Runtime.CacheRetention",
+        "UniTask",
+        "Unity.PerformanceTesting"
     ],
     "includePlatforms": [
         "Editor"

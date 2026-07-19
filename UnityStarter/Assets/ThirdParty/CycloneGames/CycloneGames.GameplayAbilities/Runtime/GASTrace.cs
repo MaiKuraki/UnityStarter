@@ -20,8 +20,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         EffectExecuted,
         EffectRemoved,
         PredictionOpened,
-        PredictionConfirmed,
-        PredictionRejected,
+        PredictionCommitted,
+        PredictionRolledBack,
         PredictionTimedOut,
         TargetDataAccepted,
         TargetDataRejected
@@ -62,7 +62,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
         ApplicationBlockedTags,
         CustomApplicationRequirement,
         StackingOverflow,
-        ServerRejected,
         PredictionTimeout,
         TargetDataValidation
     }
@@ -77,7 +76,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public GASTraceReason Reason;
         public AbilitySystemComponent Target;
         public AbilitySystemComponent Source;
-        public GameplayAbility Ability;
+        public GameplayAbility AbilityDefinition;
         public GameplayEffect Effect;
         public int AbilitySpecHandle;
         public int PredictionKey;
@@ -85,12 +84,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int PredictionInputSequence;
         public int Level;
         public int StackCount;
-        public int NetworkId;
+        public int ReconciliationId;
     }
 
     public static class GASTrace
     {
         public const int DefaultCapacity = 4096;
+        public const int MaxCapacity = 65536;
 
         private static GASTraceEvent[] events = new GASTraceEvent[DefaultCapacity];
         private static int writeIndex;
@@ -111,7 +111,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public static void SetCapacity(int capacity)
         {
-            if (capacity <= 0 || capacity == events.Length)
+            if (capacity <= 0 || capacity > MaxCapacity)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(capacity),
+                    capacity,
+                    $"Trace capacity must be between 1 and {MaxCapacity}.");
+            }
+
+            if (capacity == events.Length)
             {
                 return;
             }
@@ -146,7 +154,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GASPredictionKey predictionKey = default,
             int level = 0,
             int stackCount = 0,
-            int networkId = 0)
+            int reconciliationId = 0)
         {
             if (!enabled)
             {
@@ -162,7 +170,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             entry.Reason = reason;
             entry.Target = target;
             entry.Source = source;
-            entry.Ability = ability;
+            entry.AbilityDefinition = ability?.StableDefinition;
             entry.Effect = effect;
             entry.AbilitySpecHandle = abilitySpecHandle;
             entry.PredictionKey = predictionKey.Key;
@@ -170,7 +178,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             entry.PredictionInputSequence = predictionKey.InputSequence;
             entry.Level = level;
             entry.StackCount = stackCount;
-            entry.NetworkId = networkId;
+            entry.ReconciliationId = reconciliationId;
 
             writeIndex++;
             if (writeIndex == events.Length)

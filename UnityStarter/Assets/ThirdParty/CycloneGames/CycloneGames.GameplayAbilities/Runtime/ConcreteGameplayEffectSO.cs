@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 foreach (var abilitySO in GrantedAbilities)
                 {
-                    if (abilitySO != null) grantedAbilities.Add(abilitySO.CreateAbility());
+                    if (abilitySO != null) grantedAbilities.Add(abilitySO.GetGameplayAbility());
                 }
             }
 

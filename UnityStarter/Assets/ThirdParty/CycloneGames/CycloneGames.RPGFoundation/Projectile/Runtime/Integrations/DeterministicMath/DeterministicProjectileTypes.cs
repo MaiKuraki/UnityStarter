@@ -171,7 +171,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Integrations.DeterministicMath
             FPVector3 direction,
             in DeterministicProjectileDefinition definition)
         {
-            FPVector3 velocity = direction.Normalized * definition.InitialSpeed;
+            FPVector3 velocity = direction.NormalizedOrZero * definition.InitialSpeed;
             return new DeterministicProjectileState(
                 networkEntityId,
                 ownerEntityId,

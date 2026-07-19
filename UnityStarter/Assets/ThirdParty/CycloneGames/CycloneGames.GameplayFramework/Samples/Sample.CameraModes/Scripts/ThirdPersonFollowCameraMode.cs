@@ -1,7 +1,9 @@
 using UnityEngine;
 using Unity.Mathematics;
 
-namespace CycloneGames.GameplayFramework.Runtime
+using CycloneGames.GameplayFramework.Runtime;
+
+namespace CycloneGames.GameplayFramework.Sample.CameraModes
 {
     /// <summary>
     /// Third-person follow camera mode with optional position lag, rotation lag, and angular dead zone.

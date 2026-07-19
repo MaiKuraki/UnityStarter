@@ -1,23 +1,12 @@
 namespace CycloneGames.UIFramework.Runtime
 {
-    // NOTE: if you modify this interface name,
-    // don't forget modify the link.xml file located in the CycloneGames.UIFramework/Scripts/Framework folder
-    // (This comment is from original code, ensure link.xml is checked if this name changes)
-    public interface IUIWindowState
+    /// <summary>Authoritative lifecycle state for a managed window instance.</summary>
+    public enum UIWindowState
     {
-        void OnEnter(UIWindow window);
-        void OnExit(UIWindow window);
-        void Update(UIWindow window);
-        /// <summary>Returns true when this state performs work in Update(). Default is false.</summary>
-        bool RequiresUpdate { get; }
-    }
-
-    public abstract class UIWindowState : IUIWindowState
-    {
-        protected const string DEBUG_FLAG = "[UIWindowState]"; // Changed from UIWindowState
-        public abstract void OnEnter(UIWindow window);
-        public abstract void OnExit(UIWindow window);
-        public virtual void Update(UIWindow window) { } // Default empty update
-        public virtual bool RequiresUpdate => false;
+        Created = 0,
+        Opening = 1,
+        Open = 2,
+        Closing = 3,
+        Closed = 4,
     }
 }

@@ -1,25 +1,15 @@
 using System;
 using System.Collections.Generic;
-using System.Reflection;
 using CycloneGames.GameplayAbilities.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     public abstract class AttributeSet
     {
-        #region Optimized Attribute Discovery
-
-        /// <summary>
-        /// Cached compiled delegates for attribute getters per AttributeSet subclass.
-        /// </summary>
-        private static readonly Dictionary<Type, List<Func<AttributeSet, GameplayAttribute>>> s_AttributeGetterCache
-            = new Dictionary<Type, List<Func<AttributeSet, GameplayAttribute>>>();
-        private static readonly object s_CacheLock = new object();
-
-        #endregion
-
-        private readonly Dictionary<string, GameplayAttribute> discoveredAttributes = new Dictionary<string, GameplayAttribute>();
-        private bool attributesDiscovered;
+        private readonly Dictionary<string, GameplayAttribute> registeredAttributes =
+            new Dictionary<string, GameplayAttribute>(StringComparer.Ordinal);
+        private bool attributesRegistered;
+        private bool registrationInProgress;
 
         public AbilitySystemComponent OwningAbilitySystemComponent { get; internal set; }
 
@@ -28,105 +18,75 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
-        /// Override this in generated or handwritten AttributeSet types to avoid runtime reflection discovery.
+        /// Registers every attribute owned by this set. Implementations must use stable, unique names.
+        /// This method is called once, lazily, after derived field initialization has completed.
         /// </summary>
-        protected virtual void RegisterAttributes()
-        {
-        }
+        protected abstract void RegisterAttributes();
 
         protected void RegisterAttribute(GameplayAttribute attribute)
         {
             if (attribute == null)
             {
-                return;
+                throw new ArgumentNullException(nameof(attribute));
+            }
+
+            if (!registrationInProgress)
+            {
+                throw new InvalidOperationException("Attributes can only be registered from RegisterAttributes().");
+            }
+
+            if (string.IsNullOrWhiteSpace(attribute.Name))
+            {
+                throw new ArgumentException("GameplayAttribute names must be non-empty.", nameof(attribute));
+            }
+
+            if (registeredAttributes.ContainsKey(attribute.Name))
+            {
+                throw new InvalidOperationException($"Attribute '{attribute.Name}' is already registered by {GetType().FullName}.");
             }
 
             attribute.OwningSet = this;
-            discoveredAttributes[attribute.Name] = attribute;
+            registeredAttributes.Add(attribute.Name, attribute);
         }
 
-        private void EnsureAttributesDiscovered()
+        private void EnsureAttributesRegistered()
         {
-            if (attributesDiscovered)
+            if (attributesRegistered)
             {
                 return;
             }
 
-            DiscoverAndInitAttributes();
-            attributesDiscovered = true;
-        }
-
-        private void DiscoverAndInitAttributes()
-        {
-            int explicitAttributeCount = discoveredAttributes.Count;
-            RegisterAttributes();
-            if (discoveredAttributes.Count != explicitAttributeCount)
+            if (registrationInProgress)
             {
-                return;
+                throw new InvalidOperationException($"Recursive attribute registration detected for {GetType().FullName}.");
             }
 
-            Type setType = GetType();
-            List<Func<AttributeSet, GameplayAttribute>> getters;
-
-            lock (s_CacheLock)
-            {
-                if (!s_AttributeGetterCache.TryGetValue(setType, out getters))
-                {
-                    getters = new List<Func<AttributeSet, GameplayAttribute>>();
-
-                    // Discover properties and compile getter delegates (only once per type)
-                    foreach (var prop in setType.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
-                    {
-                        if (prop.PropertyType == typeof(GameplayAttribute))
-                        {
-                            var getMethod = prop.GetGetMethod();
-                            if (getMethod != null)
-                            {
-                                var getter = CreateGetter(setType, getMethod);
-                                if (getter != null)
-                                {
-                                    getters.Add(getter);
-                                }
-                            }
-                        }
-                    }
-                    s_AttributeGetterCache[setType] = getters;
-                }
-            }
-
-            // Use cached delegates to get attribute values (no reflection, no boxing)
-            for (int i = 0; i < getters.Count; i++)
-            {
-                var attr = getters[i](this);
-                if (attr != null)
-                {
-                    RegisterAttribute(attr);
-                }
-            }
-        }
-
-        /// <summary>
-        /// Creates a compiled getter delegate for a property.
-        /// Uses Delegate.CreateDelegate for maximum performance (no boxing, no reflection invoke).
-        /// </summary>
-        private static Func<AttributeSet, GameplayAttribute> CreateGetter(Type declaringType, MethodInfo getMethod)
-        {
+            registrationInProgress = true;
             try
             {
-                return (Func<AttributeSet, GameplayAttribute>)Delegate.CreateDelegate(
-                    typeof(Func<AttributeSet, GameplayAttribute>), getMethod);
+                RegisterAttributes();
+                attributesRegistered = true;
             }
             catch
             {
-                // Fallback for virtual/override methods
-                return (AttributeSet set) => getMethod.Invoke(set, null) as GameplayAttribute;
+                foreach (GameplayAttribute attribute in registeredAttributes.Values)
+                {
+                    attribute.OwningSet = null;
+                }
+
+                registeredAttributes.Clear();
+                throw;
+            }
+            finally
+            {
+                registrationInProgress = false;
             }
         }
 
         public IReadOnlyCollection<GameplayAttribute> GetAttributes()
         {
-            EnsureAttributesDiscovered();
-            return discoveredAttributes.Values;
+            EnsureAttributesRegistered();
+            return registeredAttributes.Values;
         }
 
         public float GetBaseValue(GameplayAttribute attribute) => attribute.BaseValue;
@@ -148,26 +108,50 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void SetBaseValueRaw(GameplayAttribute attribute, long valueRaw)
         {
+            ValidateOwnedAttribute(attribute);
             if (attribute.BaseValueRaw != valueRaw)
             {
-                attribute.SetBaseValueRaw(valueRaw);
-                OwningAbilitySystemComponent?.MarkAttributeDirty(attribute);
+                using (OwningAbilitySystemComponent?.BeginReplicationMutationScope() ?? default)
+                {
+                    attribute.SetBaseValueRawUnchecked(valueRaw);
+                    OwningAbilitySystemComponent?.MarkAttributeDirty(attribute);
+                }
             }
         }
 
         public void SetCurrentValue(GameplayAttribute attribute, float value)
         {
-            attribute.SetCurrentValue(value);
+            SetCurrentValueRaw(attribute, GASFixedValue.FromFloat(value).RawValue);
         }
 
         public void SetCurrentValue(GameplayAttribute attribute, GASFixedValue value)
         {
-            attribute.SetCurrentValue(value);
+            SetCurrentValueRaw(attribute, value.RawValue);
         }
 
         public void SetCurrentValueRaw(GameplayAttribute attribute, long valueRaw)
         {
-            attribute.SetCurrentValueRaw(valueRaw);
+            ValidateOwnedAttribute(attribute);
+            if (attribute.CurrentValueRaw == valueRaw)
+            {
+                return;
+            }
+
+            using (OwningAbilitySystemComponent?.BeginReplicationMutationScope() ?? default)
+            {
+                attribute.SetCurrentValueRawUnchecked(valueRaw);
+                OwningAbilitySystemComponent?.NotifyDirectCurrentValueChanged(attribute);
+            }
+        }
+
+        private void ValidateOwnedAttribute(GameplayAttribute attribute)
+        {
+            if (attribute == null) throw new ArgumentNullException(nameof(attribute));
+            EnsureAttributesRegistered();
+            if (!ReferenceEquals(attribute.OwningSet, this))
+            {
+                throw new InvalidOperationException($"Attribute '{attribute.Name}' is not owned by {GetType().FullName}.");
+            }
         }
 
         /// <summary>
@@ -175,8 +159,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public GameplayAttribute GetAttribute(string name)
         {
-            EnsureAttributesDiscovered();
-            discoveredAttributes.TryGetValue(name, out var attribute);
+            if (string.IsNullOrEmpty(name))
+            {
+                return null;
+            }
+
+            EnsureAttributesRegistered();
+            registeredAttributes.TryGetValue(name, out var attribute);
             return attribute;
         }
 

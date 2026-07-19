@@ -132,7 +132,7 @@ namespace CycloneGames.AssetManagement.Runtime.CacheRetention
             {
                 // Normal shutdown path.
             }
-            catch (Exception ex)
+            catch (Exception ex) when (ex is not OutOfMemoryException && ex is not AccessViolationException)
             {
                 CLogger.LogError($"[AssetCacheRetentionScheduler] Retention loop stopped due to an unexpected error: {ex}");
             }

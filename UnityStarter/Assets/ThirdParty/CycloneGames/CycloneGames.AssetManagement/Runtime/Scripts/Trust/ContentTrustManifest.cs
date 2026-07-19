@@ -1,17 +1,21 @@
+using System;
 using System.Collections.Generic;
+
 using CycloneGames.Hash.Core;
 
 namespace CycloneGames.AssetManagement.Runtime.Trust
 {
     /// <summary>
     /// Provider-neutral content manifest metadata. The manifest can describe Addressables bundles,
-    /// YooAsset bundles, raw files, or any future provider payload.
+    /// YooAsset bundles, raw files, or any future provider payload. Construction validates,
+    /// defensively copies, and canonically sorts entries.
     /// </summary>
     public readonly struct ContentTrustManifest
     {
+        private static readonly IReadOnlyList<ContentTrustFileEntry> EmptyEntries =
+            Array.AsReadOnly(Array.Empty<ContentTrustFileEntry>());
+
         public readonly string Version;
-        public readonly string MinimumClientVersion;
-        public readonly string RollbackVersion;
         public readonly string ContentRoot;
         public readonly IReadOnlyList<ContentTrustFileEntry> Entries;
         public readonly string Signature;
@@ -19,17 +23,27 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         public ContentTrustManifest(
             string version,
             IReadOnlyList<ContentTrustFileEntry> entries,
-            string minimumClientVersion = null,
-            string rollbackVersion = null,
             string contentRoot = null,
             string signature = null)
         {
+            Version = ContentTrustManifestValidation.NormalizeRequiredVersion(version);
+            ContentRoot = ContentTrustManifestValidation.NormalizeOptionalContentRoot(contentRoot);
+            Signature = ContentTrustManifestValidation.NormalizeOptionalSignature(signature);
+
+            ContentTrustFileEntry[] entryCopy = ContentTrustManifestValidation.CopyValidateAndSortEntries(entries);
+            Entries = entryCopy.Length == 0 ? EmptyEntries : Array.AsReadOnly(entryCopy);
+        }
+
+        private ContentTrustManifest(
+            string version,
+            string contentRoot,
+            string signature,
+            IReadOnlyList<ContentTrustFileEntry> canonicalEntries)
+        {
             Version = version;
-            Entries = entries;
-            MinimumClientVersion = minimumClientVersion;
-            RollbackVersion = rollbackVersion;
             ContentRoot = contentRoot;
             Signature = signature;
+            Entries = canonicalEntries;
         }
 
         /// <summary>
@@ -38,12 +52,12 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         /// </summary>
         public ulong ComputeFingerprint()
         {
+            ContentTrustManifestValidation.ThrowIfUninitialized(in this);
+
             ulong hash = StableHash64.ComputeUtf16Ordinal(Version ?? string.Empty);
-            hash = CombineString(hash, MinimumClientVersion);
-            hash = CombineString(hash, RollbackVersion);
             hash = CombineString(hash, ContentRoot);
 
-            int count = Entries?.Count ?? 0;
+            int count = Entries.Count;
             hash = StableHash64.CombineUInt64LittleEndian(hash, (ulong)count);
 
             for (int i = 0; i < count; i++)
@@ -56,6 +70,16 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             }
 
             return StableHash64.EnsureNonZero(hash);
+        }
+
+        internal ContentTrustManifest WithSignature(string signature)
+        {
+            ContentTrustManifestValidation.ThrowIfUninitialized(in this);
+            return new ContentTrustManifest(
+                Version,
+                ContentRoot,
+                ContentTrustManifestValidation.NormalizeOptionalSignature(signature),
+                Entries);
         }
 
         private static ulong CombineString(ulong hash, string value)

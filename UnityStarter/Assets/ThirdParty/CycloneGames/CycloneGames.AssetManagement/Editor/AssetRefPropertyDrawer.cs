@@ -1,18 +1,19 @@
 #if UNITY_EDITOR
+using System;
+
 using UnityEditor;
 using UnityEngine;
-using System;
+
 using CycloneGames.AssetManagement.Runtime;
 
 namespace CycloneGames.AssetManagement.Editor
 {
     /// <summary>
     /// PropertyDrawer for <see cref="AssetRef{T}"/> and <see cref="AssetRef"/> (non-generic).
-    /// Renders a standard ObjectField filtered by the generic type constraint.
+    /// Renders an ObjectField filtered by the generic type constraint and an explicit provider runtime location.
     /// <para>
-    /// On asset assignment: stores the GUID (stable across renames) and the asset path as location.
-    /// On display: resolves the GUID to the current asset. If the asset was moved/renamed,
-    /// the location is auto-healed to the new path.
+    /// The GUID is an Editor authoring aid. The runtime location remains explicit because Resources paths,
+    /// Addressables addresses, and YooAsset addresses are not interchangeable.
     /// </para>
     /// </summary>
     [CustomPropertyDrawer(typeof(AssetRef<>), true)]
@@ -21,8 +22,16 @@ namespace CycloneGames.AssetManagement.Editor
     {
         private static readonly GUIContent s_MissingIcon = EditorGUIUtility.TrIconContent(
             "console.warnicon.sml", "Referenced asset is missing.");
-        private static readonly GUIContent s_StaleLocationIcon = EditorGUIUtility.TrIconContent(
-            "console.infoicon.sml", "Referenced asset moved. Run AssetRef validation to repair the stored location.");
+        private static readonly GUIContent s_EmptyLocationIcon = EditorGUIUtility.TrIconContent(
+            "console.warnicon.sml", "A provider runtime location is required.");
+        private static readonly GUIContent s_RuntimeLocationLabel = new GUIContent(
+            "Runtime Location",
+            "Exact provider key used in Player builds. Enter a Resources-relative path, Addressables address, or YooAsset address as required by the selected provider.");
+
+        public override float GetPropertyHeight(SerializedProperty property, GUIContent label)
+        {
+            return (EditorGUIUtility.singleLineHeight * 2f) + EditorGUIUtility.standardVerticalSpacing;
+        }
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
@@ -53,18 +62,15 @@ namespace CycloneGames.AssetManagement.Editor
             string guid = guidProp.stringValue;
             UnityEngine.Object currentObj = null;
             bool isBroken = false;
-            bool hasStaleLocation = false;
+            bool hasMixedValues = guidProp.hasMultipleDifferentValues ||
+                                  locationProp.hasMultipleDifferentValues;
 
-            if (!string.IsNullOrEmpty(guid))
+            if (!hasMixedValues && !string.IsNullOrEmpty(guid))
             {
                 string currentPath = AssetDatabase.GUIDToAssetPath(guid);
                 if (!string.IsNullOrEmpty(currentPath))
                 {
                     currentObj = AssetDatabase.LoadAssetAtPath(currentPath, assetType);
-                    if (currentObj != null && locationProp.stringValue != currentPath)
-                    {
-                        hasStaleLocation = true;
-                    }
                 }
                 else
                 {
@@ -75,23 +81,46 @@ namespace CycloneGames.AssetManagement.Editor
             // --- Draw ---
             EditorGUI.BeginProperty(position, label, property);
 
-            Rect fieldRect = position;
-            if (isBroken || hasStaleLocation)
+            float lineHeight = EditorGUIUtility.singleLineHeight;
+            var objectRect = new Rect(position.x, position.y, position.width, lineHeight);
+            var locationRect = new Rect(
+                position.x,
+                position.y + lineHeight + EditorGUIUtility.standardVerticalSpacing,
+                position.width,
+                lineHeight);
+            bool hasEmptyLocation = !hasMixedValues &&
+                                    !string.IsNullOrEmpty(guid) &&
+                                    string.IsNullOrWhiteSpace(locationProp.stringValue);
+            Rect fieldRect = objectRect;
+            if (isBroken || hasEmptyLocation)
             {
-                var iconRect = new Rect(position.xMax - 18, position.y + 1, 16, 16);
-                fieldRect = new Rect(position.x, position.y, position.width - 20, position.height);
-                GUI.Label(iconRect, isBroken ? s_MissingIcon : s_StaleLocationIcon);
+                var iconRect = new Rect(objectRect.xMax - 18, objectRect.y + 1, 16, 16);
+                fieldRect = new Rect(objectRect.x, objectRect.y, objectRect.width - 20, objectRect.height);
+                GUI.Label(iconRect, isBroken ? s_MissingIcon : s_EmptyLocationIcon);
             }
 
             EditorGUI.BeginChangeCheck();
-            var newObj = EditorGUI.ObjectField(fieldRect, label, currentObj, assetType, false);
+            bool previousMixedValue = EditorGUI.showMixedValue;
+            EditorGUI.showMixedValue = hasMixedValues;
+            UnityEngine.Object newObj;
+            try
+            {
+                newObj = EditorGUI.ObjectField(fieldRect, label, currentObj, assetType, false);
+            }
+            finally
+            {
+                EditorGUI.showMixedValue = previousMixedValue;
+            }
+
             if (EditorGUI.EndChangeCheck())
             {
                 if (newObj != null)
                 {
                     var path = AssetDatabase.GetAssetPath(newObj);
                     guidProp.stringValue = AssetDatabase.AssetPathToGUID(path);
-                    locationProp.stringValue = path;
+                    // A newly selected object has no provider-neutral runtime key. Clearing the previous value
+                    // prevents a location for another asset from surviving the reassignment silently.
+                    locationProp.stringValue = string.Empty;
                 }
                 else
                 {
@@ -99,6 +128,8 @@ namespace CycloneGames.AssetManagement.Editor
                     locationProp.stringValue = string.Empty;
                 }
             }
+
+            EditorGUI.PropertyField(locationRect, locationProp, s_RuntimeLocationLabel);
 
             EditorGUI.EndProperty();
         }

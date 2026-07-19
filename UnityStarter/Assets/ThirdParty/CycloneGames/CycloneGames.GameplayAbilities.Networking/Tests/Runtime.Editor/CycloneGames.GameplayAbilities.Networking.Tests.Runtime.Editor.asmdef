@@ -1,0 +1,27 @@
+{
+    "name": "CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor",
+    "rootNamespace": "CycloneGames.GameplayAbilities.Networking.Tests.Runtime.Editor",
+    "references": [
+        "CycloneGames.GameplayAbilities.Networking.Core",
+        "CycloneGames.GameplayAbilities.Networking.Runtime",
+        "CycloneGames.GameplayAbilities.Networking.Editor",
+        "CycloneGames.GameplayAbilities.Runtime",
+        "CycloneGames.GameplayAbilities.Core",
+        "CycloneGames.GameplayTags.Core",
+        "Unity.PerformanceTesting"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

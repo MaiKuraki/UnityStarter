@@ -1,20 +1,23 @@
-using System.Reflection;
+using CycloneGames.UIFramework.Runtime;
 using NUnit.Framework;
 using UnityEngine;
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.UIFramework.Runtime;
 
 namespace CycloneGames.UIFramework.Tests.Editor
 {
     public sealed class UIWindowConfigurationTests
     {
-        private UIWindowConfiguration _config;
+        private UIWindowConfiguration _configuration;
+        private UILayerConfiguration _layer;
         private GameObject _prefabObject;
 
         [SetUp]
         public void SetUp()
         {
-            _config = ScriptableObject.CreateInstance<UIWindowConfiguration>();
+            _configuration = ScriptableObject.CreateInstance<UIWindowConfiguration>();
+            _layer = ScriptableObject.CreateInstance<UILayerConfiguration>();
+            TestReflection.SetField(_layer, "layerName", "Main");
+            TestReflection.SetField(_configuration, "windowId", "Inventory");
+            TestReflection.SetField(_configuration, "layer", _layer);
         }
 
         [TearDown]
@@ -25,76 +28,160 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 Object.DestroyImmediate(_prefabObject);
             }
 
-            Object.DestroyImmediate(_config);
+            Object.DestroyImmediate(_configuration);
+            Object.DestroyImmediate(_layer);
         }
 
         [Test]
-        public void PrefabReferenceMode_ReportsConfiguredWhenWindowPrefabExists()
+        public void PrefabReference_RequiresDirectWindowPrefab()
         {
-            _prefabObject = new GameObject("UIWindow_TestPrefab");
-            var window = _prefabObject.AddComponent<UIWindow>();
+            TestReflection.SetField(
+                _configuration,
+                "source",
+                UIWindowConfiguration.PrefabSource.PrefabReference);
+            Assert.IsFalse(_configuration.IsConfigured);
 
-            SetPrivateField(_config, "source", UIWindowConfiguration.PrefabSource.PrefabReference);
-            SetPrivateField(_config, "windowPrefab", window);
+            _prefabObject = new GameObject("InventoryPrefab", typeof(RectTransform));
+            UIWindow prefab = _prefabObject.AddComponent<UIWindow>();
+            TestReflection.SetField(_configuration, "windowPrefab", prefab);
 
-            Assert.IsTrue(_config.IsConfigured);
-            Assert.AreSame(window, _config.WindowPrefab);
-            Assert.AreEqual(string.Empty, _config.EffectiveLocation);
+            Assert.IsTrue(_configuration.IsConfigured);
+            Assert.AreSame(prefab, _configuration.WindowPrefab);
+            Assert.IsFalse(_configuration.EffectiveAssetReference.IsValid);
+            Assert.AreEqual(string.Empty, _configuration.PrefabLocation);
         }
 
         [Test]
-        public void AssetReferenceMode_UsesAssetRefLocationAsEffectiveLocation()
+        public void AssetReference_UsesProviderNeutralRuntimeLocation()
         {
-            var assetRef = new AssetRef<GameObject>("UI/Windows/Inventory.prefab", "guid-inventory");
+            var assetReference = new UIAssetReference(
+                "content/ui/inventory",
+                "editor-only-guid");
+            TestReflection.SetField(
+                _configuration,
+                "source",
+                UIWindowConfiguration.PrefabSource.AssetReference);
+            TestReflection.SetField(_configuration, "prefabAssetRef", assetReference);
 
-            SetPrivateField(_config, "source", UIWindowConfiguration.PrefabSource.AssetReference);
-            SetPrivateField(_config, "prefabAssetRef", assetRef);
-
-            Assert.IsTrue(_config.IsConfigured);
-            Assert.AreEqual("UI/Windows/Inventory.prefab", _config.EffectiveLocation);
-            Assert.IsNull(_config.PrefabLocation);
+            Assert.IsTrue(_configuration.IsConfigured);
+            Assert.AreEqual(assetReference, _configuration.PrefabAssetReference);
+            Assert.AreEqual(assetReference, _configuration.EffectiveAssetReference);
+            Assert.IsNull(_configuration.WindowPrefab);
+            Assert.AreEqual(string.Empty, _configuration.PrefabLocation);
         }
 
         [Test]
-        public void PathLocationMode_UsesRawLocationAndDoesNotRequirePrefabReference()
+        public void AssetReference_WhitespaceRuntimeLocationIsInvalidEvenWithEditorGuid()
         {
-            SetPrivateField(_config, "source", UIWindowConfiguration.PrefabSource.PathLocation);
-            SetPrivateField(_config, "prefabLocation", "Resources/UI/Settings");
+            TestReflection.SetField(
+                _configuration,
+                "source",
+                UIWindowConfiguration.PrefabSource.AssetReference);
+            TestReflection.SetField(
+                _configuration,
+                "prefabAssetRef",
+                new UIAssetReference("   ", "editor-only-guid"));
 
-            Assert.IsTrue(_config.IsConfigured);
-            Assert.AreEqual("Resources/UI/Settings", _config.EffectiveLocation);
-            Assert.IsNull(_config.WindowPrefab);
+            Assert.IsFalse(_configuration.IsConfigured);
+            Assert.IsFalse(_configuration.EffectiveAssetReference.IsValid);
         }
 
         [Test]
-        public void EmptyLocationModes_ReportNotConfigured()
+        public void PathLocation_ProducesEquivalentProviderReference()
         {
-            SetPrivateField(_config, "source", UIWindowConfiguration.PrefabSource.PathLocation);
-            SetPrivateField(_config, "prefabLocation", string.Empty);
-            Assert.IsFalse(_config.IsConfigured);
+            TestReflection.SetField(
+                _configuration,
+                "source",
+                UIWindowConfiguration.PrefabSource.PathLocation);
+            TestReflection.SetField(_configuration, "prefabLocation", "Resources/UI/Inventory");
 
-            SetPrivateField(_config, "source", UIWindowConfiguration.PrefabSource.AssetReference);
-            SetPrivateField(_config, "prefabAssetRef", default(AssetRef<GameObject>));
-            Assert.IsFalse(_config.IsConfigured);
+            Assert.IsTrue(_configuration.IsConfigured);
+            Assert.AreEqual("Resources/UI/Inventory", _configuration.PrefabLocation);
+            Assert.AreEqual("Resources/UI/Inventory", _configuration.EffectiveAssetReference.Location);
+            Assert.AreEqual(string.Empty, _configuration.EffectiveAssetReference.EditorGuid);
+            Assert.IsNull(_configuration.WindowPrefab);
         }
 
         [Test]
-        public void PrioritySceneBindingAndCanvasPolicy_ReturnSerializedValues()
+        public void MissingIdentityOrLayerMakesEverySourceInvalid()
         {
-            SetPrivateField(_config, "priority", 128);
-            SetPrivateField(_config, "isSceneBound", true);
-            SetPrivateField(_config, "subCanvasPolicy", UIWindowConfiguration.SubCanvasPolicy.ForceOwnSubCanvas);
+            _prefabObject = new GameObject("InventoryPrefab", typeof(RectTransform));
+            UIWindow prefab = _prefabObject.AddComponent<UIWindow>();
+            TestReflection.SetField(_configuration, "windowPrefab", prefab);
 
-            Assert.AreEqual(128, _config.Priority);
-            Assert.IsTrue(_config.IsSceneBound);
-            Assert.AreEqual(UIWindowConfiguration.SubCanvasPolicy.ForceOwnSubCanvas, _config.CanvasIsolationPolicy);
+            TestReflection.SetField(_configuration, "windowId", " ");
+            Assert.IsFalse(_configuration.IsConfigured);
+
+            TestReflection.SetField(_configuration, "windowId", "Inventory");
+            TestReflection.SetField(_configuration, "layer", null);
+            Assert.IsFalse(_configuration.IsConfigured);
         }
 
-        private static void SetPrivateField<T>(UIWindowConfiguration config, string fieldName, T value)
+        [Test]
+        public void AssetReference_RuntimeIdentityIgnoresEditorGuid()
         {
-            FieldInfo field = typeof(UIWindowConfiguration).GetField(fieldName, BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.IsNotNull(field, fieldName);
-            field.SetValue(config, value);
+            var first = new UIAssetReference("ui/inventory", "guid-a");
+            var same = new UIAssetReference("ui/inventory", "guid-a");
+            var differentGuid = new UIAssetReference("ui/inventory", "guid-b");
+
+            Assert.IsTrue(first.IsValid);
+            Assert.AreEqual(first, same);
+            Assert.AreEqual(first.GetHashCode(), same.GetHashCode());
+            Assert.AreEqual(first, differentGuid);
+            Assert.AreEqual(first.GetHashCode(), differentGuid.GetHashCode());
+            Assert.IsFalse(default(UIAssetReference).IsValid);
+        }
+
+        [Test]
+        public void OnValidate_PreservesInactiveSourceValuesWhenAuthorChangesSourceMode()
+        {
+            _prefabObject = new GameObject("InventoryPrefab", typeof(RectTransform));
+            UIWindow prefab = _prefabObject.AddComponent<UIWindow>();
+            TestReflection.SetField(_configuration, "windowPrefab", prefab);
+            TestReflection.SetField(
+                _configuration,
+                "source",
+                UIWindowConfiguration.PrefabSource.AssetReference);
+
+            TestReflection.Invoke(_configuration, "OnValidate");
+
+            TestReflection.SetField(
+                _configuration,
+                "source",
+                UIWindowConfiguration.PrefabSource.PrefabReference);
+            Assert.AreSame(prefab, _configuration.WindowPrefab);
+        }
+
+        [Test]
+        public void PrioritySceneBindingAndCanvasPolicyExposeSerializedValues()
+        {
+            TestReflection.SetField(_configuration, "priority", 128);
+            TestReflection.SetField(_configuration, "isSceneBound", true);
+            TestReflection.SetField(
+                _configuration,
+                "subCanvasPolicy",
+                UIWindowConfiguration.SubCanvasPolicy.IsolatedCanvas);
+
+            Assert.AreEqual(128, _configuration.Priority);
+            Assert.IsTrue(_configuration.IsSceneBound);
+            Assert.AreEqual(
+                UIWindowConfiguration.SubCanvasPolicy.IsolatedCanvas,
+                _configuration.CanvasIsolationPolicy);
+        }
+
+        [Test]
+        public void CanvasPolicyRequiresAnExplicitIsolationDecision()
+        {
+            System.Array values = System.Enum.GetValues(
+                typeof(UIWindowConfiguration.SubCanvasPolicy));
+
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    UIWindowConfiguration.SubCanvasPolicy.InheritLayerCanvas,
+                    UIWindowConfiguration.SubCanvasPolicy.IsolatedCanvas,
+                },
+                values);
         }
     }
 }

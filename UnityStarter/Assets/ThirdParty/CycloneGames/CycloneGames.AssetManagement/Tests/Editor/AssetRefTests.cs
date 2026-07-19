@@ -1,6 +1,7 @@
 using CycloneGames.AssetManagement.Runtime;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 
 namespace CycloneGames.AssetManagement.Tests.Editor
 {
@@ -79,11 +80,16 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             var package = new RecordingAssetPackage();
             var sceneRef = new SceneRef("Scenes/Main");
 
-            package.LoadSceneAsync(sceneRef, UnityEngine.SceneManagement.LoadSceneMode.Additive, SceneActivationMode.Manual, 50, "Scenes");
+            var loadParameters = new LoadSceneParameters(LoadSceneMode.Additive)
+            {
+                localPhysicsMode = LocalPhysicsMode.Physics2D
+            };
+            package.LoadSceneAsync(sceneRef, loadParameters, SceneActivationMode.Manual, 50, "Scenes");
 
-            Assert.AreEqual("LoadSceneAsyncManual", package.LastCall);
+            Assert.AreEqual("LoadSceneAsyncParameters", package.LastCall);
             Assert.AreEqual("Scenes/Main", package.LastLocation);
             Assert.AreEqual("Scenes", package.LastBucket);
+            Assert.AreEqual(LocalPhysicsMode.Physics2D, package.LastLocalPhysicsMode);
             Assert.AreEqual(SceneActivationMode.Manual, package.LastActivationMode);
             Assert.AreEqual(50, package.LastPriority);
         }

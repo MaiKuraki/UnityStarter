@@ -61,9 +61,9 @@ UnityStarter 由可复用的 `CycloneGames` 框架层、Unity 项目模板、项
 | 项目 | 详细信息 |
 | --- | --- |
 | Unity 项目根目录 | `UnityStarter/` |
-| Unity 版本来源 | `UnityStarter/ProjectSettings/ProjectVersion.txt`；打开或构建项目前应读取当前 checkout 中的这个文件。 |
-| CycloneGames 模块目录 | 当前 checkout 中 `UnityStarter/Assets/ThirdParty/CycloneGames/` 下有 36 个 package folder。 |
-| Assembly definitions | `UnityStarter/Assets/` 下 180+ 个 `.asmdef` 文件，其中 CycloneGames packages 下 170+ 个。 |
+| Unity 版本来源 | `UnityStarter/ProjectSettings/ProjectVersion.txt` |
+| CycloneGames 模块目录 | `UnityStarter/Assets/ThirdParty/CycloneGames/` |
+| Assembly definitions | Package 与项目 assembly boundary 由 `UnityStarter/Assets/` 下的 `.asmdef` 文件声明。 |
 | Analyzer 规则 | 20+ 条已实现的 `CycloneGames.Analyzers` 规则 |
 | 独立工具 | `Tools/Executable/Windows/` 下的 Go 工具 Windows 可执行文件 |
 
@@ -151,7 +151,7 @@ flowchart TD
 | 模块 | 职责 | 文档 |
 | --- | --- | --- |
 | **GameplayFramework** | Actor/Pawn/Controller/GameMode 结构、gameplay lifecycle、camera flow 与 scene-flow foundation。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md) |
-| **GameplayAbilities** | GAS 风格 data-driven ability、attribute、effect、cost、cooldown 与 cue system。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
+| **GameplayAbilities** | GAS 风格 data-driven ability、attribute、effect、cost、cooldown 与 cue system，具有显式 authority/replica role 与权威 `AuthorityOnly` execution boundary。可选 Networking integration 提供 authority activation protocol building block，不是 transport endpoint。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
 | **Choreography** | 引擎无关的 action presentation scheduling，用于 animation、audio、VFX、gameplay-event markers 与 preload coordination。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography/README.SCH.md) |
 | **GameplayTags** | 层级 tags、generated constants、query helpers、editor tooling 与 integration points。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md) |
 | **RPGFoundation** | RPG movement 与 interaction foundations，可与其他 gameplay packages 集成。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.SCH.md) |
@@ -187,7 +187,8 @@ flowchart TD
 | **DeterministicMath** | Fixed-point deterministic math，用于 replay、simulation 与 lockstep-friendly systems。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeterministicMath/README.SCH.md) |
 | **Hash** | Deterministic hashing primitives，用于 manifests、protocol checks、IDs 与 consistency。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Hash/README.SCH.md) |
 | **IO** | 面向 Unity-aware foundation modules 的 managed file and path utilities。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.IO/README.SCH.md) |
-| **InputSystem** | Reactive input wrapper，包含 YAML config、editor tooling、本地多人/多设备支持、多设备自动检测、多设备自动切换、context stacks 与 device pairing。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
+| **InputSystem** | 提供经过验证的 YAML 输入 authoring、带优先级的 mapping context、每玩家设备所有权、本地多人、binding profile、Editor tooling 与 opt-in integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.SCH.md) |
+| **InputSystem.AssetManagement** | InputSystem、AssetManagement 与 VContainer 之间的可选物理 package-loading bridge。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem.AssetManagement/README.SCH.md) |
 | **DeviceFeedback** | Haptics、vibration、rumble 与 device-light feedback abstractions。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.SCH.md) |
 | **Services** | 面向派生项目的 Unity-facing service helpers。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services/) |
 | **Utility** | Common Unity utility components and helpers。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility/) |
@@ -203,14 +204,12 @@ flowchart TD
 
 ## Networking 状态
 
-Networking layer 已经存在并有文档，但尚未完成项目级端到端验证。在使用真实 transport、serializer、authority model、reconnect flow、目标平台和 gameplay replication policy 完整测试前，请把它视为 experimental foundation。
+Networking layer 是 experimental foundation。生产接入必须使用选定的 transport、serializer、authority model、reconnect flow、目标平台和 gameplay replication policy 完成端到端验证。
 
 | 模块 | 职责 | 状态 |
 | --- | --- | --- |
 | **Networking** | Transport-neutral contracts、message catalogs、protocol manifests、sessions、replication、security、serializers、adapters 与 diagnostics。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Networking/README.SCH.md) |
-| **GameplayAbilities.Networking** | Ability activation、effect replication、attribute/tag sync、prediction keys、reconnect state 与 security policy bridge。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities.Networking/README.SCH.md) |
 | **GameplayFramework.Networking** | Session bridge、actor migration serialization、authority roles 与 observer resolution。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework.Networking/README.SCH.md) |
-| **GameplayTags.Networking** | Manifest handshakes 与 tag payload wrappers。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags.Networking/README.SCH.md) |
 | **AIPerception.Networking** | Perception event、snapshot、memory、authority 与 host-migration contracts。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.AIPerception.Networking/README.SCH.md) |
 | **BehaviorTree.Networking** | Behavior tree replication profiles、authority helpers、snapshots 与 blackboard deltas。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.BehaviorTree.Networking/README.SCH.md) |
 | **RPGFoundation.Movement.Networking** | Movement input、snapshot、correction、teleport、authority transfer、validation、history 与 reconciliation contracts。 | 实验性。[README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation.Movement.Networking/README.SCH.md) |
@@ -221,7 +220,7 @@ Networking layer 已经存在并有文档，但尚未完成项目级端到端验
 
 ### Build 是项目自有基础设施
 
-`UnityStarter/Assets/Build/` 是项目自有层。它不是冻结的底层包，因为真实产品一定需要调整 scenes、version prefixes、output layout、hot-update assembly lists、platform signing 和 release rules。
+`UnityStarter/Assets/Build/` 是项目自有基础设施。产品项目可以在其中调整 scenes、version prefixes、output layout、hot-update assembly lists、platform signing 和 release rules。
 
 当开发者从 UnityStarter 派生新游戏并运行 `rename_project` 后，Build layer 会保留在新项目中，并应继续由该项目维护。
 
@@ -289,7 +288,7 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 
 具体版本应以 `UnityStarter/Packages/manifest.json`、`UnityStarter/Packages/packages-lock.json` 和 `UnityStarter/Packages/nuget-packages/InstalledPackages/` 为准。
 
-| 领域 | 当前 checkout 示例 |
+| 领域 | 示例 |
 | --- | --- |
 | Async and reactive | `com.cysharp.unitask`、`com.cysharp.r3`、NuGet `R3` |
 | Routing and data | `jp.hadashikick.vitalrouter.unity`、`jp.hadashikick.vyaml`、NuGet `VitalRouter`、NuGet `VYaml` |
@@ -309,7 +308,7 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 | [`Tools/README.SCH.md`](Tools/README.SCH.md) | 独立项目维护工具。 |
 | [`Docs/AudioBestPractices/AudioBestPractices.SCH.md`](Docs/AudioBestPractices/AudioBestPractices.SCH.md) | Audio import 与 runtime audio guidance。 |
 | [`Docs/Networking/GameJamLanMultiplayerGuide.SCH.md`](Docs/Networking/GameJamLanMultiplayerGuide.SCH.md) | LAN multiplayer planning guide。 |
-| [`Docs/Networking/NetworkSecurityHardeningPlan.SCH.md`](Docs/Networking/NetworkSecurityHardeningPlan.SCH.md) | 当前 networking security 状态与 hardening roadmap。 |
+| [`Docs/Networking/NetworkSecurityGuide.SCH.md`](Docs/Networking/NetworkSecurityGuide.SCH.md) | Networking 安全边界、生产组合、所有权、平台要求与验证。 |
 | [DeepWiki](https://deepwiki.com/MaiKuraki/UnityStarter) | 生成式 codebase overview。 |
 
 ## 验证状态

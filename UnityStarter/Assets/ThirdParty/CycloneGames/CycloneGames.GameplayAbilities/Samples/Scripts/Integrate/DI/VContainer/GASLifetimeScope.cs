@@ -14,14 +14,20 @@ namespace CycloneGames.GameplayAbilities.Integrate.VContainer
     {
         protected override void Configure(IContainerBuilder builder)
         {
-            builder.Register<GameplayCueManager>(Lifetime.Singleton)
-                .As<IGameplayCueManager>();
+            var cuePoolConfig = new GameObjectPoolManager.PoolConfig(
+                maxAssetPools: 128,
+                maxActiveLeases: 2048,
+                maxActiveLeasesPerPool: 256,
+                maxRetainedInstancesPerPool: 128,
+                minRetainedInstancesPerPool: 0,
+                idleExpirationTime: 60f);
 
-            builder.RegisterBuildCallback(resolver =>
-            {
-                var cueManager = resolver.Resolve<IGameplayCueManager>();
-                GameplayCueManager.SetInstance(cueManager);
-            });
+            builder.Register(_ => new GameplayCueManager(cuePoolConfig), Lifetime.Singleton)
+                .As<GameplayCueManager>();
+            builder.Register(
+                    resolver => new GASRuntimeContext(cueManager: resolver.Resolve<GameplayCueManager>()),
+                    Lifetime.Singleton)
+                .As<GASRuntimeContext>();
         }
     }
 }

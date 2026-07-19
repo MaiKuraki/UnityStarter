@@ -68,7 +68,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor.Integrations.Deter
         {
             Actor actor = CreateActor();
             var provider = _gameObject.AddComponent<TestDeterministicPositionProvider>();
-            provider.Position = new FPVector3(FPInt64.FromString("1.5"), FPInt64.Zero, FPInt64.FromString("-3.25"));
+            provider.Position = new FPVector3(FPInt64.Parse("1.5"), FPInt64.Zero, FPInt64.Parse("-3.25"));
 
             bool result = actor.TryCreateDeterministicInteractionRequestPayload(
                 provider,

@@ -1,82 +1,92 @@
+using System;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
-using CycloneGames.Factory.Runtime;
-using CycloneGames.Service.Runtime;
-using CycloneGames.AssetManagement.Runtime;
 
 namespace CycloneGames.UIFramework.Runtime.Samples
 {
     /// <summary>
-    /// Minimal bootstrap demonstrating UIFramework usage with AssetManagement abstraction.
-    /// Attach to an empty GameObject in a demo scene that also contains a UIRoot prefab.
+    /// Minimal composition root that opens one directly referenced window configuration.
     /// </summary>
     public sealed class UIFrameworkSampleBootstrap : MonoBehaviour
     {
-        [SerializeField] private string firstWindowName = "UIWindow_SampleUI"; //  If you use Addressable, this is the path in Addressable, and you must implement IAssetPackage
+        [SerializeField] private UIRoot uiRoot;
+        [SerializeField] private UIWindowConfiguration firstWindowConfiguration;
 
-        private UIService uiService;
-        private MainCameraService _mainCameraService;
-        private UIAssetFactory _uiAssetFactory;
+        private IUIService _uiService;
 
-        private async void Start()
+        private void Start()
         {
-            var ok = await InitializeUIServicePipelineAsync();
-            if (!ok) return;
-
-            var window = await uiService.OpenUIAndWait(firstWindowName);
-            if (window == null)
-            {
-                Debug.LogError($"[UIFrameworkSample] Failed to open window: {firstWindowName}");
-                return;
-            }
-
-            Debug.Log($"[UIFrameworkSample] Opened window: {firstWindowName}");
-        }
-        
-        private async System.Threading.Tasks.Task<bool> InitializeUIServicePipelineAsync()
-        {
-            _uiAssetFactory = new UIAssetFactory();
-            _mainCameraService = new MainCameraService();
-
-            var factory = _uiAssetFactory as IAssetPathBuilderFactory;
-            var spawner = new DefaultUnityObjectSpawner();
-            var mainCameraService = _mainCameraService as IMainCameraService;
-
-            if (AssetManagementLocator.DefaultPackage == null)
-            {
-                await EnsureDefaultPackageAsync();
-                if (AssetManagementLocator.DefaultPackage == null)
-                {
-                    Debug.LogError("[UIFrameworkSample] DefaultPackage is null. Assign a package via AssetManagementLocator before boot.");
-                    return false;
-                }
-            }
-
-            if (factory == null)
-            {
-                Debug.LogError("[UIFrameworkSample] AssetPathBuilderFactoryProvider must implement IAssetPathBuilderFactory.");
-                return false;
-            }
-
-            uiService = new UIService();
-            uiService.Initialize(factory, spawner, mainCameraService);
-            return true;
+            RunAsync(this.GetCancellationTokenOnDestroy()).Forget();
         }
 
-        private async System.Threading.Tasks.Task EnsureDefaultPackageAsync()
+        private async UniTask RunAsync(CancellationToken lifetimeToken)
         {
             try
             {
-                // Use the new Resources-based package.
-                IAssetModule module = new ResourcesModule();
-                await module.InitializeAsync(new AssetManagementOptions());
-                var pkg = module.CreatePackage("DefaultResources");
-                await pkg.InitializeAsync(default);
-                AssetManagementLocator.DefaultPackage = pkg;
-                Debug.Log("[UIFrameworkSample] DefaultPackage set to ResourcesPackage.");
+                if (uiRoot == null)
+                {
+                    throw new InvalidOperationException("UIFramework sample requires a UIRoot reference.");
+                }
+
+                if (firstWindowConfiguration == null)
+                {
+                    throw new InvalidOperationException(
+                        "UIFramework sample requires a UIWindowConfiguration reference.");
+                }
+
+                var options = new UIServiceOptions
+                {
+                    InitialWindowCapacity = 4,
+                    MaxActiveWindows = 8,
+                    MaxInstantiatesPerFrame = 1,
+                };
+
+                _uiService = new UIService(uiRoot, options: options);
+                UIWindow window = await _uiService.OpenAsync(
+                    firstWindowConfiguration,
+                    cancellationToken: lifetimeToken);
+
+                Debug.Log($"[UIFrameworkSample] Opened window '{window.WindowId}'.", window);
+                await UniTask.WaitUntilCanceled(lifetimeToken);
             }
-            catch (System.Exception ex)
+            catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
             {
-                Debug.LogWarning($"[UIFrameworkSample] Failed to auto-setup Resources package: {ex.Message}");
+                // The lifetime finally block owns shutdown.
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+            finally
+            {
+                await ShutdownServiceAsync();
+            }
+        }
+
+        private async UniTask ShutdownServiceAsync()
+        {
+            IUIService service = _uiService;
+            _uiService = null;
+            if (service == null)
+            {
+                return;
+            }
+
+            try
+            {
+                await service.ShutdownAsync(UIShutdownMode.Immediate, CancellationToken.None);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+            finally
+            {
+                if (!service.IsDisposed)
+                {
+                    service.Dispose();
+                }
             }
         }
     }

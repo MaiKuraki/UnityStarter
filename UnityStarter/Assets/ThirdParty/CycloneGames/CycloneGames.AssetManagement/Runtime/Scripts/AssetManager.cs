@@ -1,5 +1,6 @@
-using Cysharp.Threading.Tasks;
+using System;
 using System.Threading;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -12,6 +13,7 @@ namespace CycloneGames.AssetManagement.Runtime
         /// <summary>
         /// Initializes the module and a default package in one step.
         /// </summary>
+        /// <exception cref="InvalidOperationException">Thrown when the package reports an initialization failure.</exception>
         public static async UniTask<IAssetPackage> InitializeDefaultPackageAsync(
             IAssetModule module,
             string packageName,
@@ -19,24 +21,39 @@ namespace CycloneGames.AssetManagement.Runtime
             AssetPackageInitOptions packageOptions,
             CancellationToken cancellationToken = default)
         {
-            // 1. Initialize Module
+            if (module == null)
+            {
+                throw new ArgumentNullException(nameof(module));
+            }
+
+            if (string.IsNullOrWhiteSpace(packageName))
+            {
+                throw new ArgumentException("Package name cannot be null or empty.", nameof(packageName));
+            }
+
+            AssetRuntimeGuard.EnsureMainThread();
             if (!module.Initialized)
             {
                 await module.InitializeAsync(moduleOptions);
+                await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
             }
 
-            // 2. Get or Create Package
             IAssetPackage package = module.GetPackage(packageName);
             if (package == null)
             {
-                package = module.CreatePackage(packageName);
+                return await AssetPackageFactory.CreateAndInitializePackageAsync(
+                    module,
+                    packageName,
+                    packageOptions,
+                    cancellationToken);
             }
 
-            // 3. Initialize Package
-            await package.InitializeAsync(packageOptions, cancellationToken);
-
-            // 4. Set as Default (Optional convenience)
-            AssetManagementLocator.DefaultPackage = package;
+            bool initialized = await package.InitializeAsync(packageOptions, cancellationToken);
+            await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
+            if (!initialized)
+            {
+                throw new InvalidOperationException($"Asset package '{packageName}' failed to initialize.");
+            }
 
             return package;
         }

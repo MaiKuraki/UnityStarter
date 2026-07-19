@@ -59,5 +59,32 @@ namespace CycloneGames.Hash.Tests.Editor
 
             Assert.That(ordinal, Is.EqualTo(bytes));
         }
+
+        [Test]
+        public void Fnv1a32_SeededChunksMatchOneShot()
+        {
+            byte[] data = new byte[257];
+            for (int i = 0; i < data.Length; i++)
+            {
+                data[i] = (byte)(i * 31);
+            }
+
+            const uint seed = 0x12345678U;
+            uint chunked = Fnv1a32.Compute(data.AsSpan(0, 17), seed);
+            chunked = Fnv1a32.Compute(data.AsSpan(17, 91), chunked);
+            chunked = Fnv1a32.Compute(data.AsSpan(108), chunked);
+
+            Assert.That(chunked, Is.EqualTo(Fnv1a32.Compute(data, seed)));
+        }
+
+        [Test]
+        public void Fnv1a32_Utf16Ordinal_IsNotUtf16LittleEndianByteHash()
+        {
+            const string text = "\u4F60";
+            uint ordinal = Fnv1a32.ComputeUtf16Ordinal(text);
+            uint utf16LittleEndian = Fnv1a32.Compute(new byte[] { 0x60, 0x4F });
+
+            Assert.That(ordinal, Is.Not.EqualTo(utf16LittleEndian));
+        }
     }
 }

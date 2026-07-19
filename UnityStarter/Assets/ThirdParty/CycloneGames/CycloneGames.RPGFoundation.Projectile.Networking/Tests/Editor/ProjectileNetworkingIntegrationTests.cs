@@ -20,6 +20,67 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
         }
 
         [Test]
+        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        {
+            NetworkProtocolManifest manifest = ProjectileNetworkProtocol.CreateProtocolManifest();
+            string[] canonicalSchemaLiterals =
+            {
+                "ProjectileManifestHandshakeMessage:v1",
+                "ProjectileSpawnMessage:v1",
+                "ProjectileSnapshotMessage:v1",
+                "ProjectileCorrectionMessage:v1",
+                "ProjectileHitMessage:v1",
+                "ProjectileDespawnMessage:v1",
+                "ProjectileFullStateRequestMessage:v1"
+            };
+            ulong[] expectedSchemaHashes =
+            {
+                0xBCEFB413200046DAUL,
+                0xB9F717F41389BE93UL,
+                0x706E549553486060UL,
+                0x9259A444E90A56A8UL,
+                0xEF8D26DB044A29F1UL,
+                0x2C4E503FF06B2126UL,
+                0xF9FF5A38C895A567UL
+            };
+
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0x1C14C99D4AC2EB61UL));
+            Assert.That(ProjectileNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
+            Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
+            Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
+            for (int i = 0; i < expectedSchemaHashes.Length; i++)
+            {
+                Assert.That(
+                    ComputeFnv1a64(canonicalSchemaLiterals[i]),
+                    Is.EqualTo(expectedSchemaHashes[i]),
+                    canonicalSchemaLiterals[i]);
+                Assert.That(manifest.Messages[i].SchemaHash, Is.EqualTo(expectedSchemaHashes[i]));
+                Assert.That(manifest.Messages[i].ContractId, Is.EqualTo(canonicalSchemaLiterals[i]));
+            }
+        }
+
+        private static ulong ComputeFnv1a64(string canonicalLiteral)
+        {
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offsetBasis;
+
+            for (int i = 0; i < canonicalLiteral.Length; i++)
+            {
+                char character = canonicalLiteral[i];
+                if (character > 0x7F)
+                {
+                    throw new AssertionException("Canonical schema literals must contain ASCII characters only.");
+                }
+
+                hash ^= (byte)character;
+                hash = unchecked(hash * prime);
+            }
+
+            return hash;
+        }
+
+        [Test]
         public void Handshake_Default_IsValidAndCompatible()
         {
             ProjectileManifestHandshakeMessage message = ProjectileManifestHandshakeMessage.CreateDefault();
@@ -47,7 +108,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
         {
             ProjectileSnapshotMessage message = CreateSnapshot(entityId: 9UL, tick: 2, sequence: 1);
             var context = new ProjectileNetworkValidationContext(
-                sender: null,
+                sender: new TestConnection(isAuthenticated: true),
                 serverTick: new NetworkTickId(2),
                 lastAcceptedServerTick: NetworkTickId.Invalid);
 
@@ -63,7 +124,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
         {
             ProjectileSnapshotMessage message = CreateSnapshot(entityId: 9UL, tick: 2, sequence: 1);
             var context = new ProjectileNetworkValidationContext(
-                sender: null,
+                sender: new TestConnection(isAuthenticated: true),
                 serverTick: new NetworkTickId(2),
                 lastAcceptedServerTick: new NetworkTickId(2),
                 lastAcceptedSequence: 1);
@@ -73,6 +134,23 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
                 context);
 
             Assert.That(result.Code, Is.EqualTo(NetworkActionResultCode.Duplicate));
+        }
+
+        [Test]
+        public void DefaultValidator_RejectsMissingSender()
+        {
+            ProjectileSnapshotMessage message = CreateSnapshot(entityId: 9UL, tick: 2, sequence: 1);
+            var context = new ProjectileNetworkValidationContext(
+                sender: null,
+                serverTick: new NetworkTickId(2),
+                lastAcceptedServerTick: NetworkTickId.Invalid);
+
+            NetworkActionResult result = DefaultProjectileNetworkMessageValidator.Instance.ValidateSnapshot(
+                message,
+                context);
+
+            Assert.That(context.IsAuthenticated, Is.False);
+            Assert.That(result.Code, Is.EqualTo(NetworkActionResultCode.Unauthorized));
         }
 
         [Test]
@@ -149,6 +227,30 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking.Tests.Editor
                 velocity: new ProjectileVector3(1f, 0f, 0f));
 
             return ProjectileSnapshotMessage.FromSnapshot(in snapshot, sequence);
+        }
+
+        private sealed class TestConnection : INetConnection
+        {
+            public TestConnection(bool isAuthenticated)
+            {
+                IsAuthenticated = isAuthenticated;
+            }
+
+            public int ConnectionId => 1;
+            public string RemoteAddress => string.Empty;
+            public bool IsConnected => true;
+            public bool IsAuthenticated { get; }
+            public int Ping => 0;
+            public ConnectionQuality Quality => ConnectionQuality.Good;
+            public double Jitter => 0d;
+            public long BytesSent => 0L;
+            public long BytesReceived => 0L;
+            public ulong PlayerId { get; set; }
+
+            public bool Equals(INetConnection other)
+            {
+                return other != null && other.ConnectionId == ConnectionId;
+            }
         }
     }
 }

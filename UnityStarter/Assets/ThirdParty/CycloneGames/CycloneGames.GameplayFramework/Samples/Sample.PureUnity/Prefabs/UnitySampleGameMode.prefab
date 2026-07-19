@@ -45,3 +45,11 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   initialLifeSpanSec: 0
+  bCanBeDamaged: 1
+  bHidden: 0
+  tags: []
+  bStartPlayersAsSpectators: 0
+  gameModeConfig: {fileID: 0}
+  gameStateClass: {fileID: 0}
+  maxPlayers: 16
+  maxSpectators: 4

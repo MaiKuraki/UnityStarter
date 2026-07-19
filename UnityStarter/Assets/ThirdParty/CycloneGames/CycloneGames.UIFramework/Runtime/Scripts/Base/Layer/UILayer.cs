@@ -1,265 +1,155 @@
+using System;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
 namespace CycloneGames.UIFramework.Runtime
 {
-    [RequireComponent(typeof(Canvas))]
-    [RequireComponent(typeof(GraphicRaycaster))]
-    public class UILayer : MonoBehaviour
+    [DisallowMultipleComponent]
+    [RequireComponent(typeof(Canvas), typeof(GraphicRaycaster))]
+    public sealed class UILayer : MonoBehaviour
     {
-        private const string DEBUG_FLAG = "[UILayer]";
+        private const int InitialWindowCapacity = 8;
+
         [SerializeField] private string layerName;
 
-        [Tooltip("The amount of window to expand when the window array is full")]
-        [SerializeField] private int expansionAmount = 5;
+        private readonly List<UIWindow> _windows =
+            new List<UIWindow>(InitialWindowCapacity);
+        private Canvas _canvas;
+        private GraphicRaycaster _raycaster;
+        private bool _initialized;
 
-        private Canvas uiCanvas;
-        public Canvas UICanvas => uiCanvas;
-        private GraphicRaycaster graphicRaycaster;
-        public GraphicRaycaster WindowGraphicRaycaster => graphicRaycaster;
-        public string LayerName => layerName;
+        public string LayerName => layerName ?? string.Empty;
+        public Canvas UICanvas => _canvas;
+        public GraphicRaycaster WindowGraphicRaycaster => _raycaster;
+        public int WindowCount => _windows.Count;
+        public bool IsInitialized => _initialized;
 
-        private UIWindow[] uiWindowArray; // Internal array of managed windows
-        public UIWindow[] UIWindowArray => uiWindowArray; // Public accessor for editor or specific cases
-        public int WindowCount { get; private set; }
-        public bool IsFinishedLayerInit { get; private set; }
-        private static readonly List<UIWindow> _tempWindowList = new List<UIWindow>(64);
+        private void Awake() => EnsureInitialized();
 
-        // comparer
-        private static readonly IComparer<UIWindow> _priorityComparer = Comparer<UIWindow>.Create((a, b) =>
+        internal void EnsureInitialized()
         {
-            if (ReferenceEquals(a, b)) return 0;
-            if (ReferenceEquals(a, null)) return 1;
-            if (ReferenceEquals(b, null)) return -1;
-            return a.Priority.CompareTo(b.Priority);
-        });
-
-        protected void Awake()
-        {
-            uiCanvas = GetComponent<Canvas>();
-            graphicRaycaster = GetComponent<GraphicRaycaster>();
-            // TODO: maybe your UI layer is not named 'UI'
-            if (WindowGraphicRaycaster != null)
+            if (_initialized)
             {
-                WindowGraphicRaycaster.blockingMask = LayerMask.GetMask("UI");
-            }
-            InitLayer();
-        }
-
-        private void InitLayer()
-        {
-            if (transform.childCount == 0)
-            {
-                uiWindowArray = new UIWindow[expansionAmount > 0 ? expansionAmount : 4];
-                WindowCount = 0;
-                IsFinishedLayerInit = true;
                 return;
             }
 
-            // Optimization: Use GetComponentsInChildren with a reusable List to avoid array allocation
-            _tempWindowList.Clear();
-            GetComponentsInChildren(false, _tempWindowList);
-
-            int validCount = 0;
-            for (int i = 0; i < _tempWindowList.Count; i++)
-            {
-                if (_tempWindowList[i].transform.parent == this.transform)
-                {
-                    validCount++;
-                }
-                else
-                {
-                    _tempWindowList[i] = null;
-                }
-            }
-
-            int initialCapacity = Mathf.Max(validCount, expansionAmount > 0 ? expansionAmount : 4);
-            uiWindowArray = new UIWindow[initialCapacity];
-            WindowCount = 0;
-
-            for (int i = 0; i < _tempWindowList.Count; i++)
-            {
-                var window = _tempWindowList[i];
-                if (window != null)
-                {
-                    window.SetWindowName(window.gameObject.name);
-                    window.SetUILayer(this);
-                    uiWindowArray[WindowCount++] = window;
-                }
-            }
-
-            _tempWindowList.Clear();
-
-            SortUIWindowByPriority();
-            IsFinishedLayerInit = true;
-            Debug.Log($"{DEBUG_FLAG} Finished init Layer: {LayerName}, found {WindowCount} initial windows.");
+            _canvas = GetComponent<Canvas>();
+            _raycaster = GetComponent<GraphicRaycaster>();
+            _initialized = true;
         }
 
-        public UIWindow GetUIWindow(string InWindowName)
+        public bool TryGetWindow(string windowId, out UIWindow window)
         {
-            if (string.IsNullOrEmpty(InWindowName) || uiWindowArray == null) return null;
-
-            for (int i = 0; i < WindowCount; i++)
+            if (!string.IsNullOrEmpty(windowId))
             {
-                var w = uiWindowArray[i];
-                if (w != null && string.Equals(w.WindowName, InWindowName, System.StringComparison.Ordinal))
+                for (int i = 0; i < _windows.Count; i++)
                 {
-                    return w;
-                }
-            }
-            return null;
-        }
-
-        public bool HasWindow(string InWindowName)
-        {
-            return GetUIWindow(InWindowName) != null;
-        }
-
-        public void AddWindow(UIWindow newWindow)
-        {
-            if (!IsFinishedLayerInit)
-            {
-                Debug.LogError($"{DEBUG_FLAG} Layer not initialized, cannot add window. Current layer: {LayerName}");
-                return;
-            }
-            if (newWindow == null)
-            {
-                Debug.LogError($"{DEBUG_FLAG} Cannot add a null window to layer: {LayerName}");
-                return;
-            }
-
-            if (HasWindow(newWindow.WindowName))
-            {
-                Debug.LogError($"{DEBUG_FLAG} Window already exists: {newWindow.WindowName} in layer: {LayerName}");
-                return;
-            }
-
-            newWindow.gameObject.name = newWindow.WindowName;
-            newWindow.SetUILayer(this);
-            newWindow.transform.SetParent(transform, false);
-
-            //  expand
-            if (uiWindowArray == null || WindowCount == uiWindowArray.Length)
-            {
-                int newSize = (uiWindowArray?.Length ?? 0) + (expansionAmount > 0 ? expansionAmount : 4);
-                var newArray = new UIWindow[newSize];
-                if (uiWindowArray != null)
-                {
-                    System.Array.Copy(uiWindowArray, newArray, uiWindowArray.Length);
-                }
-                uiWindowArray = newArray;
-                // Debug.Log($"{DEBUG_FLAG} Resized UIWindowArray for layer {LayerName} to {newSize}");
-            }
-
-            uiWindowArray[WindowCount++] = newWindow;
-            SortUIWindowByPriority();
-        }
-
-        public void NotifyWindowDestroyed(UIWindow window)
-        {
-            if (window == null || uiWindowArray == null) return;
-
-            int windowIndex = -1;
-            for (int i = 0; i < WindowCount; i++)
-            {
-                if (ReferenceEquals(uiWindowArray[i], window))
-                {
-                    windowIndex = i;
-                    break;
-                }
-            }
-
-            if (windowIndex != -1)
-            {
-                if (windowIndex < WindowCount - 1)
-                {
-                    System.Array.Copy(uiWindowArray, windowIndex + 1, uiWindowArray, windowIndex, WindowCount - windowIndex - 1);
-                }
-
-                WindowCount--;
-                uiWindowArray[WindowCount] = null; // Avoid object reference leak
-
-                // Debug.Log($"{DEBUG_FLAG} Window {window.WindowName} removed from layer {LayerName}. New count: {WindowCount}");
-            }
-        }
-
-        public void RemoveWindow(string InWindowName)
-        {
-            if (!IsFinishedLayerInit) return;
-
-            UIWindow windowToClose = GetUIWindow(InWindowName);
-            if (windowToClose != null)
-            {
-                windowToClose.Close();
-            }
-        }
-
-        /// <summary>
-        /// Detaches a window from this layer's tracking without calling Close/Destroy.
-        /// Used by UIManager when the close animation is driven externally (CloseAsync)
-        /// so the layer no longer references the window during its closing transition.
-        /// </summary>
-        public void  DetachWindow(string windowName)
-        {
-            if (!IsFinishedLayerInit || string.IsNullOrEmpty(windowName)) return;
-
-            int windowIndex = -1;
-            for (int i = 0; i < WindowCount; i++)
-            {
-                if (uiWindowArray[i] != null && string.Equals(uiWindowArray[i].WindowName, windowName, System.StringComparison.Ordinal))
-                {
-                    windowIndex = i;
-                    break;
-                }
-            }
-
-            if (windowIndex != -1)
-            {
-                UIWindow window = uiWindowArray[windowIndex];
-                if (window != null) window.SetUILayer(null);
-
-                if (windowIndex < WindowCount - 1)
-                {
-                    System.Array.Copy(uiWindowArray, windowIndex + 1, uiWindowArray, windowIndex, WindowCount - windowIndex - 1);
-                }
-                WindowCount--;
-                uiWindowArray[WindowCount] = null;
-            }
-        }
-
-        private void SortUIWindowByPriority()
-        {
-            if (uiWindowArray == null || WindowCount <= 1) return;
-
-            System.Array.Sort(uiWindowArray, 0, WindowCount, _priorityComparer);
-
-            for (int i = 0; i < WindowCount; i++)
-            {
-                var w = uiWindowArray[i];
-                if (w != null && w.transform.parent == this.transform)
-                {
-                    w.transform.SetSiblingIndex(i);
-                }
-            }
-        }
-
-        public void OnDestroy()
-        {
-            if (uiWindowArray != null)
-            {
-                for (int i = 0; i < WindowCount; i++)
-                {
-                    var w = uiWindowArray[i];
-                    if (w != null)
+                    UIWindow candidate = _windows[i];
+                    if (candidate != null && string.Equals(candidate.WindowId, windowId, StringComparison.Ordinal))
                     {
-                        w.SetUILayer(null);
+                        window = candidate;
+                        return true;
                     }
                 }
             }
-            uiWindowArray = null;
-            WindowCount = 0;
-            IsFinishedLayerInit = false;
+
+            window = null;
+            return false;
         }
+
+        public void CopyWindows(List<UIWindow> destination)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            destination.Clear();
+            destination.AddRange(_windows);
+        }
+
+        internal void Attach(UIWindow window)
+        {
+            if (window == null)
+            {
+                throw new ArgumentNullException(nameof(window));
+            }
+
+            EnsureInitialized();
+            if (TryGetWindow(window.WindowId, out UIWindow existing) && !ReferenceEquals(existing, window))
+            {
+                throw new InvalidOperationException(
+                    $"Layer '{LayerName}' already contains window '{window.WindowId}'.");
+            }
+
+            if (_windows.Contains(window))
+            {
+                return;
+            }
+
+            window.transform.SetParent(transform, false);
+            window.SetLayer(this);
+            InsertSorted(window);
+        }
+
+        internal bool Detach(UIWindow window)
+        {
+            if (ReferenceEquals(window, null))
+            {
+                return false;
+            }
+
+            int index = _windows.IndexOf(window);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            _windows.RemoveAt(index);
+            window.SetLayer(null);
+            return true;
+        }
+
+        private void InsertSorted(UIWindow window)
+        {
+            int index = _windows.Count;
+            while (index > 0 && _windows[index - 1] != null && _windows[index - 1].Priority > window.Priority)
+            {
+                index--;
+            }
+
+            _windows.Insert(index, window);
+            for (int i = index; i < _windows.Count; i++)
+            {
+                UIWindow item = _windows[i];
+                if (item != null && item.transform.parent == transform)
+                {
+                    item.transform.SetSiblingIndex(i);
+                }
+            }
+        }
+
+        private void OnDestroy()
+        {
+            for (int i = 0; i < _windows.Count; i++)
+            {
+                UIWindow window = _windows[i];
+                if (window != null)
+                {
+                    window.SetLayer(null);
+                }
+            }
+
+            _windows.Clear();
+            _initialized = false;
+        }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            layerName = layerName?.Trim();
+        }
+#endif
     }
 }

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO;
 
 namespace CycloneGames.AssetManagement.Runtime.Trust
 {
@@ -11,10 +11,9 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         private readonly List<ContentTrustFileEntry> _entries = new List<ContentTrustFileEntry>(128);
 
         private string _version;
-        private string _minimumClientVersion;
-        private string _rollbackVersion;
         private string _contentRoot;
         private string _signature;
+        private long _totalContentSizeBytes;
 
         public ContentTrustManifestBuilder WithVersion(string version)
         {
@@ -22,21 +21,9 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             return this;
         }
 
-        public ContentTrustManifestBuilder WithMinimumClientVersion(string minimumClientVersion)
-        {
-            _minimumClientVersion = minimumClientVersion;
-            return this;
-        }
-
-        public ContentTrustManifestBuilder WithRollbackVersion(string rollbackVersion)
-        {
-            _rollbackVersion = rollbackVersion;
-            return this;
-        }
-
         public ContentTrustManifestBuilder WithContentRoot(string contentRoot)
         {
-            _contentRoot = NormalizeOptionalLocation(contentRoot);
+            _contentRoot = ContentTrustManifestValidation.NormalizeOptionalContentRoot(contentRoot);
             return this;
         }
 
@@ -48,7 +35,22 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         public ContentTrustManifestBuilder AddEntry(ContentTrustFileEntry entry)
         {
-            _entries.Add(NormalizeEntry(entry));
+            if (_entries.Count >= ContentTrustManifestValidation.MAX_ENTRY_COUNT)
+            {
+                throw new InvalidOperationException(
+                    $"Content trust manifest entry count cannot exceed {ContentTrustManifestValidation.MAX_ENTRY_COUNT}.");
+            }
+
+            ContentTrustFileEntry normalizedEntry = ContentTrustManifestValidation.NormalizeEntry(in entry);
+            if (normalizedEntry.SizeBytes >
+                ContentTrustManifestValidation.MAX_TOTAL_CONTENT_SIZE_BYTES - _totalContentSizeBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Content trust manifest total content size cannot exceed {ContentTrustManifestValidation.MAX_TOTAL_CONTENT_SIZE_BYTES} bytes.");
+            }
+
+            _entries.Add(normalizedEntry);
+            _totalContentSizeBytes += normalizedEntry.SizeBytes;
             return this;
         }
 
@@ -62,8 +64,10 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 throw new ArgumentException("Manifest root directory cannot be null or empty.", nameof(rootDirectory));
             }
 
-            string normalizedLocation = NormalizeRequiredLocation(relativeLocation);
-            string fullPath = FilePathSecurity.EnsureWithinRoot(rootDirectory, Path.Combine(rootDirectory, normalizedLocation));
+            string normalizedLocation = ContentTrustManifestValidation.NormalizeRequiredPath(
+                relativeLocation,
+                nameof(relativeLocation));
+            string fullPath = new FilePathSandbox(rootDirectory).Resolve(normalizedLocation);
             if (!File.Exists(fullPath))
             {
                 throw new FileNotFoundException("Manifest file entry does not exist.", fullPath);
@@ -72,11 +76,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             string expectedHashHex = null;
             if (hashAlgorithm != ContentTrustHashAlgorithm.None)
             {
-                expectedHashHex = FileUtility.ComputeFileHashToHexString(fullPath, ToFileUtilityAlgorithm(hashAlgorithm));
-                if (string.IsNullOrEmpty(expectedHashHex))
-                {
-                    throw new IOException($"Failed to compute hash for manifest file entry: {normalizedLocation}");
-                }
+                expectedHashHex = FileHasher.ComputeHex(fullPath, ToFileHashAlgorithm(hashAlgorithm));
             }
 
             var fileInfo = new FileInfo(fullPath);
@@ -87,30 +87,11 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 expectedHashHex));
         }
 
-        public ContentTrustManifest Build(bool sortEntries = true)
+        public ContentTrustManifest Build()
         {
-            if (string.IsNullOrWhiteSpace(_version))
-            {
-                throw new InvalidOperationException("Content trust manifest version cannot be null or empty.");
-            }
-
-            var entries = new List<ContentTrustFileEntry>(_entries.Count);
-            for (int i = 0; i < _entries.Count; i++)
-            {
-                entries.Add(NormalizeEntry(_entries[i]));
-            }
-
-            if (sortEntries)
-            {
-                entries.Sort(CompareEntries);
-            }
-
-            ValidateUniqueLocations(entries);
             return new ContentTrustManifest(
                 _version,
-                entries,
-                _minimumClientVersion,
-                _rollbackVersion,
+                _entries,
                 _contentRoot,
                 _signature);
         }
@@ -118,80 +99,17 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         public void ClearEntries()
         {
             _entries.Clear();
+            _totalContentSizeBytes = 0L;
         }
 
-        private static ContentTrustFileEntry NormalizeEntry(in ContentTrustFileEntry entry)
-        {
-            return new ContentTrustFileEntry(
-                NormalizeRequiredLocation(entry.Location),
-                entry.SizeBytes,
-                entry.HashAlgorithm,
-                entry.ExpectedHashHex);
-        }
-
-        private static string NormalizeRequiredLocation(string location)
-        {
-            string normalized = NormalizeOptionalLocation(location);
-            if (string.IsNullOrEmpty(normalized))
-            {
-                throw new ArgumentException("Manifest entry location cannot be null or empty.", nameof(location));
-            }
-
-            if (Path.IsPathRooted(normalized))
-            {
-                throw new ArgumentException("Manifest entry location must be relative.", nameof(location));
-            }
-
-            return normalized;
-        }
-
-        private static string NormalizeOptionalLocation(string location)
-        {
-            if (string.IsNullOrWhiteSpace(location))
-            {
-                return null;
-            }
-
-            return location.Trim().Replace('\\', '/');
-        }
-
-        private static void ValidateUniqueLocations(List<ContentTrustFileEntry> entries)
-        {
-            for (int i = 1; i < entries.Count; i++)
-            {
-                if (string.Equals(entries[i - 1].Location, entries[i].Location, StringComparison.Ordinal))
-                {
-                    throw new InvalidOperationException($"Duplicate manifest entry location: {entries[i].Location}");
-                }
-            }
-        }
-
-        private static int CompareEntries(ContentTrustFileEntry x, ContentTrustFileEntry y)
-        {
-            int location = string.CompareOrdinal(x.Location, y.Location);
-            if (location != 0)
-            {
-                return location;
-            }
-
-            int size = x.SizeBytes.CompareTo(y.SizeBytes);
-            if (size != 0)
-            {
-                return size;
-            }
-
-            int algorithm = x.HashAlgorithm.CompareTo(y.HashAlgorithm);
-            return algorithm != 0 ? algorithm : string.CompareOrdinal(x.ExpectedHashHex, y.ExpectedHashHex);
-        }
-
-        private static HashAlgorithmType ToFileUtilityAlgorithm(ContentTrustHashAlgorithm algorithm)
+        private static FileHashAlgorithm ToFileHashAlgorithm(ContentTrustHashAlgorithm algorithm)
         {
             switch (algorithm)
             {
                 case ContentTrustHashAlgorithm.Sha256:
-                    return HashAlgorithmType.SHA256;
+                    return FileHashAlgorithm.Sha256;
                 case ContentTrustHashAlgorithm.XxHash64:
-                    return HashAlgorithmType.XxHash64;
+                    return FileHashAlgorithm.XxHash64;
                 default:
                     throw new ArgumentOutOfRangeException(nameof(algorithm), algorithm, "Unsupported manifest file hash algorithm.");
             }

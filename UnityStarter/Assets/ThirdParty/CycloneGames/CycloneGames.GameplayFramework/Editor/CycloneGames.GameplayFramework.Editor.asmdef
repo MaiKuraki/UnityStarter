@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "Unity.Cinemachine",
+        "UniTask",
         "CycloneGames.GameplayFramework.Runtime"
     ],
     "includePlatforms": [

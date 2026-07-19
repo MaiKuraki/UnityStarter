@@ -1,6 +1,9 @@
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework.Runtime
+using System;
+using CycloneGames.GameplayFramework.Runtime;
+
+namespace CycloneGames.GameplayFramework.Sample.CameraModes
 {
     /// <summary>
     /// Camera post-processor that prevents the camera from clipping through geometry (spring-arm probe).
@@ -36,8 +39,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public sealed class ThirdPersonCollisionPostProcessor : ICameraPostProcessor
     {
-        // Shared hit buffer to keep this post-processor allocation free.
-        private static readonly RaycastHit[] s_hitBuffer = new RaycastHit[16];
+        // Per-instance ownership avoids shared mutable scratch state across local cameras.
+        private readonly RaycastHit[] hitBuffer = new RaycastHit[32];
 
         // ─── Configuration ───────────────────────────────────────────────────
 
@@ -88,7 +91,10 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>
         /// Colliders with this tag are always ignored as camera blockers.
         /// </summary>
-        public string IgnoreOccluderTag { get; set; } = "CameraIgnoreOccluder";
+        public string IgnoreOccluderTag { get; set; }
+
+        /// <summary>True when the most recent probe filled the bounded hit buffer.</summary>
+        public bool WasHitBufferSaturated { get; private set; }
 
         /// <summary>
         /// Enforces a ground clearance so the camera does not dip underground on sharp terrain.
@@ -179,7 +185,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         private bool TryFindBlockingHit(Vector3 pivot, Vector3 direction, float distance, out RaycastHit blockingHit)
         {
             int hitCount = Physics.SphereCastNonAlloc(
-                pivot, ProbeRadius, direction, s_hitBuffer, distance, CollisionMask, QueryTriggerInteraction.Ignore);
+                pivot, ProbeRadius, direction, hitBuffer, distance, CollisionMask, QueryTriggerInteraction.Ignore);
+
+            WasHitBufferSaturated = hitCount >= hitBuffer.Length;
 
             if (hitCount <= 0)
             {
@@ -187,11 +195,11 @@ namespace CycloneGames.GameplayFramework.Runtime
                 return false;
             }
 
-            SortHitsByDistance(s_hitBuffer, hitCount);
+            SortHitsByDistance(hitBuffer, hitCount);
 
             for (int i = 0; i < hitCount; i++)
             {
-                RaycastHit hit = s_hitBuffer[i];
+                RaycastHit hit = hitBuffer[i];
                 Collider collider = hit.collider;
                 if (collider == null) continue;
                 if (ShouldIgnoreOccluder(collider)) continue;
@@ -208,7 +216,8 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             if (collider == null) return true;
 
-            if (!string.IsNullOrEmpty(IgnoreOccluderTag) && collider.CompareTag(IgnoreOccluderTag))
+            if (!string.IsNullOrEmpty(IgnoreOccluderTag) &&
+                string.Equals(collider.tag, IgnoreOccluderTag, StringComparison.Ordinal))
             {
                 return true;
             }

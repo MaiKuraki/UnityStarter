@@ -1,1831 +1,1412 @@
-[**English**](README.md) | [**简体中文**]
+# CycloneGames GameplayFramework
 
-# CycloneGames.GameplayFramework
+[English](README.md)
 
-CycloneGames.GameplayFramework 是一个面向 Unity 的 Gameplay 基础框架，继承了 **虚幻引擎（Unreal Engine）GameFramework** 的核心思想，并针对 Unity 的运行时模型进行了落地。它将 Gameplay 代码组织为 **Actor**、**Pawn**、**Controller**、**PlayerController**、**GameMode**、**PlayerState** 等明确层次，使所有权、生命周期、生成、附身和相机行为都建立在一致的契约之上。
-
-这个包适合需要长期维护 Gameplay 架构、而不是继续堆叠零散 MonoBehaviour 脚本的项目。对于存在多种 GameMode、多种 Pawn、AI Controller、重生流程或角色替换需求的项目，它能够提供更稳定的结构基础。
-
-- **Unity**: 2022.3+
-- **依赖**:
-  - `com.unity.burst` / `com.unity.mathematics` — Burst 优化的数学工具
-  - `com.unity.cinemachine@3` — 摄像机管理
-  - `com.cysharp.unitask@2` — 异步操作
-  - `com.cyclone-games.factory@1` — 对象生成抽象（`IUnityObjectSpawner`）
-  - `com.cyclone-games.logger@1` — 调试日志
-
----
+以虚幻引擎的 Gameplay Framework 为蓝本，本模块将 UE 开发者熟悉的 `GameInstance → World → GameMode → Controller → Pawn → PlayerState → GameState` 管线带入 Unity。如果你有 UE 的客户端-服务端游戏流、玩家准入、possession 和相机系统经验，这里的架构会让你很亲切——容器所有权、Authority 模式和显式运行时生命周期是第一等概念，不是后来拼凑的模式。
 
 ## 目录
 
-- [CycloneGames.GameplayFramework](#cyclonegamesgameplayframework)
-  - [目录](#目录)
-  - [设计理念](#设计理念)
-    - [问题](#问题)
-    - [解决方案](#解决方案)
-    - [核心原则](#核心原则)
-    - [这个包统一了什么](#这个包统一了什么)
-  - [架构概览](#架构概览)
-    - [组件层级](#组件层级)
-    - [生命周期序列](#生命周期序列)
-    - [数据生命周期](#数据生命周期)
-    - [推荐扩展路径](#推荐扩展路径)
-  - [类参考](#类参考)
-    - [Actor](#actor)
-    - [Pawn](#pawn)
-    - [Controller](#controller)
-    - [PlayerController](#playercontroller)
-    - [AIController](#aicontroller)
-    - [PlayerState](#playerstate)
-    - [GameMode](#gamemode)
-    - [GameState](#gamestate)
-    - [GameSession](#gamesession)
-    - [DamageType 伤害系统](#damagetype-伤害系统)
-    - [World 与 WorldSettings](#world-与-worldsettings)
-    - [CameraManager](#cameramanager)
-    - [GameplayAbility 与技能镜头集成](#gameplayability-与技能镜头集成)
-    - [PlayerStart](#playerstart)
-    - [SpectatorPawn](#spectatorpawn)
-    - [KillZVolume](#killzvolume)
-    - [SceneLogic](#scenelogic)
-    - [ActorTag 标签系统](#actortag-标签系统)
-    - [Config Assets](#config-assets)
-    - [Scene Transition](#scene-transition)
-    - [Serialization](#serialization)
-    - [Camera Modes](#camera-modes)
-    - [Camera Action Preset（ScriptableObject）](#camera-action-presetscriptableobject)
-    - [CameraProfile](#cameraprofile)
-    - [动画系统无关触发绑定](#动画系统无关触发绑定)
-      - [第一步 — 创建 CameraActionPreset](#第一步--创建-cameraactionpreset)
-      - [第二步 — 创建 CameraActionMap（可选但推荐）](#第二步--创建-cameraactionmap可选但推荐)
-      - [第三步 — 在角色上添加 CameraActionBinding](#第三步--在角色上添加-cameraactionbinding)
-      - [第四步 — 接入你的动画系统](#第四步--接入你的动画系统)
-    - [可选 Animancer 集成](#可选-animancer-集成)
-    - [Camera Blend Curves](#camera-blend-curves)
-  - [可选 Networking 包](#可选-networking-包)
-  - [快速开始](#快速开始)
-    - [前提条件](#前提条件)
-    - [最小配置](#最小配置)
-      - [1. 创建必需预制体](#1-创建必需预制体)
-      - [2. 创建并配置 WorldSettings](#2-创建并配置-worldsettings)
-      - [3. 创建引导入口](#3-创建引导入口)
-      - [4. 配置场景](#4-配置场景)
-      - [5. 验证启动流程](#5-验证启动流程)
-  - [进阶用法](#进阶用法)
-    - [重生系统](#重生系统)
-    - [角色切换](#角色切换)
-    - [输入抑制](#输入抑制)
-    - [伤害事件订阅](#伤害事件订阅)
-    - [示例 — Navigathena bootstrap](#示例--navigathena-bootstrap)
-  - [最佳实践](#最佳实践)
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
----
+## 概述
 
-## 设计理念
+`GameInstance` 拥有一个 active `World`。World 拥有 actor 和权威端 `GameMode`。玩家通过 GameMode 登录，获得 `PlayerController`，posses 一个 `Pawn`。`PlayerState` 在 Pawn 替换后仍然追踪参与者身份；`GameState` 保存已提交的匹配数据。对本地玩家，`CameraManager` 管理 camera mode 栈并负责混合。
 
-### 问题
+本模块处理 UE 中所谓的"game flow"层——不是输入，不是物理，不是网络传输。`WorldNetMode`（Standalone、ListenServer、DedicatedServer）控制框架的 authority 行为；实际的网络传输和复制放在你自行组合进 World 的独立模块中。
 
-在很多 Unity 项目中，Gameplay 责任会逐步集中到少量脚本上，通常围绕玩家控制、场景状态和生成流程展开。输入、移动、摄像机、计分、重生和规则处理经常被写进同一个行为脚本中。这种耦合会提高迭代成本，使附身与 Pawn 替换更困难，也会削弱测试与复用能力。
+## Architecture
 
-### 解决方案
+架构概览
 
-CycloneGames.GameplayFramework 通过定义稳定的 Gameplay 内核来解决这些问题，并为每个角色给出明确职责：
+### 2.1 生命周期与关系图
 
-| 层次         | 类                 | 职责                                                           |
-| ------------ | ------------------ | -------------------------------------------------------------- |
-| **实体**     | `Actor`            | 所有游戏对象的基类 — 生命周期、所有权、标签、伤害              |
-| **可控体**   | `Pawn`             | 可被附身并接收移动输入的 Actor                                 |
-| **决策**     | `Controller`       | 管理附身、控制旋转与命令流的控制对象                           |
-| **人类输入** | `PlayerController` | 由人类输入驱动的 Controller，带摄像机与观战支持                |
-| **AI 决策**  | `AIController`     | 由 AI 逻辑驱动的 Controller，带注视目标与自动转向              |
-| **持久数据** | `PlayerState`      | 在 Pawn 死亡/重生后仍保留的玩家数据（分数、昵称、统计）        |
-| **游戏规则** | `GameMode`         | 生成逻辑、重生规则、比赛流程编排                               |
-| **比赛状态** | `GameState`        | 可观察的比赛状态机与玩家名册                                   |
-| **会话**     | `GameSession`      | 网络无关的玩家容量、登录验证、踢人/封禁                        |
-| **伤害**     | `DamageType`       | 类型化的伤害管线，支持点/范围路由                              |
-| **世界**     | `World`            | 轻量级服务定位器，用于访问 GameMode/GameState/PlayerController |
-| **配置**     | `WorldSettings`    | ScriptableObject，绑定所有预制体类引用                         |
+~~~mermaid
+flowchart TD
+    H["GameplayWorldHost<br/>Unity composition root"] --> GI
+    H --> TD["GameplayWorldTickDriver<br/>Unity PlayerLoop bridge"]
+    TD --> GI
+    GI["GameInstance<br/>application scope"] --> LP["LocalPlayer 槽位<br/>0..8"]
+    GI --> W["World<br/>单个 active scope"]
+    W --> WD["WorldDefinition<br/>已解析 prefab 引用和 lease"]
+    W --> A["已注册 Actor"]
+    W --> GM["GameMode<br/>仅 authority"]
+    W --> GS["GameState<br/>已提交 World 状态"]
+    GM --> S["IGameSession<br/>准入和 roster"]
+    GM --> PC["PlayerController"]
+    PC --> PS["PlayerState"]
+    PC --> P["被 possession 的 Pawn"]
+    LP -. 本地关联 .-> PC
+    PC --> CM["CameraManager<br/>仅本地 Controller"]
+    CM --> CC["CameraContext<br/>view target 和 mode stack"]
+~~~
 
-### 核心原则
+这些关系具有独立含义：
 
-- **DI 友好**：所有对象生成通过 `IUnityObjectSpawner` 进行 — 可无缝替换为任何 DI 容器或对象池，无需修改框架代码。
-- **稳定的 Gameplay 内核**：核心语义定义在 `Actor`、`Pawn`、`Controller`、`PlayerController`、`GameMode`、`PlayerState` 这些基类上，它们决定默认使用习惯与命名风格。
-- **分层扩展**：Gameplay 角色用继承和虚方法扩展；可选规则用策略对象扩展；基础设施与外部系统通过接口接入。
-- **核心零强制依赖**：核心 runtime assembly 对 GameplayAbilities、GameplayTags、Networking 或其他可选 CycloneGames 包 **没有任何** 编译时依赖。可选 integration assembly 位于 `Runtime/Scripts/Integrations/`，当导入该集成时可以直接引用双方。
-- **包形态兼容**：Cyclone package 可以放在 `Assets/ThirdParty` 下使用，也可以作为 UPM package 引入。Integration source 不应只依赖 UPM `versionDefines`；本地包模式必须通过明确的 asmdef 边界和直接引用保持有效。
+- **生命周期所有权：**GameInstance 拥有 active World。World 拥有通过 `SpawnActor` 和 `SpawnActorDeferred` 创建的 Actor。
+- **注册：**Scene Actor 和外部 Actor 可以加入 World，而不把 GameObject 销毁所有权交给 World。
+- **Possession：**一个 Controller 独占控制一个 Pawn。Possession 不转移生命周期所有权。
+- **参与者状态：**PlayerState 标识参与者，并可在同一 World 内的 Pawn 替换过程中继续存在。
+- **本地关联：**LocalPlayer 把设备/用户槽位关联到当前 world-scoped PlayerController。
+- **View target：**PlayerController 的相机目标与 possession 相互独立。
+- **Authority：**World 在 Standalone、ListenServer 和 DedicatedServer mode 下接受权威端 Gameplay 编排。
 
-### 这个包统一了什么
+### 2.2 目录布局
 
-- **附身流程**：`GameMode` 负责生成或重启 Pawn，`Controller` 负责执行附身，而 `PlayerState` 绑定在玩家生命周期上，而不是 Pawn 生命周期上。
-- **玩家身份与角色实体的分离**：`PlayerController` 与 `PlayerState` 跨重生持续存在，`Pawn` 则被视为可替换的运行时实体。
-- **相机所有权**：`PlayerController` 持有当前视角目标，`Actor` 与 `Pawn` 暴露相机语义，`CameraManager` 负责求解最终镜头。
-- **游戏规则归属**：`GameMode` 始终是登录、出生点选择、生成、重生和比赛推进的权威入口。
+| 区域 | 职责 |
+| --- | --- |
+| `Runtime/Scripts/World` | GameplayWorldHost、GameplayWorldTickDriver、GameInstance、LocalPlayer、World、WorldSettings、WorldDefinition、KillZVolume |
+| `Runtime/Scripts/Foundation` | Actor 生命周期、primary Tick、tag、damage 契约 |
+| `Runtime/Scripts/Game` | GameMode、GameSession、GameState、PlayerState |
+| `Runtime/Scripts/Controllers` | Controller、PlayerController、AIController |
+| `Runtime/Scripts/Pawns` | Pawn、SpectatorPawn、PlayerStart |
+| `Runtime/Scripts/Camera` | Camera context、mode、blend、输出、action、post-processor |
+| `Runtime/Scripts/Config` | ScriptableObject authoring asset |
+| `Runtime/Scripts/Integrations` | 可选跨 package adapter |
+| `Editor` | Inspector、property drawer、gizmo、World Debugger、项目校验和 camera 诊断 |
+| `Tests/Editor` | EditMode 契约测试和性能测试 |
+| `Tests/PlayMode` | GameplayWorldHost 的 Unity 生命周期测试 |
+| `Samples` | 可在 Runtime 使用的 composition 和 camera 示例 |
 
----
+### 2.3 Assembly 边界
 
-## 架构概览
+| Assembly | Auto referenced | 平台 | 使用方操作 |
+| --- | --- | --- | --- |
+| `CycloneGames.GameplayFramework.Runtime` | 否 | Runtime 和 Editor | 在 asmdef 中显式添加引用 |
+| `CycloneGames.GameplayFramework.Editor` | 是 | 仅 Editor | 为支持的 Inspector 和工具加载 |
+| `CycloneGames.GameplayFramework.Tests.Editor` | 否 | 仅 Editor | 使用 Unity Test Framework 运行 |
+| `CycloneGames.GameplayFramework.Tests.PlayMode` | 否 | Runtime test Player | 使用 Unity Test Framework 运行 |
+| `CycloneGames.GameplayFramework.Sample.PureUnity` | 否 | Runtime 和 Editor | 使用 sample scene，或从 sample 代码显式引用 |
+| `CycloneGames.GameplayFramework.Sample.CameraModes` | 否 | Runtime 和 Editor | 使用 camera 示例，或从 sample 代码显式引用 |
 
-### 组件层级
+Integration assembly 同样不会被自动引用。使用方 asmdef 只添加实际需要的 integration assembly。
 
-```mermaid
-graph TD
-    WS["WorldSettings<br/>（ScriptableObject — 预制体类引用）"]
-    GM["GameMode<br/>（游戏规则、生成逻辑、比赛编排）"]
-    GSession["GameSession<br/>（可选 — 登录验证、容量、踢人/封禁）"]
-    GState["GameState<br/>（可选 — 比赛状态机、玩家名册）"]
-    PC["PlayerController<br/>（人类玩家的大脑）"]
-    PS["PlayerState<br/>（持久玩家数据）"]
-    CM["CameraManager<br/>（Cinemachine 集成）"]
-    SP["SpectatorPawn<br/>（加载/观战时的占位 Pawn）"]
-    Pawn["Pawn<br/>（实际可控角色）"]
-    User["你的移动、技能、视觉表现"]
+## Assembly 接入
 
-    WS --> GM
-    GM --> GSession
-    GM --> GState
-    GM --> PC
-    PC --> PS
-    PC --> CM
-    PC --> SP
-    PC --> Pawn
-    Pawn --> User
+模块当前位于：
 
-    style WS fill:#4a6,stroke:#333,color:#fff
-    style GM fill:#46a,stroke:#333,color:#fff
-    style PC fill:#a64,stroke:#333,color:#fff
-    style Pawn fill:#a46,stroke:#333,color:#fff
-    style User fill:#555,stroke:#999,color:#fff,stroke-dasharray: 5 5
-```
+~~~text
+<repo-root>/UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/
+~~~
 
-### 生命周期序列
+项目 Runtime 代码需要添加：
 
-```mermaid
-sequenceDiagram
-    participant Boot as Bootstrap
-    participant W as World
-    participant GM as GameMode
-    participant PC as PlayerController
-    participant PS as PlayerState
-    participant Cam as CameraManager
-    participant SP as SpectatorPawn
-    participant Pawn as Pawn
-
-    Boot->>W: 创建 World
-    Boot->>GM: 生成 GameMode
-    Boot->>GM: Initialize(spawner, settings)
-    Boot->>GM: LaunchGameModeAsync()
-    GM->>PC: 生成 PlayerController
-    activate PC
-    PC->>PS: 生成 PlayerState
-    PC->>Cam: 生成 CameraManager
-    PC->>SP: 生成 SpectatorPawn
-    GM->>PC: InitializeRuntimeComponents()
-    deactivate PC
-    GM->>GM: PostLogin(PC)
-    GM->>GM: HandleStartingNewPlayer(PC)
-    GM->>GM: RestartPlayer(PC)
-    GM->>GM: FindPlayerStart()
-    GM->>Pawn: 在出生点生成 Pawn
-    GM->>PC: Possess(Pawn)
-```
-
-### 数据生命周期
-
-| Pawn 死亡后保留                   | 随 Pawn 销毁 |
-| --------------------------------- | ------------ |
-| `PlayerController`                | `Pawn` 实例  |
-| `PlayerState`（分数、昵称、统计） | 移动状态     |
-| `CameraManager`                   | 视觉组件     |
-| `SpectatorPawn`                   | 物理状态     |
-
-这种分离使重生流程保持结构上的简洁：销毁旧 Pawn，生成新 Pawn，然后调用 `Possess()`。玩家侧状态在整个过程中保持连续。
-
-### 推荐扩展路径
-
-新增 Gameplay 功能时，建议先判断它属于哪一层：
-
-1. 如果它改变的是场景中对象的身份或被附身后的行为，优先扩展 `Actor` 或 `Pawn`。
-2. 如果它改变的是输入所有权、瞄准逻辑或视角目标选择，优先扩展 `Controller` 或 `PlayerController`。
-3. 如果它改变的是出生、重生、玩家准入或比赛流程，优先扩展 `GameMode` 或 `GameSession`。
-4. 如果它只是一个可选规则，优先放在 `CameraMode`、`IViewTargetPolicy` 或独立功能包中。
-
----
-
-## 类参考
-
-### Actor
-
-**用途**：所有游戏对象的基类。提供生命周期钩子、所有权链、标签系统、可见性切换、伤害管线和网络扩展性。
-
-**设计动机**：典型 Unity 项目中，游戏性 MonoBehaviour 缺乏统一的生命周期、所有权或伤害契约。Actor 建立了这个契约，使任何游戏对象 — 角色、弹体、拾取物、体积 — 共享一致的 API。
-
-**核心功能**：
-
-| 功能     | API                                                                      | 说明                                                                     |
-| -------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------------ |
-| 生命周期 | `BeginPlay()` / `EndPlay()`                                              | Start 之后 / OnDestroy 之前各调用一次                                    |
-| 所有权   | `SetOwner(Actor)` / `GetOwner()`                                         | 层级所有权链                                                             |
-| 发起者   | `SetInstigator(Actor)` / `GetInstigator()`                               | 谁导致了此 Actor 的创建                                                  |
-| 标签     | `ActorHasTag(string)` / `AddTag()` / `RemoveTag()`                       | 简单字符串标签系统，支持 `[ActorTag]` Inspector 选择器                   |
-| 可见性   | `SetActorHiddenInGame(bool)`                                             | 批量渲染器切换                                                           |
-| 伤害     | `TakeDamage(float)` / `TakeDamage(float, DamageEvent, ...)`              | 路由至 `ReceivePointDamage` / `ReceiveRadialDamage` / `ReceiveAnyDamage` |
-| 生命期   | `SetLifeSpan(float)`                                                     | N 秒后自动销毁                                                           |
-| 边界     | `FellOutOfWorld()` / `OutsideWorldBounds()`                              | 重写以处理出界                                                           |
-| 网络     | `HasAuthority()`                                                         | 在网络层重写；默认 `true`（单机模式）                                    |
-| 朝向     | `GetOrientation()`                                                       | Burst 编译的四元数转欧拉角                                               |
-| 事件     | `OnDestroyed` / `OwnerChanged`                                           | 可观察的 Actor 生命周期事件                                              |
-| 变换     | `GetActorLocation()` / `SetActorLocation()` / `GetActorRotation()` / ... | 对 `transform` 的便捷封装                                                |
-
-**示例 — 自定义 Actor 的生命周期与伤害处理**：
-
-```csharp
-public class Projectile : Actor
+~~~json
 {
-    [SerializeField] private float speed = 20f;
-
-    protected override void BeginPlay()
-    {
-        // Start 之后调用一次 — 设置自动销毁时间
-        SetLifeSpan(5f);
-    }
-
-    protected override void EndPlay()
-    {
-        // OnDestroy 之前调用 — 清理特效、回收对象池等
-    }
-
-    void Update()
-    {
-        if (!IsHidden())
-            transform.Translate(Vector3.forward * speed * Time.deltaTime);
-    }
-
-    public override void FellOutOfWorld()
-    {
-        // 触碰死亡区域 — 立即销毁
-        Destroy(gameObject);
-    }
+  "references": [
+    "CycloneGames.GameplayFramework.Runtime"
+  ]
 }
-```
+~~~
 
-### Pawn
+项目代码还应添加自身直接使用的 assembly 引用，例如 UniTask 或 Factory.Runtime。不要编辑 Unity 生成的 csproj 或 solution 文件。
 
-**用途**：可被 Controller **附身** 的 Actor。即你的玩家角色、AI 敌人、载具 — 任何接收输入并在世界中行动的实体。
+Sample asmdef 同时面向 Runtime 和 Editor，因此其 Prefab 组件在 Player build 中仍然有效。它们不会被自动引用；调用 sample API 的项目代码必须显式添加 assembly 引用。`GameplayWorldHost` 是标准 Unity composition root；需要额外依赖的项目可重写其窄创建方法，已有其他 composition root 的项目可直接使用 `GameInstance`。
 
-**设计动机**：将"身体"（Pawn）与"大脑"（Controller）分离，意味着可以在不重写控制逻辑的情况下更换角色，同一个 Pawn 类可以由人类输入或 AI 驱动。
+## Quick Start
 
-**核心功能**：
+快速开始
 
-- **附身**：`PossessedBy(Controller)` / `UnPossessed()` — 框架处理所有权和状态传递。
-- **移动输入管线**：`AddMovementInput(direction, scale)` 每帧累积输入。移动组件每帧调用 `ConsumeMovementInputVector()` 驱动实际移动。
-- **控制器旋转**：`FaceRotation()` 自动将 Pawn 旋转同步至 Controller 的 `ControlRotation`，支持逐轴控制（`UseControllerRotationPitch/Yaw/Roll`）。
-- **初始旋转**：`NotifyInitialRotation(Quaternion)` 向所有 `IInitialRotationSettable` 组件广播 — 允许外部移动组件（如 RPGFoundation）同步初始旋转而无需框架耦合。
-- **状态查询**：`IsPlayerControlled()`、`IsBotControlled()`、`IsLocallyControlled()`、`IsTurnedOff()`。
-- **视角**：`GetPawnViewLocation()`、`GetViewRotation()`、`GetBaseAimRotation()` — 摄像机与瞄准集成。
-- **开关**：`TurnOff()` / `TurnOn()` — 禁用 Pawn 而不销毁它。
+### 4.1 准备 Prefab
 
-**示例 — 带移动的角色 Pawn**：
+创建包含以下组件的 GameObject prefab：
 
-```csharp
-public class CharacterPawn : Pawn
+1. **GameMode prefab：**一个 `GameMode` 子类。需要 match state 和参与者数组时，在 `gameStateClass` 中分配 GameState prefab。
+2. **PlayerController prefab：**一个 `PlayerController` 子类。
+3. **Pawn prefab：**一个 `Pawn` 子类，以及产品移动和输入 adapter。
+4. **PlayerState prefab：**一个 `PlayerState` 子类。
+5. **CameraManager prefab：**可选；本地相机需要输出时配置。
+6. **SpectatorPawn prefab：**可选；spectator login 需要可 possession 的表现对象时配置。
+
+如果 spawn 玩家需要 authoring 起点，请在 scene 中放置一个或多个 `PlayerStart` Actor。
+
+### 4.2 创建 WorldSettings
+
+使用：
+
+~~~text
+Create > CycloneGames > GameplayFramework > WorldSettings
+~~~
+
+分配四个必需引用：
+
+- GameMode；
+- PlayerController；
+- Pawn；
+- PlayerState。
+
+CameraManager 和 SpectatorPawn 为可选项。进入 Play Mode 前，在 Inspector 中点击 **Validate Configuration**。
+
+### 4.3 添加 GameplayWorldHost
+
+1. 创建名为 `Gameplay World Host` 的 scene GameObject。
+2. 添加 `GameplayWorldHost`。
+3. 分配 WorldSettings 资产。
+4. 选择 net mode 和 local-player count。
+5. 作为 scene 入口时保持 **Auto Start** 开启。
+
+Dedicated Server mode 始终使用零个 local player。Host 早于普通 Actor 的 `Start` callback 启动，持有 GameInstance，创建 sealed PlayerLoop Tick bridge，公开运行状态和失败诊断，并在其 GameObject 销毁时 dispose World。禁用 Host component 会暂停 bridge 转发，但不会修改 World 生命周期；Host 应保持 enabled，直到执行 stop 或 disposal。
+
+Direct Reference 不需要 resolver。Asset Reference 和 Path 需要显式 `IWorldSettingsReferenceResolver`；第 6 节介绍 resolver 契约和模块提供的 AssetManagement 实现。如果项目的 DI 容器已经持有 application lifetime，可直接构造并 dispose `GameInstance`，无需添加 Host。
+
+### 4.4 Standalone 预期结果
+
+`StartWorldAsync` 完成后：
+
+- `GameInstance.CurrentWorld` 非 null；
+- `World.LifecycleState` 为 `Playing`；
+- `World.GameMode` 正在运行；
+- 每个已配置 LocalPlayer 都有关联的 PlayerController；
+- 每个非 spectator Controller 都有 PlayerState 和被 possession 的 Pawn；
+- 当 GameMode prefab 提供或发现 GameState 时，GameState 可用；
+- 配置 CameraManager 时会创建本地 CameraManager。
+
+Sample scene 位于：
+
+~~~text
+Samples/Sample.PureUnity/Scene/UnitySampleScene.unity
+~~~
+
+## 5. Runtime 生命周期
+
+### 5.1 GameInstance 与 LocalPlayer
+
+`GameInstance` 将创建它的线程记录为 owner thread。修改状态的调用（包括 `Tick`）会校验该线程。涉及 Unity API 的调用方应在 Unity main thread 创建和使用该实例。
+
+构造参数：
+
+| 参数 | 含义 |
+| --- | --- |
+| `IUnityObjectSpawner` | 必需的 Actor prefab 实例化边界 |
+| `localPlayerCount` | 持久本地用户槽位数量，范围为 0 到 `MaxLocalPlayers` |
+| `IWorldSettingsReferenceResolver` | 可选 WorldSettings 外部资源加载器 |
+| `ISceneTransitionHandler` | 可选 scene navigation adapter |
+
+`LocalPlayer` 包含稳定的 `Index` 和当前 world-scoped `PlayerController`。Controller logout、World 停止或 GameInstance dispose 时会清理此关联。
+
+一个 GameInstance 只接受一个 active World。启动下一个 World 前先调用并等待 `StopWorldAsync`。直接调用 public `World.ShutdownAsync` 或 `World.Dispose` 也会执行相同的所有权清理，并通知所属 GameInstance 清空 `CurrentWorld`。World 已处于 `Stopping` 时发生的重入 stop 不会释放 `CurrentWorld`；在 disposal 完成前，replacement start 仍会被拒绝。
+
+### 5.2 Net mode
+
+| WorldNetMode | IsAuthority | 创建 GameMode | 自动本地登录 |
+| --- | --- | --- | --- |
+| `Standalone` | 是 | 是 | 是 |
+| `Client` | 否 | 否 | 否 |
+| `ListenServer` | 是 | 是 | 是 |
+| `DedicatedServer` | 是 | 是 | 否 |
+
+Dedicated server composition 应使用零个 LocalPlayer。Client World 提供非权威 scope；network transport 和 replication adapter 负责添加客户端可见状态。
+
+### 5.3 World 状态
+
+~~~mermaid
+stateDiagram-v2
+    [*] --> Created
+    Created --> Initializing: StartWorldAsync
+    Initializing --> Playing: initialization 提交
+    Initializing --> Stopping: 取消或失败
+    Playing --> Stopping: StopWorldAsync、travel 或 dispose
+    Stopping --> Stopped: Actor 和 Gameplay 状态结束
+    Stopped --> Disposed: lease 和生命周期资源释放
+    Disposed --> [*]
+~~~
+
+World 仅在 `Initializing` 或 `Playing` 时接受新 Actor。
+
+### 5.4 初始化顺序
+
+`StartWorldAsync` 执行以下事务：
+
+1. 校验 GameInstance 状态和 WorldSettings。
+2. 将 WorldSettings 解析为 WorldDefinition。
+3. 切换到 Unity main thread 并校验 owner-thread affinity。
+4. 创建 World，并将其公开为 `CurrentWorld`。
+5. 通过无排序 scan 发现当前全部已加载有效 scene 中的 Actor，包括 inactive Actor。
+6. 在 authoritative World 中 spawn 并初始化 GameMode。
+7. 创建或发现 GameState。
+8. 执行 LocalPlayer 登录事务。
+9. 将 World 切换到 `Playing`。
+10. 向已注册、active、非 deferred 的 Actor 发布 BeginPlay。
+11. 通知 GameMode：World 已启动。
+12. 启用 Actor Tick dispatch。
+
+任意异常都会中止初始化、结束已注册 Actor、销毁 World-owned Actor、dispose WorldDefinition lease、清空 `CurrentWorld`，然后重新抛出异常。
+
+### 5.5 关闭与 Travel
+
+关闭一旦开始，清理过程不再接受取消：
+
+1. World 停止 Actor Tick dispatch，进入 `Stopping` 并取消 `LifetimeToken`。
+2. GameMode logout 所有 PlayerController。
+3. 剩余 Actor 按 World registry 逆序接收 EndPlay。
+4. 销毁 World-owned GameObject。
+5. 解绑 scene/external Actor，但 World 不销毁其 GameObject。
+6. 恢复 Camera brain 设置。
+7. WorldDefinition 按获取逆序释放外部 lease。
+8. World 进入 `Disposed`，GameInstance 清理 `CurrentWorld`。
+
+`GameMode.TravelToLevel` 先使用 `EndPlayReason.Travel` 停止 World，再调用 `ISceneTransitionHandler.ChangeScene`。目标 scene 创建自身 World。请求 travel 前先捕获需要跨 scene 传递的数据。
+
+`GameInstance.Dispose` 会取消自身 lifetime，使用 `ApplicationShutdown` 立即关闭 World，清理 LocalPlayer 关联并释放 cancellation source。
+
+## 6. WorldSettings 与 WorldDefinition
+
+### 6.1 Authoring 与 Runtime 职责
+
+`WorldSettings` 是 ScriptableObject authoring asset。Runtime 启动时把它解析为不可变 `WorldDefinition`。Runtime 代码通过 `World.Definition` 读取定义。
+
+| 引用 | 必需 | Runtime 用途 |
+| --- | --- | --- |
+| GameMode | 是 | 权威端规则和玩家编排 |
+| PlayerController | 是 | 参与者 Controller spawn |
+| Pawn | 是 | 默认非 spectator Pawn spawn |
+| PlayerState | 是 | 参与者身份/状态 spawn |
+| CameraManager | 否 | 本地相机 Runtime |
+| SpectatorPawn | 否 | Spectator possession |
+
+GameState 在 GameMode prefab 中配置，或者由 scene Actor 提供。
+
+### 6.2 引用来源
+
+| Source | Authoring 值 | Resolver 要求 |
+| --- | --- | --- |
+| `DirectReference` | 直接 prefab 引用 | 无 |
+| `AssetReference` | Inspector 记录的 asset location | Resolver 必须支持 `AssetReference` |
+| `PathLocation` | 项目定义的 address/path | Resolver 必须支持 `PathLocation` |
+
+必需引用必须解析为非 null asset。可选 direct reference 可以为空。可选外部引用只要 location 非空，就视为已配置并且必须成功解析。
+
+### 6.3 Resolver 契约
+
+~~~csharp
+public interface IWorldSettingsReferenceResolver
 {
-    [SerializeField] private float moveSpeed = 5f;
-    [SerializeField] private CharacterController characterController;
+    bool Supports(WorldSettingsReferenceSource source);
 
-    protected override void BeginPlay()
-    {
-        UseControllerRotationYaw = true; // 同步 Yaw 到 Controller
-    }
-
-    public override void PossessedBy(Controller NewController)
-    {
-        base.PossessedBy(NewController);
-        // 启用视觉效果、开始动画等
-    }
-
-    public override void UnPossessed()
-    {
-        base.UnPossessed();
-        // 禁用输入驱动的行为
-    }
-
-    void Update()
-    {
-        // 消费累积的移动输入
-        Vector3 input = ConsumeMovementInputVector();
-        if (input.sqrMagnitude > 0.001f)
-        {
-            characterController.Move(input * moveSpeed * Time.deltaTime);
-        }
-
-        // 同步旋转到 Controller
-        if (Controller != null)
-        {
-            FaceRotation(GetControlRotation(), Time.deltaTime);
-        }
-    }
+    UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
+        string location,
+        CancellationToken cancellationToken)
+        where T : UnityEngine.Object;
 }
-```
+~~~
 
-### Controller
+Result 包含 success、asset、error 和可选 `IDisposable` lease。部分解析失败时，WorldSettings dispose 已获取的 lease。成功时，WorldDefinition 拥有这些 lease，并按逆序且只释放一次。
 
-**用途**：附身并控制 Pawn 的抽象控制对象。它持有 `PlayerState`、出生点等持久引用，并在 Pawn 生命周期之外维护控制旋转。
+Resolver 实现必须：
 
-**设计动机**：将控制逻辑与实体执行解耦，可以让 Pawn 在不重建控制侧状态的情况下被替换，也可以让同一个 Pawn 在人类输入、AI 逻辑、回放逻辑或脚本逻辑之间切换控制来源。
+- 响应 cancellation；
+- 返回有界 error message；
+- 在返回前 dispose 失败 handle；
+- 不把可变解析状态存入 WorldSettings；
+- 当 location 可能来自项目 asset 之外时，将其作为不可信输入处理。
 
-**核心功能**：
+### 6.4 AssetManagement Resolver
 
-- **Possess / UnPossess**：完整的握手流程 — 通知旧 Pawn 和新 Pawn、旧 Controller，传递所有权。`OnPossessedPawnChanged` 事件触发。
-- **堆栈式输入抑制**：`SetIgnoreMoveInput(true/false)` / `SetIgnoreLookInput(true/false)` 递增/递减计数器。多个系统可独立抑制输入而互不干扰。调用 `ResetIgnoreInputFlags()` 一次性清除。
-- **生成器和设置注入**：`Initialize(IUnityObjectSpawner, IWorldSettings)` — 构造注入，适配 DI。
-- **出生点**：`SetStartSpot(Actor)` / `GetStartSpot()` — 追踪此 Controller 的 Pawn 生成位置。
-- **游戏流程**：`GameHasEnded(Actor, bool)` / `FailedToSpawnPawn()` — 重写以响应游戏事件。
+`AssetManagementWorldSettingsReferenceResolver` 接收显式 `IAssetPackage` 并支持 `AssetReference`。成功的 asset handle 会成为 WorldDefinition lease。它不支持 `PathLocation`。
 
-### PlayerController
+~~~csharp
+var resolver =
+    new AssetManagementWorldSettingsReferenceResolver(assetPackage);
 
-**用途**：面向人类玩家的 Controller。在 Controller 基础上扩展了 **视角目标所有权**、**相机扩展状态** 和 **观战 Pawn**。
+var instance = new GameInstance(
+    new DefaultUnityObjectSpawner(),
+    localPlayerCount: 1,
+    referenceResolver: resolver);
+~~~
 
-**设计动机**：`PlayerController` 是人类输入、玩家本地相机状态和观战回退实体的持久拥有者。框架将相机契约稳定在 `GetViewTarget`、`SetViewTarget`、`AutoManageActiveCameraTarget` 这些核心接口上，而 `CameraContext`、`IViewTargetPolicy`、`CameraMode` 则作为可选扩展点存在。
+## 7. Actor 与 World 所有权
 
-**核心功能**：
+### 7.1 Actor 生命周期
 
-- **运行时组件初始化**：`InitializeRuntimeComponents()` 会在控制器依赖注入完成后创建并连接 `PlayerState`、`CameraManager`、`CameraContext` 与 `SpectatorPawn`。`InitializationTask` 继续保留，主要用于兼容旧调用点。
-- **视角目标管理**：`SetViewTarget(Actor)`、`ClearViewTargetOverride()`、`SetViewTargetPolicy(IViewTargetPolicy)`、`AutoManageActiveCameraTarget(Actor)` 用于协同手动覆盖和自动视角选择。
-- **镜头风格管理**：`SetBaseCameraMode(CameraMode)`、`PushCameraMode(CameraMode)`、`RemoveCameraMode(CameraMode)`、`GetCameraContext()` 提供分层的镜头风格扩展方式，而不替代视角所有权模型。
-- **观战回退**：`SpawnSpectatorPawn()` 与 `GetSpectatorPawn()` 为玩家暂时没有有效 Gameplay Pawn 的阶段提供稳定回退。
+~~~mermaid
+stateDiagram-v2
+    [*] --> Constructed
+    Constructed --> Initialized: Awake
+    Initialized --> Playing: World BeginPlay 或 bound-World Start fallback
+    Playing --> Ending: 请求 EndPlay
+    Ending --> Ended: EndPlay 返回
+    Ended --> Initialized: non-owned Actor 绑定 replacement World
+    Constructed --> Destroyed: OnDestroy
+    Initialized --> Destroyed: OnDestroy
+    Playing --> Destroyed: EndPlay 后 OnDestroy
+    Ended --> Destroyed: OnDestroy
+    Destroyed --> [*]
+~~~
 
-**推荐使用方式**：
+重写以下 hook：
 
-1. 人类输入采集优先放在 `PlayerController` 或其输入子类中。
-2. 移动、运动反馈和动画驱动优先留在 Pawn 中。
-3. `SetViewTarget` 应当被视为视角切换的权威接口。
-4. `CameraMode` 用于改变构图方式，而不是改变 Gameplay 所有权。
-
-**示例 — 带输入的 PlayerController**：
-
-```csharp
-public class MyPlayerController : PlayerController
+~~~csharp
+protected override void BeginPlay()
 {
-    void Update()
-    {
-        if (IsMoveInputIgnored()) return;
-
-        Pawn pawn = GetPawn();
-        if (pawn == null) return;
-
-        // WASD 移动输入
-        float h = Input.GetAxisRaw("Horizontal");
-        float v = Input.GetAxisRaw("Vertical");
-        Vector3 direction = new Vector3(h, 0, v).normalized;
-        if (direction.sqrMagnitude > 0.001f)
-        {
-            pawn.AddMovementInput(direction, 1f);
-        }
-
-        // 鼠标视角 -> 控制旋转
-        float mouseX = Input.GetAxis("Mouse X");
-        Quaternion rot = ControlRotation() * Quaternion.Euler(0, mouseX * 2f, 0);
-        SetControlRotation(rot);
-    }
+    base.BeginPlay();
+    // Subscribe and start world-bound behavior.
 }
-```
 
-### AIController
-
-**用途**：面向 AI 驱动 Pawn 的 Controller。提供 **注视系统** 和 **自动转向**。
-
-**设计动机**：AI 需要注视目标并运行逻辑循环。AIController 提供注视/旋转管线，使 AI 实现（行为树、状态机、GOAP）只需调用 `SetFocus(Actor)` 或 `SetFocalPoint(Vector3)` 即可。
-
-**核心功能**：
-
-- **注视**：`SetFocus(Actor)` / `SetFocalPoint(Vector3)` / `ClearFocus()` / `GetFocusActor()` / `GetFocalPoint()`。
-- **自动转向**：每帧 Update 中自动朝注视目标旋转。
-- **AI 生命周期**：`RunAI()` / `StopAI()` / `IsRunningAI()` — 如果 `bStartAILogicOnPossess` 为 true，在附身/脱离附身时自动调用。
-
-**示例 — 带注视的 AI 巡逻**：
-
-```csharp
-public class PatrolAIController : AIController
+protected override void EndPlay(EndPlayReason reason)
 {
-    [SerializeField] private Transform[] patrolPoints;
-    private int currentIndex = 0;
-
-    public override void RunAI()
-    {
-        base.RunAI();
-        MoveToNextPatrolPoint();
-    }
-
-    void MoveToNextPatrolPoint()
-    {
-        if (patrolPoints.Length == 0) return;
-        SetFocalPoint(patrolPoints[currentIndex].position);
-    }
-
-    void Update()
-    {
-        if (!IsRunningAI()) return;
-
-        Pawn pawn = GetPawn();
-        if (pawn == null) return;
-
-        Vector3 target = patrolPoints[currentIndex].position;
-        Vector3 dir = (target - pawn.GetActorLocation()).normalized;
-        pawn.AddMovementInput(dir, 1f);
-
-        if (Vector3.Distance(pawn.GetActorLocation(), target) < 1f)
-        {
-            currentIndex = (currentIndex + 1) % patrolPoints.Length;
-            MoveToNextPatrolPoint();
-        }
-    }
-
-    public void OnPlayerDetected(Actor player)
-    {
-        // 切换注视到玩家 — 自动转向会跟踪玩家
-        SetFocus(player);
-    }
+    // Cancel and unsubscribe world-bound behavior.
+    base.EndPlay(reason);
 }
-```
+~~~
 
-### PlayerState
+每次 World binding 最多发布一次 `BeginPlay`。World 拥有常规发布 barrier；只有 Actor 已绑定且该 World 已处于 `Playing` 时，Unity `Start` 才提供 fallback。关闭后，non-owned scene/external Actor 会解绑，并可在 replacement World 注册它时从 `Ended` 重置为 `Initialized`。World-owned Actor 结束后不能重入。每次 binding 最多发布一次 `OnWorldUnbound`，direct destruction 也包含在内；EndPlay 内发生 destruction 时，终态 `Destroyed` 不会被 `Ended` 覆盖。`OnDestroyed` 是 Unity 销毁终态事件，与 EndPlay 分离。
 
-**用途**：在 Pawn 死亡和重生后 **仍然保留** 的持久玩家数据。
+在 Playing World 中注册 inactive Actor 时，它会保持 `Initialized`，直到变为 active；随后 `OnEnable` 请求 World 发布 BeginPlay。Actor 仍属于 deferred spawn 时，World 会拒绝该 fallback，因此 activation 不能绕过 `FinishSpawningActor`。
 
-**设计动机**：分数、玩家昵称、队伍、背包 — 这些数据不应在角色死亡时丢失。PlayerState 挂载在 Controller 上（而非 Pawn 上），因此重生时创建新 Pawn 但所有玩家数据完好无损。
+EndPlay reason 包括：
 
-**核心功能**：
+- `Destroyed`；
+- `SceneUnload`；
+- `WorldShutdown`；
+- `Travel`；
+- `InitializationFailure`；
+- `ApplicationShutdown`。
 
-- **Pawn 追踪**：`GetPawn()` / `OnPawnSetEvent` — 当附身的 Pawn 变更时收到通知。事件签名：`(PlayerState, newPawn, oldPawn)`。
-- **玩家信息**：`GetPlayerName()` / `SetPlayerName()`、`GetPlayerId()` / `SetPlayerId()`、`GetScore()` / `SetScore()`、`AddScore()`（返回新分数）。
-- **标记**：`IsABot()` / `SetIsABot()`、`IsSpectator()` / `SetIsSpectator()`。
-- **序列化接缝**：`Serialize(IDataWriter)` / `Deserialize(IDataReader)` 为存档系统、回放系统或网络同步适配器提供框架级持久化契约。
-- **复制**：`CopyProperties(PlayerState)` — 用于无缝旅行或重生时的状态传递。
+### 7.2 Primary Actor Tick
 
-**示例 — 带背包的自定义 PlayerState**：
+Primary Actor Tick 是可选的 World 生命周期服务，不会替代 Unity 的全部更新机制。`ActorTickPhase.None` 的 Actor 不会进入 Tick registry，也不会收到框架的逐帧 callback。
 
-```csharp
-public class RPGPlayerState : PlayerState
-{
-    private List<string> inventory = new List<string>();
-    public int Kills { get; private set; }
-
-    public void RecordKill()
-    {
-        Kills++;
-        AddScore(100f);
-    }
-
-    public void AddItem(string itemId)
-    {
-        inventory.Add(itemId);
-    }
-
-    public override void CopyProperties(PlayerState other)
-    {
-        base.CopyProperties(other);
-        if (other is RPGPlayerState rpg)
-        {
-            inventory = new List<string>(rpg.inventory);
-            Kills = rpg.Kills;
-        }
-    }
-}
-```
-
-### GameMode
-
-**用途**：**总编排者**。处理玩家生成、重生、出生点选择和比赛流程。
-
-**设计动机**：游戏规则（几条命、在哪重生、何时开始比赛）与玩家输入或角色移动有本质区别。GameMode 将这些决策集中在一处，只需更改 WorldSettings 中的预制体引用即可轻松切换游戏模式（死斗 vs. 夺旗 vs. 教程）。
-
-**核心功能**：
-
-- **启动**：`LaunchGameModeAsync(CancellationToken)` — 入口点。生成 PlayerController，等待初始化，调用 PostLogin，启动比赛，重启玩家。
-- **出生点选择**：`FindPlayerStart()` -> `ChoosePlayerStart()` — 重写以实现自定义逻辑（随机、基于队伍、轮询）。
-- **生成管线**：`SpawnDefaultPawnAtPlayerStart/Transform/Location()` — 生成 Pawn，通过 `TeleportPawn()` 处理 CharacterController/Rigidbody 传送。
-- **登录/登出**：`PreLogin()`（通过 GameSession 验证）-> `PostLogin()`（注册 + HandleStartingNewPlayer）-> `Logout()`（注销）。
-- **会话集成**：`SetGameSession(IGameSession)` — 可选。不设置会话时，所有登录检查通过（单机模式）。
-- **配置驱动规则**：`SetGameModeConfig(GameModeConfig)` / `GetGameModeConfig()` 允许把规则预设放在资源资产里，而不是硬编码在子类里。
-- **场景切换接缝**：`SetSceneTransitionHandler(ISceneTransitionHandler)` / `GetSceneTransitionHandler()` 为 Navigathena 这类场景导航系统提供清晰的适配边界。
-- **旅行生命周期**：`TravelToLevel()` 会先通过 `EndGameAsync()` 做游戏侧收尾，再把实际场景切换委托给 transition handler。
-- **Pawn 类选择**：重写 `GetDefaultPawnPrefabForController()` 可为不同玩家返回不同 Pawn 预制体（基于职业或队伍的选择）。
-
-**示例 — 带生命值和自定义出生点的 GameMode**：
-
-```csharp
-public class ArenaGameMode : GameMode
-{
-    private Dictionary<PlayerController, int> playerLives = new();
-    private const int MaxLives = 3;
-
-    protected override void HandleStartingNewPlayer(PlayerController NewPlayer)
-    {
-        playerLives[NewPlayer] = MaxLives;
-    }
-
-    public override void RestartPlayer(PlayerController NewPlayer, string Portal = "")
-    {
-        if (playerLives.TryGetValue(NewPlayer, out int lives) && lives <= 0)
-        {
-            // 没有剩余生命 — 切换为观战者
-            NewPlayer.GetPlayerState()?.SetIsSpectator(true);
-            return;
-        }
-        base.RestartPlayer(NewPlayer, Portal);
-    }
-
-    // 重写以随机选择出生点
-    protected override Actor ChoosePlayerStart(Controller Player)
-    {
-        var starts = PlayerStart.GetAllPlayerStarts();
-        if (starts.Count == 0) return null;
-        return starts[UnityEngine.Random.Range(0, starts.Count)];
-    }
-
-    // 重写以分配职业特定的 Pawn 预制体
-    protected override Pawn GetDefaultPawnPrefabForController(Controller InController)
-    {
-        // 可根据玩家职业选择返回不同的 Pawn 预制体
-        return base.GetDefaultPawnPrefabForController(InController);
-    }
-
-    public void OnPlayerKilled(PlayerController player)
-    {
-        if (playerLives.ContainsKey(player))
-        {
-            playerLives[player]--;
-            RestartPlayer(player);
-        }
-    }
-}
-```
-
-### GameState
-
-**用途**：所有玩家可见的、可观察的比赛状态。追踪比赛阶段、经过时间和权威的玩家名册。
-
-**设计动机**：在多人游戏中，所有客户端需要就比赛状态达成一致（等待中、进行中、已结束）。即使在单人游戏中，比赛阶段的状态机也能避免散落在各处的临时 bool 标志。
-
-**核心功能**：
-
-- **比赛状态机**：`EMatchState` 枚举（EnteringMap -> WaitingToStart -> InProgress -> WaitingPostMatch -> LeavingMap -> Aborted）。
-- **状态转换**：`SetMatchState(EMatchState)` -> `OnMatchStateChanged(old, new)` — 重写以实现自定义转换逻辑。
-- **玩家名册**：`AddPlayerState()` / `RemovePlayerState()` / `PlayerArray` / `GetNumPlayers()`。
-- **经过时间**：`ElapsedTime` — 在 `InProgress` 状态下自动递增。
-
-**示例 — 带胜利条件的 GameState**：
-
-```csharp
-public class ArenaGameState : GameState
-{
-    public int ScoreToWin { get; set; } = 10;
-
-    protected override void OnMatchStateChanged(EMatchState OldState, EMatchState NewState)
-    {
-        if (NewState == EMatchState.InProgress)
-        {
-            // 比赛刚开始 — 通知 UI
-            Debug.Log("Match started!");
-        }
-        else if (NewState == EMatchState.WaitingPostMatch)
-        {
-            Debug.Log($"Match ended after {ElapsedTime:F1}s");
-        }
-    }
-
-    public void CheckWinCondition()
-    {
-        foreach (var ps in PlayerArray)
-        {
-            if (ps.GetScore() >= ScoreToWin)
-            {
-                SetMatchState(EMatchState.WaitingPostMatch);
-                return;
-            }
-        }
-    }
-}
-```
-
-### GameSession
-
-**用途**：网络无关的会话管理 — 玩家容量、登录验证、踢人/封禁。
-
-**设计动机**：网络方案各异（Mirror、Netcode、Photon、自研）。GameSession 提供稳定的接口（`IGameSession`），GameMode 通过它调用，而实际网络实现则位于适配器中。不设置会话时，GameMode 以单机模式运行，无容量检查。
-
-**核心功能**：
-
-- **`IGameSession` 接口**：`ApproveLogin()`、`RegisterPlayer()`、`UnregisterPlayer()`、`AtCapacity()`、`KickPlayer()`、`BanPlayer()`、`HandleMatchHasStarted/Ended()`。
-- **默认实现**：`GameSession`（Actor 子类） 本地单机会话，对照 `MaxPlayers`/`MaxSpectators` 计数。
-- **集成方式**：在 Mirror/Netcode/Photon 适配器中实现 `IGameSession`。传递给 `GameMode.SetGameSession()`。
-
-**示例 — 带密码的自定义会话**：
-
-```csharp
-public class PasswordGameSession : GameSession
-{
-    [SerializeField] private string serverPassword = "";
-
-    public override bool ApproveLogin(string options, string address, out string errorMessage)
-    {
-        if (!base.ApproveLogin(options, address, out errorMessage))
-            return false;
-
-        if (!string.IsNullOrEmpty(serverPassword) && options != serverPassword)
-        {
-            errorMessage = "Invalid password";
-            return false;
-        }
-        return true;
-    }
-}
-```
-
-### DamageType 伤害系统
-
-**用途**：类型化、可路由的伤害管线。定义伤害种类（火焰、爆炸、环境）并携带命中上下文（位置、方向、半径）。
-
-**设计动机**：游戏需要区分伤害类型以处理护甲、抗性、视觉效果和音效。框架提供 `IDamageType` 接口使其可独立使用，同时通过不透明的 `EffectContext` 字段携带 GameplayAbilities 上下文 — 无需对 GAS 产生任何编译时依赖。
-
-**组件**：
-
-- **`IDamageType`**（接口）：`CausedByWorld`、`ScaleMomentumByMass`、`DamageImpulse`、`DamageFalloff`。
-- **`DamageType`**（ScriptableObject）：默认实现 — 通过 `Create -> CycloneGames -> GameplayFramework -> DamageType` 创建。
-- **`EDamageEventType`**（枚举）：`Generic`、`Point`、`Radial`。
-- **`DamageEvent`**（结构体）：零分配值类型，包含事件类型、伤害类型、命中位置/法线/方向（点伤害）、原点/半径（范围伤害），以及可选的 `EffectContext`（object）用于 GAS 桥接。
-- **工厂方法**：`DamageEvent.MakeGenericDamage()`、`MakePointDamage(...)`、`MakeRadialDamage(...)`。
-
-**Actor 中的伤害路由**：
-
-```mermaid
+~~~mermaid
 flowchart LR
-    TD["TakeDamage(amount, damageEvent,<br/>instigator, causer)"] --> Point{Point?}
-    TD --> Radial{Radial?}
-    TD --> Always["Always"]
+    PL["Unity PlayerLoop"] --> D["GameplayWorldTickDriver"]
+    D --> GI["GameInstance.Tick"]
+    GI --> W["World.Tick"]
+    W --> R["Phase registry snapshot"]
+    R --> A["Actor.Tick"]
+~~~
 
-    Point -->|Yes| RPD["ReceivePointDamage()"]
-    RPD --> OTPD["OnTakePointDamage 事件"]
+可以通过 Actor Inspector 或代码完成配置：
 
-    Radial -->|Yes| RRD["ReceiveRadialDamage()"]
-    RRD --> OTRD["OnTakeRadialDamage 事件"]
+| Member | 用途 |
+| --- | --- |
+| `ActorTickPhase` | 选择 None、Update、FixedUpdate 或 LateUpdate |
+| `CanEverTick` | 配置了可 dispatch phase 时为 true |
+| `TickPhase` | 当前 primary phase |
+| `IsActorTickEnabled` | 读取 Runtime enable flag |
+| `SetActorTickEnabled` | 启用或禁用 Runtime dispatch |
+| `SetActorTickPhase` | 修改配置 phase，并在 active phase registry 之间移动已启用的 Actor |
+| `ConfigureActorTick` | Protected 的代码侧 phase 和启动配置 |
+| `Tick` | Protected virtual Gameplay callback |
 
-    Always --> RAD["ReceiveAnyDamage()"]
+只有同时满足以下条件时，World 才会调用 `Tick`：
 
-    style TD fill:#c44,stroke:#333,color:#fff
-    style RPD fill:#46a,stroke:#333,color:#fff
-    style RRD fill:#46a,stroke:#333,color:#fff
-    style RAD fill:#46a,stroke:#333,color:#fff
-```
+- World 已完成启动，且 `LifecycleState` 为 `Playing`；
+- Actor 仍然注册、不是 deferred，并且已经完成 BeginPlay；
+- Actor component 处于 active 和 enabled 状态；
+- 配置 phase 与当前 dispatch 一致，且 Runtime Tick 已启用。
 
-**示例 — 施加和接收伤害**：
+每个 active phase registry 只包含 Runtime Tick flag 已启用的 Actor；禁用 Tick 会将 Actor 移出热路径列表。每个 phase 使用可复用 snapshot。Callback 中 spawn、启用或切换到该 phase 的 Actor，会从目标 phase 的下一次 dispatch 开始参与；snapshot 尚未访问到的 Actor 若已被禁用、销毁或移出当前 phase，则会被跳过；World shutdown 会终止剩余 entry。`GetTickActorCount` 返回当前 Runtime-enabled registry count。单个 Actor 抛出的异常会以该 Actor 作为 context 写入日志，并继续执行 phase 中的其他 Actor。Tick dispatch 只能在 owner thread 执行，并拒绝重入。
 
-```csharp
-// --- 施加伤害（如武器）---
-public class Weapon : Actor
+Tick 顺序不是 Gameplay 排序契约。注册和移除采用 dense swap-back 结构，因此 Actor 之间的依赖必须通过显式状态、事件或编排表达，不能依赖 callback 顺序。
+
+Actor 仍然是 MonoBehaviour，因此专用子类或同级 component 仍可声明原生 Unity message。这些 message 由 Unity 持有，不受 World registration 或 lifecycle gate 约束，适合生命周期跟随 component 的窄 Unity-facing 职责。
+
+一个 Actor 只有一个 primary phase。需要 Unity physics callback、Animator callback、rendering callback、Jobs/Burst scheduling 或多个独立 phase 的组件，应继续使用职责收敛的 MonoBehaviour adapter 或纯 C# simulation owner。GameplayAbilities、movement、projectile 和 presentation 模块不会因为 owner 是 Actor 就自动改为 Actor-Tick 驱动。
+
+`GameplayWorldHost` 会在 Runtime 创建一个 sealed `GameplayWorldTickDriver`。直接组合 `GameInstance` 的项目必须通过 `GameInstance.Tick`，从所选 Unity phase 或自定义 loop 中各转发一次。
+
+### 7.3 注册与所有权
+
+| API | World registry | Begin/End 通知 | World 销毁 GameObject |
+| --- | --- | --- | --- |
+| Scene discovery | 是 | 是 | 否 |
+| `RegisterActor` | 是 | 是 | 否 |
+| `SpawnActor` | 是 | 是 | 是 |
+| `SpawnActorDeferred` | 是 | Finish 后 | 是 |
+
+对于普通已注册 Actor，`DestroyActor` 会将其从 World 移除、发布 EndPlay 并销毁 GameObject。Play Mode 使用 Unity 正常销毁边界；Edit Mode 使用立即销毁。
+
+销毁已提交的 PlayerController 或其 PlayerState 会升级为 participant logout，使 roster、GameState、LocalPlayer、Pawn、camera 和 spectator 状态作为一次操作完成清理。在 World 处于 `Initializing` 或 `Playing` 时销毁 active GameMode，会升级为完整 World shutdown。
+
+Actor registry 使用 swap-back removal。Registry 顺序以及 `TryGetActor&lt;T&gt;` 返回的第一个结果都不是稳定选择策略。
+
+诊断和低频工具可在 `0..ActorCount` 范围内调用 `TryGetActorRegistration`。该调用返回 readonly value，不创建 collection snapshot；任何 Actor removal 都会使既有 index 失效，因此不得持久化 index。Unity Actor reference 必须在 main thread 读取。
+
+### 7.4 Deferred Spawn
+
+当依赖或状态必须在 BeginPlay 前完成配置时，使用 deferred spawn：
+
+~~~csharp
+Pawn pawn = world.SpawnActorDeferred(pawnPrefab);
+bool committed = false;
+
+try
 {
-    [SerializeField] private DamageType fireDamageType;
+    pawn.SetPawnConfig(pawnConfig);
+    pawn.SetActorLocationAndRotation(position, rotation);
 
-    public void FireAt(Actor target, Vector3 hitLocation, Vector3 hitNormal)
+    world.FinishSpawningActor(pawn);
+    committed = true;
+}
+finally
+{
+    if (!committed && world.IsActorRegistered(pawn))
     {
-        var damageEvent = DamageEvent.MakePointDamage(
-            hitLocation, hitNormal, GetActorForwardVector(), fireDamageType);
-
-        target.TakeDamage(25f, damageEvent,
-            GetInstigator<Controller>(), this);
-    }
-
-    public void Explode(Vector3 origin, float radius)
-    {
-        var damageEvent = DamageEvent.MakeRadialDamage(
-            origin, innerRadius: 2f, outerRadius: radius, fireDamageType);
-
-        // 对半径内的所有 Actor 施加伤害...
+        world.DestroyActor(pawn, EndPlayReason.InitializationFailure);
     }
 }
+~~~
 
-// --- 接收伤害（在你的 Actor 子类中）---
-public class EnemyActor : Actor
+如果 spawn 出的实例原本 active，World 会暂时将其设为 inactive，直到 `FinishSpawningActor`。对已注册 Actor 重复 Finish 是幂等的；Finish 未注册 Actor 会抛出异常。
+
+### 7.5 Actor 服务
+
+Actor 还提供：
+
+- owner 和 instigator 引用；
+- transform 和 view-point helper；
+- renderer visibility 同步；
+- 精确 ordinal tag，最多 64 个，每个最多 128 个字符；
+- generic、point 和 radial damage dispatch；
+- 可取消 lifespan；
+- 可选的 World-scoped primary Tick；
+- `HasAuthority`；Actor 未加入 World 时返回 true，加入后跟随 World authority；
+- `FellOutOfWorld` 和 `KillZVolume`。
+
+Actor owner、Controller possession 和 World ownership 是独立关系。
+
+## 8. GameMode 登录与 Roster
+
+### 8.1 Authority 与生命周期
+
+GameMode 只存在于 authoritative World。其状态为：
+
+~~~text
+Uninitialized -> Initialized -> Starting -> Running -> Stopping -> Stopped
+~~~
+
+初始化会组合传入的 `IGameSession`，或者创建有界 `GameSession`。`GameModeConfig` 当前用于应用默认 spectator 规则。游戏专属配置 asset 可以继承它并重写 `ApplyTo`。
+
+### 8.2 登录请求边界
+
+`PlayerLoginRequest` 强制以下限制：
+
+| 字段 | 限制 |
+| --- | --- |
+| PlayerId | 不得为负数 |
+| PlayerName | 最多 64 个字符 |
+| RemoteAddress | 最多 256 个字符 |
+| Options | 最多 1024 个字符 |
+| IsLocal | 必须匹配可信 LocalPlayer slot；local request 不能包含 RemoteAddress |
+
+构造请求前必须先对远程输入完成认证、限流、规范化和校验。修改 World 或 GameSession 的调用必须运行在 owner thread。
+
+GameMode 要求 `request.IsLocal` 与是否传入 `localPlayer` 参数一致。传入的 LocalPlayer 必须是 `World.GameInstance` 实际拥有的同一个 slot。Network 和 remote 调用方传入 null，并把 `IsLocal` 设为 false；输入 flag 不能建立可信 local identity。
+
+基础 `CreateLocalPlayerLoginRequest` 会把 LocalPlayer index 0 映射为 player ID 1 和名称 `LocalPlayer1`，把 `IsLocal` 设为 true，后续槽位依次递增。Local identity 来自 platform-user service 时，应重写该方法。
+
+基础 request validation 允许 PlayerName 为 null。GameSession 强制 PlayerId 在单个 session 内唯一；account authenticity、跨 session identity 和 reconnect/rejoin ID 分配仍属于产品准入职责。`PlayerLoginResult.Error` 是诊断文本，任何网络响应都应先进行脱敏和映射。
+
+### 8.3 事务流程
+
+~~~mermaid
+flowchart TD
+    R["PlayerLoginRequest"] --> V["校验 mode、authority、cancellation、边界和可信 local slot"]
+    V --> P["PreLogin / IGameSession.ApproveLogin"]
+    P --> D["Deferred spawn Controller 和 PlayerState"]
+    D --> O["可选本地 CameraManager 或 SpectatorPawn"]
+    O --> I["初始化 PlayerController"]
+    I --> SR["注册 roster entry"]
+    SR --> WC["提交 PlayerController 到 World 和 LocalPlayer"]
+    WC --> SP["Possess spectator，或 spawn 并 possess 默认 Pawn"]
+    SP --> GS["将 PlayerState 添加到 GameState"]
+    GS --> F["Finish deferred Actor"]
+    F --> PL["PostLogin"]
+    V -. 失败 .-> RB["返回 status"]
+    P -. 拒绝 .-> RB
+    D -. 失败 .-> RO["回滚 possession、roster、World 关联和 spawned Actor"]
+    O -. 失败 .-> RO
+    I -. 失败 .-> RO
+    SR -. 失败 .-> RO
+    WC -. 失败 .-> RO
+    SP -. 失败 .-> RO
+    GS -. 失败 .-> RO
+    F -. 失败 .-> RO
+    PL -. 失败 .-> RO
+~~~
+
+`PlayerLoginResult` 报告：
+
+- `Success`；
+- `InvalidRequest`；
+- `NotAuthoritative`；
+- `WorldNotAcceptingPlayers`；
+- `Rejected`；
+- `AtCapacity`；
+- `SpawnFailed`；
+- `Cancelled`。
+
+`PostLogin` 会在关系提交且所有 deferred Actor 完成 spawn 后运行。如果 PostLogin 抛出异常，登录事务会回滚。
+
+### 8.4 GameSession
+
+`GameSession` 同时按 PlayerController reference identity 和非负 PlayerId 索引每个已注册参与者。它拒绝重复 Controller 和重复 PlayerId，并分别维护 player/spectator count。
+
+注册会让一个 GameSession 独占 PlayerState identity lock，直到 `UnregisterPlayer`；同一个 PlayerState 不能同时注册到另一个 session。已注册参与者的 spectator category 通过 `TrySetSpectatorStatus` 修改；该方法在 owner thread 内检查容量，并作为一次操作更新 PlayerState、roster entry 和两类 count。因 identity 或 capacity 被拒绝的注册会在修改 PlayerState 前返回。会破坏已注册 entry 一致性的 PlayerId 或 spectator 直接修改会被拒绝。
+
+容量由构造参数提供。每个容量以及两者总和都受 `MaxSupportedParticipants` 限制。默认实现由单线程 owner 使用。
+
+默认 GameSession 从 GameMode prefab 接收 serialized `maxPlayers` 和 `maxSpectators`。当产品在其他位置拥有准入状态时，通过 `GameInstance.StartWorldAsync` 传入自定义 `IGameSession`。
+
+实现 `IGameSession` 可提供产品准入和 roster callback：
+
+- `ApproveLogin`；
+- `TryRegisterPlayer`；
+- `ContainsPlayer`；
+- `UnregisterPlayer`；
+- `TrySetSpectatorStatus`；
+- `HandleMatchHasStarted`；
+- `HandleMatchHasEnded`。
+
+Session match notification 成对发布。只有 World 进入 Playing 且全部初始 BeginPlay callback 完成后，`HandleMatchHasStarted` 才会提交。在此之前发生 startup rollback 时，不会发布 `HandleMatchHasEnded`；成功发布一次 start 后，shutdown 会发布一次 end。
+
+### 8.5 Spawn、Restart、Logout 与 Travel
+
+GameMode 首先按精确 portal/GameObject 名称选择 PlayerStart，然后调用 `ChoosePlayerStart`。基础实现选择缓存中的第一个 start。Scene discovery 无排序要求，因此 spawn 选择需要确定性时，应重写 `ChoosePlayerStart`。
+
+`RestartPlayer` 会复用已有 Pawn，或 deferred-spawn 默认 Pawn；随后执行 teleport、发布 initial rotation、possession，并 finish spawn。
+
+基础 teleport 路径会处理 CharacterController 和 Rigidbody component。非 kinematic Rigidbody 的 velocity 和 angular velocity 会被清零。产品移动 backend 需要其他事务时，应重写 `TeleportPawn`。
+
+`Logout` 是 public non-virtual atomic entry。它会执行 unpossess、注销 roster entry、从 GameState 移除 PlayerState、清理 World/LocalPlayer 关联，并销毁 World-owned 参与者 Actor。通过 protected virtual `HandleLogout` 扩展 logout 行为。Unpossess、roster/GameState 移除、hook 或 Actor 销毁中的异常会被隔离并记录，后续清理仍会继续。
+
+## 9. Controller、Pawn 与 Possession
+
+### 9.1 Possession 契约
+
+Controller 必须先注册到 World，并针对与 Pawn 相同的 World 完成初始化。`TryPossess` 对无效输入返回 error；`Possess` 在事务无法提交时抛出异常。
+
+事务步骤：
+
+1. 拒绝 reentrant possession。
+2. 校验 Controller 和 Pawn 的 World membership。
+3. 解绑 Controller 当前 Pawn。
+4. 解绑目标 Pawn 当前 Controller。
+5. 提交 Controller、Pawn 和 PlayerState 关联。
+6. 重置 control rotation 并 dispatch Pawn restart。
+7. 在全部双向关系一致后发布 callback。
+
+Possession 是独占的。它不会设置 Actor owner，也不会改变 World 的销毁所有权。
+
+不要在 possession callback 中调用 `Possess` 或 `UnPossess`；reentrancy guard 会拒绝此修改。
+
+Possession callback 在状态提交后运行。每个 callback 返回后，transaction 都会复核 Controller、Pawn 和 PlayerState 的双向关系。Callback 若销毁或以其他方式使已提交 Controller/Pawn 失效，框架会执行无 callback 的 emergency detach，且 `TryPossess` 返回 false。异常仍会向外传播；已提交关系保持有效时会被保留，因此抛异常的 callback 仍需要显式 compensation policy。
+
+World unbind 会清除 Controller 的 possession、PlayerState、start spot、input-suppression counter 和 initialization state；non-owned scene Controller 与 externally registered Controller 同样适用。AIController 还会停止 AI 并清除 focus。PlayerController 会清除 LocalPlayer、camera context、CameraManager、SpectatorPawn 和 view-target 关系。在 replacement World 中复用这些 non-owned object 时，必须显式重新初始化。
+
+### 9.2 Controller 输入与 View
+
+Controller 提供：
+
+- 带 Pawn pitch limit 的 control rotation；
+- start-spot 存储；
+- 可叠加的 move/look suppression counter；
+- Pawn 和 PlayerState 访问；
+- view-point 转发；
+- movement stop、game end 和 spawn failure hook。
+
+每个 `SetIgnoreMoveInput(true)` 和 `SetIgnoreLookInput(true)` 都应有匹配的 false 调用。`ResetIgnoreInputFlags` 会清空两个 counter。
+
+### 9.3 Pawn
+
+Pawn 提供：
+
+- 有界累计 movement input；
+- `ConsumeMovementInputVector`；
+- controller rotation flag 和 eye height；
+- 通过 `PawnConfig` 配置 pitch limit；
+- restart 和 initial-rotation hook；
+- player、bot 和 local-control query；
+- turn-on/turn-off 状态。
+
+Pawn 继承可选的 primary Actor Tick，但默认不参与 Tick。Movement adapter 应在该 movement 实现拥有的 phase 中消费 movement input 并调用 `ApplyControllerRotation`。基于 Rigidbody 的 adapter 通常保留 Unity `FixedUpdate`；确定性 simulator 可以改为公开显式 `Step`。
+
+`NotifyInitialRotation` 会查找 Pawn 上实现 `IInitialRotationSettable` 的组件，并在 possession 完成前发布 spawn rotation。
+
+### 9.4 PlayerController 与 LocalPlayer
+
+仅在分配 LocalPlayer 时，`PlayerController.IsLocalController` 才为 true。只有本地 PlayerController 可以拥有 CameraManager。Remote PlayerController 可以参与游戏、possess Pawn 并持有 PlayerState，而不创建本地相机状态。
+
+被 possession 的 Pawn、spectator Pawn、manual view target 和 LocalPlayer 是独立关系。自动 view target 顺序为：
+
+1. 被 possession 的 Pawn；
+2. spectator Pawn；
+3. PlayerController 自身。
+
+`SetViewTarget` 创建 manual override。`ClearViewTargetOverride` 恢复 policy-driven targeting。
+
+### 9.5 AIController 与 PlayerStart
+
+AIController 提供 focus Actor/focal point 状态，以及可重写的 `RunAI`/`StopAI`。它拥有 Update phase 的 primary Actor Tick：`RunAI` 启用 Tick，`StopAI` 禁用 Tick。运行期间，Tick 会将 control rotation 转向 focus。产品 behavior tree、navigation 和 perception 仍由 adapter 提供。
+
+PlayerStart registration 为 World-scoped。Custom Editor 支持 3D、side-scroller 和 top-down gizmo 展示，不使用 Runtime static registry。
+
+## 10. PlayerState 与 GameState
+
+### 10.1 PlayerState
+
+PlayerState 存储：
+
+- 有界 player name；
+- 非负 player ID；
+- spectator status；
+- 当前 Pawn 关联。
+
+它可以在同一 World 内的 Pawn 替换过程中继续存在。`CopyProperties` 复制 identity field，不复制 Pawn link。
+
+注册到 GameSession 期间，PlayerId 会被锁定，spectator status 由 session 的 atomic category-change operation 控制。Setters、property copying 和 snapshot restore 会拒绝冲突修改，直到完成注销。
+
+`OnPawnSetEvent` 在 possession 提交后发布。Callback observer 可以读取一致的 Controller、Pawn 和 PlayerState 关系。
+
+### 10.2 PlayerStateSnapshot
+
+`CaptureSnapshot` 创建包含以下字段的 `PlayerStateSnapshot`：
+
+- `PlayerName`；
+- `PlayerId`；
+- `IsSpectator`；
+- `SchemaVersion`。
+
+当前 schema version 为 1。`TryRestoreSnapshot` 只接受当前 schema，并在修改状态前校验 ID 和 name 边界。持久化或网络 adapter 必须在调用 Runtime API 前拒绝或转换其他 schema。
+
+Snapshot 不包含 Pawn、Controller、Transform、Unity object reference 和 World membership。序列化与存储由 save 或 network adapter 负责。Capture 会分配 snapshot object，因此应在显式 persistence 或 replication 边界使用。
+
+### 10.3 GameState
+
+GameState 包含参与者 `PlayerArray`、match state 和 in-progress elapsed time。它拒绝 null/重复 PlayerState entry，并校验 World membership。
+
+合法 match transition：
+
+| 当前状态 | 允许的下一状态 |
+| --- | --- |
+| EnteringMap | WaitingToStart、LeavingMap、Aborted |
+| WaitingToStart | InProgress、LeavingMap、Aborted |
+| InProgress | WaitingPostMatch、LeavingMap、Aborted |
+| WaitingPostMatch | WaitingToStart、LeavingMap、Aborted |
+| LeavingMap | 无 |
+| Aborted | 无 |
+
+Elapsed time 仅在 InProgress 时推进。WaitingPostMatch 到 WaitingToStart 的 transition 会重置累计时间。
+
+GameMode 拥有 transition policy。需要可恢复结果时使用 `TrySetMatchState`；非法 transition 属于编程错误时使用 `SetMatchState`。
+
+## 11. Camera 系统
+
+### 11.1 计算管线
+
+~~~mermaid
+flowchart LR
+    VT["已解析 view target"] --> BP["Actor.CalcCamera 基础 pose"]
+    BP --> BM["Base CameraMode"]
+    BM --> SM["Stacked CameraMode<br/>从最早到最新"]
+    SM --> PP["Post-processor<br/>按注册顺序"]
+    PP --> FO["显式 FOV override"]
+    FO --> BL["CameraBlendState"]
+    BL --> OUT["CameraManager 输出"]
+    OUT --> VC["CinemachineCamera pose/lens"]
+    VC --> BR["CinemachineBrain.ManualUpdate"]
+~~~
+
+### 11.2 CameraContext
+
+每个 PlayerController 按需创建一个 CameraContext。Context 拥有：
+
+- view-target policy；
+- resolved 和 manual view target；
+- 一个 base CameraMode；
+- 固定容量的 stacked-mode array。
+
+默认 mode capacity 为 8，可通过重写 `PlayerController.GetCameraModeStackCapacity` 修改。请求的容量非正数时会变为 1。
+
+`TryPushCameraMode` 会拒绝 null、重复实例、clearing 状态和容量溢出。`TryPushOrReplaceOldest` 提供显式 full-stack policy。CameraManager evaluation 期间会拒绝 base-mode replacement 以及 stack push、replace 或 remove，使正在迭代的 stack 保持稳定。Evaluation 期间请求的 `Clear` 会延迟到 evaluation scope 结束；随后按逆序 deactivate stacked mode，再 deactivate base mode。
+
+### 11.3 Camera Mode 与 Blend
+
+继承 `CameraMode` 并实现：
+
+~~~csharp
+public override CameraPose Evaluate(
+    CameraContext context,
+    in CameraPose basePose,
+    float deltaTime)
 {
-    private float health = 100f;
-
-    protected override void ReceiveAnyDamage(float Damage, Controller EventInstigator, Actor DamageCauser)
-    {
-        health -= Damage;
-        if (health <= 0f)
-            Destroy(gameObject);
-    }
-
-    protected override void ReceivePointDamage(float Damage, DamageEvent damageEvent,
-        Controller EventInstigator, Actor DamageCauser)
-    {
-        // 在撞击点生成命中特效
-        // damageEvent.HitLocation, damageEvent.HitNormal, damageEvent.ShotDirection
-    }
-
-    protected override void ReceiveRadialDamage(float Damage, DamageEvent damageEvent,
-        Controller EventInstigator, Actor DamageCauser)
-    {
-        // 从爆炸原点施加击退
-        // damageEvent.Origin, damageEvent.InnerRadius, damageEvent.OuterRadius
-    }
+    return basePose;
 }
-```
+~~~
 
-### World 与 WorldSettings
+Base mode 最先计算。Stacked mode 随后从 index 0 计算到最新 entry。最新 stacked mode 是 primary mode，用于选择 transition blend duration。
 
-**`WorldSettings`**（ScriptableObject） 绑定所有类引用的配置资产：
+`CameraBlendState` 支持 Linear、SmoothStep、EaseOut、EaseIn 和自定义 `ICameraBlendCurve` 计算。负 blend duration 会被限制为零。
 
-| 字段                    | 类型               | 必需 |
-| ----------------------- | ------------------ | ---- |
-| `GameModeClass`         | `GameMode`         | 是   |
-| `PlayerControllerClass` | `PlayerController` | 是   |
-| `PawnClass`             | `Pawn`             | 是   |
-| `PlayerStateClass`      | `PlayerState`      | 否   |
-| `CameraManagerClass`    | `CameraManager`    | 否   |
-| `SpectatorPawnClass`    | `SpectatorPawn`    | 否   |
+### 11.4 CameraManager 与 Cinemachine
 
-通过 `Create -> CycloneGames -> GameplayFramework -> WorldSettings` 创建。编辑器验证会为每个字段显示绿色/红色/黄色状态。
+GameMode 登录过程中，只有本地 PlayerController 且 WorldDefinition 包含 CameraManager prefab 时才创建 CameraManager。
 
-**`World`** — 非 MonoBehaviour 的服务定位器。持有 GameMode、GameState 引用，提供玩家查询：
+它会：
 
-```csharp
-World world = new World();
-world.SetGameMode(gameMode);
-world.SetGameState(gameState);
-PlayerController pc = world.GetPlayerController();
-Pawn pawn = world.GetPlayerPawn();
-```
+- 初始化后通过 LateUpdate phase 的 primary Actor Tick 计算相机状态；
+- 绑定显式或发现的 `CinemachineBrain`；
+- 向 World 申请独占 brain ownership；
+- 保存 brain update mode 并切换为 ManualUpdate；
+- 保存并清空 active CinemachineCamera 的 Follow/LookAt target；
+- 写入最终 pose 和 FOV；
+- 手动更新 brain；
+- 释放时恢复 brain 和 virtual-camera 状态。
 
-### CameraManager
+Scene 存在多个 brain 时，应分配 `bootstrapBrain` 或调用 `SetBootstrapBrain`。Discovery 会选择 active brain，并在选择存在歧义时记录日志。
 
-**用途**：为当前玩家求解最终 `CameraPose`，并将结果输出到活动的 Cinemachine 摄像机。
+World 会拒绝两个 CameraManager 同时拥有同一个 brain。
 
-**前提**：主摄像机需要 `CinemachineBrain`。场景中至少需要一个 `CinemachineCamera`。
+### 11.5 View Target 与 Post-processor
 
-**配置要点（推荐）**：
+`DefaultGameplayViewTargetPolicy` 依次解析 manual override、suggested target、被 possession 的 Pawn、spectator Pawn 和 PlayerController。
 
-1. `CameraManager` 预制体上设置 `Bootstrap Virtual Camera`（通常拖同物体上的 `CinemachineCamera`）。
-2. `Bootstrap Brain` 可选：
-   - 若 `CameraManager` 是场景内预放对象，可直接拖场景 `MainCamera` 上的 `CinemachineBrain`。
-   - 若 `CameraManager` 是运行时生成对象（常见），预制体无法直接持有场景引用，这是正常现象。可在运行时调用 `SetBootstrapBrain(...)` 显式绑定，或调用 `TryResolveAndBindBrain()` 自动解析。
-3. 如果场景中有多个 `CinemachineBrain`，建议始终显式绑定，避免歧义。
+CameraManager 最多支持 16 个已注册 `ICameraPostProcessor`。它们在所有 CameraMode 后按注册顺序运行。Owner 结束时应 unregister processor。
 
-**运行时绑定 API**：
+`PerlinNoiseShakePostProcessor` 是带 trauma、amplitude、frequency、decay 和 exponent 控制的 Runtime object。
 
-- `SetBootstrapBrain(CinemachineBrain brain, bool rebindImmediately = true)`
-- `SetBootStartpBrain(...)`（兼容别名）
-- `TryResolveAndBindBrain()`
+### 11.6 Camera Action
 
-**无 Brain 时的行为**：
+`CameraActionBinding` 将 string action key 映射到 `CameraActionPreset`：
 
-- `CameraManager` 仍会计算 `CameraPose`，但不会驱动最终输出相机（会打印警告）。
-- 框架 Gameplay 主逻辑可继续运行，但 Camera 模块效果不会生效。
+1. 先检查 inline entry；
+2. `CameraActionMap` 作为 fallback；
+3. Map 中重复 key 使用最后一个 entry。
 
-**核心 API**：`InitializeFor(PlayerController)`、`UpdateCamera(float)`、`NotifyCameraStateChanged()`、`SetActiveVirtualCamera()`、`SetFOV(float)`。
+Trigger policy：
 
-**扩展后的相机接缝**：
+- `ReplaceSameKey`；
+- `IgnoreIfRunning`；
+- `Stack`。
 
-- **混合曲线**：`CameraBlendState` 现在可接受 `ICameraBlendCurve`，让过渡节奏与姿态插值逻辑解耦。
-- **模式分层**：`CameraMode` 仍然负责构图扩展，而可复用的参数预设现在可以放进 `CameraProfile` ScriptableObject。
-- **示例参考实现**：`FirstPersonCameraMode`、`OrbitalCameraMode`、`ThirdPersonFollowCameraMode` 作为可选参考实现，已放在 `Samples/Sample.CameraModes`。
+Binding 具有可配置 active-action 和 pooled-mode limit，默认均为 8。达到 active limit 或 CameraContext capacity 时，`PlayAction`/`PlayPreset` 返回 false。Pool 中没有可用 mode 时会创建 `PresetCameraMode`；返回的 mode 只保留到配置的 pool limit。
 
-**镜头工作流**：
+Disable 或 destroy 时，binding 会停止 active action，并从最初接受它们的 PlayerController 移除对应 mode。
 
-- **`Actor.GetActorEyesViewPoint()`**：提供 Actor 的基础观察点。
-- **`Actor.CalcCamera()`**：主镜头求解入口。`Pawn` 或其他 Actor 可以通过重写它提供自身的镜头语义。
-- **`Controller.GetViewTarget()` 与 `PlayerController.SetViewTarget()`**：定义当前究竟观察哪个 Actor。
-- **`CameraContext` 与 `IViewTargetPolicy`**：在不把策略污染进 Gameplay 内核的前提下，进一步调整目标选择逻辑。
-- **`CameraMode`**：叠加可选构图逻辑，例如跟随距离、注视点偏移和 FOV 覆盖。
-- **`CameraManager`**：组合上述层次并写入最终镜头结果。
+可用 bridge：
 
-**建议的扩展位置**：
+- `AnimatorCameraActionBridge`，用于 Animation Event；
+- `CameraActionStateBehaviour`，用于 Animator state enter、progress threshold 和 exit；
+- `TimelineCameraActionReceiver`，用于 Playables notification；
+- Gameplay 代码直接调用。
 
-1. 当观察点与 Actor 枢轴不同步时，优先重写 `GetActorEyesViewPoint()`。
-2. 当镜头语义由 Actor 自身决定时，优先重写 `CalcCamera()`。
-3. 当目标不变而构图发生变化时，优先增加 `CameraMode`。
-4. 当自动选目标规则因 GameMode 或观战状态而变化时，优先增加或替换 `IViewTargetPolicy`。
+每个 CameraActionStateBehaviour 实例最多跟踪 8 个并发 Animator/layer pair。满载时 enter 和 exit action 继续执行；额外 pair 的 progress trigger 会暂停，直到槽位释放。`OnStateExit` 负责释放槽位。
 
-**示例 — 切换视角目标与 CameraMode**：
+Exit mode 可以不执行操作、停止 action key 或播放 action key。Progress 在 normalized time 跨过配置 threshold 时触发，并可配置为整个 state lifetime 一次，或每个 loop 一次。Enter 和 progress trigger 分别拥有独立 transition gate。
 
-```csharp
-// 在你的 PlayerController 子类中：
-public void SwitchToSpectateTarget(Actor target)
+### 11.7 Camera Authoring Asset
+
+| Asset/Runtime 类型 | 用途 |
+| --- | --- |
+| `CameraProfile` | 共享默认 FOV 和 fallback blend duration；需要显式调用 `ApplyTo` |
+| `CameraActionPreset` | Action shot 的定时 framing、offset、lens、weight curve 和 blend 数据 |
+| `CameraActionMap` | 带 lazy runtime lookup 的共享 action-key table |
+| `PresetCameraMode` | CameraActionBinding 使用的 Runtime evaluator |
+| `ViewTargetCameraMode` | 使用 resolved Actor camera pose 的 pass-through base mode |
+
+可在 Runtime 使用的 CameraModes sample 包含 first-person、orbital、third-person follow 和 collision post-processor 示例。
+
+## 12. Integrations
+
+| Assembly | 必需依赖 assembly | 能力 | 默认使用方引用 |
+| --- | --- | --- | --- |
+| `CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement` | GameplayFramework Runtime、AssetManagement Runtime、UniTask | `AssetManagementWorldSettingsReferenceResolver` | 显式 |
+| `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities` | GameplayFramework Runtime、GameplayAbilities Runtime | AbilitySystem provider 和 actor-info helper | 显式 |
+| `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags` | GameplayFramework Runtime、GameplayTags Core 和 Unity Runtime | Actor tag-container extension method | 显式 |
+| `CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena` | GameplayFramework Runtime、Navigathena、Navigathena.SceneManagement、UniTask | `ISceneTransitionHandler` adapter | 显式且有条件 |
+
+### 12.1 AssetManagement
+
+WorldSettings entry 使用 `AssetReference` 时使用 AssetManagement integration。显式组合 `IAssetPackage`，并把 resolver 传给 GameInstance。
+
+### 12.2 GameplayAbilities
+
+在 Actor 或其组件上实现 `IAbilitySystemProvider`，然后使用：
+
+- `TryGetAbilitySystem`；
+- `InitializeAbilityActorInfo`。
+
+Owner 和 avatar override 都是显式参数。未提供 override 时，会在可用时使用 Actor owner，并使用 Actor 作为 avatar。
+
+该 integration 不负责调度 `AbilitySystemComponent.Tick`。Ability-system owner 选择自身 clock 并显式转发。需要 World 生命周期 gate 时，GameplayFramework Actor 可以从 primary Tick 转发；独立 Unity composition 可以保留专用 MonoBehaviour driver。Movement 和 physics component 继续持有自身 phase。
+
+### 12.3 GameplayTags
+
+在 Actor GameObject 上添加 `GameObjectGameplayTagContainer`。Integration 提供：
+
+- `TryGetGameplayTagContainer`；
+- `ActorHasGameplayTag`；
+- `AddGameplayTag`；
+- `RemoveGameplayTag`。
+
+Actor 的轻量 string tag 与 GameplayTags container 是独立 API。
+
+这些 extension method 会执行 component discovery，只用于 composition、初始化和其他冷路径。需要重复检查或修改 Tag 的代码，应只调用一次 `TryGetGameplayTagContainer`，在 Actor/component lifetime 内保留返回的 container，并直接使用缓存引用。Integration 不提供隐藏的每帧缓存，也不接管 container 的所有权。
+
+该 integration assembly 随包发布并直接引用 GameplayTags Core 与 Unity Runtime，因此 GameplayTags 是显式声明的 package dependency。使用方仍需从自身 asmdef 显式引用 integration assembly；`autoReferenced: false` 会阻止无关 assembly 隐式取得该 API。
+
+### 12.4 Navigathena Package 边界
+
+Navigathena integration 要求 UPM package 名为 `com.mackysoft.navigathena`，支持范围为 `[1.1.0,2.0.0)`。GameplayFramework 的 `package.json` 不包含 Navigathena dependency，因此安装 GameplayFramework 不会同时安装 Navigathena。新的主版本需要完成 API 兼容验证后再扩展范围。
+
+Integration asmdef 持有以下启用规则：
+
+~~~text
+versionDefines: com.mackysoft.navigathena [1.1.0,2.0.0) -> CYCLONEGAMES_HAS_NAVIGATHENA
+defineConstraints: CYCLONEGAMES_HAS_NAVIGATHENA
+autoReferenced: false
+~~~
+
+当 Package Manager 未解析到 Navigathena 时，integration assembly 及其测试不会参与编译。GameplayFramework Runtime、Editor 工具、sample 和核心测试均不依赖 Navigathena。无需在 PlayerSettings 中维护 scripting define。
+
+调用 adapter 的代码应放在项目自身的 integration asmdef 中。该 asmdef 需要引用 GameplayFramework integration 和 Navigathena assembly，并配置自己的 `versionDefines`/`defineConstraints`；version define 生成的 symbol 仅作用于所属 assembly：
+
+~~~json
 {
-    SetViewTargetWithBlend(target, 0.5f); // 0.5 秒混合
-    SetBaseCameraMode(new ViewTargetCameraMode());
+  "name": "Game.Runtime.Integrations.Navigathena",
+  "references": [
+    "CycloneGames.GameplayFramework.Runtime",
+    "CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena",
+    "MackySoft.Navigathena",
+    "MackySoft.Navigathena.SceneManagement"
+  ],
+  "autoReferenced": false,
+  "defineConstraints": [
+    "GAME_HAS_NAVIGATHENA"
+  ],
+  "versionDefines": [
+    {
+      "name": "com.mackysoft.navigathena",
+      "expression": "[1.1.0,2.0.0)",
+      "define": "GAME_HAS_NAVIGATHENA"
+    }
+  ]
 }
+~~~
 
-public void EnableCombatCamera()
+### 12.5 Navigathena 最小组合
+
+默认 adapter 将 `ISceneTransitionHandler` 接收的 string 作为 built-in scene name。它向 Navigathena 传递 null transition director，使 `StandardSceneNavigator` 使用自身配置的默认转场。
+
+~~~csharp
+public static GameInstance CreateGameInstance(ISceneNavigator sceneNavigator)
 {
-    // MyThirdPersonCameraMode 是你的业务层 CameraMode 子类 — 参考下方模式
-    PushCameraMode(new MyThirdPersonCameraMode
-    {
-        FollowDistance = 5.5f,
-        PivotHeight = 1.8f,
-        LookAtHeight = 1.2f,
-        OverrideFov = 55f
-    });
+    var sceneTransitions =
+        new NavigathenaSceneTransitionHandler(sceneNavigator);
+
+    return new GameInstance(
+        new DefaultUnityObjectSpawner(),
+        localPlayerCount: 1,
+        referenceResolver: null,
+        sceneTransitionHandler: sceneTransitions);
 }
+~~~
 
-public void DisableCombatCamera(CameraMode combatMode)
+World 进入 Playing 后，authority 端代码可以请求关卡 travel：
+
+~~~csharp
+await world.GameMode.TravelToLevel("Stage02", cancellationToken);
+~~~
+
+该调用先停止当前 World，再调用 `ISceneNavigator.Change`。目标 scene 的 composition root 负责启动自身 World。Gameplay travel 发生前，应按照 Navigathena 的生命周期初始化传入的 `ISceneNavigator`。
+
+### 12.6 通过 Host 组合 Navigathena
+
+由 `GameplayWorldHost` 持有 GameInstance 时，需要在 Host 启动前提供 Navigator：
+
+~~~csharp
+public sealed class NavigathenaGameplayWorldHost : GameplayWorldHost
 {
-    RemoveCameraMode(combatMode);
-}
-```
+    private ISceneNavigator sceneNavigator;
 
-**模式 — 创建业务层第三人称 CameraMode**：
-
-`Samples/Sample.CameraModes` 中提供了 `ThirdPersonFollowCameraMode` 参考实现，可供学习或复制。实际项目中建议在游戏项目层自行创建 `CameraMode` 子类，以便让构图参数归属于自己的代码：
-
-```csharp
-// Assets/Game/Scripts/Camera/MyThirdPersonCameraMode.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework.Runtime;
-
-public sealed class MyThirdPersonCameraMode : CameraMode
-{
-    public float FollowDistance { get; set; } = 4.5f;
-    public float PivotHeight    { get; set; } = 1.6f;
-    public float LookAtHeight   { get; set; } = 1.1f;
-    public float OverrideFov    { get; set; } = 60f;
-
-    public override float BlendDuration => 0.25f;
-
-    public override CameraPose Evaluate(CameraContext context, in CameraPose basePose, float deltaTime)
+    public void Configure(ISceneNavigator value)
     {
-        Actor target = context?.CurrentViewTarget;
-        if (target == null) return basePose;
-
-        target.CalcCamera(deltaTime, out CameraPose targetPose, basePose.Fov);
-
-        Vector3 pivot    = targetPose.Position + Vector3.up * PivotHeight;
-        Vector3 position = pivot + (targetPose.Rotation * Vector3.back) * FollowDistance;
-        Vector3 lookAt   = targetPose.Position + Vector3.up * LookAtHeight;
-        Quaternion rot   = Quaternion.LookRotation((lookAt - position).normalized, Vector3.up);
-        float fov        = OverrideFov > 0f ? OverrideFov : basePose.Fov;
-
-        return new CameraPose(position, rot, fov);
-    }
-}
-```
-
-如需位置/旋转延迟、角度死区或碰撞避让，可在此基础上继续扩展。`Sample.CameraModes` 包中收录了完整参考实现（`ThirdPersonFollowCameraMode`、`ThirdPersonCollisionPostProcessor`），可通过 Package Manager 的 Samples 选项卡导入。
-
-**参考实现 — 第三人称与技能镜头的业务层组合**：
-
-```csharp
-using UnityEngine;
-using CycloneGames.GameplayFramework.Runtime;
-
-// 业务层 PlayerController 扩展
-public class MyGamePlayerController : PlayerController
-{
-    // 通过 Inspector 配置第三人称参数，避免硬编码。
-    // MyThirdPersonCameraMode 是纯 C# 类，不能直接序列化，
-    // 因此用中间字段承接 Inspector 值，在 OnPossess 时写入实例。
-    [SerializeField] private float followDistance = 4.5f;
-    [SerializeField] private float pivotHeight    = 1.6f;
-    [SerializeField] private float lookAtHeight   = 1.1f;
-    [SerializeField] private float overrideFov    = 60f;
-
-    // 复用同一实例：避免每次 Possess 都产生 GC 分配。
-    private readonly MyThirdPersonCameraMode thirdPersonMode = new MyThirdPersonCameraMode();
-    private readonly SkillCameraMode skillMode = new SkillCameraMode();
-
-    // 保持框架默认中立模式，业务层显式设置基础构图。
-    protected override CameraMode CreateDefaultCameraMode()
-    {
-        return new ViewTargetCameraMode();
-    }
-
-    // OnPossess：Pawn 被 Possess 后由框架回调，此处切换为第三人称构图。
-    protected override void OnPossess(Pawn inPawn)
-    {
-        base.OnPossess(inPawn); // 内部会调用 AutoManageActiveCameraTarget
-        EnterGameplayCamera();
-    }
-
-    // OnUnPossess：失去 Pawn（如死亡/观战）时回退到中立模式。
-    protected override void OnUnPossess()
-    {
-        base.OnUnPossess();
-        SetBaseCameraMode(new ViewTargetCameraMode());
-    }
-
-    private void EnterGameplayCamera()
-    {
-        // 每次进入时把 Inspector 值写入实例，支持运行时热改。
-        thirdPersonMode.FollowDistance = followDistance;
-        thirdPersonMode.PivotHeight    = pivotHeight;
-        thirdPersonMode.LookAtHeight   = lookAtHeight;
-        thirdPersonMode.OverrideFov    = overrideFov;
-        SetBaseCameraMode(thirdPersonMode);
-    }
-
-    public void OnSkillBegin(float duration)
-    {
-        skillMode.Setup(duration, 7f, 52f);
-        PushCameraMode(skillMode);
-    }
-
-    public void OnSkillEnd()
-    {
-        RemoveCameraMode(skillMode);
-    }
-}
-
-// 业务层技能镜头模式示例
-public sealed class SkillCameraMode : CameraMode
-{
-    private float duration;
-    private float elapsed;
-    private float targetDistance;
-    private float targetFov;
-
-    public override float BlendDuration => 0.15f;
-
-    public void Setup(float inDuration, float inDistance, float inFov)
-    {
-        duration = Mathf.Max(0.01f, inDuration);
-        elapsed = 0f;
-        targetDistance = inDistance;
-        targetFov = inFov;
-    }
-
-    public override void Tick(CameraContext context, float deltaTime)
-    {
-        elapsed = Mathf.Min(duration, elapsed + deltaTime);
-    }
-
-    public override CameraPose Evaluate(CameraContext context, in CameraPose basePose, float deltaTime)
-    {
-        Actor target = context != null ? context.CurrentViewTarget : null;
-        if (target == null)
+        if (GameInstance != null)
         {
-            return basePose;
+            throw new InvalidOperationException(
+                "Scene navigation must be configured before the World starts.");
         }
 
-        target.CalcCamera(deltaTime, out CameraPose targetPose, basePose.Fov);
-
-        float alpha = duration > 0f ? elapsed / duration : 1f;
-        alpha = alpha * alpha * (3f - 2f * alpha); // SmoothStep
-
-        Vector3 pivot = targetPose.Position + Vector3.up * 1.6f;
-        Vector3 desiredPos = pivot + (targetPose.Rotation * Vector3.back) * targetDistance;
-        Vector3 lookAt = targetPose.Position + Vector3.up * 1.1f;
-        Quaternion desiredRot = Quaternion.LookRotation((lookAt - desiredPos).normalized, Vector3.up);
-
-        CameraPose skillPose = new CameraPose(desiredPos, desiredRot, targetFov);
-        return CameraPose.Lerp(basePose, skillPose, alpha);
-    }
-}
-```
-
-**分层约定**：
-
-1. `CameraMode` 具体风格实现建议放在业务项目层（例如 `Assets/Game/Scripts/Camera`）。
-2. 框架 Runtime 仅维护中立契约与扩展接缝（如 `ViewTargetCameraMode`、`SetBaseCameraMode`、`PushCameraMode`、`RemoveCameraMode`）。
-3. 第三人称、锁定目标、技能演出等镜头风格通过业务层 `CameraMode` 组合实现。
-4. 对高频触发的技能镜头，建议复用 `CameraMode` 实例以降低运行时分配。
-
-### GameplayAbility 与技能镜头集成
-
-当使用 GameplayAbility 系统制作技能时，镜头动画应该由 Ability 协调，利用 `CameraMode` 栈来实现。这样做的优势是：
-
-- **生命周期统一**：Ability 激活时 Push CameraMode，Ability 结束时自动 Remove
-- **可复用**：同一个镜头效果可被多个 Ability 复用
-- **无冲突**：CameraMode 与 Ability System 完全解耦，各司其职
-- **零 GC**：复用 CameraMode 实例，对高频技能友好
-
-**实现分阶段技能镜头（例：蓄力 → 释放推远）**：
-
-```csharp
-// Assets/Game/Scripts/Camera/AbilityCameraClip.cs
-[CreateAssetMenu(menuName = "Game/Ability/AbilityCameraClip")]
-public class AbilityCameraClip : ScriptableObject
-{
-    [System.Serializable]
-    public struct CameraStage
-    {
-        public float duration;               // 阶段持续时间
-        public AnimationCurve localOffsetX;  // 相机局部右方向偏移
-        public AnimationCurve localOffsetY;  // 相机局部上方向偏移
-        public AnimationCurve localOffsetZ;  // 相机局部前方向偏移：正值=向目标拉近，负值=向后拉远
-        public AnimationCurve fov;           // FOV 曲线
+        sceneNavigator = value ?? throw new ArgumentNullException(nameof(value));
     }
 
-    [SerializeField] public CameraStage[] stages = new CameraStage[2]
+    protected override ISceneTransitionHandler CreateSceneTransitionHandler()
     {
-        // 第一阶段：蓄力（拉近 + 压低）
-        new CameraStage
+        if (sceneNavigator == null)
         {
-            duration = 0.6f,
-            localOffsetY = AnimationCurve.EaseInOut(0, 0f, 1, -0.35f),
-            localOffsetZ = AnimationCurve.EaseInOut(0, 0f, 1, 1.0f),
-            fov = AnimationCurve.EaseInOut(0, 60f, 1, 54f)
-        },
-        // 第二阶段：释放（回推到默认跟随位）
-        new CameraStage
-        {
-            duration = 0.4f,
-            localOffsetY = AnimationCurve.EaseInOut(0, -0.35f, 1, 0f),
-            localOffsetZ = AnimationCurve.EaseInOut(0, 1.0f, 1, 0f),
-            fov = AnimationCurve.EaseInOut(0, 54f, 1, 60f)
-        }
-    };
-}
-```
-
-```csharp
-// Assets/Game/Scripts/Camera/AbilityCinematicMode.cs
-using UnityEngine;
-using CycloneGames.GameplayFramework.Runtime;
-
-public sealed class AbilityCinematicMode : CameraMode
-{
-    private AbilityCameraClip clip;
-    private float totalElapsed;
-    private int currentStageIndex;
-    private float stageElapsed;
-    private bool finished;
-
-    public bool IsFinished => finished;
-    public override float BlendDuration => 0.15f;
-
-    public void Setup(AbilityCameraClip inClip)
-    {
-        clip = inClip;
-        totalElapsed = 0f;
-        currentStageIndex = 0;
-        stageElapsed = 0f;
-        finished = false;
-    }
-
-    public override void Tick(CameraContext context, float deltaTime)
-    {
-        if (clip == null || clip.stages.Length == 0 || finished) return;
-
-        totalElapsed += deltaTime;
-        stageElapsed += deltaTime;
-
-        // 检查是否需要进入下一阶段
-        while (currentStageIndex < clip.stages.Length && stageElapsed >= clip.stages[currentStageIndex].duration)
-        {
-            stageElapsed -= clip.stages[currentStageIndex].duration;
-            currentStageIndex++;
+            throw new InvalidOperationException(
+                "An initialized ISceneNavigator is required.");
         }
 
-        // 所有阶段完成
-        if (currentStageIndex >= clip.stages.Length)
-        {
-            finished = true;
-        }
-    }
-
-    public override CameraPose Evaluate(CameraContext context, in CameraPose basePose, float deltaTime)
-    {
-        if (clip == null || clip.stages.Length == 0 || currentStageIndex >= clip.stages.Length)
-            return basePose;
-
-        AbilityCameraClip.CameraStage stage = clip.stages[currentStageIndex];
-        float t = stage.duration > 0f ? Mathf.Clamp01(stageElapsed / stage.duration) : 1f;
-
-        // 在当前第三人称 basePose 的局部空间叠加偏移。
-        // 这样无论默认第三人称距离是多少，技能镜头都是在“当前镜头”的基础上拉近/推远/升降。
-        float offsetX = stage.localOffsetX != null ? stage.localOffsetX.Evaluate(t) : 0f;
-        float offsetY = stage.localOffsetY != null ? stage.localOffsetY.Evaluate(t) : 0f;
-        float offsetZ = stage.localOffsetZ != null ? stage.localOffsetZ.Evaluate(t) : 0f;
-        Vector3 localOffset = basePose.Rotation * new Vector3(offsetX, offsetY, offsetZ);
-        Vector3 position = basePose.Position + localOffset;
-
-        float fov = stage.fov.Evaluate(t);
-
-        return new CameraPose(position, basePose.Rotation, fov);
+        return new NavigathenaSceneTransitionHandler(sceneNavigator);
     }
 }
-```
+~~~
 
-```csharp
-// 在你的 Ability 中使用
-public sealed class PowerStrikeAbility : GameplayAbility
+项目 composition root 应在 Unity 调用 Host 的 `Start` 前执行 `Configure`。如果 composition root 无法保证该顺序，请关闭 **Auto Start**，完成配置后再调用 `StartWorldAsync`。
+
+### 12.7 自定义 Navigathena Request
+
+`NavigathenaLoadSceneRequestFactory` 会在每次 Change、Push 和 Replace 时接收操作类型与 scene key。它返回完整的 Navigathena `LoadSceneRequest`，因此同一 adapter 可以选择自定义 scene identifier、transition director、scene data 和 interrupt operation，而不会把这些类型加入 GameplayFramework 核心契约。
+
+~~~csharp
+public static ISceneTransitionHandler CreateSceneTransitions(
+    ISceneNavigator navigator,
+    Func<string, ISceneIdentifier> resolveScene,
+    ITransitionDirector levelTransition,
+    ITransitionDirector overlayTransition,
+    ISceneData travelData,
+    IAsyncOperation interruptOperation)
 {
-    [SerializeField] private AbilityCameraClip cameraClip;
-
-    private AbilityCinematicMode cameraModeInstance = new AbilityCinematicMode();
-    private bool isSkillCameraActive;
-
-    protected override void OnActivate()
+    LoadSceneRequest CreateLoadRequest(
+        NavigathenaSceneTransitionOperation operation,
+        string sceneKey)
     {
-        base.OnActivate();
+        ITransitionDirector transition =
+            operation == NavigathenaSceneTransitionOperation.Push
+                ? overlayTransition
+                : levelTransition;
 
-        // 启动动画
-        PlayAbilityMontage("PowerStrike");
-
-        StartSkillCamera();
+        return new LoadSceneRequest(
+            resolveScene(sceneKey),
+            transition,
+            travelData,
+            interruptOperation);
     }
 
-    protected override void OnAbilityEnds(bool wasCancelled)
-    {
-        StopSkillCamera();
+    return new NavigathenaSceneTransitionHandler(
+        navigator,
+        CreateLoadRequest,
+        () => new PopSceneRequest(
+            overlayTransition,
+            interruptOperation));
+}
+~~~
 
-        base.OnAbilityEnds(wasCancelled);
+Scene key 是产品侧输入。Resolver 应在构造 identifier 前拒绝未知或格式错误的 key。Navigathena history、`Reload`、直接进度报告，以及 `ISceneTransitionHandler` 范围之外的 navigation 操作，仍可通过注入的 `ISceneNavigator` 使用。
+
+Integration asmdef 直接引用其依赖 assembly。每个依赖及其对应 integration assembly 应同时存在或同时移除。
+
+## 13. Editor 工具
+
+| 工具 | 功能 |
+| --- | --- |
+| Actor Inspector | Serialized Actor 字段、primary Tick authoring、派生字段、多对象编辑、Runtime 生命周期和 Tick 状态，以及 Play Mode Tick 启用/禁用控制 |
+| ActorTag drawer | 为标记 `ActorTagAttribute` 的字段提供可搜索选择 |
+| WorldSettings Inspector | 必需/可选概览、Direct/Asset/Path authoring、校验按钮 |
+| GameplayWorldHost Inspector | Composition 校验、有效 local-player count、运行状态、Start/Stop 控制 |
+| GameMode Inspector | Runtime mode state 和带 Ping 的 PlayerController roster |
+| PlayerStart Inspector | 可配置 3D、side-scroller 和 top-down scene gizmo |
+| CameraManager Inspector | Runtime brain、owner、pose、blend、view target、mode 和 FOV telemetry |
+| CameraActionStateBehaviour Inspector | 条件式 enter/exit/progress authoring 和容量说明 |
+| Camera Debug Window | 带缓冲的 camera telemetry、graph 和可配置 alert |
+| World Debugger | Host、World、session、各 phase Tick registry count 和索引式 Actor registration 检查 |
+| Project Validation | 只读扫描 WorldSettings 资产和已加载 scene 中的 Host |
+
+通过以下菜单打开 camera window：
+
+~~~text
+Tools > CycloneGames > GameplayFramework > Camera Debug Window
+~~~
+
+World 和 authoring 工具入口：
+
+~~~text
+Tools > CycloneGames > GameplayFramework > World Debugger
+Tools > CycloneGames > GameplayFramework > Project Validation
+~~~
+
+该 window 只在 Play Mode 采样。Sampling mode 包括 Off、Basic 和 Full。采样率可配置为 5 到 120 Hz。内存 ring buffer 可配置为 120 到 2048 个 sample，默认为 600。Full mode 会额外采样 linear 和 angular speed。Alert threshold 覆盖 FOV delta、blend remaining time、blend stall 和 motion speed。
+
+Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在目标 Player 和 Profiler 中验证性能。
+
+## 14. 持久化与数据所有权
+
+框架不会写入 Runtime save file 或 preference key。
+
+| 数据 | Owner | 模块提供的存储 | 版本控制 | 清理/迁移 |
+| --- | --- | --- | --- | --- |
+| WorldSettings | 项目 authoring | ScriptableObject asset | 通常纳入 | 通过 serialized asset 编辑并校验 |
+| Actor phase 和 startup Tick flag | Scene/prefab authoring | Serialized MonoBehaviour 字段 | 通常纳入 | 通过 Actor Inspector 编辑；临时变更使用 Runtime API |
+| GameModeConfig、PawnConfig、CameraProfile | 项目 authoring | ScriptableObject asset | 通常纳入 | 字段变化时提供显式 serialized migration |
+| CameraActionPreset、CameraActionMap | 项目 authoring | ScriptableObject asset | 通常纳入 | 保持 action key 稳定，或迁移使用方 |
+| WorldDefinition | World Runtime | 仅内存 | 否 | 随 World dispose；按逆序释放 lease |
+| GameplayWorldHost、GameInstance、LocalPlayer、World | Runtime composition | 仅内存 | 否 | Host GameObject lifetime 或显式 Stop/Dispose |
+| PlayerStateSnapshot | Save/network adapter | 内存 DTO | 取决于 adapter | Restore 前要求当前 SchemaVersion |
+| Camera debug sample | CameraDebugWindow | 仅 Editor 内存 | 否 | 清空 buffer，或关闭/重新加载 window |
+| World Debugger 和 Project Validation 状态 | Editor window | 仅 Editor 内存 | 否 | 关闭或重载窗口；不写入 EditorPrefs 或 SessionState |
+
+对于存档数据：
+
+1. 在受控边界捕获 PlayerStateSnapshot；
+2. 把它传给专用 save service；
+3. 包含由 save service 拥有的 slot/schema metadata；
+4. 原子写入平台 persistent-data location；
+5. 反序列化前校验大小和完整性；
+6. 要求数据使用当前 build 期望的 Runtime snapshot schema；
+7. 调用 `TryRestoreSnapshot` 并处理 error。
+
+不要直接使用 Unity `JsonUtility` 序列化 PlayerStateSnapshot auto-property。应选择并验证在目标 backend 上支持该 DTO 契约的 serializer。
+
+## 15. 性能、线程与平台说明
+
+### 15.1 线程所有权
+
+- GameInstance 和 World 修改由单一 owner thread 执行。
+- GameInstance 记录构造线程 ID。
+- Actor Tick dispatch、phase change 和 Runtime enable change 使用同一个 owner thread。
+- Network、file 和 asset callback 在修改框架状态前必须 marshal 到 Unity main thread。
+- Unity object 和 Cinemachine 操作运行在 Unity main thread。
+- WorldSettings resolver I/O 可以在其他线程完成；result validation、rollback、lease transfer 和 WorldDefinition disposal 会在执行解析的 main thread 上运行。跨线程调用 WorldDefinition disposal 会在消费所有权前被拒绝。
+- GameSession 不是 thread-safe。
+- Async API 使用 UniTask，并在启动和 asset resolution 期间传播 cancellation。World initialization 会链接 caller、GameInstance 和 World lifetime token；direct World shutdown 会取消 pending async login，阻止 startup 继续提交。
+
+### 15.2 有界结构
+
+| 结构/输入 | 限制或默认值 |
+| --- | --- |
+| LocalPlayer 槽位 | 最多 8 |
+| Actor string tag | 最多 64 个；每个最多 128 个字符 |
+| 登录文本输入 | name/address/options 分别为 64/256/1024 个字符 |
+| GameSession 参与者总数 | 最多 100,000 |
+| CameraContext mode | 每个 context 固定；默认 8 |
+| CameraManager post-processor | 最多 16 |
+| CameraActionStateBehaviour tracking | 最多 8 个 Animator/layer pair |
+| CameraActionBinding active/pool count | 可配置；默认各 8 |
+| Actor primary Tick phase | 每个 Actor 一个 phase；热路径 registry size 取决于 Runtime-enabled Actor 数量 |
+
+World Actor collection 没有模块级 hard cap。Roster 只会在 GameSession 限制内增长。产品容量规划必须定义并验证额外的 Actor、spawn rate 和 scene content budget。
+
+### 15.3 分配点
+
+性能分析时应检查以下 cold path 或 boundary operation：
+
+- World scene discovery 和 collection growth；
+- WorldSettings resolution 和 lease array 创建；
+- PlayerState snapshot capture；
+- Actor tag 和 renderer buffer 首次使用；
+- Actor lifespan cancellation source 创建；
+- Actor 注册期间的 Tick registry 和可复用 snapshot capacity growth；
+- CameraContext 构造；
+- CameraActionMap lazy lookup 构造；
+- CameraActionBinding pool 为空时创建 mode；
+- timed Animation Event 的 string parsing；
+- 诊断 window buffer resize。
+
+Actor Tick dispatch 会遍历可复用的 phase snapshot，不会扫描 Tick phase 为 None 的 Actor。固定 camera array 和可复用 Tick collection 会减少构造后的 collection growth，但不代表模块整体具备 zero-allocation 保证。Hot path 必须使用 Unity Profiler 和目标设备测量。
+
+### 15.4 Player、IL2CPP 与 Server Build
+
+- Runtime assembly 引用 UnityEngine、Cinemachine、Burst、Mathematics、UniTask、Factory 和 Logger。
+- GameplayWorldHost 使用一个 sealed MonoBehaviour bridge 转发 Update、FixedUpdate 和 LateUpdate。直接组合 GameInstance 时必须提供等价 loop owner。
+- 只有 `QuaternionToEulerXYZBurst` 标记了 `BurstCompile`；目标调用路径是否实际执行 Burst 必须验证。
+- PlayerStateSnapshot 序列化由外部提供。基于反射的 serializer 可能需要 AOT metadata 或 link preservation。
+- DedicatedServer mode 会抑制自动本地登录，但 Runtime assembly 仍包含其声明依赖。
+- Client mode 本身不提供 replication。
+- Mono、IL2CPP、managed stripping、headless/server 和每个目标平台都需要代表性 Player build 验证。
+
+## 16. 由简到深示例
+
+### 16.1 查询 World Actor
+
+~~~csharp
+if (world.TryGetActor<PlayerStart>(out PlayerStart start))
+{
+    Debug.Log(start.GetActorLocation());
+}
+~~~
+
+Type lookup 适合发现，不适合确定性选择。产品选择应使用显式 identifier 或 policy。
+
+### 16.2 创建可选参与 Tick 的 Actor
+
+~~~csharp
+public sealed class RotatingActor : Actor
+{
+    [SerializeField] private Vector3 RotationAxis = Vector3.up;
+    [SerializeField, Min(0f)] private float DegreesPerSecond = 45f;
+
+    protected override void Awake()
+    {
+        base.Awake();
+        ConfigureActorTick(
+            ActorTickPhase.Update,
+            startWithTickEnabled: true);
     }
 
-    private void StartSkillCamera()
+    protected override void Tick(float deltaSeconds)
     {
-        if (isSkillCameraActive || cameraClip == null || avatarPawn == null)
+        if (RotationAxis.sqrMagnitude <= 0.0001f)
         {
             return;
         }
 
-        var playerController = avatarPawn.Controller as PlayerController;
-        if (playerController == null)
+        transform.Rotate(
+            RotationAxis.normalized,
+            DegreesPerSecond * deltaSeconds,
+            Space.Self);
+    }
+}
+~~~
+
+可以把该 component 添加到 scene object，也可以通过 World spawn。World 只会在 BeginPlay 后开始 dispatch。调用 `SetActorTickEnabled(false)` 可以暂停该 Actor，而无需禁用 GameObject；调用 `SetActorTickPhase` 可以在 owner thread 上切换 phase。Package 内提供可编译的对应示例：`Samples/Sample.PureUnity/UnitySampleRotatingActor.cs`。
+
+### 16.3 转发直接组合的 GameInstance
+
+`GameplayWorldHost` 已经持有这组转发。自定义 composition root 应在自身拥有的每个 phase 中调用同一个 instance 一次：
+
+~~~csharp
+private void Update()
+{
+    gameInstance?.Tick(ActorTickPhase.Update, Time.deltaTime);
+}
+
+private void FixedUpdate()
+{
+    gameInstance?.Tick(ActorTickPhase.FixedUpdate, Time.fixedDeltaTime);
+}
+
+private void LateUpdate()
+{
+    gameInstance?.Tick(ActorTickPhase.LateUpdate, Time.deltaTime);
+}
+~~~
+
+存在 GameplayWorldHost 时不要添加第二个 forwarder。Headless 或 deterministic host 可以从显式 loop 调用同一 API，但 delta 必须经过校验、有限且非负。
+
+### 16.4 Deferred Spawn 与 Possession
+
+~~~csharp
+Pawn pawn = world.SpawnActorDeferred(pawnPrefab);
+bool committed = false;
+
+try
+{
+    pawn.SetPawnConfig(pawnConfig);
+    pawn.SetActorLocationAndRotation(spawnPosition, spawnRotation);
+
+    if (!controller.TryPossess(pawn, out string error))
+    {
+        throw new InvalidOperationException(error);
+    }
+
+    world.FinishSpawningActor(pawn);
+    committed = true;
+}
+finally
+{
+    if (!committed && world.IsActorRegistered(pawn))
+    {
+        if (ReferenceEquals(controller.GetPawn(), pawn))
         {
-            return;
+            controller.UnPossess();
         }
 
-        cameraModeInstance.Setup(cameraClip);
-        if (playerController.TryPushCameraMode(cameraModeInstance))
-        {
-            isSkillCameraActive = true;
-        }
+        world.DestroyActor(pawn, EndPlayReason.InitializationFailure);
     }
+}
+~~~
 
-    private void StopSkillCamera()
+Controller 必须已经注册并针对同一 World 完成初始化。
+
+### 16.5 权威端远程登录
+
+~~~csharp
+PlayerLoginRequest request = new PlayerLoginRequest(
+    playerId: authenticatedPlayerId,
+    playerName: validatedDisplayName,
+    isSpectator: false,
+    remoteAddress: normalizedAddress,
+    options: validatedOptions,
+    isLocal: false);
+
+PlayerLoginResult result = await world.GameMode.LoginAsync(
+    request,
+    localPlayer: null,
+    cancellationToken);
+
+if (!result.Succeeded)
+{
+    throw new InvalidOperationException(
+        $"Login failed with {result.Status}: {result.Error}");
+}
+
+PlayerController remoteController = result.PlayerController;
+~~~
+
+Authentication 和 transport check 必须在调用前完成。该调用应在 World owner thread 执行。
+
+### 16.6 捕获与恢复参与者状态
+
+~~~csharp
+PlayerStateSnapshot snapshot = sourcePlayerState.CaptureSnapshot();
+
+if (!targetPlayerState.TryRestoreSnapshot(snapshot, out string error))
+{
+    throw new InvalidDataException(error);
+}
+~~~
+
+`CaptureSnapshot` 与 `TryRestoreSnapshot` 是 Runtime API。持久化 integration 持有 file path、serialization、atomic replace、integrity、encryption policy 和 schema migration。
+
+### 16.7 自定义 Camera Mode
+
+~~~csharp
+public sealed class ShoulderOffsetCameraMode : CameraMode
+{
+    private readonly Vector3 localOffset;
+
+    public ShoulderOffsetCameraMode(Vector3 localOffset)
     {
-        if (!isSkillCameraActive || avatarPawn == null)
-        {
-            return;
-        }
-
-        var playerController = avatarPawn.Controller as PlayerController;
-        if (playerController != null && playerController.RemoveCameraMode(cameraModeInstance))
-        {
-            isSkillCameraActive = false;
-        }
+        this.localOffset = localOffset;
     }
 
-    // 可选：在特定时机（如伤害命中点）做额外镜头调整
-    public void OnDamageHit()
+    public override float BlendDuration => 0.12f;
+
+    public override CameraPose Evaluate(
+        CameraContext context,
+        in CameraPose basePose,
+        float deltaTime)
     {
-        // 如果需要在命中时额外反馈，可以在这里调用
-        // 例如触发屏幕抖动或闪光等 PostProcessor
-    }
-}
-```
-
-**工作流总结**：
-
-1. **创建 `AbilityCameraClip` 资产** — 在项目中配置各技能的镜头参数（拉动 Ability 资产的 clip 引用）
-2. **Ability 激活时** → `cameraModeInstance.Setup(cameraClip)` 并 `PushCameraMode()`
-3. **每帧** → CameraMode 的 `Tick()` 更新阶段进度，`Evaluate()` 计算当前 Pose
-4. **Ability 结束时** → `RemoveCameraMode()` 自动回退到前一个 CameraMode（通常是第三人称）
-
-**临时技能镜头的重要规则**：
-
-- 如果这个 `CameraMode` 设计成“技能结束就移除”，那么它的最后一个阶段应该**收敛回 `basePose`**，也就是局部偏移最终回到 `0,0,0`，FOV 最终回到默认值。
-- 否则当 `RemoveCameraMode()` 执行时，镜头会从一个“仍然偏离默认跟随位”的位置瞬间切回第三人称基础跟随位，看起来就像被重置。
-- 所以文档中的第二阶段现在示例为“释放后回到默认跟随位”，而不是“释放后继续推到另一个额外位置”。
-- 如果你确实想要“先甩远，再回位”的演出，那么应当增加第三阶段 `settle-back`，把所有偏移从甩远状态平滑收回到 `0` 后，再移除 `CameraMode`。
-
-**常见陷阱：为什么会越放越快**：
-
-- `CameraContext` 不会自动去重。同一个 `CameraMode` 实例如果被重复 `PushCameraMode()`，它会在栈里出现多次。
-- `CameraManager` 每帧会对栈里的每个模式调用一次 `Tick()` 和 `Evaluate()`。如果同一个实例被压入 2 次、3 次，它的内部时间就会在一帧内推进 2 次、3 次，看起来就会越来越快。
-- 这通常发生在：Ability 被重复激活、AnimationEvent 重复触发，或技能结束时没有成功 `RemoveCameraMode()`。
-- 解决方式就是像上面的示例一样，加一个 `isSkillCameraActive` 守卫，确保同一实例在移除前只入栈一次。
-
-**与动画系统的同步**：
-
-通过 **动画蒙太奇的长度** 与 **镜头阶段总时长** 保持一致即可同步。例如蒙太奇 1.0 秒，但分为 0.6s 蓄力 + 0.4s 释放，两端时长对齐就自然同步了。
-
-**Position 与 FOV 如何取舍**：
-
-- **Position** 改变的是镜头与角色之间的真实空间关系，会带来明显的透视、遮挡和速度感变化。想要做“拉近到角色脸前一点”“释放时回推到默认跟随位”的力量感，优先用 Position。
-- **FOV** 改变的是镜头语言，更像镜头镜片变化。它不会真的靠近角色，但会产生聚焦、压迫或开阔感。想要增强情绪和镜头味道时，用 FOV 作为辅助。
-- **动作游戏推荐**：以小到中等幅度的 Position 作为主效果，再叠加较温和的 FOV 变化。这样既保留真实的镜头推进/拉远感，又不会因为纯 FOV 变化而显得像“数值缩放”。
-- 如果你**完全不想改变 FOV**，那就只写 `localOffsetY/Z` 曲线即可。对于当前第三人称 basePose，`localOffsetZ > 0` 表示沿镜头前方向目标拉近，`localOffsetZ < 0` 表示向后拉远。若技能结束时要移除该模式，请确保最终曲线回到 `0`，使镜头自然回到默认跟随位。
-
-如需在具体事件点（如伤害命中）触发额外镜头反馈，可以：
-
-- 在 AnimationEvent 中调用 Ability 上的方法（如 `OnDamageHit()`）
-- 该方法通过 `RegisterPostProcessor()` 临时加入屏幕抖动或其他 `ICameraPostProcessor`
-
-**说明**：`ThirdPersonFollowCameraMode`、`FirstPersonCameraMode`、`OrbitalCameraMode` 属于可选参考实现，现位于 `Samples/Sample.CameraModes`。框架 Runtime 核心契约仍以 `ViewTargetCameraMode`、`CameraMode` 和相机栈 API 为中心。
-
-### PlayerStart
-
-**用途**：玩家出生点。使用 **静态注册表模式** 实现零 GC 查找 — 运行时无需 `FindObjectsOfType`。
-
-**特性**：启用/禁用时自动注册/注销。支持基于名称的匹配，用于传送门/检查点系统。编辑器中绘制可感知 Collider 的 Gizmo，支持 3D、横板 2D 和俯视角 2D authoring。
-
-**编辑器可视化**：`PlayerStart` 的 Scene Gizmo 由 Editor assembly 绘制。它会读取同一 GameObject 上的 `CharacterController`、`CapsuleCollider`、`BoxCollider`、`SphereCollider`、`BoxCollider2D`、`CapsuleCollider2D`、`CircleCollider2D` 或后备 Collider bounds，用浅色半透明落点/剖面预览和高对比出生朝向箭头表达出生点。Collider 是可选的；没有 Collider 时会回退为紧凑的默认标记。旧版序列化 `Arrow` 字段已移除，authoring 时不再需要维护该字段。
-
-**2D authoring**：Scene Gizmo 设置是 `PlayerStart` 上的 editor-only metadata；它们只在 Unity Editor 中编译，不改变运行时出生点选择。横板平台类游戏通常使用 `SideScroller2D`，出生朝向默认读取 `transform.right`。俯视角动作或战术类游戏通常使用 `TopDown2D`，出生朝向默认读取 `transform.up`。如果 sprite 或 pawn 使用不同的本地朝向约定，可以覆盖 `Facing Axis`。
-
-**运行时契约**：`GameMode` 仍然使用 `PlayerStart` 的 transform position 和 rotation 生成 Pawn。Gizmo debug 开关和箭头长度设置只影响 Scene View 可视化。
-
-**示例 — 基于传送门名称的出生点选择**：
-
-```csharp
-// 将 PlayerStart 的 GameObject 命名为："SpawnPoint_LevelA"、"SpawnPoint_LevelB"
-// 然后在 GameMode 中：
-protected override Actor ChoosePlayerStart(Controller Player)
-{
-    string portal = "SpawnPoint_LevelB";
-    foreach (var start in PlayerStart.GetAllPlayerStarts())
-    {
-        if (start.gameObject.name == portal)
-            return start;
-    }
-    return base.ChoosePlayerStart(Player);
-}
-```
-
-### SpectatorPawn
-
-**用途**：当玩家尚未获得实际角色时使用的最小 Pawn（加载期间、回合间隙、观战时）。
-
-**关键字段**：`spectatorSpeed` — 观战模式下的移动速度。
-
-### KillZVolume
-
-**用途**：触发体积，任何进入的 Actor 都会调用 `FellOutOfWorld()`。同时支持 3D（`BoxCollider` + IsTrigger）和 2D（`BoxCollider2D` + IsTrigger）。
-
-**使用方式**：将 `KillZVolume` 组件添加到带有触发碰撞器的 GameObject 上。放置在可游玩区域下方。
-
-### SceneLogic
-
-**用途**：每场景的逻辑控制器。提供生命周期钩子（`Awake`、`Start`、`Update` 等），用于场景特定的游戏脚本 — 如开场过场、关卡特定触发器、环境事件等。
-
-### ActorTag 标签系统
-
-**用途**：为 Actor 基于字符串的标签字段提供 Inspector 友好的标签选择。
-
-**组件**：
-
-- **`ActorTagAttribute`**：带可选 `Type` 参数的 PropertyAttribute。
-  - `[ActorTag]` — 不指定类型：绘制为普通字符串字段（框架基类使用）。
-  - `[ActorTag(typeof(MyTags))]` — 指定类型：绘制可搜索弹出选择器，数据源为指定类中的 `public const string` 字段。
-- **`ActorTagPropertyDrawer`**：编辑器 Drawer，打开带 `SearchField` + 可滚动 `TreeView` 的 `PopupWindow`。支持搜索过滤、(None) 选项、清除按钮和无效值高亮。
-
-**示例**：
-
-```csharp
-// 1. 定义标签常量
-public static class ActorTags
-{
-    public const string Player = "Player";
-    public const string Enemy = "Enemy";
-    public const string NPC = "NPC";
-    public const string Interactable = "Interactable";
-    public const string Destructible = "Destructible";
-}
-
-// 2. 在你的 Actor 子类中使用 — Inspector 显示可搜索下拉菜单
-public class MyPawn : Pawn
-{
-    [SerializeField, ActorTag(typeof(ActorTags))]
-    private List<string> tags;
-}
-
-// 3. 运行时查询标签
-if (someActor.ActorHasTag("Enemy"))
-{
-    // 对敌人做出反应
-}
-```
-
-### Config Assets
-
-**用途**：把常见 Gameplay 调参从子类代码中抽离出来，放进可复用的 ScriptableObject 资产。
-
-**内置资产**：
-
-- **`WorldSettings`** — 绑定框架启动所需的核心预制体类型。
-- **`PawnConfig`** — 保存可控体参数，例如是否跟随 Controller Rotation、视角高度、视角俯仰限制和视角灵敏度。
-- **`GameModeConfig`** — 保存高层规则参数，例如重生延迟、比赛时长、玩家上限和默认观战设置。
-- **`CameraProfile`** — 保存与具体镜头类型无关的全局默认参数。当前基类只暴露 `fov` 与回退 `blendDuration`；当项目需要更多全局相机参数时，建议在业务层通过子类扩展，并继续把它作为单个可分配资产使用。
-
-**价值**：
-
-1. 设计师可以直接调参，而不必重新编译代码。
-2. 多个 GameMode 或 Pawn 原型可以共享同一套运行时代码，只切换不同配置资产。
-3. 框架依然保持独立，因为这些配置只是简单的 ScriptableObject，而不是对其他包的适配器。
-
-**示例 — 资产驱动配置**：
-
-```csharp
-public class ArenaGameMode : GameMode
-{
-    [SerializeField] private GameModeConfig config;
-
-    protected override void BeginPlay()
-    {
-        base.BeginPlay();
-
-        if (config == null) return;
-
-        SetGameModeConfig(config);
-        config.ApplyTo(this);
+        Vector3 offset = basePose.Rotation * localOffset;
+        return new CameraPose(
+            basePose.Position + offset,
+            basePose.Rotation,
+            basePose.Fov);
     }
 }
 
-public class CharacterPawn : Pawn
+CameraMode mode =
+    new ShoulderOffsetCameraMode(new Vector3(0.45f, 0f, 0f));
+
+if (!playerController.TryPushCameraMode(mode))
 {
-    [SerializeField] private PawnConfig config;
-
-    protected override void BeginPlay()
-    {
-        base.BeginPlay();
-
-        if (config == null) return;
-
-        SetPawnConfig(config);
-        config.ApplyTo(this);
-    }
+    throw new InvalidOperationException(
+        "The camera mode stack rejected the mode.");
 }
-```
-
-`CameraProfile` 也建议采用同样模式：在你的相机栈初始化位置持有这个资产，并在运行时 `CameraManager` 可用后把参数应用进去。
-
-### Scene Transition
-
-**用途**：让场景导航能力留在 Gameplay 内核之外，同时给 `GameMode` 提供稳定的 travel API。
-
-**核心契约**：`ISceneTransitionHandler`
-
-- `ChangeScene(string sceneName, CancellationToken)`
-- `PushScene(string sceneName, CancellationToken)`
-- `PopScene(CancellationToken)`
-- `ReplaceScene(string sceneName, CancellationToken)`
-
-**设计意图**：
-
-- `GameMode` 负责 Gameplay 侧的收尾和编排。
-- 真正的场景系统语义属于外部适配器。
-- 项目可以接入 Unity SceneManager、Navigathena 或自定义加载栈，而无需修改 `GameMode`。
-
-**重要行为**：
-
-`TravelToLevel()` 不会直接启动下一个场景的 `GameMode`。这个职责应由目标场景自己的 bootstrap 流程或 scene entry point 负责。
-
-### Serialization
-
-**用途**：提供一个最小持久化接缝，而不把存档系统或网络依赖强塞进框架内核。
-
-**核心契约**：
-
-- **`IGameplayFrameworkSerializable`** — 由希望暴露持久状态的运行时类实现。
-- **`IDataWriter`** / **`IDataReader`** — 面向适配器的类型化读写抽象。
-
-**当前内置使用**：
-
-- `PlayerState` 默认序列化玩家名、玩家 ID、分数、Bot 标记和观战标记等核心字段。
-
-**推荐使用方式**：
-
-1. 在存档系统或网络同步适配器中实现这些接口。
-2. 在子类里扩展 `PlayerState.Serialize()` / `Deserialize()`，写入项目自己的背包、成长或队伍信息。
-3. 二进制格式、JSON 格式和传输细节保持在框架包之外。
-
-### Camera Modes
-
-**用途**：在不改变视角所有权规则的前提下，提供可复用的镜头行为。
-
-**示例实现**：
-
-- **`FirstPersonCameraMode`** — 从目标的眼睛视点求值，适合直接的第一人称控制。
-- **`OrbitalCameraMode`** — 以可配置半径和高度环绕目标，并支持自动旋转。
-- **`ThirdPersonFollowCameraMode`** — 提供第三人称跟随构图的基线实现。
-
-这些示例 CameraMode 类位于 `Samples/Sample.CameraModes`，并与 Runtime 核心实现保持分离。
-
-**使用建议**：
-
-- 当某种模式代表玩家默认镜头时，用 `SetBaseCameraMode()`。
-- 当需要临时叠加战斗缩放、锁定目标或拍照模式时，用 `PushCameraMode()` / `RemoveCameraMode()`。
-- 所有权变化继续放在 `SetViewTarget()`，构图变化放在 `CameraMode`。
-
-### Camera Action Preset（ScriptableObject）
-
-在动作玩法中，可通过 `CameraActionPreset` 资产化镜头参数，再通过 `PresetCameraMode` 在运行时执行。
-
-- `CameraActionPreset`：保存时长、混合时长、构图偏移、FOV 等参数。
-- `PresetCameraMode`：基于当前 ViewTarget 与预设求解并输出 `CameraPose`。
-
-示例流程：
-
-```csharp
-public class MyActionCameraDriver : MonoBehaviour
-{
-    [SerializeField] private PlayerController playerController;
-    [SerializeField] private CameraActionPreset heavyAttackPreset;
-
-    private readonly PresetCameraMode actionMode = new PresetCameraMode();
-
-    public void PlayHeavyAttackCamera(float attackDuration)
-    {
-        actionMode.Setup(heavyAttackPreset, attackDuration);
-        playerController.PushCameraMode(actionMode);
-    }
-
-    private void Update()
-    {
-        if (actionMode.IsFinished)
-        {
-            playerController.RemoveCameraMode(actionMode);
-        }
-    }
-}
-```
-
-这种模式可以在保持运行时镜头求解轻量化的同时，让设计师将镜头方案与动画/VFX 流水线进行资源级绑定。
-
-### CameraProfile
-
-`CameraProfile` 是一个刻意保持精简的共享配置 ScriptableObject，用于与摄像机类型无关的全局参数：
-
-| 字段            | 作用                                           |
-| --------------- | ---------------------------------------------- |
-| `fov`           | 启动时应用到 `CameraManager` 的默认视野角      |
-| `blendDuration` | 当激活的 `CameraMode` 未指定混合时长时的回退值 |
-
-**它是一个设计为可拓展的基类，而非多余的资产。** 子类化它，可以将项目特有的摄像机全局参数（后处理 Volume、CinemachineChannel、镜头预设等）打包成一个可直接拖拽赋值的资产，方便在关卡、角色或场景切换时整体替换：
-
-```csharp
-[CreateAssetMenu(menuName = "MyGame/MyCameraProfile")]
-public class MyCameraProfile : CameraProfile
-{
-    [SerializeField] private VolumeProfile postProcessVolume;
-    [SerializeField] private float motionBlurIntensity;
-
-    public override void ApplyTo(CameraManager manager)
-    {
-        base.ApplyTo(manager);
-        // 在此将自定义字段应用到 manager 或 Cinemachine brain
-    }
-}
-```
-
-创建方式：`Assets > Create > CycloneGames > GameplayFramework > CameraProfile`
-
----
-
-### 动画系统无关触发绑定
-
-摄像机动作系统将触发逻辑与任何具体动画运行时解耦。
-所有动画方案都调用同一套 `CameraActionBinding` API，Camera 模块无需感知是哪个系统发起了触发。
-
-#### 第一步 — 创建 CameraActionPreset
-
-`Assets > Create > CycloneGames > GameplayFramework > CameraActionPreset`
-
-在 Inspector 中配置时序、取景、镜头覆盖字段。
-在代码中子类化，可以 override 7 个虚拟求值步骤（`ResolveUpAxis`、`ResolveOffset`、`ComputePivotPoint`、`ComputeDesiredPosition`、`ComputeLookAtPoint`、`ComputeDesiredRotation`、`ResolveDesiredFov`）。
-
-#### 第二步 — 创建 CameraActionMap（可选但推荐）
-
-`Assets > Create > CycloneGames > GameplayFramework > CameraActionMap`
-
-将 `ActionKey` 字符串映射到预设资产。多角色可共享同一张表，在资产中修改预设后所有角色立即生效。
-
-| 字段                 | 作用                                           |
-| -------------------- | ---------------------------------------------- |
-| `ActionKey`          | 动画系统发送的唯一字符串标识                   |
-| `Preset`             | 要激活的 `CameraActionPreset` 资产             |
-| `Policy`             | `ReplaceSameKey` / `IgnoreIfRunning` / `Stack` |
-| `AutoRemoveOnFinish` | 时长结束后是否自动移除                         |
-| `DurationOverride`   | 覆盖预设时长（≤0 = 使用预设自身值）            |
-
-`CameraActionBinding` 组件上的内联条目始终优先于表中相同 key 的条目，允许个别角色覆盖共享默认值，而无需修改共享资产。
-
-#### 第三步 — 在角色上添加 CameraActionBinding
-
-将组件添加到 `PlayerController` 旁边或其父对象上。可以分配内联 `actionEntries`、共享 `CameraActionMap`，或两者兼用。
-
-```csharp
-// 可从任意动画系统在任意时机调用：
-actionBinding.PlayAction("dodge");
-actionBinding.PlayAction("heavyAttack", 0.6f);  // 带时长覆盖
-actionBinding.StopAction("dodge");
-actionBinding.IsActionRunning("heavyAttack");   // 查询状态
-```
-
-#### 第四步 — 接入你的动画系统
-
-根据项目选择适配器：
-
-**Unity Animator — Animation Events**
-
-在 `CameraActionBinding` 旁边添加 `AnimatorCameraActionBridge`。
-在动画片段中添加 `AnimationEvent`，调用以下方法之一：
-
-| 方法                                      | 说明                |
-| ----------------------------------------- | ------------------- |
-| `PlayCameraAction(string key)`            | 播放 key 对应的预设 |
-| `PlayCameraActionTimed(string "key@0.6")` | 播放并内联覆盖时长  |
-| `StopCameraAction(string key)`            | 按 key 停止         |
-| `StopAllCameraActions()`                  | 停止所有激活预设    |
-
-**Unity Animator — State Machine Behaviour**
-
-在任意 Animator 状态上添加 `CameraActionStateBehaviour`（在状态 Inspector 中点击 `Add Behaviour`）：
-
-| 字段                                   | 作用                                                 |
-| -------------------------------------- | ---------------------------------------------------- |
-| `On Enter Action Key`                  | 进入此状态时播放                                     |
-| `Allow Enter Trigger In Transition`    | 混合期间是否允许进入触发                             |
-| `On Exit Mode`                         | `None` / `StopActionKey` / `PlayActionKey`           |
-| `On Exit Action Key`                   | 退出时要停止的 key（StopActionKey 模式）             |
-| `On Exit Play Action Key`              | 退出时要播放的 key（PlayActionKey 模式）             |
-| `On Progress Action Key`               | 动画归一化时间跨过阈值时播放的 key                   |
-| `Trigger Normalized Time`              | 进度触发的 0–1 阈值                                  |
-| `Trigger Every Loop`                   | 每次循环都重置触发，还是整个状态生命周期只触发一次   |
-| `Allow Progress Trigger In Transition` | 混合期间是否允许进度触发                             |
-| `Duration Override`                    | 应用到进入/退出/进度动作的时长（≤0 = 使用表/预设值） |
-
-**Unity Timeline**
-
-将 `TimelineCameraActionReceiver` 添加到与 `PlayableDirector` 同一 GameObject 上。
-在 Timeline Signal Track 中放置 `SignalEmitter` 标记并创建 `SignalAsset` 文件。
-将每个 `SignalAsset` 拖入组件的映射表并设置对应 action key。
-无需添加 `com.unity.timeline` 包依赖。
-
-**Animancer**（可选集成）
-
-在 `CameraActionBinding` 旁边添加 `AnimancerCameraActionBridge`。
-配置 `EventToAction` 映射列表：
-
-| 字段                              | 作用                                                    |
-| --------------------------------- | ------------------------------------------------------- |
-| `EventName`                       | 与动画片段中 Animancer 命名事件匹配                     |
-| `ActionKey`                       | 转发给 `CameraActionBinding.PlayAction` 或 `StopAction` |
-| `StopAction`                      | 勾选则调用 Stop 而非 Play                               |
-| `DurationOverride`                | 每个事件的时长覆盖                                      |
-| `MinTriggerInterval`              | 最小触发间隔（节流），≤0 = 无限制                       |
-| `RequiredCurrentStateKeyContains` | 仅当当前层 CurrentState 的 key 包含此子串时触发         |
-| `InvertCurrentStateKeyFilter`     | 反转状态 key 过滤逻辑                                   |
-| `LayerIndex`                      | 进行状态 key 过滤时检查的 Animancer 层索引              |
-| `AdditionalCommands`              | 批量：一次事件执行多条 Play/Stop 命令                   |
-
-每条 `AdditionalCommand` 也支持 `RequireActionRunningKey`/`InvertRequirement` 条件守卫，可对批量中的每条命令单独配置条件。
-
-**纯代码 / 其他系统**
-
-`CameraActionBinding.PlayAction` 和 `StopAction` 是普通公共方法，可从任何地方调用（PlayMaker、Bolt、自定义能力系统等）。
-
-### 可选 Animancer 集成
-
-如果项目使用 `com.kybernetik.animancer`，启用集成程序集：
-
-- 集成路径：`Runtime/Scripts/Integrations/Animancer`
-- `AnimancerCameraActionBridge` 将 Animancer 命名事件映射到 `CameraActionBinding` 的 action key。
-- 集成程序集是可选的，与框架核心契约隔离。
-- 委托在 `Awake` 中预创建，`OnEnable`/`OnDisable` 循环产生零 GC。
-
-### Camera Blend Curves
-
-**用途**：控制相机过渡的加速或缓出节奏，而不改变源姿态和目标姿态本身。
-
-**核心契约**：`ICameraBlendCurve.Evaluate(float t)`
-
-**内置曲线实现**：
-
-- `LinearCameraBlendCurve`
-- `SmoothStepCameraBlendCurve`
-- `EaseInCameraBlendCurve`
-- `EaseOutCameraBlendCurve`
-- `CustomCameraBlendCurve`
-
-当不同过渡需要不同视觉节奏时，可将这些曲线传给 `CameraBlendState.Start(..., ICameraBlendCurve curve)`。
-
----
-
-## 可选 Networking 包
-
-基础 `CycloneGames.GameplayFramework.Runtime` 程序集刻意保持网络无关。它不引用 `CycloneGames.Networking`，不要求 PlayerSettings scripting define symbols，并且可以在离线项目、单机项目、服务器模拟进程，或使用自定义网络栈的项目中单独安装。
-
-使用 Cyclone networking abstraction 的项目可以额外添加独立的 `CycloneGames.GameplayFramework.Networking` 包。该包包含 `NetworkGameSessionAdapter`、GameplayFramework 消息目录注册、actor migration serialization、authority helper，以及 owner/team/area replication 的 observer resolution。Mirror、Mirage、Nakama、Photon 或专用服务器 transport 的项目细节应继续放在这个边界之上的独立 adapter 包中。
-
-## 快速开始
-
-### 前提条件
-
-- Unity 2022.3+
-- 已安装包：`CycloneGames.GameplayFramework`、`Cinemachine`、`UniTask`、`CycloneGames.Factory`、`CycloneGames.Logger`
-
-### 最小配置
-
-#### 1. 创建必需预制体
-
-创建空 GameObject，添加对应组件，保存为预制体：
-
-| 预制体        | 组件                             | 说明                           |
-| ------------- | -------------------------------- | ------------------------------ |
-| `GM_MyGame`   | `GameMode`（或你的子类）         | 必需                           |
-| `PC_MyGame`   | `PlayerController`（或你的子类） | 必需                           |
-| `Pawn_MyGame` | `Pawn`（或你的子类）             | 必需 — 在此添加角色模型/控制器 |
-| `PS_MyGame`   | `PlayerState`（或你的子类）      | 必需                           |
-| `CM_MyGame`   | `CameraManager`                  | 可选 — 使用 Cinemachine 时需要 |
-| `SP_MyGame`   | `SpectatorPawn`                  | 可选                           |
-
-#### 2. 创建并配置 WorldSettings
-
-`Create -> CycloneGames -> GameplayFramework -> WorldSettings`。分配所有预制体。
-
-#### 3. 创建引导入口
-
-```csharp
-using Cysharp.Threading.Tasks;
-using UnityEngine;
-using CycloneGames.GameplayFramework.Runtime;
-using CycloneGames.Factory.Runtime;
-
-public class GameBootstrap : MonoBehaviour
-{
-    [SerializeField] private WorldSettings worldSettings;
-
-    async void Start()
-    {
-        IUnityObjectSpawner spawner = new SimpleObjectSpawner();
-
-        var gameMode = spawner.Create(worldSettings.GameModeClass) as GameMode;
-        gameMode.Initialize(spawner, worldSettings);
-
-        var world = new World();
-        world.SetGameMode(gameMode);
-
-        await gameMode.LaunchGameModeAsync(destroyCancellationToken);
-    }
-}
-
-public class SimpleObjectSpawner : IUnityObjectSpawner
-{
-    public T Create<T>(T origin) where T : Object
-    {
-        return origin != null ? Object.Instantiate(origin) : null;
-    }
-}
-```
-
-#### 4. 配置场景
-
-1. 在空 GameObject 上添加 `PlayerStart` 组件并定位。
-2. 确保主摄像机有 `CinemachineBrain`，场景中有至少一个 `CinemachineCamera`。
-3. 在 GameObject 上添加 `GameBootstrap` 组件并分配你的 `WorldSettings`。
-
-如果 `CameraManager` 是运行时生成，且你希望固定绑定某个 Brain，可在运行时显式设置：
-
-```csharp
-var pc = gameMode.GetPlayerController();
-var cm = pc != null ? pc.GetCameraManager() : null;
-if (cm != null)
-{
-    var brain = Camera.main != null ? Camera.main.GetComponent<CinemachineBrain>() : null;
-    cm.SetBootstrapBrain(brain, rebindImmediately: true);
-}
-```
-
-如为多相机/多 Brain 项目，建议不要依赖 `Camera.main`，而是通过你自己的相机路由系统传入目标 `CinemachineBrain`。
-
-#### 5. 验证启动流程
-
-运行时的预期流程是：生成 `GameMode` -> 生成 `PlayerController` -> 初始化运行时组件 -> 解析 `PlayerStart` -> 生成 `Pawn` -> 调用 `Possess()`。
-
----
-
-## 进阶用法
-
-以下示例聚焦于项目最常需要自定义的扩展点：重生时机、Pawn 替换、堆栈式输入抑制，以及伤害事件观察。
-
-### 重生系统
-
-```csharp
-// 在你的 GameMode 子类中：
-public void OnPlayerDied(PlayerController player)
-{
-    // 取消附身死亡的 Pawn
-    Pawn deadPawn = player.GetPawn();
-    player.UnPossess();
-
-    // 延迟重生（可选）
-    RespawnAfterDelay(player, 3f).Forget();
-}
-
-private async UniTaskVoid RespawnAfterDelay(PlayerController player, float delay)
-{
-    await UniTask.Delay(TimeSpan.FromSeconds(delay));
-    RestartPlayer(player);
-}
-```
-
-### 角色切换
-
-```csharp
-// 游戏中切换 Pawn（例如进入载具）
-public class VehicleActor : Actor
-{
-    [SerializeField] private Pawn vehiclePawn;
-
-    public void EnterVehicle(PlayerController driver)
-    {
-        Pawn oldPawn = driver.GetPawn();
-        driver.UnPossess();
-        driver.Possess(vehiclePawn);
-        oldPawn.SetActorHiddenInGame(true);
-    }
-
-    public void ExitVehicle(PlayerController driver, Pawn originalPawn)
-    {
-        driver.UnPossess();
-        originalPawn.SetActorHiddenInGame(false);
-        originalPawn.SetActorLocation(transform.position + Vector3.right * 2f);
-        driver.Possess(originalPawn);
-    }
-}
-```
-
-### 输入抑制
-
-```csharp
-// 多个系统可独立抑制输入
-playerController.SetIgnoreMoveInput(true);  // UI 打开 — 抑制
-playerController.SetIgnoreMoveInput(true);  // 过场动画 — 抑制（计数器 = 2）
-playerController.SetIgnoreMoveInput(false); // UI 关闭（计数器 = 1，仍被抑制）
-playerController.SetIgnoreMoveInput(false); // 过场结束（计数器 = 0，输入恢复）
-
-// 或一次性重置所有
-playerController.ResetIgnoreInputFlags();
-```
-
-### 伤害事件订阅
-
-```csharp
-// 从 Actor 外部订阅伤害事件
-Actor target = someEnemy;
-target.OnTakePointDamage += (damage, damageEvent, instigator, causer) =>
-{
-    // 显示命中标记 UI
-    ShowHitMarker(damageEvent.HitLocation);
-};
-target.OnTakeRadialDamage += (damage, damageEvent, instigator, causer) =>
-{
-    // 显示爆炸指示器
-    ShowExplosionIndicator(damageEvent.Origin);
-};
-```
-
----
-
-### 示例 — Navigathena bootstrap
-
-关键规则很简单：让 Navigathena 负责导航语义，让 GameplayFramework 负责 Gameplay 编排。
-
-```csharp
-using CycloneGames.GameplayFramework.Runtime;
-using CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena;
-using MackySoft.Navigathena;
-using MackySoft.Navigathena.SceneManagement;
-using UnityEngine;
-
-public sealed class GameplaySceneInstaller : MonoBehaviour
-{
-    [SerializeField] private GameMode gameMode;
-    [SerializeField] private MonoBehaviour navigatorSource;
-
-    private void Awake()
-    {
-        var navigator = navigatorSource as ISceneNavigator;
-        if (gameMode == null || navigator == null)
-        {
-            return;
-        }
-
-        gameMode.SetSceneTransitionHandler(
-            new NavigathenaSceneTransitionHandler(
-                navigator,
-                TransitionDirector.Empty()));
-    }
-}
-```
-
-把这个组件挂在当前场景里，并确保它运行在 `GameMode` 已创建或已解析之后。之后当你调用 `await gameMode.TravelToLevel("BattleScene");` 时，框架会负责当前流程收尾，而 Navigathena 适配器会转发实际导航请求。
-
----
-
-## 最佳实践
-
-1. **保持 Pawn 职责专一** — 移动、视觉表现、技能。不处理游戏规则，不处理计分。
-2. **使用 PlayerState 存储持久数据** — 分数、背包、统计数据存放在 PlayerState 而非 Pawn。它们在重生后保留。
-3. **每种游戏类型一个 GameMode** — 死斗、夺旗、教程 — 各是一个 GameMode 子类。通过更改 WorldSettings 预制体引用即可切换。
-4. **重写而非修改** — 继承 `GameMode`、`PlayerController`、`Pawn` 等。框架基类处理底层管线。
-5. **Gameplay 角色优先用继承表达** — 如果行为属于 Actor、Pawn、Controller、GameMode 的身份语义，优先使用虚方法和子类，而不是额外服务接口。
-6. **基础设施优先用接口表达** — `IGameMode`、`IGameSession`、`IWorldSettings`、`IUnityObjectSpawner` 等适合作为测试、DI 容器、外部系统的接缝。
-7. **相机扩展属于外层** — `SetViewTarget`、`GetViewTarget`、`GetActorEyesViewPoint`、`CalcCamera` 是核心契约；`IViewTargetPolicy` 与 `CameraMode` 负责增强，不应替代它们。
-8. **让 GameMode 编排一切** — 生成、重生、比赛流程都属于 GameMode。不要分散到 Pawn 或 Controller 中。
-9. **优先使用 TakeDamage 而非直接操作血量** — 所有伤害通过 Actor 伤害管线路由，确保事件触发和类型路由的一致性。
-10. **把功能包留在内核之外** — 技能、联网、高级相机行为、UI、编辑器工作流应当接入框架，而不是反向重塑基础类语义。
-
----
+~~~
+
+拥有该 action 的流程结束时，应移除同一个 mode instance。
+
+## 17. 验证
+
+### 17.1 EditMode 测试
+
+Test assembly 覆盖：
+
+- World mode、启动、回滚、non-owned Actor 复用、可信 local login 校验、participant/GameMode 销毁升级、logout 和 CurrentWorld 清理；
+- WorldSettings 校验、外部 resolver、cancellation 和 lease disposal；
+- AssetManagement prefab-component 解析与 handle ownership；
+- GameplayWorldHost ownership、索引式 World 诊断、自定义 Inspector 和项目校验；
+- Actor tag、damage、lifespan、possession、Pawn input、primary Tick phase、Runtime gate、mutation safety、re-entry rejection、exception isolation 和 owner-thread enforcement；
+- PlayerState snapshot、session identity lock、atomic spectator change 和 post-commit Pawn notification；
+- GameState transition 和 World-scoped PlayerStart；
+- CameraContext capacity、replacement、evaluation mutation guard、deferred clear、teardown order、view-target policy 和 action limit；
+- Camera blend 和 camera math；
+- CameraContext、GameSession 和 1,000 个 opt-in Actor Tick 性能 benchmark；
+- 安装受支持 Navigathena package 时的 request 映射、自定义、校验和 cancellation 转发。
+
+从 Unity Test Runner 运行：
+
+~~~text
+Window > General > Test Runner > EditMode
+Assembly: CycloneGames.GameplayFramework.Tests.Editor
+~~~
+
+安装 Navigathena `[1.1.0,2.0.0)` 后，还需要运行：
+
+~~~text
+Assembly: CycloneGames.GameplayFramework.Integrations.Navigathena.Tests.Editor
+~~~
+
+未安装 Navigathena 时，确认 integration assembly 与 test assembly 均未出现在 `Library/ScriptAssemblies` 中，然后运行上述核心 test assembly。
+
+Batchmode 示例：
+
+运行命令前先创建 `&lt;repo-root&gt;/UnityStarter/TestResults`，或者把两个输出路径替换为已存在且可写的目录。
+
+~~~powershell
+<unity-editor> -batchmode -nographics -quit -projectPath "<repo-root>/UnityStarter" -runTests -testPlatform EditMode -assemblyNames "CycloneGames.GameplayFramework.Tests.Editor" -testResults "<repo-root>/UnityStarter/TestResults/GameplayFramework.EditMode.xml" -logFile "<repo-root>/UnityStarter/TestResults/GameplayFramework.EditMode.log"
+~~~
+
+### 17.2 PlayMode 测试
+
+PlayMode assembly 验证 auto-start Host 会创建 Playing World、转发 Update/FixedUpdate/LateUpdate Actor Tick phase、随 Host lifetime 停止转发，并随 Host GameObject dispose World。
+
+~~~text
+Window > General > Test Runner > PlayMode
+Assembly: CycloneGames.GameplayFramework.Tests.PlayMode
+~~~
+
+### 17.3 Editor 手动 Smoke Test
+
+1. Reimport 或 reload 项目，确认 Runtime、Editor、sample 和 test assembly 编译。
+2. 打开 PureUnity sample scene。
+3. 确认 GameplayWorldHost 引用了 UnitySampleWorldSettings。
+4. 保持在 Edit Mode，将 `UnitySampleRotatingActor` 添加到一个 scene GameObject，并保存 scene。
+5. 进入 Play Mode。
+6. 验证 World 为 Playing，且本地 Controller 拥有 PlayerState 和 Pawn。
+7. 如果配置了 camera，验证一个 CameraManager 拥有预期 CinemachineBrain。
+8. 确认 sample Actor 仅在 World 为 Playing 时旋转。
+9. 打开 World Debugger，检查 World、各 phase Tick count 和 Actor registration。
+10. 在 sample Actor Inspector 中点击 `Disable Runtime Tick`，确认旋转停止、Tick Enabled 诊断发生变化且 Actor 仍保持注册；随后点击 `Enable Runtime Tick` 恢复旋转。
+11. 运行 Project Validation，并确认 sample 没有配置错误。
+12. 打开 Camera Debug Window，观察 pose/blend 数据。
+13. 退出 Play Mode，确认没有遗留参与者、Tick 或 camera-mode 状态。
+
+### 17.4 Player 与平台验证
+
+对每个发布目标：
+
+1. 在 Build Settings 中加入项目 Runtime composition root 和必需 scene。
+2. 执行 clean Player build。
+3. 覆盖启动、cancellation、登录失败、logout、travel 和 application shutdown。
+4. 测试 direct 和 external WorldSettings reference。
+5. 在目标硬件上分析 camera、Actor 和 roster hot path。
+6. 验证 IL2CPP/AOT serializer 行为和 managed stripping。
+7. Server target 应在没有 LocalPlayer 的条件下运行，并检查依赖、日志和关闭。
+
+EditMode 测试和源码检查不能证明 Player、IL2CPP、headless 或目标平台验证通过。
+
+## 18. 故障排查
+
+| 现象 | 检查项 |
+| --- | --- |
+| “A world is already active” | 在 `StartWorldAsync` 前调用并等待 `StopWorldAsync` |
+| Owner-thread exception | 在修改 GameInstance、World、login、spawn 或 possession 前 marshal 到 Unity main thread |
+| WorldSettings 校验失败 | 配置 GameMode、PlayerController、Pawn 和 PlayerState |
+| 外部引用没有 resolver | 向 GameInstance 传入 resolver，并确认 `Supports` 对所选 source 返回 true |
+| 外部加载在 cancellation 后失败 | 传播 cancellation 并 dispose loader handle |
+| Client World 没有 GameMode | Client mode 是非权威端；通过 network adapter 填充客户端可见状态 |
+| Dedicated server 没有本地 Controller | 使用远程 `LoginAsync`；自动本地登录已禁用 |
+| 登录返回 InvalidRequest | 检查 ID 和 name/address/options 边界、`IsLocal` 以及 GameInstance 中的同一个 LocalPlayer slot |
+| 登录返回 Rejected | 检查 session 内 PlayerId 唯一性和产品 admission policy |
+| 登录返回 AtCapacity | 检查 GameSession player/spectator capacity 和 count |
+| 登录返回 SpawnFailed | 检查 prefab reference、spawner result、World state 和自定义初始化 callback |
+| Player spawn point 不稳定 | 重写 `ChoosePlayerStart`，或传入精确 portal name |
+| Possession 失败 | 注册并初始化 Controller、使用同一 World，并避免 reentrant callback |
+| Movement input 没有效果 | Movement adapter 必须消费 pending vector 并应用它 |
+| Actor Tick 不执行 | 确认 phase 不是 None、Runtime Tick 已启用、component active/enabled、BeginPlay 已完成、registration 不是 deferred，且 World 为 Playing |
+| Actor Tick 报告重入异常 | 不要从 Actor Tick callback 调用 GameInstance.Tick 或 World.Tick；把工作推迟到下一个 owned loop phase |
+| 直接组合 GameInstance 时 Actor 从不 Tick | 由 composition root 对每个必需 phase 精确转发一次；GameplayWorldHost 会自动提供该转发 |
+| Movement 或 Ability 使用不同 update model | 保留模块自己的 MonoBehaviour 或显式 simulation clock；Actor Tick 是 opt-in，不替代 package-owned scheduling |
+| Scene Actor 在 World barrier 外 BeginPlay | 让 composition root 早于普通 Actor Start callback 启动 |
+| Ended Actor 无法加入另一个 World | non-owned scene/external Actor 必须先解绑再注册到 replacement World；World-owned Actor 不能重入 |
+| GameState transition 非法 | 遵循合法 transition table，或处理 `TrySetMatchState` failure |
+| 没有 CameraManager | 配置可选 prefab，并使用本地 PlayerController |
+| CameraManager 没有输出 | 分配/解析 CinemachineBrain 和 active CinemachineCamera |
+| Brain ownership error | 确保每个 CinemachineBrain 只由一个 CameraManager 拥有 |
+| Camera mode push 返回 false | 检查重复实例、clearing/evaluation 状态和 CameraContext capacity |
+| Camera clear 没有立即执行 | Evaluation 期间请求的 clear 会在 evaluation scope 结束后执行 |
+| Camera action 返回 false | 检查 action key、preset、active-action limit、Controller resolution 和 mode-stack capacity |
+| Animator progress action 未触发 | 检查 progress key、threshold、transition flag、loop policy 和 8-pair tracking capacity |
+| Snapshot restore 失败 | 要求当前 schema version，并校验非负 ID、player-name 长度以及已注册 identity/spectator lock |
+| Travel 报告没有 handler | 在 GameInstance 中组合 `ISceneTransitionHandler` |
+| Player build 中缺少 sample script | 确认 sample asmdef 包含目标平台，并在构建前解决全部编译错误 |

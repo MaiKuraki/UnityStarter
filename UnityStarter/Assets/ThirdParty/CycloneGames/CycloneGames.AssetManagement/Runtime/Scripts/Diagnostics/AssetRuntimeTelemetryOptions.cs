@@ -8,6 +8,7 @@ namespace CycloneGames.AssetManagement.Runtime
     public readonly struct AssetRuntimeTelemetryOptions
     {
         public const int DEFAULT_CAPACITY = 256;
+        public const int MAX_CAPACITY = 65_536;
 
         public readonly int Capacity;
         public readonly long MinimumSampleIntervalTicks;
@@ -18,9 +19,11 @@ namespace CycloneGames.AssetManagement.Runtime
             TimeSpan minimumSampleInterval = default,
             bool includeZeroActivitySamples = true)
         {
-            if (capacity <= 0)
+            if (capacity <= 0 || capacity > MAX_CAPACITY)
             {
-                throw new ArgumentOutOfRangeException(nameof(capacity), "Telemetry capacity must be greater than zero.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(capacity),
+                    $"Telemetry capacity must be between 1 and {MAX_CAPACITY}.");
             }
 
             if (minimumSampleInterval.Ticks < 0L)

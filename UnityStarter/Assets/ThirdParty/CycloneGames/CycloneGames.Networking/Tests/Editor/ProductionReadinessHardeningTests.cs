@@ -62,16 +62,14 @@ namespace CycloneGames.Networking.Tests.Editor
             NetworkProtocolManifest first = new NetworkProtocolManifestBuilder(
                     "Project.First",
                     30000,
-                    30010,
-                    NetworkMessageKind.User)
-                .AddMessage<TestInputMessage>(30000)
+                    30010)
+                .AddMessage("TestInputMessage:v1", 30000, 0x187DA17362D559D1UL)
                 .Build();
             NetworkProtocolManifest second = new NetworkProtocolManifestBuilder(
                     "Project.Second",
                     30000,
-                    30010,
-                    NetworkMessageKind.User)
-                .AddMessage<TestInventoryMessage>(30000)
+                    30010)
+                .AddMessage("TestInventoryMessage:v1", 30000, 0x9CA010B33A030EEDUL)
                 .Build();
 
             var input = new NetworkProductionReadinessInput
@@ -205,9 +203,8 @@ namespace CycloneGames.Networking.Tests.Editor
             return new NetworkProtocolManifestBuilder(
                     owner,
                     minMessageId,
-                    maxMessageId,
-                    NetworkMessageKind.User)
-                .AddMessage<TestInputMessage>(minMessageId, NetworkChannel.UnreliableSequenced, 128)
+                    maxMessageId)
+                .AddMessage("TestInputMessage:v1", minMessageId, 0x187DA17362D559D1UL, NetworkChannel.UnreliableSequenced, 128)
                 .Build();
         }
 

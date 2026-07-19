@@ -1,263 +1,271 @@
-#if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
+using CycloneGames.UIFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.UIFramework.Runtime;
 
 namespace CycloneGames.UIFramework.Editor
 {
     public sealed class UIRuntimeMonitorWindow : EditorWindow
     {
-        private readonly List<UILayerRuntimeStats> _layerStats = new List<UILayerRuntimeStats>(16);
-        private Vector2 _scroll;
+        private const double DefaultRefreshInterval = 0.5d;
+        private static readonly string[] IntCache = BuildIntCache(1024);
 
-        private UIManager _cachedManager;
-        private double _nextRepaintTime;
-        private const double RepaintInterval = 0.25;
-
-        private GUIStyle _sectionTitleStyle;
-        private GUIStyle _chipTitleStyle;
-        private GUIStyle _chipValueStyle;
-        private GUIStyle _layerHeaderStyle;
-        private GUIStyle _layerCellStyle;
-
-        private static readonly string[] IntCache = InitIntCache(512);
+        private readonly List<UILayerRuntimeStats> _layerStats =
+            new List<UILayerRuntimeStats>(16);
+        private readonly List<string> _layerValueText = new List<string>(16);
+        private UIManager _target;
+        private UIPerformanceStats _stats;
+        private Vector2 _scrollPosition;
+        private double _nextRefreshTime;
+        private double _refreshInterval = DefaultRefreshInterval;
+        private bool _hasSnapshot;
+        private bool _showLifecycle = true;
+        private bool _showLayers = true;
+        private string _sessionUsageText = "0 / 0";
 
         [MenuItem("Tools/CycloneGames/UI Framework/Runtime Monitor")]
         public static void ShowWindow()
         {
             UIRuntimeMonitorWindow window = GetWindow<UIRuntimeMonitorWindow>("UI Runtime Monitor");
-            window.minSize = new Vector2(420f, 280f);
+            window.minSize = new Vector2(500f, 360f);
+            window.Show();
         }
 
         private void OnEnable()
         {
-            _cachedManager = null;
-            EditorApplication.update += ThrottledRepaint;
+            titleContent = new GUIContent("UI Runtime Monitor");
+            EditorApplication.update += OnEditorUpdate;
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
         }
 
         private void OnDisable()
         {
-            EditorApplication.update -= ThrottledRepaint;
-            _cachedManager = null;
-        }
-
-        private void ThrottledRepaint()
-        {
-            if (!Application.isPlaying) return;
-            double now = EditorApplication.timeSinceStartup;
-            if (now < _nextRepaintTime) return;
-            _nextRepaintTime = now + RepaintInterval;
-            Repaint();
+            EditorApplication.update -= OnEditorUpdate;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            ClearSnapshot();
         }
 
         private void OnGUI()
         {
-            EnsureStyles();
+            InspectorUiUtility.DrawInspectorTitle(
+                "UI Runtime Monitor",
+                "Bounded snapshots from an explicitly selected UIManager",
+                InspectorUiUtility.RuntimeColor);
 
+            DrawTargetPanel();
             if (!Application.isPlaying)
             {
-                _cachedManager = null;
-                EditorGUILayout.HelpBox("Enter Play Mode with an active UIManager to monitor runtime UI stats.", MessageType.Info);
+                EditorGUILayout.HelpBox("Enter Play Mode to read runtime UI state.", MessageType.Info);
                 return;
             }
 
-            if (_cachedManager == null)
-                _cachedManager = Object.FindFirstObjectByType<UIManager>();
-
-            if (_cachedManager == null)
+            if (_target == null)
             {
-                EditorGUILayout.HelpBox("No UIManager found in scene.", MessageType.Warning);
+                EditorGUILayout.HelpBox(
+                    "Assign a UIManager or use Find in Open Scenes. Scene scanning runs only when the button is pressed.",
+                    MessageType.Info);
                 return;
             }
 
-            UIPerformanceStats stats = _cachedManager.GetPerformanceStats();
-            _cachedManager.CopyLayerRuntimeStats(_layerStats);
+            if (!_target.IsInitialized)
+            {
+                EditorGUILayout.HelpBox("The selected UIManager is not initialized.", MessageType.Warning);
+                return;
+            }
 
-            _scroll = EditorGUILayout.BeginScrollView(_scroll);
+            if (!_hasSnapshot)
+            {
+                RefreshSnapshot();
+            }
 
-            EditorGUILayout.Space(4);
-            DrawSectionHeader("Runtime Snapshot");
-            EditorGUILayout.Space(2);
-            DrawStatGrid(stats);
+            DrawSnapshot();
+        }
 
-            EditorGUILayout.Space(8);
-            DrawSectionHeader("Layer Breakdown");
-            EditorGUILayout.Space(2);
-            DrawLayerTable();
+        private void DrawTargetPanel()
+        {
+            InspectorUiUtility.BeginPanel();
+            UIManager nextTarget = (UIManager)EditorGUILayout.ObjectField(
+                "UIManager",
+                _target,
+                typeof(UIManager),
+                true);
+            if (nextTarget != _target)
+            {
+                _target = nextTarget;
+                ClearSnapshot();
+            }
 
-            EditorGUILayout.Space(4);
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Use Selection"))
+            {
+                _target = Selection.activeGameObject != null
+                    ? Selection.activeGameObject.GetComponentInParent<UIManager>()
+                    : null;
+                ClearSnapshot();
+            }
+
+            if (GUILayout.Button("Find in Open Scenes"))
+            {
+                _target = UnityEngine.Object.FindFirstObjectByType<UIManager>(
+                    FindObjectsInactive.Include);
+                ClearSnapshot();
+            }
+
+            using (new EditorGUI.DisabledScope(
+                       !Application.isPlaying || _target == null || !_target.IsInitialized))
+            {
+                if (GUILayout.Button("Refresh Now"))
+                {
+                    RefreshSnapshot();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            _refreshInterval = EditorGUILayout.Slider(
+                "Refresh interval (s)",
+                (float)_refreshInterval,
+                0.1f,
+                2f);
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawSnapshot()
+        {
+            _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
+
+            _showLifecycle = InspectorUiUtility.DrawFoldoutHeader(
+                "Lifecycle",
+                _showLifecycle,
+                InspectorUiUtility.RuntimeColor,
+                IntToString(_stats.SessionCount),
+                _stats.SessionCount >= _stats.MaxWindowCapacity
+                    ? InspectorUiUtility.WarningColor
+                    : InspectorUiUtility.SuccessColor);
+            if (_showLifecycle)
+            {
+                InspectorUiUtility.BeginPanel();
+                InspectorUiUtility.DrawStatusRow("Sessions", _sessionUsageText, _stats.SessionCount >= _stats.MaxWindowCapacity ? InspectorUiUtility.WarningColor : InspectorUiUtility.SuccessColor);
+                InspectorUiUtility.DrawStatusRow("Opening", IntToString(_stats.OpeningWindowCount), InspectorUiUtility.SetupColor);
+                InspectorUiUtility.DrawStatusRow("Open", IntToString(_stats.OpenWindowCount), InspectorUiUtility.SuccessColor);
+                InspectorUiUtility.DrawStatusRow("Closing", IntToString(_stats.ClosingWindowCount), InspectorUiUtility.WarningColor);
+                InspectorUiUtility.DrawStatusRow("Scene-bound", IntToString(_stats.SceneBoundWindowCount), InspectorUiUtility.AssetColor);
+                InspectorUiUtility.DrawStatusRow("Bindings", IntToString(_stats.BinderCount), InspectorUiUtility.NeutralColor);
+                InspectorUiUtility.DrawStatusRow("Isolated canvases", IntToString(_stats.IsolatedWindowCanvasCount), InspectorUiUtility.RuntimeColor);
+                InspectorUiUtility.EndPanel();
+            }
+
+            _showLayers = InspectorUiUtility.DrawFoldoutHeader(
+                "Layers",
+                _showLayers,
+                InspectorUiUtility.AssetColor,
+                IntToString(_layerStats.Count),
+                InspectorUiUtility.AssetColor);
+            if (_showLayers)
+            {
+                InspectorUiUtility.BeginPanel();
+                if (_layerStats.Count == 0)
+                {
+                    EditorGUILayout.HelpBox("No layer runtime data is available.", MessageType.Info);
+                }
+                else
+                {
+                    for (int i = 0; i < _layerStats.Count; i++)
+                    {
+                        UILayerRuntimeStats layer = _layerStats[i];
+                        InspectorUiUtility.DrawStatusRow(
+                            string.IsNullOrEmpty(layer.LayerName) ? "<unnamed>" : layer.LayerName,
+                            _layerValueText[i],
+                            layer.WindowCount > 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.NeutralColor);
+                    }
+                }
+                InspectorUiUtility.EndPanel();
+            }
+
+            EditorGUILayout.HelpBox(
+                "Snapshots are diagnostic counts, not a frame profiler. Use Unity Profiler, Frame Debugger, retained-object inspection, and target-device captures for performance conclusions.",
+                MessageType.Info);
             EditorGUILayout.EndScrollView();
         }
 
-        private void DrawSectionHeader(string title)
+        private void OnEditorUpdate()
         {
-            Rect rect = EditorGUILayout.GetControlRect(false, 22f);
-            Color bg = EditorGUIUtility.isProSkin
-                ? new Color(0.2f, 0.2f, 0.2f, 0.5f)
-                : new Color(0.78f, 0.78f, 0.78f, 0.5f);
-            Color accent = EditorGUIUtility.isProSkin
-                ? new Color(0.35f, 0.55f, 0.85f, 0.6f)
-                : new Color(0.25f, 0.45f, 0.75f, 0.4f);
-
-            EditorGUI.DrawRect(rect, bg);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 3f, rect.height), accent);
-            GUI.Label(new Rect(rect.x + 10f, rect.y, rect.width - 14f, rect.height), title, _sectionTitleStyle);
-        }
-
-        private void DrawStatGrid(UIPerformanceStats stats)
-        {
-            const int cols = 2;
-            const int rows = 5;
-            const float chipHeight = 38f;
-            const float chipGap = 2f;
-            float totalHeight = rows * chipHeight + (rows - 1) * chipGap;
-
-            Rect grid = EditorGUILayout.GetControlRect(false, totalHeight);
-            float colWidth = (grid.width - chipGap * (cols - 1)) / cols;
-
-            DrawStatChipInt(ChipRect(grid, 0, 0, colWidth, chipHeight, chipGap), "Active Windows", stats.ActiveWindowCount);
-            DrawStatChipInt(ChipRect(grid, 0, 1, colWidth, chipHeight, chipGap), "Scene-Bound", stats.SceneBoundWindowCount);
-            DrawStatChipInt(ChipRect(grid, 1, 0, colWidth, chipHeight, chipGap), "In-Flight Opens", stats.InFlightOpenCount);
-            DrawStatChipBool(ChipRect(grid, 1, 1, colWidth, chipHeight, chipGap), "Pending Sweep", stats.HasPendingSceneSweep);
-            DrawStatChipInt(ChipRect(grid, 2, 0, colWidth, chipHeight, chipGap), "Config Handles", stats.CachedConfigHandleCount);
-            DrawStatChipInt(ChipRect(grid, 2, 1, colWidth, chipHeight, chipGap), "Prefab Handles", stats.CachedPrefabHandleCount);
-            DrawStatChipInt(ChipRect(grid, 3, 0, colWidth, chipHeight, chipGap), "Layer Count", stats.LayerCount);
-            DrawStatChipInt(ChipRect(grid, 3, 1, colWidth, chipHeight, chipGap), "Layer Windows", stats.TotalLayerWindowCount);
-            DrawStatChipInt(ChipRect(grid, 4, 0, colWidth, chipHeight, chipGap), "Isolated Canvases", stats.IsolatedWindowCanvasCount);
-        }
-
-        private static Rect ChipRect(Rect grid, int row, int col, float colWidth, float chipHeight, float gap)
-        {
-            return new Rect(
-                grid.x + col * (colWidth + gap),
-                grid.y + row * (chipHeight + gap),
-                colWidth,
-                chipHeight);
-        }
-
-        private void DrawStatChipInt(Rect rect, string label, int value)
-        {
-            DrawChipBackground(rect, new Color(0.35f, 0.55f, 0.85f, 0.8f));
-            GUI.Label(new Rect(rect.x + 10f, rect.y + 3f, rect.width - 14f, 14f), label, _chipTitleStyle);
-            GUI.Label(new Rect(rect.x + 10f, rect.y + 18f, rect.width - 14f, 18f), IntToString(value), _chipValueStyle);
-        }
-
-        private void DrawStatChipBool(Rect rect, string label, bool value)
-        {
-            Color accent = value
-                ? new Color(0.85f, 0.6f, 0.2f, 0.8f)
-                : new Color(0.25f, 0.65f, 0.4f, 0.8f);
-            DrawChipBackground(rect, accent);
-            GUI.Label(new Rect(rect.x + 10f, rect.y + 3f, rect.width - 14f, 14f), label, _chipTitleStyle);
-            GUI.Label(new Rect(rect.x + 10f, rect.y + 18f, rect.width - 14f, 18f), value ? "Yes" : "No", _chipValueStyle);
-        }
-
-        private static void DrawChipBackground(Rect rect, Color accent)
-        {
-            Color bg = EditorGUIUtility.isProSkin
-                ? new Color(0.22f, 0.22f, 0.22f, 0.5f)
-                : new Color(0.82f, 0.82f, 0.82f, 0.5f);
-            EditorGUI.DrawRect(rect, bg);
-            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 3f, rect.height), accent);
-        }
-
-        private void DrawLayerTable()
-        {
-            if (_layerStats.Count == 0)
+            if (!Application.isPlaying ||
+                _target == null ||
+                !_target.IsInitialized ||
+                EditorApplication.timeSinceStartup < _nextRefreshTime)
             {
-                EditorGUILayout.HelpBox("No layers registered.", MessageType.None);
                 return;
             }
 
-            const float headerHeight = 20f;
-            const float rowHeight = 20f;
-            const float rowGap = 1f;
+            RefreshSnapshot();
+            Repaint();
+        }
 
-            Rect header = EditorGUILayout.GetControlRect(false, headerHeight);
-            Color headerBg = EditorGUIUtility.isProSkin
-                ? new Color(0.18f, 0.18f, 0.18f, 0.7f)
-                : new Color(0.72f, 0.72f, 0.72f, 0.7f);
-            EditorGUI.DrawRect(header, headerBg);
-
-            float c0 = header.width * 0.50f;
-            float c1 = header.width * 0.25f;
-            float c2 = header.width - c0 - c1;
-
-            GUI.Label(new Rect(header.x + 6f, header.y, c0 - 6f, headerHeight), "Layer", _layerHeaderStyle);
-            GUI.Label(new Rect(header.x + c0 + 6f, header.y, c1 - 6f, headerHeight), "Sort", _layerHeaderStyle);
-            GUI.Label(new Rect(header.x + c0 + c1 + 6f, header.y, c2 - 6f, headerHeight), "Windows", _layerHeaderStyle);
-
-            float totalRows = _layerStats.Count * (rowHeight + rowGap);
-            Rect rowsArea = EditorGUILayout.GetControlRect(false, totalRows);
-
-            Color rowEven = EditorGUIUtility.isProSkin
-                ? new Color(0.22f, 0.22f, 0.22f, 0.3f)
-                : new Color(0.85f, 0.85f, 0.85f, 0.3f);
-            Color rowOdd = EditorGUIUtility.isProSkin
-                ? new Color(0.25f, 0.25f, 0.25f, 0.3f)
-                : new Color(0.82f, 0.82f, 0.82f, 0.3f);
-            Color rowAccent = new Color(0.35f, 0.55f, 0.85f, 0.6f);
-
-            for (int i = 0; i < _layerStats.Count; i++)
+        private void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.ExitingPlayMode ||
+                state == PlayModeStateChange.EnteredEditMode)
             {
-                float y = rowsArea.y + i * (rowHeight + rowGap);
-                Rect row = new Rect(rowsArea.x, y, rowsArea.width, rowHeight);
-                EditorGUI.DrawRect(row, i % 2 == 0 ? rowEven : rowOdd);
-
-                if (_layerStats[i].WindowCount > 0)
-                    EditorGUI.DrawRect(new Rect(row.x, row.y, 2f, row.height), rowAccent);
-
-                GUI.Label(new Rect(row.x + 6f, row.y, c0 - 6f, rowHeight), _layerStats[i].LayerName, _layerCellStyle);
-                GUI.Label(new Rect(row.x + c0 + 6f, row.y, c1 - 6f, rowHeight), IntToString(_layerStats[i].SortingOrder), _layerCellStyle);
-                GUI.Label(new Rect(row.x + c0 + c1 + 6f, row.y, c2 - 6f, rowHeight), IntToString(_layerStats[i].WindowCount), _layerCellStyle);
+                ClearSnapshot();
             }
         }
 
-        private static string[] InitIntCache(int size)
+        private void RefreshSnapshot()
         {
-            string[] cache = new string[size];
-            for (int i = 0; i < size; i++) cache[i] = i.ToString();
-            return cache;
+            if (_target == null || !_target.IsInitialized)
+            {
+                ClearSnapshot();
+                return;
+            }
+
+            IUIService service = _target.Service;
+            _stats = service.GetPerformanceStats();
+            service.CopyLayerRuntimeStats(_layerStats);
+            _sessionUsageText =
+                IntToString(_stats.SessionCount) + " / " + IntToString(_stats.MaxWindowCapacity);
+            _layerValueText.Clear();
+            if (_layerValueText.Capacity < _layerStats.Count)
+            {
+                _layerValueText.Capacity = _layerStats.Count;
+            }
+            for (int i = 0; i < _layerStats.Count; i++)
+            {
+                UILayerRuntimeStats layer = _layerStats[i];
+                _layerValueText.Add(
+                    "Sort " + IntToString(layer.SortingOrder) +
+                    " · Windows " + IntToString(layer.WindowCount));
+            }
+            _hasSnapshot = true;
+            _nextRefreshTime = EditorApplication.timeSinceStartup + _refreshInterval;
+        }
+
+        private void ClearSnapshot()
+        {
+            _stats = default;
+            _layerStats.Clear();
+            _layerValueText.Clear();
+            _sessionUsageText = "0 / 0";
+            _hasSnapshot = false;
+            _nextRefreshTime = 0d;
+        }
+
+        private static string[] BuildIntCache(int length)
+        {
+            var result = new string[length];
+            for (int i = 0; i < result.Length; i++)
+            {
+                result[i] = i.ToString();
+            }
+
+            return result;
         }
 
         private static string IntToString(int value)
         {
-            return (uint)value < (uint)IntCache.Length ? IntCache[value] : value.ToString();
-        }
-
-        private void EnsureStyles()
-        {
-            if (_sectionTitleStyle != null) return;
-
-            _sectionTitleStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                fontSize = 12,
-                alignment = TextAnchor.MiddleLeft
-            };
-            _chipTitleStyle = new GUIStyle(EditorStyles.miniLabel)
-            {
-                alignment = TextAnchor.MiddleLeft,
-                fontSize = 10,
-                normal = { textColor = EditorGUIUtility.isProSkin
-                    ? new Color(0.6f, 0.6f, 0.6f)
-                    : new Color(0.35f, 0.35f, 0.35f) }
-            };
-            _chipValueStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                alignment = TextAnchor.MiddleLeft,
-                fontSize = 14
-            };
-            _layerHeaderStyle = new GUIStyle(EditorStyles.miniBoldLabel)
-            {
-                alignment = TextAnchor.MiddleLeft
-            };
-            _layerCellStyle = new GUIStyle(EditorStyles.label)
-            {
-                alignment = TextAnchor.MiddleLeft,
-                fontSize = 11
-            };
+            return value >= 0 && value < IntCache.Length
+                ? IntCache[value]
+                : value.ToString();
         }
     }
 }
-#endif

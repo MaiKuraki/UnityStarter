@@ -10,19 +10,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     public interface ITargetActor
     {
         /// <summary>
-        /// Broadcasts when the actor has successfully acquired valid targeting data.
-        /// The GameplayAbility's waiting task will be listening for this event.
-        /// </summary>
-        event Action<TargetData> OnTargetDataReady;
-
-        /// <summary>
-        /// Broadcasts when the targeting process is cancelled, either by user input or by failing to acquire a valid target.
-        /// The GameplayAbility's waiting task will be listening for this event.
-        /// </summary>
-        event Action OnCanceled;
-
-        /// <summary>
-        /// Initializes the TargetActor, linking it to its owning ability and wiring up the result callbacks.
+        /// Initializes the TargetActor, linking it to its owning ability and wiring exactly one result consumer.
+        /// TargetData is a callback-scoped lease, so the completion callback is request/response rather than multicast.
         /// This is the first method called on a new TargetActor instance.
         /// </summary>
         /// <param name="ability">The GameplayAbility that owns this targeting operation.</param>
@@ -38,7 +27,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         /// <summary>
         /// Called externally (typically by the owning ability or an input handler) to confirm the current target selection.
-        /// This should trigger the OnTargetDataReady event.
+        /// This should invoke the configured completion callback exactly once.
         /// </summary>
         void ConfirmTargeting();
 

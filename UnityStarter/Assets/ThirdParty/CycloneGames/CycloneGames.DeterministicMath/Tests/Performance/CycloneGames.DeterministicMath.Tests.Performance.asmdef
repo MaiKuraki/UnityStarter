@@ -1,0 +1,30 @@
+{
+    "name": "CycloneGames.DeterministicMath.Tests.Performance",
+    "rootNamespace": "CycloneGames.DeterministicMath.Tests.Performance",
+    "references": [
+        "CycloneGames.DeterministicMath.Core",
+        "Unity.PerformanceTesting"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_DETERMINISTIC_MATH_HAS_PERFORMANCE_TESTING"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.test-framework.performance",
+            "expression": "3.0.0",
+            "define": "CYCLONEGAMES_DETERMINISTIC_MATH_HAS_PERFORMANCE_TESTING"
+        }
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

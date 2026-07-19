@@ -18,6 +18,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private GameplayAttribute watchedAttribute;
         private bool onlyTriggerOnce;
         private Action<float, float> attributeChangeCallback;
+        private bool terminalCallbackStarted;
+
+        public override void InitTask(GameplayAbility ability)
+        {
+            base.InitTask(ability);
+            terminalCallbackStarted = false;
+        }
 
         /// <summary>
         /// Creates a WaitAttributeChange task.
@@ -50,18 +57,43 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (!IsActive || IsCancelled) return;
 
-            OnAttributeChanged?.Invoke(oldValue, newValue);
-
             if (onlyTriggerOnce)
             {
-                EndTask();
+                if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                        this,
+                        ref terminalCallbackStarted,
+                        out ulong leaseGeneration)) return;
+                try
+                {
+                    OnAttributeChanged?.Invoke(oldValue, newValue);
+                }
+                finally
+                {
+                    EndTaskIfCurrentLease(leaseGeneration);
+                }
+                return;
             }
+
+            OnAttributeChanged?.Invoke(oldValue, newValue);
         }
 
         public override void CancelTask()
         {
-            OnCancelled?.Invoke();
-            base.CancelTask();
+            if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            try
+            {
+                OnCancelled?.Invoke();
+            }
+            finally
+            {
+                if (IsCurrentLease(leaseGeneration))
+                {
+                    base.CancelTask();
+                }
+            }
         }
 
         protected override void OnDestroy()

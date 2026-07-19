@@ -7,6 +7,7 @@ using CycloneGames.Foundation2D.Sample.Runtime;
 namespace CycloneGames.Foundation2D.Sample.Editor
 {
     [CustomEditor(typeof(SpriteSequencePerformanceBenchmark))]
+    [CanEditMultipleObjects]
     public sealed class SpriteSequencePerformanceBenchmarkEditor : UnityEditor.Editor
     {
         private SerializedProperty _enableScaleSweep;
@@ -15,6 +16,7 @@ namespace CycloneGames.Foundation2D.Sample.Editor
         private SerializedProperty _includeSceneControllersInSweep;
 
         private SerializedProperty _compareMonoAndBurst;
+        private SerializedProperty _burstManager;
         private SerializedProperty _enableCapacitySearch;
         private SerializedProperty _capacitySearchTestBurst;
         private SerializedProperty _capacitySearchSamplesPerPoint;
@@ -22,6 +24,8 @@ namespace CycloneGames.Foundation2D.Sample.Editor
         private SerializedProperty _enableNonMonotonicLocalRescan;
         private SerializedProperty _prewarmGeneratedToMaxTargetBeforeRun;
         private SerializedProperty _useFactoryMonoFastPool;
+        private bool _sceneValidationAvailable;
+        private int _controllerCount;
 
         private void OnEnable()
         {
@@ -31,6 +35,7 @@ namespace CycloneGames.Foundation2D.Sample.Editor
             _includeSceneControllersInSweep = serializedObject.FindProperty("includeSceneControllersInSweep");
 
             _compareMonoAndBurst = serializedObject.FindProperty("compareMonoAndBurst");
+            _burstManager = serializedObject.FindProperty("burstManager");
             _enableCapacitySearch = serializedObject.FindProperty("enableCapacitySearch");
             _capacitySearchTestBurst = serializedObject.FindProperty("capacitySearchTestBurst");
             _capacitySearchSamplesPerPoint = serializedObject.FindProperty("capacitySearchSamplesPerPoint");
@@ -55,12 +60,32 @@ namespace CycloneGames.Foundation2D.Sample.Editor
         {
             EditorGUILayout.LabelField("Validation Hints", EditorStyles.boldLabel);
 
-            var allControllers = FindControllers(_ignoreInactiveSceneControllers.boolValue);
-            bool hasAnyController = allControllers != null && allControllers.Length > 0;
-
-            if (!hasAnyController)
+            using (new EditorGUI.DisabledScope(serializedObject.isEditingMultipleObjects))
             {
-                EditorGUILayout.HelpBox("No SpriteSequenceController found in scene. Benchmark will have no targets.", MessageType.Warning);
+                if (GUILayout.Button("Refresh Scene Validation"))
+                {
+                    RefreshSceneValidation();
+                }
+            }
+
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                EditorGUILayout.HelpBox(
+                    "Scene and dependency diagnostics require one benchmark component. Common serialized settings above remain available for multi-object editing.",
+                    MessageType.Info);
+                return;
+            }
+            else if (!_sceneValidationAvailable)
+            {
+                EditorGUILayout.HelpBox("Scene queries are performed only on request so Inspector repaint cost stays independent of scene size.", MessageType.None);
+            }
+            else if (_controllerCount == 0)
+            {
+                EditorGUILayout.HelpBox("No SpriteSequenceController found in the selected scene scope. Benchmark will have no targets.", MessageType.Warning);
+            }
+            else
+            {
+                EditorGUILayout.LabelField($"Controllers in selected scope: {_controllerCount}", EditorStyles.miniLabel);
             }
 
             if (_enableScaleSweep.boolValue)
@@ -107,38 +132,35 @@ namespace CycloneGames.Foundation2D.Sample.Editor
             bool burstIsRelevant = _compareMonoAndBurst.boolValue || (_enableCapacitySearch.boolValue && _capacitySearchTestBurst.boolValue);
             if (burstIsRelevant)
             {
-#if BURST_JOBS
-                EditorGUILayout.HelpBox("BURST_JOBS define is enabled.", MessageType.Info);
-#else
-                EditorGUILayout.HelpBox("BURST_JOBS define is not enabled. BurstManaged tests will fallback to MonoUpdate.", MessageType.Warning);
-#endif
-
-                if (!HasActiveBurstManagerInScene())
+                EditorGUILayout.HelpBox("This sample assembly is compiled only when the optional Burst and Collections integration is available.", MessageType.Info);
+                if (_burstManager.hasMultipleDifferentValues)
                 {
-                    EditorGUILayout.HelpBox("No SpriteSequenceBurstManager found in scene. BurstManaged playback may fallback to MonoUpdate.", MessageType.Warning);
+                    EditorGUILayout.HelpBox("Selected benchmark components use different Burst Manager assignments.", MessageType.Info);
+                }
+                else if (_burstManager.objectReferenceValue == null)
+                {
+                    EditorGUILayout.HelpBox("Assign an active SpriteSequenceBurstManager. Burst phases are cancelled instead of silently measuring MonoUpdate fallback.", MessageType.Error);
+                }
+                else if (_burstManager.objectReferenceValue is SpriteSequenceBurstManager manager && !manager.isActiveAndEnabled)
+                {
+                    EditorGUILayout.HelpBox("The assigned SpriteSequenceBurstManager is inactive or disabled.", MessageType.Error);
                 }
             }
 
             EditorGUILayout.HelpBox("Benchmark component can be placed on any object; it does not need to be on the SpriteSequenceController object.", MessageType.None);
         }
 
-        private static bool HasActiveBurstManagerInScene()
+        private void RefreshSceneValidation()
         {
 #if UNITY_2023_1_OR_NEWER
-        var managers = Object.FindObjectsByType<SpriteSequenceBurstManager>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            SpriteSequenceController[] controllers = Object.FindObjectsByType<SpriteSequenceController>(
+                _ignoreInactiveSceneControllers.boolValue ? FindObjectsInactive.Exclude : FindObjectsInactive.Include,
+                FindObjectsSortMode.None);
 #else
-            var managers = Object.FindObjectsOfType<SpriteSequenceBurstManager>(true);
+            SpriteSequenceController[] controllers = Object.FindObjectsOfType<SpriteSequenceController>(!_ignoreInactiveSceneControllers.boolValue);
 #endif
-            return managers != null && managers.Length > 0;
-        }
-
-        private static SpriteSequenceController[] FindControllers(bool ignoreInactive)
-        {
-#if UNITY_2023_1_OR_NEWER
-        return Object.FindObjectsByType<SpriteSequenceController>(ignoreInactive ? FindObjectsInactive.Exclude : FindObjectsInactive.Include, FindObjectsSortMode.None);
-#else
-            return Object.FindObjectsOfType<SpriteSequenceController>(!ignoreInactive);
-#endif
+            _controllerCount = controllers?.Length ?? 0;
+            _sceneValidationAvailable = true;
         }
     }
 }

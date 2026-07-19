@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.inputsystem",
   "version": "1.0.0",
   "displayName": "CycloneGames.InputSystem",
-  "description": "Reactive, zero-GC input wrapper with YAML config, editor tooling, context stacks, and robust multi-player device pairing.",
+  "description": "Validated YAML input authoring, per-player context routing, local multiplayer device ownership, rebinding profiles, editor tooling, and opt-in integrations for Unity Input System.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "license": "MIT",

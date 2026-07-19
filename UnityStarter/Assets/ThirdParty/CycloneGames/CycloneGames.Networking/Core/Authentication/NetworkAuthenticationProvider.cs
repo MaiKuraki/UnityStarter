@@ -5,13 +5,14 @@ namespace CycloneGames.Networking.Authentication
 {
     public enum NetworkAuthenticationStatus : byte
     {
-        Accepted,
-        Rejected,
-        Pending,
-        Unsupported,
-        InvalidCredentials,
-        Expired,
-        ProviderUnavailable
+        Invalid = 0,
+        Accepted = 1,
+        Rejected = 2,
+        Pending = 3,
+        Unsupported = 4,
+        InvalidCredentials = 5,
+        Expired = 6,
+        ProviderUnavailable = 7
     }
 
     public readonly struct NetworkPrincipal

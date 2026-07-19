@@ -3,26 +3,10 @@ using System;
 namespace CycloneGames.Networking
 {
     /// <summary>
-    /// Shared scaffolding for a domain networking module's protocol.
+    /// Provides the runtime-facing operations for one immutable, versioned protocol manifest.
     /// </summary>
-    /// <remarks>
-    /// Every CycloneGames *.Networking package used to copy-paste the same module logic:
-    /// message-id range containment checks, protocol-version support checks, catalog resolution
-    /// from the runtime context, manifest registration, and idempotent per-message registration.
-    /// Those copies had already drifted (for example one module registered the extra range via
-    /// <see cref="INetworkMessageCatalog.RegisterRange"/> while another used
-    /// <see cref="INetworkMessageCatalog.RegisterModuleRange"/>). This type centralizes the logic so
-    /// each domain protocol becomes a thin facade over a single <see cref="NetworkProtocolManifest"/>
-    /// (which carries the owner, version window, id range, and messages) and forwards the rest here.
-    /// </remarks>
     public sealed class NetworkModuleProtocol
     {
-        /// <summary>
-        /// Wraps a domain protocol <paramref name="manifest"/>. The wire version window is derived from the
-        /// manifest's <see cref="NetworkProtocolManifest.CurrentVersion"/> /
-        /// <see cref="NetworkProtocolManifest.MinimumSupportedVersion"/> so there is a single source of truth:
-        /// the manifest (which also feeds the fingerprint) cannot drift from a separately supplied version.
-        /// </summary>
         public NetworkModuleProtocol(NetworkProtocolManifest manifest)
         {
             Manifest = manifest ?? throw new ArgumentNullException(nameof(manifest));
@@ -60,17 +44,17 @@ namespace CycloneGames.Networking
         }
 
         /// <summary>
-        /// Resolve the message catalog from a manager's runtime context and register this module's manifest.
-        /// Returns false when the manager does not expose a runtime context or a catalog service.
+        /// Resolve the message catalog from an endpoint's runtime context and register this module's manifest.
+        /// Returns false when the endpoint does not expose a runtime context or a catalog service.
         /// </summary>
-        public bool TryRegister(INetworkManager networkManager)
+        public bool TryRegister(INetworkMessageEndpoint messageEndpoint)
         {
-            if (networkManager == null)
+            if (messageEndpoint == null)
             {
                 return false;
             }
 
-            if (networkManager is not INetworkRuntimeContextProvider provider || provider.RuntimeContext == null)
+            if (messageEndpoint is not INetworkRuntimeContextProvider provider || provider.RuntimeContext == null)
             {
                 return false;
             }
@@ -92,59 +76,11 @@ namespace CycloneGames.Networking
                 throw new ArgumentNullException(nameof(catalog));
             }
 
-            catalog.RegisterProtocolManifest(Manifest);
-        }
-
-        /// <summary>
-        /// Idempotently register a single module-owned message id that is not part of the static
-        /// manifest (for example project-specific extensions inside the module's reserved range).
-        /// Re-registering an identical descriptor is a no-op; a conflicting descriptor throws.
-        /// </summary>
-        public void RegisterMessage<T>(
-            INetworkMessageCatalog catalog,
-            ushort messageId,
-            NetworkChannel channel = NetworkChannel.Reliable,
-            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
-        {
-            if (catalog == null)
+            if (!catalog.TryRegisterProtocolManifest(Manifest))
             {
-                throw new ArgumentNullException(nameof(catalog));
+                throw new InvalidOperationException(
+                    $"Protocol manifest {Manifest.ProtocolId} conflicts with the message catalog.");
             }
-
-            if (!ContainsMessageId(messageId))
-            {
-                throw new ArgumentOutOfRangeException(
-                    nameof(messageId),
-                    messageId,
-                    $"{Owner} message ids must be inside {MessageRange}.");
-            }
-
-            catalog.RegisterModuleRange(MessageRange);
-
-            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<T>(
-                messageId,
-                Owner,
-                NetworkMessageKind.Module,
-                channel,
-                maxPayloadSize);
-
-            if (catalog.TryRegister(descriptor))
-            {
-                return;
-            }
-
-            if (catalog.TryGet(messageId, out NetworkMessageDescriptor existing)
-                && existing.SchemaHash == descriptor.SchemaHash
-                && string.Equals(existing.Owner, descriptor.Owner, StringComparison.Ordinal)
-                && string.Equals(existing.Name, descriptor.Name, StringComparison.Ordinal)
-                && existing.Kind == descriptor.Kind
-                && existing.DefaultChannel == descriptor.DefaultChannel
-                && existing.MaxPayloadSize == descriptor.MaxPayloadSize)
-            {
-                return;
-            }
-
-            throw new InvalidOperationException($"Message id {messageId} is already registered by {existing.Owner}:{existing.Name}.");
         }
     }
 }

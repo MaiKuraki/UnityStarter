@@ -2,8 +2,7 @@
     "name": "CycloneGames.Factory.DOD.Runtime",
     "rootNamespace": "",
     "references": [
-        "Unity.Collections",
-        "Unity.Burst"
+        "Unity.Collections"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -11,17 +10,14 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
+    "defineConstraints": [
+        "PRESENT_COLLECTIONS"
+    ],
     "versionDefines": [
         {
             "name": "com.unity.collections",
             "expression": "",
             "define": "PRESENT_COLLECTIONS"
-        },
-        {
-            "name": "com.unity.burst",
-            "expression": "",
-            "define": "PRESENT_BURST"
         }
     ],
     "noEngineReferences": false

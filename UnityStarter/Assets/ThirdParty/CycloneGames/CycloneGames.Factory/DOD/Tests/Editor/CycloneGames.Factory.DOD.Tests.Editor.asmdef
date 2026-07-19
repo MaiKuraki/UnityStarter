@@ -1,0 +1,30 @@
+{
+    "name": "CycloneGames.Factory.DOD.Tests.Editor",
+    "rootNamespace": "CycloneGames.Factory.Tests.Editor",
+    "references": [
+        "CycloneGames.Factory.DOD.Runtime",
+        "Unity.Collections"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "PRESENT_COLLECTIONS"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.collections",
+            "expression": "",
+            "define": "PRESENT_COLLECTIONS"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

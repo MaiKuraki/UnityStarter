@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Security.Cryptography;
-using CycloneGames.Hash.Core;
-using CycloneGames.IO.Runtime;
+using System.Threading;
+
+using Cysharp.Threading.Tasks;
+
+using CycloneGames.IO;
 
 namespace CycloneGames.AssetManagement.Runtime.Trust
 {
@@ -13,10 +15,36 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
     /// </summary>
     public sealed class ContentTrustVerifier : IContentTrustBufferVerifier
     {
-        public static readonly ContentTrustVerifier Shared = new ContentTrustVerifier();
+        public static readonly ContentTrustVerifier Shared = new ContentTrustVerifier(ContentTrustPolicy.RequireSignature);
+        public static readonly ContentTrustVerifier IntegrityOnly = new ContentTrustVerifier(ContentTrustPolicy.IntegrityOnly);
 
         private const int SHA256_HEX_LENGTH = 64;
         private const int XXHASH64_HEX_LENGTH = 16;
+
+        public ContentTrustPolicy Policy { get; }
+
+        public ContentTrustVerifier(ContentTrustPolicy policy = ContentTrustPolicy.RequireSignature)
+        {
+            if (policy != ContentTrustPolicy.RequireSignature && policy != ContentTrustPolicy.IntegrityOnly)
+            {
+                throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unsupported content trust policy.");
+            }
+
+            Policy = policy;
+        }
+
+        public static ContentTrustVerifier ForPolicy(ContentTrustPolicy policy)
+        {
+            switch (policy)
+            {
+                case ContentTrustPolicy.RequireSignature:
+                    return Shared;
+                case ContentTrustPolicy.IntegrityOnly:
+                    return IntegrityOnly;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(policy), policy, "Unsupported content trust policy.");
+            }
+        }
 
         public ContentTrustVerificationResult VerifyBytes(byte[] bytes, in ContentTrustFileEntry entry)
         {
@@ -86,6 +114,33 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             }
         }
 
+        public ContentTrustVerificationResult ValidateManifest(
+            in ContentTrustManifest manifest,
+            IContentTrustSignatureVerifier signatureVerifier = null)
+        {
+            if (manifest.Entries == null || string.IsNullOrEmpty(manifest.Version))
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.InvalidManifest,
+                    null,
+                    message: "Manifest is not initialized.");
+            }
+
+            for (int i = 0; i < manifest.Entries.Count; i++)
+            {
+                ContentTrustFileEntry entry = manifest.Entries[i];
+                ContentTrustVerificationResult validation = ValidateEntry(in entry);
+                if (!validation.Succeeded)
+                {
+                    return validation;
+                }
+            }
+
+            return Policy == ContentTrustPolicy.RequireSignature
+                ? VerifyRequiredSignature(in manifest, signatureVerifier)
+                : ContentTrustVerificationResult.Passed(null);
+        }
+
         public int VerifyManifestFiles(
             string rootDirectory,
             in ContentTrustManifest manifest,
@@ -94,17 +149,24 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         {
             failures?.Clear();
 
-            if (manifest.Entries == null)
+            ContentTrustVerificationResult manifestValidation = ValidateManifest(
+                in manifest,
+                signatureVerifier);
+            if (!manifestValidation.Succeeded)
             {
-                AddFailure(failures, ContentTrustVerificationResult.Failed(ContentTrustFailure.InvalidManifest, null, message: "Manifest entries are null."));
+                AddFailure(failures, manifestValidation);
                 return 1;
             }
 
-            if (signatureVerifier != null && !signatureVerifier.Verify(in manifest, out string signatureError))
-            {
-                AddFailure(failures, ContentTrustVerificationResult.Failed(ContentTrustFailure.SignatureRejected, null, message: signatureError));
-                return 1;
-            }
+            return VerifyValidatedManifestFiles(rootDirectory, in manifest, failures);
+        }
+
+        private int VerifyValidatedManifestFiles(
+            string rootDirectory,
+            in ContentTrustManifest manifest,
+            List<ContentTrustVerificationResult> failures = null)
+        {
+            failures?.Clear();
 
             if (!TryResolveManifestRoot(rootDirectory, manifest.ContentRoot, out string contentRoot, out ContentTrustVerificationResult rootFailure))
             {
@@ -112,10 +174,27 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
                 return 1;
             }
 
+            FilePathSandbox contentSandbox;
+            try
+            {
+                contentSandbox = new FilePathSandbox(contentRoot);
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException)
+            {
+                AddFailure(
+                    failures,
+                    ContentTrustVerificationResult.Failed(
+                        ContentTrustFailure.PathEscapesRoot,
+                        manifest.ContentRoot,
+                        message: ex.Message));
+                return 1;
+            }
+
             int failureCount = 0;
             for (int i = 0; i < manifest.Entries.Count; i++)
             {
-                ContentTrustVerificationResult result = VerifyFile(contentRoot, manifest.Entries[i]);
+                ContentTrustFileEntry entry = manifest.Entries[i];
+                ContentTrustVerificationResult result = VerifyValidatedFile(contentSandbox, in entry);
                 if (result.Succeeded)
                 {
                     continue;
@@ -128,7 +207,199 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             return failureCount;
         }
 
-        private static ContentTrustVerificationResult ValidateEntry(in ContentTrustFileEntry entry)
+        public async UniTask<int> VerifyManifestFilesAsync(
+            string rootDirectory,
+            ContentTrustManifest manifest,
+            List<ContentTrustVerificationResult> failures = null,
+            IContentTrustSignatureVerifier signatureVerifier = null,
+            CancellationToken cancellationToken = default)
+        {
+            failures?.Clear();
+            cancellationToken.ThrowIfCancellationRequested();
+
+            ContentTrustVerificationResult manifestValidation = ValidateManifest(
+                in manifest,
+                signatureVerifier);
+            if (!manifestValidation.Succeeded)
+            {
+                AddFailure(failures, manifestValidation);
+                return 1;
+            }
+
+            return await VerifyValidatedManifestFilesAsync(
+                rootDirectory,
+                manifest,
+                failures,
+                cancellationToken);
+        }
+
+        private async UniTask<int> VerifyValidatedManifestFilesAsync(
+            string rootDirectory,
+            ContentTrustManifest manifest,
+            List<ContentTrustVerificationResult> failures,
+            CancellationToken cancellationToken)
+        {
+
+            if (!TryResolveManifestRoot(
+                    rootDirectory,
+                    manifest.ContentRoot,
+                    out string contentRoot,
+                    out ContentTrustVerificationResult rootFailure))
+            {
+                AddFailure(failures, rootFailure);
+                return 1;
+            }
+
+            FilePathSandbox contentSandbox;
+            try
+            {
+                contentSandbox = new FilePathSandbox(contentRoot);
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is IOException ||
+                                       ex is UnauthorizedAccessException || ex is NotSupportedException)
+            {
+                AddFailure(
+                    failures,
+                    ContentTrustVerificationResult.Failed(
+                        ContentTrustFailure.PathEscapesRoot,
+                        manifest.ContentRoot,
+                        message: ex.Message));
+                return 1;
+            }
+
+            var hashBuffer = new byte[32];
+            int failureCount = 0;
+            for (int i = 0; i < manifest.Entries.Count; i++)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                ContentTrustFileEntry entry = manifest.Entries[i];
+                ContentTrustVerificationResult result = await VerifyValidatedFileAsync(
+                    contentSandbox,
+                    entry,
+                    hashBuffer,
+                    cancellationToken);
+                if (!result.Succeeded)
+                {
+                    failureCount++;
+                    AddFailure(failures, result);
+                }
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+                await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
+#endif
+            }
+
+            return failureCount;
+        }
+
+        private static async UniTask<ContentTrustVerificationResult> VerifyValidatedFileAsync(
+            FilePathSandbox sandbox,
+            ContentTrustFileEntry entry,
+            byte[] hashBuffer,
+            CancellationToken cancellationToken)
+        {
+            string filePath;
+            try
+            {
+                filePath = sandbox.Resolve(entry.Location);
+                if (!File.Exists(filePath))
+                {
+                    return ContentTrustVerificationResult.Failed(
+                        ContentTrustFailure.MissingFile,
+                        entry.Location);
+                }
+
+                long actualSize = new FileInfo(filePath).Length;
+                if (entry.SizeBytes != actualSize)
+                {
+                    return ContentTrustVerificationResult.Failed(
+                        ContentTrustFailure.SizeMismatch,
+                        entry.Location,
+                        entry.SizeBytes.ToString(),
+                        actualSize.ToString());
+                }
+
+                if (entry.HashAlgorithm == ContentTrustHashAlgorithm.None)
+                {
+                    return ContentTrustVerificationResult.Passed(entry.Location);
+                }
+
+                int hashSize = GetHashSizeInBytes(entry.HashAlgorithm);
+                await FileHasher.WriteHashAsync(
+                    filePath,
+                    ToFileHashAlgorithm(entry.HashAlgorithm),
+                    new Memory<byte>(hashBuffer, 0, hashSize),
+                    cancellationToken: cancellationToken);
+                if (!MatchesExpectedHashHex(
+                        new ReadOnlySpan<byte>(hashBuffer, 0, hashSize),
+                        entry.ExpectedHashHex))
+                {
+                    return ContentTrustVerificationResult.Failed(
+                        ContentTrustFailure.HashMismatch,
+                        entry.Location,
+                        entry.ExpectedHashHex,
+                        ContentHasher.ToHex(new ReadOnlySpan<byte>(hashBuffer, 0, hashSize)));
+                }
+
+                return ContentTrustVerificationResult.Passed(entry.Location);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException ||
+                                       ex is NotSupportedException || ex is ArgumentException ||
+                                       ex is System.Security.Cryptography.CryptographicException)
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.IoError,
+                    entry.Location,
+                    message: ex.Message);
+            }
+        }
+
+        private static ContentTrustVerificationResult VerifyValidatedFile(
+            FilePathSandbox sandbox,
+            in ContentTrustFileEntry entry)
+        {
+            string filePath;
+            try
+            {
+                filePath = sandbox.Resolve(entry.Location);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException || ex is ArgumentException)
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.PathEscapesRoot,
+                    entry.Location,
+                    message: ex.Message);
+            }
+
+            try
+            {
+                if (!File.Exists(filePath))
+                {
+                    return ContentTrustVerificationResult.Failed(ContentTrustFailure.MissingFile, entry.Location);
+                }
+
+                long actualSize = new FileInfo(filePath).Length;
+                if (entry.SizeBytes != actualSize)
+                {
+                    return ContentTrustVerificationResult.Failed(
+                        ContentTrustFailure.SizeMismatch,
+                        entry.Location,
+                        entry.SizeBytes.ToString(),
+                        actualSize.ToString());
+                }
+
+                return VerifyFileHash(filePath, in entry);
+            }
+            catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException || ex is ArgumentException)
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.IoError,
+                    entry.Location,
+                    message: ex.Message);
+            }
+        }
+
+        private ContentTrustVerificationResult ValidateEntry(in ContentTrustFileEntry entry)
         {
             if (string.IsNullOrEmpty(entry.Location))
             {
@@ -138,6 +409,16 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             if (entry.SizeBytes < 0L)
             {
                 return ContentTrustVerificationResult.Failed(ContentTrustFailure.InvalidEntry, entry.Location, message: "SizeBytes cannot be negative.");
+            }
+
+            if (entry.HashAlgorithm != ContentTrustHashAlgorithm.Sha256)
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.HashAlgorithmRejected,
+                    entry.Location,
+                    ContentTrustHashAlgorithm.Sha256.ToString(),
+                    entry.HashAlgorithm.ToString(),
+                    "The selected content trust policy requires cryptographic SHA-256 hashes.");
             }
 
             int expectedHashLength = GetExpectedHashHexLength(entry.HashAlgorithm);
@@ -153,6 +434,49 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             }
 
             return ContentTrustVerificationResult.Passed(entry.Location);
+        }
+
+        private static ContentTrustVerificationResult VerifyRequiredSignature(
+            in ContentTrustManifest manifest,
+            IContentTrustSignatureVerifier signatureVerifier)
+        {
+            if (signatureVerifier == null)
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.SignatureRequired,
+                    null,
+                    message: "The RequireSignature content trust policy requires a signature verifier.");
+            }
+
+            if (string.IsNullOrWhiteSpace(manifest.Signature))
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.SignatureRequired,
+                    null,
+                    message: "The RequireSignature content trust policy requires a manifest signature.");
+            }
+
+            try
+            {
+                if (!signatureVerifier.Verify(in manifest, out string signatureError))
+                {
+                    return ContentTrustVerificationResult.Failed(
+                        ContentTrustFailure.SignatureRejected,
+                        null,
+                        message: string.IsNullOrEmpty(signatureError)
+                            ? "The content trust manifest signature was rejected."
+                            : signatureError);
+                }
+
+                return ContentTrustVerificationResult.Passed(null);
+            }
+            catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+            {
+                return ContentTrustVerificationResult.Failed(
+                    ContentTrustFailure.SignatureRejected,
+                    null,
+                    message: $"The content trust manifest signature verifier failed: {ex.Message}");
+            }
         }
 
         private static bool TryResolveManifestRoot(
@@ -172,13 +496,11 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
             try
             {
-                string candidateRoot = string.IsNullOrEmpty(manifestContentRoot)
-                    ? rootDirectory
-                    : Path.Combine(rootDirectory, manifestContentRoot);
-                contentRoot = FilePathSecurity.EnsureWithinRoot(rootDirectory, candidateRoot);
+                contentRoot = new FilePathSandbox(rootDirectory).Resolve(
+                    manifestContentRoot ?? string.Empty);
                 return true;
             }
-            catch (Exception ex) when (ex is ArgumentException || ex is UnauthorizedAccessException || ex is NotSupportedException)
+            catch (Exception ex) when (ex is ArgumentException || ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException)
             {
                 failure = ContentTrustVerificationResult.Failed(ContentTrustFailure.PathEscapesRoot, manifestContentRoot, message: ex.Message);
                 return false;
@@ -202,11 +524,10 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
             try
             {
-                string candidatePath = Path.Combine(rootDirectory, entryLocation);
-                filePath = FilePathSecurity.EnsureWithinRoot(rootDirectory, candidatePath);
+                filePath = new FilePathSandbox(rootDirectory).Resolve(entryLocation);
                 return true;
             }
-            catch (Exception ex) when (ex is ArgumentException || ex is UnauthorizedAccessException || ex is NotSupportedException)
+            catch (Exception ex) when (ex is ArgumentException || ex is IOException || ex is UnauthorizedAccessException || ex is NotSupportedException)
             {
                 failure = ContentTrustVerificationResult.Failed(ContentTrustFailure.PathEscapesRoot, entryLocation, message: ex.Message);
                 return false;
@@ -222,14 +543,11 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
             int hashSize = GetHashSizeInBytes(entry.HashAlgorithm);
             Span<byte> hashBuffer = stackalloc byte[hashSize];
-            if (!FileUtility.ComputeFileHash(filePath, ToFileUtilityAlgorithm(entry.HashAlgorithm), hashBuffer))
-            {
-                return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashComputationFailed, entry.Location);
-            }
+            FileHasher.WriteHash(filePath, ToFileHashAlgorithm(entry.HashAlgorithm), hashBuffer);
 
             if (!MatchesExpectedHashHex(hashBuffer, entry.ExpectedHashHex))
             {
-                string actual = FileUtility.ToHexString(hashBuffer);
+                string actual = ContentHasher.ToHex(hashBuffer);
                 return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashMismatch, entry.Location, entry.ExpectedHashHex, actual);
             }
 
@@ -245,30 +563,11 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
             int hashSize = GetHashSizeInBytes(entry.HashAlgorithm);
             Span<byte> hashBuffer = stackalloc byte[hashSize];
-            if (entry.HashAlgorithm == ContentTrustHashAlgorithm.XxHash64)
-            {
-                XxHash64 hasher = XxHash64.Create();
-                hasher.Append(bytes);
-                if (!hasher.TryWriteHash(hashBuffer))
-                {
-                    return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashComputationFailed, entry.Location);
-                }
-            }
-            else
-            {
-                using (var incrementalHasher = IncrementalHash.CreateHash(HashAlgorithmName.SHA256))
-                {
-                    incrementalHasher.AppendData(bytes);
-                    if (!incrementalHasher.TryGetHashAndReset(hashBuffer, out int bytesWritten) || bytesWritten != hashSize)
-                    {
-                        return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashComputationFailed, entry.Location);
-                    }
-                }
-            }
+            ContentHasher.WriteHash(bytes, ToFileHashAlgorithm(entry.HashAlgorithm), hashBuffer);
 
             if (!MatchesExpectedHashHex(hashBuffer, entry.ExpectedHashHex))
             {
-                string actual = FileUtility.ToHexString(hashBuffer);
+                string actual = ContentHasher.ToHex(hashBuffer);
                 return ContentTrustVerificationResult.Failed(ContentTrustFailure.HashMismatch, entry.Location, entry.ExpectedHashHex, actual);
             }
 
@@ -358,11 +657,11 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             return GetExpectedHashHexLength(algorithm) / 2;
         }
 
-        private static HashAlgorithmType ToFileUtilityAlgorithm(ContentTrustHashAlgorithm algorithm)
+        private static FileHashAlgorithm ToFileHashAlgorithm(ContentTrustHashAlgorithm algorithm)
         {
             return algorithm == ContentTrustHashAlgorithm.XxHash64
-                ? HashAlgorithmType.XxHash64
-                : HashAlgorithmType.SHA256;
+                ? FileHashAlgorithm.XxHash64
+                : FileHashAlgorithm.Sha256;
         }
 
         private static void AddFailure(List<ContentTrustVerificationResult> failures, ContentTrustVerificationResult failure)

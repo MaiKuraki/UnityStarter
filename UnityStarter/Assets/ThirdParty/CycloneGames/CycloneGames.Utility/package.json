@@ -2,13 +2,12 @@
   "name": "com.cyclone-games.utility",
   "version": "1.0.0",
   "displayName": "CycloneGames.Utility",
-  "description": "A common utility module for Unity develope.",
+  "description": "Shared runtime and Editor utilities for Unity projects.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
     "com.cyclone-games.hash": "1.0.0",
-    "com.unity.burst": "1.8.0",
-    "com.unity.mathematics": "1.3.0"
+    "com.unity.ugui": "1.0.0"
   },
   "keywords": [
     "CycloneGames",

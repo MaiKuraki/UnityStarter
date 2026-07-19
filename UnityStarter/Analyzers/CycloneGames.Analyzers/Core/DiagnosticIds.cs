@@ -17,8 +17,6 @@ namespace CycloneGames.Analyzers
         public const string ResourcesLoad = "CG0014";
         public const string NativeContainerLeak = "CG0015";
 
-        public const string NetworkVariableBlittability = "CG0020";
-        public const string RpcMethodSignature = "CG0021";
         public const string ActorStartBaseCall = "CG0022";
         public const string PoolOnDespawnOverride = "CG0023";
         public const string GameplayTagImplicitCast = "CG0024";

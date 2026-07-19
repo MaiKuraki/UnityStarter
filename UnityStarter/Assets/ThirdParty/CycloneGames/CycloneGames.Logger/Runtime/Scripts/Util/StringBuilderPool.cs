@@ -1,187 +1,171 @@
 using System;
-using System.Collections.Concurrent;
 using System.Text;
 using System.Threading;
 
 namespace CycloneGames.Logger.Util
 {
-    /// <summary>
-    /// Thread-safe StringBuilder pool with three-tier adaptive capacity management.
-    /// - Target: Normal operating capacity, maintained during steady state
-    /// - Peak: Maximum capacity during load spikes, allows auto-expansion without GC
-    /// - Max: Absolute hard limit to prevent memory leaks
-    /// </summary>
-    public static class StringBuilderPool
+    internal static class StringBuilderPool
     {
-        private static readonly ConcurrentQueue<StringBuilder> _pool = new();
-
         private const int DefaultCapacity = 256;
         private const int MaxCapacityToRetain = 4096;
+        private const int DefaultPrewarmCount = 128;
+        private const int MaxRetainedCount = 512;
 
-        private const int TargetPoolSize = 128;
-        private const int PeakPoolSize = 1024;
-        private const int MaxPoolSize = 2048;
+        private static readonly object SyncRoot = new object();
+        private static readonly StringBuilder[] Items = new StringBuilder[MaxRetainedCount];
 
-        private static int _poolSize = 0;
-        private static int _isTrimming = 0;
+        private static int _count;
+        private static int _peakSize;
+        private static long _totalGets;
+        private static long _totalReturns;
+        private static long _totalMisses;
+        private static long _totalDiscards;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private static long _totalGets = 0;
-        private static long _totalReturns = 0;
-        private static long _totalMisses = 0;
-        private static long _totalDiscards = 0;
-        private static long _trimCount = 0;
-        private static int _peakSize = 0;
-#endif
-
-        public static StringBuilder Get()
+        internal static StringBuilder Get()
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Interlocked.Increment(ref _totalGets);
-#endif
-            if (_pool.TryDequeue(out var sb))
+            lock (SyncRoot)
             {
-                Interlocked.Decrement(ref _poolSize);
-                return sb;
+                if (_count > 0)
+                {
+                    int index = --_count;
+                    StringBuilder builder = Items[index];
+                    Items[index] = null;
+                    return builder;
+                }
             }
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+
             Interlocked.Increment(ref _totalMisses);
-#endif
             return new StringBuilder(DefaultCapacity);
         }
 
-        public static void Return(StringBuilder sb)
+        internal static void Return(StringBuilder builder)
         {
-            if (sb == null || sb.Capacity > MaxCapacityToRetain)
+            if (builder == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (sb != null) Interlocked.Increment(ref _totalDiscards);
-#endif
                 return;
             }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Interlocked.Increment(ref _totalReturns);
-#endif
-
-            int currentSize = Volatile.Read(ref _poolSize);
-
-            // Hard limit: discard only when exceeding absolute maximum
-            if (currentSize >= MaxPoolSize)
+            if (builder.Capacity > MaxCapacityToRetain)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
                 Interlocked.Increment(ref _totalDiscards);
-#endif
                 return;
             }
 
-            sb.Clear();
-            _pool.Enqueue(sb);
-            int newSize = Interlocked.Increment(ref _poolSize);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            int peak = Volatile.Read(ref _peakSize);
-            if (newSize > peak)
+            builder.Clear();
+            lock (SyncRoot)
             {
-                Interlocked.CompareExchange(ref _peakSize, newSize, peak);
-            }
-#endif
+                if (_count >= Items.Length)
+                {
+                    Interlocked.Increment(ref _totalDiscards);
+                    return;
+                }
 
-            // Trigger trimming when exceeding peak capacity
-            if (newSize > PeakPoolSize)
-            {
-                TryTrimExcess();
+                Items[_count++] = builder;
+                if (_count > _peakSize)
+                {
+                    _peakSize = _count;
+                }
             }
         }
 
-        public static string GetStringAndReturn(StringBuilder sb)
+        internal static string GetStringAndReturn(StringBuilder builder)
         {
-            string result = sb.ToString();
-            Return(sb);
+            if (builder == null)
+            {
+                return string.Empty;
+            }
+
+            string result = builder.ToString();
+            Return(builder);
             return result;
         }
 
-        /// <summary>
-        /// Prewarms the pool to target capacity to reduce cold-start allocations.
-        /// </summary>
-        public static void Prewarm(int count = TargetPoolSize)
+        internal static void Prewarm(int count = DefaultPrewarmCount)
         {
-            count = Math.Min(Math.Max(count, 0), PeakPoolSize);
-            int current = Volatile.Read(ref _poolSize);
-            int toAdd = Math.Min(count - current, PeakPoolSize - current);
-
-            for (int i = 0; i < toAdd; i++)
+            count = Math.Min(Math.Max(count, 0), Items.Length);
+            lock (SyncRoot)
             {
-                _pool.Enqueue(new StringBuilder(DefaultCapacity));
-                Interlocked.Increment(ref _poolSize);
-            }
-        }
-
-        private static void TryTrimExcess()
-        {
-            if (Interlocked.CompareExchange(ref _isTrimming, 1, 0) != 0)
-                return;
-
-            try
-            {
-                int currentSize = Volatile.Read(ref _poolSize);
-                int toRemove = currentSize - TargetPoolSize;
-
-                if (toRemove <= 0) return;
-
-                for (int i = 0; i < toRemove && _pool.TryDequeue(out _); i++)
+                while (_count < count)
                 {
-                    Interlocked.Decrement(ref _poolSize);
+                    Items[_count++] = new StringBuilder(DefaultCapacity);
                 }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Interlocked.Increment(ref _trimCount);
-#endif
-            }
-            finally
-            {
-                Volatile.Write(ref _isTrimming, 0);
+                if (_count > _peakSize)
+                {
+                    _peakSize = _count;
+                }
             }
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        public static PoolStatistics GetStatistics()
+        internal static void Clear()
         {
-            return new PoolStatistics
+            lock (SyncRoot)
             {
-                CurrentSize = Volatile.Read(ref _poolSize),
-                PeakSize = Volatile.Read(ref _peakSize),
-                TotalGets = Interlocked.Read(ref _totalGets),
-                TotalReturns = Interlocked.Read(ref _totalReturns),
-                TotalMisses = Interlocked.Read(ref _totalMisses),
-                TotalDiscards = Interlocked.Read(ref _totalDiscards),
-                TrimCount = Interlocked.Read(ref _trimCount)
-            };
+                Array.Clear(Items, 0, _count);
+                _count = 0;
+            }
         }
 
-        public static void ResetStatistics()
+        internal static PoolStatistics GetStatistics()
+        {
+            int count;
+            int peak;
+            lock (SyncRoot)
+            {
+                count = _count;
+                peak = _peakSize;
+            }
+
+            return new PoolStatistics(
+                count,
+                peak,
+                Interlocked.Read(ref _totalGets),
+                Interlocked.Read(ref _totalReturns),
+                Interlocked.Read(ref _totalMisses),
+                Interlocked.Read(ref _totalDiscards));
+        }
+
+        internal static void ResetStatistics()
         {
             Interlocked.Exchange(ref _totalGets, 0);
             Interlocked.Exchange(ref _totalReturns, 0);
             Interlocked.Exchange(ref _totalMisses, 0);
             Interlocked.Exchange(ref _totalDiscards, 0);
-            Interlocked.Exchange(ref _trimCount, 0);
-            Interlocked.Exchange(ref _peakSize, 0);
+            lock (SyncRoot)
+            {
+                _peakSize = _count;
+            }
         }
 
-        public struct PoolStatistics
+        internal readonly struct PoolStatistics
         {
-            public int CurrentSize;
-            public int PeakSize;
-            public long TotalGets;
-            public long TotalReturns;
-            public long TotalMisses;
-            public long TotalDiscards;
-            public long TrimCount;
+            internal readonly int CurrentSize;
+            internal readonly int PeakSize;
+            internal readonly long TotalGets;
+            internal readonly long TotalReturns;
+            internal readonly long TotalMisses;
+            internal readonly long TotalDiscards;
 
-            public double HitRate => TotalGets > 0 ? 1.0 - (double)TotalMisses / TotalGets : 1.0;
-            public double DiscardRate => TotalReturns > 0 ? (double)TotalDiscards / TotalReturns : 0;
+            internal double HitRate => TotalGets > 0 ? 1.0 - (double)TotalMisses / TotalGets : 1.0;
+            internal double DiscardRate => TotalReturns > 0 ? (double)TotalDiscards / TotalReturns : 0.0;
+
+            internal PoolStatistics(
+                int currentSize,
+                int peakSize,
+                long totalGets,
+                long totalReturns,
+                long totalMisses,
+                long totalDiscards)
+            {
+                CurrentSize = currentSize;
+                PeakSize = peakSize;
+                TotalGets = totalGets;
+                TotalReturns = totalReturns;
+                TotalMisses = totalMisses;
+                TotalDiscards = totalDiscards;
+            }
         }
-#endif
     }
 }

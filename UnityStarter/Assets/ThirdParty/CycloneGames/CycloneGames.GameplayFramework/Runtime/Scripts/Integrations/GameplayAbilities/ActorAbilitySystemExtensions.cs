@@ -1,4 +1,3 @@
-#if GAMEPLAY_FRAMEWORK_PRESENT && GAMEPLAY_ABILITIES_PRESENT
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayFramework.Runtime;
 using UnityEngine;
@@ -67,4 +66,3 @@ namespace CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities
         }
     }
 }
-#endif

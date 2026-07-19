@@ -8,8 +8,25 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// Owns pending replicated state, scratch buffers, and state-version counters for ASC delta generation.
     /// </summary>
-    public sealed class ReplicationStateBuilder
+    internal sealed class ReplicationStateBuilder
     {
+        internal readonly struct MutationScope : IDisposable
+        {
+            private readonly ReplicationStateBuilder owner;
+            private readonly int expectedDepth;
+
+            internal MutationScope(ReplicationStateBuilder owner, int expectedDepth)
+            {
+                this.owner = owner;
+                this.expectedDepth = expectedDepth;
+            }
+
+            public void Dispose()
+            {
+                owner?.EndMutationScope(expectedDepth);
+            }
+        }
+
         public ulong StateVersion;
         public ulong LastReplicatedStateVersion;
         public uint OutgoingDeltaSequence;
@@ -25,14 +42,18 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public readonly HashSet<GameplayTag> PendingRemovedTags = new HashSet<GameplayTag>();
         public readonly List<GameplayTag> PendingAddedTagSnapshots = new List<GameplayTag>(8);
         public readonly List<GameplayTag> PendingRemovedTagSnapshots = new List<GameplayTag>(8);
-        public readonly List<int> PendingRemovedEffectNetIds = new List<int>(8);
-        public readonly List<IGASAbilityDefinition> PendingRemovedAbilityDefs = new List<IGASAbilityDefinition>(8);
+        public readonly List<int> PendingRemovedEffectReconciliationIds = new List<int>(8);
+        public readonly List<int> PendingRemovedAbilitySpecHandles = new List<int>(8);
 
         public GameplayTag[] EffectReplicationSetByCallerTags = Array.Empty<GameplayTag>();
         public long[] EffectReplicationSetByCallerValuesRaw = Array.Empty<long>();
         public GameplayTag[] StateApplySetByCallerTags = Array.Empty<GameplayTag>();
         public long[] StateApplySetByCallerValuesRaw = Array.Empty<long>();
-        public int[] TargetDataNetworkIdBuffer = Array.Empty<int>();
+
+        private int mutationScopeDepth;
+        private bool attributeStructureReserved;
+
+        internal int MutationScopeDepth => mutationScopeDepth;
 
         public AbilitySystemStateChangeMask PendingMask
         {
@@ -72,8 +93,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EnsureListCapacity(DirtyAttributeValueSnapshots, dirtyAttributeCapacity);
             EnsureListCapacity(PendingAddedTagSnapshots, tagDeltaCapacity);
             EnsureListCapacity(PendingRemovedTagSnapshots, tagDeltaCapacity);
-            EnsureListCapacity(PendingRemovedEffectNetIds, removedEffectCapacity);
-            EnsureListCapacity(PendingRemovedAbilityDefs, removedAbilityCapacity);
+            EnsureListCapacity(PendingRemovedEffectReconciliationIds, removedEffectCapacity);
+            EnsureListCapacity(PendingRemovedAbilitySpecHandles, removedAbilityCapacity);
             EnsureHashSetCapacity(DirtyAttributeNames, dirtyAttributeCapacity);
             EnsureHashSetCapacity(PendingAddedTags, tagDeltaCapacity);
             EnsureHashSetCapacity(PendingRemovedTags, tagDeltaCapacity);
@@ -81,11 +102,47 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void ResetAll()
         {
+            if (mutationScopeDepth != 0)
+            {
+                throw new InvalidOperationException("Replication state cannot be reset while a mutation scope is active.");
+            }
+
             ClearPendingStateChanges();
             StateVersion = 0UL;
             LastReplicatedStateVersion = 0UL;
             OutgoingDeltaSequence = 0U;
             AttributeRegistryVersion = 0U;
+        }
+
+        internal MutationScope BeginMutationScope(bool attributeStructure = false)
+        {
+            if (mutationScopeDepth == 0)
+            {
+                if (attributeStructure)
+                {
+                    EnsureAttributeStructureVersionAvailable();
+                }
+                else
+                {
+                    EnsureStateVersionAvailable();
+                }
+
+                IncrementStateVersionAfterPrecheck();
+                if (attributeStructure)
+                {
+                    AttributeRegistryVersion++;
+                    attributeStructureReserved = true;
+                }
+            }
+            else if (attributeStructure && !attributeStructureReserved)
+            {
+                EnsureAttributeRegistryVersionAvailable();
+                AttributeRegistryVersion++;
+                attributeStructureReserved = true;
+            }
+
+            mutationScopeDepth++;
+            return new MutationScope(this, mutationScopeDepth);
         }
 
         public void ClearPendingStateChanges()
@@ -100,8 +157,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             PendingRemovedTags.Clear();
             PendingAddedTagSnapshots.Clear();
             PendingRemovedTagSnapshots.Clear();
-            PendingRemovedEffectNetIds.Clear();
-            PendingRemovedAbilityDefs.Clear();
+            PendingRemovedEffectReconciliationIds.Clear();
+            PendingRemovedAbilitySpecHandles.Clear();
         }
 
         public void BeginCapture(GASAbilitySystemStateDeltaBuffer buffer)
@@ -113,19 +170,44 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             buffer.ClearCounts();
             buffer.BaseVersion = LastReplicatedStateVersion;
+            buffer.Sequence = NextOutgoingDeltaSequence();
         }
 
-        public void CompleteCapture(GASAbilitySystemStateDeltaBuffer buffer, ulong stateChecksum)
+        public void FinalizeCapture(GASAbilitySystemStateDeltaBuffer buffer, ulong stateChecksum)
         {
             if (buffer == null)
             {
                 return;
             }
 
-            ClearPendingStateChanges();
             buffer.CurrentVersion = StateVersion;
             buffer.StateChecksum = stateChecksum;
-            LastReplicatedStateVersion = StateVersion;
+        }
+
+        public bool CommitCapture(GASAbilitySystemStateDeltaBuffer buffer)
+        {
+            if (buffer == null ||
+                buffer.SchemaVersion != GASRuntimeDataContract.ReconciliationSchemaVersion ||
+                buffer.Sequence == 0u ||
+                buffer.StateChecksum == 0UL ||
+                buffer.BaseVersion != LastReplicatedStateVersion ||
+                buffer.CurrentVersion != StateVersion)
+            {
+                return false;
+            }
+
+            ClearPendingStateChanges();
+            LastReplicatedStateVersion = buffer.CurrentVersion;
+            return true;
+        }
+
+        public void CompleteCapture(GASAbilitySystemStateDeltaBuffer buffer, ulong stateChecksum)
+        {
+            FinalizeCapture(buffer, stateChecksum);
+            if (buffer != null && !CommitCapture(buffer))
+            {
+                throw new InvalidOperationException("State changed while the delta capture was being completed.");
+            }
         }
 
         public uint NextOutgoingDeltaSequence()
@@ -133,6 +215,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             unchecked
             {
                 OutgoingDeltaSequence++;
+                if (OutgoingDeltaSequence == 0u)
+                {
+                    OutgoingDeltaSequence++;
+                }
             }
 
             return OutgoingDeltaSequence;
@@ -140,14 +226,28 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public void MarkGrantedAbilitiesDirty()
         {
+            if (mutationScopeDepth == 0)
+            {
+                EnsureStateVersionAvailable();
+            }
             GrantedAbilitiesDirty = true;
-            IncrementStateVersion();
+            if (mutationScopeDepth == 0)
+            {
+                IncrementStateVersionAfterPrecheck();
+            }
         }
 
         public void MarkActiveEffectsDirty()
         {
+            if (mutationScopeDepth == 0)
+            {
+                EnsureStateVersionAvailable();
+            }
             ActiveEffectsDirty = true;
-            IncrementStateVersion();
+            if (mutationScopeDepth == 0)
+            {
+                IncrementStateVersionAfterPrecheck();
+            }
         }
 
         public void MarkAttributeValueDirty(GameplayAttribute attribute)
@@ -157,23 +257,39 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
+            if (mutationScopeDepth == 0)
+            {
+                EnsureStateVersionAvailable();
+            }
             if (DirtyAttributeNames.Add(attribute.Name))
             {
                 DirtyAttributeValueSnapshots.Add(attribute);
             }
 
-            IncrementStateVersion();
+            if (mutationScopeDepth == 0)
+            {
+                IncrementStateVersionAfterPrecheck();
+            }
         }
 
         public void MarkAttributeStructureDirty()
         {
-            AttributeStructureDirty = true;
-            unchecked
+            if (mutationScopeDepth == 0)
             {
+                EnsureAttributeStructureVersionAvailable();
                 AttributeRegistryVersion++;
             }
+            else if (!attributeStructureReserved)
+            {
+                throw new InvalidOperationException(
+                    "Attribute structure changed inside a replication mutation scope that did not reserve an attribute registry revision.");
+            }
 
-            IncrementStateVersion();
+            AttributeStructureDirty = true;
+            if (mutationScopeDepth == 0)
+            {
+                IncrementStateVersionAfterPrecheck();
+            }
         }
 
         public bool TrackTagCountChange(GameplayTag tag, int newCount)
@@ -183,6 +299,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return false;
             }
 
+            if (mutationScopeDepth == 0)
+            {
+                EnsureStateVersionAvailable();
+            }
             TagsDirty = true;
             if (newCount > 0)
             {
@@ -207,28 +327,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
             }
 
-            IncrementStateVersion();
+            if (mutationScopeDepth == 0)
+            {
+                IncrementStateVersionAfterPrecheck();
+            }
             return true;
         }
 
-        public void TrackRemovedEffectNetworkId(int networkId)
+        public void TrackRemovedEffectReconciliationId(int reconciliationId)
         {
-            if (networkId == 0)
+            if (reconciliationId == 0)
             {
                 return;
             }
 
-            PendingRemovedEffectNetIds.Add(networkId);
+            PendingRemovedEffectReconciliationIds.Add(reconciliationId);
         }
 
-        public void TrackRemovedAbilityDefinition(IGASAbilityDefinition abilityDefinition)
+        public void TrackRemovedAbilitySpecHandle(int specHandle)
         {
-            if (abilityDefinition == null)
+            if (specHandle <= 0)
             {
                 return;
             }
 
-            PendingRemovedAbilityDefs.Add(abilityDefinition);
+            PendingRemovedAbilitySpecHandles.Add(specHandle);
         }
 
         public void EnsureEffectReplicationSetByCallerCapacity(int count)
@@ -243,16 +366,46 @@ namespace CycloneGames.GameplayAbilities.Runtime
             EnsureArrayCapacity(ref StateApplySetByCallerValuesRaw, count);
         }
 
-        public void EnsureTargetDataNetworkIdCapacity(int count)
+        private void IncrementStateVersionAfterPrecheck()
         {
-            EnsureArrayCapacity(ref TargetDataNetworkIdBuffer, count);
+            StateVersion++;
         }
 
-        private void IncrementStateVersion()
+        internal void EnsureStateVersionAvailable()
         {
-            unchecked
+            if (StateVersion == ulong.MaxValue)
             {
-                StateVersion++;
+                throw new InvalidOperationException(
+                    "The replication state version is exhausted. Start a new replication stream and full baseline instead of wrapping the version.");
+            }
+        }
+
+        internal void EnsureAttributeStructureVersionAvailable()
+        {
+            EnsureStateVersionAvailable();
+            EnsureAttributeRegistryVersionAvailable();
+        }
+
+        private void EnsureAttributeRegistryVersionAvailable()
+        {
+            if (AttributeRegistryVersion == uint.MaxValue)
+            {
+                throw new InvalidOperationException(
+                    "The attribute registry revision is exhausted. Recreate the replication stream instead of wrapping the revision.");
+            }
+        }
+
+        private void EndMutationScope(int expectedDepth)
+        {
+            if (expectedDepth <= 0 || mutationScopeDepth != expectedDepth)
+            {
+                throw new InvalidOperationException("Replication mutation scopes must be disposed exactly once in last-in-first-out order.");
+            }
+
+            mutationScopeDepth--;
+            if (mutationScopeDepth == 0)
+            {
+                attributeStructureReserved = false;
             }
         }
 

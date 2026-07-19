@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using CycloneGames.Hash.Core;
 
 namespace CycloneGames.Networking
@@ -11,6 +12,8 @@ namespace CycloneGames.Networking
 
         private readonly NetworkMessageDescriptor[] _messages;
         private readonly Dictionary<string, string> _metadata;
+        private readonly ReadOnlyCollection<NetworkMessageDescriptor> _readOnlyMessages;
+        private readonly ReadOnlyDictionary<string, string> _readOnlyMetadata;
 
         internal NetworkProtocolManifest(NetworkProtocolManifestBuilder builder)
         {
@@ -26,6 +29,8 @@ namespace CycloneGames.Networking
             MessageRange = builder.MessageRange;
             _messages = builder.Messages.ToArray();
             _metadata = new Dictionary<string, string>(builder.Metadata, StringComparer.Ordinal);
+            _readOnlyMessages = Array.AsReadOnly(_messages);
+            _readOnlyMetadata = new ReadOnlyDictionary<string, string>(_metadata);
             Validate();
             Fingerprint = ComputeFingerprint();
         }
@@ -41,7 +46,7 @@ namespace CycloneGames.Networking
         {
             get
             {
-                return _messages;
+                return _readOnlyMessages;
             }
         }
 
@@ -49,7 +54,7 @@ namespace CycloneGames.Networking
         {
             get
             {
-                return _metadata;
+                return _readOnlyMetadata;
             }
         }
 
@@ -64,6 +69,9 @@ namespace CycloneGames.Networking
             {
                 throw new ArgumentException("Protocol owner must not be null or empty.");
             }
+
+            NetworkMessageCatalog.ComputeAsciiFnv1a64(Owner);
+            NetworkMessageCatalog.ComputeAsciiFnv1a64(ProtocolId);
 
             if (CurrentVersion <= 0)
             {
@@ -88,7 +96,7 @@ namespace CycloneGames.Networking
 
             if (!NetworkMessageRanges.ContainsRange(MessageRange))
             {
-                throw new ArgumentException($"Protocol message range {MessageRange} is outside the reserved global range for kind {MessageRange.Kind}.");
+                throw new ArgumentException($"Protocol message range {MessageRange} crosses a reserved global range boundary.");
             }
 
             for (int i = 0; i < _messages.Length; i++)
@@ -99,6 +107,12 @@ namespace CycloneGames.Networking
                     throw new ArgumentException("Protocol message descriptor is invalid.");
                 }
 
+                if (NetworkMessageCatalog.ComputeAsciiFnv1a64(descriptor.ContractId) != descriptor.SchemaHash)
+                {
+                    throw new ArgumentException(
+                        $"Message id {descriptor.MessageId} schema hash does not match contract id '{descriptor.ContractId}'.");
+                }
+
                 if (!MessageRange.Contains(descriptor.MessageId))
                 {
                     throw new ArgumentException($"Message id {descriptor.MessageId} is outside protocol range {MessageRange}.");
@@ -107,11 +121,6 @@ namespace CycloneGames.Networking
                 if (!string.Equals(descriptor.Owner, Owner, StringComparison.Ordinal))
                 {
                     throw new ArgumentException($"Message id {descriptor.MessageId} belongs to {descriptor.Owner}, not {Owner}.");
-                }
-
-                if ((descriptor.Kind & MessageRange.Kind) == 0)
-                {
-                    throw new ArgumentException($"Message id {descriptor.MessageId} kind {descriptor.Kind} does not match protocol range kind {MessageRange.Kind}.");
                 }
 
                 for (int j = i + 1; j < _messages.Length; j++)
@@ -126,13 +135,10 @@ namespace CycloneGames.Networking
 
         private ulong ComputeFingerprint()
         {
-            ulong hash = NetworkMessageCatalog.ComputeStableHash(Owner);
-            hash = Combine(hash, NetworkMessageCatalog.ComputeStableHash(ProtocolId));
-            hash = Combine(hash, CurrentVersion);
-            hash = Combine(hash, MinimumSupportedVersion);
+            ulong hash = NetworkMessageCatalog.ComputeAsciiFnv1a64(Owner);
+            hash = Combine(hash, NetworkMessageCatalog.ComputeAsciiFnv1a64(ProtocolId));
             hash = Combine(hash, MessageRange.Min);
             hash = Combine(hash, MessageRange.Max);
-            hash = Combine(hash, (ushort)MessageRange.Kind);
 
             var ids = new ushort[_messages.Length];
             for (int i = 0; i < _messages.Length; i++)
@@ -145,14 +151,13 @@ namespace CycloneGames.Networking
             {
                 NetworkMessageDescriptor descriptor = Find(ids[i]);
                 hash = Combine(hash, descriptor.MessageId);
-                hash = Combine(hash, (ushort)descriptor.Kind);
                 hash = Combine(hash, (ushort)descriptor.DefaultChannel);
                 hash = Combine(hash, descriptor.SchemaHash);
                 hash = Combine(hash, descriptor.MaxPayloadSize);
-                hash = Combine(hash, NetworkMessageCatalog.ComputeStableHash(descriptor.Name));
+                hash = Combine(hash, NetworkMessageCatalog.ComputeAsciiFnv1a64(descriptor.ContractId));
             }
 
-            return hash == 0UL ? NetworkMessageCatalog.ComputeStableHash(Owner) : hash;
+            return hash == 0UL ? NetworkMessageCatalog.ComputeAsciiFnv1a64(Owner) : hash;
         }
 
         private NetworkMessageDescriptor Find(ushort messageId)
@@ -203,10 +208,10 @@ namespace CycloneGames.Networking
         internal readonly List<NetworkMessageDescriptor> Messages = new List<NetworkMessageDescriptor>(DEFAULT_MESSAGE_CAPACITY);
         internal readonly Dictionary<string, string> Metadata = new Dictionary<string, string>(StringComparer.Ordinal);
 
-        public NetworkProtocolManifestBuilder(string owner, ushort minMessageId, ushort maxMessageId, NetworkMessageKind kind)
+        public NetworkProtocolManifestBuilder(string owner, ushort minMessageId, ushort maxMessageId)
         {
             Owner = owner ?? string.Empty;
-            MessageRange = new NetworkMessageIdRange(Owner, minMessageId, maxMessageId, kind);
+            MessageRange = new NetworkMessageIdRange(Owner, minMessageId, maxMessageId);
         }
 
         public string ProtocolId { get; set; }
@@ -221,15 +226,23 @@ namespace CycloneGames.Networking
             return this;
         }
 
-        public NetworkProtocolManifestBuilder AddMessage<T>(
+        public NetworkProtocolManifestBuilder AddMessage(
+            string contractId,
             ushort messageId,
+            ulong schemaHash,
             NetworkChannel defaultChannel = NetworkChannel.Reliable,
-            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
+            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize)
         {
-            return Add(NetworkMessageDescriptor.Create<T>(
+            if (string.IsNullOrEmpty(contractId))
+                throw new ArgumentException("Network contract id must be explicit and non-empty.", nameof(contractId));
+            if (schemaHash == 0UL)
+                throw new ArgumentOutOfRangeException(nameof(schemaHash), "Network schema hash must be explicit and non-zero.");
+
+            return Add(new NetworkMessageDescriptor(
                 messageId,
+                contractId,
                 Owner,
-                MessageRange.Kind,
+                schemaHash,
                 defaultChannel,
                 maxPayloadSize));
         }
@@ -251,80 +264,4 @@ namespace CycloneGames.Networking
         }
     }
 
-    public static class NetworkProtocolManifestCatalogExtensions
-    {
-        public static void RegisterProtocolManifest(
-            this INetworkMessageCatalog catalog,
-            NetworkProtocolManifest manifest)
-        {
-            if (!TryRegisterProtocolManifest(catalog, manifest))
-            {
-                throw new InvalidOperationException($"Protocol manifest {manifest?.ProtocolId ?? string.Empty} conflicts with the message catalog.");
-            }
-        }
-
-        public static bool TryRegisterProtocolManifest(
-            this INetworkMessageCatalog catalog,
-            NetworkProtocolManifest manifest)
-        {
-            if (catalog == null)
-            {
-                throw new ArgumentNullException(nameof(catalog));
-            }
-
-            if (manifest == null)
-            {
-                throw new ArgumentNullException(nameof(manifest));
-            }
-
-            for (int i = 0; i < manifest.Messages.Count; i++)
-            {
-                NetworkMessageDescriptor descriptor = manifest.Messages[i];
-                if (catalog.TryGet(descriptor.MessageId, out NetworkMessageDescriptor existing)
-                    && !DescriptorsMatch(existing, descriptor))
-                {
-                    return false;
-                }
-            }
-
-            if (!catalog.TryRegisterRange(manifest.MessageRange))
-            {
-                return false;
-            }
-
-            for (int i = 0; i < manifest.Messages.Count; i++)
-            {
-                NetworkMessageDescriptor descriptor = manifest.Messages[i];
-                if (catalog.TryGet(descriptor.MessageId, out NetworkMessageDescriptor existing))
-                {
-                    if (!DescriptorsMatch(existing, descriptor))
-                    {
-                        return false;
-                    }
-
-                    continue;
-                }
-
-                if (!catalog.TryRegister(descriptor))
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        private static bool DescriptorsMatch(
-            in NetworkMessageDescriptor left,
-            in NetworkMessageDescriptor right)
-        {
-            return left.MessageId == right.MessageId
-                   && string.Equals(left.Name, right.Name, StringComparison.Ordinal)
-                   && string.Equals(left.Owner, right.Owner, StringComparison.Ordinal)
-                   && left.SchemaHash == right.SchemaHash
-                   && left.Kind == right.Kind
-                   && left.DefaultChannel == right.DefaultChannel
-                   && left.MaxPayloadSize == right.MaxPayloadSize;
-        }
-    }
 }

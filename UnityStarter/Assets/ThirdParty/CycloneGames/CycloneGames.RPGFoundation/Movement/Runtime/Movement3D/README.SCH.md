@@ -1,40 +1,52 @@
 # RPG 移动模块
 
-基于状态机的高性能角色移动模块，专为 Unity RPG 游戏设计，Gameplay Ability System (GAS) 适配良好。
+[English](README.md) | 简体中文
 
-<p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
+一个基于状态的 Unity 3D 角色移动组件，提供显式输入、旋转、移动状态、snapshot 和可选 GameplayAbilities integration 边界。
 
-## GameplayFramework 集成
+## 目录
 
-`MovementComponent` 不直接依赖 `CycloneGames.GameplayFramework`。移动逻辑和生成所有权保持解耦，因此基础 Movement Runtime 可以在不包含 GameplayFramework 的 Unity 项目、headless 工具和不同 package 布局中正常编译。
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
-强类型 GameplayFramework 集成应放在独立 integration asmdef 中，并由该 asmdef 通过 `versionDefines` 和 `defineConstraints` 启用。不要把项目级全局 scripting define symbol 作为常规开关。
+## 概述
 
-如果没有启用 GameplayFramework integration assembly，请在生成逻辑中设置初始旋转。
+`MovementComponent` 提供显式状态机驱动的 3D 移动。移动和旋转已解耦 — 组件处理速度、重力、地面检测、跳跃和状态转换，旋转则通过 `SetLookDirection` 和 `SetRotation` 单独控制。可选的 GAS integration assembly 仅在启用 `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` 时编译。
 
-## GameplayAbilities 集成
+本包不直接依赖 `CycloneGames.GameplayFramework`。移动与生成所有权保持分离。
 
-`MovementComponent` 可以配合由 ability 拥有的移动动作，同时不把 GameplayAbilities 或 GameplayTags 变成基础 Movement runtime 的硬依赖。可选 integration assembly 只会在启用 `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES`，并且 `CycloneGames.GameplayAbilities.Runtime` 与 `CycloneGames.GameplayTags.Core` 都可用时编译。
+### 主要特性
 
-当跳跃、翻滚、梯子攀爬、墙面攀爬等动作由 ability 实现时，应由 ability 使用 `MovementStateRequestContext.FromAbility(this)` 请求移动状态。直接玩家输入仍可照常请求状态；GAS authority 会决定激活 ability、直接进入状态，或阻止直接状态切换。
+- **状态机** — 显式状态（Idle、Walk、Run、Sprint、Jump、Fall、Crouch、Roll、Climb、WallSlide）
+- **解耦旋转** — 移动不自动旋转，旋转通过 `SetLookDirection` / `SetRotation` 控制
+- **CharacterController 物理** — 手动重力，`CharacterController.Move` 集成
+- **Snapshot 支持** — `MovementSnapshot` 用于网络交接
+- **属性修改** — 运行时覆盖，可选 GAS 映射
+- **时间缩放** — 全局与组件局部控制
+- **攀爬系统** — 梯子和贴墙攀爬
 
-### 控制旋转
+## 架构
 
-**移动和旋转已分离** - `MovementComponent` 只负责移动，不自动旋转。您必须使用以下方法之一手动控制旋转：
-
-```csharp
-// 设置朝向方向（平滑旋转到目标方向）
-movement.SetLookDirection(targetDirection);
-
-// 立即设置旋转
-movement.SetRotation(targetRotation, immediate: true);
-
-// 从方向设置旋转
-movement.SetRotation(targetDirection, immediate: true);
-
-// 清除朝向方向（停止自动旋转）
-movement.ClearLookDirection();
+```mermaid
+flowchart LR
+    Input["输入 (方向、跳跃、冲刺、蹲伏、翻滚、攀爬)"] --> MC["MovementComponent"]
+    MC --> Config["MovementConfig (ScriptableObject)"]
+    MC --> CC["CharacterController"]
+    MC --> Auth["IMovementAuthority<br/>(可选: 属性覆盖、状态控制)"]
+    Auth --> GAS["GASMovementAuthority<br/>(可选 GameplayAbilities 集成)"]
+    MC --> Snap["MovementSnapshot<br/>(网络交接数据)"]
 ```
+
+`MovementComponent` 是 Unity 组件，必须从主线程调用。`MovementSnapshot` 只作为网络交接数据；多线程模拟应放入纯数据系统或 deterministic integration assembly。
+
+## 快速上手
 
 ### 核心 Runtime API
 
@@ -53,277 +65,208 @@ movement.ApplySnapshot(snapshot);
 movement.ResetFromSnapshot(snapshot);
 ```
 
-`MovementComponent` 是 Unity 组件，必须从 Unity main thread 调用。`MovementSnapshot` 只作为网络交接数据；多线程模拟应放入纯数据系统或 deterministic integration assembly。
-
-**示例：分离移动和旋转输入**
-
-以下是 `CalculateLookDirection` 的几种常见实现方式：
-
-**选项 1：基于欧拉角的鼠标视角（第一/第三人称）**
+### 旋转 API
 
 ```csharp
-using UnityEngine;
+movement.SetLookDirection(targetDirection);           // 平滑旋转到目标方向
+movement.SetRotation(targetRotation, immediate: true); // 立即旋转
+movement.SetRotation(targetDirection, immediate: true); // 从方向立即旋转
+movement.ClearLookDirection();                         // 停止自动旋转
+```
+
+### 基础玩家控制器
+
+```csharp
 using CycloneGames.RPGFoundation.Movement.Runtime;
 
 public class PlayerController : MonoBehaviour
 {
     private MovementComponent _movement;
-    private Camera _camera;
 
-    [Header("旋转设置")]
-    [SerializeField] private float mouseSensitivity = 2f;
-    [SerializeField] private float minVerticalAngle = -80f;
-    [SerializeField] private float maxVerticalAngle = 80f;
-
-    private float _verticalRotation = 0f;
-    private float _horizontalRotation = 0f;
-
-    void Awake()
-    {
-        _movement = GetComponent<MovementComponent>();
-        _camera = Camera.main; // 或分配您的相机引用
-    }
+    void Awake() => _movement = GetComponent<MovementComponent>();
 
     void Update()
     {
-        // 移动输入（本地空间 - 相对于角色的前后左右）
         Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-        Vector3 localInput = new Vector3(moveInput.x, 0, moveInput.y);
-        _movement.SetInputDirection(localInput);
-
-        // 旋转输入（鼠标视角）
-        Vector2 lookInput = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
-        Vector3 targetLookDirection = CalculateLookDirection(lookInput);
-        _movement.SetLookDirection(targetLookDirection);
-    }
-
-    private Vector3 CalculateLookDirection(Vector2 lookInput)
-    {
-        // 累积旋转
-        _horizontalRotation += lookInput.x * mouseSensitivity;
-        _verticalRotation -= lookInput.y * mouseSensitivity;
-        _verticalRotation = Mathf.Clamp(_verticalRotation, minVerticalAngle, maxVerticalAngle);
-
-        // 转换为方向向量
-        float horizontalRad = _horizontalRotation * Mathf.Deg2Rad;
-        float verticalRad = _verticalRotation * Mathf.Deg2Rad;
-
-        Vector3 direction = new Vector3(
-            Mathf.Sin(horizontalRad) * Mathf.Cos(verticalRad),
-            Mathf.Sin(verticalRad),
-            Mathf.Cos(horizontalRad) * Mathf.Cos(verticalRad)
-        );
-
-        return direction.normalized;
-    }
-}
-```
-
-**选项 2：基于相机的方向（第三人称相机跟随）**
-
-```csharp
-private Vector3 CalculateLookDirection(Vector2 lookInput)
-{
-    if (_camera == null) return transform.forward;
-
-    // 获取相机的向前方向（投影到水平面）
-    Vector3 cameraForward = _camera.transform.forward;
-    cameraForward.y = 0f; // 移除垂直分量
-    cameraForward.Normalize();
-
-    // 根据鼠标输入旋转
-    float horizontalRotation = lookInput.x * mouseSensitivity;
-    Quaternion rotation = Quaternion.Euler(0, horizontalRotation, 0);
-
-    return rotation * cameraForward;
-}
-```
-
-**选项 3：屏幕到世界的射线检测（点击朝向）**
-
-```csharp
-private Vector3 CalculateLookDirection(Vector2 lookInput)
-{
-    // 用于点击朝向或屏幕空间输入
-    if (Input.GetMouseButton(0) || Input.GetMouseButton(1))
-    {
-        Ray ray = _camera.ScreenPointToRay(Input.mousePosition);
-        RaycastHit hit;
-
-        if (Physics.Raycast(ray, out hit))
-        {
-            Vector3 direction = (hit.point - transform.position);
-            direction.y = 0f; // 保持水平
-            return direction.normalized;
-        }
-    }
-
-    // 回退：使用当前向前方向
-    return transform.forward;
-}
-```
-
-**选项 4：手柄右摇杆**
-
-```csharp
-private Vector3 CalculateLookDirection(Vector2 lookInput)
-{
-    // 用于手柄右摇杆输入
-    if (lookInput.magnitude < 0.1f)
-        return transform.forward; // 无输入，保持当前方向
-
-    // 获取相机的右和向前向量（仅水平）
-    Vector3 cameraRight = _camera.transform.right;
-    Vector3 cameraForward = _camera.transform.forward;
-    cameraRight.y = 0f;
-    cameraForward.y = 0f;
-    cameraRight.Normalize();
-    cameraForward.Normalize();
-
-    // 根据摇杆输入组合
-    Vector3 direction = (cameraForward * lookInput.y + cameraRight * lookInput.x).normalized;
-    return direction;
-}
-```
-
-**选项 5：第三人称动作游戏（基于相机的移动）**
-
-适用于第三人称动作游戏，其中：
-
-- 相机跟随角色
-- 移动输入相对于相机方向（而非角色方向）
-- 角色自动面向移动方向
-
-```csharp
-using UnityEngine;
-using CycloneGames.RPGFoundation.Movement.Runtime;
-
-public class ThirdPersonPlayerController : MonoBehaviour
-{
-    private MovementComponent _movement;
-    private Camera _camera;
-
-    [Header("移动设置")]
-    [SerializeField] private bool autoFaceMovementDirection = true;
-    [SerializeField] private float rotationSmoothing = 10f;
-
-    void Awake()
-    {
-        _movement = GetComponent<MovementComponent>();
-        _camera = Camera.main; // 或分配您的相机引用
-    }
-
-    void Update()
-    {
-        // 获取相机空间的输入（相对于相机的向前/右方向）
-        Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-
-        // 将基于相机的输入转换为世界空间方向
-        Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
-
-        // 将世界方向转换为本地空间供 MovementComponent 使用
-        // MovementComponent 期望本地空间输入（相对于角色的向前/右方向）
-        Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
-        _movement.SetInputDirection(localInput);
-
-        // 可选：让角色面向移动方向
-        if (autoFaceMovementDirection && moveInput.magnitude > 0.1f)
-        {
-            Vector3 lookDirection = worldMoveDirection;
-            lookDirection.y = 0f; // 仅保持水平
-            if (lookDirection.magnitude > 0.1f)
-            {
-                _movement.SetLookDirection(lookDirection.normalized);
-            }
-        }
-
-        // 其他输入
+        _movement.SetInputDirection(new Vector3(moveInput.x, 0, moveInput.y));
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
-        _movement.SetCrouchHeld(Input.GetKey(KeyCode.C));
-    }
-
-    /// <summary>
-    /// 将基于相机的输入（WASD）转换为世界空间移动方向。
-    /// 这允许相对于相机移动，而不是角色朝向。
-    /// </summary>
-    private Vector3 GetCameraRelativeMovementDirection(Vector2 input)
-    {
-        if (_camera == null || input.magnitude < 0.1f)
-            return Vector3.zero;
-
-        // 获取相机的向前和右向量（投影到水平面）
-        Vector3 cameraForward = _camera.transform.forward;
-        Vector3 cameraRight = _camera.transform.right;
-
-        // 移除垂直分量以保持移动在水平面上
-        cameraForward.y = 0f;
-        cameraRight.y = 0f;
-        cameraForward.Normalize();
-        cameraRight.Normalize();
-
-        // 根据输入组合相机方向
-        // input.y 是前后（W/S），input.x 是左右（A/D）
-        Vector3 direction = (cameraForward * input.y + cameraRight * input.x).normalized;
-
-        return direction;
     }
 }
 ```
 
-**替代方案：更简单的基于相机的移动（无自动旋转）**
+## 核心概念
 
-如果您想要基于相机的移动但不想要自动旋转：
+### 移动与旋转已解耦
+
+`MovementComponent` 处理速度、重力、地面检测、跳跃和状态转换。它不会自动将角色转向移动方向。旋转必须显式控制。
+
+### 旋转技术
+
+| 技术 | API | 适用场景 |
+| --- | --- | --- |
+| 鼠标视角（欧拉角） | `SetLookDirection(dir)` | 带鼠标灵敏度和垂直角度限制的第一/第三人称 |
+| 基于相机的方向 | `SetLookDirection(cameraForward)` | 相机跟随的第三人称 |
+| 屏幕转世界射线 | `SetLookDirection(hitPoint - position)` | 点击朝向 |
+| 手柄右摇杆 | `SetLookDirection(cameraDir)` | 主机/跨平台 |
+| 相机相对移动 | `SetInputDirection(local) + SetLookDirection(worldMove)` | 第三人称动作游戏 |
+
+### 相机相对移动
+
+第三人称游戏中输入相对于相机方向时：
 
 ```csharp
 void Update()
 {
-    // 获取相机空间的输入
     Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
 
-    // 转换为相对于相机的世界空间方向
-    Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
+    // 相机相对世界方向
+    Vector3 camForward = _camera.transform.forward;
+    Vector3 camRight = _camera.transform.right;
+    camForward.y = 0f; camRight.y = 0f;
+    camForward.Normalize(); camRight.Normalize();
+    Vector3 worldMove = (camForward * moveInput.y + camRight * moveInput.x).normalized;
 
-    // 将世界方向转换为角色的本地空间
-    Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
-    _movement.SetInputDirection(localInput);
-
-    // 旋转单独控制（例如，通过相机或鼠标视角）
-    // 您可以使用选项 1 或选项 2 进行旋转控制
+    // 转换为本地空间给 MovementComponent，并设置朝向
+    _movement.SetInputDirection(transform.InverseTransformDirection(worldMove));
+    if (moveInput.magnitude > 0.1f)
+        _movement.SetLookDirection(worldMove);
 }
 ```
 
-## 🎨 扩展系统
+### GAS 移动权限
 
-### 添加新状态
+当跳跃、翻滚或攀爬由 ability 实现时，应由 ability 使用 `MovementStateRequestContext.FromAbility(this)` 请求移动状态。GAS authority 会决定激活 ability、直接进入状态，或阻止状态切换。
 
-1. 创建继承自 `MovementStateBase` 的新状态类
-2. 实现必需的方法（`OnEnter`、`OnUpdate`、`OnExit`、`EvaluateTransition`）
-3. 将状态添加到 `MovementStateType` 枚举
-4. 在 `MovementComponent.GetStateByType()` 中注册
+## 使用指南
 
-示例：
+### 鼠标视角（欧拉角）
 
 ```csharp
-public class DashState : MovementStateBase
+private float _verticalRotation = 0f;
+private float _horizontalRotation = 0f;
+
+void Update()
 {
-    public override MovementStateType StateType => MovementStateType.Dash;
+    Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
+    _movement.SetInputDirection(new Vector3(moveInput.x, 0, moveInput.y));
 
-    public override void OnEnter(ref MovementContext context)
-    {
-        // 初始化冲刺
-    }
+    Vector2 lookInput = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
+    _horizontalRotation += lookInput.x * 2f;
+    _verticalRotation = Mathf.Clamp(_verticalRotation - lookInput.y * 2f, -80f, 80f);
 
-    public override void OnUpdate(ref MovementContext context, out float3 displacement)
-    {
-        // 执行冲刺移动
-        displacement = context.InputDirection * context.Config.dashSpeed * context.DeltaTime;
-    }
+    float hRad = _horizontalRotation * Mathf.Deg2Rad;
+    float vRad = _verticalRotation * Mathf.Deg2Rad;
+    Vector3 direction = new Vector3(
+        Mathf.Sin(hRad) * Mathf.Cos(vRad),
+        Mathf.Sin(vRad),
+        Mathf.Cos(hRad) * Mathf.Cos(vRad)
+    );
+    _movement.SetLookDirection(direction.normalized);
+}
+```
 
-    public override MovementStateBase EvaluateTransition(ref MovementContext context)
+### 手柄右摇杆旋转
+
+```csharp
+Vector2 lookInput = new Vector2(Input.GetAxis("RightStickX"), Input.GetAxis("RightStickY"));
+if (lookInput.magnitude < 0.1f) return;
+
+Vector3 camRight = _camera.transform.right;
+Vector3 camForward = _camera.transform.forward;
+camRight.y = 0f; camForward.y = 0f;
+camRight.Normalize(); camForward.Normalize();
+
+Vector3 direction = (camForward * lookInput.y + camRight * lookInput.x).normalized;
+_movement.SetLookDirection(direction);
+```
+
+### 点击朝向
+
+```csharp
+if (Input.GetMouseButton(0))
+{
+    Ray ray = _camera.ScreenPointToRay(Input.mousePosition);
+    if (Physics.Raycast(ray, out RaycastHit hit))
     {
-        // 冲刺完成后返回行走状态
-        return StatePool.GetState<WalkState>();
+        Vector3 direction = (hit.point - transform.position);
+        direction.y = 0f;
+        _movement.SetLookDirection(direction.normalized);
     }
 }
 ```
+
+### 动画
+
+```csharp
+void Update()
+{
+    var movement = GetComponent<MovementComponent>();
+    animator.SetFloat("Speed", movement.CurrentSpeed);
+    animator.SetBool("IsGrounded", movement.IsGrounded);
+    animator.SetBool("IsCrouching", movement.CurrentState == MovementStateType.Crouch);
+}
+```
+
+## 进阶主题
+
+### GameplayAbilities 集成
+
+Integration assembly 仅在启用 `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` 且 `CycloneGames.GameplayAbilities.Runtime` 与 `CycloneGames.GameplayTags.Core` 都可用时编译。当移动动词由 ability 拥有时，使用 `MovementStateRequestContext.FromAbility(this)` 请求状态。
+
+### 属性修改
+
+```csharp
+var movement = GetComponent<MovementComponent>();
+var authority = gameObject.AddComponent<MovementAttributeAuthority>();
+movement.MovementAuthority = authority;
+
+authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
+authority.SetMultiplier(MovementAttribute.JumpForce, 1.2f);
+```
+
+### 时间缩放
+
+```csharp
+Time.timeScale = 0.2f;
+movementComponent.LocalTimeScale = 1.5f;
+movementComponent.IgnoreTimeScale = true;
+```
+
+## 常见场景
+
+### 分离移动和旋转
+
+移动输入控制速度，相机或鼠标独立控制旋转。使用 `SetInputDirection` 处理移动，`SetLookDirection` 处理旋转。
+
+### 自动面向移动方向
+
+```csharp
+Vector3 worldMove = GetCameraRelativeMovementDirection(moveInput);
+if (moveInput.magnitude > 0.1f)
+{
+    _movement.SetInputDirection(transform.InverseTransformDirection(worldMove));
+    _movement.SetLookDirection(worldMove);
+}
+```
+
+### 多段跳
+
+在移动 config 中配置 `maxJumpCount`，每次按下消耗一次跳跃次数，接触地面时重置。
+
+## 性能与内存
+
+- 使用 `CharacterController.Move` 进行位移 — 分配取决于 Unity 的 Physics backend。
+- Snapshot 为 `readonly struct`，通过 `in` 传递时不产生堆分配。
+- `MovementComponent` 仅限主线程。多线程模拟应放入纯数据系统。
+- 使用 `MovementAttributeAuthority` 而非逐帧计算属性。
+
+## 故障排查
+
+| 现象             | 原因                                         | 解决方法                                   |
+| ---------------- | -------------------------------------------- | ------------------------------------------ |
+| 角色穿过地面掉落 | 未附加 `CharacterController` 或 `groundCheck` 位置错误 | 添加 `CharacterController`，将 groundCheck 放在脚部 |
+| 旋转未生效       | 缺少 `SetLookDirection` 或 `SetRotation` 调用 | 移动不会自动旋转 — 需显式调用旋转 API     |
+| 跳跃未触发       | `IMovementAuthority.CanEnterState` 阻止了状态切换 | 检查 authority 实现                      |
+| 攀爬未生效       | config 中缺少 `enableClimbing` 或 layer 错误 | 验证 config 和 layer mask               |
+| 性能问题         | 逐帧重复计算属性开销较大                     | 使用 `MovementAttributeAuthority` 缓存覆盖值 |

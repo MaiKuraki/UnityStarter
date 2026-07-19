@@ -1,6 +1,6 @@
 # Network Host Permissions
 
-This folder contains Unity-facing platform helpers for LAN listen-server readiness. The API is transport-neutral and can be used before starting Mirror, Mirage, Nakama, or a custom `INetTransport` implementation.
+This folder contains Unity-facing platform helpers for LAN listen-server readiness. The API is transport-neutral and can be used before starting a Mirror or Mirage LAN host, or a custom listen-server transport.
 
 ## Responsibilities
 
@@ -46,16 +46,18 @@ NetworkHostPermissionCheckResult status = service.GetStatus(7777, NetworkTranspo
 if (status.CanRequestAutomatically)
 {
     NetworkHostPermissionRequestResult result = service.RequestSystemConfiguration(7777, NetworkTransportProtocol.Udp);
-    // result.Launched means the OS prompt was shown; confirm by verifying or connecting from another peer.
+    // result.Launched means the OS request was started; verify the live rule state separately.
 }
 
 // On Windows, verify the live firewall state without blocking the main thread (UniTask + CancellationToken).
 NetworkHostPermissionCheckResult verified = await service.RefreshStatusAsync(7777, NetworkTransportProtocol.Udp, ct);
 if (verified.IsVerified && !verified.RequiresSystemConfiguration)
 {
-    // An enabled inbound firewall rule for this port/protocol is present; LAN peers can reach the host.
+    // An enabled inbound rule is present; listener, routing, and peer reachability still require a connection test.
 }
 ```
+
+A default-initialized request result has outcome `Unknown` and `Launched == false`; only the explicit `Launched` outcome indicates that an OS request was started.
 
 ```csharp
 using System.Collections.Generic;

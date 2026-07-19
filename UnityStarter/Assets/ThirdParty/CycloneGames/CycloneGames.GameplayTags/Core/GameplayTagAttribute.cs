@@ -1,14 +1,15 @@
-﻿using System;
+using System;
 
 namespace CycloneGames.GameplayTags.Core
 {
    /// <summary>
-   /// An attribute to define gameplay tags at the assembly level.
+   /// Defines a gameplay tag for Editor discovery and validated Player build catalog generation.
+   /// Player startup does not scan assembly attributes through reflection.
    /// </summary>
    /// <example>
    /// The <see cref="GameplayTagAttribute"/> can be used to annotate an assembly with gameplay tags.
    /// This is useful for categorizing and identifying various conditions and states in the game.
-   /// 
+   ///
    /// Example usage:
    /// <code>
    /// [assembly: GameplayTag("Character.Invincible", "Indicates that a character is invincible.")]

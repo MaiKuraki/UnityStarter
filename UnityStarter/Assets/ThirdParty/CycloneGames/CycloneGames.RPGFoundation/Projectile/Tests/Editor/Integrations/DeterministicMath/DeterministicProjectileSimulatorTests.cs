@@ -94,5 +94,76 @@ namespace CycloneGames.RPGFoundation.Projectile.Tests.Editor.Integrations.Determ
             Assert.That(snapshot.Tick, Is.EqualTo(8));
             Assert.That(snapshot.PredictionKey, Is.EqualTo(12));
         }
+
+        [Test]
+        public void Create_WithZeroDirection_ProducesZeroVelocity()
+        {
+            DeterministicProjectileDefinition definition = DeterministicProjectileDefinition.FromFloats(
+                definitionId: 300,
+                ProjectileGuidanceMode.Direction,
+                ProjectileLifecycleFlags.None,
+                initialSpeed: 5f,
+                maxSpeed: 5f,
+                acceleration: 0f,
+                radius: 0.25f,
+                maxLifetime: 2f,
+                turnRateRadiansPerSecond: 0f,
+                leadPredictionTime: 0f,
+                gravityX: 0f,
+                gravityY: 0f,
+                gravityZ: 0f);
+
+            DeterministicProjectileState state = DeterministicProjectileState.Create(
+                1UL,
+                2UL,
+                0UL,
+                spawnTick: 0,
+                predictionKey: 0,
+                seed: 0u,
+                FPVector3.Zero,
+                FPVector3.Zero,
+                in definition);
+
+            Assert.That(state.Velocity, Is.EqualTo(FPVector3.Zero));
+        }
+
+        [Test]
+        public void Step_HomingTargetAtProjectilePosition_PreservesDirection()
+        {
+            DeterministicProjectileDefinition definition = DeterministicProjectileDefinition.FromFloats(
+                definitionId: 301,
+                ProjectileGuidanceMode.Homing,
+                ProjectileLifecycleFlags.None,
+                initialSpeed: 5f,
+                maxSpeed: 5f,
+                acceleration: 0f,
+                radius: 0.25f,
+                maxLifetime: 2f,
+                turnRateRadiansPerSecond: 100f,
+                leadPredictionTime: 0f,
+                gravityX: 0f,
+                gravityY: 0f,
+                gravityZ: 0f);
+
+            DeterministicProjectileState state = DeterministicProjectileState.Create(
+                1UL,
+                2UL,
+                3UL,
+                spawnTick: 0,
+                predictionKey: 0,
+                seed: 0u,
+                FPVector3.Zero,
+                FPVector3.Right,
+                in definition);
+            DeterministicProjectileInput input = new DeterministicProjectileInput(
+                FPInt64.One,
+                hasTarget: true,
+                state.Position,
+                FPVector3.Zero);
+
+            state = DeterministicProjectileSimulator.Step(in state, in definition, in input, tick: 1);
+
+            Assert.That(state.Velocity, Is.EqualTo(FPVector3.Right * definition.InitialSpeed));
+        }
     }
 }

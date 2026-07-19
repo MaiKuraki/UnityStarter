@@ -11,7 +11,10 @@ namespace CycloneGames.AssetManagement.Editor
     public sealed class AssetRuntimeGovernanceWindow : EditorWindow
     {
         private const int MaxVisibleRows = 10;
+        private const int MaxAutomaticHandles = 4_096;
+        private const int MaxAutomaticCacheRowsPerTier = 4_096;
         private const int MetricCount = 8;
+        private const double AutoRefreshIntervalSeconds = 0.5d;
         private const float SectionSpacing = 8f;
         private const float HeaderHeight = 20f;
         private const float RowHeight = 20f;
@@ -21,14 +24,14 @@ namespace CycloneGames.AssetManagement.Editor
 
         private static readonly string[] MetricLabels =
         {
-            "Active Handles",
+            "Tracked Handles",
             "Tracked Scenes",
             "Waiting Scenes",
             "Unloading Scenes",
             "Active Cache",
-            "Idle Trial",
-            "Idle Main",
-            "Buckets"
+            "Idle Probation",
+            "Idle Protected",
+            "Sampled Buckets"
         };
 
         private readonly List<HandleTracker.HandleInfo> _handles = new List<HandleTracker.HandleInfo>(256);
@@ -39,11 +42,14 @@ namespace CycloneGames.AssetManagement.Editor
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _activeScratch = new List<AssetCacheService.CacheDiagnosticEntry>(512);
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _trialScratch = new List<AssetCacheService.CacheDiagnosticEntry>(256);
         private readonly List<AssetCacheService.CacheDiagnosticEntry> _mainScratch = new List<AssetCacheService.CacheDiagnosticEntry>(256);
+        private readonly List<AssetCacheService> _cacheInstances = new List<AssetCacheService>(4);
         private readonly Dictionary<string, int> _bucketCounts = new Dictionary<string, int>(64, StringComparer.Ordinal);
         private readonly List<KeyValuePair<string, int>> _bucketPairs = new List<KeyValuePair<string, int>>(64);
         private readonly List<BucketRow> _bucketRows = new List<BucketRow>(64);
         private readonly List<HandleRow> _handleRows = new List<HandleRow>(256);
         private readonly List<SceneRow> _sceneRows = new List<SceneRow>(64);
+        private readonly List<HandleTracker.HandleInfo> _oldestHandles = new List<HandleTracker.HandleInfo>(MaxVisibleRows);
+        private readonly List<SceneTracker.SceneInfo> _oldestScenes = new List<SceneTracker.SceneInfo>(MaxVisibleRows);
 
         private readonly float[] _bucketWeights = { 0.84f, 0.16f };
         private readonly float[] _handleWeights = { 0.17f, 0.67f, 0.16f };
@@ -58,6 +64,13 @@ namespace CycloneGames.AssetManagement.Editor
         private double _nextRepaint;
         private bool _hasSnapshot;
         private bool _stylesInitialized;
+        private bool _isVisible = true;
+        private bool _handlesTruncated;
+        private bool _cacheDiagnosticsTruncated;
+        private int _handleTotal;
+        private int _activeTotal;
+        private int _trialTotal;
+        private int _mainTotal;
 
         private GUIStyle _sectionTitleStyle;
         private GUIStyle _tableHeaderStyle;
@@ -76,18 +89,41 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void OnEnable()
         {
+            _isVisible = true;
+            _nextRepaint = 0d;
             EditorApplication.update += OnEditorUpdate;
-            RefreshSnapshot();
+            if (Application.isPlaying)
+                RefreshSnapshot();
+            else
+                _hasSnapshot = false;
         }
 
-        private void OnDisable() => EditorApplication.update -= OnEditorUpdate;
+        private void OnDisable()
+        {
+            _isVisible = false;
+            EditorApplication.update -= OnEditorUpdate;
+            _cacheInstances.Clear();
+        }
+
+        private void OnBecameVisible()
+        {
+            _isVisible = true;
+            _nextRepaint = 0d;
+            _hasSnapshot = false;
+        }
+
+        private void OnBecameInvisible()
+        {
+            _isVisible = false;
+            _cacheInstances.Clear();
+        }
 
         private void OnEditorUpdate()
         {
-            if (!Application.isPlaying) return;
+            if (!_isVisible || !Application.isPlaying) return;
             if (EditorApplication.timeSinceStartup < _nextRepaint) return;
 
-            _nextRepaint = EditorApplication.timeSinceStartup + 0.2d;
+            _nextRepaint = EditorApplication.timeSinceStartup + AutoRefreshIntervalSeconds;
             RefreshSnapshot();
             Repaint();
         }
@@ -104,6 +140,56 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             if (!_hasSnapshot) RefreshSnapshot();
+
+            if (_handlesTruncated)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Handle rows are capped at {MaxAutomaticHandles:N0}. The tracked-registry total is exact for the current observation epoch; " +
+                    "the longest-lived table is calculated from the captured sample.",
+                    MessageType.Warning);
+            }
+
+            if (HandleTracker.ObservationIncomplete)
+            {
+                EditorGUILayout.HelpBox(
+                    "Handle observation began after one or more handles may have been created, or the enabled registry was cleared. " +
+                    "Counts are exact for the current observation epoch but may not cover every live provider handle. Restart Play Mode with tracking enabled for a complete epoch.",
+                    MessageType.Warning);
+            }
+
+            long droppedHandles = HandleTracker.DroppedRegistrationCount;
+            if (droppedHandles > 0L)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Handle tracking dropped {droppedHandles:N0} registration(s) after reaching its configured capacity. " +
+                    "The tracked-registry total is not a complete live-handle count for this observation epoch.",
+                    MessageType.Warning);
+            }
+
+            long droppedScenes = SceneTracker.DroppedRegistrationCount;
+            if (droppedScenes > 0L)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Scene tracking dropped {droppedScenes:N0} registration(s) after reaching its configured capacity. " +
+                    "The scene summary is incomplete for this Play Mode session.",
+                    MessageType.Warning);
+            }
+
+            if (SceneTracker.ObservationIncomplete)
+            {
+                EditorGUILayout.HelpBox(
+                    "Scene observation is incomplete because tracking was disabled or cleared, or a previous Play Mode scene owner survived subsystem registration. " +
+                    "The scene summary covers only the current registry.",
+                    MessageType.Warning);
+            }
+
+            if (_cacheDiagnosticsTruncated)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Cache detail is capped at {MaxAutomaticCacheRowsPerTier:N0} rows per tier across all cache instances. " +
+                    "Tier totals are exact; bucket counts are a bounded sample.",
+                    MessageType.Warning);
+            }
 
             _scroll = EditorGUILayout.BeginScrollView(_scroll);
             DrawOverview();
@@ -147,23 +233,41 @@ namespace CycloneGames.AssetManagement.Editor
             _bucketRows.Clear();
             _handleRows.Clear();
             _sceneRows.Clear();
+            _oldestHandles.Clear();
+            _oldestScenes.Clear();
+            _handleTotal = 0;
+            _activeTotal = 0;
+            _trialTotal = 0;
+            _mainTotal = 0;
+            _handlesTruncated = false;
+            _cacheDiagnosticsTruncated = false;
 
-            var handles = HandleTracker.GetActiveHandles();
-            for (int i = 0; i < handles.Count; i++)
-                _handles.Add(handles[i]);
+            _handleTotal = HandleTracker.CopyActiveHandlesTo(_handles, MaxAutomaticHandles);
+            _handlesTruncated = _handles.Count < _handleTotal;
 
-            var scenes = SceneTracker.GetTrackedScenes();
-            for (int i = 0; i < scenes.Count; i++)
-                _scenes.Add(scenes[i]);
+            SceneTracker.CopyTrackedScenesTo(_scenes, SceneTracker.Capacity);
 
-            var caches = AssetCacheService.GlobalInstances;
-            for (int i = 0; i < caches.Count; i++)
+            AssetCacheService.CopyGlobalInstancesTo(_cacheInstances);
+            for (int i = 0; i < _cacheInstances.Count; i++)
             {
                 _activeScratch.Clear();
                 _trialScratch.Clear();
                 _mainScratch.Clear();
 
-                caches[i].GetDiagnostics(_activeScratch, _trialScratch, _mainScratch);
+                int activeRemaining = Math.Max(0, MaxAutomaticCacheRowsPerTier - _active.Count);
+                int trialRemaining = Math.Max(0, MaxAutomaticCacheRowsPerTier - _trial.Count);
+                int mainRemaining = Math.Max(0, MaxAutomaticCacheRowsPerTier - _main.Count);
+                AssetCacheService.CacheDiagnosticCapture capture = _cacheInstances[i].GetDiagnostics(
+                    _activeScratch,
+                    _trialScratch,
+                    _mainScratch,
+                    activeRemaining,
+                    trialRemaining,
+                    mainRemaining);
+                _activeTotal += capture.ActiveTotal;
+                _trialTotal += capture.ProbationTotal;
+                _mainTotal += capture.ProtectedTotal;
+                _cacheDiagnosticsTruncated |= capture.IsTruncated;
                 for (int j = 0; j < _activeScratch.Count; j++) _active.Add(_activeScratch[j]);
                 for (int j = 0; j < _trialScratch.Count; j++) _trial.Add(_trialScratch[j]);
                 for (int j = 0; j < _mainScratch.Count; j++) _main.Add(_mainScratch[j]);
@@ -174,11 +278,7 @@ namespace CycloneGames.AssetManagement.Editor
             CountBuckets(_main);
 
             foreach (var kvp in _bucketCounts)
-                _bucketPairs.Add(kvp);
-
-            _bucketPairs.Sort((a, b) => b.Value.CompareTo(a.Value));
-            _handles.Sort((a, b) => a.RegistrationTime.CompareTo(b.RegistrationTime));
-            _scenes.Sort((a, b) => a.RegistrationTimeUtc.CompareTo(b.RegistrationTimeUtc));
+                ConsiderBucket(kvp);
 
             BuildCachedRows();
             _hasSnapshot = true;
@@ -186,7 +286,8 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void BuildCachedRows()
         {
-            DateTime nowUtc = DateTime.UtcNow;
+            long nowTimestamp = HandleTracker.GetMonotonicTimestamp();
+            long sceneNowTimestamp = SceneTracker.GetMonotonicTimestamp();
             int waitingScenes = 0;
             int unloadingScenes = 0;
 
@@ -197,12 +298,15 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             for (int i = 0; i < _handles.Count; i++)
+                ConsiderOldestHandle(_handles[i]);
+
+            for (int i = 0; i < _oldestHandles.Count; i++)
             {
-                var handle = _handles[i];
+                var handle = _oldestHandles[i];
                 _handleRows.Add(new HandleRow(
                     handle.PackageName ?? "-",
                     handle.Description ?? "-",
-                    FormatAge(nowUtc - handle.RegistrationTime)));
+                    FormatAge(TimeSpan.FromSeconds(HandleTracker.GetActiveDurationSeconds(in handle, nowTimestamp)))));
             }
 
             for (int i = 0; i < _scenes.Count; i++)
@@ -211,23 +315,127 @@ namespace CycloneGames.AssetManagement.Editor
                 if (scene.UnloadRequested) unloadingScenes++;
                 if (scene.ActivationState == SceneActivationState.WaitingForActivation) waitingScenes++;
 
+                ConsiderOldestScene(scene);
+            }
+
+            for (int i = 0; i < _oldestScenes.Count; i++)
+            {
+                var scene = _oldestScenes[i];
                 _sceneRows.Add(new SceneRow(
                     scene.PackageName ?? "-",
                     scene.SceneLocation ?? "-",
                     scene.ProviderType ?? "-",
                     scene.UnloadRequested ? "Unloading" : scene.ActivationState.ToString(),
                     FormatPercent(scene.Progress),
-                    FormatAge(nowUtc - scene.RegistrationTimeUtc)));
+                    FormatAge(TimeSpan.FromSeconds(SceneTracker.GetAgeSeconds(scene.RegistrationTimestamp, sceneNowTimestamp)))));
             }
 
-            _metricValues[0] = _handles.Count.ToString();
+            _metricValues[0] = _handleTotal.ToString();
             _metricValues[1] = _scenes.Count.ToString();
             _metricValues[2] = waitingScenes.ToString();
             _metricValues[3] = unloadingScenes.ToString();
-            _metricValues[4] = _active.Count.ToString();
-            _metricValues[5] = _trial.Count.ToString();
-            _metricValues[6] = _main.Count.ToString();
+            _metricValues[4] = _activeTotal.ToString();
+            _metricValues[5] = _trialTotal.ToString();
+            _metricValues[6] = _mainTotal.ToString();
             _metricValues[7] = _bucketCounts.Count.ToString();
+        }
+
+        private void ConsiderBucket(KeyValuePair<string, int> candidate)
+        {
+            int count = _bucketPairs.Count;
+            if (count == MaxVisibleRows && !ComesBefore(candidate, _bucketPairs[count - 1])) return;
+
+            int index;
+            if (count < MaxVisibleRows)
+            {
+                _bucketPairs.Add(candidate);
+                index = count;
+            }
+            else
+            {
+                index = count - 1;
+                _bucketPairs[index] = candidate;
+            }
+
+            while (index > 0 && ComesBefore(candidate, _bucketPairs[index - 1]))
+            {
+                _bucketPairs[index] = _bucketPairs[index - 1];
+                index--;
+            }
+
+            _bucketPairs[index] = candidate;
+        }
+
+        private void ConsiderOldestHandle(HandleTracker.HandleInfo candidate)
+        {
+            int count = _oldestHandles.Count;
+            if (count == MaxVisibleRows && !ComesBefore(candidate, _oldestHandles[count - 1])) return;
+
+            int index;
+            if (count < MaxVisibleRows)
+            {
+                _oldestHandles.Add(candidate);
+                index = count;
+            }
+            else
+            {
+                index = count - 1;
+                _oldestHandles[index] = candidate;
+            }
+
+            while (index > 0 && ComesBefore(candidate, _oldestHandles[index - 1]))
+            {
+                _oldestHandles[index] = _oldestHandles[index - 1];
+                index--;
+            }
+
+            _oldestHandles[index] = candidate;
+        }
+
+        private void ConsiderOldestScene(SceneTracker.SceneInfo candidate)
+        {
+            int count = _oldestScenes.Count;
+            if (count == MaxVisibleRows && !ComesBefore(candidate, _oldestScenes[count - 1])) return;
+
+            int index;
+            if (count < MaxVisibleRows)
+            {
+                _oldestScenes.Add(candidate);
+                index = count;
+            }
+            else
+            {
+                index = count - 1;
+                _oldestScenes[index] = candidate;
+            }
+
+            while (index > 0 && ComesBefore(candidate, _oldestScenes[index - 1]))
+            {
+                _oldestScenes[index] = _oldestScenes[index - 1];
+                index--;
+            }
+
+            _oldestScenes[index] = candidate;
+        }
+
+        private static bool ComesBefore(KeyValuePair<string, int> left, KeyValuePair<string, int> right)
+        {
+            int countComparison = right.Value.CompareTo(left.Value);
+            return countComparison != 0
+                ? countComparison < 0
+                : string.CompareOrdinal(left.Key, right.Key) < 0;
+        }
+
+        private static bool ComesBefore(HandleTracker.HandleInfo left, HandleTracker.HandleInfo right)
+        {
+            int timeComparison = left.ActiveSinceTimestamp.CompareTo(right.ActiveSinceTimestamp);
+            return timeComparison != 0 ? timeComparison < 0 : left.Id < right.Id;
+        }
+
+        private static bool ComesBefore(SceneTracker.SceneInfo left, SceneTracker.SceneInfo right)
+        {
+            int timeComparison = left.RegistrationTimestamp.CompareTo(right.RegistrationTimestamp);
+            return timeComparison != 0 ? timeComparison < 0 : left.Id < right.Id;
         }
 
         private void CountBuckets(List<AssetCacheService.CacheDiagnosticEntry> entries)
@@ -312,11 +520,13 @@ namespace CycloneGames.AssetManagement.Editor
             GUILayout.Space(SectionSpacing);
             using (new EditorGUILayout.VerticalScope(EditorStyles.helpBox))
             {
-                EditorGUILayout.LabelField("Longest-Lived Active Handles", _sectionTitleStyle);
+                EditorGUILayout.LabelField(
+                    _handlesTruncated ? "Longest Active Epochs in Captured Sample" : "Longest Active Handle Epochs",
+                    _sectionTitleStyle);
 
                 if (_handleRows.Count == 0)
                 {
-                    EditorGUILayout.LabelField("No tracked active handles.", EditorStyles.miniLabel);
+                    EditorGUILayout.LabelField("No handles in the current observation epoch.", EditorStyles.miniLabel);
                     return;
                 }
 

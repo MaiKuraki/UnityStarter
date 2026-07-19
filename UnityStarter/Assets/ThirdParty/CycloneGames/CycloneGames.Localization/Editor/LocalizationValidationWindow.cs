@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System.Collections.Generic;
+using CycloneGames.Localization.Runtime;
 using UnityEditor;
 using UnityEngine;
 
@@ -12,6 +13,7 @@ namespace CycloneGames.Localization.Editor
         private static readonly GUIContent s_clearLabel = new GUIContent("Clear");
 
         private readonly List<LocalizationValidationResult> _results = new List<LocalizationValidationResult>(128);
+        [SerializeField] private LocalizationSettings localizationSettings;
         private Vector2 _scroll;
 
         [MenuItem("Tools/CycloneGames/Localization/Validation/Window")]
@@ -24,12 +26,20 @@ namespace CycloneGames.Localization.Editor
 
         private void OnGUI()
         {
+            localizationSettings = (LocalizationSettings)EditorGUILayout.ObjectField(
+                new GUIContent(
+                    "Localization Settings",
+                    "Optional explicit settings. Required when the project contains multiple LocalizationSettings assets."),
+                localizationSettings,
+                typeof(LocalizationSettings),
+                false);
+
             Rect toolbarRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight, EditorStyles.toolbar);
             Rect scanRect = new Rect(toolbarRect.x, toolbarRect.y, 180f, toolbarRect.height);
             Rect clearRect = new Rect(scanRect.xMax + 4f, toolbarRect.y, 64f, toolbarRect.height);
 
             if (GUI.Button(scanRect, s_scanLabel, EditorStyles.toolbarButton))
-                LocalizationValidator.ValidateProject(_results);
+                LocalizationValidator.ValidateProject(_results, localizationSettings, true);
 
             if (GUI.Button(clearRect, s_clearLabel, EditorStyles.toolbarButton))
                 _results.Clear();

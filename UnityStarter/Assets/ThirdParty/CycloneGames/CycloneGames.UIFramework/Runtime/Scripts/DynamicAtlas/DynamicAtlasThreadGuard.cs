@@ -1,37 +1,33 @@
+using System;
 using System.Threading;
-using CycloneGames.Logger;
-using UnityEngine;
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
-    internal static class DynamicAtlasThreadGuard
+    internal sealed class DynamicAtlasThreadGuard
     {
-        private static int _mainThreadId = -1;
+        private readonly int _ownerThreadId;
 
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-        private static void Initialize()
+        internal DynamicAtlasThreadGuard()
         {
-            _mainThreadId = Thread.CurrentThread.ManagedThreadId;
-        }
-
-        public static bool IsMainThread
-        {
-            get
+            if (!PlayerLoopHelper.IsMainThread)
             {
-                if (_mainThreadId < 0)
-                {
-                    _mainThreadId = Thread.CurrentThread.ManagedThreadId;
-                }
-                return Thread.CurrentThread.ManagedThreadId == _mainThreadId;
+                throw new InvalidOperationException("DynamicAtlasService must be created on the Unity main thread.");
             }
+
+            _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
         }
 
-        public static bool EnsureMainThread(string caller)
-        {
-            if (IsMainThread) return true;
+        internal bool IsOwnerThread =>
+            PlayerLoopHelper.IsMainThread &&
+            Thread.CurrentThread.ManagedThreadId == _ownerThreadId;
 
-            CLogger.LogError($"[DynamicAtlas] {caller} must be called on Unity main thread.");
-            return false;
+        internal void ThrowIfNotOwnerThread(string operation)
+        {
+            if (!IsOwnerThread)
+            {
+                throw new InvalidOperationException($"Dynamic atlas operation '{operation}' must run on its owner Unity thread.");
+            }
         }
     }
 }

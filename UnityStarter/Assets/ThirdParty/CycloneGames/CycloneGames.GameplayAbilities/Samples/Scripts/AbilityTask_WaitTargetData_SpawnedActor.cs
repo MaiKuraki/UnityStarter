@@ -51,11 +51,24 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private void HandleTargetDataReady(TargetData data)
         {
-            if (IsActive && !IsCancelled)
+            try
             {
-                OnValidData?.Invoke(data);
+                if (IsActive && !IsCancelled)
+                {
+                    OnValidData?.Invoke(data);
+                }
             }
-            EndTask();
+            finally
+            {
+                try
+                {
+                    data?.Release();
+                }
+                finally
+                {
+                    EndTask();
+                }
+            }
         }
 
         private void HandleCancelled()

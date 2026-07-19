@@ -1,56 +1,99 @@
+using System;
 using System.Collections.Generic;
+using CycloneGames.UIFramework.DynamicAtlas;
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.UIFramework.DynamicAtlas;
 
 namespace CycloneGames.UIFramework.Editor.DynamicAtlas
 {
-    public class DynamicAtlasDebuggerWindow : EditorWindow
+    public sealed class DynamicAtlasDebuggerWindow : EditorWindow
     {
-        private Vector2 _sidebarScrollPosition;
-        private Vector2 _mainScrollPosition;
-        private Vector2 _itemsScrollPosition;
-        private Vector2 _imageScrollPosition;
-        private float _zoom = 1.0f;
-        
-        private DynamicAtlasService _activeService;
-        private DynamicAtlasPage _selectedPage;
-        
-        private readonly List<DynamicAtlasService.EditorAtlasItem> _reusableItemList = new List<DynamicAtlasService.EditorAtlasItem>();
-        
-        // Colors for debug drawing
-        private static readonly Color BgColor = new Color(0.15f, 0.15f, 0.15f, 1f);
-        private static readonly Color GridColor = new Color(0.25f, 0.25f, 0.25f, 1f);
-        private static readonly Color OutlineColor = new Color(0f, 1f, 0f, 0.5f);
-        private static readonly Color FillColor = new Color(0f, 0.5f, 0f, 0.2f);
-        private static readonly Color PaddingColor = new Color(1f, 0.5f, 0f, 0.3f);
-        private static readonly Color TextColor = Color.white;
+        private readonly struct EntryPresentation
+        {
+            internal readonly string Size;
+            internal readonly string CopyPath;
+            internal readonly string ReferenceState;
 
-        [MenuItem("Tools/CycloneGames/Dynamic Atlas/Dynamic Atlas Debugger")]
+            internal EntryPresentation(string size, string copyPath, string referenceState)
+            {
+                Size = size;
+                CopyPath = copyPath;
+                ReferenceState = referenceState;
+            }
+        }
+
+        private const int MaximumSnapshotEntries = 4096;
+        private const int MaximumVisibleEntries = 500;
+
+        private static readonly GUIContent RefreshContent = new GUIContent("Refresh", "Refresh diagnostics without scanning scenes or assets.");
+        private static readonly GUIContent AutoRefreshContent = new GUIContent("Auto Refresh", "Refresh at a throttled interval while the Editor is playing.");
+        private static readonly GUIContent TrimContent = new GUIContent("Trim Unused", "Evict every zero-reference cache entry.");
+        private static readonly GUIContent ClearContent = new GUIContent("Clear", "Destroy every generated sprite and page owned by the selected service.");
+
+        private readonly List<DynamicAtlasService> _services = new List<DynamicAtlasService>(8);
+        private readonly List<DynamicAtlasPageSnapshot> _pages = new List<DynamicAtlasPageSnapshot>(8);
+        private readonly List<DynamicAtlasEntrySnapshot> _entries = new List<DynamicAtlasEntrySnapshot>(256);
+        private readonly List<DynamicAtlasEntrySnapshot> _visibleEntries = new List<DynamicAtlasEntrySnapshot>(MaximumVisibleEntries);
+        private readonly List<GUIContent> _pageLabels = new List<GUIContent>(8);
+        private readonly List<EntryPresentation> _entryPresentations = new List<EntryPresentation>(MaximumVisibleEntries);
+
+        private string[] _serviceNames = Array.Empty<string>();
+        private int _selectedServiceIndex = -1;
+        private int _selectedPageId = -1;
+        private DynamicAtlasStats _stats;
+        private Vector2 _pageScroll;
+        private Vector2 _entryScroll;
+        private Vector2 _previewScroll;
+        private float _previewZoom = 1f;
+        private bool _autoRefresh;
+        private double _refreshInterval = 0.5d;
+        private double _nextRefreshTime;
+        private string _keyFilter = string.Empty;
+        private string _activeRetainedText = "0 / 0";
+        private string _reservedText = "0.0%";
+        private string _estimatedMemoryText = "0 B";
+        private string _pendingDestructionText = "0 B";
+        private string _budgetText = "0 B";
+        private string _gpuReadbackText = "0 / 0";
+        private bool _entrySnapshotSuppressed;
+        private int _matchingEntryCount;
+
+        [MenuItem("Tools/CycloneGames/UI Framework/Dynamic Atlas Debugger")]
         public static void ShowWindow()
         {
-            var window = GetWindow<DynamicAtlasDebuggerWindow>("Dynamic Atlas Debugger");
-            window.minSize = new Vector2(800, 600);
+            DynamicAtlasDebuggerWindow window = GetWindow<DynamicAtlasDebuggerWindow>();
+            window.titleContent = new GUIContent("Dynamic Atlas");
+            window.minSize = new Vector2(860f, 560f);
             window.Show();
         }
+
+        private DynamicAtlasService SelectedService =>
+            _selectedServiceIndex >= 0 && _selectedServiceIndex < _services.Count
+                ? _services[_selectedServiceIndex]
+                : null;
 
         private void OnEnable()
         {
             EditorApplication.update += OnEditorUpdate;
+            RefreshAll();
         }
 
         private void OnDisable()
         {
             EditorApplication.update -= OnEditorUpdate;
+            ClearDiagnosticBuffers();
         }
 
         private void OnEditorUpdate()
         {
-            // Auto-refresh the window continuously when playing
-            if (EditorApplication.isPlaying && _activeService != null)
+            if (!_autoRefresh || !EditorApplication.isPlaying || EditorApplication.timeSinceStartup < _nextRefreshTime)
             {
-                Repaint();
+                return;
             }
+
+            _nextRefreshTime = EditorApplication.timeSinceStartup + _refreshInterval;
+            RefreshAll();
+            Repaint();
         }
 
         private void OnGUI()
@@ -59,104 +102,122 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
 
             if (!EditorApplication.isPlaying)
             {
-                EditorGUILayout.HelpBox("Dynamic Atlas Debugger is only active during Play Mode.", MessageType.Info);
-                return;
+                EditorGUILayout.HelpBox("Runtime atlas services are available in Play Mode. Enter Play Mode, then refresh this window.", MessageType.Info);
             }
 
-            FindActiveService();
-
-            if (_activeService == null)
+            DynamicAtlasService service = SelectedService;
+            if (service == null)
             {
-                EditorGUILayout.HelpBox("No active DynamicAtlasService found. Make sure DynamicAtlasManager is initialized.", MessageType.Warning);
+                EditorGUILayout.HelpBox("No active DynamicAtlasService is registered. Services are discovered through the editor-only diagnostics registry; no scene scan is performed.", MessageType.Warning);
                 return;
             }
 
+            DrawSummary();
             EditorGUILayout.BeginHorizontal();
-            
-            DrawSidebar();
-
-            DrawVerticalLine();
-
-            DrawMainArea();
-
+            DrawPageSidebar();
+            DrawSelectedPage();
             EditorGUILayout.EndHorizontal();
         }
 
         private void DrawToolbar()
         {
             EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-            GUILayout.FlexibleSpace();
-            if (GUILayout.Button("Force Refresh", EditorStyles.toolbarButton))
+            int nextIndex = EditorGUILayout.Popup(
+                Mathf.Max(0, _selectedServiceIndex),
+                _serviceNames,
+                EditorStyles.toolbarPopup,
+                GUILayout.MinWidth(220f));
+            if (_services.Count > 0 && nextIndex != _selectedServiceIndex)
             {
-                Repaint();
+                _selectedServiceIndex = Mathf.Clamp(nextIndex, 0, _services.Count - 1);
+                _selectedPageId = -1;
+                RefreshSelectedService();
             }
+
+            if (GUILayout.Button(RefreshContent, EditorStyles.toolbarButton, GUILayout.Width(62f)))
+            {
+                RefreshAll();
+            }
+
+            GUILayout.Space(8f);
+            _autoRefresh = GUILayout.Toggle(_autoRefresh, AutoRefreshContent, EditorStyles.toolbarButton, GUILayout.Width(92f));
+            using (new EditorGUI.DisabledScope(!_autoRefresh))
+            {
+                GUILayout.Label("Interval", GUILayout.Width(44f));
+                _refreshInterval = EditorGUILayout.DoubleField(_refreshInterval, GUILayout.Width(48f));
+                _refreshInterval = Math.Max(0.25d, Math.Min(5d, _refreshInterval));
+            }
+
+            GUILayout.FlexibleSpace();
+            using (new EditorGUI.DisabledScope(SelectedService == null))
+            {
+                if (GUILayout.Button(TrimContent, EditorStyles.toolbarButton, GUILayout.Width(84f)))
+                {
+                    SelectedService.TrimUnused();
+                    RefreshSelectedService();
+                }
+
+                if (GUILayout.Button(ClearContent, EditorStyles.toolbarButton, GUILayout.Width(46f)) &&
+                    EditorUtility.DisplayDialog(
+                        "Clear Dynamic Atlas",
+                        "Destroy every generated sprite and page in the selected service? Active UI references will become invalid.",
+                        "Clear",
+                        "Cancel"))
+                {
+                    SelectedService.Clear();
+                    RefreshSelectedService();
+                }
+            }
+
             EditorGUILayout.EndHorizontal();
         }
 
-        private void FindActiveService()
+        private void DrawSummary()
         {
-            if (DynamicAtlasManager.Instance != null && DynamicAtlasManager.Instance.EditorAtlasService is DynamicAtlasService service)
-            {
-                _activeService = service;
-            }
-            else
-            {
-                _activeService = null;
-                _selectedPage = null;
-            }
+            EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
+            DrawMetric("Pages", _stats.PageCount.ToString());
+            DrawMetric("Entries", _stats.EntryCount.ToString());
+            DrawMetric("Active / Retained", _activeRetainedText);
+            DrawMetric("References", _stats.ActiveReferenceCount.ToString());
+            DrawMetric("Reserved", _reservedText);
+            DrawMetric("Estimated Memory", _estimatedMemoryText);
+            DrawMetric("Pending Destroy", _pendingDestructionText);
+            DrawMetric("Budget", _budgetText);
+            DrawMetric("GPU / Readback", _gpuReadbackText);
+            EditorGUILayout.EndHorizontal();
         }
 
-        private void DrawSidebar()
+        private static void DrawMetric(string label, string value)
         {
-            var pages = _activeService.EditorGetPages();
-            
-            EditorGUILayout.BeginVertical(GUILayout.Width(250));
-            _sidebarScrollPosition = EditorGUILayout.BeginScrollView(_sidebarScrollPosition);
+            EditorGUILayout.BeginVertical(GUILayout.MinWidth(78f));
+            EditorGUILayout.LabelField(label, EditorStyles.miniLabel);
+            EditorGUILayout.LabelField(value, EditorStyles.boldLabel);
+            EditorGUILayout.EndVertical();
+        }
 
-            EditorGUILayout.LabelField("Active Pages", EditorStyles.boldLabel);
-            
-            // Total stats
-            long totalBytes = 0;
-            foreach (var p in pages)
+        private void DrawPageSidebar()
+        {
+            EditorGUILayout.BeginVertical(GUILayout.Width(235f));
+            EditorGUILayout.LabelField("Pages", EditorStyles.boldLabel);
+            _pageScroll = EditorGUILayout.BeginScrollView(_pageScroll);
+
+            if (_pages.Count == 0)
             {
-                // Simple VRAM estimation
-                int bpp = (p.Format == TextureFormat.RGBA32 || p.Format == TextureFormat.ARGB32) ? 4 : 1; 
-                totalBytes += p.Width * p.Height * bpp;
+                EditorGUILayout.HelpBox("No page has been allocated.", MessageType.None);
             }
-            EditorGUILayout.LabelField($"Total VRAM: {(totalBytes / 1024f / 1024f):F2} MB");
-            EditorGUILayout.LabelField($"Total Pages: {pages.Count}");
-            
-            EditorGUILayout.Space();
 
-            if (pages.Count == 0)
+            for (int i = 0; i < _pages.Count; i++)
             {
-                EditorGUILayout.HelpBox("No pages allocated.", MessageType.None);
-                _selectedPage = null;
-            }
-            else
-            {
-                // Validate selection
-                if (_selectedPage != null)
+                DynamicAtlasPageSnapshot page = _pages[i];
+                bool selected = page.PageId == _selectedPageId;
+                if (GUILayout.Toggle(
+                        selected,
+                        _pageLabels[i],
+                        EditorStyles.helpBox,
+                        GUILayout.Height(43f)) && !selected)
                 {
-                    bool pageExists = false;
-                    foreach (var p in pages)
-                    {
-                        if (p == _selectedPage)
-                        {
-                            pageExists = true;
-                            break;
-                        }
-                    }
-
-                    if (!pageExists)
-                    {
-                        _selectedPage = null;
-                    }
-                }
-
-                foreach (var page in pages)
-                {
-                    DrawPageButton(page);
+                    _selectedPageId = page.PageId;
+                    RebuildVisibleEntries();
                 }
             }
 
@@ -164,261 +225,251 @@ namespace CycloneGames.UIFramework.Editor.DynamicAtlas
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawPageButton(DynamicAtlasPage page)
-        {
-            bool isSelected = _selectedPage == page;
-            
-            // Custom styling for selected state
-            GUIStyle style = new GUIStyle(EditorStyles.helpBox);
-            if (isSelected)
-            {
-                style.normal.background = EditorGUIUtility.whiteTexture;
-            }
-
-            GUI.color = isSelected ? new Color(0.3f, 0.5f, 0.8f, 1f) : Color.white;
-
-            EditorGUILayout.BeginVertical(style);
-            GUI.color = Color.white; // Reset text color
-
-            EditorGUILayout.LabelField($"Page ID: {page.PageId}", EditorStyles.boldLabel);
-            EditorGUILayout.LabelField($"Size: {page.Width}x{page.Height}");
-            EditorGUILayout.LabelField($"Format: {page.Format}");
-            EditorGUILayout.LabelField($"Active Sprites: {page.ActiveSpriteCount}");
-            
-            // Draw a mini progress bar for Y usage
-            // Usage is how far down we've gone (CurrentY) plus the height of the current row we are working on (MaxYInRow)
-            float usageY = (float)(page.CurrentY + page.MaxYInRow) / page.Height;
-            if (page.IsFull) usageY = 1.0f;
-            else if (usageY > 1.0f) usageY = 1.0f;
-            
-            EditorGUI.ProgressBar(EditorGUILayout.GetControlRect(false, 15), usageY, $"Usage: {(usageY*100):F1}%");
-
-            EditorGUILayout.EndVertical();
-
-            // Handle Clicks
-            Rect rect = GUILayoutUtility.GetLastRect();
-            if (Event.current.type == EventType.MouseDown && rect.Contains(Event.current.mousePosition))
-            {
-                _selectedPage = page;
-                Event.current.Use();
-            }
-        }
-
-        private void DrawMainArea()
+        private void DrawSelectedPage()
         {
             EditorGUILayout.BeginVertical();
-
-            if (_selectedPage == null)
+            if (!TryGetSelectedPage(out DynamicAtlasPageSnapshot page))
             {
-                EditorGUILayout.HelpBox("Select a page from the sidebar to inspect.", MessageType.Info);
+                EditorGUILayout.HelpBox("Select a page to inspect its texture and entries.", MessageType.Info);
                 EditorGUILayout.EndVertical();
                 return;
             }
 
-            float atlasPreviewHeight = position.height * 0.6f;
-            
-            // Visual Atlas Preview
-            EditorGUILayout.LabelField($"Atlas Visualizer - Page {_selectedPage.PageId}", EditorStyles.boldLabel);
-            _mainScrollPosition = EditorGUILayout.BeginScrollView(_mainScrollPosition, GUILayout.Height(atlasPreviewHeight));
-            DrawAtlasPreview(_selectedPage);
-            EditorGUILayout.EndScrollView();
-            
-            DrawHorizontalLine();
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField($"Page {page.PageId} Preview", EditorStyles.boldLabel);
+            GUILayout.FlexibleSpace();
+            GUILayout.Label("Zoom", GUILayout.Width(34f));
+            _previewZoom = GUILayout.HorizontalSlider(_previewZoom, 0.25f, 4f, GUILayout.Width(120f));
+            EditorGUILayout.EndHorizontal();
 
-            // Cached Items List for this page
-            EditorGUILayout.LabelField("Sprites Residing on this Page", EditorStyles.boldLabel);
-            
-            var allItems = _activeService.EditorGetCachedItems();
-            _reusableItemList.Clear();
-            foreach (var item in allItems)
+            float previewHeight = Mathf.Max(180f, position.height * 0.42f);
+            _previewScroll = EditorGUILayout.BeginScrollView(_previewScroll, GUILayout.Height(previewHeight));
+            DrawTexturePreview(page, previewHeight - 20f);
+            EditorGUILayout.EndScrollView();
+
+            EditorGUILayout.Space(4f);
+            EditorGUILayout.BeginHorizontal();
+            EditorGUILayout.LabelField("Entries", EditorStyles.boldLabel, GUILayout.Width(54f));
+            EditorGUI.BeginChangeCheck();
+            string nextFilter = EditorGUILayout.TextField(_keyFilter, EditorStyles.toolbarSearchField);
+            if (EditorGUI.EndChangeCheck())
             {
-                if (item.Page == _selectedPage)
-                {
-                    _reusableItemList.Add(item);
-                }
+                _keyFilter = nextFilter;
+                RebuildVisibleEntries();
             }
 
-            DrawItemsList(_reusableItemList);
-
+            EditorGUILayout.EndHorizontal();
+            DrawEntryList();
             EditorGUILayout.EndVertical();
         }
 
-        private void DrawAtlasPreview(DynamicAtlasPage page)
+        private void DrawTexturePreview(DynamicAtlasPageSnapshot page, float availableHeight)
         {
-            if (page.Texture == null) return;
-
-            // Hint box
-            EditorGUILayout.HelpBox("Controls: Scroll Wheel to Zoom In/Out. Click & Drag Scrollbars to Pan.", MessageType.Info);
-
-            // Container for the scroll view
-            Rect viewportRect = GUILayoutUtility.GetRect(10, 10000, 10, 10000);
-
-            // Handle Zoom
-            Event e = Event.current;
-            if (viewportRect.Contains(e.mousePosition) && e.type == EventType.ScrollWheel)
+            if (page.Texture == null)
             {
-                float zoomDelta = -e.delta.y * 0.05f;
-                float oldZoom = _zoom;
-                _zoom = Mathf.Clamp(_zoom + zoomDelta, 0.1f, 10.0f);
-                
-                // Adjust scroll position to keep mouse position relatively stable
-                Vector2 relativeMousePos = (e.mousePosition - viewportRect.position + _imageScrollPosition) / oldZoom;
-                _imageScrollPosition = relativeMousePos * _zoom - (e.mousePosition - viewportRect.position);
-                
-                e.Use();
+                return;
             }
 
-            // Calculate Base Size to fit window perfectly at zoom 1.0
-            float aspect = (float)page.Width / page.Height;
-            float targetHeight = viewportRect.height - 20; // 20px padding for scrollbars
-            float targetWidth = targetHeight * aspect;
-            
-            if (targetWidth > viewportRect.width - 20)
+            float baseSize = Mathf.Max(128f, availableHeight);
+            float width = baseSize * _previewZoom;
+            float height = baseSize * _previewZoom;
+            Rect textureRect = GUILayoutUtility.GetRect(width, height, GUILayout.ExpandWidth(false));
+            EditorGUI.DrawRect(textureRect, new Color(0.12f, 0.12f, 0.12f));
+            GUI.DrawTexture(textureRect, page.Texture, ScaleMode.StretchToFill, alphaBlend: true);
+
+            float scaleX = textureRect.width / page.Width;
+            float scaleY = textureRect.height / page.Height;
+            Handles.color = new Color(0.2f, 1f, 0.45f, 0.8f);
+            for (int i = 0; i < _visibleEntries.Count; i++)
             {
-                targetWidth = viewportRect.width - 20;
-                targetHeight = targetWidth / aspect;
-            }
+                DynamicAtlasEntrySnapshot entry = _visibleEntries[i];
 
-            float scaledWidth = targetWidth * _zoom;
-            float scaledHeight = targetHeight * _zoom;
-
-            Rect contentRect = new Rect(0, 0, scaledWidth, scaledHeight);
-            
-            _imageScrollPosition = GUI.BeginScrollView(viewportRect, _imageScrollPosition, contentRect);
-            
-            Rect baseRect = new Rect(0, 0, scaledWidth, scaledHeight);
-
-            DrawCheckerboard(baseRect);
-
-            GUI.DrawTexture(baseRect, page.Texture, ScaleMode.StretchToFill, true);
-
-            var allItems = _activeService.EditorGetCachedItems();
-            _reusableItemList.Clear();
-            foreach (var item in allItems)
-            {
-                if (item.Page == page)
-                {
-                    _reusableItemList.Add(item);
-                }
-            }
-
-            foreach (var item in _reusableItemList)
-            {
-                if (item.Sprite == null) continue;
-
-                Rect spriteRect = item.Sprite.rect;
-                
-                float scaleX = baseRect.width / page.Width;
-                float scaleY = baseRect.height / page.Height;
-
-                float x = baseRect.x + spriteRect.x * scaleX;
-                // GUI Y goes down. Texture Y goes up.
-                float y = baseRect.y + baseRect.height - ((spriteRect.y + spriteRect.height) * scaleY);
-                float w = spriteRect.width * scaleX;
-                float h = spriteRect.height * scaleY;
-
-                Rect guiRect = new Rect(x, y, w, h);
-
-                EditorGUI.DrawRect(guiRect, FillColor);
-                
-                Handles.color = OutlineColor;
-                Handles.DrawWireCube(new Vector3(guiRect.center.x, guiRect.center.y, 0), new Vector3(guiRect.width, guiRect.height, 0));
-
-                if (_zoom > 0.5f) // Hide text if zoomed out too far
-                {
-                    GUIStyle labelStyle = new GUIStyle(EditorStyles.miniLabel);
-                    labelStyle.normal.textColor = TextColor;
-                    
-                    string shortName = item.Path;
-                    if (shortName.Length > 15) shortName = "..." + shortName.Substring(shortName.Length - 15);
-                    GUI.Label(guiRect, shortName, labelStyle);
-                }
+                RectInt pixelRect = entry.PixelRect;
+                Rect outline = new Rect(
+                    textureRect.x + (pixelRect.x * scaleX),
+                    textureRect.yMax - (pixelRect.yMax * scaleY),
+                    pixelRect.width * scaleX,
+                    pixelRect.height * scaleY);
+                Handles.DrawWireCube(outline.center, outline.size);
             }
 
             Handles.color = Color.white;
-            GUI.EndScrollView();
         }
 
-        private void DrawItemsList(List<DynamicAtlasService.EditorAtlasItem> items)
+        private void DrawEntryList()
         {
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Sprite Name / Path", EditorStyles.boldLabel, GUILayout.Width(300));
-            EditorGUILayout.LabelField("Size (Pixels)", EditorStyles.boldLabel, GUILayout.Width(100));
-            EditorGUILayout.LabelField("RefCount", EditorStyles.boldLabel, GUILayout.Width(80));
-            EditorGUILayout.EndHorizontal();
-
-            _itemsScrollPosition = EditorGUILayout.BeginScrollView(_itemsScrollPosition);
-
-            if (items.Count == 0)
+            _entryScroll = EditorGUILayout.BeginScrollView(_entryScroll);
+            if (_entrySnapshotSuppressed)
             {
-                EditorGUILayout.HelpBox("No active sprites tracked here. (They might have been released)", MessageType.Info);
+                EditorGUILayout.HelpBox(
+                    $"Entry details are not captured because this service has more than {MaximumSnapshotEntries} entries. Summary and page diagnostics remain available.",
+                    MessageType.Info);
+                EditorGUILayout.EndScrollView();
+                return;
             }
-            else
-            {
-                foreach (var item in items)
-                {
-                    EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-                    
-                    // Path
-                    EditorGUILayout.SelectableLabel(item.Path, GUILayout.Width(300), GUILayout.Height(18));
-                    
-                    // Size
-                    string sizeInfo = "N/A";
-                    if (item.Sprite != null)
-                    {
-                        sizeInfo = $"{item.Sprite.rect.width}x{item.Sprite.rect.height}";
-                    }
-                    EditorGUILayout.LabelField(sizeInfo, GUILayout.Width(100));
 
-                    // RefCount (make it green if alive, red if dying)
-                    GUIStyle refStyle = new GUIStyle(EditorStyles.boldLabel);
-                    refStyle.normal.textColor = item.RefCount > 0 ? new Color(0.2f, 0.8f, 0.2f) : Color.red;
-                    EditorGUILayout.LabelField(item.RefCount.ToString(), refStyle, GUILayout.Width(80));
-                    
-                    EditorGUILayout.EndHorizontal();
-                }
+            for (int i = 0; i < _visibleEntries.Count; i++)
+            {
+                DynamicAtlasEntrySnapshot entry = _visibleEntries[i];
+                EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
+                EditorGUILayout.SelectableLabel(entry.Key, GUILayout.Height(EditorGUIUtility.singleLineHeight), GUILayout.MinWidth(220f));
+                EntryPresentation presentation = _entryPresentations[i];
+                GUILayout.Label(presentation.Size, GUILayout.Width(72f));
+                GUILayout.Label(presentation.CopyPath, GUILayout.Width(110f));
+                GUILayout.Label(presentation.ReferenceState, GUILayout.Width(72f));
+                EditorGUILayout.EndHorizontal();
+            }
+
+            if (_matchingEntryCount > MaximumVisibleEntries)
+            {
+                EditorGUILayout.HelpBox(
+                    $"Showing {MaximumVisibleEntries} of {_matchingEntryCount} matching entries. Narrow the key filter to inspect a smaller bounded set. Preview outlines follow this visible set.",
+                    MessageType.Info);
             }
 
             EditorGUILayout.EndScrollView();
         }
 
-        private void DrawCheckerboard(Rect rect)
+        private bool TryGetSelectedPage(out DynamicAtlasPageSnapshot selectedPage)
         {
-            EditorGUI.DrawRect(rect, BgColor);
-            
-            float cellSize = 16f;
-            int cols = Mathf.CeilToInt(rect.width / cellSize);
-            int rows = Mathf.CeilToInt(rect.height / cellSize);
-
-            Handles.color = GridColor;
-            for (int r = 0; r < rows; r++)
+            for (int i = 0; i < _pages.Count; i++)
             {
-                for (int c = 0; c < cols; c++)
+                if (_pages[i].PageId == _selectedPageId)
                 {
-                    if ((r + c) % 2 == 0) continue;
-                    
-                    float x = rect.x + c * cellSize;
-                    float y = rect.y + r * cellSize;
-                    float w = Mathf.Min(cellSize, rect.width - (x - rect.x));
-                    float h = Mathf.Min(cellSize, rect.height - (y - rect.y));
-                    
-                    EditorGUI.DrawRect(new Rect(x, y, w, h), GridColor);
+                    selectedPage = _pages[i];
+                    return true;
                 }
             }
-            Handles.color = Color.white;
+
+            selectedPage = default;
+            return false;
         }
 
-        private void DrawVerticalLine()
+        private void RefreshAll()
         {
-            Rect rect = EditorGUILayout.GetControlRect(false, GUILayout.Width(2));
-            rect.height = position.height;
-            EditorGUI.DrawRect(rect, Color.gray);
+            DynamicAtlasService previous = SelectedService;
+            DynamicAtlasService.CopyActiveEditorServices(_services);
+            RebuildServiceNames();
+
+            _selectedServiceIndex = previous != null ? _services.IndexOf(previous) : -1;
+            if (_selectedServiceIndex < 0 && _services.Count > 0)
+            {
+                _selectedServiceIndex = 0;
+            }
+
+            RefreshSelectedService();
         }
 
-        private void DrawHorizontalLine()
+        private void RebuildServiceNames()
         {
-            Rect rect = EditorGUILayout.GetControlRect(false, 2);
-            EditorGUI.DrawRect(rect, new Color(0.3f, 0.3f, 0.3f, 1f));
+            if (_services.Count == 0)
+            {
+                _serviceNames = Array.Empty<string>();
+                return;
+            }
+
+            _serviceNames = new string[_services.Count];
+            for (int i = 0; i < _services.Count; i++)
+            {
+                DynamicAtlasStats stats = _services[i].GetStats();
+                _serviceNames[i] = $"Service {i + 1}  ({stats.PageCount} pages, {stats.EntryCount} entries)";
+            }
+        }
+
+        private void RefreshSelectedService()
+        {
+            DynamicAtlasService service = SelectedService;
+            _pages.Clear();
+            _entries.Clear();
+            _visibleEntries.Clear();
+            _pageLabels.Clear();
+            _entryPresentations.Clear();
+            _stats = default;
+            _entrySnapshotSuppressed = false;
+            _matchingEntryCount = 0;
+
+            if (service == null || service.IsDisposed)
+            {
+                _selectedPageId = -1;
+                return;
+            }
+
+            _stats = service.GetStats();
+            service.CopyPageSnapshots(_pages);
+            if (_stats.EntryCount <= MaximumSnapshotEntries)
+            {
+                service.CopyEntrySnapshots(_entries);
+            }
+            else
+            {
+                _entrySnapshotSuppressed = true;
+            }
+
+            _activeRetainedText = $"{_stats.ActiveEntryCount} / {_stats.RetainedEntryCount}";
+            _reservedText = $"{_stats.ReservedUsageRatio * 100f:F1}%";
+            _estimatedMemoryText = EditorUtility.FormatBytes(_stats.EstimatedTextureBytes);
+            _pendingDestructionText = EditorUtility.FormatBytes(_stats.PendingDestructionBytes);
+            _budgetText = EditorUtility.FormatBytes(_stats.MemoryBudgetBytes);
+            _gpuReadbackText = $"{_stats.GpuCopyCount} / {_stats.SynchronousReadbackCount}";
+
+            for (int i = 0; i < _pages.Count; i++)
+            {
+                DynamicAtlasPageSnapshot page = _pages[i];
+                _pageLabels.Add(new GUIContent(
+                    $"Page {page.PageId}  |  {page.Mode}\n{page.EntryCount} entries, {page.ReleasedSlotCount} reusable slots"));
+            }
+
+            if (!TryGetSelectedPage(out _) && _pages.Count > 0)
+            {
+                _selectedPageId = _pages[0].PageId;
+            }
+
+            RebuildVisibleEntries();
+        }
+
+        private void RebuildVisibleEntries()
+        {
+            _visibleEntries.Clear();
+            _entryPresentations.Clear();
+            _matchingEntryCount = 0;
+
+            if (_entrySnapshotSuppressed || _selectedPageId < 0)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _entries.Count; i++)
+            {
+                DynamicAtlasEntrySnapshot entry = _entries[i];
+                if (entry.PageId != _selectedPageId ||
+                    (!string.IsNullOrEmpty(_keyFilter) && entry.Key.IndexOf(_keyFilter, StringComparison.OrdinalIgnoreCase) < 0))
+                {
+                    continue;
+                }
+
+                _matchingEntryCount++;
+                if (_visibleEntries.Count >= MaximumVisibleEntries)
+                {
+                    continue;
+                }
+
+                _visibleEntries.Add(entry);
+                _entryPresentations.Add(new EntryPresentation(
+                    $"{entry.PixelRect.width}x{entry.PixelRect.height}",
+                    entry.CopyPath.ToString(),
+                    entry.ReferenceCount == 0 ? "Retained" : $"Refs {entry.ReferenceCount}"));
+            }
+        }
+
+        private void ClearDiagnosticBuffers()
+        {
+            _services.Clear();
+            _pages.Clear();
+            _entries.Clear();
+            _visibleEntries.Clear();
+            _pageLabels.Clear();
+            _entryPresentations.Clear();
+            _serviceNames = Array.Empty<string>();
         }
     }
 }

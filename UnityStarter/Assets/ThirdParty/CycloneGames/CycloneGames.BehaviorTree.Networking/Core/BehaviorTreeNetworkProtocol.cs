@@ -19,6 +19,13 @@ namespace CycloneGames.BehaviorTree.Networking
         public const int DEFAULT_MAX_DELTA_PAYLOAD_SIZE = NetworkConstants.DefaultMaxPayloadSize * 2;
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
 
+        // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
+        private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0x059263302E9505CDUL;
+        private const ulong STATE_PAYLOAD_SCHEMA_V1 = 0xA5D8529342EA168CUL;
+        private const ulong DESYNC_REPORT_SCHEMA_V1 = 0x7CA942FF64163207UL;
+        private const ulong TICK_CONTROL_SCHEMA_V1 = 0x6299F932DCE53765UL;
+        private const ulong AUTHORITY_TRANSFER_SCHEMA_V1 = 0x94B78D8EED490D89UL;
+
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
         public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
@@ -35,9 +42,9 @@ namespace CycloneGames.BehaviorTree.Networking
             return messageId >= MSG_MANIFEST_HANDSHAKE && messageId <= MSG_AUTHORITY_TRANSFER;
         }
 
-        public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
+        public static bool TryRegisterMessageCatalog(INetworkMessageEndpoint messageEndpoint)
         {
-            return Module.TryRegister(networkManager);
+            return Module.TryRegister(messageEndpoint);
         }
 
         public static void RegisterMessageCatalog(INetworkMessageCatalog catalog)
@@ -50,8 +57,7 @@ namespace CycloneGames.BehaviorTree.Networking
             var builder = new NetworkProtocolManifestBuilder(
                 MessageOwner,
                 MESSAGE_ID_BASE,
-                MESSAGE_ID_MAX,
-                NetworkMessageKind.Module)
+                MESSAGE_ID_MAX)
             {
                 ProtocolId = "CycloneGames.BehaviorTree.Networking"
             };
@@ -60,41 +66,44 @@ namespace CycloneGames.BehaviorTree.Networking
                 .SetMetadata("module", "BehaviorTree")
                 .SetMetadata("snapshot", "RuntimeBehaviorTree blackboard snapshot payload")
                 .SetMetadata("delta", "RuntimeBlackboard tracked-key delta payload")
-                .AddMessage<BehaviorTreeManifestHandshakeMessage>(
+                .AddMessage(
+                    "BehaviorTreeManifestHandshakeMessage:v1",
                     MSG_MANIFEST_HANDSHAKE,
+                    MANIFEST_HANDSHAKE_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<BehaviorTreeStatePayloadMessage>(
+                .AddMessage(
+                    "BehaviorTreeStatePayloadMessage:v1",
                     MSG_FULL_SNAPSHOT,
+                    STATE_PAYLOAD_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
-                .AddMessage<BehaviorTreeStatePayloadMessage>(
+                .AddMessage(
+                    "BehaviorTreeStatePayloadMessage:v1",
                     MSG_BLACKBOARD_DELTA,
+                    STATE_PAYLOAD_SCHEMA_V1,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_DELTA_PAYLOAD_SIZE)
-                .AddMessage<BehaviorTreeDesyncReportMessage>(
+                .AddMessage(
+                    "BehaviorTreeDesyncReportMessage:v1",
                     MSG_DESYNC_REPORT,
+                    DESYNC_REPORT_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<BehaviorTreeTickControlMessage>(
+                .AddMessage(
+                    "BehaviorTreeTickControlMessage:v1",
                     MSG_TICK_CONTROL,
+                    TICK_CONTROL_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<BehaviorTreeAuthorityTransferMessage>(
+                .AddMessage(
+                    "BehaviorTreeAuthorityTransferMessage:v1",
                     MSG_AUTHORITY_TRANSFER,
+                    AUTHORITY_TRANSFER_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE);
 
             return builder.Build();
-        }
-
-        public static void RegisterMessage<T>(
-            INetworkMessageCatalog catalog,
-            ushort messageId,
-            NetworkChannel channel = NetworkChannel.Reliable,
-            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
-        {
-            Module.RegisterMessage<T>(catalog, messageId, channel, maxPayloadSize);
         }
     }
 }

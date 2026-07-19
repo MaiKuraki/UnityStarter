@@ -1,219 +1,275 @@
-using UnityEngine;
+using System;
+using System.Globalization;
 using System.Text;
+
+using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace CycloneGames.Utility.Runtime
 {
     /// <summary>
-    /// Lightweight, 0GC (after initialization) FPS counter with IMGUI overlay.
-    /// Supports safe area, outline text, color thresholds, and multiple display modes.
-    /// Attach to any GameObject; optionally enable singleton + DontDestroyOnLoad.
+    /// Explicitly owned IMGUI frame-rate diagnostic overlay.
     /// </summary>
-    public class FPSCounter : MonoBehaviour
+    /// <remarks>
+    /// Sampling performs no recurring collection growth. IMGUI and combined text mode can still allocate;
+    /// use this component as a diagnostic tool rather than production presentation UI.
+    /// </remarks>
+    [DisallowMultipleComponent]
+    public sealed class FPSCounter : MonoBehaviour
     {
-        public enum Modes { Instant, MovingAverage, InstantAndMovingAverage }
-        public enum ScreenPosition
+        public enum Modes
         {
-            TopLeft,
-            TopCenter,
-            TopRight,
-            MiddleLeft,
-            MiddleRight,
-            BottomLeft,
-            BottomCenter,
-            BottomRight,
-            Custom
+            Instant = 0,
+            MovingAverage = 1,
+            InstantAndMovingAverage = 2
         }
 
-        [System.Serializable]
+        public enum ScreenPosition
+        {
+            TopLeft = 0,
+            TopCenter = 1,
+            TopRight = 2,
+            MiddleLeft = 3,
+            MiddleRight = 4,
+            BottomLeft = 5,
+            BottomCenter = 6,
+            BottomRight = 7,
+            Custom = 8
+        }
+
+        [Serializable]
         public struct FPSColor
         {
-            [Tooltip("When FPS falls below this value, the text changes to the associated color.")]
+            [Min(0)]
+            [Tooltip("The color is used when the sampled FPS is below this value.")]
             public int FPSValue;
 
-            [Tooltip("The color applied when FPS is below the threshold.")]
             public Color Color;
         }
 
-        public static FPSCounter Instance { get; private set; }
+        private const int MinimumMovingAverageSamples = 1;
+        private const int MaximumMovingAverageSamples = 120;
+        private const int MaximumDisplayedFps = 9999;
+        private const int CachedFpsLimit = 999;
 
-        [Tooltip("If true, the FPS counter will be visible.")]
-        public bool IsVisible = true;
+        private static readonly string[] FpsStringCache = new string[CachedFpsLimit + 1];
 
-        [Tooltip("If true, enforces singleton pattern and persists across scene loads.")]
-        [SerializeField] private bool _singleton = true;
+        [FormerlySerializedAs("IsVisible")]
+        [SerializeField]
+        private bool _isVisible = true;
 
-        [Header("Safe Area Settings")]
-        [Tooltip("Adjust position to fit within the screen's safe area (notch, rounded corners, etc.).")]
-        [SerializeField] private bool AdjustForSafeArea = true;
-        [Tooltip("If true, the UI extends into the bottom safe area (behind Home Indicator on iOS).")]
-        private bool extendIntoBottomSafeArea = true;
-        [Tooltip("If true, the bottom inset is increased to match the top inset. Balances a top notch in portrait mode.")]
-        public bool enforceVerticalSymmetry = true;
-        [Tooltip("If true, left/right insets are matched to the larger of the two. Balances a notch in landscape mode.")]
-        public bool enforceHorizontalSymmetry = true;
+        [FormerlySerializedAs("_singleton")]
+        [SerializeField]
+        [Tooltip("Moves this component's entire GameObject to DontDestroyOnLoad. Use a dedicated owner GameObject.")]
+        private bool _persistAcrossScenes;
 
-        [Space(10)]
-        [Tooltip("The interval (in seconds) at which the FPS display is updated.")]
-        [SerializeField] private float UpdateInterval = 0.3f;
+        [FormerlySerializedAs("AdjustForSafeArea")]
+        [SerializeField]
+        private bool _adjustForSafeArea = true;
 
-        [Tooltip("Determines what FPS value is displayed: instantaneous, a moving average, or both.")]
-        [SerializeField] private Modes Mode = Modes.Instant;
+        [FormerlySerializedAs("extendIntoBottomSafeArea")]
+        [SerializeField]
+        private bool _extendIntoBottomSafeArea = true;
 
-        [Tooltip("The default color for the FPS text.")]
-        [SerializeField] private Color DefaultForegroundColor = Color.green;
+        [FormerlySerializedAs("enforceVerticalSymmetry")]
+        [SerializeField]
+        private bool _enforceVerticalSymmetry = true;
 
-        [Tooltip("The color used for the text outline effect.")]
-        [SerializeField] private Color OutlineColor = Color.black;
+        [FormerlySerializedAs("enforceHorizontalSymmetry")]
+        [SerializeField]
+        private bool _enforceHorizontalSymmetry = true;
 
-        [Tooltip("The offset for the text outline effect. (1,1) usually looks good.")]
-        [SerializeField] private Vector2 OutlineOffset = new Vector2(1, 1);
+        [FormerlySerializedAs("UpdateInterval")]
+        [SerializeField, Min(0.05f)]
+        private float _updateInterval = 0.3f;
 
-        [Tooltip("Predefined screen position for the FPS counter.")]
-        [SerializeField] private ScreenPosition PositionPreset = ScreenPosition.TopLeft;
+        [SerializeField, Range(MinimumMovingAverageSamples, MaximumMovingAverageSamples)]
+        private int _movingAverageSampleCount = 30;
 
-        [Tooltip("Margin from the screen edges or safe area boundaries (in pixels).")]
-        [SerializeField] private int PresetPositionMargin = 10;
+        [FormerlySerializedAs("Mode")]
+        [SerializeField]
+        private Modes _mode = Modes.Instant;
 
-        [Tooltip("Custom screen position (in pixels) if PositionPreset is set to Custom. (0,0) is top-left.")]
-        [SerializeField] private Vector2 CustomPosition = new Vector2(0, 0);
+        [FormerlySerializedAs("DefaultForegroundColor")]
+        [SerializeField]
+        private Color _defaultForegroundColor = Color.green;
 
-        [Tooltip("FPS thresholds and colors. Sorted descending at runtime. When FPS < threshold, the corresponding color is used.")]
-        [SerializeField] private FPSColor[] FPSColors = new FPSColor[0];
+        [FormerlySerializedAs("OutlineColor")]
+        [SerializeField]
+        private Color _outlineColor = Color.black;
 
-        private Color _foregroundColor;
-        private float _framesAccumulated;
-        private int _framesDrawnInTheInterval;
-        private float _timeLeft;
-        private int _currentFPS;
-        private int _totalFrames;
-        private float _averageAccumulator; // Float accumulator for precision
-        private int _averageFPS;
-        private readonly StringBuilder _displayedTextSB = new StringBuilder(16);
-        private string _cachedDisplayText = string.Empty;
-        private bool _displayDirty = true;
-        private bool _useDirectString; // True when display string can be a pre-cached FpsString (0GC)
-        private GUIStyle _style;
-        private readonly GUIContent _content = new GUIContent();
+        [FormerlySerializedAs("OutlineOffset")]
+        [SerializeField]
+        private Vector2 _outlineOffset = new Vector2(1f, 1f);
+
+        [FormerlySerializedAs("PositionPreset")]
+        [SerializeField]
+        private ScreenPosition _positionPreset = ScreenPosition.TopLeft;
+
+        [FormerlySerializedAs("PresetPositionMargin")]
+        [SerializeField, Min(0)]
+        private int _presetPositionMargin = 10;
+
+        [FormerlySerializedAs("CustomPosition")]
+        [SerializeField]
+        private Vector2 _customPosition;
+
+        [SerializeField, Range(0.01f, 0.1f)]
         private float _fontSizeRatio = 0.04f;
 
-        // Cached screen/safe-area state to avoid per-frame recalculation
+        [FormerlySerializedAs("FPSColors")]
+        [SerializeField]
+        private FPSColor[] _fpsColors = Array.Empty<FPSColor>();
+
+        private readonly StringBuilder _displayBuilder = new StringBuilder(24);
+        private readonly GUIContent _content = new GUIContent();
+        private SortedFpsColor[] _sortedFpsColors = Array.Empty<SortedFpsColor>();
+        private int[] _movingAverageSamples = Array.Empty<int>();
+        private GUIStyle _style;
+        private Color _foregroundColor;
+        private string _cachedDisplayText = string.Empty;
+        private int _cachedInstantValue = -1;
+        private string _cachedInstantText;
+        private int _cachedAverageValue = -1;
+        private string _cachedAverageText;
+        private bool _displayDirty = true;
+        private bool _configurationDirty = true;
+
+        private double _intervalElapsed;
+        private int _framesInInterval;
+        private long _movingAverageSum;
+        private int _movingAverageCount;
+        private int _movingAverageWriteIndex;
+        private int _currentFps;
+        private int _averageFps;
+
         private int _cachedScreenWidth;
         private int _cachedScreenHeight;
         private Rect _cachedSafeArea;
-        private Rect _computedSafeArea;
-        private int _cachedFontSize;
+        private Rect _computedGuiArea;
         private bool _layoutCacheDirty = true;
 
-        private const int FPS_MAX_CACHED = 999;
-        private static readonly string[] FpsStrings = GenerateFpsStrings(FPS_MAX_CACHED);
-
-        private static string[] GenerateFpsStrings(int max)
+        /// <summary>
+        /// Gets or sets whether the overlay is visible and sampling is active.
+        /// </summary>
+        public bool IsVisible
         {
-            string[] arr = new string[max + 1];
-            for (int i = 0; i <= max; i++)
-            {
-                arr[i] = i.ToString();
-            }
-            return arr;
+            get => _isVisible;
+            set => _isVisible = value;
         }
 
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void ResetStatics()
+        public int CurrentFPS => _currentFps;
+        public int AverageFPS => _averageFps;
+
+        [Obsolete("Use the Inspector safe-area settings or a dedicated presentation adapter.")]
+        public bool enforceVerticalSymmetry
         {
-            Instance = null;
+            get => _enforceVerticalSymmetry;
+            set
+            {
+                _enforceVerticalSymmetry = value;
+                InvalidateLayoutCache();
+            }
+        }
+
+        [Obsolete("Use the Inspector safe-area settings or a dedicated presentation adapter.")]
+        public bool enforceHorizontalSymmetry
+        {
+            get => _enforceHorizontalSymmetry;
+            set
+            {
+                _enforceHorizontalSymmetry = value;
+                InvalidateLayoutCache();
+            }
         }
 
         private void Awake()
         {
-            if (_singleton)
+            if (_persistAcrossScenes && Application.isPlaying)
             {
-                if (Instance != null && Instance != this)
-                {
-                    Destroy(gameObject);
-                    return;
-                }
-                Instance = this;
                 DontDestroyOnLoad(gameObject);
             }
         }
 
-        private void OnDestroy()
+        private void OnEnable()
         {
-            if (Instance == this)
+            if (_style == null)
             {
-                Instance = null;
+                _style = new GUIStyle();
             }
-        }
 
-        protected virtual void Start()
-        {
-            // Sort FPSColors descending by FPSValue for binary search
-            System.Array.Sort(FPSColors, CompareFPSColorsDescending);
-            _timeLeft = UpdateInterval;
-            _foregroundColor = DefaultForegroundColor;
-            _style = new GUIStyle();
+            ConfigureCaches();
+            ResetSampling();
+            _foregroundColor = _defaultForegroundColor;
+            _content.text = string.Empty;
             InvalidateLayoutCache();
         }
 
-        private static int CompareFPSColorsDescending(FPSColor a, FPSColor b)
+#if UNITY_EDITOR
+        private void OnValidate()
         {
-            return b.FPSValue.CompareTo(a.FPSValue);
+            _updateInterval = SanitizeUpdateInterval(_updateInterval);
+            _movingAverageSampleCount = Mathf.Clamp(
+                _movingAverageSampleCount,
+                MinimumMovingAverageSamples,
+                MaximumMovingAverageSamples);
+            _presetPositionMargin = Mathf.Max(0, _presetPositionMargin);
+            _fontSizeRatio = Mathf.Clamp(_fontSizeRatio, 0.01f, 0.1f);
+
+            _configurationDirty = true;
+            InvalidateLayoutCache();
+        }
+#endif
+
+        private void Update()
+        {
+            if (_configurationDirty)
+            {
+                ConfigureCaches();
+            }
+
+            if (!_isVisible)
+            {
+                return;
+            }
+
+            SampleFrame(Time.unscaledDeltaTime);
         }
 
-        protected virtual void Update()
+        internal void SampleFrame(float unscaledDeltaTime)
         {
-            if (!IsVisible) return;
-
-            _framesDrawnInTheInterval++;
-            _framesAccumulated += 1f / Time.unscaledDeltaTime;
-            _timeLeft -= Time.unscaledDeltaTime;
-
-            if (_timeLeft <= 0f)
+            if (!(unscaledDeltaTime > 0f) || float.IsNaN(unscaledDeltaTime) || float.IsInfinity(unscaledDeltaTime))
             {
-                _currentFPS = _framesDrawnInTheInterval > 0
-                    ? Mathf.Clamp(Mathf.RoundToInt(_framesAccumulated / _framesDrawnInTheInterval), 0, FPS_MAX_CACHED)
-                    : 0;
-
-                _framesDrawnInTheInterval = 0;
-                _framesAccumulated = 0f;
-                _timeLeft += UpdateInterval;
-
-                // Cumulative moving average with float precision
-                _totalFrames++;
-                _averageAccumulator += (_currentFPS - _averageAccumulator) / _totalFrames;
-                _averageFPS = Mathf.Clamp(Mathf.RoundToInt(_averageAccumulator), 0, FPS_MAX_CACHED);
-
-                // Build display string (only on interval tick, not every frame)
-                switch (Mode)
-                {
-                    case Modes.Instant:
-                        _cachedDisplayText = FpsStrings[_currentFPS];
-                        _useDirectString = true;
-                        break;
-                    case Modes.MovingAverage:
-                        _cachedDisplayText = FpsStrings[_averageFPS];
-                        _useDirectString = true;
-                        break;
-                    case Modes.InstantAndMovingAverage:
-                        _displayedTextSB.Clear();
-                        _displayedTextSB.Append(FpsStrings[_currentFPS]);
-                        _displayedTextSB.Append(" / ");
-                        _displayedTextSB.Append(FpsStrings[_averageFPS]);
-                        _useDirectString = false;
-                        break;
-                }
-
-                UpdateForegroundColor();
-                _displayDirty = true;
+                return;
             }
+
+            _framesInInterval++;
+            _intervalElapsed += unscaledDeltaTime;
+            double interval = SanitizeUpdateInterval(_updateInterval);
+            if (_intervalElapsed < interval)
+            {
+                return;
+            }
+
+            double sampledFps = _framesInInterval / _intervalElapsed;
+            _currentFps = sampledFps >= MaximumDisplayedFps
+                ? MaximumDisplayedFps
+                : (int)Math.Max(0d, Math.Round(sampledFps));
+            _framesInInterval = 0;
+            _intervalElapsed = 0d;
+
+            AddMovingAverageSample(_currentFps);
+            UpdateForegroundColor();
+            RebuildDisplayText();
         }
 
         private void OnGUI()
         {
-            if (!IsVisible) return;
-            if (_style == null) return;
+            if (!_isVisible || _style == null)
+            {
+                return;
+            }
 
-            // Detect screen/safe-area changes (rotation, resize, etc.)
             if (_cachedScreenWidth != Screen.width ||
                 _cachedScreenHeight != Screen.height ||
                 _cachedSafeArea != Screen.safeArea)
@@ -226,32 +282,191 @@ namespace CycloneGames.Utility.Runtime
                 RebuildLayoutCache();
             }
 
-            // Only allocate a new string when the display content actually changed
             if (_displayDirty)
             {
-                if (!_useDirectString)
-                {
-                    _cachedDisplayText = _displayedTextSB.ToString();
-                }
-                // _useDirectString: _cachedDisplayText already points to a pre-cached string (0GC)
                 _content.text = _cachedDisplayText;
                 _displayDirty = false;
             }
 
             Vector2 labelSize = _style.CalcSize(_content);
-            Vector2 labelPos = GetLabelPosition(labelSize);
+            Vector2 labelPosition = GetLabelPosition(labelSize);
+            float outlineX = _outlineOffset.x;
+            float outlineY = _outlineOffset.y;
 
-            // Draw outline (4 offset copies)
-            _style.normal.textColor = OutlineColor;
-            float ox = OutlineOffset.x, oy = OutlineOffset.y;
-            GUI.Label(new Rect(labelPos.x - ox, labelPos.y - oy, labelSize.x, labelSize.y), _content, _style);
-            GUI.Label(new Rect(labelPos.x - ox, labelPos.y + oy, labelSize.x, labelSize.y), _content, _style);
-            GUI.Label(new Rect(labelPos.x + ox, labelPos.y - oy, labelSize.x, labelSize.y), _content, _style);
-            GUI.Label(new Rect(labelPos.x + ox, labelPos.y + oy, labelSize.x, labelSize.y), _content, _style);
+            _style.normal.textColor = _outlineColor;
+            GUI.Label(new Rect(labelPosition.x - outlineX, labelPosition.y - outlineY, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPosition.x - outlineX, labelPosition.y + outlineY, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPosition.x + outlineX, labelPosition.y - outlineY, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPosition.x + outlineX, labelPosition.y + outlineY, labelSize.x, labelSize.y), _content, _style);
 
-            // Draw foreground
             _style.normal.textColor = _foregroundColor;
-            GUI.Label(new Rect(labelPos.x, labelPos.y, labelSize.x, labelSize.y), _content, _style);
+            GUI.Label(new Rect(labelPosition.x, labelPosition.y, labelSize.x, labelSize.y), _content, _style);
+        }
+
+        /// <summary>
+        /// Enables or disables visibility and sampling.
+        /// </summary>
+        public void SetVisible(bool visible)
+        {
+            _isVisible = visible;
+        }
+
+        /// <summary>
+        /// Clears the bounded moving-average window without changing the current sample.
+        /// </summary>
+        public void ResetAverage()
+        {
+            if (_movingAverageSamples.Length > 0)
+            {
+                Array.Clear(_movingAverageSamples, 0, _movingAverageSamples.Length);
+            }
+
+            _movingAverageSum = 0L;
+            _movingAverageCount = 0;
+            _movingAverageWriteIndex = 0;
+            _averageFps = 0;
+            RebuildDisplayText();
+        }
+
+        private void ConfigureCaches()
+        {
+            int sampleCount = Mathf.Clamp(
+                _movingAverageSampleCount,
+                MinimumMovingAverageSamples,
+                MaximumMovingAverageSamples);
+            if (_movingAverageSamples.Length != sampleCount)
+            {
+                _movingAverageSamples = new int[sampleCount];
+                _movingAverageSum = 0L;
+                _movingAverageCount = 0;
+                _movingAverageWriteIndex = 0;
+                _averageFps = 0;
+            }
+
+            int colorCount = _fpsColors == null ? 0 : _fpsColors.Length;
+            if (_sortedFpsColors.Length != colorCount)
+            {
+                _sortedFpsColors = colorCount == 0
+                    ? Array.Empty<SortedFpsColor>()
+                    : new SortedFpsColor[colorCount];
+            }
+
+            if (colorCount > 0)
+            {
+                for (int i = 0; i < colorCount; i++)
+                {
+                    _sortedFpsColors[i] = new SortedFpsColor(_fpsColors[i], i);
+                }
+
+                Array.Sort(_sortedFpsColors, SortedFpsColorComparer.Instance);
+            }
+
+            UpdateForegroundColor();
+            _configurationDirty = false;
+        }
+
+        private void ResetSampling()
+        {
+            _intervalElapsed = 0d;
+            _framesInInterval = 0;
+            _currentFps = 0;
+            ResetAverage();
+        }
+
+        private void AddMovingAverageSample(int sample)
+        {
+            if (_movingAverageSamples.Length == 0)
+            {
+                _averageFps = sample;
+                return;
+            }
+
+            if (_movingAverageCount == _movingAverageSamples.Length)
+            {
+                _movingAverageSum -= _movingAverageSamples[_movingAverageWriteIndex];
+            }
+            else
+            {
+                _movingAverageCount++;
+            }
+
+            _movingAverageSamples[_movingAverageWriteIndex] = sample;
+            _movingAverageSum += sample;
+            _movingAverageWriteIndex++;
+            if (_movingAverageWriteIndex == _movingAverageSamples.Length)
+            {
+                _movingAverageWriteIndex = 0;
+            }
+
+            _averageFps = _movingAverageCount == 0
+                ? 0
+                : (int)Math.Round((double)_movingAverageSum / _movingAverageCount);
+        }
+
+        private void RebuildDisplayText()
+        {
+            string instantText = GetValueText(_currentFps, ref _cachedInstantValue, ref _cachedInstantText);
+            string averageText = GetValueText(_averageFps, ref _cachedAverageValue, ref _cachedAverageText);
+
+            switch (_mode)
+            {
+                case Modes.Instant:
+                    _cachedDisplayText = instantText;
+                    break;
+                case Modes.MovingAverage:
+                    _cachedDisplayText = averageText;
+                    break;
+                case Modes.InstantAndMovingAverage:
+                    _displayBuilder.Clear();
+                    _displayBuilder.Append(instantText);
+                    _displayBuilder.Append(" / ");
+                    _displayBuilder.Append(averageText);
+                    _cachedDisplayText = _displayBuilder.ToString();
+                    break;
+                default:
+                    _cachedDisplayText = instantText;
+                    break;
+            }
+
+            _displayDirty = true;
+        }
+
+        private static string GetValueText(int value, ref int cachedValue, ref string cachedText)
+        {
+            if (cachedValue == value && cachedText != null)
+            {
+                return cachedText;
+            }
+
+            cachedValue = value;
+            if ((uint)value <= CachedFpsLimit)
+            {
+                string shared = FpsStringCache[value];
+                if (shared == null)
+                {
+                    shared = value.ToString(CultureInfo.InvariantCulture);
+                    FpsStringCache[value] = shared;
+                }
+
+                cachedText = shared;
+                return shared;
+            }
+
+            cachedText = value.ToString(CultureInfo.InvariantCulture);
+            return cachedText;
+        }
+
+        private void UpdateForegroundColor()
+        {
+            _foregroundColor = _defaultForegroundColor;
+            for (int i = 0; i < _sortedFpsColors.Length; i++)
+            {
+                FPSColor threshold = _sortedFpsColors[i].Value;
+                if (_currentFps < threshold.FPSValue)
+                {
+                    _foregroundColor = threshold.Color;
+                }
+            }
         }
 
         private void InvalidateLayoutCache()
@@ -265,137 +480,92 @@ namespace CycloneGames.Utility.Runtime
             _cachedScreenHeight = Screen.height;
             _cachedSafeArea = Screen.safeArea;
 
-            // Font size
-            int shortSide = _cachedScreenWidth < _cachedScreenHeight ? _cachedScreenWidth : _cachedScreenHeight;
-            _cachedFontSize = Mathf.Max(10, Mathf.RoundToInt(shortSide * _fontSizeRatio));
-            _style.fontSize = _cachedFontSize;
+            int shortSide = Mathf.Min(_cachedScreenWidth, _cachedScreenHeight);
+            _style.fontSize = Mathf.Max(10, Mathf.RoundToInt(shortSide * _fontSizeRatio));
 
-            // Safe area
-            _computedSafeArea = AdjustForSafeArea ? ComputeAdaptiveSafeArea() : new Rect(0, 0, _cachedScreenWidth, _cachedScreenHeight);
-
-            _layoutCacheDirty = false;
-        }
-
-        /// <summary>
-        /// Determines text color based on current FPS and thresholds.
-        /// Uses binary search on descending-sorted FPSColors array.
-        /// </summary>
-        private void UpdateForegroundColor()
-        {
-            _foregroundColor = DefaultForegroundColor;
-            if (FPSColors == null || FPSColors.Length == 0) return;
-
-            // Binary search: find the tightest (lowest FPSValue) threshold that currentFPS is below.
-            // FPSColors is sorted descending by FPSValue.
-            int left = 0, right = FPSColors.Length - 1;
-            while (left <= right)
+            Rect pixelArea;
+            if (_adjustForSafeArea && _cachedScreenWidth > 0 && _cachedScreenHeight > 0)
             {
-                int mid = left + ((right - left) >> 1);
-                if (_currentFPS < FPSColors[mid].FPSValue)
-                {
-                    _foregroundColor = FPSColors[mid].Color;
-                    left = mid + 1;
-                }
-                else
-                {
-                    right = mid - 1;
-                }
+                SafeAreaPolicy policy = new SafeAreaPolicy(
+                    _extendIntoBottomSafeArea,
+                    _enforceVerticalSymmetry,
+                    _enforceHorizontalSymmetry);
+                pixelArea = SafeAreaUtility.CalculatePixelRect(
+                    _cachedSafeArea,
+                    _cachedScreenWidth,
+                    _cachedScreenHeight,
+                    in policy);
             }
+            else
+            {
+                pixelArea = new Rect(0f, 0f, _cachedScreenWidth, _cachedScreenHeight);
+            }
+
+            _computedGuiArea = SafeAreaUtility.ToGuiRect(pixelArea, _cachedScreenHeight);
+            _layoutCacheDirty = false;
         }
 
         private Vector2 GetLabelPosition(Vector2 labelSize)
         {
-            Rect sa = _computedSafeArea;
-            int m = PresetPositionMargin;
-
-            switch (PositionPreset)
+            Rect area = _computedGuiArea;
+            int margin = _presetPositionMargin;
+            switch (_positionPreset)
             {
                 case ScreenPosition.TopLeft:
-                    return new Vector2(sa.xMin + m, sa.yMin + m);
+                    return new Vector2(area.xMin + margin, area.yMin + margin);
                 case ScreenPosition.TopCenter:
-                    return new Vector2(sa.xMin + (sa.width - labelSize.x) * 0.5f, sa.yMin + m);
+                    return new Vector2(area.xMin + (area.width - labelSize.x) * 0.5f, area.yMin + margin);
                 case ScreenPosition.TopRight:
-                    return new Vector2(sa.xMax - labelSize.x - m, sa.yMin + m);
+                    return new Vector2(area.xMax - labelSize.x - margin, area.yMin + margin);
                 case ScreenPosition.MiddleLeft:
-                    return new Vector2(sa.xMin + m, sa.yMin + (sa.height - labelSize.y) * 0.5f);
+                    return new Vector2(area.xMin + margin, area.yMin + (area.height - labelSize.y) * 0.5f);
                 case ScreenPosition.MiddleRight:
-                    return new Vector2(sa.xMax - labelSize.x - m, sa.yMin + (sa.height - labelSize.y) * 0.5f);
+                    return new Vector2(area.xMax - labelSize.x - margin, area.yMin + (area.height - labelSize.y) * 0.5f);
                 case ScreenPosition.BottomLeft:
-                    return new Vector2(sa.xMin + m, sa.yMax - labelSize.y - m);
+                    return new Vector2(area.xMin + margin, area.yMax - labelSize.y - margin);
                 case ScreenPosition.BottomCenter:
-                    return new Vector2(sa.xMin + (sa.width - labelSize.x) * 0.5f, sa.yMax - labelSize.y - m);
+                    return new Vector2(area.xMin + (area.width - labelSize.x) * 0.5f, area.yMax - labelSize.y - margin);
                 case ScreenPosition.BottomRight:
-                    return new Vector2(sa.xMax - labelSize.x - m, sa.yMax - labelSize.y - m);
+                    return new Vector2(area.xMax - labelSize.x - margin, area.yMax - labelSize.y - margin);
                 case ScreenPosition.Custom:
-                    return CustomPosition;
+                    return _customPosition;
                 default:
-                    return new Vector2(sa.xMin + m, sa.yMin + m);
+                    return new Vector2(area.xMin + margin, area.yMin + margin);
             }
         }
 
-        private Rect ComputeAdaptiveSafeArea()
+        private readonly struct SortedFpsColor
         {
-            Rect safeArea = _cachedSafeArea;
-            float sw = _cachedScreenWidth;
-            float sh = _cachedScreenHeight;
+            public readonly FPSColor Value;
+            public readonly int SourceIndex;
 
-            float topInset = sh - safeArea.yMax;
-            float bottomInset = safeArea.yMin;
-            float leftInset = safeArea.xMin;
-            float rightInset = sw - safeArea.xMax;
-
-            // Step 1: Optionally reclaim bottom area (e.g. draw behind iOS Home Indicator)
-            if (extendIntoBottomSafeArea)
+            public SortedFpsColor(FPSColor value, int sourceIndex)
             {
-                bottomInset = 0;
+                Value = value;
+                SourceIndex = sourceIndex;
             }
-
-            // Step 2: Symmetry overrides (applied after step 1 so notch balance takes priority)
-            if (enforceVerticalSymmetry)
-            {
-                float maxVertical = bottomInset > topInset ? bottomInset : topInset;
-                bottomInset = maxVertical;
-                // topInset remains unchanged — it's derived from safeArea.yMax
-            }
-
-            if (enforceHorizontalSymmetry)
-            {
-                float maxHorizontal = leftInset > rightInset ? leftInset : rightInset;
-                leftInset = maxHorizontal;
-                rightInset = maxHorizontal;
-            }
-
-            return new Rect(leftInset, bottomInset, sw - leftInset - rightInset, sh - bottomInset - topInset);
         }
 
-        // --- Public API ---
-
-        /// <summary>
-        /// Toggles FPS counter visibility. Safe to call from anywhere.
-        /// </summary>
-        public void SetVisible(bool visible)
+        private sealed class SortedFpsColorComparer : System.Collections.Generic.IComparer<SortedFpsColor>
         {
-            IsVisible = visible;
+            public static readonly SortedFpsColorComparer Instance = new SortedFpsColorComparer();
+
+            private SortedFpsColorComparer()
+            {
+            }
+
+            public int Compare(SortedFpsColor x, SortedFpsColor y)
+            {
+                int thresholdComparison = y.Value.FPSValue.CompareTo(x.Value.FPSValue);
+                return thresholdComparison != 0
+                    ? thresholdComparison
+                    : x.SourceIndex.CompareTo(y.SourceIndex);
+            }
         }
 
-        /// <summary>
-        /// Resets the cumulative average FPS counter.
-        /// </summary>
-        public void ResetAverage()
+        private static float SanitizeUpdateInterval(float value)
         {
-            _totalFrames = 0;
-            _averageAccumulator = 0f;
-            _averageFPS = 0;
+            return float.IsNaN(value) || float.IsInfinity(value) ? 0.3f : Mathf.Max(0.05f, value);
         }
-
-        /// <summary>
-        /// Gets the current instantaneous FPS value.
-        /// </summary>
-        public int CurrentFPS => _currentFPS;
-
-        /// <summary>
-        /// Gets the cumulative average FPS value.
-        /// </summary>
-        public int AverageFPS => _averageFPS;
     }
 }

@@ -1,13 +1,13 @@
-using System;
+#if UNITY_EDITOR
 using System.Reflection;
 
 namespace CycloneGames.GameplayTags.Core
 {
-   internal class AssemblyGameplayTagSource : IGameplayTagSource
+   internal sealed class AssemblyGameplayTagSource : IGameplayTagSource
    {
       public string Name => m_Assembly.GetName().Name;
 
-      private Assembly m_Assembly;
+      private readonly Assembly m_Assembly;
 
       public AssemblyGameplayTagSource(Assembly assembly)
       {
@@ -16,20 +16,9 @@ namespace CycloneGames.GameplayTags.Core
 
       public void RegisterTags(GameplayTagRegistrationContext context)
       {
-         try
-         {
-            foreach (GameplayTagAttribute attribute in m_Assembly.GetCustomAttributes<GameplayTagAttribute>())
-               context.RegisterTag(attribute.TagName, attribute.Description, attribute.Flags, this);
-        }
-        catch (ReflectionTypeLoadException ex)
-        {
-            foreach (Exception loaderException in ex.LoaderExceptions)
-               GameplayTagLogger.LogError($"Failed to load type from assembly '{m_Assembly.FullName}': {loaderException.Message}");
-        }
-        catch (Exception ex)
-        {
-            GameplayTagLogger.LogError($"Failed to fetch tags from assembly '{m_Assembly.FullName}': {ex.Message}");
-        }
+         foreach (GameplayTagAttribute attribute in m_Assembly.GetCustomAttributes<GameplayTagAttribute>())
+            context.RegisterTag(attribute.TagName, attribute.Description, attribute.Flags, this);
       }
    }
 }
+#endif

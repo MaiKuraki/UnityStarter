@@ -6,11 +6,9 @@ namespace CycloneGames.Networking.Security
     {
         public MessageSecurityPolicyRegistry MessagePolicies { get; set; } = new MessageSecurityPolicyRegistry();
         public RateLimiter RateLimiter { get; set; }
-        public INetworkReplayProtector ReplayProtector { get; set; } = new NetworkReplayGuardProtector();
+        public NetworkReplayGuard ReplayGuard { get; set; } = new NetworkReplayGuard();
         public INetworkMessageSigner MessageSigner { get; set; } = NoopNetworkMessageSigner.Instance;
-        public INetworkCryptoProvider CryptoProvider { get; set; } = NoopNetworkCryptoProvider.Instance;
         public INetworkAntiCheatSignalSink AntiCheatSignalSink { get; set; } = NoopNetworkAntiCheatSignalSink.Instance;
-        public bool EnableRateLimiting { get; set; }
         public bool ReportRejectedMessages { get; set; } = true;
     }
 
@@ -48,17 +46,10 @@ namespace CycloneGames.Networking.Security
     {
         private readonly MessageSecurityPolicyRegistry _policies;
         private readonly RateLimiter _rateLimiter;
-        private readonly INetworkReplayProtector _replayProtector;
+        private readonly NetworkReplayGuard _replayGuard;
         private readonly INetworkMessageSigner _messageSigner;
-        private readonly INetworkCryptoProvider _cryptoProvider;
         private readonly INetworkAntiCheatSignalSink _antiCheatSignalSink;
-        private readonly bool _enableRateLimiting;
         private readonly bool _reportRejectedMessages;
-
-        public NetworkSecurityPipeline()
-            : this(new NetworkSecurityPipelineOptions())
-        {
-        }
 
         public NetworkSecurityPipeline(NetworkSecurityPipelineOptions options)
         {
@@ -67,13 +58,15 @@ namespace CycloneGames.Networking.Security
                 throw new ArgumentNullException(nameof(options));
             }
 
-            _policies = options.MessagePolicies ?? new MessageSecurityPolicyRegistry();
+            _policies = options.MessagePolicies
+                ?? throw new ArgumentException("Message policies must be explicitly configured.", nameof(options));
             _rateLimiter = options.RateLimiter;
-            _replayProtector = options.ReplayProtector ?? new NetworkReplayGuardProtector();
-            _messageSigner = options.MessageSigner ?? NoopNetworkMessageSigner.Instance;
-            _cryptoProvider = options.CryptoProvider ?? NoopNetworkCryptoProvider.Instance;
-            _antiCheatSignalSink = options.AntiCheatSignalSink ?? NoopNetworkAntiCheatSignalSink.Instance;
-            _enableRateLimiting = options.EnableRateLimiting;
+            _replayGuard = options.ReplayGuard
+                ?? throw new ArgumentException("Replay guard must be explicitly configured.", nameof(options));
+            _messageSigner = options.MessageSigner
+                ?? throw new ArgumentException("Message signer must be explicitly configured.", nameof(options));
+            _antiCheatSignalSink = options.AntiCheatSignalSink
+                ?? throw new ArgumentException("Anti-cheat signal sink must be explicitly configured.", nameof(options));
             _reportRejectedMessages = options.ReportRejectedMessages;
         }
 
@@ -93,29 +86,25 @@ namespace CycloneGames.Networking.Security
             }
         }
 
-        public INetworkCryptoProvider CryptoProvider
-        {
-            get
-            {
-                return _cryptoProvider;
-            }
-        }
-
         public NetworkSecurityPipelineResult ValidateInbound(
             INetConnection connection,
             in NetworkMessageEnvelope envelope,
             ReadOnlySpan<byte> payload,
             ReadOnlySpan<byte> signature,
             bool transportEncrypted,
-            float currentTime,
-            int rateLimitBytes = -1)
+            double currentTime,
+            int rateLimitBytes)
         {
+            if (rateLimitBytes < 0)
+                throw new ArgumentOutOfRangeException(nameof(rateLimitBytes));
+
             if (!envelope.IsValid || payload.Length != envelope.PayloadLength)
             {
                 return Reject(connection, envelope, MessageSecurityResult.MalformedEnvelope, currentTime, "Message envelope is malformed.");
             }
 
-            if (envelope.Version > NetworkMessageEnvelope.CurrentVersion)
+            if (envelope.Version < NetworkWireProtocol.MinSupportedVersion
+                || envelope.Version > NetworkWireProtocol.CurrentVersion)
             {
                 return Reject(connection, envelope, MessageSecurityResult.UnsupportedVersion, currentTime, "Message protocol version is not supported.");
             }
@@ -136,16 +125,15 @@ namespace CycloneGames.Networking.Security
                 return Reject(connection, envelope, MessageSecurityResult.AuthenticationRequired, currentTime, "Authenticated connection is required.");
             }
 
-            if (policy.RequireEncryptedTransport && !IsEncryptionSatisfied(envelope, transportEncrypted))
+            if (policy.RequireEncryptedTransport && !transportEncrypted)
             {
-                return Reject(connection, envelope, MessageSecurityResult.EncryptionRequired, currentTime, "Encrypted transport or payload encryption is required.");
+                return Reject(connection, envelope, MessageSecurityResult.EncryptionRequired, currentTime, "Encrypted transport is required.");
             }
 
-            if (_enableRateLimiting && _rateLimiter != null)
+            if (_rateLimiter != null)
             {
                 int connectionId = connection != null ? connection.ConnectionId : 0;
-                int chargedBytes = rateLimitBytes >= 0 ? rateLimitBytes : payload.Length;
-                if (!_rateLimiter.TryConsume(connectionId, chargedBytes, currentTime))
+                if (!_rateLimiter.TryConsume(connectionId, rateLimitBytes, currentTime))
                 {
                     return Reject(connection, envelope, MessageSecurityResult.RateLimited, currentTime, "Connection exceeded network message rate limit.");
                 }
@@ -167,37 +155,17 @@ namespace CycloneGames.Networking.Security
             if (policy.EnableReplayProtection)
             {
                 if (connection == null
-                    || !_replayProtector.TryAccept(new NetworkReplayContext(
+                    || !_replayGuard.TryAccept(
                         connection.ConnectionId,
                         envelope.MessageId,
                         envelope.Sequence,
-                        currentTime)))
+                        currentTime))
                 {
                     return Reject(connection, envelope, MessageSecurityResult.ReplayRejected, currentTime, "Message sequence was rejected by replay protection.");
                 }
             }
 
             return NetworkSecurityPipelineResult.Accept();
-        }
-
-        public bool TryProtectPayload(
-            INetConnection connection,
-            in NetworkMessageEnvelope envelope,
-            ReadOnlySpan<byte> plaintext,
-            Span<byte> protectedPayload,
-            out int writtenBytes)
-        {
-            return _cryptoProvider.TryProtect(connection, envelope, plaintext, protectedPayload, out writtenBytes);
-        }
-
-        public bool TryUnprotectPayload(
-            INetConnection connection,
-            in NetworkMessageEnvelope envelope,
-            ReadOnlySpan<byte> protectedPayload,
-            Span<byte> plaintext,
-            out int writtenBytes)
-        {
-            return _cryptoProvider.TryUnprotect(connection, envelope, protectedPayload, plaintext, out writtenBytes);
         }
 
         public bool TrySign(
@@ -213,19 +181,13 @@ namespace CycloneGames.Networking.Security
         public void RemoveConnection(int connectionId)
         {
             _rateLimiter?.RemoveConnection(connectionId);
-            _replayProtector.RemoveConnection(connectionId);
+            _replayGuard.RemoveConnection(connectionId);
         }
 
         public void ClearState()
         {
             _rateLimiter?.Clear();
-            _replayProtector.Clear();
-        }
-
-        private bool IsEncryptionSatisfied(in NetworkMessageEnvelope envelope, bool transportEncrypted)
-        {
-            return transportEncrypted
-                   || (_cryptoProvider.IsEnabled && (envelope.Flags & NetworkMessageFlags.Encrypted) != 0);
+            _replayGuard.Clear();
         }
 
         private NetworkSecurityPipelineResult Reject(

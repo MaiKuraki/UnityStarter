@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayAbilities.Core;
@@ -9,7 +10,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// A ScriptableObject that serves as a data asset for defining a GameplayAbility's properties in the Unity Editor.
     /// This allows designers to configure abilities without modifying code.
     /// </summary>
-    public abstract class GameplayAbilitySO : ScriptableObject, IGASAbilityDefinition
+    public abstract class GameplayAbilitySO : ScriptableObject, IGASAbilityDefinition, ISerializationCallbackReceiver
     {
         [Tooltip("The display name of the ability, primarily used for debugging and logging.")]
         public string AbilityName;
@@ -17,8 +18,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("Defines how this ability is instantiated upon activation.")]
         public EGameplayAbilityInstancingPolicy InstancingPolicy;
 
-        [Tooltip("Defines where the ability's logic executes in a networked game.")]
-        public ENetExecutionPolicy NetExecutionPolicy;
+        [Tooltip("Defines whether the ability executes locally or only on the simulation authority.")]
+        public EAbilityExecutionPolicy ExecutionPolicy;
 
         [Tooltip("The GameplayEffect asset that defines the resource cost (e.g., mana, stamina) to activate this ability.")]
         public GameplayEffectSO CostEffect;
@@ -65,22 +66,45 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Tooltip("Defines triggers that can automatically activate this ability (e.g., on gameplay event or tag change). UE5: FAbilityTriggerData.")]
         public List<AbilityTriggerData> AbilityTriggerDataList;
 
+        private GameplayAbility runtimeDefinition;
+
         /// <summary>
-        /// Factory method that creates a runtime instance of the GameplayAbility based on the data in this asset.
+        /// Returns the cached immutable runtime definition for this loaded asset revision.
+        /// Ability activation state is created separately according to the definition's instancing policy.
         /// </summary>
-        /// <returns>A new, initialized GameplayAbility instance.</returns>
-        public abstract GameplayAbility CreateAbility();
+        public GameplayAbility GetGameplayAbility()
+        {
+            if (runtimeDefinition != null)
+                return runtimeDefinition;
+
+            GameplayAbility created = CreateGameplayAbility();
+            if (created == null)
+                throw new InvalidOperationException($"Ability asset '{name}' returned a null runtime definition.");
+            if (!created.IsConfigurationInitialized)
+            {
+                throw new InvalidOperationException(
+                    $"Ability asset '{name}' returned an uninitialized runtime definition.");
+            }
+
+            runtimeDefinition = created;
+            return runtimeDefinition;
+        }
+
+        /// <summary>
+        /// Creates the immutable runtime definition represented by this asset.
+        /// </summary>
+        protected abstract GameplayAbility CreateGameplayAbility();
 
         /// <summary>
         /// Convenience method for initializing a GameplayAbility with all the fields from this SO.
-        /// Subclasses can call this in their CreateAbility() implementation to avoid duplicating initialization code.
+        /// Subclasses can call this in their CreateGameplayAbility() implementation to avoid duplicating initialization code.
         /// </summary>
         protected void InitializeAbility(GameplayAbility ability)
         {
             ability.Initialize(
                 AbilityName,
                 InstancingPolicy,
-                NetExecutionPolicy,
+                ExecutionPolicy,
                 CostEffect?.GetGameplayEffect(),
                 CooldownEffect?.GetGameplayEffect(),
                 AbilityTags,
@@ -96,6 +120,26 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 TargetBlockedTags,
                 AbilityTriggerDataList
             );
+        }
+
+        /// <summary>Invalidates the cached definition after authoring data changes.</summary>
+        public void ClearCache()
+        {
+            runtimeDefinition = null;
+        }
+
+        private void OnValidate()
+        {
+            ClearCache();
+        }
+
+        void ISerializationCallbackReceiver.OnBeforeSerialize()
+        {
+        }
+
+        void ISerializationCallbackReceiver.OnAfterDeserialize()
+        {
+            ClearCache();
         }
     }
 }

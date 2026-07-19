@@ -1,659 +1,204 @@
 using System;
 using System.Collections.Generic;
 using UnityEngine;
-using UnityEngine.Rendering;
-using CycloneGames.Logger;
-
-#if !UNITY_WEBGL || UNITY_EDITOR
-using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
-#endif
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
-    /// <summary>
-    /// Represents a single Texture2D atlas page that handles texture insertion using shelf packing algorithm.
-    /// Supports block alignment for compressed formats and zero-GC operations on supported platforms.
-    /// </summary>
-    public class DynamicAtlasPage : IDisposable
+    internal enum DynamicAtlasPageInsertResult
     {
-        private static int _pageIdCounter = 0;
-        private static readonly Dictionary<int, Color32[]> ClearBufferCache = new Dictionary<int, Color32[]>(4);
-        private static readonly object ClearBufferCacheLock = new object();
+        Success = 0,
+        NoSpace = 1,
+        CopyUnsupported = 2,
+        CopyFailed = 3,
+    }
 
-        public Texture2D Texture { get; private set; }
-        public int Width => _width;
-        public int Height => _height;
-        public bool IsFull { get; private set; }
-        public TextureFormat Format => _format;
+    internal readonly struct DynamicAtlasPlacement
+    {
+        internal readonly RectInt SlotRect;
+        internal readonly RectInt ContentRect;
 
-#if UNITY_EDITOR
-        public int Padding => _padding;
-#endif
+        internal DynamicAtlasPlacement(RectInt slotRect, RectInt contentRect)
+        {
+            SlotRect = slotRect;
+            ContentRect = contentRect;
+        }
+    }
 
-        private int _activeSpriteCount;
-        public int ActiveSpriteCount => _activeSpriteCount;
+    internal sealed class DynamicAtlasPage : IDisposable
+    {
+        private static int _nextPageId;
 
-        private long _usedPixelArea;
-        public long UsedPixelArea => _usedPixelArea;
-
-        private long _allocatedPixelArea;
-        public long AllocatedPixelArea => _allocatedPixelArea;
-
-        /// <summary>
-        /// Returns a value between 0 and 1, where 1 means completely empty/fragmented and 0 means optimally packed.
-        /// </summary>
-        public float FragmentationRatio => 1.0f - (float)_usedPixelArea / ((long)_width * _height);
-
-        private readonly int _width;
-        private readonly int _height;
+        private readonly int _size;
         private readonly int _padding;
-        private readonly int _blockSize;
-        private readonly TextureFormat _format;
-        private readonly CopyTextureSupport _copySupport;
-        private readonly int _pageId;
-        private readonly bool _enablePlatformOptimizations;
+        private readonly int _maxEntries;
         private readonly bool _enableBleed;
-        private readonly bool _enableMipmap;
-        private readonly bool _allowCpuReadPixelsFallback;
-        private readonly bool _allowCpuBleedFallback;
-        private bool _needsApply;
+        private readonly bool _allowSynchronousReadback;
+        private readonly int _bytesPerPixel;
+        private readonly List<RectInt> _releasedSlots;
 
-        public int PageId => _pageId;
+        private int _cursorX;
+        private int _cursorY;
+        private int _rowHeight;
+        private int _entryCount;
+        private long _payloadPixelArea;
+        private long _reservedPixelArea;
+        private bool _needsUpload;
+        private bool _disposed;
 
-#if UNITY_EDITOR
-        public int CurrentX => _currentX;
-        public int CurrentY => _currentY;
-        public int MaxYInRow => _maxYInRow;
-#endif
+        internal int PageId { get; }
+        internal Texture2D Texture { get; private set; }
+        internal DynamicAtlasPageMode Mode { get; }
+        internal int EntryCount => _entryCount;
+        internal int ReleasedSlotCount => _releasedSlots.Count;
+        internal long PayloadPixelArea => _payloadPixelArea;
+        internal long ReservedPixelArea => _reservedPixelArea;
+        internal bool IsEmpty => _entryCount == 0;
+        internal bool HasPendingUpload => _needsUpload;
 
-        // Shelf packing state
-        private int _currentX;
-        private int _currentY;
-        private int _maxYInRow;
-
-        public DynamicAtlasPage(int size) : this(size, TextureFormat.RGBA32, 2, true, true, false, true, true)
+        internal DynamicAtlasPage(
+            int size,
+            TextureFormat format,
+            FilterMode filterMode,
+            int padding,
+            bool enableBleed,
+            int maxEntries,
+            DynamicAtlasPageMode mode,
+            bool allowSynchronousReadback)
         {
-        }
-
-        public DynamicAtlasPage(int size, TextureFormat format, int padding = 2, bool enablePlatformOptimizations = true, bool enableBleed = true, bool enableMipmap = false, bool allowCpuReadPixelsFallback = true, bool allowCpuBleedFallback = true)
-        {
-            _width = size;
-            _height = size;
-            _format = format;
-            _blockSize = TextureFormatHelper.GetBlockSize(format);
-            _enablePlatformOptimizations = enablePlatformOptimizations;
-            _enableMipmap = enableMipmap;
-            _allowCpuReadPixelsFallback = allowCpuReadPixelsFallback;
-            _allowCpuBleedFallback = allowCpuBleedFallback;
-            _copySupport = SystemInfo.copyTextureSupport;
-            _pageId = System.Threading.Interlocked.Increment(ref _pageIdCounter);
-
-            // Bleed writes 1px outside sprite bounds; padding >= 2 prevents inter-sprite bleed overlap
-            if (enableBleed && padding < 2 && _blockSize <= 1)
-            {
-                padding = 2;
-            }
+            _size = size;
             _padding = padding;
-            _enableBleed = enableBleed && (padding >= 2) && (_blockSize <= 1);
+            _maxEntries = maxEntries;
+            _enableBleed = enableBleed;
+            _allowSynchronousReadback = allowSynchronousReadback;
+            _bytesPerPixel = TextureFormatHelper.GetBytesPerPixel(format);
+            _releasedSlots = new List<RectInt>(Mathf.Min(maxEntries, 128));
+            Mode = mode;
+            PageId = ++_nextPageId;
 
-            InitializeTexture();
+            Texture = new Texture2D(size, size, format, mipChain: false, linear: false)
+            {
+                name = $"DynamicAtlasPage_{PageId}_{mode}",
+                filterMode = filterMode,
+                wrapMode = TextureWrapMode.Clamp,
+                anisoLevel = 0,
+                hideFlags = HideFlags.DontSave,
+            };
+
+            ClearAndInitializeTexture(mode == DynamicAtlasPageMode.GpuOnly);
         }
 
-        private void InitializeTexture()
+        internal DynamicAtlasPageInsertResult TryInsert(
+            Texture2D source,
+            RectInt sourceRect,
+            out DynamicAtlasPlacement placement,
+            out DynamicAtlasCopyPath copyPath)
         {
-            Texture = new Texture2D(_width, _height, _format, _enableMipmap);
-            Texture.filterMode = FilterMode.Bilinear;
-            Texture.wrapMode = TextureWrapMode.Clamp;
-            Texture.name = "DynamicAtlasPage_" + _pageId;
+            placement = default;
+            copyPath = DynamicAtlasCopyPath.None;
 
-            // Clear texture to transparent
-            ClearTexture();
-            _needsApply = false;
+            if (_disposed || source == null || _entryCount >= _maxEntries || !IsValidSourceRect(source, sourceRect))
+            {
+                return DynamicAtlasPageInsertResult.NoSpace;
+            }
+
+            int slotWidth = sourceRect.width + (_padding * 2);
+            int slotHeight = sourceRect.height + (_padding * 2);
+            if (slotWidth > _size || slotHeight > _size)
+            {
+                return DynamicAtlasPageInsertResult.NoSpace;
+            }
+
+            if (!TryReserveSlot(slotWidth, slotHeight, out RectInt slotRect))
+            {
+                return DynamicAtlasPageInsertResult.NoSpace;
+            }
+
+            RectInt contentRect = new RectInt(
+                slotRect.x + _padding,
+                slotRect.y + _padding,
+                sourceRect.width,
+                sourceRect.height);
+
+            DynamicAtlasPageInsertResult copyResult = Mode == DynamicAtlasPageMode.GpuOnly
+                ? TryCopyGpu(source, sourceRect, contentRect)
+                : TryCopyCpuBacked(source, sourceRect, contentRect, out copyPath);
+
+            if (Mode == DynamicAtlasPageMode.GpuOnly && copyResult == DynamicAtlasPageInsertResult.Success)
+            {
+                copyPath = DynamicAtlasCopyPath.GpuCopy;
+            }
+
+            if (copyResult != DynamicAtlasPageInsertResult.Success)
+            {
+                RetainReleasedSlot(slotRect);
+                return copyResult;
+            }
+
+            _entryCount++;
+            _payloadPixelArea += (long)sourceRect.width * sourceRect.height;
+            _reservedPixelArea += (long)slotRect.width * slotRect.height;
+            placement = new DynamicAtlasPlacement(slotRect, contentRect);
+            return DynamicAtlasPageInsertResult.Success;
         }
 
-        private void ClearTexture()
+        internal void Release(DynamicAtlasPlacement placement)
         {
-#if !UNITY_WEBGL || UNITY_EDITOR
-            if (_enablePlatformOptimizations && TextureFormatHelper.SupportsUnsafeCode())
+            if (_disposed || _entryCount <= 0)
             {
-                try
-                {
-                    var rawData = Texture.GetRawTextureData<Color32>();
-                    unsafe
-                    {
-                        UnsafeUtility.MemClear(NativeArrayUnsafeUtility.GetUnsafePtr(rawData),
-                            rawData.Length * UnsafeUtility.SizeOf<Color32>());
-                    }
-                    Texture.Apply();
-                    return;
-                }
-                catch (Exception)
-                {
-                    // Fall through to managed path
-                }
+                return;
             }
-#endif
-            // Managed fallback (WebGL or when unsafe fails)
-            var clearPixels = GetSharedClearBuffer(_width * _height);
-            Texture.SetPixels32(clearPixels);
-            Texture.Apply();
+
+            _entryCount--;
+            _payloadPixelArea -= (long)placement.ContentRect.width * placement.ContentRect.height;
+            _reservedPixelArea -= (long)placement.SlotRect.width * placement.SlotRect.height;
+
+            if (_entryCount == 0)
+            {
+                _cursorX = 0;
+                _cursorY = 0;
+                _rowHeight = 0;
+                _payloadPixelArea = 0;
+                _reservedPixelArea = 0;
+                _releasedSlots.Clear();
+                return;
+            }
+
+            RetainReleasedSlot(placement.SlotRect);
         }
 
-        private static Color32[] GetSharedClearBuffer(int size)
+        internal void FlushPendingUpload()
         {
-            lock (ClearBufferCacheLock)
+            if (_disposed || !_needsUpload || Texture == null)
             {
-                if (!ClearBufferCache.TryGetValue(size, out var buffer))
-                {
-                    buffer = new Color32[size];
-                    ClearBufferCache[size] = buffer;
-                }
-                return buffer;
+                return;
             }
+
+            Texture.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+            _needsUpload = false;
         }
 
-        /// <summary>
-        /// Attempts to insert a texture into this page.
-        /// </summary>
-        /// <param name="source">Source texture to insert</param>
-        /// <param name="uvRect">Output UV rectangle for the inserted texture</param>
-        /// <returns>True if insertion succeeded</returns>
-        public bool TryInsert(Texture2D source, out Rect uvRect)
+        internal DynamicAtlasPageSnapshot CreateSnapshot()
         {
-            return TryInsert(source, out uvRect, out _);
+            return new DynamicAtlasPageSnapshot(
+                PageId,
+                Texture,
+                Mode,
+                _entryCount,
+                _releasedSlots.Count,
+                _payloadPixelArea,
+                _reservedPixelArea);
         }
-
-        /// <summary>
-        /// Attempts to insert a texture into this page with block alignment.
-        /// </summary>
-        /// <param name="source">Source texture to insert</param>
-        /// <param name="uvRect">Output UV rectangle (based on actual texture size)</param>
-        /// <param name="allocatedSize">Actual allocated size including alignment padding</param>
-        /// <returns>True if insertion succeeded</returns>
-        public bool TryInsert(Texture2D source, out Rect uvRect, out Vector2Int allocatedSize)
-        {
-            uvRect = default;
-            allocatedSize = default;
-
-            if (source == null) return false;
-            if (IsFull) return false;
-
-            int sourceWidth = source.width;
-            int sourceHeight = source.height;
-
-            // Calculate allocation size (aligned to block size if needed)
-            int allocWidth = sourceWidth;
-            int allocHeight = sourceHeight;
-
-            if (_blockSize > 1)
-            {
-                allocWidth = TextureFormatHelper.AlignToBlockSize(sourceWidth, _blockSize);
-                allocHeight = TextureFormatHelper.AlignToBlockSize(sourceHeight, _blockSize);
-            }
-
-            int maxWidth = _width - _padding;
-            int maxHeight = _height - _padding;
-
-            if (allocWidth > maxWidth || allocHeight > maxHeight)
-            {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogError($"[DynamicAtlasPage] Texture ({sourceWidth}x{sourceHeight}, aligned: {allocWidth}x{allocHeight}) " +
-                    $"is too large for page ({_width}x{_height}, max available: {maxWidth}x{maxHeight} with padding).");
-#endif
-                return false;
-            }
-
-            // Shelf packing: try current row first
-            if (_currentX + allocWidth + _padding > _width)
-            {
-                // Move to next row
-                _currentY += _maxYInRow + _padding;
-                _currentX = 0;
-                _maxYInRow = 0;
-            }
-
-            if (_currentY + allocHeight + _padding > _height)
-            {
-                IsFull = true;
-                return false;
-            }
-
-            int xPos = _currentX;
-            int yPos = _currentY;
-
-            // Copy pixels to the allocated space
-            if (CopyPixels(source, xPos, yPos, sourceWidth, sourceHeight, allocWidth, allocHeight))
-            {
-                _currentX += allocWidth + _padding;
-                if (allocHeight > _maxYInRow) _maxYInRow = allocHeight;
-
-                // UV rect is based on ACTUAL texture size, not allocated size
-                // This ensures the sprite displays the original image without distortion
-                float invWidth = 1.0f / _width;
-                float invHeight = 1.0f / _height;
-                uvRect.x = xPos * invWidth;
-                uvRect.y = yPos * invHeight;
-                uvRect.width = sourceWidth * invWidth;
-                uvRect.height = sourceHeight * invHeight;
-
-                allocatedSize = new Vector2Int(allocWidth, allocHeight);
-                System.Threading.Interlocked.Add(ref _allocatedPixelArea, (long)allocWidth * allocHeight);
-
-                return true;
-            }
-
-            return false;
-        }
-
-        /// <summary>
-        /// Attempts to insert a region from a source texture into this page.
-        /// This is optimized for copying sub-regions from SpriteAtlas textures.
-        /// </summary>
-        /// <param name="sourceTexture">The source texture (e.g., SpriteAtlas texture)</param>
-        /// <param name="sourceRect">The region to copy (in pixels, bottom-left origin)</param>
-        /// <param name="uvRect">Output UV rectangle for the inserted region</param>
-        /// <returns>True if insertion succeeded</returns>
-        public bool TryInsertFromRegion(Texture2D sourceTexture, Rect sourceRect, out Rect uvRect)
-        {
-            uvRect = default;
-            if (sourceTexture == null) return false;
-            if (IsFull) return false;
-
-            int sourceWidth = Mathf.RoundToInt(sourceRect.width);
-            int sourceHeight = Mathf.RoundToInt(sourceRect.height);
-            int srcX = Mathf.RoundToInt(sourceRect.x);
-            int srcY = Mathf.RoundToInt(sourceRect.y);
-
-            // Calculate allocation size (aligned to block size if needed)
-            int allocWidth = sourceWidth;
-            int allocHeight = sourceHeight;
-
-            if (_blockSize > 1)
-            {
-                allocWidth = TextureFormatHelper.AlignToBlockSize(sourceWidth, _blockSize);
-                allocHeight = TextureFormatHelper.AlignToBlockSize(sourceHeight, _blockSize);
-            }
-
-            int maxWidth = _width - _padding;
-            int maxHeight = _height - _padding;
-
-            if (allocWidth > maxWidth || allocHeight > maxHeight)
-            {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogError($"[DynamicAtlasPage] Region ({sourceWidth}x{sourceHeight}, aligned: {allocWidth}x{allocHeight}) " +
-                    $"is too large for page ({_width}x{_height}, max available: {maxWidth}x{maxHeight} with padding).");
-#endif
-                return false;
-            }
-
-            // Shelf packing: try current row first
-            if (_currentX + allocWidth + _padding > _width)
-            {
-                _currentY += _maxYInRow + _padding;
-                _currentX = 0;
-                _maxYInRow = 0;
-            }
-
-            if (_currentY + allocHeight + _padding > _height)
-            {
-                IsFull = true;
-                return false;
-            }
-
-            int xPos = _currentX;
-            int yPos = _currentY;
-
-            // Copy pixels from the source region
-            if (CopyPixelsFromRegion(sourceTexture, srcX, srcY, xPos, yPos, sourceWidth, sourceHeight))
-            {
-                _currentX += allocWidth + _padding;
-                if (allocHeight > _maxYInRow) _maxYInRow = allocHeight;
-
-                float invWidth = 1.0f / _width;
-                float invHeight = 1.0f / _height;
-                uvRect.x = xPos * invWidth;
-                uvRect.y = yPos * invHeight;
-                uvRect.width = sourceWidth * invWidth;
-                uvRect.height = sourceHeight * invHeight;
-                System.Threading.Interlocked.Add(ref _allocatedPixelArea, (long)allocWidth * allocHeight);
-
-                return true;
-            }
-
-            return false;
-        }
-
-        private bool CopyPixelsFromRegion(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
-        {
-            // When mipmap enabled, use Blit+ReadPixels path so Apply() regenerates mip levels
-            bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0 && !_enableMipmap;
-            bool gpuCopySuccess = false;
-
-            if (useCopyTexture && source.format == _format)
-            {
-                try
-                {
-                    Graphics.CopyTexture(source, 0, 0, srcX, srcY, w, h, Texture, 0, 0, dstX, dstY);
-                    gpuCopySuccess = true;
-                }
-                catch
-                {
-                    gpuCopySuccess = false;
-                }
-            }
-
-            if (gpuCopySuccess)
-            {
-                if (_enableBleed) GenerateBleedGPU(source, srcX, srcY, dstX, dstY, w, h);
-                return true;
-            }
-
-            if (TryCopyPixelsFromRaw(source, srcX, srcY, dstX, dstY, w, h))
-            {
-                return true;
-            }
-
-            if (!_allowCpuReadPixelsFallback)
-            {
-                return false;
-            }
-
-            bool result = CopyPixelsFromRegionViaRT(source, srcX, srcY, dstX, dstY, w, h);
-            if (result && _enableBleed && _allowCpuBleedFallback) GenerateBleedCPU(dstX, dstY, w, h);
-            return result;
-        }
-
-        private bool CopyPixelsFromRegionViaRT(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
-        {
-            RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-            RenderTexture previous = RenderTexture.active;
-
-            try
-            {
-                Vector2 scale = new Vector2((float)w / source.width, (float)h / source.height);
-                Vector2 offset = new Vector2((float)srcX / source.width, (float)srcY / source.height);
-                Graphics.Blit(source, rt, scale, offset);
-
-                RenderTexture.active = rt;
-                Texture.ReadPixels(new Rect(0, 0, w, h), dstX, dstY);
-                _needsApply = true;
-                return true;
-            }
-            finally
-            {
-                RenderTexture.active = previous;
-                RenderTexture.ReleaseTemporary(rt);
-            }
-        }
-
-        /// <summary>
-        /// Generates 1px bleed (gutter) around a sprite via GPU CopyTexture.
-        /// Copies edge pixel rows/columns into the adjacent padding region to prevent
-        /// bilinear filtering artifacts at sprite boundaries.
-        /// </summary>
-        private void GenerateBleedGPU(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
-        {
-            try
-            {
-                // Left edge: copy 1px column from left side of sprite to padding area
-                if (dstX > 0)
-                    Graphics.CopyTexture(source, 0, 0, srcX, srcY, 1, h, Texture, 0, 0, dstX - 1, dstY);
-                // Right edge
-                if (dstX + w < _width)
-                    Graphics.CopyTexture(source, 0, 0, srcX + w - 1, srcY, 1, h, Texture, 0, 0, dstX + w, dstY);
-                // Bottom edge
-                if (dstY > 0)
-                    Graphics.CopyTexture(source, 0, 0, srcX, srcY, w, 1, Texture, 0, 0, dstX, dstY - 1);
-                // Top edge
-                if (dstY + h < _height)
-                    Graphics.CopyTexture(source, 0, 0, srcX, srcY + h - 1, w, 1, Texture, 0, 0, dstX, dstY + h);
-            }
-            catch
-            {
-                // Non-critical: bleed failure only causes minor visual artifacts
-            }
-        }
-
-        /// <summary>
-        /// Generates 1px bleed around a sprite in CPU/ReadPixels path.
-        /// Reads edge pixels from the already-written region in the atlas texture.
-        /// </summary>
-        private void GenerateBleedCPU(int dstX, int dstY, int w, int h)
-        {
-            try
-            {
-                // Left edge
-                if (dstX > 0)
-                {
-                    var col = Texture.GetPixels(dstX, dstY, 1, h);
-                    Texture.SetPixels(dstX - 1, dstY, 1, h, col);
-                }
-                // Right edge
-                if (dstX + w < _width)
-                {
-                    var col = Texture.GetPixels(dstX + w - 1, dstY, 1, h);
-                    Texture.SetPixels(dstX + w, dstY, 1, h, col);
-                }
-                // Bottom edge
-                if (dstY > 0)
-                {
-                    var row = Texture.GetPixels(dstX, dstY, w, 1);
-                    Texture.SetPixels(dstX, dstY - 1, w, 1, row);
-                }
-                // Top edge
-                if (dstY + h < _height)
-                {
-                    var row = Texture.GetPixels(dstX, dstY + h - 1, w, 1);
-                    Texture.SetPixels(dstX, dstY + h, w, 1, row);
-                }
-                _needsApply = true;
-            }
-            catch
-            {
-                // Non-critical: bleed failure only causes minor visual artifacts
-            }
-        }
-
-        /// <summary>
-        /// Applies pending texture changes. Call after batch insertions for better performance.
-        /// </summary>
-        public void ApplyIfNeeded()
-        {
-            if (_needsApply)
-            {
-                Texture.Apply();
-                _needsApply = false;
-            }
-        }
-
-        private bool CopyPixels(Texture2D source, int x, int y, int w, int h, int allocW, int allocH)
-        {
-            // When mipmap enabled, use Blit+ReadPixels path so Apply() regenerates mip levels
-            bool useCopyTexture = (_copySupport & CopyTextureSupport.Basic) != 0 && !_enableMipmap;
-            bool gpuCopySuccess = false;
-
-            // Attempt GPU copy (fastest, zero GC allocation)
-            if (useCopyTexture && source.format == _format)
-            {
-                try
-                {
-                    Graphics.CopyTexture(source, 0, 0, 0, 0, w, h, Texture, 0, 0, x, y);
-                    gpuCopySuccess = true;
-                }
-                catch
-                {
-                    gpuCopySuccess = false;
-                }
-            }
-
-            if (gpuCopySuccess)
-            {
-                if (_enableBleed) GenerateBleedGPU(source, 0, 0, x, y, w, h);
-                return true;
-            }
-
-            if (TryCopyPixelsFromRaw(source, 0, 0, x, y, w, h))
-            {
-                return true;
-            }
-
-            // GPU Fallback via RT Bridge (always works regardless of readability)
-            if (!_allowCpuReadPixelsFallback)
-            {
-                return false;
-            }
-
-            bool result = CopyPixelsViaRT(source, x, y, w, h);
-            if (result && _enableBleed && _allowCpuBleedFallback) GenerateBleedCPU(x, y, w, h);
-            return result;
-        }
-
-        private bool TryCopyPixelsFromRaw(Texture2D source, int srcX, int srcY, int dstX, int dstY, int w, int h)
-        {
-#if !UNITY_WEBGL || UNITY_EDITOR
-            if (!_enablePlatformOptimizations || !TextureFormatHelper.SupportsNativeArrays())
-            {
-                return false;
-            }
-
-            if (!source.isReadable ||
-                !TextureFormatHelper.SupportsRawColor32Copy(source.format) ||
-                !TextureFormatHelper.SupportsRawColor32Copy(_format))
-            {
-                return false;
-            }
-
-            try
-            {
-                NativeArray<Color32> sourcePixels = source.GetRawTextureData<Color32>();
-                NativeArray<Color32> atlasPixels = Texture.GetRawTextureData<Color32>();
-
-                int sourceWidth = source.width;
-                for (int row = 0; row < h; row++)
-                {
-                    int sourceRowStart = (srcY + row) * sourceWidth + srcX;
-                    int atlasRowStart = (dstY + row) * _width + dstX;
-                    for (int col = 0; col < w; col++)
-                    {
-                        atlasPixels[atlasRowStart + col] = sourcePixels[sourceRowStart + col];
-                    }
-                }
-
-                if (_enableBleed)
-                {
-                    CopyBleedFromRaw(sourcePixels, sourceWidth, srcX, srcY, atlasPixels, dstX, dstY, w, h);
-                }
-
-                _needsApply = true;
-                return true;
-            }
-            catch (Exception)
-            {
-                return false;
-            }
-#else
-            return false;
-#endif
-        }
-
-#if !UNITY_WEBGL || UNITY_EDITOR
-        private void CopyBleedFromRaw(
-            NativeArray<Color32> sourcePixels,
-            int sourceWidth,
-            int srcX,
-            int srcY,
-            NativeArray<Color32> atlasPixels,
-            int dstX,
-            int dstY,
-            int w,
-            int h)
-        {
-            if (dstX > 0)
-            {
-                for (int row = 0; row < h; row++)
-                {
-                    Color32 leftPixel = sourcePixels[(srcY + row) * sourceWidth + srcX];
-                    atlasPixels[(dstY + row) * _width + (dstX - 1)] = leftPixel;
-                }
-            }
-
-            if (dstX + w < _width)
-            {
-                int srcRight = srcX + w - 1;
-                for (int row = 0; row < h; row++)
-                {
-                    Color32 rightPixel = sourcePixels[(srcY + row) * sourceWidth + srcRight];
-                    atlasPixels[(dstY + row) * _width + (dstX + w)] = rightPixel;
-                }
-            }
-
-            if (dstY > 0)
-            {
-                int sourceBottom = srcY * sourceWidth + srcX;
-                int atlasBottom = (dstY - 1) * _width + dstX;
-                for (int col = 0; col < w; col++)
-                {
-                    atlasPixels[atlasBottom + col] = sourcePixels[sourceBottom + col];
-                }
-            }
-
-            if (dstY + h < _height)
-            {
-                int sourceTop = (srcY + h - 1) * sourceWidth + srcX;
-                int atlasTop = (dstY + h) * _width + dstX;
-                for (int col = 0; col < w; col++)
-                {
-                    atlasPixels[atlasTop + col] = sourcePixels[sourceTop + col];
-                }
-            }
-        }
-#endif
-
-        private bool CopyPixelsViaRT(Texture2D source, int x, int y, int w, int h)
-        {
-            RenderTexture rt = RenderTexture.GetTemporary(w, h, 0, RenderTextureFormat.ARGB32);
-            RenderTexture previous = RenderTexture.active;
-
-            try
-            {
-                Graphics.Blit(source, rt);
-                RenderTexture.active = rt;
-                Texture.ReadPixels(new Rect(0, 0, w, h), x, y);
-                _needsApply = true;
-                return true;
-            }
-            finally
-            {
-                RenderTexture.active = previous;
-                RenderTexture.ReleaseTemporary(rt);
-            }
-        }
-
-        public void IncrementActiveCount(int width, int height)
-        {
-            System.Threading.Interlocked.Increment(ref _activeSpriteCount);
-            System.Threading.Interlocked.Add(ref _usedPixelArea, (long)width * height);
-        }
-
-        public void DecrementActiveCount(int width, int height)
-        {
-            int newCount = System.Threading.Interlocked.Decrement(ref _activeSpriteCount);
-            if (newCount < 0)
-            {
-                System.Threading.Interlocked.CompareExchange(ref _activeSpriteCount, 0, newCount);
-            }
-            long newArea = System.Threading.Interlocked.Add(ref _usedPixelArea, -((long)width * height));
-            if (newArea < 0)
-            {
-                System.Threading.Interlocked.CompareExchange(ref _usedPixelArea, 0, newArea);
-            }
-        }
-
-        public bool IsEmpty => _activeSpriteCount == 0;
 
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
+            _releasedSlots.Clear();
+
             if (Texture != null)
             {
                 DestroyUnityObject(Texture);
@@ -661,8 +206,375 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
         }
 
+        private void ClearAndInitializeTexture(bool releaseCpuCopy)
+        {
+            var rawData = Texture.GetRawTextureData<byte>();
+            for (int i = 0; i < rawData.Length; i++)
+            {
+                rawData[i] = 0;
+            }
+
+            Texture.Apply(updateMipmaps: false, makeNoLongerReadable: releaseCpuCopy);
+        }
+
+        private bool TryReserveSlot(int width, int height, out RectInt slotRect)
+        {
+            int bestIndex = -1;
+            long bestWaste = long.MaxValue;
+
+            for (int i = 0; i < _releasedSlots.Count; i++)
+            {
+                RectInt candidate = _releasedSlots[i];
+                if (width > candidate.width || height > candidate.height)
+                {
+                    continue;
+                }
+
+                long waste = ((long)candidate.width * candidate.height) - ((long)width * height);
+                if (waste < bestWaste)
+                {
+                    bestWaste = waste;
+                    bestIndex = i;
+                    if (waste == 0)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (bestIndex >= 0)
+            {
+                slotRect = _releasedSlots[bestIndex];
+                int lastIndex = _releasedSlots.Count - 1;
+                _releasedSlots[bestIndex] = _releasedSlots[lastIndex];
+                _releasedSlots.RemoveAt(lastIndex);
+                return true;
+            }
+
+            if (_cursorX + width > _size)
+            {
+                _cursorX = 0;
+                _cursorY += _rowHeight;
+                _rowHeight = 0;
+            }
+
+            if (_cursorY + height > _size)
+            {
+                slotRect = default;
+                return false;
+            }
+
+            slotRect = new RectInt(_cursorX, _cursorY, width, height);
+            _cursorX += width;
+            if (height > _rowHeight)
+            {
+                _rowHeight = height;
+            }
+
+            return true;
+        }
+
+        private void RetainReleasedSlot(RectInt slotRect)
+        {
+            for (int i = _releasedSlots.Count - 1; i >= 0; i--)
+            {
+                if (!TryMergeAdjacent(slotRect, _releasedSlots[i], out RectInt combined))
+                {
+                    continue;
+                }
+
+                slotRect = combined;
+                int lastIndex = _releasedSlots.Count - 1;
+                _releasedSlots[i] = _releasedSlots[lastIndex];
+                _releasedSlots.RemoveAt(lastIndex);
+            }
+
+            if (_releasedSlots.Count < _maxEntries)
+            {
+                _releasedSlots.Add(slotRect);
+                return;
+            }
+
+            int smallestIndex = 0;
+            long smallestArea = GetArea(_releasedSlots[0]);
+            for (int i = 1; i < _releasedSlots.Count; i++)
+            {
+                long area = GetArea(_releasedSlots[i]);
+                if (area < smallestArea)
+                {
+                    smallestArea = area;
+                    smallestIndex = i;
+                }
+            }
+
+            if (GetArea(slotRect) > smallestArea)
+            {
+                _releasedSlots[smallestIndex] = slotRect;
+            }
+        }
+
+        private DynamicAtlasPageInsertResult TryCopyGpu(Texture2D source, RectInt sourceRect, RectInt destinationRect)
+        {
+            if (!TextureFormatHelper.CanUseGpuCopy(source, Texture))
+            {
+                return DynamicAtlasPageInsertResult.CopyUnsupported;
+            }
+
+            try
+            {
+                Graphics.CopyTexture(
+                    source,
+                    0,
+                    0,
+                    sourceRect.x,
+                    sourceRect.y,
+                    sourceRect.width,
+                    sourceRect.height,
+                    Texture,
+                    0,
+                    0,
+                    destinationRect.x,
+                    destinationRect.y);
+
+                if (_enableBleed)
+                {
+                    CopyBleedGpu(source, sourceRect, destinationRect);
+                }
+
+                return DynamicAtlasPageInsertResult.Success;
+            }
+            catch (Exception)
+            {
+                return DynamicAtlasPageInsertResult.CopyFailed;
+            }
+        }
+
+        private DynamicAtlasPageInsertResult TryCopyCpuBacked(
+            Texture2D source,
+            RectInt sourceRect,
+            RectInt destinationRect,
+            out DynamicAtlasCopyPath copyPath)
+        {
+            copyPath = DynamicAtlasCopyPath.None;
+
+            DynamicAtlasPageInsertResult rawCopyResult = TryCopyRaw(source, sourceRect, destinationRect);
+            if (rawCopyResult == DynamicAtlasPageInsertResult.Success)
+            {
+                copyPath = DynamicAtlasCopyPath.CpuRawCopy;
+                return DynamicAtlasPageInsertResult.Success;
+            }
+
+            if (!_allowSynchronousReadback)
+            {
+                return rawCopyResult;
+            }
+
+            DynamicAtlasPageInsertResult readbackResult = TryCopyViaReadback(source, sourceRect, destinationRect);
+            if (readbackResult == DynamicAtlasPageInsertResult.Success)
+            {
+                copyPath = DynamicAtlasCopyPath.SynchronousGpuReadback;
+                return DynamicAtlasPageInsertResult.Success;
+            }
+
+            return readbackResult;
+        }
+
+        private DynamicAtlasPageInsertResult TryCopyRaw(Texture2D source, RectInt sourceRect, RectInt destinationRect)
+        {
+            if (!source.isReadable ||
+                source.format != Texture.format ||
+                source.graphicsFormat != Texture.graphicsFormat ||
+                _bytesPerPixel <= 0)
+            {
+                return DynamicAtlasPageInsertResult.CopyUnsupported;
+            }
+
+            try
+            {
+                var sourceData = source.GetRawTextureData<byte>();
+                var destinationData = Texture.GetRawTextureData<byte>();
+                int sourceStride = source.width * _bytesPerPixel;
+                int destinationStride = _size * _bytesPerPixel;
+                int rowBytes = sourceRect.width * _bytesPerPixel;
+
+                for (int row = 0; row < sourceRect.height; row++)
+                {
+                    int sourceOffset = ((sourceRect.y + row) * sourceStride) + (sourceRect.x * _bytesPerPixel);
+                    int destinationOffset = ((destinationRect.y + row) * destinationStride) + (destinationRect.x * _bytesPerPixel);
+                    Unity.Collections.NativeArray<byte>.Copy(
+                        sourceData,
+                        sourceOffset,
+                        destinationData,
+                        destinationOffset,
+                        rowBytes);
+                }
+
+                if (_enableBleed)
+                {
+                    CopyBleedCpu(destinationData, destinationRect);
+                }
+
+                _needsUpload = true;
+                return DynamicAtlasPageInsertResult.Success;
+            }
+            catch (Exception)
+            {
+                return DynamicAtlasPageInsertResult.CopyFailed;
+            }
+        }
+
+        private DynamicAtlasPageInsertResult TryCopyViaReadback(Texture2D source, RectInt sourceRect, RectInt destinationRect)
+        {
+            RenderTexture temporary = null;
+            RenderTexture previous = RenderTexture.active;
+
+            try
+            {
+                temporary = RenderTexture.GetTemporary(
+                    sourceRect.width,
+                    sourceRect.height,
+                    0,
+                    RenderTextureFormat.ARGB32,
+                    RenderTextureReadWrite.Default);
+                Vector2 scale = new Vector2(
+                    (float)sourceRect.width / source.width,
+                    (float)sourceRect.height / source.height);
+                Vector2 offset = new Vector2(
+                    (float)sourceRect.x / source.width,
+                    (float)sourceRect.y / source.height);
+
+                Graphics.Blit(source, temporary, scale, offset);
+                RenderTexture.active = temporary;
+                Texture.ReadPixels(
+                    new Rect(0f, 0f, sourceRect.width, sourceRect.height),
+                    destinationRect.x,
+                    destinationRect.y,
+                    recalculateMipMaps: false);
+
+                if (_enableBleed)
+                {
+                    var destinationData = Texture.GetRawTextureData<byte>();
+                    CopyBleedCpu(destinationData, destinationRect);
+                }
+
+                _needsUpload = true;
+                return DynamicAtlasPageInsertResult.Success;
+            }
+            catch (Exception)
+            {
+                return DynamicAtlasPageInsertResult.CopyFailed;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                if (temporary != null)
+                {
+                    RenderTexture.ReleaseTemporary(temporary);
+                }
+            }
+        }
+
+        private static bool TryMergeAdjacent(RectInt first, RectInt second, out RectInt combined)
+        {
+            if (first.y == second.y && first.height == second.height &&
+                (first.xMax == second.x || second.xMax == first.x))
+            {
+                int x = Mathf.Min(first.x, second.x);
+                combined = new RectInt(x, first.y, first.width + second.width, first.height);
+                return true;
+            }
+
+            if (first.x == second.x && first.width == second.width &&
+                (first.yMax == second.y || second.yMax == first.y))
+            {
+                int y = Mathf.Min(first.y, second.y);
+                combined = new RectInt(first.x, y, first.width, first.height + second.height);
+                return true;
+            }
+
+            combined = default;
+            return false;
+        }
+
+        private static long GetArea(RectInt rect)
+        {
+            return (long)rect.width * rect.height;
+        }
+
+        private void CopyBleedGpu(Texture2D source, RectInt sourceRect, RectInt destinationRect)
+        {
+            int sourceRight = sourceRect.xMax - 1;
+            int sourceTop = sourceRect.yMax - 1;
+            int destinationRight = destinationRect.xMax;
+            int destinationTop = destinationRect.yMax;
+
+            Graphics.CopyTexture(source, 0, 0, sourceRect.x, sourceRect.y, 1, sourceRect.height, Texture, 0, 0, destinationRect.x - 1, destinationRect.y);
+            Graphics.CopyTexture(source, 0, 0, sourceRight, sourceRect.y, 1, sourceRect.height, Texture, 0, 0, destinationRight, destinationRect.y);
+            Graphics.CopyTexture(source, 0, 0, sourceRect.x, sourceRect.y, sourceRect.width, 1, Texture, 0, 0, destinationRect.x, destinationRect.y - 1);
+            Graphics.CopyTexture(source, 0, 0, sourceRect.x, sourceTop, sourceRect.width, 1, Texture, 0, 0, destinationRect.x, destinationTop);
+            Graphics.CopyTexture(source, 0, 0, sourceRect.x, sourceRect.y, 1, 1, Texture, 0, 0, destinationRect.x - 1, destinationRect.y - 1);
+            Graphics.CopyTexture(source, 0, 0, sourceRight, sourceRect.y, 1, 1, Texture, 0, 0, destinationRight, destinationRect.y - 1);
+            Graphics.CopyTexture(source, 0, 0, sourceRect.x, sourceTop, 1, 1, Texture, 0, 0, destinationRect.x - 1, destinationTop);
+            Graphics.CopyTexture(source, 0, 0, sourceRight, sourceTop, 1, 1, Texture, 0, 0, destinationRight, destinationTop);
+        }
+
+        private void CopyBleedCpu(Unity.Collections.NativeArray<byte> destinationData, RectInt destinationRect)
+        {
+            int destinationStride = _size * _bytesPerPixel;
+            int leftX = destinationRect.x;
+            int rightX = destinationRect.xMax - 1;
+            int bottomY = destinationRect.y;
+            int topY = destinationRect.yMax - 1;
+
+            for (int row = bottomY; row <= topY; row++)
+            {
+                CopyPixel(destinationData, leftX, row, leftX - 1, row, destinationStride);
+                CopyPixel(destinationData, rightX, row, rightX + 1, row, destinationStride);
+            }
+
+            for (int column = leftX - 1; column <= rightX + 1; column++)
+            {
+                int clampedColumn = Mathf.Clamp(column, leftX, rightX);
+                CopyPixel(destinationData, clampedColumn, bottomY, column, bottomY - 1, destinationStride);
+                CopyPixel(destinationData, clampedColumn, topY, column, topY + 1, destinationStride);
+            }
+        }
+
+        private void CopyPixel(
+            Unity.Collections.NativeArray<byte> data,
+            int sourceX,
+            int sourceY,
+            int destinationX,
+            int destinationY,
+            int stride)
+        {
+            int sourceOffset = (sourceY * stride) + (sourceX * _bytesPerPixel);
+            int destinationOffset = (destinationY * stride) + (destinationX * _bytesPerPixel);
+            for (int i = 0; i < _bytesPerPixel; i++)
+            {
+                data[destinationOffset + i] = data[sourceOffset + i];
+            }
+        }
+
+        private static bool IsValidSourceRect(Texture2D source, RectInt sourceRect)
+        {
+            return sourceRect.width > 0 &&
+                   sourceRect.height > 0 &&
+                   sourceRect.x >= 0 &&
+                   sourceRect.y >= 0 &&
+                   sourceRect.width <= source.width &&
+                   sourceRect.height <= source.height &&
+                   sourceRect.x <= source.width - sourceRect.width &&
+                   sourceRect.y <= source.height - sourceRect.height;
+        }
+
         private static void DestroyUnityObject(UnityEngine.Object target)
         {
+            if (target == null)
+            {
+                return;
+            }
+
             if (Application.isPlaying)
             {
                 UnityEngine.Object.Destroy(target);

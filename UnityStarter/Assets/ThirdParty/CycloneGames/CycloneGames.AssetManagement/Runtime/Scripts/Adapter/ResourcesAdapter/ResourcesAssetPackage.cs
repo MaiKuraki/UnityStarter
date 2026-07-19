@@ -1,229 +1,199 @@
-using CycloneGames.Logger;
-using Cysharp.Threading.Tasks;
 using System;
+using System.Collections.Generic;
 using System.Threading;
+
 using UnityEngine;
-using UnityEngine.SceneManagement;
+
+using Cysharp.Threading.Tasks;
+
+using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetRuntimeDiagnostics, IAssetPatchProviderReconciler
+    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetRuntimeDiagnostics
     {
-        private readonly string packageName;
-        private int nextId = 1;
+        private readonly string _packageName;
 
-        public string Name => packageName;
+        public string Name => _packageName;
 
         private readonly Cache.AssetCacheService _cacheService;
-        private static readonly AssetPatchProviderReconciliationCapabilities ReconciliationCapabilities =
-            new AssetPatchProviderReconciliationCapabilities(
-                "Resources",
-                supportsVersionedManifestUpdate: false,
-                supportsExplicitCacheCleanup: false,
-                supportsUnusedCacheCleanup: false,
-                supportsTagScopedCacheCleanup: false,
-                supportsProviderManagedDownloadCache: false,
-                supportsIsolatedVersionPreDownload: false,
-                requiresMainThreadAccess: true);
-
-        // Cached delegate to avoid per-call lambda allocation for non-cached handle types.
-        private static readonly Action<string, IReferenceCounted> _instantiateReleaseCallback =
-            (_, h) => ((ResourcesInstantiateHandle)h).DisposeInternal();
-
-        public AssetPatchProviderReconciliationCapabilities Capabilities => ReconciliationCapabilities;
+        private readonly Dictionary<long, ResourcesInstantiateHandle> _instantiateHandles =
+            new Dictionary<long, ResourcesInstantiateHandle>();
+        private readonly Action<long> _onInstantiateDisposed;
+        private bool _initialized;
+        private bool _destroyed;
+        private bool _destroying;
 
         public ResourcesAssetPackage(string name)
         {
-            packageName = name;
+            _packageName = name;
             _cacheService = new Cache.AssetCacheService(this);
-        }
-
-        public UniTask<AssetPatchProviderReconciliationResult> ReconcileAsync(
-            AssetPatchJournalRecord record,
-            AssetPatchRecoveryRecommendation recommendation,
-            CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (!recommendation.RequiresProviderReconciliation)
-            {
-                return UniTask.FromResult(
-                    AssetPatchProviderReconciliationResult.NoActionRequired(
-                        ReconciliationCapabilities,
-                        "Resources has no provider-side patch state for this journal."));
-            }
-
-            return UniTask.FromResult(
-                AssetPatchProviderReconciliationResult.NotSupported(
-                    ReconciliationCapabilities,
-                    "Resources does not support remote manifests, download cache recovery, or interrupted patch reconciliation."));
+            _onInstantiateDisposed = OnInstantiateDisposed;
         }
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
         {
-            if (options.IdleMemoryBudgetBytesOverride.HasValue)
-                _cacheService.SetIdleMemoryBudget(options.IdleMemoryBudgetBytesOverride.Value);
+            AssetRuntimeGuard.EnsureMainThread();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfShutdownRequested();
+            if (_initialized)
+            {
+                return UniTask.FromResult(true);
+            }
+
+            if (options.ProviderOptions != null)
+            {
+                throw new ArgumentException(
+                    "Resources package initialization does not accept provider options.",
+                    nameof(options));
+            }
+
+            if (options.CacheTuningOverride.HasValue)
+            {
+                _cacheService.Configure(options.CacheTuningOverride.Value);
+            }
+
+            _initialized = true;
             return UniTask.FromResult(true);
         }
 
         public UniTask DestroyAsync()
         {
-            _cacheService.Dispose();
-            return UniTask.CompletedTask;
-        }
+            AssetRuntimeGuard.EnsureMainThread();
+            if (_destroyed || _destroying)
+            {
+                return UniTask.CompletedTask;
+            }
 
-        public UniTask<string> RequestPackageVersionAsync(bool appendTimeTicks = true, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
-        {
-            return UniTask.FromResult("N/A");
-        }
+            _destroying = true;
+            try
+            {
+                List<Exception> failures = null;
+                var instances = new List<ResourcesInstantiateHandle>(_instantiateHandles.Values);
+                for (int i = 0; i < instances.Count; i++)
+                {
+                    try
+                    {
+                        instances[i].DisposeInternal();
+                    }
+                    catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+                    {
+                        failures ??= new List<Exception>();
+                        failures.Add(ex);
+                    }
+                }
 
-        public UniTask<bool> UpdatePackageManifestAsync(string packageVersion, int timeoutSeconds = 60, CancellationToken cancellationToken = default)
-        {
-            return UniTask.FromException<bool>(new NotSupportedException("Resources does not support manifest updates."));
-        }
+                _instantiateHandles.Clear();
+                try
+                {
+                    _cacheService.Dispose();
+                }
+                catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+                {
+                    failures ??= new List<Exception>();
+                    failures.Add(ex);
+                }
 
-        public UniTask<bool> ClearCacheFilesAsync(ClearCacheMode clearMode = ClearCacheMode.All, object tags = null, CancellationToken cancellationToken = default)
-        {
-            return UniTask.FromResult(true);
-        }
+                _initialized = false;
+                _destroyed = true;
+                if (failures != null)
+                {
+                    throw new AggregateException(
+                        $"Resources package '{_packageName}' failed to release one or more owned resources.",
+                        failures);
+                }
 
-        public IDownloader CreateDownloaderForAll(int downloadingMaxNumber, int failedTryAgain)
-        {
-            throw new NotSupportedException("Resources does not support downloading.");
-        }
-
-        public IDownloader CreateDownloaderForTags(string[] tags, int downloadingMaxNumber, int failedTryAgain)
-        {
-            throw new NotSupportedException("Resources does not support downloading.");
-        }
-
-        public IDownloader CreateDownloaderForLocations(string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain)
-        {
-            throw new NotSupportedException("Resources does not support downloading.");
-        }
-
-        public UniTask<IDownloader> CreatePreDownloaderForAllAsync(string packageVersion, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
-        {
-            return UniTask.FromException<IDownloader>(new NotSupportedException("Resources does not support pre-downloading."));
-        }
-
-        public UniTask<IDownloader> CreatePreDownloaderForTagsAsync(string packageVersion, string[] tags, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
-        {
-            return UniTask.FromException<IDownloader>(new NotSupportedException("Resources does not support pre-downloading."));
-        }
-
-        public UniTask<IDownloader> CreatePreDownloaderForLocationsAsync(string packageVersion, string[] locations, bool recursiveDownload, int downloadingMaxNumber, int failedTryAgain, CancellationToken cancellationToken = default)
-        {
-            return UniTask.FromException<IDownloader>(new NotSupportedException("Resources does not support pre-downloading."));
+                return UniTask.CompletedTask;
+            }
+            finally
+            {
+                _destroying = false;
+            }
         }
 
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string bucket = null, string tag = null, string owner = null) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            ValidateLocation(location);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), AssetCacheEntryKind.Asset);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
-            if (cached != null) return (IAssetHandle<TAsset>)cached;
+            if (cached != null) return AssetHandleLeases.Create((IAssetHandle<TAsset>)cached);
 
             var asset = Resources.Load<TAsset>(location);
-            var id = RegisterHandle();
-            var handle = ResourcesAssetHandle<TAsset>.Create(id, cacheKey, asset, _cacheService.OnHandleReleased);
-            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
-            return handle;
+            long id = RegisterHandle();
+            var handle = ResourcesAssetHandle<TAsset>.Create(
+                id,
+                cacheKey,
+                asset,
+                _cacheService.OnHandleReleased,
+                this);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
+            handle = (ResourcesAssetHandle<TAsset>)_cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
+            return AssetHandleLeases.Create(handle);
         }
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
+            AssetRuntimeGuard.EnsureMainThread();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDestroyed();
+            ValidateLocation(location);
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), AssetCacheEntryKind.Asset);
             var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
-            if (cached != null) return (IAssetHandle<TAsset>)cached;
+            if (cached != null) return AssetHandleLeases.Create((IAssetHandle<TAsset>)cached, cancellationToken);
 
             var request = Resources.LoadAsync<TAsset>(location);
-            var id = RegisterHandle();
-            var handle = ResourcesAssetHandle<TAsset>.Create(id, cacheKey, request, _cacheService.OnHandleReleased, cancellationToken);
-            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
+            long id = RegisterHandle();
+            var handle = ResourcesAssetHandle<TAsset>.Create(
+                id,
+                cacheKey,
+                request,
+                _cacheService.OnHandleReleased,
+                this);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
+            handle = (ResourcesAssetHandle<TAsset>)_cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             AssetLoadProfiler.TrackAsync(handle, location);
 #endif
-            return handle;
-        }
-
-        public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default) where TAsset : UnityEngine.Object
-        {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.AllAssets);
-            var cached = _cacheService.Get(cacheKey, bucket, tag, owner);
-            if (cached != null) return (IAllAssetsHandle<TAsset>)cached;
-
-            var assets = Resources.LoadAll<TAsset>(location);
-            var id = RegisterHandle();
-            var handle = ResourcesAllAssetsHandle<TAsset>.Create(id, cacheKey, assets, _cacheService.OnHandleReleased);
-            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
-            _cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            AssetLoadProfiler.TrackAsync(handle, location);
-#endif
-            return handle;
-        }
-
-        public IRawFileHandle LoadRawFileSync(string location, string bucket = null, string tag = null, string owner = null)
-        {
-            throw new NotSupportedException("Resources does not support RawFile loading. Use LoadAssetAsync<TextAsset> for text files.");
-        }
-
-        public IRawFileHandle LoadRawFileAsync(string location, string bucket = null, string tag = null, string owner = null, CancellationToken cancellationToken = default)
-        {
-            throw new NotSupportedException("Resources does not support RawFile loading. Use LoadAssetAsync<TextAsset> for text files.");
-        }
-
-        public GameObject InstantiateSync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false)
-        {
-            if (handle?.Asset != null)
-            {
-                return GameObject.Instantiate(handle.Asset, parent, worldPositionStays);
-            }
-            return null;
+            return AssetHandleLeases.Create(handle, cancellationToken);
         }
 
         public IInstantiateHandle InstantiateAsync(IAssetHandle<GameObject> handle, Transform parent = null, bool worldPositionStays = false, bool setActive = true)
         {
-            GameObject instance = null;
-            if (handle?.Asset != null)
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            if (handle is not IAssetHandleLease lease ||
+                !lease.TryGetBackend<ResourcesAssetHandle<GameObject>>(out ResourcesAssetHandle<GameObject> backend) ||
+                !ReferenceEquals(backend.Owner, this))
             {
-                instance = GameObject.Instantiate(handle.Asset, parent, worldPositionStays);
-                if (instance != null) instance.SetActive(setActive);
+                throw new ArgumentException(
+                    "The handle is not an active Resources GameObject lease owned by this package.",
+                    nameof(handle));
             }
-            var id = RegisterHandle();
-            // InstantiateHandle is not cached; pass null key.
-            var wrapped = ResourcesInstantiateHandle.Create(id, instance, _instantiateReleaseCallback);
-            if (HandleTracker.Enabled) HandleTracker.Register(id, packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
+
+            if (backend.Task.Status != UniTaskStatus.Succeeded || backend.Asset == null)
+            {
+                throw new InvalidOperationException(
+                    "The Resources GameObject lease must complete successfully before instantiation.");
+            }
+
+            GameObject instance = GameObject.Instantiate(backend.Asset, parent, worldPositionStays);
+            if (instance != null) instance.SetActive(setActive);
+            long id = RegisterHandle();
+            var wrapped = ResourcesInstantiateHandle.Create(id, instance, _onInstantiateDisposed);
+            _instantiateHandles.Add(id, wrapped);
+            if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             AssetLoadProfiler.TrackAsync(wrapped, handle?.AssetObject?.name ?? "unknown");
 #endif
             return wrapped;
         }
 
-        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100, string bucket = null)
-        {
-            throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
-        }
-
-        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode, SceneActivationMode activationMode, int priority = 100, string bucket = null)
-        {
-            throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
-        }
-
-        public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, string bucket = null)
-        {
-            throw new NotSupportedException("Loading scenes from Resources is not supported via this API. Use Unity's SceneManager directly.");
-        }
-
-        public UniTask UnloadSceneAsync(ISceneHandle sceneHandle)
-        {
-            return UniTask.FromException(new NotSupportedException("Unloading scenes from Resources is not supported via this API."));
-        }
-
         public async UniTask UnloadUnusedAssetsAsync()
         {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
             _cacheService.ClearAll();
             CLogger.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync triggers Resources.UnloadUnusedAssets(). This can cause hitches on the main thread, so prefer explicit handle release and bucket clears whenever possible.");
             await Resources.UnloadUnusedAssets().ToUniTask();
@@ -231,38 +201,87 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object
         {
-            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), Cache.AssetCacheOperationKind.Asset);
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            var cacheKey = Cache.AssetCacheService.BuildCacheKey(location, typeof(TAsset), AssetCacheEntryKind.Asset);
             return _cacheService.Contains(cacheKey);
         }
 
         public AssetRuntimeCacheSnapshot GetRuntimeCacheSnapshot()
         {
-            return _cacheService.CreateRuntimeSnapshot(packageName, "Resources");
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            return _cacheService.CreateRuntimeSnapshot(_packageName, "Resources");
         }
 
         public void SetCacheIdleMemoryBudget(long maxIdleBytes)
         {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
             _cacheService.SetIdleMemoryBudget(maxIdleBytes);
         }
 
         public int TrimIdleCache(AssetCacheRetentionPolicy policy)
         {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
             return _cacheService.TrimIdle(policy);
         }
 
         public void ClearBucket(string bucket)
         {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
             _cacheService.ClearBucket(bucket);
         }
 
         public void ClearBucketsByPrefix(string bucketPrefix)
         {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
             _cacheService.ClearBucketsByPrefix(bucketPrefix);
         }
 
-        private int RegisterHandle()
+        private long RegisterHandle()
         {
-            return Interlocked.Increment(ref nextId);
+            return AssetRuntimeGuard.NextHandleId();
+        }
+
+        private void OnInstantiateDisposed(long id)
+        {
+            _instantiateHandles.Remove(id);
+        }
+
+        private static void ValidateLocation(string location)
+        {
+            if (string.IsNullOrWhiteSpace(location))
+            {
+                throw new ArgumentException("Asset location cannot be null or empty.", nameof(location));
+            }
+        }
+
+        internal void ConfigureCache(AssetCacheTuning tuning)
+        {
+            ThrowIfShutdownRequested();
+            _cacheService.Configure(tuning);
+        }
+
+        private void ThrowIfDestroyed()
+        {
+            ThrowIfShutdownRequested();
+            if (!_initialized)
+            {
+                throw new InvalidOperationException(
+                    $"Resources package '{Name}' has not completed initialization.");
+            }
+        }
+
+        private void ThrowIfShutdownRequested()
+        {
+            if (_destroyed || _destroying)
+            {
+                throw new ObjectDisposedException(nameof(ResourcesAssetPackage));
+            }
         }
     }
 }

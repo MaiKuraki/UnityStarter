@@ -1,0 +1,148 @@
+schemaVersion: 1
+schemaFingerprint: ""
+joinAction:
+  type: Button
+  action: JoinGame
+  expectedControlType: Button
+  bindingGroups: KeyboardMouse;Gamepad
+  deviceBindings:
+    - "<Keyboard>/enter"
+    - "<Gamepad>/start"
+  updateMode: EventDriven
+  longPressMs: 0
+  longPressValueThreshold: 0.5
+playerSlots:
+  - playerId: 0
+    joinAction:
+      type: Button
+      action: JoinGame
+      expectedControlType: Button
+      bindingGroups: KeyboardMouse;Gamepad
+      deviceBindings:
+        - "<Keyboard>/enter"
+        - "<Gamepad>/start"
+      updateMode: EventDriven
+      longPressMs: 0
+      longPressValueThreshold: 0.5
+    controlSchemes:
+      - name: KeyboardMouse
+        bindingGroup: KeyboardMouse
+        deviceRequirements:
+          - controlPath: "<Keyboard>"
+            isOptional: false
+            isOr: false
+          - controlPath: "<Mouse>"
+            isOptional: false
+            isOr: false
+      - name: Gamepad
+        bindingGroup: Gamepad
+        deviceRequirements:
+          - controlPath: "<Gamepad>"
+            isOptional: false
+            isOr: false
+    contexts:
+      - name: Gameplay
+        actionMap: PlayerActions
+        priority: 0
+        blocksLowerPriority: true
+        bindings:
+          - type: Vector2
+            action: Move
+            expectedControlType: Vector2
+            bindingGroups: Gamepad
+            deviceBindings:
+              - "<Gamepad>/leftStick"
+            compositeBindings:
+              - name: 2DVector
+                parameters: mode=2
+                bindingGroups: KeyboardMouse
+                parts:
+                  - name: up
+                    path: "<Keyboard>/w"
+                  - name: down
+                    path: "<Keyboard>/s"
+                  - name: left
+                    path: "<Keyboard>/a"
+                  - name: right
+                    path: "<Keyboard>/d"
+            updateMode: Polling
+            longPressMs: 0
+            longPressValueThreshold: 0.5
+          - type: Button
+            action: Confirm
+            expectedControlType: Button
+            bindingGroups: KeyboardMouse;Gamepad
+            deviceBindings:
+              - "<Gamepad>/buttonSouth"
+              - "<Keyboard>/space"
+            updateMode: EventDriven
+            longPressMs: 500
+            longPressValueThreshold: 0.5
+  - playerId: 1
+    joinAction:
+      type: Button
+      action: JoinGame
+      expectedControlType: Button
+      bindingGroups: KeyboardMouse;Gamepad
+      deviceBindings:
+        - "<Keyboard>/numpadEnter"
+        - "<Gamepad>/start"
+      updateMode: EventDriven
+      longPressMs: 0
+      longPressValueThreshold: 0.5
+    controlSchemes:
+      - name: KeyboardMouse
+        bindingGroup: KeyboardMouse
+        deviceRequirements:
+          - controlPath: "<Keyboard>"
+            isOptional: false
+            isOr: false
+          - controlPath: "<Mouse>"
+            isOptional: false
+            isOr: false
+      - name: Gamepad
+        bindingGroup: Gamepad
+        deviceRequirements:
+          - controlPath: "<Gamepad>"
+            isOptional: false
+            isOr: false
+    contexts:
+      - name: Gameplay
+        actionMap: PlayerActions
+        priority: 0
+        blocksLowerPriority: true
+        bindings:
+          - type: Vector2
+            action: Move
+            expectedControlType: Vector2
+            bindingGroups: KeyboardMouse;Gamepad
+            deviceBindings:
+              - "<Gamepad>/leftStick"
+              - "<Mouse>/delta"
+            compositeBindings:
+              - name: 2DVector
+                parameters: mode=2
+                bindingGroups: KeyboardMouse
+                parts:
+                  - name: up
+                    path: "<Keyboard>/upArrow"
+                  - name: down
+                    path: "<Keyboard>/downArrow"
+                  - name: left
+                    path: "<Keyboard>/leftArrow"
+                  - name: right
+                    path: "<Keyboard>/rightArrow"
+            updateMode: Polling
+            longPressMs: 0
+            longPressValueThreshold: 0.5
+          - type: Button
+            action: Confirm
+            expectedControlType: Button
+            bindingGroups: KeyboardMouse;Gamepad
+            deviceBindings:
+              - "<Gamepad>/buttonSouth"
+              - "<Keyboard>/numpadEnter"
+              - "<Mouse>/leftButton"
+            updateMode: EventDriven
+            longPressMs: 500
+            longPressValueThreshold: 0.5

@@ -2,8 +2,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Security.Cryptography;
-using System.Text;
 using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Runtime;
 using UnityEditor;
@@ -15,8 +13,12 @@ namespace CycloneGames.Localization.Editor
     {
         public const string DefaultVersion = "1.0.0";
 
+        public LocalizationSettings Settings;
         public string OutputPath;
         public string Version = DefaultVersion;
+        public LocalizationCatalogContentKind ContentKind = LocalizationCatalogContentKind.All;
+        public IReadOnlyList<Locale> IncludedLocales;
+        public IReadOnlyList<string> IncludedTableIds;
         public bool ValidateBeforeBuild = true;
         public bool SelectBuiltAsset = true;
     }
@@ -52,13 +54,21 @@ namespace CycloneGames.Localization.Editor
 
     public static class LocalizationCatalogBuilder
     {
-        private const string DefaultCatalogPath = "Assets/LocalizationCatalog.asset";
+        internal const int MaxTableAssets = 8_192;
+        internal const int MaxEntriesPerTable = 250_000;
+        internal const int MaxTotalEntries = 1_000_000;
+        internal const int MaxTableIdChars = 256;
+        internal const int MaxKeyChars = 1_024;
+        internal const int MaxStringValueChars = 1_048_576;
+        internal const int MaxAssetReferenceChars = 4_096;
+        internal const int MaxCatalogVersionChars = 128;
 
         [MenuItem("Tools/CycloneGames/Localization/Catalog/Build Once...")]
         public static void BuildCatalogFromMenu()
         {
             string outputPath = SelectOutputPath();
-            if (string.IsNullOrEmpty(outputPath)) return;
+            if (string.IsNullOrEmpty(outputPath))
+                return;
 
             var options = new LocalizationCatalogBuildOptions
             {
@@ -93,29 +103,32 @@ namespace CycloneGames.Localization.Editor
         [MenuItem("Tools/CycloneGames/Localization/Catalog/Build From Settings")]
         public static void BuildCatalogFromSettingsMenu()
         {
-            LocalizationCatalogBuildSettings settings = FindSettingsAsset();
-            if (settings == null)
+            if (!TryFindSettingsAsset(out LocalizationCatalogBuildSettings settings, out string error))
             {
-                EditorUtility.DisplayDialog(
-                    "Localization Catalog",
-                    "No LocalizationCatalogBuildSettings asset was found. Create one with Create > CycloneGames > Localization > Catalog Build Settings.",
-                    "OK");
+                EditorUtility.DisplayDialog("Localization Catalog", error, "OK");
                 return;
             }
 
-            BuildCatalog(settings);
+            try
+            {
+                BuildCatalog(settings);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                EditorUtility.DisplayDialog(
+                    "Localization Catalog",
+                    "Catalog build failed. See Console for details.",
+                    "OK");
+            }
         }
 
         [MenuItem("Tools/CycloneGames/Localization/Catalog/Select Build Settings")]
         public static void SelectSettingsMenu()
         {
-            LocalizationCatalogBuildSettings settings = FindSettingsAsset();
-            if (settings == null)
+            if (!TryFindSettingsAsset(out LocalizationCatalogBuildSettings settings, out string error))
             {
-                EditorUtility.DisplayDialog(
-                    "Localization Catalog",
-                    "No LocalizationCatalogBuildSettings asset was found.",
-                    "OK");
+                EditorUtility.DisplayDialog("Localization Catalog", error, "OK");
                 return;
             }
 
@@ -135,56 +148,38 @@ namespace CycloneGames.Localization.Editor
 
         public static LocalizationCatalogBuildResult BuildCatalog(LocalizationCatalogBuildSettings settings)
         {
-            if (settings == null) throw new ArgumentNullException(nameof(settings));
+            if (settings == null)
+                throw new ArgumentNullException(nameof(settings));
+
             return BuildCatalog(settings.ToBuildOptions());
         }
 
         public static LocalizationCatalogBuildResult BuildCatalog(LocalizationCatalogBuildOptions options)
         {
-            if (options == null) throw new ArgumentNullException(nameof(options));
-            if (string.IsNullOrEmpty(options.OutputPath)) throw new ArgumentNullException(nameof(options.OutputPath));
-            if (!options.OutputPath.StartsWith("Assets/", StringComparison.Ordinal) &&
-                !string.Equals(options.OutputPath, "Assets", StringComparison.Ordinal))
-            {
-                throw new ArgumentException("Catalog output path must be inside the Assets folder.", nameof(options));
-            }
-            if (!options.OutputPath.EndsWith(".asset", StringComparison.OrdinalIgnoreCase))
-                throw new ArgumentException("Catalog output path must use the .asset extension.", nameof(options));
+            if (options == null)
+                throw new ArgumentNullException(nameof(options));
+
+            string outputPath = NormalizeOutputPath(options.OutputPath);
+            string version = ValidateVersion(options.Version);
+            if (!LocalizationEditorSettingsUtility.TryResolve(options.Settings, out LocalizationSettings settings, out string settingsError))
+                throw new InvalidOperationException(settingsError);
 
             if (options.ValidateBeforeBuild)
-                ValidateProjectOrThrow();
+                ValidateProjectOrThrow(settings);
 
-            var data = BuildCatalogData();
+            // All source data is read, bounded, validated and canonicalized before output assets are touched.
+            CatalogBuildData data = BuildCatalogData(settings, options);
             string hash = ComputeContentHash(data.StringTables, data.AssetTables);
-            EnsureParentFolders(options.OutputPath);
 
-            var existingAsset = AssetDatabase.LoadMainAssetAtPath(options.OutputPath);
-            if (existingAsset != null && !(existingAsset is LocalizationCatalog))
-            {
-                throw new InvalidOperationException(
-                    "Catalog output path is already used by another asset type: " + options.OutputPath);
-            }
+            EnsureParentFolders(outputPath);
+            LocalizationCatalog catalog = ReplaceCatalogAtomically(outputPath, version, hash, data);
 
-            var catalog = existingAsset as LocalizationCatalog;
-            if (catalog == null)
-            {
-                catalog = ScriptableObject.CreateInstance<LocalizationCatalog>();
-                catalog.SetData(options.Version, hash, data.StringTables, data.AssetTables);
-                AssetDatabase.CreateAsset(catalog, options.OutputPath);
-            }
-            else
-            {
-                catalog.SetData(options.Version, hash, data.StringTables, data.AssetTables);
-                EditorUtility.SetDirty(catalog);
-            }
-
-            AssetDatabase.SaveAssets();
             if (options.SelectBuiltAsset)
                 Selection.activeObject = catalog;
 
             var result = new LocalizationCatalogBuildResult(
                 catalog,
-                options.OutputPath,
+                outputPath,
                 hash,
                 data.StringTables.Count,
                 data.StringEntryCount,
@@ -205,138 +200,338 @@ namespace CycloneGames.Localization.Editor
             IReadOnlyList<CatalogStringTable> stringTables,
             IReadOnlyList<CatalogAssetTable> assetTables)
         {
-            if (stringTables == null) throw new ArgumentNullException(nameof(stringTables));
-            if (assetTables == null) throw new ArgumentNullException(nameof(assetTables));
-
-            var builder = new StringBuilder(4096);
-            builder.Append(LocalizationCatalog.CurrentSchemaVersion).Append('\n');
-
-            for (int i = 0; i < stringTables.Count; i++)
-            {
-                var table = stringTables[i];
-                if (table == null) continue;
-
-                AppendValue(builder, "S");
-                AppendValue(builder, table.TableId);
-                AppendValue(builder, table.LocaleId.Code);
-
-                var entries = table.Entries;
-                for (int entryIndex = 0; entryIndex < entries.Count; entryIndex++)
-                {
-                    var entry = entries[entryIndex];
-                    AppendValue(builder, entry.Key);
-                    AppendValue(builder, entry.Value);
-                }
-            }
-
-            for (int i = 0; i < assetTables.Count; i++)
-            {
-                var table = assetTables[i];
-                if (table == null) continue;
-
-                AppendValue(builder, "A");
-                AppendValue(builder, table.TableId);
-                AppendValue(builder, table.LocaleId.Code);
-
-                var entries = table.Entries;
-                for (int entryIndex = 0; entryIndex < entries.Count; entryIndex++)
-                {
-                    var entry = entries[entryIndex];
-                    AppendValue(builder, entry.Key);
-                    AppendValue(builder, entry.Asset.Location);
-                    AppendValue(builder, entry.Asset.Guid);
-                }
-            }
-
-            using (var sha = SHA256.Create())
-            {
-                byte[] bytes = Encoding.UTF8.GetBytes(builder.ToString());
-                byte[] hash = sha.ComputeHash(bytes);
-                var hex = new StringBuilder(hash.Length * 2);
-                for (int i = 0; i < hash.Length; i++)
-                    hex.Append(hash[i].ToString("x2"));
-                return hex.ToString();
-            }
+            return LocalizationCatalog.ComputeContentHash(stringTables, assetTables);
         }
 
-        private static CatalogBuildData BuildCatalogData()
+        private static CatalogBuildData BuildCatalogData(
+            LocalizationSettings settings,
+            LocalizationCatalogBuildOptions options)
         {
+            var allowedLocales = new HashSet<string>(StringComparer.Ordinal);
+            IReadOnlyList<Locale> availableLocales = settings.AvailableLocales;
+            if (availableLocales == null || availableLocales.Count == 0)
+                throw new InvalidDataException("LocalizationSettings must contain at least one Available Locale.");
+
+            for (int index = 0; index < availableLocales.Count; index++)
+            {
+                Locale locale = availableLocales[index];
+                if (locale == null || !locale.Id.IsValid)
+                    throw new InvalidDataException($"LocalizationSettings Available Locales contains an invalid item at index {index}.");
+                if (!allowedLocales.Add(locale.Id.Code))
+                    throw new InvalidDataException($"LocalizationSettings contains duplicate locale '{locale.Id.Code}'.");
+            }
+
+            LocalizationCatalogBuildFilter filter = LocalizationCatalogBuildFilter.Create(
+                options.ContentKind,
+                options.IncludedLocales,
+                options.IncludedTableIds,
+                allowedLocales);
             var data = new CatalogBuildData();
-            AppendStringTables(data);
-            AppendAssetTables(data);
+            var identities = new HashSet<string>(StringComparer.Ordinal);
+            if (filter.IncludeStrings)
+                AppendStringTables(data, allowedLocales, identities, filter);
+            if (filter.IncludeAssets)
+                AppendAssetTables(data, allowedLocales, identities, filter);
+            if (data.StringTables.Count == 0 && data.AssetTables.Count == 0)
+                throw new InvalidDataException("Catalog filters did not match any localization tables.");
+            data.StringTables.Sort(CompareStringTables);
+            data.AssetTables.Sort(CompareAssetTables);
             return data;
         }
 
-        private static void AppendStringTables(CatalogBuildData data)
+        private static void AppendStringTables(
+            CatalogBuildData data,
+            HashSet<string> allowedLocales,
+            HashSet<string> identities,
+            LocalizationCatalogBuildFilter filter)
         {
             string[] guids = AssetDatabase.FindAssets("t:StringTable");
             Array.Sort(guids, CompareAssetGuidByPath);
+            int includedCount = 0;
 
-            for (int i = 0; i < guids.Length; i++)
+            for (int tableIndex = 0; tableIndex < guids.Length; tableIndex++)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                string path = AssetDatabase.GUIDToAssetPath(guids[tableIndex]);
                 var table = AssetDatabase.LoadAssetAtPath<StringTable>(path);
-                if (table == null) continue;
-                if (string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) continue;
+                if (table == null)
+                    throw new InvalidDataException($"StringTable could not be loaded: {path}");
+                if (!filter.Includes(table.TableId, table.LocaleId.Code))
+                    continue;
+                ValidateTableAssetCount(++includedCount, "string");
 
+                ValidateTableIdentity(table.TableId, table.LocaleId.Code, allowedLocales, "string", path, identities);
                 var serialized = new SerializedObject(table);
-                var entries = serialized.FindProperty("entries");
-                var catalogEntries = new List<CatalogStringEntry>(entries != null && entries.isArray ? entries.arraySize : 0);
-                if (entries != null && entries.isArray)
-                {
-                    for (int entryIndex = 0; entryIndex < entries.arraySize; entryIndex++)
-                    {
-                        var entry = entries.GetArrayElementAtIndex(entryIndex);
-                        var key = entry.FindPropertyRelative("Key");
-                        if (key == null || string.IsNullOrEmpty(key.stringValue)) continue;
+                SerializedProperty entries = serialized.FindProperty("entries");
+                ValidateEntriesProperty(entries, path);
 
-                        var value = entry.FindPropertyRelative("Value");
-                        catalogEntries.Add(new CatalogStringEntry(key.stringValue, value != null ? value.stringValue : string.Empty));
-                    }
+                var catalogEntries = new List<CatalogStringEntry>(entries.arraySize);
+                var keys = new HashSet<string>(StringComparer.Ordinal);
+                for (int entryIndex = 0; entryIndex < entries.arraySize; entryIndex++)
+                {
+                    SerializedProperty entry = entries.GetArrayElementAtIndex(entryIndex);
+                    string key = RequireString(entry.FindPropertyRelative("Key"), "key", path, entryIndex, MaxKeyChars, false);
+                    if (!keys.Add(key))
+                        throw new InvalidDataException($"StringTable '{path}' contains duplicate key '{key}'.");
+
+                    string value = RequireString(entry.FindPropertyRelative("Value"), "value", path, entryIndex, MaxStringValueChars, true);
+                    if (string.IsNullOrWhiteSpace(value))
+                        continue;
+                    catalogEntries.Add(new CatalogStringEntry(key, value));
+                    IncrementEntryCount(data, true);
                 }
 
-                data.StringEntryCount += catalogEntries.Count;
+                catalogEntries.Sort((left, right) => string.CompareOrdinal(left.Key, right.Key));
                 data.StringTables.Add(new CatalogStringTable(table.TableId, table.LocaleId.Code, catalogEntries));
             }
         }
 
-        private static void AppendAssetTables(CatalogBuildData data)
+        private static void AppendAssetTables(
+            CatalogBuildData data,
+            HashSet<string> allowedLocales,
+            HashSet<string> identities,
+            LocalizationCatalogBuildFilter filter)
         {
             string[] guids = AssetDatabase.FindAssets("t:AssetTable");
             Array.Sort(guids, CompareAssetGuidByPath);
+            int includedCount = 0;
 
-            for (int i = 0; i < guids.Length; i++)
+            for (int tableIndex = 0; tableIndex < guids.Length; tableIndex++)
             {
-                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                string path = AssetDatabase.GUIDToAssetPath(guids[tableIndex]);
                 var table = AssetDatabase.LoadAssetAtPath<AssetTable>(path);
-                if (table == null) continue;
-                if (string.IsNullOrEmpty(table.TableId) || !table.LocaleId.IsValid) continue;
+                if (table == null)
+                    throw new InvalidDataException($"AssetTable could not be loaded: {path}");
+                if (!filter.Includes(table.TableId, table.LocaleId.Code))
+                    continue;
+                ValidateTableAssetCount(++includedCount, "asset");
 
+                ValidateTableIdentity(table.TableId, table.LocaleId.Code, allowedLocales, "asset", path, identities);
                 var serialized = new SerializedObject(table);
-                var entries = serialized.FindProperty("entries");
-                var catalogEntries = new List<CatalogAssetEntry>(entries != null && entries.isArray ? entries.arraySize : 0);
-                if (entries != null && entries.isArray)
-                {
-                    for (int entryIndex = 0; entryIndex < entries.arraySize; entryIndex++)
-                    {
-                        var entry = entries.GetArrayElementAtIndex(entryIndex);
-                        var key = entry.FindPropertyRelative("Key");
-                        if (key == null || string.IsNullOrEmpty(key.stringValue)) continue;
+                SerializedProperty entries = serialized.FindProperty("entries");
+                ValidateEntriesProperty(entries, path);
 
-                        var asset = entry.FindPropertyRelative("Asset");
-                        var location = asset != null ? asset.FindPropertyRelative("m_Location") : null;
-                        var guid = asset != null ? asset.FindPropertyRelative("m_GUID") : null;
-                        catalogEntries.Add(new CatalogAssetEntry(
-                            key.stringValue,
-                            new AssetRef(
-                                location != null ? location.stringValue : string.Empty,
-                                guid != null ? guid.stringValue : string.Empty)));
+                var catalogEntries = new List<CatalogAssetEntry>(entries.arraySize);
+                var keys = new HashSet<string>(StringComparer.Ordinal);
+                for (int entryIndex = 0; entryIndex < entries.arraySize; entryIndex++)
+                {
+                    SerializedProperty entry = entries.GetArrayElementAtIndex(entryIndex);
+                    string key = RequireString(entry.FindPropertyRelative("Key"), "key", path, entryIndex, MaxKeyChars, false);
+                    if (!keys.Add(key))
+                        throw new InvalidDataException($"AssetTable '{path}' contains duplicate key '{key}'.");
+
+                    SerializedProperty asset = entry.FindPropertyRelative("Asset");
+                    if (asset == null)
+                        throw new InvalidDataException($"AssetTable '{path}' entry {entryIndex} has no Asset field.");
+
+                    string location = RequireString(asset.FindPropertyRelative("m_Location"), "asset location", path, entryIndex, MaxAssetReferenceChars, false);
+                    string guid = RequireString(asset.FindPropertyRelative("m_GUID"), "asset GUID", path, entryIndex, MaxAssetReferenceChars, true);
+                    catalogEntries.Add(new CatalogAssetEntry(key, new AssetRef(location, guid)));
+                    IncrementEntryCount(data, false);
+                }
+
+                catalogEntries.Sort((left, right) => string.CompareOrdinal(left.Key, right.Key));
+                data.AssetTables.Add(new CatalogAssetTable(table.TableId, table.LocaleId.Code, catalogEntries));
+            }
+        }
+
+        private static LocalizationCatalog ReplaceCatalogAtomically(
+            string outputPath,
+            string version,
+            string hash,
+            CatalogBuildData data)
+        {
+            UnityEngine.Object existingAsset = AssetDatabase.LoadMainAssetAtPath(outputPath);
+            if (existingAsset != null && !(existingAsset is LocalizationCatalog))
+                throw new InvalidOperationException("Catalog output path is used by another asset type: " + outputPath);
+            if (existingAsset != null && EditorUtility.IsDirty(existingAsset))
+                throw new InvalidOperationException("Catalog output asset has unsaved changes and cannot be replaced: " + outputPath);
+
+            string folder = Path.GetDirectoryName(outputPath)?.Replace('\\', '/');
+            string temporaryAssetPath = folder + "/__LocalizationCatalog_" + Guid.NewGuid().ToString("N") + ".asset";
+            var temporaryCatalog = ScriptableObject.CreateInstance<LocalizationCatalog>();
+            temporaryCatalog.SetData(version, hash, data.StringTables, data.AssetTables);
+
+            try
+            {
+                AssetDatabase.CreateAsset(temporaryCatalog, temporaryAssetPath);
+                AssetDatabase.SaveAssetIfDirty(temporaryCatalog);
+
+                if (existingAsset == null)
+                {
+                    string moveError = AssetDatabase.MoveAsset(temporaryAssetPath, outputPath);
+                    if (!string.IsNullOrEmpty(moveError))
+                        throw new IOException("Could not move generated catalog into place: " + moveError);
+
+                    temporaryAssetPath = null;
+                    return RequireImportedCatalog(outputPath, version, hash);
+                }
+
+                return ReplaceExistingCatalogFile(temporaryAssetPath, outputPath, version, hash);
+            }
+            finally
+            {
+                if (!string.IsNullOrEmpty(temporaryAssetPath))
+                    AssetDatabase.DeleteAsset(temporaryAssetPath);
+            }
+        }
+
+        private static LocalizationCatalog ReplaceExistingCatalogFile(
+            string temporaryAssetPath,
+            string outputPath,
+            string version,
+            string hash)
+        {
+            string projectRoot = Directory.GetParent(Application.dataPath)?.FullName;
+            if (string.IsNullOrEmpty(projectRoot))
+                throw new InvalidOperationException("Unity project root is unavailable.");
+
+            string temporaryFullPath = ToFullPath(projectRoot, temporaryAssetPath);
+            string outputFullPath = ToFullPath(projectRoot, outputPath);
+            string token = Guid.NewGuid().ToString("N");
+            string replacementPath = outputFullPath + "." + token + ".replacement";
+            string backupPath = outputFullPath + "." + token + ".backup";
+            bool replacementCommitted = false;
+
+            try
+            {
+                CopyFileDurably(temporaryFullPath, replacementPath);
+                if (!AssetDatabase.DeleteAsset(temporaryAssetPath))
+                    throw new IOException("Could not clean the temporary catalog asset before replacement.");
+
+                File.Replace(replacementPath, outputFullPath, backupPath);
+                replacementCommitted = true;
+                AssetDatabase.ImportAsset(outputPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+                LocalizationCatalog catalog = RequireImportedCatalog(outputPath, version, hash);
+                File.Delete(backupPath);
+                return catalog;
+            }
+            catch
+            {
+                if (replacementCommitted && File.Exists(backupPath))
+                {
+                    try
+                    {
+                        File.Replace(backupPath, outputFullPath, null);
+                        AssetDatabase.ImportAsset(outputPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
+                    }
+                    catch (Exception rollbackException)
+                    {
+                        Debug.LogError("[Localization] Catalog replacement rollback failed: " + rollbackException);
                     }
                 }
 
-                data.AssetEntryCount += catalogEntries.Count;
-                data.AssetTables.Add(new CatalogAssetTable(table.TableId, table.LocaleId.Code, catalogEntries));
+                throw;
             }
+            finally
+            {
+                DeleteFileBestEffort(replacementPath);
+                DeleteFileBestEffort(backupPath);
+            }
+        }
+
+        private static LocalizationCatalog RequireImportedCatalog(string outputPath, string version, string hash)
+        {
+            var catalog = AssetDatabase.LoadAssetAtPath<LocalizationCatalog>(outputPath);
+            if (catalog == null || catalog.SchemaVersion != LocalizationCatalog.CurrentSchemaVersion ||
+                !string.Equals(catalog.CatalogVersion, version, StringComparison.Ordinal) ||
+                !string.Equals(catalog.ContentHash, hash, StringComparison.Ordinal))
+            {
+                throw new InvalidDataException("Generated catalog failed post-write verification: " + outputPath);
+            }
+
+            return catalog;
+        }
+
+        private static void ValidateTableIdentity(
+            string tableId,
+            string localeCode,
+            HashSet<string> allowedLocales,
+            string kind,
+            string path,
+            HashSet<string> identities)
+        {
+            if (string.IsNullOrWhiteSpace(tableId) || tableId.Length > MaxTableIdChars)
+                throw new InvalidDataException($"{kind} table '{path}' has an empty or oversized Table Id.");
+            if (string.IsNullOrEmpty(localeCode) || !allowedLocales.Contains(localeCode))
+                throw new InvalidDataException($"{kind} table '{path}' uses locale '{localeCode}' which is not in LocalizationSettings.");
+
+            string identity = kind + "\0" + tableId + "\0" + localeCode;
+            if (!identities.Add(identity))
+                throw new InvalidDataException($"Duplicate {kind} table identity '{tableId}' / '{localeCode}'.");
+        }
+
+        private static void ValidateEntriesProperty(SerializedProperty entries, string path)
+        {
+            if (entries == null || !entries.isArray)
+                throw new InvalidDataException("Table has no serialized entries array: " + path);
+            if (entries.arraySize > MaxEntriesPerTable)
+                throw new InvalidDataException($"Table '{path}' exceeds the {MaxEntriesPerTable} entry limit.");
+        }
+
+        private static string RequireString(
+            SerializedProperty property,
+            string fieldName,
+            string path,
+            int entryIndex,
+            int maxChars,
+            bool allowEmpty)
+        {
+            if (property == null || property.propertyType != SerializedPropertyType.String)
+                throw new InvalidDataException($"Table '{path}' entry {entryIndex} has no valid {fieldName} field.");
+
+            string value = property.stringValue ?? string.Empty;
+            if ((!allowEmpty && string.IsNullOrWhiteSpace(value)) || value.Length > maxChars)
+                throw new InvalidDataException($"Table '{path}' entry {entryIndex} has an empty or oversized {fieldName}.");
+            return value;
+        }
+
+        private static void IncrementEntryCount(CatalogBuildData data, bool isString)
+        {
+            if (isString)
+                data.StringEntryCount++;
+            else
+                data.AssetEntryCount++;
+
+            if ((long)data.StringEntryCount + data.AssetEntryCount > MaxTotalEntries)
+                throw new InvalidDataException($"Localization catalog exceeds the {MaxTotalEntries} total entry limit.");
+        }
+
+        private static void ValidateTableAssetCount(int count, string kind)
+        {
+            if (count > MaxTableAssets)
+                throw new InvalidDataException($"Localization project exceeds the {MaxTableAssets} {kind} table asset limit.");
+        }
+
+        private static string NormalizeOutputPath(string outputPath)
+        {
+            if (string.IsNullOrWhiteSpace(outputPath))
+                throw new ArgumentNullException(nameof(outputPath));
+
+            string folder = Path.GetDirectoryName(outputPath)?.Replace('\\', '/');
+            string fileName = Path.GetFileName(outputPath);
+            if (!LocalizationAssetPathUtility.TryNormalizeCatalogAssetPath(
+                    folder,
+                    fileName,
+                    out string normalizedPath,
+                    out string error))
+            {
+                throw new ArgumentException(error, nameof(outputPath));
+            }
+
+            return normalizedPath;
+        }
+
+        private static string ValidateVersion(string version)
+        {
+            version = string.IsNullOrWhiteSpace(version) ? LocalizationCatalogBuildOptions.DefaultVersion : version.Trim();
+            if (version.Length > MaxCatalogVersionChars)
+                throw new ArgumentException($"Catalog version exceeds {MaxCatalogVersionChars} characters.", nameof(version));
+            for (int index = 0; index < version.Length; index++)
+            {
+                if (char.IsControl(version[index]))
+                    throw new ArgumentException("Catalog version contains a control character.", nameof(version));
+            }
+            return version;
         }
 
         private static string SelectOutputPath()
@@ -351,80 +546,136 @@ namespace CycloneGames.Localization.Editor
 
         internal static LocalizationCatalogBuildSettings FindSettingsAsset()
         {
-            string[] guids = AssetDatabase.FindAssets("t:LocalizationCatalogBuildSettings");
-            if (guids.Length == 0) return null;
-
-            Array.Sort(guids, CompareAssetGuidByPath);
-            string path = AssetDatabase.GUIDToAssetPath(guids[0]);
-            return AssetDatabase.LoadAssetAtPath<LocalizationCatalogBuildSettings>(path);
+            if (!TryFindSettingsAsset(out LocalizationCatalogBuildSettings settings, out string error))
+                throw new InvalidOperationException(error);
+            return settings;
         }
 
-        private static void ValidateProjectOrThrow()
+        private static bool TryFindSettingsAsset(
+            out LocalizationCatalogBuildSettings settings,
+            out string error)
+        {
+            string[] guids = AssetDatabase.FindAssets("t:LocalizationCatalogBuildSettings");
+            Array.Sort(guids, CompareAssetGuidByPath);
+            if (guids.Length == 0)
+            {
+                settings = null;
+                error = "No LocalizationCatalogBuildSettings asset was found. Create one with Create > CycloneGames > Localization > Catalog Build Settings.";
+                return false;
+            }
+            if (guids.Length > 1)
+            {
+                settings = null;
+                error = $"Multiple LocalizationCatalogBuildSettings assets exist ({guids.Length}). Select and build the intended asset from its Inspector.";
+                return false;
+            }
+
+            string path = AssetDatabase.GUIDToAssetPath(guids[0]);
+            settings = AssetDatabase.LoadAssetAtPath<LocalizationCatalogBuildSettings>(path);
+            error = settings == null ? "LocalizationCatalogBuildSettings could not be loaded: " + path : null;
+            return settings != null;
+        }
+
+        private static void ValidateProjectOrThrow(LocalizationSettings settings)
         {
             var results = new List<LocalizationValidationResult>(128);
-            LocalizationValidator.ValidateProject(results);
+            LocalizationValidator.ValidateProject(results, settings, false);
             int errors = CountResults(results, MessageType.Error);
-            if (errors == 0) return;
+            if (errors == 0)
+                return;
 
             LogValidationResults(results);
             throw new InvalidOperationException(
-                "Catalog build aborted because localization validation has " + errors + " error(s).");
-        }
-
-        private static void AppendValue(StringBuilder builder, string value)
-        {
-            if (value == null)
-            {
-                builder.Append("-1:");
-                return;
-            }
-
-            builder.Append(value.Length).Append(':').Append(value).Append('\n');
+                "Catalog build aborted because localization validation has " + errors + " error(s)." );
         }
 
         private static void EnsureParentFolders(string outputPath)
         {
             string[] parts = outputPath.Split('/');
-            if (parts.Length <= 2) return;
+            if (parts.Length <= 2)
+                return;
 
             string current = parts[0];
-            for (int i = 1; i < parts.Length - 1; i++)
+            for (int index = 1; index < parts.Length - 1; index++)
             {
-                string next = current + "/" + parts[i];
+                string next = current + "/" + parts[index];
                 if (!AssetDatabase.IsValidFolder(next))
-                    AssetDatabase.CreateFolder(current, parts[i]);
+                {
+                    string guid = AssetDatabase.CreateFolder(current, parts[index]);
+                    if (string.IsNullOrEmpty(guid))
+                        throw new IOException("Could not create catalog output folder: " + next);
+                }
                 current = next;
             }
         }
 
         private static int CompareAssetGuidByPath(string leftGuid, string rightGuid)
         {
-            string leftPath = AssetDatabase.GUIDToAssetPath(leftGuid);
-            string rightPath = AssetDatabase.GUIDToAssetPath(rightGuid);
-            return string.CompareOrdinal(leftPath, rightPath);
+            return string.CompareOrdinal(
+                AssetDatabase.GUIDToAssetPath(leftGuid),
+                AssetDatabase.GUIDToAssetPath(rightGuid));
+        }
+
+        private static int CompareStringTables(CatalogStringTable left, CatalogStringTable right)
+        {
+            int tableCompare = string.CompareOrdinal(left.TableId, right.TableId);
+            return tableCompare != 0 ? tableCompare : string.CompareOrdinal(left.LocaleId.Code, right.LocaleId.Code);
+        }
+
+        private static int CompareAssetTables(CatalogAssetTable left, CatalogAssetTable right)
+        {
+            int tableCompare = string.CompareOrdinal(left.TableId, right.TableId);
+            return tableCompare != 0 ? tableCompare : string.CompareOrdinal(left.LocaleId.Code, right.LocaleId.Code);
         }
 
         private static int CountResults(List<LocalizationValidationResult> results, MessageType type)
         {
             int count = 0;
-            for (int i = 0; i < results.Count; i++)
+            for (int index = 0; index < results.Count; index++)
             {
-                if (results[i].Type == type)
+                if (results[index].Type == type)
                     count++;
             }
-
             return count;
         }
 
         private static void LogValidationResults(List<LocalizationValidationResult> results)
         {
-            for (int i = 0; i < results.Count; i++)
+            for (int index = 0; index < results.Count; index++)
             {
-                var result = results[i];
+                LocalizationValidationResult result = results[index];
                 if (result.Type == MessageType.Error)
                     Debug.LogError(result.Text, result.Context);
                 else if (result.Type == MessageType.Warning)
                     Debug.LogWarning(result.Text, result.Context);
+            }
+        }
+
+        private static string ToFullPath(string projectRoot, string assetPath)
+        {
+            return Path.GetFullPath(Path.Combine(projectRoot, assetPath.Replace('/', Path.DirectorySeparatorChar)));
+        }
+
+        private static void CopyFileDurably(string source, string destination)
+        {
+            using (var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read))
+            using (var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None))
+            {
+                input.CopyTo(output, 64 * 1024);
+                output.Flush(true);
+            }
+        }
+
+        private static void DeleteFileBestEffort(string path)
+        {
+            try
+            {
+                if (File.Exists(path))
+                    File.Delete(path);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogWarning("[Localization] Could not remove temporary catalog file: " + exception.Message);
             }
         }
 
@@ -434,6 +685,72 @@ namespace CycloneGames.Localization.Editor
             public readonly List<CatalogAssetTable> AssetTables = new List<CatalogAssetTable>(16);
             public int StringEntryCount;
             public int AssetEntryCount;
+        }
+
+        internal sealed class LocalizationCatalogBuildFilter
+        {
+            private readonly HashSet<string> _localeCodes;
+            private readonly HashSet<string> _tableIds;
+
+            private LocalizationCatalogBuildFilter(
+                LocalizationCatalogContentKind contentKind,
+                HashSet<string> localeCodes,
+                HashSet<string> tableIds)
+            {
+                IncludeStrings = (contentKind & LocalizationCatalogContentKind.Strings) != 0;
+                IncludeAssets = (contentKind & LocalizationCatalogContentKind.Assets) != 0;
+                _localeCodes = localeCodes;
+                _tableIds = tableIds;
+            }
+
+            public bool IncludeStrings { get; }
+            public bool IncludeAssets { get; }
+
+            public bool Includes(string tableId, string localeCode)
+            {
+                return (_localeCodes == null || _localeCodes.Contains(localeCode)) &&
+                       (_tableIds == null || _tableIds.Contains(tableId));
+            }
+
+            public static LocalizationCatalogBuildFilter Create(
+                LocalizationCatalogContentKind contentKind,
+                IReadOnlyList<Locale> locales,
+                IReadOnlyList<string> tableIds,
+                HashSet<string> allowedLocales)
+            {
+                if (contentKind == 0 || (contentKind & ~LocalizationCatalogContentKind.All) != 0)
+                    throw new InvalidDataException("Catalog Content Kind must include Strings, Assets, or both.");
+
+                HashSet<string> localeCodes = null;
+                if (locales != null && locales.Count > 0)
+                {
+                    localeCodes = new HashSet<string>(StringComparer.Ordinal);
+                    for (int index = 0; index < locales.Count; index++)
+                    {
+                        Locale locale = locales[index];
+                        if (locale == null || !locale.Id.IsValid || !allowedLocales.Contains(locale.Id.Code))
+                            throw new InvalidDataException("Included Locales contains an invalid or unavailable locale.");
+                        if (!localeCodes.Add(locale.Id.Code))
+                            throw new InvalidDataException("Included Locales contains duplicate locale '" + locale.Id.Code + "'.");
+                    }
+                }
+
+                HashSet<string> includedTableIds = null;
+                if (tableIds != null && tableIds.Count > 0)
+                {
+                    includedTableIds = new HashSet<string>(StringComparer.Ordinal);
+                    for (int index = 0; index < tableIds.Count; index++)
+                    {
+                        string tableId = tableIds[index];
+                        if (string.IsNullOrWhiteSpace(tableId) || tableId.Length > MaxTableIdChars)
+                            throw new InvalidDataException("Included Table IDs contains an empty or oversized value.");
+                        if (!includedTableIds.Add(tableId))
+                            throw new InvalidDataException("Included Table IDs contains duplicate table ID '" + tableId + "'.");
+                    }
+                }
+
+                return new LocalizationCatalogBuildFilter(contentKind, localeCodes, includedTableIds);
+            }
         }
     }
 }

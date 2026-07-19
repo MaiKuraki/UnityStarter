@@ -1,4 +1,5 @@
 using System;
+using System.Globalization;
 using System.IO;
 using System.Text;
 using NUnit.Framework;
@@ -125,21 +126,64 @@ namespace CycloneGames.Logger.Tests.Editor
         }
 
         [Test]
-        public void Constructor_RotationUsesUniqueArchiveNameWhenTimestampCollides()
+        public void TextSinks_FormatLineNumbersIndependentlyOfCurrentCulture()
+        {
+            CultureInfo previousCulture = CultureInfo.CurrentCulture;
+            TextWriter previousOut = Console.Out;
+            var customCulture = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+            customCulture.NumberFormat.NegativeSign = new string('!', 1024);
+            var consoleOutput = new StringWriter(CultureInfo.InvariantCulture);
+            string logPath = Path.Combine(_tempDirectory, "culture.log");
+            try
+            {
+                CultureInfo.CurrentCulture = customCulture;
+                Console.SetOut(consoleOutput);
+                LogMessage consoleMessage = CreateMessage(LogLevel.Info, "console", "Culture", -123);
+                using (var consoleLogger = new ConsoleLogger())
+                {
+                    consoleLogger.Log(consoleMessage);
+                }
+                LogMessagePool.Return(consoleMessage);
+
+                var options = new FileLoggerOptions
+                {
+                    MaintenanceMode = FileMaintenanceMode.None,
+                    FlushBatchSize = 1,
+                    FlushIntervalMs = 60000
+                };
+                using (var fileLogger = new FileLogger(logPath, options))
+                {
+                    LogMessage fileMessage = CreateMessage(LogLevel.Info, "file", "Culture", -123);
+                    fileLogger.Log(fileMessage);
+                    LogMessagePool.Return(fileMessage);
+                }
+            }
+            finally
+            {
+                Console.SetOut(previousOut);
+                CultureInfo.CurrentCulture = previousCulture;
+            }
+
+            string consoleText = consoleOutput.ToString();
+            string fileText = File.ReadAllText(logPath);
+            Assert.That(consoleText, Does.Contain("FileLoggerTests.cs:-123"));
+            Assert.That(fileText, Does.Contain("FileLoggerTests.cs:-123"));
+            Assert.That(consoleText, Does.Not.Contain(customCulture.NumberFormat.NegativeSign));
+            Assert.That(fileText, Does.Not.Contain(customCulture.NumberFormat.NegativeSign));
+        }
+
+        [Test]
+        public void Constructor_RotatesOversizedFileToVersionedArchive()
         {
             string logPath = Path.Combine(_tempDirectory, "rotate.log");
-            string existingArchivePath = Path.Combine(_tempDirectory, "rotate_fixed.log");
-            string expectedArchivePath = Path.Combine(_tempDirectory, "rotate_fixed_1.log");
 
             File.WriteAllText(logPath, new string('a', 128));
-            File.WriteAllText(existingArchivePath, "existing");
 
             var options = new FileLoggerOptions
             {
                 MaintenanceMode = FileMaintenanceMode.Rotate,
                 MaxFileBytes = 1,
                 MaxArchiveFiles = 8,
-                ArchiveTimestampFormat = "'fixed'",
                 FlushBatchSize = 1
             };
 
@@ -147,8 +191,7 @@ namespace CycloneGames.Logger.Tests.Editor
             {
             }
 
-            Assert.IsTrue(File.Exists(existingArchivePath));
-            Assert.IsTrue(File.Exists(expectedArchivePath));
+            Assert.AreEqual(1, Directory.GetFiles(_tempDirectory, "rotate.cyclone-v2-*.log").Length);
         }
 
         private static string ReadAllTextShared(string path)

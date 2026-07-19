@@ -32,6 +32,8 @@ CycloneGames.RPGFoundation.Interaction.Networking/
 
 The core assembly references `CycloneGames.RPGFoundation.Interaction.Core` and `CycloneGames.Networking.Core`. It does not reference UnityEngine, backend SDK types, PlayerSettings scripting define symbols, or a DI container.
 
+The Core and EditMode test assemblies use `autoReferenced: false`. Consumer asmdefs must reference Core explicitly. No PlayerSettings scripting define is required.
+
 ## Core Concepts
 
 | Type | Purpose |
@@ -50,22 +52,24 @@ graph LR
     CoreRequest["InteractionRequest"]
     Mapper["InteractionNetworkRequest.From"]
     NetworkRequest["InteractionNetworkRequest"]
-    Manager["INetworkManager"]
+    Endpoint["INetworkMessageEndpoint"]
     Bridge["InteractionNetworkAuthorityBridge"]
     Authority["InteractionAuthorityService"]
     Result["InteractionNetworkResult"]
 
     CoreRequest --> Mapper
     Mapper --> NetworkRequest
-    NetworkRequest --> Manager
-    Manager --> Bridge
+    NetworkRequest --> Endpoint
+    Endpoint --> Bridge
     Bridge --> Authority
     Authority --> Result
 ```
 
 ## Protocol
 
-`InteractionNetworkProtocol` owns message ids `13000-13999` in the Cyclone module range.
+`InteractionNetworkProtocol` owns message IDs `13000-13999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
+
+Every descriptor declares an explicit printable-ASCII `ContractId` such as `InteractionNetworkRequest:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and coordinate `CurrentVersion` / `MinimumSupportedVersion` across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
 
 | Message | ID | Channel | Purpose |
 | --- | ---: | --- | --- |
@@ -135,7 +139,7 @@ public sealed class InteractionAuthorityEndpoint
 ## Extension Points
 
 - Keep connection ownership, authentication, and backend identity mapping in the adapter that receives the network request.
-- Register project-specific interaction messages in a project-owned `NetworkMessageKind.User` manifest.
+- Register project-specific interaction messages through a separate project-owned manifest in an unclaimed `NetworkMessageRanges.User` subrange.
 - Use custom `InteractionAuthorityService` configuration in the Interaction module, then expose it through `InteractionNetworkAuthorityBridge`.
 
 ## Persistence

@@ -484,6 +484,9 @@ namespace CycloneGames.Networking.Session
 
         public bool MarkDisconnected(int connectionId, double time, NetworkTickId lastConfirmedTick)
         {
+            if (double.IsNaN(time) || double.IsInfinity(time) || time < 0d)
+                throw new ArgumentOutOfRangeException(nameof(time));
+
             if (!_participants.TryGetValue(connectionId, out NetworkHostParticipant participant))
             {
                 return false;
@@ -501,7 +504,11 @@ namespace CycloneGames.Networking.Session
         public bool Update(double currentTime, NetworkTickId transferTick, out NetworkAuthorityTransferPlan plan)
         {
             plan = default;
-            if (State != HostMigrationState.Stable || CurrentHostConnectionId <= 0)
+            if (double.IsNaN(currentTime) || double.IsInfinity(currentTime) || currentTime < 0d)
+                throw new ArgumentOutOfRangeException(nameof(currentTime));
+
+            if ((State != HostMigrationState.Stable && State != HostMigrationState.HostSuspectedLost)
+                || CurrentHostConnectionId <= 0)
             {
                 return false;
             }
@@ -532,6 +539,9 @@ namespace CycloneGames.Networking.Session
             out NetworkAuthorityTransferPlan plan)
         {
             plan = default;
+            if (State != HostMigrationState.Stable && State != HostMigrationState.HostSuspectedLost)
+                return false;
+
             if (CurrentHostConnectionId <= 0)
             {
                 Fail("Current host is not set.");

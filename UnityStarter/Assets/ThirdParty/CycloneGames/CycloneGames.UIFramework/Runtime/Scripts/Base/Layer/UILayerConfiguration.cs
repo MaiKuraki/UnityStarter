@@ -2,12 +2,19 @@ using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime
 {
-    [CreateAssetMenu(fileName = "UILayer_", menuName = "CycloneGames/UIFramework/UILayer Configuration")] // Added file name convention
-    [System.Serializable]
-    public class UILayerConfiguration : ScriptableObject
+    [CreateAssetMenu(fileName = "UILayer_", menuName = "CycloneGames/UIFramework/Layer Configuration")]
+    public sealed class UILayerConfiguration : ScriptableObject
     {
-        // This layerName must be the same as UILayer's LayerName in UIRoot's layerList
         [SerializeField] private string layerName;
-        public string LayerName => layerName;
+
+        public string LayerName => layerName ?? string.Empty;
+        public bool IsValid => !string.IsNullOrWhiteSpace(layerName);
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            layerName = layerName?.Trim();
+        }
+#endif
     }
 }

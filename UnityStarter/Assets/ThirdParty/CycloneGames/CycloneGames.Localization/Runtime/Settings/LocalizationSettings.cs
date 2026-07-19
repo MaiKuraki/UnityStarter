@@ -12,6 +12,7 @@ namespace CycloneGames.Localization.Runtime
     public sealed class LocalizationSettings : ScriptableObject
     {
         [SerializeField] private Locale defaultLocale;
+        [SerializeField] private Locale authoringLocale;
         [SerializeField] private List<Locale> availableLocales = new List<Locale>();
         [SerializeField] private bool detectSystemLanguage = true;
 
@@ -19,6 +20,7 @@ namespace CycloneGames.Localization.Runtime
         [SerializeField] private PseudoLocaleMode pseudoLocaleMode = PseudoLocaleMode.None;
 
         public Locale DefaultLocale => defaultLocale;
+        public Locale AuthoringLocale => authoringLocale != null ? authoringLocale : defaultLocale;
         public IReadOnlyList<Locale> AvailableLocales => availableLocales;
         public bool DetectSystemLanguage => detectSystemLanguage;
         public PseudoLocaleMode PseudoLocaleMode => pseudoLocaleMode;

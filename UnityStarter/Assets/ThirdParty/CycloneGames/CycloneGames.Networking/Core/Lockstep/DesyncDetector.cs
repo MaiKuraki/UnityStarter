@@ -11,11 +11,10 @@ namespace CycloneGames.Networking.Lockstep
     /// <para>Hash algorithm is pluggable via <typeparamref name="THasher"/>
     /// (<c>struct</c> constraint = JIT monomorphization, zero virtual-call overhead).</para>
     ///
-    /// <para><b>Default:</b> <c>DesyncDetector</c> (type alias) uses <see cref="Fnv1aHasher"/>.</para>
-    /// <para><b>Custom:</b> Implement <see cref="IStateHasher"/> (e.g. wrap xxHash64) and use
-    /// <c>new DesyncDetector<MyHasher>()</c>.</para>
+    /// Implement <see cref="IStateHasher"/> and select the algorithm explicitly through
+    /// <typeparamref name="THasher"/>.
     /// </summary>
-    public class DesyncDetector<THasher> where THasher : struct, IStateHasher
+    public sealed class DesyncDetector<THasher> where THasher : struct, IStateHasher
     {
         private THasher _hasher;
         private ulong _currentHash;
@@ -33,8 +32,8 @@ namespace CycloneGames.Networking.Lockstep
         /// <param name="historySize">Must be power of 2 (default 256)</param>
         public DesyncDetector(int historySize = 256)
         {
-            if ((historySize & (historySize - 1)) != 0)
-                throw new ArgumentException("historySize must be power of 2");
+            if (historySize <= 0 || (historySize & (historySize - 1)) != 0)
+                throw new ArgumentOutOfRangeException(nameof(historySize), "History size must be a positive power of two.");
 
             _hashHistory = new ulong[historySize];
             _historyMask = historySize - 1;
@@ -167,13 +166,4 @@ namespace CycloneGames.Networking.Lockstep
         }
     }
 
-    /// <summary>
-    /// Default <see cref="DesyncDetector{THasher}"/> using <see cref="Fnv1aHasher"/>.
-    /// Drop-in compatible with the original non-generic API:
-    /// <c>var detector = new DesyncDetector();</c>
-    /// </summary>
-    public sealed class DesyncDetector : DesyncDetector<Fnv1aHasher>
-    {
-        public DesyncDetector(int historySize = 256) : base(historySize) { }
-    }
 }

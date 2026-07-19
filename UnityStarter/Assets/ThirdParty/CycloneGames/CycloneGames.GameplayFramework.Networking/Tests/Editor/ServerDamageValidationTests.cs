@@ -10,14 +10,14 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         public void SetUp()
         {
             NetworkBufferPool.Clear();
-            NetworkBufferPool.ResetConfiguration();
+            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [TearDown]
         public void TearDown()
         {
             NetworkBufferPool.Clear();
-            NetworkBufferPool.ResetConfiguration();
+            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         private static ServerDamageValidationRequest MakeRequest(
@@ -49,6 +49,20 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 currentTime,
                 lastAcceptedTime,
                 cooldown);
+        }
+
+        [Test]
+        public void DefaultDamageResults_AreUnknownAndFailClosed()
+        {
+            ServerDamageValidationResult validation = default;
+            DamageResultMessage message = default;
+
+            Assert.AreEqual(ServerDamageRejectReason.Unknown, validation.Reason);
+            Assert.IsFalse(validation.Accepted);
+            Assert.AreEqual(ServerDamageRejectReason.Unknown, message.ResultCode);
+
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            Assert.Throws<System.InvalidOperationException>(() => buffer.WriteDamageResult(message));
         }
 
         [Test]
@@ -236,7 +250,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 InstigatorActorId = 7,
                 TargetActorId = 9,
                 AppliedDamage = 30f,
-                ResultCode = (byte)ServerDamageRejectReason.Accepted,
+                ResultCode = ServerDamageRejectReason.Accepted,
                 DamageEventType = 1,
                 HitLocation = new NetworkVector3(4f, 5f, 6f)
             };
@@ -250,6 +264,61 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.AreEqual(message.AppliedDamage, roundTripped.AppliedDamage);
             Assert.AreEqual(message.ResultCode, roundTripped.ResultCode);
             Assert.AreEqual(message.HitLocation, roundTripped.HitLocation);
+        }
+
+        [Test]
+        public void DamageResult_MatchesFrozenLittleEndianBytes()
+        {
+            var message = new DamageResultMessage
+            {
+                RequestSequence = 0x01020304u,
+                InstigatorActorId = 0x05060708,
+                TargetActorId = 0x11121314,
+                AppliedDamage = 1f,
+                ResultCode = ServerDamageRejectReason.Accepted,
+                DamageEventType = 2,
+                HitLocation = new NetworkVector3(1f, -2f, 0.5f)
+            };
+            byte[] expected =
+            {
+                0x04, 0x03, 0x02, 0x01,
+                0x08, 0x07, 0x06, 0x05,
+                0x14, 0x13, 0x12, 0x11,
+                0x00, 0x00, 0x80, 0x3F,
+                0x01,
+                0x02,
+                0x00, 0x00, 0x80, 0x3F,
+                0x00, 0x00, 0x00, 0xC0,
+                0x00, 0x00, 0x00, 0x3F
+            };
+
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            buffer.WriteDamageResult(message);
+            System.ArraySegment<byte> segment = buffer.ToArraySegment();
+            var actual = new byte[segment.Count];
+            System.Buffer.BlockCopy(segment.Array, segment.Offset, actual, 0, segment.Count);
+
+            Assert.AreEqual(GameplayFrameworkNetworkProtocol.DamageResultPayloadBytes, segment.Count);
+            CollectionAssert.AreEqual(expected, actual);
+        }
+
+        [TestCase(0)]
+        [TestCase(9)]
+        public void DamageResult_ReadRejectsUnknownOrOutOfRangeResultCode(byte resultCode)
+        {
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            buffer.WriteUInt(1u);
+            buffer.WriteInt(1);
+            buffer.WriteInt(2);
+            buffer.WriteFloat(0f);
+            buffer.WriteByte(resultCode);
+            buffer.WriteByte(0);
+            buffer.WriteFloat(0f);
+            buffer.WriteFloat(0f);
+            buffer.WriteFloat(0f);
+            buffer.FlipForRead();
+
+            Assert.Throws<System.InvalidOperationException>(() => buffer.ReadDamageResult());
         }
 
         [Test]
@@ -305,7 +374,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
             Assert.IsTrue(result.Accepted);
             Assert.AreEqual(10f, processor.CooldownTracker.GetLastAcceptedTime(1));
             Assert.AreEqual(99u, resultMessage.RequestSequence);
-            Assert.AreEqual((byte)ServerDamageRejectReason.Accepted, resultMessage.ResultCode);
+            Assert.AreEqual(ServerDamageRejectReason.Accepted, resultMessage.ResultCode);
             Assert.AreEqual(result.ApprovedDamage, resultMessage.AppliedDamage);
         }
 
@@ -319,7 +388,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 out DamageResultMessage resultMessage);
 
             Assert.AreEqual(float.NegativeInfinity, processor.CooldownTracker.GetLastAcceptedTime(1));
-            Assert.AreEqual((byte)ServerDamageRejectReason.OwnershipMismatch, resultMessage.ResultCode);
+            Assert.AreEqual(ServerDamageRejectReason.OwnershipMismatch, resultMessage.ResultCode);
             Assert.AreEqual(0f, resultMessage.AppliedDamage);
         }
 

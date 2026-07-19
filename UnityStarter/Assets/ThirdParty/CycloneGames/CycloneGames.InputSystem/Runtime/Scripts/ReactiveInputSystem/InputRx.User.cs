@@ -19,10 +19,10 @@ namespace CycloneGames.InputSystem.Runtime
             );
         }
 
-        public static Observable<(InputControl, InputEventPtr)> OnUnpairedDeviceUsed(CancellationToken cancellationToken = default)
+        public static Observable<UnpairedDeviceUseSnapshot> OnUnpairedDeviceUsed(CancellationToken cancellationToken = default)
         {
-            return Observable.FromEvent<Action<InputControl, InputEventPtr>, (InputControl, InputEventPtr)>(
-                h => (x, y) => h((x, y)),
+            return Observable.FromEvent<Action<InputControl, InputEventPtr>, UnpairedDeviceUseSnapshot>(
+                h => (control, eventPtr) => h(new UnpairedDeviceUseSnapshot(control, eventPtr)),
                 h => InputUser.onUnpairedDeviceUsed += h,
                 h => InputUser.onUnpairedDeviceUsed -= h,
                 cancellationToken

@@ -298,8 +298,8 @@ namespace CycloneGames.BehaviorTree.Integrations.DeterministicMath
                 return minInclusive;
             }
 
-            FPInt64 min = FPInt64.FromFloatUnsafe(minInclusive);
-            FPInt64 max = FPInt64.FromFloatUnsafe(maxInclusive);
+            FPInt64 min = FPInt64.FromFloat(minInclusive);
+            FPInt64 max = FPInt64.FromFloat(maxInclusive);
             return _random.NextFP(min, max).ToFloat();
         }
 

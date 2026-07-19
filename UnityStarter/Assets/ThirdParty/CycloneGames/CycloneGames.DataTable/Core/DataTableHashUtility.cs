@@ -1,4 +1,5 @@
 using System;
+using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 
 namespace CycloneGames.DataTable
@@ -18,18 +19,44 @@ namespace CycloneGames.DataTable
                 throw new ArgumentNullException(nameof(bytes));
             }
 
+            return ComputeSha256Hex(new ReadOnlyMemory<byte>(bytes));
+        }
+
+        public static string ComputeSha256Hex(ReadOnlyMemory<byte> bytes)
+        {
             using (SHA256 sha256 = SHA256.Create())
             {
-                byte[] hash = sha256.ComputeHash(bytes);
+                byte[] hash;
+                if (MemoryMarshal.TryGetArray(bytes, out ArraySegment<byte> segment))
+                {
+                    byte[] source = segment.Array ?? Array.Empty<byte>();
+                    hash = sha256.ComputeHash(source, segment.Offset, segment.Count);
+                }
+                else
+                {
+                    byte[] copy = bytes.ToArray();
+                    hash = sha256.ComputeHash(copy);
+                }
+
                 return ToLowerHex(hash);
             }
         }
 
         public static bool Sha256Matches(byte[] bytes, string expectedSha256Hex)
         {
+            if (bytes == null)
+            {
+                throw new ArgumentNullException(nameof(bytes));
+            }
+
+            return Sha256Matches(new ReadOnlyMemory<byte>(bytes), expectedSha256Hex);
+        }
+
+        public static bool Sha256Matches(ReadOnlyMemory<byte> bytes, string expectedSha256Hex)
+        {
             if (string.IsNullOrWhiteSpace(expectedSha256Hex))
             {
-                return true;
+                return false;
             }
 
             string actualHash = ComputeSha256Hex(bytes);

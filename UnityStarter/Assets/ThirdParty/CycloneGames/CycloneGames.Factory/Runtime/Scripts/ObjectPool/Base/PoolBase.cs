@@ -1,46 +1,62 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 
 namespace CycloneGames.Factory.Runtime
 {
     /// <summary>
-    /// Abstract base class providing shared tracking, capacity management, diagnostics,
-    /// and lifecycle infrastructure for main-thread object pools.
-    /// Subclasses provide item creation, spawn/despawn hooks, and specific spawn signatures.
+    /// Single-owner base for bounded managed object pools.
+    /// Structural operations and lifecycle callbacks must run on the owning execution context.
     /// </summary>
     public abstract class PoolBase<TValue> : IDespawnableMemoryPool<TValue>, IDisposable where TValue : class
     {
-        private readonly Stack<TValue> _inactiveItems;
+        private readonly List<TValue> _inactiveItems;
         private readonly List<TValue> _activeItems;
         private readonly Dictionary<TValue, int> _activeItemIndices;
-
-        private int _softCapacity;
-        private int _hardCapacity;
-        private PoolOverflowPolicy _overflowPolicy;
-        private PoolTrimPolicy _trimPolicy;
+        private readonly PoolCapacitySettings _capacitySettings;
 
         private int _peakActive;
         private int _peakCountAll;
-        private int _totalCreated;
-        private int _totalSpawned;
-        private int _totalDespawned;
-        private int _failedSpawnRollbacks;
-        private int _rejectedSpawns;
-        private int _invalidDespawns;
-        private int _destroyedOnTrim;
+        private long _totalCreated;
+        private long _totalSpawned;
+        private long _totalDespawned;
+        private long _failedSpawnRollbacks;
+        private long _rejectedSpawns;
+        private long _invalidDespawns;
+        private long _totalDestroyed;
+        private long _callbackFailures;
+        private long _quarantinedItems;
+        private long _invalidatedInactiveItems;
 
-        private bool _disposed;
+        private int _lifecycleCallbackDepth;
+        private int _structuralVersion;
+        private PoolLifecycleState _lifecycleState;
+
+        protected PoolBase(PoolCapacitySettings capacitySettings)
+        {
+            int initialTrackingCapacity = capacitySettings.SoftCapacity;
+            _inactiveItems = new List<TValue>(initialTrackingCapacity);
+            _activeItems = new List<TValue>(initialTrackingCapacity);
+            _activeItemIndices = new Dictionary<TValue, int>(
+                initialTrackingCapacity,
+                ReferenceIdentityComparer<TValue>.Instance);
+            _capacitySettings = capacitySettings;
+            _lifecycleState = PoolLifecycleState.Ready;
+        }
 
         public int CountAll => CountActive + CountInactive;
         public int CountActive => _activeItems.Count;
         public int CountInactive => _inactiveItems.Count;
         public Type ItemType => typeof(TValue);
+        public PoolLifecycleState LifecycleState => _lifecycleState;
+        public PoolCapacitySettings CapacitySettings => _capacitySettings;
+        public int SoftCapacity => _capacitySettings.SoftCapacity;
+        public int MaxCapacity => _capacitySettings.HardCapacity;
+        public PoolOverflowPolicy OverflowPolicy => _capacitySettings.OverflowPolicy;
+        public PoolTrimPolicy TrimPolicy => _capacitySettings.TrimPolicy;
 
-        public PoolCapacitySettings CapacitySettings =>
-            new(_softCapacity, _hardCapacity, _overflowPolicy, _trimPolicy);
-
-        public PoolDiagnostics Diagnostics => new(
+        public PoolDiagnostics Diagnostics => new PoolDiagnostics(
             _peakActive,
             _peakCountAll,
             _totalCreated,
@@ -49,160 +65,188 @@ namespace CycloneGames.Factory.Runtime
             _failedSpawnRollbacks,
             _rejectedSpawns,
             _invalidDespawns,
-            _destroyedOnTrim);
+            _totalDestroyed,
+            _callbackFailures,
+            _quarantinedItems,
+            _invalidatedInactiveItems);
 
-        public PoolProfile Profile =>
-            new(CountAll, CountActive, CountInactive, CapacitySettings, Diagnostics);
-
-        public int SoftCapacity
-        {
-            get => _softCapacity;
-            set => _softCapacity = ValidateSoftCapacity(value, _hardCapacity);
-        }
-
-        public int MaxCapacity
-        {
-            get => _hardCapacity;
-            set => _hardCapacity = ValidateHardCapacity(value, _softCapacity);
-        }
-
-        public PoolOverflowPolicy OverflowPolicy
-        {
-            get => _overflowPolicy;
-            set => _overflowPolicy = value;
-        }
-
-        public PoolTrimPolicy TrimPolicy
-        {
-            get => _trimPolicy;
-            set => _trimPolicy = value;
-        }
-
-        /// <summary>
-        /// Initializes shared pool state. Does NOT call Prewarm — subclasses must call it
-        /// after their own fields are initialized to avoid virtual calls on uninitialized state.
-        /// </summary>
-        protected PoolBase(PoolCapacitySettings capacitySettings)
-        {
-            _inactiveItems = new Stack<TValue>(capacitySettings.SoftCapacity);
-            _activeItems = new List<TValue>(capacitySettings.SoftCapacity);
-            _activeItemIndices = new Dictionary<TValue, int>(capacitySettings.SoftCapacity);
-            _softCapacity = capacitySettings.SoftCapacity;
-            _hardCapacity = capacitySettings.HardCapacity;
-            _overflowPolicy = capacitySettings.OverflowPolicy;
-            _trimPolicy = capacitySettings.TrimPolicy;
-        }
+        public PoolProfile Profile => new PoolProfile(
+            CountAll,
+            CountActive,
+            CountInactive,
+            _lifecycleState,
+            _capacitySettings,
+            Diagnostics);
 
         public bool Despawn(TValue item)
         {
-            if (item == null || _disposed)
+            if (item == null || _lifecycleState != PoolLifecycleState.Ready)
             {
                 _invalidDespawns++;
                 return false;
             }
 
-            if (!RemoveActive(item))
+            ThrowIfLifecycleCallbackIsRunning();
+
+            if (!_activeItemIndices.ContainsKey(item))
             {
                 _invalidDespawns++;
                 return false;
             }
 
-            try
-            {
-                OnDespawn(item);
-            }
-            finally
-            {
-                _totalDespawned++;
-                if (ShouldTrimReturnedItem())
-                {
-                    DestroyItem(item);
-                }
-                else
-                {
-                    _inactiveItems.Push(item);
-                }
-            }
-
+            DespawnOwnedItem(item);
             return true;
         }
 
         public bool Contains(TValue item)
         {
-            return item != null && _activeItemIndices.ContainsKey(item);
+            return item != null
+                && _lifecycleState == PoolLifecycleState.Ready
+                && _activeItemIndices.ContainsKey(item);
         }
 
         public void ForEachActive(Action<TValue> action)
         {
-            if (action == null) throw new ArgumentNullException(nameof(action));
-
-            for (int i = _activeItems.Count - 1; i >= 0; i--)
+            if (action == null)
             {
-                action(_activeItems[i]);
+                throw new ArgumentNullException(nameof(action));
             }
+
+            ThrowIfNotReady();
+            IterateActive(action);
         }
 
         public void ForEachActive<TState>(TState state, Action<TValue, TState> action)
         {
-            if (action == null) throw new ArgumentNullException(nameof(action));
-
-            for (int i = _activeItems.Count - 1; i >= 0; i--)
+            if (action == null)
             {
-                action(_activeItems[i], state);
+                throw new ArgumentNullException(nameof(action));
+            }
+
+            ThrowIfNotReady();
+
+            for (int index = _activeItems.Count - 1; index >= 0; index--)
+            {
+                TValue item = _activeItems[index];
+                int versionBeforeCallback = _structuralVersion;
+                action(item, state);
+                ValidateIterationMutation(item, index, versionBeforeCallback);
             }
         }
 
         public void Prewarm(int count)
         {
-            ThrowIfDisposed();
-            if (count <= 0) return;
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
 
-            int capacityLeft = GetRemainingCapacity();
-            if (capacityLeft == 0) return;
+            if (count <= 0)
+            {
+                return;
+            }
 
-            int itemsToCreate = _hardCapacity > 0 ? Math.Min(count, capacityLeft) : count;
+            int itemsToCreate = ClampToRemainingCapacity(count);
             for (int i = 0; i < itemsToCreate; i++)
             {
-                _inactiveItems.Push(CreateNewItem());
+                _inactiveItems.Add(CreateNewItem());
+                _structuralVersion++;
                 UpdatePeaks();
+            }
+        }
+
+        public int WarmupStep(int maxItems)
+        {
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
+
+            if (maxItems <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxItems));
+            }
+
+            int itemsToCreate = ClampToRemainingCapacity(maxItems);
+            for (int i = 0; i < itemsToCreate; i++)
+            {
+                _inactiveItems.Add(CreateNewItem());
+                _structuralVersion++;
+            }
+
+            UpdatePeaks();
+            return itemsToCreate;
+        }
+
+        public IEnumerator WarmupCoroutine(int count, int batchSize = 8)
+        {
+            if (count < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count));
+            }
+
+            if (batchSize <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(batchSize));
+            }
+
+            int created = 0;
+            while (created < count && _lifecycleState == PoolLifecycleState.Ready)
+            {
+                int requested = Math.Min(batchSize, count - created);
+                int completed = WarmupStep(requested);
+                if (completed == 0)
+                {
+                    yield break;
+                }
+
+                created += completed;
+                if (created < count)
+                {
+                    yield return null;
+                }
             }
         }
 
         public void TrimInactive(int targetInactiveCount)
         {
-            if (targetInactiveCount < 0) throw new ArgumentOutOfRangeException(nameof(targetInactiveCount));
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
 
+            if (targetInactiveCount < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(targetInactiveCount));
+            }
+
+            List<Exception> failures = null;
             while (_inactiveItems.Count > targetInactiveCount)
             {
-                TValue item = _inactiveItems.Pop();
-                if (IsValid(item))
+                TValue item = PopInactive();
+                if (!TryValidateItem(item, out Exception validationFailure))
                 {
-                    DestroyItem(item);
+                    _invalidatedInactiveItems++;
+                    AddFailure(ref failures, validationFailure);
+                    continue;
                 }
+
+                AddFailure(ref failures, TryDestroyOwnedItem(item));
             }
+
+            ThrowFailures("One or more inactive pool items could not be destroyed.", failures);
         }
 
         public void DespawnAll()
         {
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
+
             while (_activeItems.Count > 0)
             {
-                TValue item = _activeItems[_activeItems.Count - 1];
-                if (!Despawn(item))
-                {
-                    throw new InvalidOperationException(
-                        $"Failed to despawn active item of type {typeof(TValue).Name}. " +
-                        "Pool state was preserved to avoid losing ownership tracking.");
-                }
+                DespawnOwnedItem(_activeItems[_activeItems.Count - 1]);
             }
         }
 
-        /// <summary>
-        /// Non-alloc frame-sliced despawn. Processes up to <paramref name="maxItems"/> active items.
-        /// Returns the number processed in this step.
-        /// </summary>
         public int DespawnStep(int maxItems)
         {
-            ThrowIfDisposed();
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
+
             if (maxItems <= 0)
             {
                 throw new ArgumentOutOfRangeException(nameof(maxItems));
@@ -211,74 +255,25 @@ namespace CycloneGames.Factory.Runtime
             int processed = 0;
             while (processed < maxItems && _activeItems.Count > 0)
             {
-                TValue item = _activeItems[_activeItems.Count - 1];
-                if (!Despawn(item))
-                {
-                    throw new InvalidOperationException(
-                        $"Failed to despawn active item of type {typeof(TValue).Name}. " +
-                        "Pool state was preserved to avoid losing ownership tracking.");
-                }
-
+                DespawnOwnedItem(_activeItems[_activeItems.Count - 1]);
                 processed++;
             }
 
             return processed;
         }
 
-        /// <summary>
-        /// Non-alloc frame-sliced warmup. Creates up to <paramref name="maxItems"/> inactive items.
-        /// Returns the number created in this step.
-        /// </summary>
-        public int WarmupStep(int maxItems)
-        {
-            ThrowIfDisposed();
-            if (maxItems <= 0)
-            {
-                throw new ArgumentOutOfRangeException(nameof(maxItems));
-            }
-
-            int capacityLeft = GetRemainingCapacity();
-            if (capacityLeft == 0)
-            {
-                return 0;
-            }
-
-            int itemsToCreate = _hardCapacity > 0 ? Math.Min(maxItems, capacityLeft) : maxItems;
-            for (int i = 0; i < itemsToCreate; i++)
-            {
-                _inactiveItems.Push(CreateNewItem());
-            }
-            UpdatePeaks();
-            return itemsToCreate;
-        }
-
-        /// <summary>
-        /// Coroutine-friendly DespawnAll that yields every <paramref name="batchSize"/> items
-        /// to spread the cost across multiple frames.
-        /// Allocates an iterator state machine and should not be used on strict zero-GC hot paths.
-        /// </summary>
         public IEnumerator DespawnAllCoroutine(int batchSize = 8)
         {
             if (batchSize <= 0)
             {
-                batchSize = 1;
+                throw new ArgumentOutOfRangeException(nameof(batchSize));
             }
 
-            int remainingUntilYield = batchSize;
-            while (_activeItems.Count > 0)
+            while (_activeItems.Count > 0 && _lifecycleState == PoolLifecycleState.Ready)
             {
-                TValue item = _activeItems[_activeItems.Count - 1];
-                if (!Despawn(item))
+                DespawnStep(Math.Min(batchSize, _activeItems.Count));
+                if (_activeItems.Count > 0)
                 {
-                    throw new InvalidOperationException(
-                        $"Failed to despawn active item of type {typeof(TValue).Name}. " +
-                        "Pool state was preserved to avoid losing ownership tracking.");
-                }
-
-                remainingUntilYield--;
-                if (remainingUntilYield <= 0)
-                {
-                    remainingUntilYield = batchSize;
                     yield return null;
                 }
             }
@@ -286,162 +281,318 @@ namespace CycloneGames.Factory.Runtime
 
         public void Clear()
         {
-            Exception firstException = null;
-
-            try
-            {
-                DespawnAll();
-            }
-            catch (Exception ex)
-            {
-                firstException = ex;
-            }
-
-            try
-            {
-                TrimInactive(0);
-            }
-            catch (Exception ex) when (firstException == null)
-            {
-                firstException = ex;
-            }
-
-            if (firstException != null)
-            {
-                throw firstException;
-            }
-        }
-
-        /// <summary>
-        /// Coroutine-friendly Prewarm that yields every <paramref name="batchSize"/> items.
-        /// Allocates an iterator state machine and should not be used on strict zero-GC hot paths.
-        /// </summary>
-        public IEnumerator WarmupCoroutine(int count, int batchSize = 8)
-        {
-            if (batchSize <= 0)
-            {
-                batchSize = 1;
-            }
-
-            int remainingUntilYield = batchSize;
-            for (int i = 0; i < count; i++)
-            {
-                if (_disposed) yield break;
-                if (_hardCapacity > 0 && CountAll >= _hardCapacity) yield break;
-
-                _inactiveItems.Push(CreateNewItem());
-                UpdatePeaks();
-
-                remainingUntilYield--;
-                if (remainingUntilYield <= 0)
-                {
-                    remainingUntilYield = batchSize;
-                    yield return null;
-                }
-            }
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
+            List<Exception> failures = ClearOwnedItems();
+            ThrowFailures("One or more pool items could not be cleared.", failures);
         }
 
         public void Dispose()
         {
-            if (_disposed) return;
-            Clear();
-            _disposed = true;
+            if (_lifecycleState == PoolLifecycleState.Disposed
+                || _lifecycleState == PoolLifecycleState.Disposing)
+            {
+                return;
+            }
+
+            ThrowIfLifecycleCallbackIsRunning();
+            _lifecycleState = PoolLifecycleState.Disposing;
+            List<Exception> failures;
+
+            try
+            {
+                failures = ClearOwnedItems();
+            }
+            finally
+            {
+                _lifecycleState = PoolLifecycleState.Disposed;
+                _structuralVersion++;
+            }
+
+            ThrowFailures("One or more pool items could not be disposed.", failures);
         }
 
-        /// <summary>
-        /// Creates a new poolable item. Must return a valid (non-null) item.
-        /// </summary>
         protected abstract TValue CreateNew();
 
-        /// <summary>
-        /// Called when an item is being despawned (returned to the pool or destroyed).
-        /// </summary>
         protected abstract void OnDespawn(TValue item);
 
-        /// <summary>
-        /// Determines whether an item is still valid (e.g., not destroyed).
-        /// </summary>
         protected virtual bool IsValid(TValue item)
         {
             return item != null;
         }
 
-        /// <summary>
-        /// Destroys an item permanently. Called when trimming excess capacity.
-        /// </summary>
         protected virtual void DestroyItem(TValue item)
         {
             if (item is IDisposable disposable)
             {
                 disposable.Dispose();
             }
-
-            _destroyedOnTrim++;
         }
 
-        /// <summary>
-        /// The inactive item stack. Exposed for subclasses that need direct access.
-        /// </summary>
-        protected Stack<TValue> InactiveItems => _inactiveItems;
+        protected bool IsDisposed => _lifecycleState == PoolLifecycleState.Disposed;
 
-        protected bool IsDisposed => _disposed;
-
-        /// <summary>
-        /// Acquires an item from the inactive stack or creates a new one,
-        /// then tracks it as active. Does NOT call spawn hooks.
-        /// Caller must invoke the appropriate spawn hook and handle rollback on failure.
-        /// </summary>
         protected bool TryAcquireAndTrack(bool throwOnFailure, out TValue item)
         {
-            ThrowIfDisposed();
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
 
             if (!TryGetOrCreateItem(throwOnFailure, out item))
             {
                 return false;
             }
 
-            TrackAsActive(item);
+            int index = _activeItems.Count;
+            _activeItems.Add(item);
+
+            try
+            {
+                _activeItemIndices.Add(item, index);
+            }
+            catch
+            {
+                _activeItems.RemoveAt(index);
+                _inactiveItems.Add(item);
+                throw;
+            }
+
+            _structuralVersion++;
+            _totalSpawned++;
+            UpdatePeaks();
             return true;
         }
 
-        /// <summary>
-        /// Rolls back a spawn that failed during the hook call.
-        /// Untracks the item and returns it to the pool or destroys it.
-        /// </summary>
-        protected void RollbackSpawn(TValue item)
+        protected Exception RollbackSpawn(TValue item)
         {
-            RemoveActive(item);
-            _failedSpawnRollbacks++;
-            TryResetAfterFailedSpawn(item);
-            if (ShouldTrimReturnedItem())
+            if (!RemoveActive(item))
             {
-                DestroyItem(item);
+                return new InvalidOperationException("A failed spawn lost active ownership tracking.");
+            }
+
+            _failedSpawnRollbacks++;
+            Exception resetFailure = InvokeDespawnCallback(item);
+            Exception validationFailure = null;
+            if (resetFailure == null && TryValidateItem(item, out validationFailure))
+            {
+                if (ShouldTrimReturnedItem())
+                {
+                    return TryDestroyOwnedItem(item);
+                }
+
+                _inactiveItems.Add(item);
+                _structuralVersion++;
+                return null;
+            }
+
+            if (resetFailure == null)
+            {
+                resetFailure = validationFailure;
+            }
+
+            _quarantinedItems++;
+            Exception destroyFailure = TryDestroyOwnedItem(item);
+            return CombineFailures(resetFailure, destroyFailure);
+        }
+
+        protected void BeginLifecycleCallback()
+        {
+            if (_lifecycleCallbackDepth != 0)
+            {
+                throw new InvalidOperationException("Pool lifecycle callbacks cannot be re-entered.");
+            }
+
+            _lifecycleCallbackDepth = 1;
+        }
+
+        protected void EndLifecycleCallback()
+        {
+            _lifecycleCallbackDepth = 0;
+        }
+
+        protected static void RethrowSpawnFailure(Exception spawnFailure, Exception cleanupFailure)
+        {
+            if (cleanupFailure != null)
+            {
+                throw new AggregateException(
+                    "An item failed to spawn and its rollback also failed.",
+                    spawnFailure,
+                    cleanupFailure);
+            }
+
+            ExceptionDispatchInfo.Capture(spawnFailure).Throw();
+        }
+
+        private void IterateActive(Action<TValue> action)
+        {
+            for (int index = _activeItems.Count - 1; index >= 0; index--)
+            {
+                TValue item = _activeItems[index];
+                int versionBeforeCallback = _structuralVersion;
+                action(item);
+                ValidateIterationMutation(item, index, versionBeforeCallback);
+            }
+        }
+
+        private void ValidateIterationMutation(TValue item, int index, int versionBeforeCallback)
+        {
+            if (_structuralVersion == versionBeforeCallback)
+            {
+                return;
+            }
+
+            bool removedCurrentItemOnly = _structuralVersion == versionBeforeCallback + 2
+                && _activeItems.Count == index
+                && !_activeItemIndices.ContainsKey(item);
+
+            if (!removedCurrentItemOnly)
+            {
+                throw new InvalidOperationException(
+                    "Active iteration may only despawn the item currently being visited.");
+            }
+        }
+
+        private void DespawnOwnedItem(TValue item)
+        {
+            if (!RemoveActive(item))
+            {
+                _invalidDespawns++;
+                return;
+            }
+
+            _totalDespawned++;
+            Exception callbackFailure = InvokeDespawnCallback(item);
+            Exception validationFailure = null;
+            bool isValid = callbackFailure == null && TryValidateItem(item, out validationFailure);
+
+            Exception cleanupFailure = null;
+            if (callbackFailure != null || validationFailure != null || !isValid)
+            {
+                _quarantinedItems++;
+                cleanupFailure = TryDestroyOwnedItem(item);
+            }
+            else if (ShouldTrimReturnedItem())
+            {
+                cleanupFailure = TryDestroyOwnedItem(item);
             }
             else
             {
-                _inactiveItems.Push(item);
+                _inactiveItems.Add(item);
+                _structuralVersion++;
             }
+
+            ThrowCombined(callbackFailure ?? validationFailure, cleanupFailure);
+        }
+
+        private Exception InvokeDespawnCallback(TValue item)
+        {
+            BeginLifecycleCallback();
+            try
+            {
+                OnDespawn(item);
+                return null;
+            }
+            catch (Exception exception)
+            {
+                _callbackFailures++;
+                return exception;
+            }
+            finally
+            {
+                EndLifecycleCallback();
+            }
+        }
+
+        private bool TryGetOrCreateItem(bool throwOnFailure, out TValue item)
+        {
+            while (_inactiveItems.Count > 0)
+            {
+                item = PopInactive();
+                if (TryValidateItem(item, out Exception validationFailure))
+                {
+                    return true;
+                }
+
+                _invalidatedInactiveItems++;
+                if (validationFailure != null)
+                {
+                    _callbackFailures++;
+                    Exception destroyFailure = TryDestroyOwnedItem(item);
+                    ThrowCombined(validationFailure, destroyFailure);
+                }
+            }
+
+            if (_capacitySettings.HardCapacity > 0 && CountAll >= _capacitySettings.HardCapacity)
+            {
+                _rejectedSpawns++;
+                item = null;
+
+                if (throwOnFailure && _capacitySettings.OverflowPolicy == PoolOverflowPolicy.Throw)
+                {
+                    throw new InvalidOperationException(
+                        $"Pool for {typeof(TValue).Name} reached hard capacity {_capacitySettings.HardCapacity}.");
+                }
+
+                return false;
+            }
+
+            item = CreateNewItem();
+            return true;
         }
 
         private TValue CreateNewItem()
         {
-            TValue item = CreateNew();
-            if (!IsValid(item))
+            BeginLifecycleCallback();
+            TValue item;
+
+            try
             {
-                throw new InvalidOperationException($"Pool factory for {typeof(TValue).Name} returned an invalid item.");
+                item = CreateNew();
+            }
+            finally
+            {
+                EndLifecycleCallback();
+            }
+
+            if (!TryValidateItem(item, out Exception validationFailure))
+            {
+                if (validationFailure != null)
+                {
+                    ExceptionDispatchInfo.Capture(validationFailure).Throw();
+                }
+
+                throw new InvalidOperationException(
+                    $"Pool factory for {typeof(TValue).Name} returned an invalid item.");
+            }
+
+            if (_activeItemIndices.ContainsKey(item) || ContainsInactiveReference(item))
+            {
+                throw new InvalidOperationException(
+                    $"Pool factory for {typeof(TValue).Name} returned an item already owned by this pool.");
             }
 
             _totalCreated++;
             return item;
         }
 
-        private void TrackAsActive(TValue item)
+        private bool ContainsInactiveReference(TValue item)
         {
-            int index = _activeItems.Count;
-            _activeItems.Add(item);
-            _activeItemIndices[item] = index;
-            _totalSpawned++;
-            UpdatePeaks();
+            for (int i = 0; i < _inactiveItems.Count; i++)
+            {
+                if (ReferenceEquals(_inactiveItems[i], item))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private TValue PopInactive()
+        {
+            int lastIndex = _inactiveItems.Count - 1;
+            TValue item = _inactiveItems[lastIndex];
+            _inactiveItems.RemoveAt(lastIndex);
+            _structuralVersion++;
+            return item;
         }
 
         private bool RemoveActive(TValue item)
@@ -453,7 +604,6 @@ namespace CycloneGames.Factory.Runtime
 
             int lastIndex = _activeItems.Count - 1;
             TValue lastItem = _activeItems[lastIndex];
-
             _activeItems[index] = lastItem;
             _activeItems.RemoveAt(lastIndex);
             _activeItemIndices.Remove(item);
@@ -463,51 +613,92 @@ namespace CycloneGames.Factory.Runtime
                 _activeItemIndices[lastItem] = index;
             }
 
+            _structuralVersion++;
             return true;
         }
 
-        private bool TryGetOrCreateItem(bool throwOnFailure, out TValue item)
+        private bool TryValidateItem(TValue item, out Exception failure)
         {
+            try
+            {
+                failure = null;
+                return IsValid(item);
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+                return false;
+            }
+        }
+
+        private Exception TryDestroyOwnedItem(TValue item)
+        {
+            BeginLifecycleCallback();
+            try
+            {
+                DestroyItem(item);
+                _totalDestroyed++;
+                return null;
+            }
+            catch (Exception exception)
+            {
+                _callbackFailures++;
+                return exception;
+            }
+            finally
+            {
+                EndLifecycleCallback();
+                _structuralVersion++;
+            }
+        }
+
+        private List<Exception> ClearOwnedItems()
+        {
+            List<Exception> failures = null;
+
+            while (_activeItems.Count > 0)
+            {
+                TValue item = _activeItems[_activeItems.Count - 1];
+                try
+                {
+                    DespawnOwnedItem(item);
+                }
+                catch (Exception exception)
+                {
+                    AddFailure(ref failures, exception);
+                }
+            }
+
             while (_inactiveItems.Count > 0)
             {
-                item = _inactiveItems.Pop();
-                if (IsValid(item))
+                TValue item = PopInactive();
+                if (!TryValidateItem(item, out Exception validationFailure))
                 {
-                    return true;
+                    _invalidatedInactiveItems++;
+                    AddFailure(ref failures, validationFailure);
+                    continue;
                 }
+
+                AddFailure(ref failures, TryDestroyOwnedItem(item));
             }
 
-            if (_hardCapacity > 0 && CountAll >= _hardCapacity)
+            return failures;
+        }
+
+        private int ClampToRemainingCapacity(int requested)
+        {
+            if (_capacitySettings.HardCapacity <= 0)
             {
-                _rejectedSpawns++;
-                if (_overflowPolicy == PoolOverflowPolicy.ReturnNull && !throwOnFailure)
-                {
-                    item = null;
-                    return false;
-                }
-
-                throw new InvalidOperationException($"Pool for {typeof(TValue).Name} reached max capacity {_hardCapacity}.");
+                return requested;
             }
 
-            item = CreateNewItem();
-            return true;
+            return Math.Min(requested, Math.Max(0, _capacitySettings.HardCapacity - CountAll));
         }
 
         private bool ShouldTrimReturnedItem()
         {
-            return _trimPolicy == PoolTrimPolicy.TrimOnDespawn
-                && _softCapacity >= 0
-                && CountInactive >= _softCapacity;
-        }
-
-        private int GetRemainingCapacity()
-        {
-            if (_hardCapacity <= 0)
-            {
-                return int.MaxValue;
-            }
-
-            return Math.Max(0, _hardCapacity - CountAll);
+            return _capacitySettings.TrimPolicy == PoolTrimPolicy.TrimOnDespawn
+                && CountInactive >= _capacitySettings.SoftCapacity;
         }
 
         private void UpdatePeaks()
@@ -523,37 +714,75 @@ namespace CycloneGames.Factory.Runtime
             }
         }
 
-        private void ThrowIfDisposed()
+        private void ThrowIfNotReady()
         {
-            if (_disposed)
+            if (_lifecycleState != PoolLifecycleState.Ready)
             {
                 throw new ObjectDisposedException(GetType().Name);
             }
         }
 
-        private void TryResetAfterFailedSpawn(TValue item)
+        private void ThrowIfLifecycleCallbackIsRunning()
         {
-            try
+            if (_lifecycleCallbackDepth != 0)
             {
-                OnDespawn(item);
-            }
-            catch
-            {
+                throw new InvalidOperationException(
+                    "Pool mutation is not allowed from create, spawn, despawn, or destroy callbacks.");
             }
         }
 
-        private static int ValidateSoftCapacity(int softCapacity, int hardCapacity)
+        private static Exception CombineFailures(Exception first, Exception second)
         {
-            if (softCapacity < 0) throw new ArgumentOutOfRangeException(nameof(softCapacity));
-            if (hardCapacity > 0 && softCapacity > hardCapacity) throw new ArgumentException("Soft capacity cannot exceed hard capacity.", nameof(softCapacity));
-            return softCapacity;
+            if (first == null)
+            {
+                return second;
+            }
+
+            if (second == null)
+            {
+                return first;
+            }
+
+            return new AggregateException(first, second);
         }
 
-        private static int ValidateHardCapacity(int hardCapacity, int softCapacity)
+        private static void ThrowCombined(Exception primary, Exception cleanup)
         {
-            if (hardCapacity == 0 || hardCapacity < -1) throw new ArgumentOutOfRangeException(nameof(hardCapacity));
-            if (hardCapacity > 0 && softCapacity > hardCapacity) throw new ArgumentException("Hard capacity cannot be smaller than soft capacity.", nameof(hardCapacity));
-            return hardCapacity;
+            if (primary != null && cleanup != null)
+            {
+                throw new AggregateException(primary, cleanup);
+            }
+
+            Exception failure = primary ?? cleanup;
+            if (failure != null)
+            {
+                ExceptionDispatchInfo.Capture(failure).Throw();
+            }
+        }
+
+        private static void AddFailure(ref List<Exception> failures, Exception failure)
+        {
+            if (failure == null)
+            {
+                return;
+            }
+
+            if (failures == null)
+            {
+                failures = new List<Exception>();
+            }
+
+            failures.Add(failure);
+        }
+
+        private static void ThrowFailures(string message, List<Exception> failures)
+        {
+            if (failures == null || failures.Count == 0)
+            {
+                return;
+            }
+
+            throw new AggregateException(message, failures);
         }
     }
 }

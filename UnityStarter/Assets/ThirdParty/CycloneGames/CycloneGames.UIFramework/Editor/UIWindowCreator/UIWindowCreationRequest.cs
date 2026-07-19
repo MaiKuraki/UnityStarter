@@ -15,6 +15,7 @@ namespace CycloneGames.UIFramework.Editor
         public readonly bool UseMvp;
         public readonly UIWindowConfiguration.PrefabSource SourceMode;
         public readonly bool AutoFillLocationFromPrefabPath;
+        public readonly string RuntimeLocation;
 
         public UIWindowCreationRequest(
             string windowName,
@@ -26,7 +27,8 @@ namespace CycloneGames.UIFramework.Editor
             UILayerConfiguration layer,
             bool useMvp,
             UIWindowConfiguration.PrefabSource sourceMode,
-            bool autoFillLocationFromPrefabPath)
+            bool autoFillLocationFromPrefabPath,
+            string runtimeLocation)
         {
             WindowName = windowName != null ? windowName.Trim() : string.Empty;
             NamespaceName = namespaceName != null ? namespaceName.Trim() : string.Empty;
@@ -38,6 +40,7 @@ namespace CycloneGames.UIFramework.Editor
             UseMvp = useMvp;
             SourceMode = sourceMode;
             AutoFillLocationFromPrefabPath = autoFillLocationFromPrefabPath;
+            RuntimeLocation = runtimeLocation != null ? runtimeLocation.Trim() : string.Empty;
         }
     }
 }

@@ -1,23 +1,49 @@
+using System.Collections.Generic;
+using System.IO;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Unity.Runtime;
 using UnityEditor;
+using UnityEngine;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
     /// <summary>
-    /// This class ensures that the GameplayTagManager is initialized when the Unity editor loads.
-    /// This is crucial for preventing serialization issues where GameplayTagContainers are deserialized
-    /// before the tag manager has registered all available tags.
+    /// Configures the Unity adapter without forcing reflection and file I/O during editor domain load.
     /// </summary>
     [InitializeOnLoad]
     public static class GameplayTagManagerEditorInitialization
     {
         static GameplayTagManagerEditorInitialization()
         {
+            ConfigureEditorSources();
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+        }
+
+        internal static void ConfigureEditorSources()
+        {
             GameplayTagUnityPlatformBootstrap.Configure();
-            // By calling this here, we guarantee that the tag manager is fully populated
-            // before any assets that use GameplayTags (like ScriptableObjects) are deserialized.
-            GameplayTagManager.InitializeIfNeeded();
+            GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory = GetProjectTagSettingsDirectory;
+            GameplayTagRuntimePlatform.EnumerateProjectTagSources = EnumerateProjectTagSources;
+        }
+
+        private static string GetProjectTagSettingsDirectory()
+        {
+            return Path.GetFullPath(Path.Combine(Application.dataPath, "..", "ProjectSettings", "GameplayTags"));
+        }
+
+        private static IEnumerable<IGameplayTagSource> EnumerateProjectTagSources()
+        {
+            foreach (FileGameplayTagSource source in FileGameplayTagSource.GetAllFileSources())
+                yield return source;
+        }
+
+        private static void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state != PlayModeStateChange.EnteredEditMode && state != PlayModeStateChange.EnteredPlayMode)
+                return;
+
+            ConfigureEditorSources();
+            GameplayTagEditorWindow.RebindOpenWindows();
         }
     }
 }

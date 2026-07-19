@@ -10,9 +10,6 @@ namespace CycloneGames.GameplayAbilities.Sample
     /// </summary>
     public class GameplayAbilityTargetActor_GroundSelect : MonoBehaviour, ITargetActor
     {
-        public event Action<TargetData> OnTargetDataReady;
-        public event Action OnCanceled;
-
         [Tooltip("The visual indicator for the selection area.")]
         public GameObject SelectionIndicator;
         [Tooltip("The layer mask representing the ground.")]
@@ -61,10 +58,16 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (!isTargeting) return;
             isTargeting = false;
 
-            var targetData = GameplayAbilityTargetData_SingleTargetHit.Get();
+            var targetData = owningAbility.AbilitySystemComponent.RentTargetData<GameplayAbilityTargetData_SingleTargetHit>();
             targetData.Init(lastValidHit);
-            onTargetDataReadyCallback?.Invoke(targetData);
-            OnTargetDataReady?.Invoke(targetData);
+            Action<TargetData> callback = onTargetDataReadyCallback;
+            if (callback == null)
+            {
+                targetData.Release();
+                throw new InvalidOperationException("Ground targeting completed without a TargetData receiver.");
+            }
+
+            callback(targetData);
         }
 
         public void CancelTargeting()
@@ -72,11 +75,13 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (!isTargeting) return;
             isTargeting = false;
             onCancelledCallback?.Invoke();
-            OnCanceled?.Invoke();
         }
 
         public void Destroy()
         {
+            onTargetDataReadyCallback = null;
+            onCancelledCallback = null;
+            owningAbility = null;
             // This is now a MonoBehaviour, so we destroy the GameObject.
             Destroy(this.gameObject);
         }

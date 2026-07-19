@@ -2,12 +2,11 @@
   "name": "com.cyclone-games.asset-management",
   "version": "1.0.0",
   "displayName": "CycloneGames.AssetManagement",
-  "description": "Interface-first, DI-friendly unified asset management for Unity with provider-neutral cache, handle lifetime, content trust, and optional Addressables/YooAsset/Navigathena integrations.",
+  "description": "Explicit-composition asset management for Unity with bounded runtime caching, owned handle lifetimes, content trust, storage governance, diagnostics, and optional provider integrations.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
     "com.cysharp.unitask": "2.0.0",
-    "com.cysharp.r3": "1.3.1",
     "com.cyclone-games.hash": "1.0.0",
     "com.cyclone-games.io": "1.0.0",
     "com.cyclone-games.logger": "1.0.0"

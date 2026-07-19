@@ -36,10 +36,14 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       {
          m_Tag = tag;
 
-         foreach (IGameplayTagSource source in tag.Definition.GetAllSources())
+         for (int i = 0; i < tag.Definition.SourceCount; i++)
          {
+            IGameplayTagSource source = tag.Definition.GetSource(i);
             if (source is IDeleteTagHandler)
+            {
                CanBeDeleted = true;
+               break;
+            }
          }
       }
    }
@@ -244,12 +248,17 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
          m_DeleteTagPanel.OnTagDeleted += () =>
          {
-            Reload();
-            OnTagDeleted(tag);
+            RefreshAfterCatalogChange();
          };
       }
 
-      protected virtual void OnTagDeleted(GameplayTag tag)
+      internal void RefreshAfterCatalogChange()
+      {
+         Reload();
+         OnCatalogChanged();
+      }
+
+      protected virtual void OnCatalogChanged()
       { }
 
       protected virtual void OnTagAdded(GameplayTag tag)
@@ -409,9 +418,6 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
          foreach (GameplayTag tag in GameplayTagManager.GetAllTags())
          {
-            if (tag.Name.StartsWith("Test.") || tag.Name.Equals("Test"))
-               continue;
-
             items.Add(new GameplayTagTreeViewItem(tag.RuntimeIndex, tag));
             m_IsEmpty = false;
          }

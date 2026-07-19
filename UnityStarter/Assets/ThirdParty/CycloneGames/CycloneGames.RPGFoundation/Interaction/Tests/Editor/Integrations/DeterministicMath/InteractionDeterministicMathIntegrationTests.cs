@@ -93,9 +93,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor.Integrations.Deter
         public void DeterministicVectorPayload_RoundTripsRawFixedPointValues()
         {
             var deterministic = new FPVector3(
-                FPInt64.FromString("1.125"),
-                FPInt64.FromString("-2.5"),
-                FPInt64.FromString("3.75"));
+                FPInt64.Parse("1.125"),
+                FPInt64.Parse("-2.5"),
+                FPInt64.Parse("3.75"));
 
             InteractionDeterministicVector3Payload payload = deterministic.ToDeterministicPayload();
             FPVector3 roundTrip = payload.ToFPVector3();

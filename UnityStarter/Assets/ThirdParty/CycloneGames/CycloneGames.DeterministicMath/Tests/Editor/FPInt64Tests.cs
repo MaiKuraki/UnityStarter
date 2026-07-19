@@ -1,155 +1,408 @@
+using System;
+using System.Numerics;
+using System.Reflection;
+
 using NUnit.Framework;
 
 namespace CycloneGames.DeterministicMath.Tests.Editor
 {
     public sealed class FPInt64Tests
     {
-        private static readonly FPInt64 Epsilon = FPInt64.FromRaw(100); // ~2.3e-8
+        private const int RANDOM_ORACLE_CASES = 512;
 
         [Test]
-        public void Zero_Equals_Zero()
+        public void Q32Constants_HaveExpectedRawLayout()
         {
-            Assert.That(FPInt64.Zero.RawValue, Is.EqualTo(0));
+            Assert.That(FPInt64.FractionalBits, Is.EqualTo(32));
+            Assert.That(FPInt64.RAW_ONE, Is.EqualTo(1L << 32));
+            Assert.That(FPInt64.RAW_HALF, Is.EqualTo(1L << 31));
+            Assert.That(FPInt64.One.RawValue, Is.EqualTo(FPInt64.RAW_ONE));
+            Assert.That(FPInt64.Half.RawValue, Is.EqualTo(FPInt64.RAW_HALF));
+            Assert.That(FPInt64.MinValue.RawValue, Is.EqualTo(long.MinValue));
+            Assert.That(FPInt64.MaxValue.RawValue, Is.EqualTo(long.MaxValue));
         }
 
         [Test]
-        public void FromInt_RoundTrips_Int()
+        public void PublicSurface_UsesExplicitFactoriesAndValueConstants()
         {
-            Assert.That(FPInt64.FromInt(42).ToInt(), Is.EqualTo(42));
-            Assert.That(FPInt64.FromInt(-7).ToInt(), Is.EqualTo(-7));
+            Type type = typeof(FPInt64);
+
+            Assert.That(type.GetConstructors(BindingFlags.Public | BindingFlags.Instance), Is.Empty);
+            Assert.That(
+                type.GetMethod(nameof(FPInt64.Parse), BindingFlags.Public | BindingFlags.Static)?.ReturnType,
+                Is.EqualTo(typeof(FPInt64)));
+            Assert.That(type.GetField(nameof(FPInt64.RAW_ONE))?.FieldType, Is.EqualTo(typeof(long)));
+            Assert.That(type.GetField(nameof(FPInt64.RAW_HALF))?.FieldType, Is.EqualTo(typeof(long)));
+            Assert.That(type.GetField(nameof(FPInt64.One))?.FieldType, Is.EqualTo(typeof(FPInt64)));
+            Assert.That(type.GetField(nameof(FPInt64.Half))?.FieldType, Is.EqualTo(typeof(FPInt64)));
+            Assert.That(FPInt64.FromRaw(123L).RawValue, Is.EqualTo(123L));
         }
 
         [Test]
-        public void FromString_Parses_Invariant_Decimal()
+        public void ToInt_TruncatesTowardZero()
         {
-            var parsed = FPInt64.FromString("-12.5");
-            var expected = FPInt64.FromInt(-12) - FPInt64.FromRaw(FPInt64.One >> 1);
+            FPInt64 positive = FPInt64.FromDouble(1.75);
+            FPInt64 negative = FPInt64.FromDouble(-1.75);
 
-            Assert.That(parsed.RawValue, Is.EqualTo(expected.RawValue));
+            Assert.That(positive.ToInt(), Is.EqualTo(1));
+            Assert.That(negative.ToInt(), Is.EqualTo(-1));
         }
 
         [Test]
-        public void TryParse_Rejects_Invalid_Input()
+        public void SafeFloatingConversions_AcceptFiniteRepresentableValues()
         {
-            Assert.That(FPInt64.TryParse("1,5", out _), Is.False);
-            Assert.That(FPInt64.TryParse("abc", out _), Is.False);
+            Assert.That(FPInt64.TryFromFloat(-12.5f, out FPInt64 fromFloat), Is.True);
+            Assert.That(fromFloat.RawValue, Is.EqualTo(-12L * FPInt64.RAW_ONE - FPInt64.RAW_HALF));
+            Assert.That(FPInt64.TryFromDouble(2147483647.5d, out FPInt64 nearMaximum), Is.True);
+            Assert.That(nearMaximum.RawValue, Is.EqualTo(long.MaxValue - FPInt64.RAW_HALF + 1L));
+            Assert.That(FPInt64.TryFromDouble(-2147483648d, out FPInt64 minimum), Is.True);
+            Assert.That(minimum, Is.EqualTo(FPInt64.MinValue));
+        }
+
+        [TestCase(double.NaN)]
+        [TestCase(double.PositiveInfinity)]
+        [TestCase(double.NegativeInfinity)]
+        [TestCase(2147483648d)]
+        [TestCase(-2147483649d)]
+        public void TryFromDouble_InvalidValue_FailsWithoutResult(double value)
+        {
+            bool success = FPInt64.TryFromDouble(value, out FPInt64 result);
+
+            Assert.That(success, Is.False);
+            Assert.That(result, Is.EqualTo(FPInt64.Zero));
+            Assert.That(() => FPInt64.FromDouble(value), Throws.TypeOf<ArgumentOutOfRangeException>());
         }
 
         [Test]
-        public void TryParse_Allows_Minimum_Integer()
+        public void TryFromFloat_NonFiniteValuesFail()
         {
-            Assert.That(FPInt64.TryParse("-2147483648", out var value), Is.True);
-            Assert.That(value.RawValue, Is.EqualTo(long.MinValue));
+            Assert.That(FPInt64.TryFromFloat(float.NaN, out _), Is.False);
+            Assert.That(FPInt64.TryFromFloat(float.PositiveInfinity, out _), Is.False);
+            Assert.That(FPInt64.TryFromFloat(float.NegativeInfinity, out _), Is.False);
+            Assert.That(() => FPInt64.FromFloat(float.NaN), Throws.TypeOf<ArgumentOutOfRangeException>());
         }
 
         [Test]
-        public void OneValue_Multiplied_Equals_Identity()
+        public void ArithmeticOperators_UseExplicitUncheckedWrapping()
         {
-            var v = FPInt64.FromInt(5);
-            Assert.That((v * FPInt64.OneValue).RawValue, Is.EqualTo(v.RawValue));
+            FPInt64 oneRaw = FPInt64.FromRaw(1L);
+
+            Assert.That((FPInt64.MaxValue + oneRaw).RawValue, Is.EqualTo(long.MinValue));
+            Assert.That((FPInt64.MinValue - oneRaw).RawValue, Is.EqualTo(long.MaxValue));
+            Assert.That((-FPInt64.MinValue).RawValue, Is.EqualTo(long.MinValue));
         }
 
         [Test]
-        public void Addition_Is_Commutative()
+        public void TryAddSubtractAndNegate_ReportRawOverflow()
         {
-            var a = FPInt64.FromFloat(3.14f);
-            var b = FPInt64.FromFloat(2.72f);
-            Assert.That((a + b).RawValue, Is.EqualTo((b + a).RawValue));
+            FPInt64 oneRaw = FPInt64.FromRaw(1L);
+
+            Assert.That(FPInt64.TryAdd(FPInt64.MaxValue, oneRaw, out _), Is.False);
+            Assert.That(FPInt64.TrySubtract(FPInt64.MinValue, oneRaw, out _), Is.False);
+            Assert.That(FPInt64.TryNegate(FPInt64.MinValue, out _), Is.False);
+            Assert.That(FPInt64.TryAdd(1, 2, out FPInt64 sum), Is.True);
+            Assert.That(sum, Is.EqualTo(FPInt64.FromInt(3)));
+            Assert.That(FPInt64.TrySubtract(1, 2, out FPInt64 difference), Is.True);
+            Assert.That(difference, Is.EqualTo(FPInt64.FromInt(-1)));
+            Assert.That(FPInt64.TryNegate(2, out FPInt64 negative), Is.True);
+            Assert.That(negative, Is.EqualTo(FPInt64.FromInt(-2)));
         }
 
         [Test]
-        public void Multiplication_Preserves_Sign()
+        public void Multiplication_AgreesWithBigIntegerOracle()
         {
-            var pos = FPInt64.FromInt(3);
-            var neg = FPInt64.FromInt(-3);
-            Assert.That((pos * neg).RawValue, Is.LessThan(0));
-            Assert.That((neg * neg).RawValue, Is.GreaterThan(0));
+            var random = new Random(0x6D617468);
+
+            for (int i = 0; i < RANDOM_ORACLE_CASES; i++)
+            {
+                long aRaw = NextInt64(random);
+                long bRaw = NextInt64(random);
+                BigInteger exact = MultiplyOracle(aRaw, bRaw);
+                long wrapped = WrapToInt64(exact);
+
+                FPInt64 actual = FPInt64.FromRaw(aRaw) * FPInt64.FromRaw(bRaw);
+                bool success = FPInt64.TryMultiply(
+                    FPInt64.FromRaw(aRaw),
+                    FPInt64.FromRaw(bRaw),
+                    out FPInt64 checkedResult);
+                bool representable = IsInt64(exact);
+
+                Assert.That(actual.RawValue, Is.EqualTo(wrapped), $"Multiply case {i}.");
+                Assert.That(success, Is.EqualTo(representable), $"TryMultiply case {i}.");
+                if (representable)
+                {
+                    Assert.That(checkedResult.RawValue, Is.EqualTo((long)exact), $"TryMultiply result {i}.");
+                }
+            }
         }
 
         [Test]
-        public void Division_By_Zero_Throws()
+        public void Division_AgreesWithBigIntegerOracle()
         {
-            Assert.That(() => FPInt64.OneValue / FPInt64.Zero, Throws.TypeOf<System.DivideByZeroException>());
+            var random = new Random(0x64697669);
+
+            for (int i = 0; i < RANDOM_ORACLE_CASES; i++)
+            {
+                long aRaw = NextInt64(random);
+                long bRaw;
+                do
+                {
+                    bRaw = NextInt64(random);
+                }
+                while (bRaw == 0);
+
+                BigInteger exact = (new BigInteger(aRaw) << FPInt64.FractionalBits) / bRaw;
+                long wrapped = WrapToInt64(exact);
+
+                FPInt64 actual = FPInt64.FromRaw(aRaw) / FPInt64.FromRaw(bRaw);
+                bool success = FPInt64.TryDivide(
+                    FPInt64.FromRaw(aRaw),
+                    FPInt64.FromRaw(bRaw),
+                    out FPInt64 checkedResult);
+                bool representable = IsInt64(exact);
+
+                Assert.That(actual.RawValue, Is.EqualTo(wrapped), $"Divide case {i}.");
+                Assert.That(success, Is.EqualTo(representable), $"TryDivide case {i}.");
+                if (representable)
+                {
+                    Assert.That(checkedResult.RawValue, Is.EqualTo((long)exact), $"TryDivide result {i}.");
+                }
+            }
         }
 
         [Test]
-        public void Division_By_Int_PowerOfTwo_Is_Correct()
+        public void MultiplyDivide_AgreesWithFullPrecisionBigIntegerOracle()
         {
-            var value = FPInt64.FromInt(100);
-            var result = value / FPInt64.FromInt(2);
-            Assert.That(result.RawValue, Is.EqualTo(FPInt64.FromInt(50).RawValue));
+            var random = new Random(0x66757365);
+
+            for (int i = 0; i < RANDOM_ORACLE_CASES; i++)
+            {
+                long aRaw = NextInt64(random);
+                long bRaw = NextInt64(random);
+                long divisorRaw;
+                do
+                {
+                    divisorRaw = NextInt64(random);
+                }
+                while (divisorRaw == 0);
+
+                BigInteger exact = (new BigInteger(aRaw) * bRaw) / divisorRaw;
+                bool representable = IsInt64(exact);
+                bool success = FPInt64.TryMultiplyDivide(
+                    FPInt64.FromRaw(aRaw),
+                    FPInt64.FromRaw(bRaw),
+                    FPInt64.FromRaw(divisorRaw),
+                    out FPInt64 result);
+
+                Assert.That(success, Is.EqualTo(representable), $"TryMultiplyDivide case {i}.");
+                if (representable)
+                {
+                    Assert.That(result.RawValue, Is.EqualTo((long)exact), $"TryMultiplyDivide result {i}.");
+                }
+            }
         }
 
         [Test]
-        public void Division_By_Fractional_PowerOfTwo_Is_Correct()
+        public void MultiplyDivide_ZeroDivisorFailsWithoutResult()
         {
-            var value = FPInt64.FromInt(5);
-            var half = FPInt64.FromRaw(FPInt64.One >> 1);
-            var result = value / half;
-            Assert.That(result.RawValue, Is.EqualTo(FPInt64.FromInt(10).RawValue));
+            bool success = FPInt64.TryMultiplyDivide(
+                FPInt64.One,
+                FPInt64.One,
+                FPInt64.Zero,
+                out FPInt64 result);
+
+            Assert.That(success, Is.False);
+            Assert.That(result, Is.EqualTo(FPInt64.Zero));
         }
 
         [Test]
-        public void Division_By_Negative_PowerOfTwo_Is_Correct()
+        public void Division_TruncatesNegativeSubRawResultTowardZero()
         {
-            var value = FPInt64.FromInt(100);
-            var result = value / FPInt64.FromInt(-2);
-            Assert.That(result.RawValue, Is.EqualTo(FPInt64.FromInt(-50).RawValue));
+            FPInt64 numerator = FPInt64.FromRaw(-1L);
+            FPInt64 denominator = FPInt64.FromInt(2);
+
+            Assert.That((numerator / denominator).RawValue, Is.EqualTo(0L));
         }
 
         [Test]
-        public void Sqrt_Four_Equals_Two()
+        public void DivisionByZero_ThrowsWhileTryDivideFails()
         {
-            var four = FPInt64.FromInt(4);
-            var two = FPInt64.FromInt(2);
-            var result = FPInt64.Sqrt(four);
-            Assert.That(FPInt64.Abs(result - two).RawValue, Is.LessThan(Epsilon.RawValue));
+            Assert.That(() => _ = FPInt64.One / FPInt64.Zero, Throws.TypeOf<DivideByZeroException>());
+            Assert.That(FPInt64.TryDivide(FPInt64.One, FPInt64.Zero, out FPInt64 result), Is.False);
+            Assert.That(result, Is.EqualTo(FPInt64.Zero));
         }
 
         [Test]
-        public void Sqrt_Two_Approximately_Correct()
+        public void TryMultiplyAndTryDivide_ReportUnrepresentableResults()
         {
-            // sqrt(2) is approximately 1.41421356237 in Q32.32.
-            var two = FPInt64.FromInt(2);
-            var expected = FPInt64.FromRaw(6074000999L);
-            var result = FPInt64.Sqrt(two);
-            var diff = FPInt64.Abs(result - expected);
-            Assert.That(diff.RawValue, Is.LessThan(Epsilon.RawValue * 10));
+            Assert.That(FPInt64.TryMultiply(FPInt64.MaxValue, 2, out _), Is.False);
+            Assert.That(
+                FPInt64.TryDivide(FPInt64.MaxValue, FPInt64.FromRaw(1L), out _),
+                Is.False);
         }
 
         [Test]
-        public void Floor_Ceil_Round_NegativeValues_Are_Correct()
+        public void ExactDecimalText_RoundTripsRepresentativeRawValues()
         {
-            var minusOnePointSeven = FPInt64.FromRaw(-FPInt64.One - (FPInt64.One * 7 / 10));
-            var minusOnePointThree = FPInt64.FromRaw(-FPInt64.One - (FPInt64.One * 3 / 10));
-            var minusOnePointFive = FPInt64.FromRaw(-FPInt64.One - FPInt64.Half);
+            long[] rawValues =
+            {
+                long.MinValue,
+                long.MinValue + 1L,
+                -FPInt64.RAW_ONE - 1L,
+                -FPInt64.RAW_ONE,
+                -1L,
+                0L,
+                1L,
+                FPInt64.RAW_ONE,
+                FPInt64.RAW_ONE + 1L,
+                long.MaxValue - 1L,
+                long.MaxValue,
+            };
 
-            Assert.That(FPInt64.Floor(minusOnePointSeven).RawValue, Is.EqualTo(FPInt64.FromInt(-2).RawValue));
-            Assert.That(FPInt64.Ceil(minusOnePointThree).RawValue, Is.EqualTo(FPInt64.FromInt(-1).RawValue));
-            Assert.That(FPInt64.Round(minusOnePointFive).RawValue, Is.EqualTo(FPInt64.FromInt(-2).RawValue));
+            foreach (long rawValue in rawValues)
+            {
+                FPInt64 original = FPInt64.FromRaw(rawValue);
+                string text = original.ToString();
+                bool success = FPInt64.TryParse(text, out FPInt64 parsed);
+
+                Assert.That(success, Is.True, text);
+                Assert.That(parsed.RawValue, Is.EqualTo(rawValue), text);
+            }
         }
 
         [Test]
-        public void Constants_Are_Consistent()
+        public void ExactDecimalText_RoundTripsRandomRawValues()
         {
-            Assert.That(FPInt64.Abs((FPInt64.HalfPi * 2) - FPInt64.Pi).RawValue, Is.LessThanOrEqualTo(1));
-            Assert.That(FPInt64.Abs((FPInt64.TwoPi / 2) - FPInt64.Pi).RawValue, Is.LessThanOrEqualTo(1));
+            var random = new Random(0x72617773);
+
+            for (int i = 0; i < RANDOM_ORACLE_CASES; i++)
+            {
+                long rawValue = NextInt64(random);
+                string text = FPInt64.FromRaw(rawValue).ToString();
+
+                Assert.That(FPInt64.TryParse(text, out FPInt64 parsed), Is.True, $"Text case {i}: {text}");
+                Assert.That(parsed.RawValue, Is.EqualTo(rawValue), $"Text case {i}: {text}");
+            }
+        }
+
+        [TestCase("")]
+        [TestCase(" ")]
+        [TestCase("+")]
+        [TestCase("-")]
+        [TestCase("1,5")]
+        [TestCase("1.2.3")]
+        [TestCase("2147483648")]
+        [TestCase("-2147483648.00000000023283064365386962890625")]
+        [TestCase("0.000000000000000000000000000000001")]
+        public void TryParse_RejectsInvalidOrOutOfRangeText(string text)
+        {
+            Assert.That(FPInt64.TryParse(text, out _), Is.False);
+            Assert.That(() => FPInt64.Parse(text), Throws.TypeOf<FormatException>());
         }
 
         [Test]
-        public void Lerp_T_Zero_Returns_A()
+        public void Parse_AcceptsExactRangeEndpoints()
         {
-            var a = FPInt64.FromInt(10);
-            var b = FPInt64.FromInt(20);
-            Assert.That(FPInt64.Lerp(a, b, FPInt64.Zero).RawValue, Is.EqualTo(a.RawValue));
+            Assert.That(FPInt64.Parse("-2147483648"), Is.EqualTo(FPInt64.MinValue));
+            Assert.That(
+                FPInt64.Parse("2147483647.99999999976716935634613037109375"),
+                Is.EqualTo(FPInt64.MaxValue));
         }
 
         [Test]
-        public void Lerp_T_One_Returns_B()
+        public void AbsCeilRoundAndSqrt_ExposeInvalidNonTryOperations()
         {
-            var a = FPInt64.FromInt(10);
-            var b = FPInt64.FromInt(20);
-            Assert.That(FPInt64.Lerp(a, b, FPInt64.OneValue).RawValue, Is.EqualTo(b.RawValue));
+            Assert.That(FPInt64.TryAbs(FPInt64.MinValue, out _), Is.False);
+            Assert.That(() => FPInt64.Abs(FPInt64.MinValue), Throws.TypeOf<OverflowException>());
+            Assert.That(FPInt64.TryCeil(FPInt64.MaxValue, out _), Is.False);
+            Assert.That(() => FPInt64.Ceil(FPInt64.MaxValue), Throws.TypeOf<OverflowException>());
+            Assert.That(FPInt64.TryRound(FPInt64.MaxValue, out _), Is.False);
+            Assert.That(() => FPInt64.Round(FPInt64.MaxValue), Throws.TypeOf<OverflowException>());
+            Assert.That(FPInt64.TrySqrt(FPInt64.MinusOne, out _), Is.False);
+            Assert.That(() => FPInt64.Sqrt(FPInt64.MinusOne), Throws.TypeOf<ArgumentOutOfRangeException>());
+        }
+
+        [Test]
+        public void FloorCeilAndRound_UseDocumentedNegativeSemantics()
+        {
+            FPInt64 minusOnePointSeven = FPInt64.FromDouble(-1.7);
+            FPInt64 minusOnePointFive = FPInt64.FromDouble(-1.5);
+            FPInt64 plusOnePointFive = FPInt64.FromDouble(1.5);
+
+            Assert.That(FPInt64.Floor(minusOnePointSeven), Is.EqualTo(FPInt64.FromInt(-2)));
+            Assert.That(FPInt64.Ceil(minusOnePointSeven), Is.EqualTo(FPInt64.FromInt(-1)));
+            Assert.That(FPInt64.Round(minusOnePointFive), Is.EqualTo(FPInt64.FromInt(-2)));
+            Assert.That(FPInt64.Round(plusOnePointFive), Is.EqualTo(FPInt64.FromInt(2)));
+        }
+
+        [Test]
+        public void Sqrt_ReturnsFloorOfExactQ32Root()
+        {
+            long[] sourceRawValues =
+            {
+                0L,
+                1L,
+                FPInt64.RAW_ONE,
+                FPInt64.FromInt(2).RawValue,
+                FPInt64.FromInt(4).RawValue,
+                long.MaxValue,
+            };
+
+            foreach (long sourceRaw in sourceRawValues)
+            {
+                FPInt64 root = FPInt64.Sqrt(FPInt64.FromRaw(sourceRaw));
+                BigInteger target = new BigInteger(sourceRaw) << FPInt64.FractionalBits;
+                BigInteger rootSquared = new BigInteger(root.RawValue) * root.RawValue;
+                BigInteger nextSquared = new BigInteger(root.RawValue + 1L) * (root.RawValue + 1L);
+
+                Assert.That(rootSquared <= target, Is.True, $"Source raw {sourceRaw} lower bound.");
+                Assert.That(nextSquared > target, Is.True, $"Source raw {sourceRaw} upper bound.");
+            }
+        }
+
+        [Test]
+        public void Lerp_ClampsWhileLerpUnclampedExtrapolates()
+        {
+            FPInt64 start = FPInt64.FromInt(10);
+            FPInt64 end = FPInt64.FromInt(20);
+
+            Assert.That(FPInt64.Lerp(start, end, FPInt64.FromInt(-1)), Is.EqualTo(start));
+            Assert.That(FPInt64.Lerp(start, end, FPInt64.FromInt(2)), Is.EqualTo(end));
+            Assert.That(
+                FPInt64.LerpUnclamped(start, end, FPInt64.FromInt(2)),
+                Is.EqualTo(FPInt64.FromInt(30)));
+        }
+
+        private static BigInteger MultiplyOracle(long aRaw, long bRaw)
+        {
+            bool negative = (aRaw < 0) ^ (bRaw < 0);
+            BigInteger magnitude = (BigInteger.Abs(new BigInteger(aRaw)) * BigInteger.Abs(new BigInteger(bRaw))) >>
+                                   FPInt64.FractionalBits;
+            return negative ? -magnitude : magnitude;
+        }
+
+        private static bool IsInt64(BigInteger value)
+        {
+            return value >= long.MinValue && value <= long.MaxValue;
+        }
+
+        private static long WrapToInt64(BigInteger value)
+        {
+            BigInteger modulus = BigInteger.One << 64;
+            BigInteger wrapped = value % modulus;
+            if (wrapped.Sign < 0)
+            {
+                wrapped += modulus;
+            }
+
+            return unchecked((long)(ulong)wrapped);
+        }
+
+        private static long NextInt64(Random random)
+        {
+            var bytes = new byte[sizeof(long)];
+            random.NextBytes(bytes);
+            return BitConverter.ToInt64(bytes, 0);
         }
     }
 }

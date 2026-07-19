@@ -1,159 +1,200 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 
 namespace CycloneGames.GameplayTags.Core
 {
-   /// <summary>
-   /// Handles tag renaming and migration. When tags are renamed, old names are
-   /// redirected to new names transparently during resolution.
-   /// Redirect chains are flattened (A→B→C becomes A→C) for O(1) lookup.
-   /// </summary>
+   /// <summary>Copy-on-write redirect table that resolves renamed gameplay tag aliases.</summary>
    public static class GameplayTagRedirector
    {
-      private static Dictionary<string, string> s_Redirects = new(StringComparer.Ordinal);
-      private static readonly object s_Lock = new();
+      public const int MaxRedirectCount = 4096;
 
-      /// <summary>
-      /// Register a tag redirect from oldName to newName.
-      /// If oldName already redirects somewhere, the chain is flattened.
-      /// </summary>
-      public static void AddRedirect(string oldName, string newName)
+      private sealed class RedirectTable
       {
-         if (string.IsNullOrEmpty(oldName) || string.IsNullOrEmpty(newName))
-            return;
-         if (string.Equals(oldName, newName, StringComparison.Ordinal))
-            return;
+         public readonly Dictionary<string, string> Entries;
+         public readonly ulong ManifestHash;
 
-         lock (s_Lock)
+         public RedirectTable(Dictionary<string, string> entries)
          {
-            Dictionary<string, string> redirects = new(s_Redirects, StringComparer.Ordinal);
-
-            // Flatten redirect chain: follow newName to its final destination
-            string finalTarget = ResolveChain(newName, redirects);
-
-            // Check for circular redirect
-            if (string.Equals(finalTarget, oldName, StringComparison.Ordinal))
+            Entries = entries;
+            if (entries.Count == 0)
             {
-               GameplayTagLogger.LogWarning($"Circular tag redirect detected: '{oldName}' → '{newName}' → '{oldName}'. Redirect ignored.");
+               ManifestHash = 0;
                return;
             }
 
-            redirects[oldName] = finalTarget;
-
-            // Re-flatten any existing redirects that pointed to oldName
-            List<string> keysToUpdate = null;
-            foreach (var kvp in redirects)
+            string[] keys = new string[entries.Count];
+            entries.Keys.CopyTo(keys, 0);
+            Array.Sort(keys, StringComparer.Ordinal);
+            ulong hash = GameplayTagUtility.FnvOffsetBasis64;
+            for (int i = 0; i < keys.Length; i++)
             {
-               if (string.Equals(kvp.Value, oldName, StringComparison.Ordinal) &&
-                   !string.Equals(kvp.Key, oldName, StringComparison.Ordinal))
+               hash = GameplayTagUtility.CombineStableHash(hash, GameplayTagUtility.ComputeStableIdUnchecked(keys[i]));
+               hash = GameplayTagUtility.CombineStableHash(hash, GameplayTagUtility.ComputeStableIdUnchecked(entries[keys[i]]));
+            }
+            ManifestHash = hash;
+         }
+      }
+
+      private static readonly object s_Gate = new();
+      private static RedirectTable s_Table = new(new Dictionary<string, string>(StringComparer.Ordinal));
+
+      internal static ulong CurrentManifestHash => Volatile.Read(ref s_Table).ManifestHash;
+
+      public static void AddRedirect(string oldName, string newName)
+      {
+         GameplayTagUtility.ValidateName(oldName);
+         GameplayTagUtility.ValidateName(newName);
+         if (string.Equals(oldName, newName, StringComparison.Ordinal))
+            return;
+
+         lock (s_Gate)
+         {
+            Dictionary<string, string> next = new(Volatile.Read(ref s_Table).Entries, StringComparer.Ordinal);
+            if (!next.ContainsKey(oldName) && next.Count >= MaxRedirectCount)
+               throw new InvalidOperationException($"Gameplay tag redirect count cannot exceed {MaxRedirectCount}.");
+
+            string finalTarget = ResolveChain(newName, next);
+            if (string.Equals(finalTarget, oldName, StringComparison.Ordinal))
+               throw new InvalidOperationException($"Circular gameplay tag redirect detected: '{oldName}' -> '{newName}'.");
+
+            next[oldName] = finalTarget;
+            string[] keys = new string[next.Count];
+            int keyCount = 0;
+            foreach (KeyValuePair<string, string> pair in next)
+            {
+               if (!string.Equals(pair.Key, oldName, StringComparison.Ordinal) &&
+                   string.Equals(pair.Value, oldName, StringComparison.Ordinal))
                {
-                  keysToUpdate ??= new List<string>();
-                  keysToUpdate.Add(kvp.Key);
+                  keys[keyCount++] = pair.Key;
                }
             }
 
-            if (keysToUpdate != null)
-            {
-               for (int i = 0; i < keysToUpdate.Count; i++)
-                  redirects[keysToUpdate[i]] = finalTarget;
-            }
+            for (int i = 0; i < keyCount; i++)
+               next[keys[i]] = finalTarget;
 
-            s_Redirects = redirects;
+            ValidateAcyclic(next);
+            Volatile.Write(ref s_Table, new RedirectTable(next));
          }
       }
 
-      /// <summary>
-      /// Batch-register multiple redirects.
-      /// </summary>
+      /// <summary>Adds an entire redirect batch atomically.</summary>
       public static void AddRedirects(IEnumerable<KeyValuePair<string, string>> redirects)
       {
-         if (redirects == null) return;
-         foreach (var kvp in redirects)
+         if (redirects == null)
+            throw new ArgumentNullException(nameof(redirects));
+
+         if (redirects is ICollection<KeyValuePair<string, string>> collection &&
+             collection.Count > MaxRedirectCount)
          {
-            if (!string.IsNullOrEmpty(kvp.Key) && !string.IsNullOrEmpty(kvp.Value))
-               AddRedirect(kvp.Key, kvp.Value);
+            throw new InvalidOperationException(
+               $"Gameplay tag redirect batch cannot contain more than {MaxRedirectCount} entries.");
+         }
+
+         if (redirects is IReadOnlyCollection<KeyValuePair<string, string>> readOnlyCollection &&
+             readOnlyCollection.Count > MaxRedirectCount)
+         {
+            throw new InvalidOperationException(
+               $"Gameplay tag redirect batch cannot contain more than {MaxRedirectCount} entries.");
+         }
+
+         List<KeyValuePair<string, string>> batch = new();
+         foreach (KeyValuePair<string, string> pair in redirects)
+         {
+            if (batch.Count == MaxRedirectCount)
+            {
+               throw new InvalidOperationException(
+                  $"Gameplay tag redirect batch cannot contain more than {MaxRedirectCount} entries.");
+            }
+
+            GameplayTagUtility.ValidateName(pair.Key);
+            GameplayTagUtility.ValidateName(pair.Value);
+            batch.Add(pair);
+         }
+
+         if (batch.Count == 0)
+            return;
+
+         lock (s_Gate)
+         {
+            Dictionary<string, string> next = new(Volatile.Read(ref s_Table).Entries, StringComparer.Ordinal);
+            for (int i = 0; i < batch.Count; i++)
+            {
+               KeyValuePair<string, string> pair = batch[i];
+               if (!string.Equals(pair.Key, pair.Value, StringComparison.Ordinal))
+                  next[pair.Key] = pair.Value;
+               if (next.Count > MaxRedirectCount)
+                  throw new InvalidOperationException($"Gameplay tag redirect count cannot exceed {MaxRedirectCount}.");
+            }
+
+            ValidateAcyclic(next);
+
+            string[] keys = new string[next.Count];
+            next.Keys.CopyTo(keys, 0);
+            for (int i = 0; i < keys.Length; i++)
+               next[keys[i]] = ResolveChain(next[keys[i]], next);
+
+            Volatile.Write(ref s_Table, new RedirectTable(next));
          }
       }
 
-      /// <summary>
-      /// Resolve a tag name through the redirect table.
-      /// Returns the original name if no redirect exists.
-      /// O(1) lookup since chains are pre-flattened.
-      /// </summary>
       public static string Resolve(string tagName)
       {
          if (string.IsNullOrEmpty(tagName))
             return tagName;
-
-         // Copy-on-write table snapshot. Reads may see the previous table briefly,
-         // but never a Dictionary being mutated concurrently.
-         Dictionary<string, string> redirects = s_Redirects;
-         return redirects.TryGetValue(tagName, out string redirected) ? redirected : tagName;
+         Dictionary<string, string> snapshot = Volatile.Read(ref s_Table).Entries;
+         return snapshot.TryGetValue(tagName, out string target) ? target : tagName;
       }
 
-      /// <summary>
-      /// Check if a tag name has a redirect registered.
-      /// </summary>
       public static bool HasRedirect(string tagName)
       {
-         if (string.IsNullOrEmpty(tagName))
-            return false;
-         return s_Redirects.ContainsKey(tagName);
+         return !string.IsNullOrEmpty(tagName) && Volatile.Read(ref s_Table).Entries.ContainsKey(tagName);
       }
 
-      /// <summary>
-      /// Remove a redirect for the given old name.
-      /// </summary>
       public static bool RemoveRedirect(string oldName)
       {
          if (string.IsNullOrEmpty(oldName))
             return false;
-         lock (s_Lock)
-         {
-            if (!s_Redirects.ContainsKey(oldName))
-               return false;
 
-            Dictionary<string, string> redirects = new(s_Redirects, StringComparer.Ordinal);
-            bool removed = redirects.Remove(oldName);
-            s_Redirects = redirects;
+         lock (s_Gate)
+         {
+            Dictionary<string, string> current = Volatile.Read(ref s_Table).Entries;
+            if (!current.ContainsKey(oldName))
+               return false;
+            Dictionary<string, string> next = new(current, StringComparer.Ordinal);
+            bool removed = next.Remove(oldName);
+            Volatile.Write(ref s_Table, new RedirectTable(next));
             return removed;
          }
       }
 
-      /// <summary>
-      /// Clear all registered redirects.
-      /// </summary>
       public static void ClearAll()
       {
-         lock (s_Lock)
-         {
-            s_Redirects = new Dictionary<string, string>(StringComparer.Ordinal);
-         }
+         lock (s_Gate)
+            Volatile.Write(ref s_Table, new RedirectTable(new Dictionary<string, string>(StringComparer.Ordinal)));
       }
 
-      /// <summary>
-      /// Get all current redirects (for serialization/debugging).
-      /// </summary>
       public static IReadOnlyDictionary<string, string> GetAllRedirects()
       {
-         lock (s_Lock)
-         {
-            return new Dictionary<string, string>(s_Redirects, StringComparer.Ordinal);
-         }
+         return new Dictionary<string, string>(Volatile.Read(ref s_Table).Entries, StringComparer.Ordinal);
+      }
+
+      private static void ValidateAcyclic(Dictionary<string, string> redirects)
+      {
+         foreach (string key in redirects.Keys)
+            ResolveChain(key, redirects);
       }
 
       private static string ResolveChain(string name, Dictionary<string, string> redirects)
       {
-         const int maxHops = 16;
+         HashSet<string> visited = new(StringComparer.Ordinal);
          string current = name;
-         for (int i = 0; i < maxHops; i++)
+         while (redirects.TryGetValue(current, out string next))
          {
-            if (!redirects.TryGetValue(current, out string next))
-               return current;
+            if (!visited.Add(current))
+               throw new InvalidOperationException($"Circular gameplay tag redirect detected from '{name}'.");
             current = next;
          }
-
-         GameplayTagLogger.LogWarning($"Tag redirect chain exceeded {maxHops} hops starting from '{name}'. Possible circular reference.");
          return current;
       }
    }

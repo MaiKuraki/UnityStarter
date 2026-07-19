@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.Text;
 
@@ -42,20 +43,31 @@ namespace CycloneGames.InputSystem.Runtime
         public override string ToString()
         {
             return $"[{Severity}] Context=\"{ContextName}\", Map=\"{ActionMapName}\", Binding=\"{BindingPath}\": " +
-                   $"\"{ActionA}\"({TypeA}) ↔ \"{ActionB}\"({TypeB})";
+                   $"\"{ActionA}\"({TypeA}) <-> \"{ActionB}\"({TypeB})";
         }
     }
 
     public static class InputBindingValidator
     {
+        private const int MaxReportedConflicts = 256;
+
         public static List<BindingConflict> DetectConflicts(PlayerSlotConfig config)
         {
             var conflicts = new List<BindingConflict>();
             if (config?.Contexts == null) return conflicts;
 
-            foreach (var ctxConfig in config.Contexts)
+            InputConfigurationLimits limits = InputConfigurationLimits.Default;
+            int remainingActions = limits.MaxTotalActionsPerPlayer;
+            int contextCount = Math.Min(config.Contexts.Count, limits.MaxContextsPerPlayer);
+            for (int contextIndex = 0;
+                 contextIndex < contextCount && remainingActions > 0 && conflicts.Count < MaxReportedConflicts;
+                 contextIndex++)
             {
-                DetectContextConflicts(ctxConfig, conflicts);
+                DetectContextConflicts(
+                    config.Contexts[contextIndex],
+                    conflicts,
+                    limits,
+                    ref remainingActions);
             }
 
             return conflicts;
@@ -66,11 +78,20 @@ namespace CycloneGames.InputSystem.Runtime
             var conflicts = new List<BindingConflict>();
             if (config?.Contexts == null || string.IsNullOrEmpty(contextNameFilter)) return conflicts;
 
-            foreach (var ctxConfig in config.Contexts)
+            InputConfigurationLimits limits = InputConfigurationLimits.Default;
+            int contextCount = Math.Min(config.Contexts.Count, limits.MaxContextsPerPlayer);
+            for (int contextIndex = 0; contextIndex < contextCount; contextIndex++)
             {
-                if (ctxConfig.Name == contextNameFilter)
+                ContextDefinitionConfig context = config.Contexts[contextIndex];
+                if (context != null &&
+                    string.Equals(context.Name, contextNameFilter, StringComparison.Ordinal))
                 {
-                    DetectContextConflicts(ctxConfig, conflicts);
+                    int remainingActions = limits.MaxTotalActionsPerPlayer;
+                    DetectContextConflicts(
+                        context,
+                        conflicts,
+                        limits,
+                        ref remainingActions);
                     break;
                 }
             }
@@ -116,7 +137,7 @@ namespace CycloneGames.InputSystem.Runtime
                 foreach (var c in ctxConflicts)
                 {
                     sb.AppendLine($"  {c.Severity.ToString().PadRight(9)} | {c.BindingPath}");
-                    sb.AppendLine($"    └─ \"{c.ActionA}\"({c.TypeA}) vs \"{c.ActionB}\"({c.TypeB})");
+                    sb.AppendLine($"    - \"{c.ActionA}\"({c.TypeA}) vs \"{c.ActionB}\"({c.TypeB})");
                 }
                 sb.AppendLine();
             }
@@ -124,129 +145,134 @@ namespace CycloneGames.InputSystem.Runtime
             return sb.ToString();
         }
 
-        private static void DetectContextConflicts(ContextDefinitionConfig ctxConfig, List<BindingConflict> conflicts)
+        private static void DetectContextConflicts(
+            ContextDefinitionConfig ctxConfig,
+            List<BindingConflict> conflicts,
+            InputConfigurationLimits limits,
+            ref int remainingActions)
         {
-            if (ctxConfig?.Bindings == null) return;
+            if (ctxConfig?.Bindings == null || remainingActions <= 0) return;
 
-            var bindingToAction = new Dictionary<string, (string actionName, ActionValueType type, int longPressMs)>();
+            var bindingToAction = new Dictionary<string, (string actionName, ActionValueType type, int longPressMs)>(
+                StringComparer.OrdinalIgnoreCase);
+            int actionCount = Math.Min(
+                Math.Min(ctxConfig.Bindings.Count, limits.MaxActionsPerContext),
+                remainingActions);
+            remainingActions -= actionCount;
 
-            foreach (var binding in ctxConfig.Bindings)
+            for (int actionIndex = 0;
+                 actionIndex < actionCount && conflicts.Count < MaxReportedConflicts;
+                 actionIndex++)
             {
-                if (binding.DeviceBindings == null) continue;
+                ActionBindingConfig binding = ctxConfig.Bindings[actionIndex];
+                if (binding == null) continue;
 
-                foreach (var rawBinding in binding.DeviceBindings)
+                int remainingBindingEntries = limits.MaxBindingsPerAction;
+                int directCount = Math.Min(
+                    binding.DeviceBindings?.Count ?? 0,
+                    remainingBindingEntries);
+                for (int directIndex = 0;
+                     directIndex < directCount && conflicts.Count < MaxReportedConflicts;
+                     directIndex++)
                 {
-                    var individualPaths = ExpandBindingPaths(rawBinding);
+                    RegisterBindingPath(
+                        ctxConfig,
+                        binding,
+                        binding.DeviceBindings[directIndex],
+                        bindingToAction,
+                        conflicts,
+                        limits);
+                }
 
-                    foreach (var path in individualPaths)
+                remainingBindingEntries -= directCount;
+                int compositeCount = Math.Min(
+                    binding.CompositeBindings?.Count ?? 0,
+                    limits.MaxCompositesPerAction);
+                for (int compositeIndex = 0;
+                     compositeIndex < compositeCount &&
+                     remainingBindingEntries > 0 &&
+                     conflicts.Count < MaxReportedConflicts;
+                     compositeIndex++)
+                {
+                    CompositeBindingConfig composite = binding.CompositeBindings[compositeIndex];
+                    if (composite?.Parts == null) continue;
+                    int partCount = Math.Min(
+                        Math.Min(composite.Parts.Count, limits.MaxPartsPerComposite),
+                        remainingBindingEntries);
+                    for (int partIndex = 0;
+                         partIndex < partCount && conflicts.Count < MaxReportedConflicts;
+                         partIndex++)
                     {
-                        var normalizedPath = NormalizeBindingPath(path);
-
-                        if (bindingToAction.TryGetValue(normalizedPath, out var existing))
-                        {
-                            bool isLongPressDifferentiated =
-                                (existing.longPressMs > 0 && binding.LongPressMs == 0) ||
-                                (existing.longPressMs == 0 && binding.LongPressMs > 0) ||
-                                (existing.longPressMs > 0 && binding.LongPressMs > 0 && existing.longPressMs != binding.LongPressMs);
-
-                            BindingConflictSeverity severity;
-                            if (isLongPressDifferentiated)
-                            {
-                                severity = BindingConflictSeverity.Info;
-                            }
-                            else if (existing.type == binding.Type)
-                            {
-                                severity = BindingConflictSeverity.Critical;
-                            }
-                            else
-                            {
-                                severity = BindingConflictSeverity.Warning;
-                            }
-
-                            conflicts.Add(new BindingConflict(
-                                severity,
-                                ctxConfig.Name ?? "unnamed",
-                                ctxConfig.ActionMap ?? "unknown",
-                                normalizedPath,
-                                existing.actionName, existing.type,
-                                binding.ActionName, binding.Type
-                            ));
-                        }
-                        else
-                        {
-                            bindingToAction[normalizedPath] = (binding.ActionName, binding.Type, binding.LongPressMs);
-                        }
+                        CompositePartBindingConfig part = composite.Parts[partIndex];
+                        if (part == null) continue;
+                        RegisterBindingPath(
+                            ctxConfig,
+                            binding,
+                            part.Path,
+                            bindingToAction,
+                            conflicts,
+                            limits);
                     }
+
+                    remainingBindingEntries -= partCount;
                 }
             }
         }
 
-        private static List<string> ExpandBindingPaths(string rawBinding)
+        private static void RegisterBindingPath(
+            ContextDefinitionConfig context,
+            ActionBindingConfig binding,
+            string path,
+            Dictionary<string, (string actionName, ActionValueType type, int longPressMs)> bindingToAction,
+            List<BindingConflict> conflicts,
+            InputConfigurationLimits limits)
         {
-            var paths = new List<string>(4);
-
-            if (string.IsNullOrEmpty(rawBinding))
+            if (string.IsNullOrWhiteSpace(path) ||
+                path.Length > limits.MaxStringLength ||
+                InputConfigurationValidator.ContainsForbiddenTechnicalCharacter(path))
             {
-                paths.Add(string.Empty);
-                return paths;
+                return;
             }
 
-            if (IsCompositeBinding(rawBinding))
+            string normalizedPath = NormalizeBindingPath(path);
+            if (bindingToAction.TryGetValue(normalizedPath, out var existing))
             {
-                var compositePaths = ExtractCompositePaths(rawBinding);
-                if (compositePaths.Length > 0)
+                bool isLongPressDifferentiated =
+                    (existing.longPressMs > 0 && binding.LongPressMs == 0) ||
+                    (existing.longPressMs == 0 && binding.LongPressMs > 0) ||
+                    (existing.longPressMs > 0 &&
+                     binding.LongPressMs > 0 &&
+                     existing.longPressMs != binding.LongPressMs);
+
+                BindingConflictSeverity severity;
+                if (isLongPressDifferentiated)
                 {
-                    foreach (var p in compositePaths)
-                    {
-                        if (!string.IsNullOrEmpty(p))
-                            paths.Add(p);
-                    }
-                    return paths;
+                    severity = BindingConflictSeverity.Info;
                 }
-            }
-
-            paths.Add(rawBinding);
-            return paths;
-        }
-
-        private static bool IsCompositeBinding(string binding)
-        {
-            return !string.IsNullOrEmpty(binding) &&
-                   binding.StartsWith("2DVector(", System.StringComparison.OrdinalIgnoreCase) &&
-                   binding.EndsWith(")");
-        }
-
-        private static string[] ExtractCompositePaths(string composite)
-        {
-            const string prefix = "2DVector(";
-            var inner = composite.Substring(prefix.Length, composite.Length - prefix.Length - 1);
-            var segments = inner.Split(',');
-            var paths = new string[4];
-            int pathCount = 0;
-
-            for (int i = 0; i < segments.Length; i++)
-            {
-                var seg = segments[i].Trim();
-                int eq = seg.IndexOf('=');
-                if (eq <= 0 || eq >= seg.Length - 1) continue;
-
-                var key = seg.Substring(0, eq).Trim();
-                var val = seg.Substring(eq + 1).Trim();
-
-                if (key.Equals("up") || key.Equals("down") || key.Equals("left") || key.Equals("right"))
+                else if (existing.type == binding.Type)
                 {
-                    if (!string.IsNullOrEmpty(val))
-                    {
-                        paths[pathCount] = val;
-                        pathCount++;
-                    }
+                    severity = BindingConflictSeverity.Critical;
                 }
-            }
+                else
+                {
+                    severity = BindingConflictSeverity.Warning;
+                }
 
-            var result = new string[pathCount];
-            for (int i = 0; i < pathCount; i++)
-                result[i] = paths[i];
-            return result;
+                conflicts.Add(new BindingConflict(
+                    severity,
+                    context.Name ?? "unnamed",
+                    context.ActionMap ?? "unknown",
+                    normalizedPath,
+                    existing.actionName,
+                    existing.type,
+                    binding.ActionName,
+                    binding.Type));
+            }
+            else
+            {
+                bindingToAction[normalizedPath] =
+                    (binding.ActionName, binding.Type, binding.LongPressMs);
+            }
         }
 
         private static string NormalizeBindingPath(string path)

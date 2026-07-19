@@ -13,8 +13,8 @@ MonoBehaviour:
   m_Name: GA_Purify
   m_EditorClassIdentifier: 
   AbilityName: Purify
-  InstancingPolicy: 0
-  NetExecutionPolicy: 0
+  InstancingPolicy: 1
+  ExecutionPolicy: 1
   CostEffect: {fileID: 11400000, guid: d6ec08bd85ef7c84da9a7e1fdebaf78b, type: 2}
   CooldownEffect: {fileID: 11400000, guid: 29b3fdd1a4dcb3948b8f8495bdbb0bb7, type: 2}
   AbilityTags:

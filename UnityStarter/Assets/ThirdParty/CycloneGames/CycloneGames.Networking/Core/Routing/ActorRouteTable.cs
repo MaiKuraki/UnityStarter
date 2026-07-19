@@ -14,10 +14,12 @@ namespace CycloneGames.Networking.Routing
     /// in the same address space. For multi-process deployments, replace with a
     /// distributed router backed by Redis, etcd, or a dedicated routing service.
     /// </para>
-        /// <para>
-        /// Thread Safety: All public methods are safe for concurrent access from
-        /// multiple threads. Registration and resolution use concurrent dictionary operations.
-        /// </para>
+    /// <para>
+    /// Concurrent dictionary operations protect each index from corruption. The actor and process
+    /// indexes are updated separately, so concurrent snapshots can observe a transient migration state.
+    /// Use one routing owner when cross-index consistency is required. This helper has no actor-count
+    /// capacity policy; a production composition must bound registrations before calling it.
+    /// </para>
     /// </remarks>
     public sealed class ActorRouteTable : IActorRouter
     {

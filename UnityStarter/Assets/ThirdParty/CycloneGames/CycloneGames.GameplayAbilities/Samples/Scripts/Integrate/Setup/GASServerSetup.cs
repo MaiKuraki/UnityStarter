@@ -10,12 +10,16 @@ namespace CycloneGames.GameplayAbilities.Integrate.Setup
     public static class GASServerSetup
     {
         /// <summary>
-        /// Initializes GAS for server/headless mode. All cue operations are no-ops.
+        /// Creates an explicitly owned server/headless context. All cue operations are no-ops.
         /// </summary>
-        public static void Initialize()
+        public static GASRuntimeContext CreateContext(
+            GASRuntimeThreadPolicy threadPolicy = GASRuntimeThreadPolicy.Throw,
+            GASRuntimeCacheProfile cacheProfile = null)
         {
-            // Use the null implementation - all cue operations are safe no-ops
-            GASServices.CueManager = NullGameplayCueManager.Instance;
+            return new GASRuntimeContext(
+                cueManager: NullGameplayCueManager.Instance,
+                threadPolicy: threadPolicy,
+                cacheProfile: cacheProfile);
         }
     }
 }

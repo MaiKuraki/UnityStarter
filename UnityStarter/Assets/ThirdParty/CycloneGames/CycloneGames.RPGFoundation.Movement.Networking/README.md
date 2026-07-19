@@ -57,6 +57,8 @@ CycloneGames.RPGFoundation.Movement.Networking/
 
 The core assembly references `CycloneGames.RPGFoundation.Movement.Core`, `CycloneGames.Networking.Core`, and `Unity.Mathematics`. It does not reference backend SDK types, PlayerSettings scripting define symbols, or a DI container.
 
+The Core and EditMode test assemblies use `autoReferenced: false`. Consumer asmdefs must reference Core explicitly. No PlayerSettings scripting define is required.
+
 ## Core Concepts
 
 | Type | Purpose |
@@ -86,20 +88,22 @@ graph TD
     Snapshot["MovementNetworkSnapshotMessage"]
     Correction["MovementCorrectionMessage"]
     Teleport["MovementTeleportMessage"]
-    Manager["INetworkManager"]
+    Endpoint["INetworkMessageEndpoint"]
 
-    Input --> Manager
+    Input --> Endpoint
     Provider --> Bridge
     Validator --> Bridge
     Bridge --> Snapshot
-    Snapshot --> Manager
-    Correction --> Manager
-    Teleport --> Manager
+    Snapshot --> Endpoint
+    Correction --> Endpoint
+    Teleport --> Endpoint
 ```
 
 ## Protocol
 
-`MovementNetworkProtocol` owns message ids `16000-16999` in the Cyclone module range.
+`MovementNetworkProtocol` owns message IDs `16000-16999` inside the shared `NetworkMessageRanges.Module` range (`1000-29999`). `CreateProtocolManifest` builds the complete manifest, and `RegisterMessageCatalog` / `TryRegisterMessageCatalog` submit it through `TryRegisterProtocolManifest`. Registration either commits the range and every descriptor together or rejects the manifest without a partial catalog update.
+
+Every descriptor declares an explicit printable-ASCII `ContractId` such as `MovementNetworkSnapshotMessage:v1`. Its nonzero `SchemaHash` is the FNV-1a 64-bit hash of that exact identifier; manifest validation rejects a mismatch. The protocol fingerprint includes the range and each descriptor's message ID, contract identity, schema hash, channel, and payload limit. CLR type names and reflection are not protocol identity. A payload layout, codec, or semantic compatibility change must receive a new contract identity and coordinate `CurrentVersion` / `MinimumSupportedVersion` across all communicating peers. Incompatible peers must be rejected before gameplay traffic. Project-specific messages belong in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange; this module exposes no dynamic descriptor-registration facade.
 
 | Message | ID | Channel | Payload |
 | --- | ---: | --- | --- |
@@ -251,7 +255,7 @@ Large position errors are marked as teleport-style hard resets through `Movement
 
 ## Extension Points
 
-- Define project-specific movement verbs in a project-owned `NetworkMessageKind.User` manifest.
+- Define project-specific movement verbs in a separate project-owned manifest using an unclaimed `NetworkMessageRanges.User` subrange.
 - Keep backend connection, ownership, and host/session logic in the network adapter.
 - Use `CustomFlags` and project-owned button masks for input concepts not represented by the generic DTO fields.
 - Supply a project-specific `IMovementNetworkInputValidator` when ability tags, stamina, vehicle ownership, mounted states, anti-cheat rules, or platform-specific authority rules must be checked before input is accepted.
@@ -259,7 +263,7 @@ Large position errors are marked as teleport-style hard resets through `Movement
 
 ## Persistence
 
-This package does not write files, assets, preferences, caches, or runtime save data. It only defines protocol metadata, value-type DTOs, and bridge helpers.
+This package does not write files, assets, preferences, caches, or runtime save data. It only defines protocol metadata, value-type DTOs, history buffers, and bridge helpers. History buffers are runtime-memory objects; the creating system owns their lifetime, cleanup, and reuse.
 
 ## Validation
 
@@ -269,4 +273,11 @@ Run these checks after changing the package:
 Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.RPGFoundation.Movement.Tests.Editor
 Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
+```
+
+For CLI validation, first let Unity refresh the generated project files, then compile:
+
+```text
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Networking.Core.csproj --nologo
+dotnet build UnityStarter/CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor.csproj --nologo
 ```

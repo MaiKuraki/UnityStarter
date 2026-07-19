@@ -24,6 +24,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private int totalRepetitions;
         private int currentRepetition;
         private double timer;
+        private bool terminalCallbackStarted;
+
+        public override void InitTask(GameplayAbility ability)
+        {
+            base.InitTask(ability);
+            terminalCallbackStarted = false;
+        }
 
         /// <summary>
         /// Creates a Repeat task.
@@ -45,8 +52,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (totalRepetitions == 0)
             {
-                OnFinished?.Invoke();
-                EndTask();
+                CompleteRepeat();
             }
         }
 
@@ -55,17 +61,39 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (!IsActive || IsCancelled) return;
 
             timer += deltaTime;
-            while (timer >= interval && IsActive && !IsCancelled)
+            int executionBudget = Ability?.AbilitySystemComponent?.Limits.MaxAbilityTaskRepeatExecutionsPerTick
+                ?? GASRuntimeLimits.Default.MaxAbilityTaskRepeatExecutionsPerTick;
+            for (int executionCount = 0;
+                 executionCount < executionBudget && timer >= interval && IsActive && !IsCancelled;
+                 executionCount++)
             {
                 timer -= interval;
                 currentRepetition++;
 
-                bool shouldContinue = OnPerformAction?.Invoke(currentRepetition) ?? true;
+                bool callbackReturned = false;
+                bool shouldContinue = true;
+                ulong callbackLeaseGeneration = LeaseGeneration;
+                try
+                {
+                    shouldContinue = OnPerformAction?.Invoke(currentRepetition) ?? true;
+                    callbackReturned = true;
+                }
+                finally
+                {
+                    if (!callbackReturned)
+                    {
+                        EndTaskIfCurrentLease(callbackLeaseGeneration);
+                    }
+                }
+
+                if (!IsActive || IsCancelled)
+                {
+                    return;
+                }
 
                 if (!shouldContinue || (totalRepetitions > 0 && currentRepetition >= totalRepetitions))
                 {
-                    OnFinished?.Invoke();
-                    EndTask();
+                    CompleteRepeat();
                     return;
                 }
             }
@@ -73,8 +101,38 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public override void CancelTask()
         {
-            OnCancelled?.Invoke();
-            base.CancelTask();
+            if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            try
+            {
+                OnCancelled?.Invoke();
+            }
+            finally
+            {
+                if (IsCurrentLease(leaseGeneration))
+                {
+                    base.CancelTask();
+                }
+            }
+        }
+
+        private void CompleteRepeat()
+        {
+            if (IsCancelled ||
+                !AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            try
+            {
+                OnFinished?.Invoke();
+            }
+            finally
+            {
+                EndTaskIfCurrentLease(leaseGeneration);
+            }
         }
 
         protected override void OnDestroy()

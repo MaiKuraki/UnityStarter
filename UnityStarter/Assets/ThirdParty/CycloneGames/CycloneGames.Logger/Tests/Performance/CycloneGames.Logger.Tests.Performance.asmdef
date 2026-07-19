@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.Logger.Tests.Performance",
+    "rootNamespace": "CycloneGames.Logger.Tests.Performance",
+    "references": [
+        "CycloneGames.Logger",
+        "Unity.PerformanceTesting"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

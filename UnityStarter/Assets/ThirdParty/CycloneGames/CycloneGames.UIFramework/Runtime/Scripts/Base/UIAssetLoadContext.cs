@@ -1,24 +1,23 @@
-using CycloneGames.AssetManagement.Runtime;
+using System;
+using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
-    /// Optional metadata applied to UI configuration and prefab asset loads.
-    /// Use this to attach custom bucket / tag / owner values without hard-coding lifecycle names in the framework.
+    /// Provider-neutral metadata for configuration and prefab loads. Providers that
+    /// do not support a field may ignore it. Values are immutable after construction.
     /// </summary>
-    public readonly struct UIAssetLoadContext
+    [Serializable]
+    public struct UIAssetLoadContext
     {
-        public readonly string ConfigBucket;
-        public readonly string ConfigTag;
-        public readonly string ConfigOwner;
-        public readonly string PrefabBucket;
-        public readonly string PrefabTag;
-        public readonly string PrefabOwner;
+        [SerializeField] private string configBucket;
+        [SerializeField] private string configTag;
+        [SerializeField] private string configOwner;
+        [SerializeField] private string prefabBucket;
+        [SerializeField] private string prefabTag;
+        [SerializeField] private string prefabOwner;
 
-        public UIAssetLoadContext(
-            string sharedBucket = null,
-            string sharedTag = null,
-            string sharedOwner = null)
+        public UIAssetLoadContext(string sharedBucket, string sharedTag = null, string sharedOwner = null)
             : this(sharedBucket, sharedTag, sharedOwner, sharedBucket, sharedTag, sharedOwner)
         {
         }
@@ -31,53 +30,38 @@ namespace CycloneGames.UIFramework.Runtime
             string prefabTag,
             string prefabOwner)
         {
-            ConfigBucket = configBucket;
-            ConfigTag = configTag;
-            ConfigOwner = configOwner;
-            PrefabBucket = prefabBucket;
-            PrefabTag = prefabTag;
-            PrefabOwner = prefabOwner;
+            this.configBucket = configBucket;
+            this.configTag = configTag;
+            this.configOwner = configOwner;
+            this.prefabBucket = prefabBucket;
+            this.prefabTag = prefabTag;
+            this.prefabOwner = prefabOwner;
         }
 
+        public string ConfigBucket => configBucket;
+        public string ConfigTag => configTag;
+        public string ConfigOwner => configOwner;
+        public string PrefabBucket => prefabBucket;
+        public string PrefabTag => prefabTag;
+        public string PrefabOwner => prefabOwner;
+
         public bool HasAnyMetadata =>
-            !string.IsNullOrEmpty(ConfigBucket) ||
-            !string.IsNullOrEmpty(ConfigTag) ||
-            !string.IsNullOrEmpty(ConfigOwner) ||
-            !string.IsNullOrEmpty(PrefabBucket) ||
-            !string.IsNullOrEmpty(PrefabTag) ||
-            !string.IsNullOrEmpty(PrefabOwner);
+            !string.IsNullOrEmpty(configBucket) ||
+            !string.IsNullOrEmpty(configTag) ||
+            !string.IsNullOrEmpty(configOwner) ||
+            !string.IsNullOrEmpty(prefabBucket) ||
+            !string.IsNullOrEmpty(prefabTag) ||
+            !string.IsNullOrEmpty(prefabOwner);
 
         public UIAssetLoadContext Merge(in UIAssetLoadContext fallback)
         {
             return new UIAssetLoadContext(
-                ConfigBucket ?? fallback.ConfigBucket,
-                ConfigTag ?? fallback.ConfigTag,
-                ConfigOwner ?? fallback.ConfigOwner,
-                PrefabBucket ?? fallback.PrefabBucket,
-                PrefabTag ?? fallback.PrefabTag,
-                PrefabOwner ?? fallback.PrefabOwner);
-        }
-
-        public static UIAssetLoadContext FromScope(AssetBucketScope scope)
-        {
-            return new UIAssetLoadContext(
-                scope.Bucket,
-                scope.Tag,
-                scope.Owner,
-                scope.Bucket,
-                scope.Tag,
-                scope.Owner);
-        }
-
-        public static UIAssetLoadContext FromScopes(AssetBucketScope configScope, AssetBucketScope prefabScope)
-        {
-            return new UIAssetLoadContext(
-                configScope.Bucket,
-                configScope.Tag,
-                configScope.Owner,
-                prefabScope.Bucket,
-                prefabScope.Tag,
-                prefabScope.Owner);
+                configBucket ?? fallback.configBucket,
+                configTag ?? fallback.configTag,
+                configOwner ?? fallback.configOwner,
+                prefabBucket ?? fallback.prefabBucket,
+                prefabTag ?? fallback.prefabTag,
+                prefabOwner ?? fallback.prefabOwner);
         }
     }
 }

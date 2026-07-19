@@ -1,746 +1,235 @@
-#if UNITY_EDITOR
 // Copyright (c) CycloneGames
 // Licensed under the MIT License.
 
-using System.Collections.Generic;
-using System.IO;
+using System;
+using CycloneGames.UIFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.UI;
-using CycloneGames.UIFramework.Runtime;
 
 namespace CycloneGames.UIFramework.Editor
 {
-    [CustomEditor(typeof(UIRoot))]
-    public class UIRootEditor : UnityEditor.Editor
+    [CustomEditor(typeof(UIRoot), true)]
+    [CanEditMultipleObjects]
+    public sealed class UIRootEditor : UnityEditor.Editor
     {
-        // Colors
-        private static readonly Color coreRefsColor = new Color(0.5f, 0.6f, 0.4f);
-        private static readonly Color layerListColor = new Color(0.5f, 0.5f, 0.7f);
-        private static readonly Color validationColor = new Color(0.6f, 0.5f, 0.5f);
-        private static readonly Color successColor = new Color(0.3f, 0.7f, 0.4f);
-        private static readonly Color warningColor = new Color(0.9f, 0.6f, 0.2f);
-        private static readonly Color errorColor = new Color(0.8f, 0.3f, 0.3f);
+        private SerializedProperty _uiCamera;
+        private SerializedProperty _rootCanvas;
+        private SerializedProperty _layerList;
 
-        // Foldout states
-        private bool showCoreRefs = true;
-        private bool showLayerList = true;
-        private bool showValidation = false;
-
-        // Serialized properties
-        private SerializedProperty uiCameraProp;
-        private SerializedProperty rootCanvasProp;
-        private SerializedProperty layerListProp;
-
-        // Cached validation results
-        private List<ValidationResult> validationResults = new List<ValidationResult>();
-        private bool validationRun = false;
-
-        private struct ValidationResult
-        {
-            public string message;
-            public MessageType type;
-            public Object context;
-        }
-
-        // Cached GUIStyles to avoid per-frame allocations
-        private GUIStyle _titleStyle;
-        private GUIStyle _subtitleStyle;
-        private GUIStyle _runtimeStyle;
-        private GUIStyle _orderStyle;
-        private GUIStyle _whiteNameStyle;
-        private GUIStyle _errorNameStyle;
-        private bool _stylesInitialized;
+        private bool _showRoot = true;
+        private bool _showLayers = true;
+        private bool _showValidation = true;
 
         private void OnEnable()
         {
-            uiCameraProp = serializedObject.FindProperty("uiCamera");
-            rootCanvasProp = serializedObject.FindProperty("rootCanvas");
-            layerListProp = serializedObject.FindProperty("layerList");
-            _stylesInitialized = false;
-        }
-
-        private void InitializeStyles()
-        {
-            if (_stylesInitialized) return;
-            _stylesInitialized = true;
-
-            _titleStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                fontSize = 14,
-                alignment = TextAnchor.MiddleCenter
-            };
-
-            _subtitleStyle = new GUIStyle(EditorStyles.centeredGreyMiniLabel) { fontSize = 10 };
-
-            _runtimeStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                normal = { textColor = new Color(0.4f, 0.8f, 0.4f) }
-            };
-
-            _orderStyle = new GUIStyle(EditorStyles.label)
-            {
-                alignment = TextAnchor.MiddleCenter
-            };
-
-            _whiteNameStyle = new GUIStyle(EditorStyles.label) { normal = { textColor = Color.white } };
-            _errorNameStyle = new GUIStyle(EditorStyles.label) { normal = { textColor = errorColor } };
+            _uiCamera = serializedObject.FindProperty("uiCamera");
+            _rootCanvas = serializedObject.FindProperty("rootCanvas");
+            _layerList = serializedObject.FindProperty("layerList");
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
 
-            // Initialize cached styles
-            InitializeStyles();
+            InspectorUiUtility.DrawInspectorTitle(
+                "UI Root",
+                "Canvas, camera, and ordered layer composition",
+                InspectorUiUtility.SetupColor);
 
-            UIRoot uiRoot = (UIRoot)target;
-
-            // Title
-            DrawTitle();
-
-            EditorGUILayout.Space(5);
-
-            // Core References Section
-            showCoreRefs = InspectorUiUtility.DrawFoldoutHeader("Core References", showCoreRefs, coreRefsColor);
-            if (showCoreRefs)
+            bool hasCanvas = _rootCanvas.hasMultipleDifferentValues || _rootCanvas.objectReferenceValue != null;
+            _showRoot = InspectorUiUtility.DrawFoldoutHeader(
+                "Root References",
+                _showRoot,
+                InspectorUiUtility.SetupColor,
+                hasCanvas ? "READY" : "REQUIRED",
+                hasCanvas ? InspectorUiUtility.SuccessColor : InspectorUiUtility.WarningColor);
+            if (_showRoot)
             {
-                DrawCoreReferencesSection(uiRoot);
+                InspectorUiUtility.BeginPanel();
+                EditorGUILayout.PropertyField(_rootCanvas, new GUIContent(
+                    "Root Canvas",
+                    "Canvas that defines the root UI coordinate space."));
+                EditorGUILayout.PropertyField(_uiCamera, new GUIContent(
+                    "UI Camera",
+                    "Optional camera used by camera-space UI and UI coordinate conversion."));
+                if (!_rootCanvas.hasMultipleDifferentValues && _rootCanvas.objectReferenceValue == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Root Canvas is required. UIService rejects a root that cannot provide its coordinate space.",
+                        MessageType.Warning);
+                }
+                else if (!_uiCamera.hasMultipleDifferentValues && _uiCamera.objectReferenceValue == null)
+                {
+                    EditorGUILayout.HelpBox(
+                        "UI Camera is optional for Overlay canvases. Assign it when camera-space conversion or Camera render mode is used.",
+                        MessageType.Info);
+                }
+
+                InspectorUiUtility.EndPanel();
             }
 
-            EditorGUILayout.Space(3);
-
-            // Layer List Section
-            int layerCount = layerListProp.arraySize;
-            string layerListTitle = $"UI Layers ({layerCount})";
-            showLayerList = InspectorUiUtility.DrawFoldoutHeader(layerListTitle, showLayerList, layerListColor);
-            if (showLayerList)
+            string layerBadge = _layerList.hasMultipleDifferentValues ? "MIXED" : $"{_layerList.arraySize} LAYERS";
+            _showLayers = InspectorUiUtility.DrawFoldoutHeader(
+                "Layer Composition",
+                _showLayers,
+                InspectorUiUtility.AssetColor,
+                layerBadge,
+                _layerList.hasMultipleDifferentValues || _layerList.arraySize > 0
+                    ? InspectorUiUtility.AssetColor
+                    : InspectorUiUtility.WarningColor);
+            if (_showLayers)
             {
-                DrawLayerListSection(uiRoot);
+                InspectorUiUtility.BeginPanel();
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    EditorGUILayout.PropertyField(_layerList, new GUIContent(
+                        "Layers",
+                        "Ordered layer components registered by this root. Each component and Layer Name must be unique."), true);
+                }
+                EditorGUILayout.HelpBox(
+                    "List order is the root's deterministic layer registration order. Window ordering inside each layer is controlled by UIWindowConfiguration.Priority.",
+                    MessageType.None);
+                InspectorUiUtility.EndPanel();
             }
 
-            EditorGUILayout.Space(3);
-
-            // Validation Section
-            string validationTitle = validationRun 
-                ? $"Validation ({GetValidationSummary()})" 
-                : "Validation";
-            showValidation = InspectorUiUtility.DrawFoldoutHeader(validationTitle, showValidation, validationColor);
-            if (showValidation)
+            int issueCount = CountValidationIssues();
+            _showValidation = InspectorUiUtility.DrawFoldoutHeader(
+                "Validation",
+                _showValidation,
+                InspectorUiUtility.RuntimeColor,
+                GetValidationBadge(issueCount),
+                issueCount == 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.WarningColor);
+            if (_showValidation)
             {
-                DrawValidationSection(uiRoot);
-            }
-
-            // Runtime info
-            if (Application.isPlaying)
-            {
-                EditorGUILayout.Space(5);
-                DrawRuntimeInfo(uiRoot);
+                InspectorUiUtility.BeginPanel();
+                DrawValidation(issueCount);
+                InspectorUiUtility.EndPanel();
             }
 
             serializedObject.ApplyModifiedProperties();
         }
 
-        private void DrawTitle()
+        private int CountValidationIssues()
         {
-            EditorGUILayout.BeginHorizontal();
-            GUILayout.FlexibleSpace();
-
-            EditorGUILayout.LabelField("UI Root", _titleStyle, GUILayout.Height(24));
-
-            GUILayout.FlexibleSpace();
-            EditorGUILayout.EndHorizontal();
-
-            // Subtitle
-            EditorGUILayout.LabelField("UI Framework Root Manager", _subtitleStyle);
-        }
-
-        private void DrawCoreReferencesSection(UIRoot uiRoot)
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            // UI Camera
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("UI Camera", GUILayout.Width(100));
-            EditorGUILayout.PropertyField(uiCameraProp, GUIContent.none);
-
-            bool hasCam = uiCameraProp.objectReferenceValue != null;
-            DrawStatusIndicator(hasCam);
-
-            EditorGUILayout.EndHorizontal();
-
-            // Root Canvas
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Root Canvas", GUILayout.Width(100));
-            EditorGUILayout.PropertyField(rootCanvasProp, GUIContent.none);
-
-            bool hasCanvas = rootCanvasProp.objectReferenceValue != null;
-            DrawStatusIndicator(hasCanvas);
-
-            EditorGUILayout.EndHorizontal();
-
-            UIAssetContextProvider contextProvider = uiRoot.AssetContextProvider;
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Asset Context", GUILayout.Width(100));
-            EditorGUILayout.ObjectField(contextProvider, typeof(UIAssetContextProvider), true);
-            DrawStatusIndicator(contextProvider != null);
-            EditorGUILayout.EndHorizontal();
-
-            DrawAssetContextControls(uiRoot, contextProvider);
-
-            // Canvas info
-            if (hasCanvas)
+            if (serializedObject.isEditingMultipleObjects ||
+                _rootCanvas.hasMultipleDifferentValues ||
+                _layerList.hasMultipleDifferentValues)
             {
-                Canvas canvas = rootCanvasProp.objectReferenceValue as Canvas;
-                if (canvas != null)
+                return -1;
+            }
+
+            int count = _rootCanvas.objectReferenceValue == null ? 1 : 0;
+            for (int i = 0; i < _layerList.arraySize; i++)
+            {
+                UILayer layer = GetLayer(i);
+                if (layer == null || string.IsNullOrWhiteSpace(layer.LayerName))
                 {
-                    EditorGUI.indentLevel++;
-                    EditorGUILayout.LabelField($"Render Mode: {canvas.renderMode}", EditorStyles.miniLabel);
-                    
-                    CanvasScaler scaler = canvas.GetComponent<CanvasScaler>();
-                    if (scaler != null)
-                    {
-                        EditorGUILayout.LabelField($"Scale Mode: {scaler.uiScaleMode}", EditorStyles.miniLabel);
-                        if (scaler.uiScaleMode == CanvasScaler.ScaleMode.ScaleWithScreenSize)
-                        {
-                            EditorGUILayout.LabelField($"Reference: {scaler.referenceResolution.x}x{scaler.referenceResolution.y}", EditorStyles.miniLabel);
-                        }
-                    }
-                    EditorGUI.indentLevel--;
-                }
-            }
-
-            if (contextProvider == null)
-            {
-                EditorGUILayout.HelpBox(
-                    "No UIAssetContextProvider found on UIRoot or its parents.\n" +
-                    "UI windows can still open, but default bucket/tag/owner metadata must then come from explicit OpenUI(...) overrides.",
-                    MessageType.Info);
-            }
-            else
-            {
-                EditorGUI.indentLevel++;
-                EditorGUILayout.LabelField($"Source Mode: {contextProvider.SourceMode}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Uses Embedded Snapshot: {contextProvider.UseEmbeddedSnapshot}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Preload Package Context: {contextProvider.PreloadPackageBackedContext}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Has Snapshot Metadata: {contextProvider.HasEmbeddedSnapshot}", EditorStyles.miniLabel);
-
-                if (contextProvider.UsesDirectReference)
-                {
-                    if (!contextProvider.HasAssignedContextAsset)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "UIAssetContextProvider is in DirectReference mode, but no UIAssetContextAsset is assigned.\n" +
-                            "This is still a safe empty-context configuration and will not block UI loading.",
-                            MessageType.Info);
-                    }
-                    else if (!contextProvider.HasEffectiveMetadata)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "A UIAssetContextAsset is assigned, but all metadata fields are currently empty.\n" +
-                            "Loads will still succeed and simply behave like an empty default context until the project config fills these values.",
-                            MessageType.None);
-                    }
-
-                    EditorGUILayout.ObjectField("Context Asset", contextProvider.ContextAsset, typeof(UIAssetContextAsset), false);
-                }
-                else if (contextProvider.UsesPathLocation)
-                {
-                    if (!contextProvider.HasAssignedPathLocation)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "UIAssetContextProvider is in PathLocation mode, but Custom Path is empty.\n" +
-                            "This is still a safe empty-context configuration and will not block UI loading.",
-                            MessageType.Info);
-                    }
-                    else
-                    {
-                        EditorGUILayout.LabelField($"Custom Path: {GetDisplayValue(contextProvider.ContextAssetLocation)}", EditorStyles.miniLabel);
-                        EditorGUILayout.HelpBox(contextProvider.UseEmbeddedSnapshot
-                                ? "This provider can serve its embedded metadata snapshot immediately and only uses the package-backed context if you explicitly enable preload or later resolve it.\nThis is the recommended default for Addressables-style projects because it avoids auto-pulling the package just to fetch default metadata."
-                                : "This provider will resolve its context asset through IAssetPackage.LoadAssetAsync<UIAssetContextAsset>(path) on first use.\nIf the package is unavailable or the path fails to load, UI loading will safely fall back to an empty default context.",
-                            contextProvider.UseEmbeddedSnapshot ? MessageType.Info : MessageType.None);
-                    }
-                }
-                else
-                {
-                    if (!contextProvider.HasAssignedAssetReference)
-                    {
-                        EditorGUILayout.HelpBox(
-                            "UIAssetContextProvider is in AssetReference mode, but no AssetRef is configured.\n" +
-                        "This is still a safe empty-context configuration and will not block UI loading.",
-                            MessageType.Info);
-                    }
-                    else
-                    {
-                        EditorGUILayout.LabelField($"AssetRef Location: {GetDisplayValue(contextProvider.ContextAssetLocation)}", EditorStyles.miniLabel);
-
-                        if (contextProvider.HasResolvedAssetReference)
-                        {
-                            EditorGUILayout.ObjectField("Resolved Asset", contextProvider.ContextAsset, typeof(UIAssetContextAsset), false);
-                        }
-                        else
-                        {
-                            EditorGUILayout.HelpBox(contextProvider.UseEmbeddedSnapshot
-                                    ? "This provider can serve its embedded metadata snapshot immediately and only touches the AssetManagement reference if you explicitly enable preload or later resolve it.\nThis is the recommended default for Addressables-style projects because it avoids auto-pulling the package just to fetch default metadata."
-                                    : "This provider will resolve its context asset through AssetManagement on first use.\nIf the package is unavailable or the reference fails to load, UI loading will safely fall back to an empty default context.",
-                                contextProvider.UseEmbeddedSnapshot ? MessageType.Info : MessageType.None);
-                        }
-                    }
-                }
-
-                EditorGUILayout.LabelField($"Config Bucket: {GetDisplayValue(contextProvider.ConfigBucket)}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Config Tag: {GetDisplayValue(contextProvider.ConfigTag)}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Config Owner: {GetDisplayValue(contextProvider.ConfigOwner)}", EditorStyles.miniLabel);
-                EditorGUILayout.Space(2);
-                EditorGUILayout.LabelField($"Prefab Bucket: {GetDisplayValue(contextProvider.PrefabBucket)}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Prefab Tag: {GetDisplayValue(contextProvider.PrefabTag)}", EditorStyles.miniLabel);
-                EditorGUILayout.LabelField($"Prefab Owner: {GetDisplayValue(contextProvider.PrefabOwner)}", EditorStyles.miniLabel);
-                EditorGUI.indentLevel--;
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private static string GetDisplayValue(string value)
-        {
-            return string.IsNullOrEmpty(value) ? "<none>" : value;
-        }
-
-        private void DrawAssetContextControls(UIRoot uiRoot, UIAssetContextProvider contextProvider)
-        {
-            EditorGUILayout.BeginHorizontal();
-
-            if (contextProvider == null)
-            {
-                if (GUILayout.Button("Add Provider", GUILayout.Height(22)))
-                {
-                    Undo.AddComponent<UIAssetContextProvider>(uiRoot.gameObject);
-                    EditorUtility.SetDirty(uiRoot.gameObject);
-                }
-            }
-            else
-            {
-                if (GUILayout.Button("Select Provider", GUILayout.Height(22)))
-                {
-                    Selection.activeObject = contextProvider;
-                    EditorGUIUtility.PingObject(contextProvider);
-                }
-
-                if (contextProvider.UsesDirectReference && contextProvider.ContextAsset == null)
-                {
-                    if (GUILayout.Button("Create Context Asset", GUILayout.Height(22)))
-                    {
-                        CreateAndAssignContextAsset(uiRoot, contextProvider);
-                    }
-                }
-                else if (contextProvider.UsesDirectReference && contextProvider.ContextAsset != null)
-                {
-                    if (GUILayout.Button("Select Context Asset", GUILayout.Height(22)))
-                    {
-                        Selection.activeObject = contextProvider.ContextAsset;
-                        EditorGUIUtility.PingObject(contextProvider.ContextAsset);
-                    }
-                }
-            }
-
-            EditorGUILayout.EndHorizontal();
-        }
-
-        private static void CreateAndAssignContextAsset(UIRoot uiRoot, UIAssetContextProvider contextProvider)
-        {
-            string rootPrefabPath = PrefabUtility.GetPrefabAssetPathOfNearestInstanceRoot(uiRoot.gameObject);
-            string baseFolder = !string.IsNullOrEmpty(rootPrefabPath)
-                ? Path.GetDirectoryName(rootPrefabPath)?.Replace("\\", "/")
-                : "Assets";
-            if (string.IsNullOrEmpty(baseFolder) || !AssetDatabase.IsValidFolder(baseFolder))
-            {
-                baseFolder = "Assets";
-            }
-
-            string assetPath = AssetDatabase.GenerateUniqueAssetPath($"{baseFolder}/UIAssetContext_Default.asset");
-            UIAssetContextAsset asset = ScriptableObject.CreateInstance<UIAssetContextAsset>();
-            AssetDatabase.CreateAsset(asset, assetPath);
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-
-            SerializedObject serializedProvider = new SerializedObject(contextProvider);
-            SerializedProperty contextAssetProp = serializedProvider.FindProperty("contextAsset");
-            contextAssetProp.objectReferenceValue = asset;
-            serializedProvider.ApplyModifiedProperties();
-
-            EditorUtility.SetDirty(contextProvider);
-            Selection.activeObject = asset;
-            EditorGUIUtility.PingObject(asset);
-        }
-
-        private void DrawStatusIndicator(bool isOk)
-        {
-            InspectorUiUtility.DrawStatusBadge(isOk ? "OK" : "Missing", isOk ? successColor : errorColor, 54f);
-        }
-
-        private void DrawLayerListSection(UIRoot uiRoot)
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            if (layerListProp.arraySize == 0)
-            {
-                EditorGUILayout.LabelField("No layers configured", EditorStyles.centeredGreyMiniLabel);
-            }
-            else
-            {
-                // Header row
-                EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField("#", EditorStyles.miniLabel, GUILayout.Width(25));
-                EditorGUILayout.LabelField("Layer Name", EditorStyles.miniLabel, GUILayout.MinWidth(100));
-                EditorGUILayout.LabelField("Sort Order", EditorStyles.miniLabel, GUILayout.Width(70));
-                EditorGUILayout.LabelField("Windows", EditorStyles.miniLabel, GUILayout.Width(60));
-                EditorGUILayout.LabelField("Action", EditorStyles.miniLabel, GUILayout.Width(50));
-                EditorGUILayout.EndHorizontal();
-
-                // Separator
-                Rect separatorRect = EditorGUILayout.GetControlRect(false, 1);
-                EditorGUI.DrawRect(separatorRect, Color.gray * 0.5f);
-
-                // Check for duplicate sorting orders
-                HashSet<int> usedOrders = new HashSet<int>();
-                HashSet<int> duplicateOrders = new HashSet<int>();
-
-                for (int i = 0; i < layerListProp.arraySize; i++)
-                {
-                    var layerProp = layerListProp.GetArrayElementAtIndex(i);
-                    if (layerProp.objectReferenceValue is UILayer layer)
-                    {
-                        Canvas canvas = layer.GetComponent<Canvas>();
-                        if (canvas != null)
-                        {
-                            int order = canvas.sortingOrder;
-                            if (!usedOrders.Add(order))
-                            {
-                                duplicateOrders.Add(order);
-                            }
-                        }
-                    }
-                }
-
-                // Layer rows
-                for (int i = 0; i < layerListProp.arraySize; i++)
-                {
-                    DrawLayerRow(i, layerListProp.GetArrayElementAtIndex(i), duplicateOrders);
-                }
-            }
-
-            EditorGUILayout.EndVertical();
-
-            // Layer list property (for adding/removing) - outside helpBox for proper foldout alignment
-            EditorGUILayout.Space(3);
-            EditorGUI.indentLevel++;
-            EditorGUILayout.PropertyField(layerListProp, new GUIContent("Edit Layer List"), true);
-            EditorGUI.indentLevel--;
-        }
-
-        private void DrawLayerRow(int index, SerializedProperty layerProp, HashSet<int> duplicateOrders)
-        {
-            UILayer layer = layerProp.objectReferenceValue as UILayer;
-            bool isValid = layer != null;
-
-            // Alternating row background
-            Rect rowRect = EditorGUILayout.BeginHorizontal(GUILayout.Height(20));
-            if (index % 2 == 0)
-            {
-                EditorGUI.DrawRect(rowRect, new Color(0.5f, 0.5f, 0.5f, 0.1f));
-            }
-
-            // Index
-            EditorGUILayout.LabelField(index.ToString(), GUILayout.Width(25));
-
-            // Layer Name - use cached styles
-            string layerName = isValid ? layer.LayerName : "[NULL]";
-            EditorGUILayout.LabelField(layerName, isValid ? _whiteNameStyle : _errorNameStyle, GUILayout.MinWidth(100));
-
-            // Sorting Order - use GetComponent for editor compatibility
-            string orderText = "N/A";
-            Color orderColor = Color.white;
-            if (isValid)
-            {
-                Canvas canvas = layer.GetComponent<Canvas>();
-                if (canvas != null)
-                {
-                    int order = canvas.sortingOrder;
-                    orderText = order.ToString();
-                    if (duplicateOrders.Contains(order))
-                    {
-                        orderColor = errorColor;
-                        orderText += " [DUP]";
-                    }
-                }
-            }
-            _orderStyle.normal.textColor = orderColor;
-            EditorGUILayout.LabelField(orderText, _orderStyle, GUILayout.Width(70));
-
-            // Window count (runtime only)
-            string windowCount = "-";
-            if (Application.isPlaying && isValid)
-            {
-                windowCount = layer.WindowCount.ToString();
-            }
-            EditorGUILayout.LabelField(windowCount, EditorStyles.centeredGreyMiniLabel, GUILayout.Width(60));
-
-            // Select button
-            GUI.enabled = isValid;
-            var selectContent = new GUIContent("Select", "Select this layer in Hierarchy");
-            if (GUILayout.Button(selectContent, EditorStyles.miniButton, GUILayout.Width(50)))
-            {
-                Selection.activeGameObject = layer.gameObject;
-                EditorGUIUtility.PingObject(layer.gameObject);
-            }
-            GUI.enabled = true;
-
-            EditorGUILayout.EndHorizontal();
-        }
-
-        private void DrawValidationSection(UIRoot uiRoot)
-        {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            // Run Validation button
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Run Validation Check", GUILayout.Height(25)))
-            {
-                RunValidation(uiRoot);
-            }
-            if (GUILayout.Button("Open Performance Auditor", GUILayout.Height(25)))
-            {
-                UIPerformanceAuditWindow.ShowWindow();
-            }
-            EditorGUILayout.EndHorizontal();
-
-            if (Application.isPlaying)
-            {
-                if (GUILayout.Button("Open Runtime Monitor", GUILayout.Height(22)))
-                {
-                    UIRuntimeMonitorWindow.ShowWindow();
-                }
-            }
-
-            if (validationRun)
-            {
-                EditorGUILayout.Space(5);
-
-                if (validationResults.Count == 0)
-                {
-                    EditorGUILayout.HelpBox("All checks passed!", MessageType.Info);
-                }
-                else
-                {
-                    foreach (var result in validationResults)
-                    {
-                        EditorGUILayout.BeginHorizontal();
-                        EditorGUILayout.HelpBox(result.message, result.type);
-                        if (result.context != null)
-                        {
-                            if (GUILayout.Button("Go", GUILayout.Width(30), GUILayout.Height(38)))
-                            {
-                                Selection.activeObject = result.context;
-                                EditorGUIUtility.PingObject(result.context);
-                            }
-                        }
-                        EditorGUILayout.EndHorizontal();
-                    }
-                }
-            }
-            else
-            {
-                EditorGUILayout.LabelField("Click 'Run Validation Check' to validate configuration", 
-                    EditorStyles.centeredGreyMiniLabel);
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        private void RunValidation(UIRoot uiRoot)
-        {
-            validationResults.Clear();
-            validationRun = true;
-
-            // Check UI Camera
-            if (uiCameraProp.objectReferenceValue == null)
-            {
-                validationResults.Add(new ValidationResult
-                {
-                    message = "UI Camera is not assigned!",
-                    type = MessageType.Error,
-                    context = uiRoot
-                });
-            }
-
-            // Check Root Canvas
-            if (rootCanvasProp.objectReferenceValue == null)
-            {
-                validationResults.Add(new ValidationResult
-                {
-                    message = "Root Canvas is not assigned!",
-                    type = MessageType.Error,
-                    context = uiRoot
-                });
-            }
-
-            // Check Layer List
-            if (layerListProp.arraySize == 0)
-            {
-                validationResults.Add(new ValidationResult
-                {
-                    message = "Layer list is empty. Add at least one UILayer.",
-                    type = MessageType.Warning,
-                    context = uiRoot
-                });
-            }
-
-            HashSet<string> usedNames = new HashSet<string>();
-            HashSet<int> usedOrders = new HashSet<int>();
-
-            for (int i = 0; i < layerListProp.arraySize; i++)
-            {
-                var layerProp = layerListProp.GetArrayElementAtIndex(i);
-                UILayer layer = layerProp.objectReferenceValue as UILayer;
-
-                if (layer == null)
-                {
-                    validationResults.Add(new ValidationResult
-                    {
-                        message = $"Layer at index {i} is null!",
-                        type = MessageType.Error,
-                        context = uiRoot
-                    });
+                    count++;
                     continue;
                 }
 
-                // Check parent
-                if (layer.transform.parent != uiRoot.transform)
+                for (int previousIndex = 0; previousIndex < i; previousIndex++)
                 {
-                    validationResults.Add(new ValidationResult
+                    UILayer previous = GetLayer(previousIndex);
+                    if (previous == null)
                     {
-                        message = $"Layer '{layer.LayerName}' is not a child of UIRoot!",
-                        type = MessageType.Error,
-                        context = layer
-                    });
-                }
-
-                // Check name
-                if (string.IsNullOrEmpty(layer.LayerName))
-                {
-                    validationResults.Add(new ValidationResult
-                    {
-                        message = $"Layer at index {i} has empty LayerName!",
-                        type = MessageType.Error,
-                        context = layer
-                    });
-                }
-                else if (!usedNames.Add(layer.LayerName))
-                {
-                    validationResults.Add(new ValidationResult
-                    {
-                        message = $"Duplicate layer name: '{layer.LayerName}'",
-                        type = MessageType.Error,
-                        context = layer
-                    });
-                }
-
-                // Check canvas - use GetComponent for editor compatibility
-                Canvas layerCanvas = layer.GetComponent<Canvas>();
-                if (layerCanvas == null)
-                {
-                    validationResults.Add(new ValidationResult
-                    {
-                        message = $"Layer '{layer.LayerName}' is missing Canvas component!",
-                        type = MessageType.Error,
-                        context = layer
-                    });
-                }
-                else
-                {
-                    // Check override sorting
-                    if (!layerCanvas.overrideSorting)
-                    {
-                        validationResults.Add(new ValidationResult
-                        {
-                            message = $"Layer '{layer.LayerName}' Canvas should have 'Override Sorting' enabled.",
-                            type = MessageType.Warning,
-                            context = layer
-                        });
+                        continue;
                     }
 
-                    // Check sorting order
-                    int order = layerCanvas.sortingOrder;
-                    if (!usedOrders.Add(order))
+                    if (ReferenceEquals(previous, layer) ||
+                        string.Equals(previous.LayerName, layer.LayerName, StringComparison.Ordinal))
                     {
-                        validationResults.Add(new ValidationResult
-                        {
-                            message = $"Layer '{layer.LayerName}' has duplicate sortingOrder: {order}",
-                            type = MessageType.Error,
-                            context = layer
-                        });
+                        count++;
+                        break;
                     }
                 }
             }
+
+            return count;
         }
 
-        private string GetValidationSummary()
+        private void DrawValidation(int issueCount)
         {
-            int errors = 0;
-            int warnings = 0;
-            foreach (var r in validationResults)
+            if (issueCount < 0)
             {
-                if (r.type == MessageType.Error) errors++;
-                else if (r.type == MessageType.Warning) warnings++;
+                EditorGUILayout.HelpBox(
+                    "Multiple roots are selected. Shared properties remain editable; detailed validation is shown for a single root only.",
+                    MessageType.Info);
+                return;
             }
 
-            if (errors == 0 && warnings == 0) return "OK";
-            if (errors > 0 && warnings > 0) return $"{errors} Errors, {warnings} Warnings";
-            if (errors > 0) return $"{errors} Errors";
-            return $"{warnings} Warnings";
+            InspectorUiUtility.DrawStatusRow(
+                "Configuration",
+                issueCount == 0 ? "Ready" : $"{issueCount} Issue(s)",
+                issueCount == 0 ? InspectorUiUtility.SuccessColor : InspectorUiUtility.WarningColor);
+
+            if (_rootCanvas.objectReferenceValue == null)
+            {
+                EditorGUILayout.HelpBox("Root Canvas is required.", MessageType.Warning);
+            }
+
+            for (int i = 0; i < _layerList.arraySize; i++)
+            {
+                UILayer layer = GetLayer(i);
+                if (layer == null)
+                {
+                    EditorGUILayout.HelpBox($"Layer element {i} is not assigned.", MessageType.Warning);
+                    continue;
+                }
+
+                if (string.IsNullOrWhiteSpace(layer.LayerName))
+                {
+                    EditorGUILayout.HelpBox($"Layer element {i} has an empty Layer Name.", MessageType.Warning);
+                }
+
+                for (int previousIndex = 0; previousIndex < i; previousIndex++)
+                {
+                    UILayer previous = GetLayer(previousIndex);
+                    if (previous == null)
+                    {
+                        continue;
+                    }
+
+                    if (ReferenceEquals(previous, layer))
+                    {
+                        EditorGUILayout.HelpBox(
+                            $"Layer element {i} duplicates the component at element {previousIndex}.",
+                            MessageType.Warning);
+                        break;
+                    }
+
+                    if (!string.IsNullOrWhiteSpace(layer.LayerName) &&
+                        string.Equals(previous.LayerName, layer.LayerName, StringComparison.Ordinal))
+                    {
+                        EditorGUILayout.HelpBox(
+                            $"Layer name '{layer.LayerName}' is duplicated at elements {previousIndex} and {i}.",
+                            MessageType.Warning);
+                        break;
+                    }
+                }
+            }
+
+            if (issueCount == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "The root has a Canvas and all registered layers have unique components and names.",
+                    MessageType.Info);
+            }
         }
 
-        private void DrawRuntimeInfo(UIRoot uiRoot)
+        private UILayer GetLayer(int index)
         {
-            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
-
-            EditorGUILayout.LabelField("[Runtime Mode]", _runtimeStyle);
-
-            UIManager manager = UnityEngine.Object.FindFirstObjectByType<UIManager>();
-            if (manager != null)
-            {
-                UIPerformanceStats stats = manager.GetPerformanceStats();
-                EditorGUILayout.LabelField($"Total Active Windows: {stats.ActiveWindowCount}");
-                EditorGUILayout.LabelField($"Scene-Bound Windows: {stats.SceneBoundWindowCount}");
-                EditorGUILayout.LabelField($"Cached Config Handles: {stats.CachedConfigHandleCount}");
-                EditorGUILayout.LabelField($"Cached Prefab Handles: {stats.CachedPrefabHandleCount}");
-                EditorGUILayout.LabelField($"Isolated Window Canvases: {stats.IsolatedWindowCanvasCount}");
-                EditorGUILayout.LabelField($"Pending Scene Sweep: {stats.HasPendingSceneSweep}");
-
-                EditorGUILayout.Space(4);
-                EditorGUILayout.BeginHorizontal();
-                if (GUILayout.Button("Open Runtime Monitor", GUILayout.Height(22)))
-                {
-                    UIRuntimeMonitorWindow.ShowWindow();
-                }
-                if (GUILayout.Button("Open Performance Auditor", GUILayout.Height(22)))
-                {
-                    UIPerformanceAuditWindow.ShowWindow();
-                }
-                EditorGUILayout.EndHorizontal();
-            }
-            else
-            {
-                EditorGUILayout.LabelField("Total Active Windows: <UIManager not found>");
-            }
-
-            EditorGUILayout.EndVertical();
-
-            // Auto-repaint
-            Repaint();
+            return _layerList.GetArrayElementAtIndex(index).objectReferenceValue as UILayer;
         }
 
+        private string GetValidationBadge(int issueCount)
+        {
+            if (issueCount < 0)
+            {
+                return "MULTI-EDIT";
+            }
+
+            return issueCount == 0 ? "READY" : $"{issueCount} ISSUES";
+        }
     }
 }
-#endif
