@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         // Basic
         private SerializedProperty abilityNameProp;
         private SerializedProperty instancingPolicyProp;
-        private SerializedProperty netExecPolicyProp;
+        private SerializedProperty executionPolicyProp;
         private SerializedProperty costEffectProp;
         private SerializedProperty cooldownEffectProp;
 
@@ -59,13 +59,55 @@ namespace CycloneGames.GameplayAbilities.Editor
         private static GUIStyle s_SummaryStyle;
         private static GUIStyle s_SectionHeader;
         private static readonly Color s_SectionLine = new Color(0.3f, 0.3f, 0.3f, 1f);
+        private static readonly GUIContent s_NameContent = new GUIContent("Name");
+        private static readonly GUIContent s_InstancingContent = new GUIContent(
+            "Instancing Policy",
+            "InstancedPerActor: one instance per ASC. InstancedPerExecution: one instance per activation. NonInstanced is not supported by the Unity Runtime path.");
+        private static readonly GUIContent s_ExecutionPolicyContent = new GUIContent(
+            "Execution Policy",
+            "LocalOnly executes in the current runtime. AuthorityOnly requires a runtime context that owns simulation authority.");
+        private static readonly GUIContent s_CostContent = new GUIContent(
+            "Cost Effect",
+            "A GameplayEffect that defines the resource cost and is applied when the ability commits.");
+        private static readonly GUIContent s_CooldownContent = new GUIContent(
+            "Cooldown Effect",
+            "A GameplayEffect that grants the cooldown state checked before activation.");
+        private static readonly GUIContent s_ActivateOnGrantedContent = new GUIContent(
+            "Activate On Granted",
+            "Activates the ability immediately after a successful grant. Use this for passive abilities with an explicit lifetime.");
+        private static readonly GUIContent s_TriggersContent = new GUIContent(
+            "Ability Triggers",
+            "Bounded automatic activation conditions: GameplayEvent, OwnedTagAdded, or OwnedTagRemoved.");
+        private static readonly GUIContent s_AbilityTagsContent = new GUIContent(
+            "Ability Tags",
+            "Tags that identify this ability and participate in cancel or block matching.");
+        private static readonly GUIContent s_ActivationOwnedTagsContent = new GUIContent(
+            "Activation Owned Tags",
+            "Tags granted to the owner while this ability is active.");
+        private static readonly GUIContent s_ActivationRequiredContent = new GUIContent(
+            "Activation Required",
+            "The owner must have all of these tags before activation.");
+        private static readonly GUIContent s_ActivationBlockedContent = new GUIContent(
+            "Activation Blocked",
+            "The owner must have none of these tags before activation.");
+        private static readonly GUIContent s_CancelAbilitiesContent = new GUIContent(
+            "Cancel Abilities With Tag",
+            "Activation cancels active abilities whose definition tags match any of these tags.");
+        private static readonly GUIContent s_BlockAbilitiesContent = new GUIContent(
+            "Block Abilities With Tag",
+            "While active, this ability blocks definitions whose tags match any of these tags.");
+        private static readonly GUIContent s_RequiredTagsContent = new GUIContent("Required Tags");
+        private static readonly GUIContent s_BlockedTagsContent = new GUIContent("Blocked Tags");
 
         private readonly StringBuilder sb = new StringBuilder(256);
+        private readonly List<SerializedProperty> derivedProperties = new List<SerializedProperty>(8);
+        private string derivedFieldsLabel;
 
         private void OnEnable()
         {
             CacheBasePropertyNames();
             CacheProperties();
+            CacheDerivedProperties();
         }
 
         private static void CacheBasePropertyNames()
@@ -93,7 +135,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             abilityNameProp = serializedObject.FindProperty("AbilityName");
             instancingPolicyProp = serializedObject.FindProperty("InstancingPolicy");
-            netExecPolicyProp = serializedObject.FindProperty("NetExecutionPolicy");
+            executionPolicyProp = serializedObject.FindProperty("ExecutionPolicy");
             costEffectProp = serializedObject.FindProperty("CostEffect");
             cooldownEffectProp = serializedObject.FindProperty("CooldownEffect");
 
@@ -111,6 +153,27 @@ namespace CycloneGames.GameplayAbilities.Editor
             srcBlockedProp = serializedObject.FindProperty("SourceBlockedTags");
             tgtRequiredProp = serializedObject.FindProperty("TargetRequiredTags");
             tgtBlockedProp = serializedObject.FindProperty("TargetBlockedTags");
+        }
+
+        private void CacheDerivedProperties()
+        {
+            derivedProperties.Clear();
+            var iterator = serializedObject.GetIterator();
+            bool enterChildren = true;
+            while (iterator.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+                if (iterator.name == "m_Script" || s_BasePropertyNames.Contains(iterator.name))
+                {
+                    continue;
+                }
+
+                derivedProperties.Add(iterator.Copy());
+            }
+
+            derivedFieldsLabel = target != null
+                ? $"Custom Fields ({target.GetType().Name})"
+                : "Custom Fields";
         }
 
         private static void EnsureStyles()
@@ -143,11 +206,9 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (showBasic)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(abilityNameProp, new GUIContent("Name"));
-                EditorGUILayout.PropertyField(instancingPolicyProp, new GUIContent("Instancing Policy",
-                    "NonInstanced: CDO only (best perf, no state)\nInstancedPerActor: One per ASC (most common)\nInstancedPerExecution: New per activation (clean state)"));
-                EditorGUILayout.PropertyField(netExecPolicyProp, new GUIContent("Net Execution",
-                    "LocalOnly: Client cosmetic\nLocalPredicted: Client-predicted, server-authoritative\nServerOnly: Server-side only"));
+                EditorGUILayout.PropertyField(abilityNameProp, s_NameContent);
+                EditorGUILayout.PropertyField(instancingPolicyProp, s_InstancingContent);
+                EditorGUILayout.PropertyField(executionPolicyProp, s_ExecutionPolicyContent);
                 EditorGUI.indentLevel--;
             }
 
@@ -159,10 +220,8 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (showCostCooldown)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(costEffectProp, new GUIContent("Cost Effect",
-                    "A GameplayEffect that defines the resource cost (Mana, Stamina, etc.). Applied when the ability commits."));
-                EditorGUILayout.PropertyField(cooldownEffectProp, new GUIContent("Cooldown Effect",
-                    "A GameplayEffect that applies a cooldown tag. The ability cannot re-activate while on cooldown."));
+                EditorGUILayout.PropertyField(costEffectProp, s_CostContent);
+                EditorGUILayout.PropertyField(cooldownEffectProp, s_CooldownContent);
                 EditorGUI.indentLevel--;
             }
 
@@ -174,10 +233,8 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (showActivation)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(activateOnGrantedProp, new GUIContent("Activate On Granted",
-                    "If true, the ability activates automatically when granted. Use for passive abilities."));
-                EditorGUILayout.PropertyField(triggerDataProp, new GUIContent("Ability Triggers",
-                    "Define automatic trigger conditions (GameplayEvent, OwnedTagAdded, OwnedTagRemoved)."), true);
+                EditorGUILayout.PropertyField(activateOnGrantedProp, s_ActivateOnGrantedContent);
+                EditorGUILayout.PropertyField(triggerDataProp, s_TriggersContent, true);
                 EditorGUI.indentLevel--;
             }
 
@@ -189,15 +246,11 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (showAbilityTags)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(abilityTagsProp, new GUIContent("Ability Tags",
-                    "Tags that identify this ability (e.g., 'Ability.Damage.Fire'). Used for cancel/block matching."));
-                EditorGUILayout.PropertyField(activationOwnedTagsProp, new GUIContent("Activation Owned Tags",
-                    "Tags granted to the owner while this ability is active."));
+                EditorGUILayout.PropertyField(abilityTagsProp, s_AbilityTagsContent);
+                EditorGUILayout.PropertyField(activationOwnedTagsProp, s_ActivationOwnedTagsContent);
                 EditorGUILayout.Space(4);
-                EditorGUILayout.PropertyField(activationRequiredTagsProp, new GUIContent("Activation Required",
-                    "Owner must have ALL these tags to activate."));
-                EditorGUILayout.PropertyField(activationBlockedTagsProp, new GUIContent("Activation Blocked",
-                    "Owner must have NONE of these tags to activate."));
+                EditorGUILayout.PropertyField(activationRequiredTagsProp, s_ActivationRequiredContent);
+                EditorGUILayout.PropertyField(activationBlockedTagsProp, s_ActivationBlockedContent);
                 EditorGUI.indentLevel--;
             }
 
@@ -209,10 +262,8 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (showInteractionTags)
             {
                 EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(cancelWithTagProp, new GUIContent("Cancel Abilities With Tag",
-                    "When this ability activates, cancel any other active abilities with these tags."));
-                EditorGUILayout.PropertyField(blockWithTagProp, new GUIContent("Block Abilities With Tag",
-                    "While this ability is active, block activation of abilities with these tags."));
+                EditorGUILayout.PropertyField(cancelWithTagProp, s_CancelAbilitiesContent);
+                EditorGUILayout.PropertyField(blockWithTagProp, s_BlockAbilitiesContent);
                 EditorGUI.indentLevel--;
             }
 
@@ -225,12 +276,12 @@ namespace CycloneGames.GameplayAbilities.Editor
             {
                 EditorGUI.indentLevel++;
                 EditorGUILayout.LabelField("Source (Caster)", EditorStyles.boldLabel);
-                EditorGUILayout.PropertyField(srcRequiredProp, new GUIContent("Required Tags"));
-                EditorGUILayout.PropertyField(srcBlockedProp, new GUIContent("Blocked Tags"));
+                EditorGUILayout.PropertyField(srcRequiredProp, s_RequiredTagsContent);
+                EditorGUILayout.PropertyField(srcBlockedProp, s_BlockedTagsContent);
                 EditorGUILayout.Space(4);
                 EditorGUILayout.LabelField("Target", EditorStyles.boldLabel);
-                EditorGUILayout.PropertyField(tgtRequiredProp, new GUIContent("Required Tags"));
-                EditorGUILayout.PropertyField(tgtBlockedProp, new GUIContent("Blocked Tags"));
+                EditorGUILayout.PropertyField(tgtRequiredProp, s_RequiredTagsContent);
+                EditorGUILayout.PropertyField(tgtBlockedProp, s_BlockedTagsContent);
                 EditorGUI.indentLevel--;
             }
 
@@ -245,6 +296,13 @@ namespace CycloneGames.GameplayAbilities.Editor
         private void DrawSummary()
         {
             sb.Clear();
+
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                sb.Append(targets.Length).Append(" abilities selected");
+                EditorGUILayout.LabelField(sb.ToString(), s_SummaryStyle);
+                return;
+            }
 
             string name = abilityNameProp.stringValue;
             if (string.IsNullOrEmpty(name)) name = target.name;
@@ -261,9 +319,16 @@ namespace CycloneGames.GameplayAbilities.Editor
             };
             sb.Append("  \u2022  <color=#6BB8E0>").Append(instLabel).Append("</color>");
 
-            // Net
-            var netPolicy = (Runtime.ENetExecutionPolicy)netExecPolicyProp.enumValueIndex;
-            sb.Append("  \u2022  ").Append(netPolicy.ToString());
+            var executionPolicy = (Runtime.EAbilityExecutionPolicy)executionPolicyProp.enumValueIndex;
+            string executionLabel = executionPolicy switch
+            {
+                Runtime.EAbilityExecutionPolicy.Invalid => "Invalid",
+                Runtime.EAbilityExecutionPolicy.LocalOnly => "LocalOnly",
+                Runtime.EAbilityExecutionPolicy.AuthorityOnly => "AuthorityOnly",
+                Runtime.EAbilityExecutionPolicy.LocalPredicted => "LocalPredicted",
+                _ => "?"
+            };
+            sb.Append("  \u2022  ").Append(executionLabel);
 
             // Passive
             if (activateOnGrantedProp.boolValue)
@@ -296,28 +361,40 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             bool hasWarnings = false;
 
-            if (string.IsNullOrEmpty(abilityNameProp.stringValue))
+            if (!abilityNameProp.hasMultipleDifferentValues && string.IsNullOrEmpty(abilityNameProp.stringValue))
             {
                 EditorGUILayout.HelpBox("Ability Name is empty. This makes debugging difficult.", MessageType.Warning);
                 hasWarnings = true;
             }
 
             // Passive with cooldown is unusual
-            if (activateOnGrantedProp.boolValue && cooldownEffectProp.objectReferenceValue != null)
+            if (!activateOnGrantedProp.hasMultipleDifferentValues &&
+                !cooldownEffectProp.hasMultipleDifferentValues &&
+                activateOnGrantedProp.boolValue &&
+                cooldownEffectProp.objectReferenceValue != null)
             {
                 EditorGUILayout.HelpBox("'Activate On Granted' is enabled along with a Cooldown. Passive abilities typically don't use cooldowns.", MessageType.Info);
                 hasWarnings = true;
             }
 
-            // NonInstanced with state
-            if (instancingPolicyProp.enumValueIndex == (int)Runtime.EGameplayAbilityInstancingPolicy.NonInstanced)
+            // Runtime definitions require an explicit instance owner.
+            if (!instancingPolicyProp.hasMultipleDifferentValues &&
+                instancingPolicyProp.enumValueIndex == (int)Runtime.EGameplayAbilityInstancingPolicy.NonInstanced)
             {
-                // Check if derived class might store state
-                if (target.GetType() != typeof(Runtime.GameplayAbilitySO))
-                {
-                    EditorGUILayout.HelpBox("Instancing is 'NonInstanced' (CDO). Derived ability code must not store per-activation state in member variables.", MessageType.Info);
-                    hasWarnings = true;
-                }
+                EditorGUILayout.HelpBox(
+                    "Unity Runtime does not grant NonInstanced abilities because shared definitions cannot safely own ASC, task, or activation state. " +
+                    "Choose InstancedPerActor or InstancedPerExecution. Pure Core simulation may still use stateless NonInstanced definitions.",
+                    MessageType.Error);
+                hasWarnings = true;
+            }
+
+            if (!executionPolicyProp.hasMultipleDifferentValues &&
+                executionPolicyProp.enumValueIndex == (int)Runtime.EAbilityExecutionPolicy.Invalid)
+            {
+                EditorGUILayout.HelpBox(
+                    "Execution Policy is Invalid. Choose LocalOnly or AuthorityOnly before creating a runtime ability.",
+                    MessageType.Error);
+                hasWarnings = true;
             }
 
             if (hasWarnings) EditorGUILayout.Space(4);
@@ -329,34 +406,18 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         private void DrawDerivedClassFields()
         {
-            var targetType = target.GetType();
-            if (targetType == typeof(Runtime.GameplayAbilitySO)) return;
-
-            var derivedFields = new List<SerializedProperty>();
-            var iterator = serializedObject.GetIterator();
-            bool enterChildren = true;
-
-            while (iterator.NextVisible(enterChildren))
-            {
-                enterChildren = false;
-                if (iterator.name == "m_Script") continue;
-                if (s_BasePropertyNames.Contains(iterator.name)) continue;
-                derivedFields.Add(iterator.Copy());
-            }
-
-            if (derivedFields.Count > 0)
+            if (derivedProperties.Count > 0)
             {
                 EditorGUILayout.Space(8);
                 DrawSectionLine();
-                showDerivedFields = EditorGUILayout.Foldout(showDerivedFields,
-                    $"Custom Fields ({targetType.Name})", true);
+                showDerivedFields = EditorGUILayout.Foldout(showDerivedFields, derivedFieldsLabel, true);
 
                 if (showDerivedFields)
                 {
                     EditorGUI.indentLevel++;
-                    foreach (var prop in derivedFields)
+                    for (int i = 0; i < derivedProperties.Count; i++)
                     {
-                        EditorGUILayout.PropertyField(prop, true);
+                        EditorGUILayout.PropertyField(derivedProperties[i], true);
                     }
                     EditorGUI.indentLevel--;
                 }

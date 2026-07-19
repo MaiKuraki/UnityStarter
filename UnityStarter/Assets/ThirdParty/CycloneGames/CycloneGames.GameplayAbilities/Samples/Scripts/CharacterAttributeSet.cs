@@ -35,6 +35,21 @@ namespace CycloneGames.GameplayAbilities.Sample
             // but we'll do it via a GameplayEffect for better data-driven design.
         }
 
+        protected override void RegisterAttributes()
+        {
+            RegisterAttribute(Level);
+            RegisterAttribute(Experience);
+            RegisterAttribute(AttackPower);
+            RegisterAttribute(Defense);
+            RegisterAttribute(Speed);
+            RegisterAttribute(Health);
+            RegisterAttribute(MaxHealth);
+            RegisterAttribute(Mana);
+            RegisterAttribute(MaxMana);
+            RegisterAttribute(BonusDamageMultiplier);
+            RegisterAttribute(Damage);
+        }
+
         /// <summary>
         /// Called before a change is made to an attribute's CurrentValue. Perfect for clamping.
         /// </summary>

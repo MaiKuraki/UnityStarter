@@ -1,0 +1,33 @@
+{
+    "name": "CycloneGames.AssetManagement.Providers.Addressables.Tests.Editor",
+    "rootNamespace": "CycloneGames.AssetManagement.Tests.Editor",
+    "references": [
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.AssetManagement.Runtime.Providers.Addressables",
+        "UniTask",
+        "Unity.Addressables",
+        "Unity.ResourceManager"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_ADDRESSABLES"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.addressables",
+            "expression": "[2.11.1,2.11.2)",
+            "define": "CYCLONEGAMES_HAS_ADDRESSABLES"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

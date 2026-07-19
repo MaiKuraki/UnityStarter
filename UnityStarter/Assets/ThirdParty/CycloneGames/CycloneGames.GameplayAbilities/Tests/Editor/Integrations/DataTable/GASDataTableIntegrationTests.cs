@@ -34,7 +34,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor.Integrations.DataTable
 
             Assert.That(spec.GetCalculatedMagnitude(0), Is.EqualTo(35f));
 
-            spec.ReturnToPool();
+            spec.Discard();
         }
 
         [Test]
@@ -86,7 +86,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor.Integrations.DataTable
 
             Assert.That(spec.GetCalculatedMagnitude(0), Is.EqualTo(43f));
 
-            spec.ReturnToPool();
+            spec.Discard();
         }
 
         private sealed class SkillMagnitudeRow : IDataRow
@@ -108,6 +108,12 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor.Integrations.DataTable
         {
             public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
             public GameplayAttribute Mana { get; } = new GameplayAttribute("Mana");
+
+            protected override void RegisterAttributes()
+            {
+                RegisterAttribute(Health);
+                RegisterAttribute(Mana);
+            }
         }
     }
 }

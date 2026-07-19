@@ -29,7 +29,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void That(bool condition, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -37,7 +36,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void That(bool condition, Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -45,7 +43,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void That<T>(bool condition, T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -53,7 +50,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void IsTrue(bool condition, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (condition) return;
@@ -61,7 +57,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void IsFalse(bool condition, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (!condition) return;
@@ -69,7 +64,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void IsNull(object value, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (value == null) return;
@@ -77,7 +71,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void IsNotNull(object value, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (value != null) return;
@@ -85,7 +78,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void AreEqual<T>(T expected, T actual, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (EqualityComparer<T>.Default.Equals(expected, actual)) return;
@@ -93,7 +85,6 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void AreNotEqual<T>(T notExpected, T actual, string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             if (!EqualityComparer<T>.Default.Equals(notExpected, actual)) return;
@@ -101,27 +92,23 @@ namespace CycloneGames.Logger
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void Fail(string message = null, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             HandleFailure(message ?? DefaultFailureMessage, category, filePath, lineNumber, memberName);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void Fail(Action<StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             HandleFailure(messageBuilder, category, filePath, lineNumber, memberName);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        [UnityEngine.HideInCallstack]
         public static void Fail<T>(T state, Action<T, StringBuilder> messageBuilder, string category = null, [CallerFilePath] string filePath = "", [CallerLineNumber] int lineNumber = 0, [CallerMemberName] string memberName = "")
         {
             HandleFailure(state, messageBuilder, category, filePath, lineNumber, memberName);
         }
 
-        [UnityEngine.HideInCallstack]
         private static void HandleFailure(string message, string category, string filePath, int lineNumber, string memberName)
         {
             var options = _options;
@@ -140,7 +127,6 @@ namespace CycloneGames.Logger
             }
         }
 
-        [UnityEngine.HideInCallstack]
         private static void HandleFailure(Action<StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
             if (messageBuilder == null)
@@ -170,7 +156,6 @@ namespace CycloneGames.Logger
             }
         }
 
-        [UnityEngine.HideInCallstack]
         private static void HandleFailure<T>(T state, Action<T, StringBuilder> messageBuilder, string category, string filePath, int lineNumber, string memberName)
         {
             if (messageBuilder == null)

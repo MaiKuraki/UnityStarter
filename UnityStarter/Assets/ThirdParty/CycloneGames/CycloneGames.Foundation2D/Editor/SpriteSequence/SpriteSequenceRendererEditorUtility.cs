@@ -4,7 +4,6 @@ using System.Collections.Generic;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.U2D;
 using CycloneGames.Foundation2D.Runtime;
 
 namespace CycloneGames.Foundation2D.Editor
@@ -47,8 +46,12 @@ namespace CycloneGames.Foundation2D.Editor
             public readonly int FrameCount;
             public readonly int DistinctTextureCount;
             public readonly bool FramesShareTexture;
+            public readonly bool FramesMeetFlipbookContract;
+            public readonly SpriteFlipbookCompatibilityError CompatibilityError;
+            public readonly int ErrorFrameIndex;
             public readonly bool HasMaterial;
             public readonly bool ShaderMatches;
+            public readonly bool ShaderSupported;
             public readonly bool MeetsSharedBatchingPrerequisites;
             public readonly string ExpectedShaderName;
             public readonly string SuggestedActions;
@@ -56,14 +59,34 @@ namespace CycloneGames.Foundation2D.Editor
             public readonly bool ShouldSuggestCreateCorrectMaterial;
             public readonly bool ShouldSuggestSwitchToFlipbookMode;
 
-            public CompatibilitySummary(bool hasController, int frameCount, int distinctTextureCount, bool framesShareTexture, bool hasMaterial, bool shaderMatches, bool meetsSharedBatchingPrerequisites, string expectedShaderName, string suggestedActions, bool shouldSuggestFilterFrames, bool shouldSuggestCreateCorrectMaterial, bool shouldSuggestSwitchToFlipbookMode)
+            public CompatibilitySummary(
+                bool hasController,
+                int frameCount,
+                int distinctTextureCount,
+                bool framesShareTexture,
+                bool framesMeetFlipbookContract,
+                SpriteFlipbookCompatibilityError compatibilityError,
+                int errorFrameIndex,
+                bool hasMaterial,
+                bool shaderMatches,
+                bool shaderSupported,
+                bool meetsSharedBatchingPrerequisites,
+                string expectedShaderName,
+                string suggestedActions,
+                bool shouldSuggestFilterFrames,
+                bool shouldSuggestCreateCorrectMaterial,
+                bool shouldSuggestSwitchToFlipbookMode)
             {
                 HasController = hasController;
                 FrameCount = frameCount;
                 DistinctTextureCount = distinctTextureCount;
                 FramesShareTexture = framesShareTexture;
+                FramesMeetFlipbookContract = framesMeetFlipbookContract;
+                CompatibilityError = compatibilityError;
+                ErrorFrameIndex = errorFrameIndex;
                 HasMaterial = hasMaterial;
                 ShaderMatches = shaderMatches;
+                ShaderSupported = shaderSupported;
                 MeetsSharedBatchingPrerequisites = meetsSharedBatchingPrerequisites;
                 ExpectedShaderName = expectedShaderName;
                 SuggestedActions = suggestedActions;
@@ -75,6 +98,8 @@ namespace CycloneGames.Foundation2D.Editor
 
         private static readonly HashSet<Texture> TextureSetBuffer = new();
         private static readonly List<Sprite> SpriteBuffer = new(256);
+        private const int MaxRetainedFrameBufferCapacity = 1024;
+        private const int DefaultFrameBufferCapacity = 256;
 
         public static bool TryGetController(Component context, out SpriteSequenceController controller)
         {
@@ -82,76 +107,78 @@ namespace CycloneGames.Foundation2D.Editor
             return controller != null;
         }
 
-        public static bool AllFramesShareTexture(Component context)
+        private static void AnalyzeFrames(
+            Component context,
+            out bool hasController,
+            out int frameCount,
+            out int distinctTextureCount,
+            out bool framesShareTexture,
+            out bool framesMeetFlipbookContract,
+            out SpriteFlipbookCompatibilityError compatibilityError,
+            out int errorFrameIndex)
         {
-            if (!TryGetFramesProperty(context, out _, out SerializedProperty frames))
+            hasController = TryGetFramesProperty(context, out SerializedObject controllerObject, out SerializedProperty frames);
+            frameCount = 0;
+            distinctTextureCount = 0;
+            framesShareTexture = false;
+            framesMeetFlipbookContract = false;
+            compatibilityError = SpriteFlipbookCompatibilityError.MissingFrames;
+            errorFrameIndex = -1;
+            if (!hasController)
             {
-                return true;
+                return;
             }
 
-            int count = frames.arraySize;
-            if (count <= 1)
+            controllerObject.UpdateIfRequiredOrScript();
+            frameCount = frames.arraySize;
+            if (frameCount <= 0)
             {
-                return true;
+                return;
             }
 
-            if (TryBuildFrameList(frames, out List<Sprite> frameSprites) && TryGetCommonAtlas(frameSprites, out _))
-            {
-                return true;
-            }
-
-            Sprite first = frames.GetArrayElementAtIndex(0).objectReferenceValue as Sprite;
-            if (first == null || first.texture == null)
-            {
-                return false;
-            }
-
-            Texture texture = first.texture;
-            for (int i = 1; i < count; i++)
-            {
-                Sprite sprite = frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite;
-                if (sprite == null || sprite.texture == null || sprite.texture != texture)
-                {
-                    return false;
-                }
-            }
-
-            return true;
-        }
-
-        public static int CountDistinctFrameTextures(Component context)
-        {
             TextureSetBuffer.Clear();
-            if (!TryGetFramesProperty(context, out _, out SerializedProperty frames))
+            SpriteBuffer.Clear();
+            try
             {
-                return 0;
-            }
-
-            if (TryBuildFrameList(frames, out List<Sprite> frameSprites) && TryGetCommonAtlas(frameSprites, out _))
-            {
-                return frameSprites.Count > 0 ? 1 : 0;
-            }
-
-            for (int i = 0; i < frames.arraySize; i++)
-            {
-                Sprite sprite = frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite;
-                if (sprite != null && sprite.texture != null)
+                bool hasNullOrMissingTexture = false;
+                if (SpriteBuffer.Capacity < frameCount)
                 {
+                    SpriteBuffer.Capacity = frameCount;
+                }
+
+                for (int i = 0; i < frameCount; i++)
+                {
+                    Sprite sprite = frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite;
+                    SpriteBuffer.Add(sprite);
+                    if (sprite == null || sprite.texture == null)
+                    {
+                        hasNullOrMissingTexture = true;
+                        continue;
+                    }
+
                     TextureSetBuffer.Add(sprite.texture);
                 }
+
+                distinctTextureCount = TextureSetBuffer.Count;
+                framesShareTexture = !hasNullOrMissingTexture && distinctTextureCount == 1;
+                framesMeetFlipbookContract = SpriteFlipbookCompatibility.TryValidateAndBuild(
+                    SpriteBuffer,
+                    null,
+                    out _,
+                    out compatibilityError,
+                    out errorFrameIndex);
             }
-
-            return TextureSetBuffer.Count;
-        }
-
-        public static int GetFrameCount(Component context)
-        {
-            if (!TryGetFramesProperty(context, out _, out SerializedProperty frames))
+            finally
             {
-                return 0;
-            }
+                bool trimTextureSet = TextureSetBuffer.Count > MaxRetainedFrameBufferCapacity;
+                TextureSetBuffer.Clear();
+                if (trimTextureSet)
+                {
+                    TextureSetBuffer.TrimExcess();
+                }
 
-            return frames.arraySize;
+                ReleaseSpriteBuffer();
+            }
         }
 
         public static bool KeepOnlyFirstTextureFrames(Component context)
@@ -162,6 +189,7 @@ namespace CycloneGames.Foundation2D.Editor
                 return false;
             }
 
+            controllerSo.UpdateIfRequiredOrScript();
             int count = frames.arraySize;
             if (count <= 1)
             {
@@ -176,34 +204,78 @@ namespace CycloneGames.Foundation2D.Editor
             }
 
             Texture targetTexture = first.texture;
-            SpriteBuffer.Clear();
+            int keepCount = 0;
             for (int i = 0; i < count; i++)
             {
                 Sprite sprite = frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite;
                 if (sprite != null && sprite.texture == targetTexture)
                 {
-                    SpriteBuffer.Add(sprite);
+                    keepCount++;
                 }
             }
 
-            if (SpriteBuffer.Count == 0)
+            int removeCount = count - keepCount;
+            if (removeCount <= 0)
             {
-                EditorUtility.DisplayDialog("Filter Failed", "No frame matches the first frame texture.", "OK");
+                EditorUtility.DisplayDialog("No Frames Removed", "Every frame already uses the first frame texture.", "OK");
                 return false;
             }
 
-            Undo.RecordObject(controllerSo.targetObject, "Filter Frames By First Texture");
-            controllerSo.Update();
-            frames.arraySize = SpriteBuffer.Count;
-            for (int i = 0; i < SpriteBuffer.Count; i++)
+            if (!EditorUtility.DisplayDialog(
+                    "Keep Frames Using First Texture",
+                    $"This will remove {removeCount} of {count} frames from the sequence. This operation supports Undo.",
+                    "Keep Matching Frames",
+                    "Cancel"))
             {
-                frames.GetArrayElementAtIndex(i).objectReferenceValue = SpriteBuffer[i];
+                return false;
             }
-            controllerSo.ApplyModifiedProperties();
-            return true;
+
+            SpriteBuffer.Clear();
+            try
+            {
+                if (SpriteBuffer.Capacity < keepCount)
+                {
+                    SpriteBuffer.Capacity = keepCount;
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    Sprite sprite = frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite;
+                    if (sprite != null && sprite.texture == targetTexture)
+                    {
+                        SpriteBuffer.Add(sprite);
+                    }
+                }
+
+                Undo.RecordObject(controllerSo.targetObject, "Keep Frames Using First Texture");
+                frames.arraySize = SpriteBuffer.Count;
+                for (int i = 0; i < SpriteBuffer.Count; i++)
+                {
+                    frames.GetArrayElementAtIndex(i).objectReferenceValue = SpriteBuffer[i];
+                }
+                controllerSo.ApplyModifiedProperties();
+                return true;
+            }
+            finally
+            {
+                ReleaseSpriteBuffer();
+            }
         }
 
-        public static Material FindBestMaterial(Component context, string shaderName, string ownerName, Material currentMaterial, out string message)
+        private static void ReleaseSpriteBuffer()
+        {
+            SpriteBuffer.Clear();
+            if (SpriteBuffer.Capacity > MaxRetainedFrameBufferCapacity)
+            {
+                SpriteBuffer.Capacity = DefaultFrameBufferCapacity;
+            }
+        }
+
+        public static Material SelectBestMaterial(
+            List<MaterialCandidate> candidates,
+            Material currentMaterial,
+            string shaderName,
+            out string message)
         {
             message = null;
 
@@ -212,8 +284,7 @@ namespace CycloneGames.Foundation2D.Editor
                 return currentMaterial;
             }
 
-            List<MaterialCandidate> candidates = GetMaterialCandidates(context, shaderName, ownerName);
-            if (candidates.Count == 0)
+            if (candidates == null || candidates.Count == 0)
             {
                 message = $"No material using shader {shaderName} was found.";
                 return null;
@@ -272,32 +343,54 @@ namespace CycloneGames.Foundation2D.Editor
 
         public static CompatibilitySummary BuildCompatibilitySummary(Component context, Material material, string expectedShaderName, bool suggestSwitchToFlipbookMode)
         {
-            bool hasController = TryGetController(context, out _);
-            int frameCount = GetFrameCount(context);
-            int distinctTextureCount = CountDistinctFrameTextures(context);
-            bool framesShareTexture = frameCount <= 1 || AllFramesShareTexture(context);
+            AnalyzeFrames(
+                context,
+                out bool hasController,
+                out int frameCount,
+                out int distinctTextureCount,
+                out bool framesShareTexture,
+                out bool framesMeetFlipbookContract,
+                out SpriteFlipbookCompatibilityError compatibilityError,
+                out int errorFrameIndex);
             bool hasMaterial = material != null;
-            bool shaderMatches = !hasMaterial
-                ? false
-                : material.shader != null && string.Equals(material.shader.name, expectedShaderName, StringComparison.OrdinalIgnoreCase);
-            bool meetsSharedBatchingPrerequisites = hasController && frameCount > 0 && framesShareTexture && hasMaterial && shaderMatches;
-            string suggestedActions = BuildSuggestedActions(hasController, frameCount, framesShareTexture, hasMaterial, shaderMatches, expectedShaderName, meetsSharedBatchingPrerequisites);
+            bool shaderMatches = hasMaterial && material.shader != null &&
+                                 string.Equals(material.shader.name, expectedShaderName, StringComparison.Ordinal);
+            bool shaderSupported = hasMaterial && material.shader != null && material.shader.isSupported;
+            bool meetsSharedBatchingPrerequisites = hasController && frameCount > 0 &&
+                                                     framesMeetFlipbookContract && hasMaterial &&
+                                                     shaderMatches && shaderSupported;
+            string suggestedActions = BuildSuggestedActions(
+                hasController,
+                frameCount,
+                framesShareTexture,
+                framesMeetFlipbookContract,
+                compatibilityError,
+                hasMaterial,
+                shaderMatches,
+                shaderSupported,
+                expectedShaderName,
+                meetsSharedBatchingPrerequisites);
             bool shouldSuggestFilterFrames = hasController && frameCount > 1 && !framesShareTexture;
-            bool shouldSuggestCreateCorrectMaterial = hasController && frameCount > 0 && (!hasMaterial || !shaderMatches);
+            bool shouldSuggestCreateCorrectMaterial = hasController && frameCount > 0 &&
+                                                      (!hasMaterial || !shaderMatches || !shaderSupported);
 
             return new CompatibilitySummary(
                 hasController,
                 frameCount,
                 distinctTextureCount,
                 framesShareTexture,
+                framesMeetFlipbookContract,
+                compatibilityError,
+                errorFrameIndex,
                 hasMaterial,
                 shaderMatches,
+                shaderSupported,
                 meetsSharedBatchingPrerequisites,
                 expectedShaderName,
-                    suggestedActions,
-                    shouldSuggestFilterFrames,
-                    shouldSuggestCreateCorrectMaterial,
-                    suggestSwitchToFlipbookMode);
+                suggestedActions,
+                shouldSuggestFilterFrames,
+                shouldSuggestCreateCorrectMaterial,
+                suggestSwitchToFlipbookMode && framesMeetFlipbookContract);
         }
 
         public static string FormatCompatibilitySummary(CompatibilitySummary summary, bool requiresExpectedShader)
@@ -306,15 +399,23 @@ namespace CycloneGames.Foundation2D.Editor
                 ? $"Shader Match: {(summary.ShaderMatches ? "Yes" : "No")} (expected {summary.ExpectedShaderName})"
                 : $"Shader Match: {(summary.HasMaterial ? "Not constrained by this mode" : "No material assigned")}";
 
+            string contractLine = summary.FramesMeetFlipbookContract
+                ? "Runtime Flipbook Contract: Compatible"
+                : summary.ErrorFrameIndex >= 0
+                    ? $"Runtime Flipbook Contract: {SpriteFlipbookCompatibility.GetErrorMessage(summary.CompatibilityError)} (frame {summary.ErrorFrameIndex + 1})"
+                    : $"Runtime Flipbook Contract: {SpriteFlipbookCompatibility.GetErrorMessage(summary.CompatibilityError)}";
+
             string readinessLine = requiresExpectedShader
                 ? $"Shared-Material Ready: {(summary.MeetsSharedBatchingPrerequisites ? "Yes" : "No")}"
-                : $"Shared-Material Ready: {(summary.FramesShareTexture ? "Potentially, if you switch to a shared-material mode" : "No, frames span multiple textures")}";
+                : $"Shared-Material Ready: {(summary.FramesMeetFlipbookContract ? "Frame data is compatible; assign the dedicated flipbook material when switching modes" : "No")}";
 
             return
                 $"Frame Count: {summary.FrameCount}\n" +
-                $"Same Texture/Atlas: {(summary.FramesShareTexture ? "Yes" : "No")} (distinct textures: {summary.DistinctTextureCount})\n" +
+                $"Same Direct Texture: {(summary.FramesShareTexture ? "Yes" : "No")} (distinct textures: {summary.DistinctTextureCount})\n" +
+                contractLine + "\n" +
                 $"Material Assigned: {(summary.HasMaterial ? "Yes" : "No")}\n" +
                 shaderLine + "\n" +
+                $"Shader Supported On Current Editor Platform: {(summary.ShaderSupported ? "Yes" : "No")}\n" +
                 readinessLine + "\n" +
                 $"Suggested Action: {summary.SuggestedActions}";
         }
@@ -339,12 +440,74 @@ namespace CycloneGames.Foundation2D.Editor
                 return null;
             }
 
-            Material material = new(shader);
-            AssetDatabase.CreateAsset(material, path);
-            AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
-            EditorGUIUtility.PingObject(material);
-            return material;
+            path = AssetDatabase.GenerateUniqueAssetPath(path);
+            Material material = null;
+            bool assetCreated = false;
+            try
+            {
+                material = new Material(shader)
+                {
+                    name = Path.GetFileNameWithoutExtension(path),
+                };
+                AssetDatabase.CreateAsset(material, path);
+                assetCreated = true;
+                Undo.RegisterCreatedObjectUndo(material, "Create Renderer Material");
+                AssetDatabase.SaveAssetIfDirty(material);
+                EditorGUIUtility.PingObject(material);
+                return material;
+            }
+            catch (Exception exception)
+            {
+                if (assetCreated)
+                {
+                    AssetDatabase.DeleteAsset(path);
+                }
+                else if (material != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(material);
+                }
+
+                Debug.LogException(exception);
+                EditorUtility.DisplayDialog("Material Creation Failed", "The material asset could not be created. See the Console for details.", "OK");
+                return null;
+            }
+        }
+
+        public static bool EnableRequiredCanvasChannels(Canvas canvas, out string failure)
+        {
+            if (canvas == null)
+            {
+                failure = "No Canvas is available for this UI renderer.";
+                return false;
+            }
+
+            AdditionalCanvasShaderChannels current = canvas.additionalShaderChannels;
+            AdditionalCanvasShaderChannels required = FlipbookUVMeshEffect.RequiredCanvasChannels;
+            AdditionalCanvasShaderChannels updated = current | required;
+            if (updated != current)
+            {
+                Undo.RecordObject(canvas, "Enable Flipbook Canvas Shader Channels");
+                canvas.additionalShaderChannels = updated;
+                PrefabUtility.RecordPrefabInstancePropertyModifications(canvas);
+                EditorUtility.SetDirty(canvas);
+            }
+
+            EditorGUIUtility.PingObject(canvas);
+            failure = null;
+            return true;
+        }
+
+        internal static void EnableFlipbookEffect(FlipbookUVMeshEffect effect)
+        {
+            if (effect == null || effect.enabled)
+            {
+                return;
+            }
+
+            Undo.RecordObject(effect, "Enable Flipbook UV Mesh Effect");
+            effect.enabled = true;
+            PrefabUtility.RecordPrefabInstancePropertyModifications(effect);
+            EditorUtility.SetDirty(effect);
         }
 
         private static bool TryGetFramesProperty(Component context, out SerializedObject controllerSo, out SerializedProperty frames)
@@ -360,68 +523,6 @@ namespace CycloneGames.Foundation2D.Editor
             controllerSo = new SerializedObject(controller);
             frames = controllerSo.FindProperty("frames");
             return frames != null;
-        }
-
-        private static bool TryBuildFrameList(SerializedProperty frames, out List<Sprite> sprites)
-        {
-            sprites = null;
-            if (frames == null || frames.arraySize <= 0)
-            {
-                return false;
-            }
-
-            List<Sprite> list = new List<Sprite>(frames.arraySize);
-            for (int i = 0; i < frames.arraySize; i++)
-            {
-                Sprite sprite = frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite;
-                if (sprite == null)
-                {
-                    return false;
-                }
-
-                list.Add(sprite);
-            }
-
-            sprites = list;
-            return true;
-        }
-
-        private static bool TryGetCommonAtlas(List<Sprite> sprites, out SpriteAtlas atlas)
-        {
-            atlas = null;
-            if (sprites == null || sprites.Count == 0)
-            {
-                return false;
-            }
-
-            string[] atlasGuids = AssetDatabase.FindAssets("t:SpriteAtlas");
-            for (int i = 0; i < atlasGuids.Length; i++)
-            {
-                string path = AssetDatabase.GUIDToAssetPath(atlasGuids[i]);
-                SpriteAtlas candidate = AssetDatabase.LoadAssetAtPath<SpriteAtlas>(path);
-                if (candidate == null)
-                {
-                    continue;
-                }
-
-                bool allInThisAtlas = true;
-                for (int s = 0; s < sprites.Count; s++)
-                {
-                    if (!candidate.CanBindTo(sprites[s]))
-                    {
-                        allInThisAtlas = false;
-                        break;
-                    }
-                }
-
-                if (allInThisAtlas)
-                {
-                    atlas = candidate;
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private static string GetReferenceDirectory(Component context)
@@ -502,7 +603,17 @@ namespace CycloneGames.Foundation2D.Editor
             return (score, details.ToArray());
         }
 
-        private static string BuildSuggestedActions(bool hasController, int frameCount, bool framesShareTexture, bool hasMaterial, bool shaderMatches, string expectedShaderName, bool meetsSharedBatchingPrerequisites)
+        private static string BuildSuggestedActions(
+            bool hasController,
+            int frameCount,
+            bool framesShareTexture,
+            bool framesMeetFlipbookContract,
+            SpriteFlipbookCompatibilityError compatibilityError,
+            bool hasMaterial,
+            bool shaderMatches,
+            bool shaderSupported,
+            string expectedShaderName,
+            bool meetsSharedBatchingPrerequisites)
         {
             if (!hasController)
             {
@@ -516,7 +627,12 @@ namespace CycloneGames.Foundation2D.Editor
 
             if (!framesShareTexture)
             {
-                return "Filter frames to one atlas/texture, or stay on SpriteSwap mode instead of shared-material flipbook mode.";
+                return "Keep only frames using one resolved texture, or remain on SpriteSwap mode.";
+            }
+
+            if (!framesMeetFlipbookContract)
+            {
+                return SpriteFlipbookCompatibility.GetErrorMessage(compatibilityError) + " Use SpriteSwap mode until the source sprites satisfy this contract.";
             }
 
             if (!hasMaterial)
@@ -527,6 +643,11 @@ namespace CycloneGames.Foundation2D.Editor
             if (!shaderMatches)
             {
                 return $"Switch to a material using {expectedShaderName}, or change render mode if this shader path is not intended.";
+            }
+
+            if (!shaderSupported)
+            {
+                return "The selected shader is unsupported on the current Editor graphics configuration. Validate the target renderer and platform before using it.";
             }
 
             if (meetsSharedBatchingPrerequisites)

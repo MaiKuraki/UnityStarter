@@ -10,19 +10,8 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [],
-    "versionDefines": [
-        {
-            "name": "com.cyclone-games.gameplay-framework",
-            "expression": "",
-            "define": "GAMEPLAY_FRAMEWORK_PRESENT"
-        },
-        {
-            "name": "com.cyclone-games.gameplay-abilities",
-            "expression": "",
-            "define": "GAMEPLAY_ABILITIES_PRESENT"
-        }
-    ],
+    "versionDefines": [],
     "noEngineReferences": false
 }

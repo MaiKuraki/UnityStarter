@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
     /// Registers gameplay tags referenced by generated DataTable rows.
     /// This is useful for GameplayAbilities or GameplayEffects authored as Luban rows instead of ScriptableObjects.
     /// </summary>
-    public sealed class GameplayTagDataTableReferenceSource<TRow> : IGameplayTagSource where TRow : IDataRow
+    public sealed class GameplayTagDataTableReferenceSource<TRow> : IGameplayTagSource
     {
         private readonly IReadOnlyList<TRow> _rows;
         private readonly Func<TRow, IEnumerable<string>>[] _getTagNameCollections;
@@ -21,7 +21,7 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
 
         public GameplayTagDataTableReferenceSource(
             string sourceName,
-            IDataTable<TRow> table,
+            IDataTableRows<TRow> table,
             params Func<TRow, IEnumerable<string>>[] getTagNameCollections)
             : this(sourceName, table?.All, null, null, getTagNameCollections)
         { }
@@ -35,7 +35,7 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
 
         public GameplayTagDataTableReferenceSource(
             string sourceName,
-            IDataTable<TRow> table,
+            IDataTableRows<TRow> table,
             Func<TRow, string> getDescription,
             Func<TRow, bool> isEnabled,
             params Func<TRow, IEnumerable<string>>[] getTagNameCollections)
@@ -61,7 +61,8 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
 
             Name = sourceName;
             _rows = rows ?? throw new ArgumentNullException(nameof(rows));
-            _getTagNameCollections = getTagNameCollections;
+            _getTagNameCollections =
+                (Func<TRow, IEnumerable<string>>[])getTagNameCollections.Clone();
             _getDescription = getDescription ?? (static _ => string.Empty);
             _isEnabled = isEnabled ?? (static _ => true);
         }
@@ -75,8 +76,13 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
 
             for (int i = 0; i < _rows.Count; i++)
             {
+                if (context.IsRegistrationTerminated)
+                {
+                    return;
+                }
+
                 TRow row = _rows[i];
-                if (row == null || !_isEnabled(row))
+                if (row is null || !_isEnabled(row))
                 {
                     continue;
                 }
@@ -84,52 +90,68 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
                 string description = _getDescription(row) ?? string.Empty;
                 for (int accessorIndex = 0; accessorIndex < _getTagNameCollections.Length; accessorIndex++)
                 {
-                    RegisterTagsFromCollection(context, row, _getTagNameCollections[accessorIndex], description);
+                    if (!RegisterTagsFromCollection(
+                        context,
+                        row,
+                        _getTagNameCollections[accessorIndex],
+                        description))
+                    {
+                        return;
+                    }
                 }
             }
         }
 
-        private void RegisterTagsFromCollection(
+        private bool RegisterTagsFromCollection(
             GameplayTagRegistrationContext context,
             TRow row,
             Func<TRow, IEnumerable<string>> getTagNames,
             string description)
         {
+            if (context.IsRegistrationTerminated)
+            {
+                return false;
+            }
+
             if (getTagNames == null)
             {
-                return;
+                return true;
             }
 
             IEnumerable<string> tagNames = getTagNames(row);
             if (tagNames == null)
             {
-                return;
+                return true;
             }
 
             if (tagNames is IReadOnlyList<string> tagNameList)
             {
                 for (int i = 0; i < tagNameList.Count; i++)
                 {
-                    RegisterTag(context, tagNameList[i], description);
+                    if (!RegisterTag(context, tagNameList[i], description))
+                    {
+                        return false;
+                    }
                 }
 
-                return;
+                return true;
             }
 
             foreach (string tagName in tagNames)
             {
-                RegisterTag(context, tagName, description);
+                if (!RegisterTag(context, tagName, description))
+                {
+                    return false;
+                }
             }
+
+            return true;
         }
 
-        private void RegisterTag(GameplayTagRegistrationContext context, string tagName, string description)
+        private bool RegisterTag(GameplayTagRegistrationContext context, string tagName, string description)
         {
-            if (string.IsNullOrWhiteSpace(tagName))
-            {
-                return;
-            }
-
             context.RegisterTag(tagName, description, GameplayTagFlags.None, this);
+            return !context.IsRegistrationTerminated;
         }
     }
 }

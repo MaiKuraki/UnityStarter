@@ -1,0 +1,27 @@
+{
+    "name": "CycloneGames.InputSystem.Runtime.Integrations.UGUI",
+    "rootNamespace": "",
+    "references": [
+        "CycloneGames.InputSystem.Runtime",
+        "R3.Unity",
+        "UnityEngine.UI",
+        "CycloneGames.Logger"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_INPUTSYSTEM_HAS_UGUI"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.ugui",
+            "expression": "1.0.0",
+            "define": "CYCLONEGAMES_INPUTSYSTEM_HAS_UGUI"
+        }
+    ],
+    "noEngineReferences": false
+}

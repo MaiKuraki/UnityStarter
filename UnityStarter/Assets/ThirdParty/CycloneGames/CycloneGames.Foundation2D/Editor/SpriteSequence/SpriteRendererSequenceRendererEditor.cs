@@ -7,186 +7,398 @@ using CycloneGames.Foundation2D.Runtime;
 namespace CycloneGames.Foundation2D.Editor
 {
     [CustomEditor(typeof(SpriteRendererSequenceRenderer))]
+    [CanEditMultipleObjects]
     public sealed class SpriteRendererSequenceRendererEditor : UnityEditor.Editor
     {
+        private static readonly GUIContent ModuleTitle = new("SpriteRenderer Sequence Renderer");
+        private static readonly GUIContent ModuleSubtitle = new("Sprite swapping and shared-material flipbook authoring for SpriteRenderer.");
+        private static readonly GUIContent SectionConfiguration = new("Renderer Configuration");
+        private static readonly GUIContent SectionDiagnostics = new("Compatibility Diagnostics");
+        private static readonly GUIContent BadgeRendering = new("RENDERING");
+        private static readonly GUIContent BadgeReady = new("READY");
+        private static readonly GUIContent BadgeReview = new("REVIEW");
         private static readonly GUIContent LabelSpriteRenderer = new("Sprite Renderer");
         private static readonly GUIContent LabelRenderMode = new("Render Mode");
         private static readonly GUIContent LabelMaterialStrategy = new("Material Strategy");
         private static readonly GUIContent LabelSharedMaterialOverride = new("Shared Material Override");
         private static readonly GUIContent LabelFlipbookMaterial = new("Flipbook Shared Material");
 
+        private static readonly string[] ExplicitlyDrawnProperties =
+        {
+            "spriteRenderer",
+            "renderMode",
+            "materialStrategy",
+            "sharedMaterialOverride",
+            "flipbookSharedMaterial",
+        };
+
+        private SerializedProperty _spriteRenderer;
+        private SerializedProperty _renderMode;
+        private SerializedProperty _materialStrategy;
+        private SerializedProperty _sharedMaterialOverride;
+        private SerializedProperty _flipbookSharedMaterial;
+
+        private SpriteRendererSequenceRenderer _rendererTarget;
+        private SpriteRenderer _fallbackSpriteRenderer;
+        private SpriteSequenceController _controller;
+        private SpriteSequenceRendererEditorUtility.CompatibilitySummary _compatibilitySummary;
+        private string _compatibilityText;
+        private int _compatibilityFingerprint;
+        private bool _compatibilityValid;
+        private bool _serializedPropertiesValid;
+        private string _serializedPropertiesError;
+        private bool _foldConfiguration = true;
+        private bool _foldDiagnostics = true;
+
+        private void OnEnable()
+        {
+            _spriteRenderer = serializedObject.FindProperty("spriteRenderer");
+            _renderMode = serializedObject.FindProperty("renderMode");
+            _materialStrategy = serializedObject.FindProperty("materialStrategy");
+            _sharedMaterialOverride = serializedObject.FindProperty("sharedMaterialOverride");
+            _flipbookSharedMaterial = serializedObject.FindProperty("flipbookSharedMaterial");
+            _serializedPropertiesValid = Foundation2DInspectorUi.ValidateRequiredProperties(
+                serializedObject,
+                nameof(SpriteRendererSequenceRendererEditor),
+                ExplicitlyDrawnProperties,
+                out _serializedPropertiesError);
+            _rendererTarget = target as SpriteRendererSequenceRenderer;
+            _fallbackSpriteRenderer = _rendererTarget != null ? _rendererTarget.GetComponent<SpriteRenderer>() : null;
+            _controller = _rendererTarget != null ? _rendererTarget.GetComponent<SpriteSequenceController>() : null;
+            Undo.undoRedoPerformed += OnUndoRedo;
+            InvalidateCompatibility();
+        }
+
+        private void OnDisable()
+        {
+            Undo.undoRedoPerformed -= OnUndoRedo;
+        }
+
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
 
-            SerializedProperty spriteRenderer = serializedObject.FindProperty("spriteRenderer");
-            SerializedProperty renderMode = serializedObject.FindProperty("renderMode");
-            SerializedProperty materialStrategy = serializedObject.FindProperty("materialStrategy");
-            SerializedProperty sharedMaterialOverride = serializedObject.FindProperty("sharedMaterialOverride");
-            SerializedProperty flipbookSharedMaterial = serializedObject.FindProperty("flipbookSharedMaterial");
-
-            EditorGUILayout.PropertyField(spriteRenderer, LabelSpriteRenderer);
-            EditorGUILayout.PropertyField(renderMode, LabelRenderMode);
-
-            bool useFlipbookMode = renderMode != null && renderMode.enumValueIndex == (int)SpriteRendererSequenceRenderer.SpriteRenderMode.ShaderFlipbookSharedMaterial;
-            if (useFlipbookMode)
+            if (!_serializedPropertiesValid)
             {
-                EditorGUILayout.PropertyField(flipbookSharedMaterial, LabelFlipbookMaterial);
-                EditorGUILayout.HelpBox("Flipbook shared-material mode keeps one shared Sprite material and updates UV remap through MaterialPropertyBlock. This is usually only worth it when many SpriteRenderers animate from one atlas and you want tighter material consistency.", MessageType.None);
-                DrawCompatibilitySummary(
-                    flipbookSharedMaterial.objectReferenceValue as Material,
-                    "Sprites/FlipbookRemap",
-                    true,
-                    flipbookSharedMaterial,
-                    ((SpriteRendererSequenceRenderer)target).gameObject.name,
-                    renderMode,
-                    false);
-
-                DrawMaterialButtons(flipbookSharedMaterial, "Sprites/FlipbookRemap", ((SpriteRendererSequenceRenderer)target).gameObject.name, "Create Sprite Flipbook Material", "_SpriteFlipbookRemap.mat", "Select save path for the created SpriteRenderer flipbook material.");
-                DrawFrameTextureWarnings((SpriteRendererSequenceRenderer)target, "SpriteRenderer flipbook shared-material mode requires all frames to come from one texture or atlas.");
-            }
-            else
-            {
-                EditorGUILayout.PropertyField(materialStrategy, LabelMaterialStrategy);
-                if (materialStrategy != null && materialStrategy.enumValueIndex == (int)SpriteRendererSequenceRenderer.MaterialStrategy.SharedMaterialOverride)
-                {
-                    EditorGUILayout.PropertyField(sharedMaterialOverride, LabelSharedMaterialOverride);
-                    EditorGUILayout.HelpBox("SharedMaterialOverride forces many SpriteRenderers onto the same shared material path. It is simpler than flipbook remap and is often enough when sprites already atlas well.", MessageType.None);
-
-                    SpriteRenderer renderer = ((SpriteRendererSequenceRenderer)target).GetComponent<SpriteRenderer>();
-                    string shaderName = renderer != null && renderer.sharedMaterial != null && renderer.sharedMaterial.shader != null
-                        ? renderer.sharedMaterial.shader.name
-                        : "Sprites/Default";
-
-                    DrawCompatibilitySummary(
-                        sharedMaterialOverride.objectReferenceValue as Material,
-                        shaderName,
-                        true,
-                        sharedMaterialOverride,
-                        ((SpriteRendererSequenceRenderer)target).gameObject.name,
-                        renderMode,
-                        true);
-
-                    DrawMaterialButtons(sharedMaterialOverride, shaderName, ((SpriteRendererSequenceRenderer)target).gameObject.name, "Create SpriteRenderer Shared Material", "_SpriteRendererShared.mat", "Select save path for the created SpriteRenderer material.");
-                }
-                else
-                {
-                    EditorGUILayout.HelpBox("UseRendererDefault keeps the SpriteRenderer's existing shared material. This is usually the safest option when the scene already has a correct Sprite material setup.", MessageType.None);
-
-                    SpriteRenderer renderer = ((SpriteRendererSequenceRenderer)target).GetComponent<SpriteRenderer>();
-                    Material currentMaterial = renderer != null ? renderer.sharedMaterial : null;
-                    string shaderName = currentMaterial != null && currentMaterial.shader != null
-                        ? currentMaterial.shader.name
-                        : "Sprites/Default";
-                    DrawCompatibilitySummary(
-                        currentMaterial,
-                        shaderName,
-                        false,
-                        null,
-                        ((SpriteRendererSequenceRenderer)target).gameObject.name,
-                        renderMode,
-                        true);
-                }
-
-                DrawFrameTextureWarnings((SpriteRendererSequenceRenderer)target, "SpriteRenderer batching benefits are best when frames share a texture/atlas and material state stays consistent.");
+                Foundation2DInspectorUi.DrawInvalidSerializedPropertyState(
+                    serializedObject,
+                    ModuleTitle,
+                    ModuleSubtitle,
+                    _serializedPropertiesError);
+                serializedObject.ApplyModifiedProperties();
+                return;
             }
 
-            serializedObject.ApplyModifiedProperties();
-        }
-
-        private void DrawMaterialButtons(SerializedProperty materialProperty, string shaderName, string ownerName, string dialogTitle, string suffix, string prompt)
-        {
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button("Auto Assign Existing Material", EditorStyles.miniButtonLeft))
+            Foundation2DInspectorUi.DrawModuleHeader(ModuleTitle, ModuleSubtitle);
+            if (serializedObject.isEditingMultipleObjects)
             {
-                Material current = materialProperty.objectReferenceValue as Material;
-                Material found = SpriteSequenceRendererEditorUtility.FindBestMaterial((Component)target, shaderName, ownerName, current, out string message);
-                if (found != null)
+                Foundation2DInspectorUi.DrawMultiObjectActionNotice();
+            }
+
+            if (Foundation2DInspectorUi.DrawSectionHeader(
+                    ref _foldConfiguration,
+                    SectionConfiguration,
+                    BadgeRendering,
+                    Foundation2DInspectorUi.BadgeTone.Neutral))
+            {
+                using (Foundation2DInspectorUi.BeginCard())
                 {
-                    materialProperty.objectReferenceValue = found;
-                }
-                else
-                {
-                    List<SpriteSequenceRendererEditorUtility.MaterialCandidate> candidates = SpriteSequenceRendererEditorUtility.GetMaterialCandidates((Component)target, shaderName, ownerName);
-                    if (candidates.Count > 1)
+                    EditorGUILayout.PropertyField(_spriteRenderer, LabelSpriteRenderer, false);
+                    EditorGUILayout.PropertyField(_renderMode, LabelRenderMode, false);
+
+                    if (!_renderMode.hasMultipleDifferentValues)
                     {
-                        SpriteSequenceMaterialPickerWindow.Open("SpriteRenderer Material Picker", shaderName, candidates, material => AssignMaterial(materialProperty.propertyPath, material));
+                        bool useFlipbookMode = _renderMode.enumValueIndex == (int)SpriteRendererSequenceRenderer.SpriteRenderMode.ShaderFlipbookSharedMaterial;
+                        if (useFlipbookMode)
+                        {
+                            EditorGUILayout.PropertyField(_flipbookSharedMaterial, LabelFlipbookMaterial, false);
+                            EditorGUILayout.HelpBox("Flipbook mode keeps one shared material and updates UV remap through MaterialPropertyBlock. Frames must satisfy the runtime texture and geometry contract.", MessageType.None);
+                        }
+                        else
+                        {
+                            EditorGUILayout.PropertyField(_materialStrategy, LabelMaterialStrategy, false);
+                            if (!_materialStrategy.hasMultipleDifferentValues &&
+                                _materialStrategy.enumValueIndex == (int)SpriteRendererSequenceRenderer.MaterialStrategy.SharedMaterialOverride)
+                            {
+                                EditorGUILayout.PropertyField(_sharedMaterialOverride, LabelSharedMaterialOverride, false);
+                                EditorGUILayout.HelpBox("SharedMaterialOverride applies one explicit material. Its shader is not constrained by SpriteSwap mode.", MessageType.None);
+                            }
+                            else
+                            {
+                                EditorGUILayout.HelpBox("UseRendererDefault preserves the SpriteRenderer's current shared material.", MessageType.None);
+                            }
+                        }
                     }
                     else
                     {
-                        EditorUtility.DisplayDialog("Auto Assign Skipped", message ?? $"No compatible material using shader {shaderName} was found.", "OK");
+                        EditorGUILayout.HelpBox("Selected renderers use different render modes. Set a common mode to edit mode-specific settings.", MessageType.Info);
                     }
                 }
             }
 
-            if (GUILayout.Button("Create And Assign Material", EditorStyles.miniButtonRight))
+            if (!serializedObject.isEditingMultipleObjects && !_renderMode.hasMultipleDifferentValues)
             {
-                Material created = SpriteSequenceRendererEditorUtility.CreateMaterialAsset(ownerName, shaderName, dialogTitle, suffix, prompt);
-                if (created != null)
+                GetCurrentDiagnosticContext(out Material material, out string shaderName, out bool requiresShader, out SerializedProperty materialProperty, out bool suggestFlipbook);
+                EnsureCompatibility(material, shaderName, requiresShader, suggestFlipbook);
+                Foundation2DInspectorUi.BadgeTone tone = _compatibilitySummary.MeetsSharedBatchingPrerequisites
+                    ? Foundation2DInspectorUi.BadgeTone.Good
+                    : Foundation2DInspectorUi.BadgeTone.Warning;
+                GUIContent badge = _compatibilitySummary.MeetsSharedBatchingPrerequisites ? BadgeReady : BadgeReview;
+                if (Foundation2DInspectorUi.DrawSectionHeader(ref _foldDiagnostics, SectionDiagnostics, badge, tone))
                 {
-                    materialProperty.objectReferenceValue = created;
+                    using (Foundation2DInspectorUi.BeginCard())
+                    {
+                        DrawCompatibilitySummary(materialProperty, shaderName, requiresShader, suggestFlipbook);
+                        DrawMaterialButtonsForCurrentMode(materialProperty, shaderName);
+                    }
                 }
             }
-            EditorGUILayout.EndHorizontal();
+
+            Foundation2DInspectorUi.DrawRemainingProperties(serializedObject, ExplicitlyDrawnProperties);
+            if (serializedObject.ApplyModifiedProperties())
+            {
+                InvalidateCompatibility();
+                Repaint();
+            }
         }
 
-        private void DrawCompatibilitySummary(Material material, string expectedShaderName, bool requiresExpectedShader, SerializedProperty materialProperty, string ownerName, SerializedProperty renderMode, bool suggestSwitchToFlipbook)
+        private void DrawCompatibilitySummary(
+            SerializedProperty materialProperty,
+            string expectedShaderName,
+            bool requiresExpectedShader,
+            bool suggestSwitchToFlipbook)
         {
-            var summary = SpriteSequenceRendererEditorUtility.BuildCompatibilitySummary((Component)target, material, expectedShaderName, suggestSwitchToFlipbook);
-            MessageType messageType = summary.MeetsSharedBatchingPrerequisites ? MessageType.Info : MessageType.Warning;
-            EditorGUILayout.HelpBox(SpriteSequenceRendererEditorUtility.FormatCompatibilitySummary(summary, requiresExpectedShader), messageType);
+            MessageType messageType = _compatibilitySummary.MeetsSharedBatchingPrerequisites
+                ? MessageType.Info
+                : MessageType.Warning;
+            EditorGUILayout.HelpBox(_compatibilityText, messageType);
 
-            EditorGUILayout.BeginHorizontal();
-            if (summary.ShouldSuggestFilterFrames && GUILayout.Button("Filter To First Atlas Frames", EditorStyles.miniButtonLeft))
+            int actionCount = 1;
+            if (_compatibilitySummary.ShouldSuggestFilterFrames)
             {
-                SpriteSequenceRendererEditorUtility.KeepOnlyFirstTextureFrames((Component)target);
+                actionCount++;
             }
 
-            if (requiresExpectedShader && materialProperty != null && summary.ShouldSuggestCreateCorrectMaterial && GUILayout.Button("Create Correct Material", EditorStyles.miniButtonMid))
+            if (_compatibilitySummary.ShouldSuggestSwitchToFlipbookMode)
             {
-                Material created = SpriteSequenceRendererEditorUtility.CreateMaterialAsset(ownerName, expectedShaderName, "Create Correct Renderer Material", "_RendererAutoFix.mat", "Select save path for a material matching current renderer mode.");
-                if (created != null)
+                actionCount++;
+            }
+
+            using (Foundation2DInspectorUi.BeginActionLayout(actionCount, 150f))
+            {
+                if (GUILayout.Button("Refresh Diagnostics"))
                 {
-                    materialProperty.objectReferenceValue = created;
+                    RefreshCompatibility(materialProperty != null ? materialProperty.objectReferenceValue as Material : GetBoundMaterial(), expectedShaderName, requiresExpectedShader, suggestSwitchToFlipbook);
+                }
+
+                if (_compatibilitySummary.ShouldSuggestFilterFrames &&
+                    GUILayout.Button("Keep First-Texture Frames"))
+                {
+                    if (SpriteSequenceRendererEditorUtility.KeepOnlyFirstTextureFrames(_rendererTarget))
+                    {
+                        InvalidateCompatibility();
+                    }
+                }
+
+                if (_compatibilitySummary.ShouldSuggestSwitchToFlipbookMode &&
+                    GUILayout.Button("Switch To Flipbook"))
+                {
+                    _renderMode.enumValueIndex = (int)SpriteRendererSequenceRenderer.SpriteRenderMode.ShaderFlipbookSharedMaterial;
+                    InvalidateCompatibility();
                 }
             }
 
-            if (summary.ShouldSuggestSwitchToFlipbookMode && renderMode != null && GUILayout.Button("Switch To Flipbook Mode", EditorStyles.miniButtonRight))
+            if (requiresExpectedShader && materialProperty != null && _compatibilitySummary.ShouldSuggestCreateCorrectMaterial)
             {
-                renderMode.enumValueIndex = (int)SpriteRendererSequenceRenderer.SpriteRenderMode.ShaderFlipbookSharedMaterial;
+                if (GUILayout.Button("Create Compatible Material"))
+                {
+                    Material created = SpriteSequenceRendererEditorUtility.CreateMaterialAsset(
+                        _rendererTarget.gameObject.name,
+                        expectedShaderName,
+                        "Create Compatible Renderer Material",
+                        "_RendererCompatible.mat",
+                        "Select a project path for a material matching the current renderer mode.");
+                    if (created != null)
+                    {
+                        materialProperty.objectReferenceValue = created;
+                        InvalidateCompatibility();
+                    }
+                }
             }
-            EditorGUILayout.EndHorizontal();
+        }
+
+        private void DrawMaterialButtonsForCurrentMode(SerializedProperty materialProperty, string shaderName)
+        {
+            if (materialProperty == null)
+            {
+                return;
+            }
+
+            EditorGUILayout.Space(2f);
+            using (Foundation2DInspectorUi.BeginActionLayout(2, 135f))
+            {
+                if (GUILayout.Button("Find Existing Material"))
+                {
+                    List<SpriteSequenceRendererEditorUtility.MaterialCandidate> candidates =
+                        SpriteSequenceRendererEditorUtility.GetMaterialCandidates(_rendererTarget, shaderName, _rendererTarget.gameObject.name);
+                    Material current = materialProperty.objectReferenceValue as Material;
+                    Material found = SpriteSequenceRendererEditorUtility.SelectBestMaterial(candidates, current, shaderName, out string message);
+                    if (found != null)
+                    {
+                        materialProperty.objectReferenceValue = found;
+                        InvalidateCompatibility();
+                    }
+                    else if (candidates.Count > 1)
+                    {
+                        string propertyPath = materialProperty.propertyPath;
+                        SpriteSequenceMaterialPickerWindow.Open(
+                            "SpriteRenderer Material Picker",
+                            shaderName,
+                            candidates,
+                            material => AssignMaterial(propertyPath, material));
+                    }
+                    else
+                    {
+                        EditorUtility.DisplayDialog("Material Search", message, "OK");
+                    }
+                }
+
+                if (GUILayout.Button("Create Material"))
+                {
+                    Material created = SpriteSequenceRendererEditorUtility.CreateMaterialAsset(
+                        _rendererTarget.gameObject.name,
+                        shaderName,
+                        "Create SpriteRenderer Material",
+                        "_SpriteRenderer.mat",
+                        "Select a project path for the created SpriteRenderer material.");
+                    if (created != null)
+                    {
+                        materialProperty.objectReferenceValue = created;
+                        InvalidateCompatibility();
+                    }
+                }
+            }
+        }
+
+        private void GetCurrentDiagnosticContext(
+            out Material material,
+            out string shaderName,
+            out bool requiresShader,
+            out SerializedProperty materialProperty,
+            out bool suggestFlipbook)
+        {
+            bool flipbook = _renderMode.enumValueIndex == (int)SpriteRendererSequenceRenderer.SpriteRenderMode.ShaderFlipbookSharedMaterial;
+            if (flipbook)
+            {
+                materialProperty = _flipbookSharedMaterial;
+                material = _flipbookSharedMaterial.objectReferenceValue as Material;
+                shaderName = SpriteRendererSequenceRenderer.FlipbookShaderName;
+                requiresShader = true;
+                suggestFlipbook = false;
+                return;
+            }
+
+            suggestFlipbook = true;
+            if (!_materialStrategy.hasMultipleDifferentValues &&
+                _materialStrategy.enumValueIndex == (int)SpriteRendererSequenceRenderer.MaterialStrategy.SharedMaterialOverride)
+            {
+                materialProperty = _sharedMaterialOverride;
+                material = _sharedMaterialOverride.objectReferenceValue as Material;
+                Material boundMaterial = GetBoundMaterial();
+                shaderName = material != null && material.shader != null
+                    ? material.shader.name
+                    : boundMaterial != null && boundMaterial.shader != null
+                        ? boundMaterial.shader.name
+                        : "Sprites/Default";
+                requiresShader = false;
+                return;
+            }
+
+            materialProperty = null;
+            material = GetBoundMaterial();
+            shaderName = material != null && material.shader != null ? material.shader.name : "Sprites/Default";
+            requiresShader = false;
+        }
+
+        private Material GetBoundMaterial()
+        {
+            SpriteRenderer renderer = _spriteRenderer.objectReferenceValue as SpriteRenderer;
+            renderer ??= _fallbackSpriteRenderer;
+            return renderer != null ? renderer.sharedMaterial : null;
+        }
+
+        private void EnsureCompatibility(Material material, string shaderName, bool requiresShader, bool suggestFlipbook)
+        {
+            int fingerprint = BuildCompatibilityFingerprint(material, shaderName, requiresShader, suggestFlipbook);
+            if (!_compatibilityValid || fingerprint != _compatibilityFingerprint)
+            {
+                RefreshCompatibility(material, shaderName, requiresShader, suggestFlipbook);
+            }
+        }
+
+        private void RefreshCompatibility(Material material, string shaderName, bool requiresShader, bool suggestFlipbook)
+        {
+            _controller = _rendererTarget != null ? _rendererTarget.GetComponent<SpriteSequenceController>() : null;
+            _fallbackSpriteRenderer = _rendererTarget != null ? _rendererTarget.GetComponent<SpriteRenderer>() : null;
+            _compatibilitySummary = SpriteSequenceRendererEditorUtility.BuildCompatibilitySummary(
+                _rendererTarget,
+                material,
+                shaderName,
+                suggestFlipbook);
+            _compatibilityText = SpriteSequenceRendererEditorUtility.FormatCompatibilitySummary(_compatibilitySummary, requiresShader);
+            _compatibilityFingerprint = BuildCompatibilityFingerprint(material, shaderName, requiresShader, suggestFlipbook);
+            _compatibilityValid = true;
+        }
+
+        private int BuildCompatibilityFingerprint(Material material, string shaderName, bool requiresShader, bool suggestFlipbook)
+        {
+            unchecked
+            {
+                int hash = _rendererTarget != null ? EditorUtility.GetDirtyCount(_rendererTarget) : 0;
+                hash = hash * 397 ^ (_controller != null ? EditorUtility.GetDirtyCount(_controller) : 0);
+                hash = hash * 397 ^ (material != null ? material.GetInstanceID() : 0);
+                hash = hash * 397 ^ (material != null ? EditorUtility.GetDirtyCount(material) : 0);
+                SpriteRenderer renderer = _spriteRenderer.objectReferenceValue as SpriteRenderer;
+                renderer ??= _fallbackSpriteRenderer;
+                hash = hash * 397 ^ (renderer != null ? renderer.GetInstanceID() : 0);
+                hash = hash * 397 ^ (renderer != null ? EditorUtility.GetDirtyCount(renderer) : 0);
+                hash = hash * 397 ^ (shaderName != null ? shaderName.GetHashCode() : 0);
+                hash = hash * 397 ^ (requiresShader ? 1 : 0);
+                hash = hash * 397 ^ (suggestFlipbook ? 1 : 0);
+                return hash;
+            }
         }
 
         private void AssignMaterial(string propertyPath, Material material)
         {
-            SerializedObject so = new SerializedObject(target);
-            SerializedProperty property = so.FindProperty(propertyPath);
+            if (target == null || serializedObject.isEditingMultipleObjects)
+            {
+                return;
+            }
+
+            SerializedObject targetObject = new(target);
+            targetObject.Update();
+            SerializedProperty property = targetObject.FindProperty(propertyPath);
             if (property == null)
             {
                 return;
             }
 
-            Undo.RecordObject(target, "Assign Renderer Material");
-            so.Update();
             property.objectReferenceValue = material;
-            so.ApplyModifiedProperties();
-            EditorUtility.SetDirty(target);
+            targetObject.ApplyModifiedProperties();
+            InvalidateCompatibility();
+            Repaint();
         }
 
-        private void DrawFrameTextureWarnings(SpriteRendererSequenceRenderer renderer, string message)
+        private void OnUndoRedo()
         {
-            if (SpriteSequenceRendererEditorUtility.AllFramesShareTexture(renderer))
-            {
-                return;
-            }
+            InvalidateCompatibility();
+            Repaint();
+        }
 
-            int textureCount = SpriteSequenceRendererEditorUtility.CountDistinctFrameTextures(renderer);
-            EditorGUILayout.HelpBox($"Frames currently span {textureCount} textures. {message}", MessageType.Warning);
-            if (GUILayout.Button("Keep First Texture Frames Only"))
-            {
-                SpriteSequenceRendererEditorUtility.KeepOnlyFirstTextureFrames(renderer);
-            }
+        private void InvalidateCompatibility()
+        {
+            _compatibilityValid = false;
         }
     }
 }

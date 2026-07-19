@@ -4,8 +4,6 @@
     "references": [
         "UniTask",
         "CycloneGames.Logger",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.Hash.Core"

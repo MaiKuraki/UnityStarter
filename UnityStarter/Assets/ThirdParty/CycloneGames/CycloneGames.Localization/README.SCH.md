@@ -1,874 +1,618 @@
 # CycloneGames.Localization
 
-<div align="left"><a href="./README.md">English</a> | 简体中文</div>
+[English | 简体中文](README.md)
 
-面向商业级项目设计的 Unity **本地化框架**。提供完整的字符串与资产本地化管线，支持 BCP 47 语言标识符、自动回退链、覆盖 25+ 种语言的 CLDR 复数规则、通过可选 UIFramework 集成提供逐语言布局快照，并使用由 ScriptableObject 配置生成的运行时编译查找数据。
+CycloneGames.Localization 是面向长期项目的 Unity 本地化模块，用于管理版本化文本与本地化资产内容。模块将 locale-aware runtime lookup、有界 catalog 安装、显式表现层绑定和适合长期项目分批翻译的 Editor 工作流组合在一起。它适用于桌面、移动端、WebGL、Headless Unity Player，以及提供兼容 asset backend 的主机平台集成，且不要求 DI 容器、全局 Service Locator、运行时反射或 worker thread。
 
-## 功能特性
+## 目录
 
-### 🌍 核心本地化
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
-| 功能                        | 详情                                                                                             |
-| --------------------------- | ------------------------------------------------------------------------------------------------ |
-| **LocaleId 值类型**         | `readonly struct`，由 BCP 47 code 字符串表示；使用 ordinal 等值比较，比较过程不产生临时分配 |
-| **BCP 47 支持**             | 标准语言代码：`en`、`zh-CN`、`ja-JP`、`pt-BR` 等                                                 |
-| **Locale ScriptableObject** | 每种语言配置显示名称、母语名称和回退链 — 设计师在 Inspector 中配置                               |
-| **自动回退链**              | BFS 遍历加去重：`zh-CN → zh → en` 仅解析一次并缓存                                               |
-| **系统语言检测**            | 通过 `CultureInfo`（BCP 47）检测系统语言，回退到 `Application.systemLanguage`                    |
+## 概述
 
-### 📝 字符串表
+本地化系统回答两个问题：玩家应该看到哪段文本或哪个资源，以及当前提交的是哪个 locale。CycloneGames.Localization 把创作（在 Editor 中编辑的 `LocalizationSettings`、`Locale`、`StringTable`、`AssetTable`、`StringTableMetadata`）、运行时分发（基于不可变 lookup snapshot 的 `LocalizationService` facade）与表现层（`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder`）解耦。所有者负责创作 table 与 catalog；service 把它们作为一个原子事务校验并安装；表现层组件订阅已提交的变更并按需刷新。
 
-| 功能                    | 详情                                                                             |
-| ----------------------- | -------------------------------------------------------------------------------- |
-| **ScriptableObject 表** | 每个表 ID 每种语言对应一个 `StringTable` 资产；通过项目启动流程加载并注册 |
-| **编译后运行时查找**    | 序列化列表在注册或预热时编译为 `CompiledStringTable`；查找使用 `StringComparer.Ordinal` |
-| **回退链解析**          | 如果 `zh-CN` 中缺少某个 Key，自动检查 `zh`，然后 `en`，依此类推                  |
-| **预热支持**            | 可在加载阶段编译表数据，使 UI 刷新路径只执行字典查找                              |
-| **参数化文本**          | `GetFormattedString("ui", "damage", weaponName, amount)` → `"造成 {0} {1} 伤害"` |
+本模块负责：经过校验的 locale identifier、显式 fallback graph、分区 string/asset table、plural selection、composite formatting、pseudo-localization、事务化 runtime catalog ownership、TMP 与 UGUI 绑定，以及多语言创作、validation、CSV 交换和 catalog build 的 Editor 工作流。字体 fallback、双向文字 shaping、远程翻译平台 API、下载/鉴权/补丁/CDN 策略，以及保存玩家语言偏好的应用级存档格式不由本模块负责 —— 它们留在各自的 owner adapter 中，使翻译数据不依赖产品专用网络、持久化和 UI composition。UI 导航和 locale-specific Prefab 布局在使用时由 `CycloneGames.UIFramework` 提供。
 
-### 🔢 复数规则（CLDR）
+当项目需要版本化、分区、事务化的本地化能力，并需要在长 live-service 生命周期内支持增量翻译交付时使用本模块。不要将其作为字体/字形覆盖方案或翻译管理供应商桥接使用。
 
-| 功能           | 详情                                                                                                                                         |
-| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| **25+ 种语言** | 完整 CLDR 基数复数规则：东斯拉夫语、波兰语、捷克语、阿拉伯语、罗马尼亚语、立陶宛语、拉脱维亚语、爱尔兰语、斯洛文尼亚语、威尔士语、马耳他语等 |
-| **6 个类别**   | `Zero`、`One`、`Two`、`Few`、`Many`、`Other` — 每种语言使用其所需的子集                                                                      |
-| **后缀约定**   | 基础 Key `"item_count"` → 条目 `"item_count.one"`、`"item_count.other"` 等                                                                   |
-| **自动回退**   | 解析的类别 → `.other` 回退 → 缺失 Key 警告                                                                                                   |
-| **静态解析器** | 纯静态方法 + 整数运算；解析后的 Key 使用已有的编译表查找路径                                                                                  |
+### 主要特性
 
-### 🎨 资产表
+- **经过校验的 `LocaleId`**：长度受限的 BCP 47 风格 tag，规范化大小写；不可信边界使用 `TryCreate`。
+- **显式 fallback graph**：每个 `Locale` 的显式 fallback 引用，确定且 cycle-safe 的 chain。
+- **分区 table**：每个 `(table ID, locale)` 一个 `StringTable` / `AssetTable`；支持独立 locale pack。
+- **Plural selection 与 composite formatting**：确定的 integer cardinal rule set（`CLDR-48-integer-cardinal-subset`）；译者可控的 composite format。
+- **事务化 catalog**：`LocalizationCatalog` 以 owner 范围原子事务安装多个 table，并做 schema、hash、duplicate、size 校验。
+- **表现层绑定**：`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder` 只在 enabled 时订阅；无 per-frame polling。
+- **Pseudo-localization**：保护 placeholder 与 tag 的文本变换，用于布局和内容 QA。
+- **Editor workspace**：多语言 table workspace、增量 CSV 交换（RFC 4180）、validation 窗口、分区 catalog build。
+- **纯 C# 核心**：`CycloneGames.Localization.Core` 设 `noEngineReferences: true`；Runtime 与 Components 依赖 `UniTask` 和 `CycloneGames.AssetManagement`。
 
-| 功能               | 详情                                                           |
-| ------------------ | -------------------------------------------------------------- |
-| **逐语言资产变体** | 将逻辑 Key 映射到不同语言的精灵图、音频剪辑或字体              |
-| **回退链解析**     | 与字符串表相同的 BFS 回退 — `ja-JP → ja → en`                  |
-| **AssetRef 集成**  | 解析为兼容 `CycloneGames.AssetManagement` 管线的 `AssetRef<T>` |
-| **编译后运行时查找** | `AssetTable` 编辑数据会先编译为 `CompiledAssetTable`，再进入运行时查找路径 |
-| **类型安全**       | `LocalizedAsset<Sprite>`、`LocalizedAsset<AudioClip>` 等       |
+## 架构
 
-### 🧩 组件
-
-| 功能                    | 详情                                                             |
-| ----------------------- | ---------------------------------------------------------------- |
-| **LocalizeTMPText**     | 语言切换时自动更新 `TMP_Text` — 支持纯文本、格式化文本和复数文本 |
-| **LocalizeImage**       | 语言切换时自动更新 `Image.sprite`，正确管理资产句柄生命周期      |
-| **事件驱动**            | 零逐帧开销 — 仅在 `OnLocaleChanged` 事件触发时刷新               |
-| **优雅的缺失 Key 处理** | 缺失 Key 返回 `null` → 保留预制体原始文本（设计师占位符）        |
-
-### 🔌 集成
-
-| 功能                         | 详情                                                                                                                               |
-| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Yarn Spinner**             | `YarnLocaleSync` 将语言变更桥接到 `LineProviderBehaviour.LocaleCode` — 无需修改 Yarn Spinner 源代码                                |
-| **CycloneGames.UIFramework** | 通过 `UILocaleLayout` 实现可选的逐语言布局快照 — [查看 UIFramework 文档](../CycloneGames.UIFramework/README.SCH.md#本地化集成可选) |
-
-### 🧪 伪本地化
-
-| 功能              | 详情                                                                                                                           |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| **5 种变换模式**  | `Accents`（à→é）、`Elongate`（~33% 填充）、`Brackets`（⟦text⟧）、`Mirror`（RTL 反转）、`Full`（Accents + Elongate + Brackets） |
-| **按位组合**      | `[Flags]` 枚举 — 通过 `\|` 组合任意模式创建自定义 QA 预设                                                                      |
-| **零内存分配**    | 字符串 ≤ 512 字符时使用 `stackalloc`；`PseudoLocaleMode.None` 时直接返回原字符串引用                                           |
-| **运行时切换**    | `ILocalizationService.PseudoMode` — 运行时切换模式无需重启                                                                     |
-| **Settings 集成** | `LocalizationSettings` 上的 `PseudoLocaleMode` 字段 — 在 Inspector 中配置，通过 `ToOptions()` 自动传递                         |
-
-### 🔗 语言选择链
-
-| 功能                          | 详情                                                                        |
-| ----------------------------- | --------------------------------------------------------------------------- |
-| **优先级排序选择器**          | `ILocaleSelector` 接口 — 第一个返回非 null 的匹配胜出                       |
-| **CommandLineLocaleSelector** | `--locale zh-CN` — 最高优先级，首次调用后缓存；用于 QA 测试                 |
-| **PlayerPrefsLocaleSelector** | 读写 `PlayerPrefs` 键 `"CycloneGames.Locale"` — 玩家语言设置持久化          |
-| **SystemLocaleSelector**      | `CultureInfo.CurrentUICulture`（BCP 47）+ `Application.systemLanguage` 回退 |
-| **自定义选择器**              | 实现 `ILocaleSelector` 添加项目特定来源（服务器配置、Steam API 等）         |
-| **默认链**                    | CommandLine → PlayerPrefs → System → Default Locale（未提供自定义链时）     |
-
-### 📋 条目元数据
-
-| 功能           | 详情                                                                       |
-| -------------- | -------------------------------------------------------------------------- |
-| **译者上下文** | `Comment` 字段 — 描述上下文、语气或约束的译者注释                          |
-| **字符限制**   | `MaxLength` — 最大字符数；运行时可通过 `GetMaxLength()` 查询，用于输入验证 |
-| **锁定状态**   | `Locked` 标志 — 标记已定稿的条目，译者不应修改                             |
-| **标签系统**   | 逗号分隔的 `Tags`，用于分类和过滤（例如 `"menu,button,short"`）            |
-| **截图引用**   | `Texture2D` 引用，展示文本在 UI 中的位置（仅 Editor）                      |
-| **独立存储**   | `StringTableMetadata` ScriptableObject — 保持运行时 `StringTable` 资产轻量 |
-| **表类型分离** | `TableType` 枚举（`String` / `Asset`）— 同一表 ID 可按类型拥有独立元数据   |
-
-### 🛠️ 编辑器工具
-
-| 功能                     | 详情                                                                                         |
-| ------------------------ | -------------------------------------------------------------------------------------------- |
-| **多语言字符串表编辑器** | 并排编辑所有语言，冻结 Key 列、水平/垂直滚动、元数据子行、重复检测、CSV 导入/导出            |
-| **多语言资产表编辑器**   | 相同架构的资产表编辑器 — 冻结 Key 列、逐语言 `AssetRef` 字段、元数据集成                     |
-| **CSV 导入/导出**        | 批量导入导出，便于交付给翻译人员                                                             |
-| **Property Drawer**      | `LocalizedString` 和 `LocalizedAsset<T>` 的下拉表和 Key 选择器                               |
-| **Locale Inspector**     | 自定义编辑器，展示 BCP 47 代码、显示名称、母语名称和回退链                                   |
-| **版本缓存发现**         | `LocalizedFieldHelper` 配合 `AssetPostprocessor` — 表/Key 列表仅在资产导入时更新，零逐帧开销 |
-| **验证窗口**             | 项目级扫描空 ID、非法语言、重复 Key 和 fallback 环                                           |
-
-## 核心架构
+| 程序集 | 路径 | 用途 |
+| --- | --- | --- |
+| `CycloneGames.Localization.Core` | `Core/` | `LocaleId`、fallback traversal、plural category、pseudo-localization。不引用 `UnityEngine`。 |
+| `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridge、`LocalizationService`、catalog、table、selector。依赖 Core、UniTask、AssetManagement。 |
+| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeTMPText`、`LocalizeImage`。依赖 Runtime、TMP、UGUI、AssetManagement、UniTask。 |
+| `CycloneGames.Localization.Editor` | `Editor/` | Inspector、table workspace、validation、CSV、catalog build。依赖 Runtime、UnityEditor。 |
+| `CycloneGames.Localization.Runtime.Integrations.YarnSpinner` | `Runtime/Integrations/YarnSpinner/` | Yarn locale 同步；仅安装 Yarn Spinner 时参与编译。 |
+| `CycloneGames.Localization.Tests.Editor` | `Tests/Editor/` | Pure core、runtime、catalog 与 Editor workflow 测试。 |
 
 ```mermaid
-graph TD
-    LS[LocalizationSettings]
-    LOC[Locale]
-    LID[LocaleId]
-    FCB[LocaleFallbackChainBuilder]
-    PR[PluralRules]
-    PSL[PseudoLocalizer]
-    FC[FallbackChain]
-    SEL[ILocaleSelector]
-    ST[StringTable]
-    CST[CompiledStringTable]
-    AT[AssetTable]
-    CAT[CompiledAssetTable]
-    META[StringTableMetadata]
-    ILS[ILocalizationService]
-    LSV[LocalizationService]
-    LTT[LocalizeTMPText]
-    LI[LocalizeImage]
-    YLS[YarnLocaleSync]
-    LS --> LOC
-    LOC --> LID
-    LOC --> FCB
-    FC --> FCB
-    LSV --> ILS
-    ILS --> ST
-    ST --> CST
-    ILS --> AT
-    AT --> CAT
-    ILS --> FC
-    ILS --> PR
-    ILS --> PSL
-    ILS --> SEL
-    ILS --> META
-    LTT --> ILS
-    LI --> ILS
-    YLS --> ILS
+flowchart LR
+    subgraph Authoring["Unity authoring"]
+        Settings["LocalizationSettings"]
+        LocaleAssets["Locale assets"]
+        StringAssets["String tables"]
+        AssetAssets["Asset tables"]
+        Metadata["Translation metadata"]
+    end
+
+    subgraph Build["Validation and build"]
+        Validator["LocalizationValidator"]
+        CatalogBuilder["Catalog builder"]
+        Catalog["Versioned catalog"]
+    end
+
+    subgraph Runtime["Runtime owner"]
+        Service["LocalizationService facade"]
+        Snapshot["Immutable lookup snapshot"]
+        Diagnostics["Bounded diagnostics"]
+    end
+
+    subgraph Presentation["Presentation adapters"]
+        TMP["LocalizeTMPText"]
+        Image["LocalizeImage"]
+        UI["UIFramework binding targets"]
+    end
+
+    Settings --> Validator
+    LocaleAssets --> Validator
+    StringAssets --> Validator
+    AssetAssets --> Validator
+    Metadata --> Validator
+    Validator --> CatalogBuilder --> Catalog
+    Catalog -->|"validated atomic commit"| Service
+    Service --> Snapshot
+    Snapshot --> TMP
+    Snapshot --> Image
+    Snapshot --> UI
+    Service --> Diagnostics
 ```
 
-## 依赖项
-
-| 包                               | 用途                                                              |
-| -------------------------------- | ----------------------------------------------------------------- |
-| **CycloneGames.AssetManagement** | `AssetRef<T>`、`IAssetPackage`、`IAssetHandle<T>`，用于资产表解析 |
-| **UniTask**                      | 异步初始化和语言切换                                              |
-| **TextMeshPro**                  | `LocalizeTMPText` 组件                                            |
-| **Unity UI**                     | `LocalizeImage` 组件                                              |
-| **Yarn Spinner** _（可选）_      | `YarnLocaleSync` — 仅在 Yarn Spinner 存在时编译                   |
-
----
-
-## 模块结构
-
-```
-CycloneGames.Localization/
-  Core/        纯 C# LocaleId、复数规则、伪本地化、fallback helper
-  Runtime/     Unity 运行时服务、设置、表、组件和集成
-  Editor/      Inspector、Drawer、多语言表编辑器和验证工具
-  Tests/       Core 与 Editor 相关行为的 EditMode 测试
-```
-
-`Core` 不引用 Unity Engine，可复用于工具、测试、服务器代码或未来非 Unity 适配层。Runtime 中的 ScriptableObject 是编辑数据；`LocalizationService` 注册时会使用编译后的运行时表数据进行查找。
-
-### 运行时数据包
-
-`LocalizationCatalog` 是生成后的运行时数据包，用于一次性注册本地化字符串表和资产表。它包含 schema 版本、catalog 版本、内容 hash、字符串表条目和资产表条目。
-
-Catalog 提供生成后的运行时数据包，可用于启动载荷、构建验证、热更新清单、加密交付和二进制解码。运行时服务只依赖 catalog 数据契约，不依赖固定存储后端。
-
-支持的注册路径：
-
-1. 在项目启动流程中分别注册 `StringTable` 和 `AssetTable` 资产。
-2. 构建并注册 `LocalizationCatalog`。
-3. 在独立集成程序集中将外部数据解码为 `LocalizationCatalog`、`CompiledStringTable` 或 `CompiledAssetTable`。
-
-可选的 DataTable、二进制、MessagePack 或加密支持应放在 integration 程序集中实现。这些集成程序集依赖 `CycloneGames.Localization.Runtime`；基础 Runtime 程序集不应依赖 DataTable 或固定资源加载后端。
-
-需要异步加载 catalog 的项目可以实现 `ILocalizationCatalogProvider`。Provider 实现可以从 `CycloneGames.AssetManagement`、加密文件、远端清单、测试内存数据或任意项目自定义来源加载 catalog。Provider 返回 catalog 后，通过 `ILocalizationService.RegisterCatalog` 注册。
-
----
+运行时内容按 table 与 locale 分区。项目可以安装基础 catalog 和独立可下载语言包，无需让所有语言常驻同一个资产。只有在候选内容完整通过 schema、hash、duplicate 和 size validation 后，catalog owner 才会被替换。
 
 ## 快速上手
 
-基础接入流程使用 `Locale`、`LocalizationSettings` 和 `StringTable` 资产。初始化 `LocalizationService`，加载所需表，并通过 `RegisterStringTable` 注册。该流程不要求创建 `LocalizationCatalog`。
-
-### 1. 创建 Locale 资产
-
-为每种支持的语言创建一个 `Locale` ScriptableObject：
-
-**Create → CycloneGames → Localization → Locale**
-
-| 字段         | 示例（英语） | 示例（简体中文）     |
-| ------------ | ------------ | -------------------- |
-| Locale Code  | `en`         | `zh-CN`              |
-| Display Name | `English`    | `Simplified Chinese` |
-| Native Name  | `English`    | `简体中文`           |
-| Fallbacks    | _（空）_     | `en`                 |
-
-回退链按语言定义。例如，`zh-CN` 回退到 `en`，意味着中文表中缺失的任何 Key 都将自动从英文表中解析。
-
-### 2. 创建 LocalizationSettings
-
-创建唯一的 `LocalizationSettings` 资产：
-
-**Create → CycloneGames → Localization → Settings**
-
-| 字段                   | 描述                                                                       |
-| ---------------------- | -------------------------------------------------------------------------- |
-| Default Locale         | 系统检测失败时的回退语言                                                   |
-| Available Locales      | 项目支持的所有语言（将 Locale 资产拖入此处）                               |
-| Detect System Language | 启用后，系统在首次启动时自动选择最匹配的语言                               |
-| Pseudo Locale Mode     | QA 测试模式：`None`、`Accents`、`Elongate`、`Brackets`、`Mirror` 或 `Full` |
-
-### 3. 创建字符串表
-
-每个表组每种语言创建一个 `StringTable`：
-
-**Create → CycloneGames → Localization → String Table**
-
-示例结构：
-
-```
-Localization/
-├── StringTables/
-│   ├── UI_en.asset        (tableId: "ui", locale: "en")
-│   ├── UI_zh-CN.asset     (tableId: "ui", locale: "zh-CN")
-│   ├── Items_en.asset     (tableId: "items", locale: "en")
-│   └── Items_zh-CN.asset  (tableId: "items", locale: "zh-CN")
-```
-
-使用**字符串表编辑器窗口**（Tools → CycloneGames → Localization → Tables → String Table Editor）进行可视化编辑，或从 CSV 导入。
-
-### 4. 初始化服务
+在 asmdef 中添加对 `CycloneGames.Localization.Runtime`（以及表现层用到的 `CycloneGames.Localization.Components`）的引用，然后导入命名空间：
 
 ```csharp
-// VContainer 方式
-public class LocalizationInstaller : LifetimeScope
+using CycloneGames.Localization.Runtime;
+```
+
+### 创建 authoring 资产
+
+1. 创建一个 `LocalizationSettings` 资产。
+2. 创建一个 `StringTable`，填写 table ID，然后双击该资产打开组合 table workspace。
+3. 在 **+ Locale** 左侧输入首个 locale code（例如 `en` 或 `zh-CN`）。如果该 locale 尚未注册，workspace 会询问是否创建或复用对应 `Locale` 资产、加入 `Available Locales`，并填充尚为空的 default/authoring 字段。
+4. 在每个 `Locale` 资产上配置 display name 和显式 fallback 引用。
+5. 点击 **+ Key**，在 authoring-locale column 中输入 source text。
+6. 进入 Play Mode 或构建 catalog 前运行 **Tools > CycloneGames > Localization > Validation > Window**。
+
+### 不使用 DI 初始化
+
+```csharp
+using System;
+using CycloneGames.Localization.Runtime;
+using UnityEngine;
+
+public sealed class GameLocalization : MonoBehaviour
 {
     [SerializeField] private LocalizationSettings settings;
+    [SerializeField] private StringTable[] bootstrapTables;
 
-    protected override void Configure(IContainerBuilder builder)
+    public LocalizationService Service { get; private set; }
+
+    private void Awake()
     {
-        builder.Register<LocalizationService>(Lifetime.Singleton)
-               .As<ILocalizationService>();
+        Service = new LocalizationService();
+        Service.Initialize(settings.ToOptions());
 
-        builder.RegisterBuildCallback(resolver =>
+        for (int i = 0; i < bootstrapTables.Length; i++)
         {
-            var service = resolver.Resolve<ILocalizationService>();
-            service.InitializeAsync(settings.ToOptions()).Forget();
-        });
+            if (!Service.RegisterStringTable(bootstrapTables[i]))
+                throw new InvalidOperationException("Localization bootstrap table was rejected.");
+        }
     }
+
+    private void OnDestroy() => Service?.Dispose();
 }
 ```
 
-```csharp
-// 手动初始化
-var service = new LocalizationService();
-await service.InitializeAsync(settings.ToOptions());
-```
-
-### 5. 注册字符串表
+### 解析字符串与 plural
 
 ```csharp
-// 通过项目启动流程或资产包流程加载并注册表。
-service.RegisterStringTable(uiTableEn);
-service.RegisterStringTable(uiTableZhCN);
+string title = service.GetString("menu", "main.title");
+
+if (service.TryGetString("inventory", "item.potion.name", out string potionName))
+    nameLabel.text = potionName;
+
+// Plural：以分类后缀保存变体（item_count.one / item_count.other）
+string countText = service.GetPluralString("inventory", "item_count", count);
 ```
 
-`RegisterStringTable` 会将每个 `StringTable` 编译为 `CompiledStringTable`。请在加载流程或场景启动阶段注册表，不要在逐帧 UI 刷新中注册。
-
-### 6. 注册资产表
+### 格式化消息
 
 ```csharp
-service.RegisterAssetTable(flagsEn);
-service.RegisterAssetTable(flagsZhCN);
+string message = service.GetFormattedString("combat", "damage.received", actorName, damage);
 ```
 
-`RegisterAssetTable` 会将每个 `AssetTable` 编译为 `CompiledAssetTable`。运行时查找会解析当前语言 fallback 链并返回 `AssetRef`，不会在查找时重建表字典。
-
-### 7. 验证项目数据
-
-发布或交付翻译前，打开 **Tools > CycloneGames > Localization > Validation > Validate Project**。验证工具会扫描字符串表、资产表、元数据和语言 fallback 链中的空 ID、非法语言、重复 Key、缺失的 plural `.other`、自 fallback 和 fallback 环。
-
-### 8. 运行时 Catalog 流程
-
-当项目需要面向发布构建、CI 验证、热更新交付、加密文件或二进制解码的生成数据包时，使用 `LocalizationCatalog`。直接资产注册流程可跳过本节，在加载阶段或场景启动阶段注册 `StringTable` 或 `AssetTable` 资产。
-
-为团队协作和 CI 流程创建 `LocalizationCatalogBuildSettings` 资产：
-
-**Create > CycloneGames > Localization > Catalog Build Settings**
-
-在 Inspector 中配置输出文件夹、输出文件名、catalog 版本和验证选项。输出文件夹是文件夹资产引用，因此该设置可以提交到版本控制，并在不同机器上复用，无需修改包源码。
-
-使用 **Tools > CycloneGames > Localization > Catalog > Build From Settings** 从项目中找到的第一个 settings 资产构建 catalog。构建器会先执行验证，保留条目顺序，并写入确定性的 `SHA256` 内容 hash，便于版本检查、热更新和未来差量包流程。
-
-仅在需要一次性手动选择输出路径时，使用 **Tools > CycloneGames > Localization > Catalog > Build Once...**。
+### 切换 locale
 
 ```csharp
-// 通过 CycloneGames.AssetManagement 或项目自己的包流程加载 Catalog。
-service.RegisterCatalog(localizationCatalog);
-```
-
-`LocalizationCatalog` 与具体后端无关。生成后的资产可以放入首包、通过热更新包交付，或由项目自定义解码器生成后再注册。
-
-`LocalizationCatalog` Inspector 是只读的生成数据视图。它会展示 schema 版本、catalog 版本、`ContentHash`、字符串表数量、资产表数量和条目总数，并提供复用 `LocalizationCatalogBuildSettings` 的构建操作。请修改源表和构建设置，不要直接编辑生成后的 catalog 字段。
-
----
-
-## 用法
-
-### 基本字符串查找
-
-```csharp
-// 通过 LocalizedString（Inspector 中赋值）
-[SerializeField] private LocalizedString greeting;
-
-string text = localizationService.GetString(greeting);
-// 例如 "欢迎回来，英雄！"
-
-// 通过表 ID + Key
-string text = localizationService.GetString("ui", "greeting");
-```
-
-### 参数化文本
-
-字符串表条目：`"damage_dealt" → "造成 {0} {1} 伤害"`
-
-```csharp
-[SerializeField] private LocalizedString damageDealt;
-
-string text = localizationService.GetFormattedString(damageDealt, weaponName, amount);
-// 例如 "造成 圣剑 150 伤害"
-```
-
-### 复数字符串
-
-字符串表条目：
-
-```
-"item_count.one"   → "{0} item"
-"item_count.other" → "{0} items"
-```
-
-对于东斯拉夫语（俄语、乌克兰语等）：
-
-```
-"item_count.one"   → "{0} предмет"
-"item_count.few"   → "{0} предмета"
-"item_count.many"  → "{0} предметов"
-```
-
-```csharp
-[SerializeField] private LocalizedString itemCount;
-
-string text = localizationService.GetPluralString(itemCount, count);
-// count=1  → "1 item"     (en)
-// count=5  → "5 items"    (en)
-// count=3  → "3 предмета" (ru, "few" 形式)
-```
-
-带额外参数：
-
-```csharp
-// "item_count.one"   → "You have {0} {1} item"
-// "item_count.other" → "You have {0} {1} items"
-
-string text = localizationService.GetPluralString(itemCount, count, playerName);
-// count 始终是 {0}，额外参数是 {1}、{2}……
-```
-
-### 运行时切换语言
-
-```csharp
-await localizationService.SetLocaleAsync(new LocaleId("zh-CN"));
-// 所有订阅的组件（LocalizeTMPText、LocalizeImage 等）自动刷新
-
-// 保存玩家选择，下次启动时生效
-PlayerPrefsLocaleSelector.Save(new LocaleId("zh-CN"));
-```
-
-### 伪本地化（QA 测试）
-
-启用伪本地化来测试 UI 布局和发现硬编码字符串，无需真实翻译：
-
-```csharp
-// 方式 1：在 LocalizationSettings Inspector 中配置（Pseudo Locale Mode 字段）
-
-// 方式 2：运行时切换
-localizationService.PseudoMode = PseudoLocaleMode.Full;
-// 所有 GetString / GetFormattedString / GetPluralString 结果现在被变换：
-// "Settings" → "⟦Šéťťíñĝš~~~⟧"
-
-// 自定义组合
-localizationService.PseudoMode = PseudoLocaleMode.Accents | PseudoLocaleMode.Brackets;
-// "Settings" → "⟦Šéťťíñĝš⟧"
-
-// 禁用
-localizationService.PseudoMode = PseudoLocaleMode.None;
-```
-
-| 模式       | 效果                          | 用途                                 |
-| ---------- | ----------------------------- | ------------------------------------ |
-| `Accents`  | `a→à, e→é, s→š`               | 验证文本在变音符下的渲染（编码问题） |
-| `Elongate` | 追加 `~~~`（约长 33%）        | 捕捉截断问题 — 模拟德语/芬兰语长度   |
-| `Brackets` | `⟦text⟧`                      | 发现绕过本地化的硬编码字符串         |
-| `Mirror`   | 反转字符顺序                  | 基本 RTL 布局测试                    |
-| `Full`     | Accents + Elongate + Brackets | 综合 QA 测试                         |
-
-### 语言选择链
-
-初始化时，服务按优先级顺序评估选择器以确定起始语言：
-
-```
-CommandLine → PlayerPrefs → System → Default Locale
-```
-
-```csharp
-// 通过命令行强制语言（最高优先级）
-// 启动：MyGame.exe --locale ja
-
-// 保存/清除玩家偏好
-PlayerPrefsLocaleSelector.Save(new LocaleId("fr"));  // 持久化到 PlayerPrefs
-PlayerPrefsLocaleSelector.Clear();                     // 恢复为系统语言检测
-
-// 自定义选择器链
-var options = new LocalizationOptions(
-    defaultLocale: enLocale,
-    availableLocales: allLocales,
-    localeSelectors: new ILocaleSelector[]
-    {
-        new CommandLineLocaleSelector(),
-        new PlayerPrefsLocaleSelector(),
-        new MyServerConfigSelector(),    // 你的自定义实现
-        new SystemLocaleSelector(),
-    });
-await service.InitializeAsync(options);
-```
-
-实现 `ILocaleSelector` 添加项目特定来源：
-
-```csharp
-public class SteamLocaleSelector : ILocaleSelector
+LocaleId japanese = new LocaleId("ja");
+if (!service.TrySetLocale(japanese))
 {
-    public string GetPreferredLocaleCode()
+    // 该 service 配置中不可用。
+}
+```
+
+### 绑定 TMP 文本
+
+```csharp
+var context = new LocalizationBindingContext(service);
+localizeText.Bind(in context);
+```
+
+组件只在 enabled 期间订阅，不执行 per-frame polling，并在 locale、content 或 pseudo change 时刷新。
+
+## 核心概念
+
+### Locale identity
+
+`LocaleId` 接受长度受限的 BCP 47 风格 language tag，并规范化大小写（`en`、`en-US`、`pt-BR`、`zh-Hans-CN`、`sr-Latn`）。无效、空或超长 tag 会在进入 runtime registry 前被拒绝。在命令行、远程配置或存档数据等不可信边界使用 `LocaleId.TryCreate`；经过验证的常量可以直接构造。
+
+```csharp
+if (!LocaleId.TryCreate(untrustedCode, out LocaleId locale))
+{
+    // 拒绝该值或使用配置的 default locale。
+}
+```
+
+Locale equality 对规范 code 使用 ordinal 比较。`Language` 会被缓存，重复 plural 或 fallback lookup 不会创建 substring。
+
+### Default、authoring 与 current locale
+
+三个 locale 角色相互独立：
+
+- **Default locale** —— 请求语言不可用时的最终运行时 fallback。
+- **Authoring locale** —— 开发者创建和修改 source text 的语言；未单独指定时使用 default locale。
+- **Current locale** —— 运行时 query 使用的已提交语言。
+
+这种分离允许团队使用工作语言创作内容，同时发布另一种默认语言；Editor 也能在处理其他语言时让 source column 始终可见。
+
+### Fallback
+
+每个 `Locale` 资产可以引用显式 fallback locale。Runtime 在初始化期间构建确定、cycle-safe 的 chain：
+
+```text
+fr-CA -> fr -> en
+```
+
+Regional table 可以是 sparse：缺少 `fr-CA` entry 时可从 `fr` 解析。Cycle、重复 locale code、无效引用和超出配置深度的 chain 都是 validation error。
+
+### Tables
+
+每个 `StringTable` 或 `AssetTable` 表示一个 locale 下的一个 table ID。这种布局支持独立 locale pack 和明确的内存所有权。
+
+- Table ID 和 entry key 使用 ordinal matching；编译时拒绝 duplicate key。
+- 空字符串或纯空格 string value 表示缺失内容（不阻断 fallback）；有意隐藏 label 应由 presentation state 表达，而不是通过 translation data。
+- Compiled table 会将 authoring data 复制为 read-only lookup state。
+- Asset entry 将 Editor object GUID 与 provider-neutral runtime location 分开保存；runtime location 必须适用于所选 `IAssetPackage` provider。
+- 空或无效的 table ID、locale code、key、超长 value 与 asset location 会按照 `LocalizationLimits` 被拒绝。
+
+Entry key 应视为稳定契约。使用 `menu.settings.audio` 这类语义 key，不使用显示文本。
+
+### 翻译工作流 metadata
+
+`StringTableMetadata` 保存译者上下文，不进入常规 string lookup 路径。Entry 可以包含：source revision；每个 locale 的状态（`Missing`、`Draft`、`NeedsReview`、`Approved`、`Stale`）；每份翻译基于的 source revision；译者备注、最大长度、锁定状态、tag 和 Editor screenshot。Source text 变更会推进 revision，并将基于旧 revision 的翻译标记为 stale。Locked entry 在显式解锁前拒绝 table workspace 和 CSV 写入。
+
+`StringTableMetadata` 不会嵌入 catalog。只有明确使用可选 runtime `GetMaxLength` 契约的产品才需要加载并注册所需 metadata 资产；普通 string/asset lookup 与翻译工作流不加载它们。
+
+### Runtime state 与线程
+
+`LocalizationService` 使用 single writer 和 immutable read snapshot：
+
+- `Initialize` 必须在 Unity main thread 执行，并将该线程捕获为 mutation owner。
+- `TrySetLocale`、table/catalog mutation、`Shutdown` 和 `Dispose` 在该 owner thread 上执行。
+- Pure lookup method 捕获 immutable snapshot，可并发执行。
+- Worker-thread lookup code 不访问 Unity object。
+- WebGL 使用同一设计，不要求 worker thread 或同步原语。
+
+`Changed` 在 state commit 后由 owner thread 同步发布。每个事件包含 previous locale、current locale、reason 和单调递增 revision。Subscriber exception 相互隔离并发送至配置的 diagnostic sink。Reentrant mutation 使用有界 queue 串行化，避免 nested commit 后后续 subscriber 仍观察过期的外层 transition。
+
+### 内存与缓存策略
+
+Service 不使用全局 mutable lookup cache。每个 service instance 拥有：immutable compiled table snapshot；预计算 locale fallback chain；catalog ownership record；有界 missing-key diagnostic set；有界 reentrant mutation queue。`Shutdown` 释放 runtime registry 与 fallback data。`Dispose` 结束 service lifetime 并释放 event ownership。Pseudo-localized 与 formatted string 按需创建；频繁渲染不变值的调用方应缓存解析结果，并在 `Changed` 时失效。
+
+## 使用指南
+
+### 使用 DI 初始化
+
+Service 支持在任意 composition root 中通过 constructor 注册。Container 拥有 service lifetime；模块不依赖该 container。
+
+```csharp
+// VContainer 示例
+builder.Register<LocalizationService>(Lifetime.Singleton)
+       .AsImplementedInterfaces()
+       .AsSelf();
+```
+
+### 解析 string、asset 与 plural
+
+```csharp
+// String lookup
+string title = service.GetString("menu", "main.title");
+bool found = service.TryGetString("inventory", "item.potion.name", out string name);
+
+// Plural lookup（变体以 .one/.other/.few/... 后缀保存）
+string countText = service.GetPluralString("inventory", "item_count", count);
+```
+
+Value 缺失时 `GetString` 返回 `null`，并对每个有界 missing-key identity 最多发出一次 diagnostic。需要显式 fallback UI 或 gameplay behavior 时优先使用 `TryGetString`。
+
+### 格式化消息
+
+```csharp
+string message = service.GetFormattedString("combat", "damage.received", actorName, damage);
+```
+
+Composite format 是译者可控制的输入。Catalog build 前会校验 placeholder。Runtime formatting 使用配置的 `IFormatProvider`（默认 `CultureInfo.InvariantCulture`），malformed format 会被报告且不会破坏已提交状态。Formatting 会创建 result string（使用 `params` 时还会创建 `params` array）；不要对未变化内容每帧调用。对于频繁更新的 numeric label，`LocalizeTMPText.SetNumericArguments` 使用 TMP numeric formatting path。
+
+### 切换 locale 并观察变更
+
+```csharp
+LocaleId japanese = new LocaleId("ja");
+if (!service.TrySetLocale(japanese)) { /* 不可用 */ }
+
+service.Changed += change =>
+{
+    Debug.Log($"Localization revision {change.Revision}: {change.Reason}");
+};
+```
+
+切换 locale 是同步操作，因为它提交已经常驻的 lookup state。Network 或 disk work 属于 catalog provider：先加载并校验 catalog，在 owner thread 提交，再选择 locale。
+
+### Locale selection 与持久化
+
+初始化按顺序评估 `ILocaleSelector` instance。Built-in chain 可以在 configured default 前使用 command-line 与 system UI culture selection。
+
+```csharp
+ILocaleSelector[] selectors =
+{
+    new CommandLineLocaleSelector(),
+    new SavedLocaleSelector(applicationSettings),
+    new SystemLocaleSelector(),
+};
+
+var options = new LocalizationOptions(
+    defaultLocale,
+    locales,
+    localeSelectors: selectors);
+```
+
+Application-owned selector 从拥有其他用户偏好的同一个显式、versioned save/settings service 读取。Localization 模块不写入 `PlayerPrefs`、`EditorPrefs`、registry、plist 或隐藏的全局文件。通过 application save service 保存选择的 locale，并沿用它的 schema、migration、atomic-write、integrity 和 recovery policy。
+
+### 绑定表现层组件
+
+```csharp
+// TMP 文本 —— 不需要 asset package
+var textContext = new LocalizationBindingContext(service);
+localizeText.Bind(in textContext);
+
+// 本地化图片 —— 需要 IAssetPackage
+var imageContext = new LocalizationBindingContext(service, assetPackage);
+localizeImage.Bind(in imageContext);
+
+// UIFramework window（存在 CycloneGames.UIFramework 时）
+var binder = new LocalizationWindowBinder(service, assetPackage);
+```
+
+`LocalizeImage` 保留最后一个有效 handle，直到 current locale 的 candidate 成功完成。Cancellation、provider fault、stale completion、disable、unbind 和 destruction 都会释放各自拥有的 handle；candidate 失败不会提前 Dispose last-known-good image。`LocalizationWindowBinder` 对实例化的 window hierarchy 扫描一次，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。
+
+### Runtime catalog
+
+`LocalizationCatalog` 是 versioned、hashed payload，用于将多个 string/asset table 作为一个 owner transaction 安装。
+
+```csharp
+if (!service.TryRegisterCatalog("base-content", baseCatalog))
+{
+    // 保持在之前提交的 snapshot 上运行。
+}
+
+if (!service.TryRegisterCatalog("season-12", downloadedCatalog))
+{
+    // 之前的 season-12 owner 保持活跃。
+}
+
+service.RemoveCatalog("season-12"); // 只移除该 ID 拥有的内容
+```
+
+替换 owner 时会在发布前校验完整 candidate。Schema、hash、limit、locale、duplicate table、duplicate key 或 location validation 失败都会保持之前 snapshot 不变。`RemoveCatalog(ownerId)` 只移除该 ID 拥有的内容，并重新发布剩余 immutable snapshot。Catalog 加载顺序不是 override priority：两个 owner 若包含相同 `(table type, table ID, locale)` 会发生冲突，后加载的 candidate 会被拒绝。使用同一 owner ID 重新安装是 atomic replacement —— 正常 patch 路径。
+
+建议 ownership：
+
+| Owner | 典型内容 | Lifetime |
+| --- | --- | --- |
+| `base-content` | 必需的 default-locale UI 与 gameplay string | 整个进程 |
+| `locale-ja` | 日语 string 与本地化 asset | 语言包 resident 期间 |
+| `season-12` | 支持语言共享的 live-service 内容 | Season 或 patch lifetime |
+| `mod:<stable-id>` | 经过校验的用户/mod 内容 | Mod session |
+
+### Diagnostics
+
+`LocalizationOptions` 接受 `Action<LocalizationDiagnostic>`。Diagnostic 包含稳定 code、severity、message 和可选 exception。Sink 只在 diagnostic 时运行，不参与正常成功 lookup；sink exception 会被隔离。
+
+```csharp
+void ReportLocalization(LocalizationDiagnostic diagnostic)
+{
+    telemetry.Record(diagnostic.Code.ToString(), diagnostic.Severity.ToString(), diagnostic.Message);
+}
+
+var options = new LocalizationOptions(defaultLocale, locales, diagnosticSink: ReportLocalization);
+```
+
+## 进阶主题
+
+### 热更新启动顺序
+
+对于未被 Scene 或 Inspector 引用的内容，按以下顺序初始化：
+
+1. 初始化选定的 `IAssetPackage`，并完成远程 manifest/catalog 更新。
+2. 加载顶层 `LocalizationSettings` 资产并保留该 handle；其中引用的 `Locale` 资产是 provider dependency。
+3. 通过 `settings.ToOptions()` 创建并初始化 `LocalizationService`。
+4. 加载并安装必需的 default-locale/base catalog。
+5. 加载并安装可选 locale、feature、season 或 mod catalog partition。
+6. 只有当前 locale 与 fallback 所需内容已提交后，才选择保存或请求的 locale。
+7. 绑定 TMP、image、UIFramework window 和其他 presentation target。
+8. shutdown 时先解除 presentation binding，再 dispose service，最后释放保留的 settings handle。
+
+```csharp
+using System;
+using System.Threading;
+using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Localization.Core;
+using CycloneGames.Localization.Runtime;
+using Cysharp.Threading.Tasks;
+
+public sealed class HotUpdateLocalizationOwner : IDisposable
+{
+    private IAssetHandle<LocalizationSettings> _settingsHandle;
+    public LocalizationService Service { get; private set; }
+
+    public async UniTask InitializeAsync(
+        IAssetPackage package,
+        string settingsLocation,
+        string baseCatalogLocation,
+        string savedLocaleCode,
+        CancellationToken cancellationToken)
     {
-        // 返回 BCP 47 代码或 null（无偏好时）
-        return SteamApps.GameLanguage switch
+        _settingsHandle = package.LoadAssetAsync<LocalizationSettings>(
+            settingsLocation,
+            bucket: "localization/config",
+            owner: "localization-session",
+            cancellationToken: cancellationToken);
+
+        try
         {
-            "schinese" => "zh-CN",
-            "japanese" => "ja",
-            _ => null
-        };
+            await _settingsHandle.Task;
+            LocalizationSettings settings = _settingsHandle.Asset
+                ?? throw new InvalidOperationException("Localization settings did not load.");
+
+            Service = new LocalizationService();
+            Service.Initialize(settings.ToOptions());
+
+            bool installed = await Service.LoadAndRegisterCatalogAsync(
+                package,
+                ownerId: "base-content",
+                location: baseCatalogLocation,
+                bucket: "localization/catalogs",
+                cancellationToken: cancellationToken);
+            if (!installed)
+                throw new InvalidOperationException("The base localization catalog was rejected.");
+
+            if (LocaleId.TryCreate(savedLocaleCode, out LocaleId savedLocale))
+                Service.TrySetLocale(savedLocale);
+        }
+        catch
+        {
+            Dispose();
+            throw;
+        }
+    }
+
+    public void Dispose()
+    {
+        Service?.Dispose();
+        Service = null;
+        _settingsHandle?.Dispose();
+        _settingsHandle = null;
     }
 }
 ```
 
-### 条目元数据
+`LoadAndRegisterCatalogAsync` 拥有临时 catalog handle，并在成功、拒绝、取消或 provider failure 时释放它。成功提交后，service 拥有复制后的 managed lookup data。Settings handle 不同：初始化后的 locale configuration 仍持有其 `Locale` 资产，因此 composition root 必须保留该 handle，直到 service 被 dispose。
 
-通过 `StringTableMetadata` 为译者提供上下文 — 独立的 ScriptableObject，保持运行时表资产轻量：
+如果 patch 改变 available locale identity 或 fallback graph，应从替换后的 settings 资产创建并初始化一个 replacement service，安装其必需 catalog，然后在受控 application transition 中重新绑定。仅替换 catalog 只会改变内容，不会修改 service 初始化时确定的 locale configuration。
 
-**Create → CycloneGames → Localization → String Table Metadata**
+### Editor workspace
 
-```csharp
-// 注册元数据用于运行时 MaxLength 查询
-service.RegisterMetadata(uiMetadata);
+String 与 asset workspace 将 parallel locale asset 呈现为一个表格：
 
-// 查询字符限制（例如玩家名输入验证）
-int maxLen = localizationService.GetMaxLength("ui", "player_name");
-if (maxLen > 0 && input.Length > maxLen)
-    input = input.Substring(0, maxLen);
-```
+- 双击已配置 table 或 metadata 资产会打开对应 workspace 与 table ID。
+- Authoring key 保持 serialized order；**Sort** 菜单可以显式按 ordinal A→Z、ordinal Z→A 或 natural A→Z（`item.2` 位于 `item.10` 前）重排。filter 激活时排序禁用，执行前必须确认，并且可通过一次 Undo 撤销。
+- Key 与 authoring-locale column 保持固定；其他 locale column 横向滚动。Visible row 使用 virtualization。
+- 每行提供明确的 **Details** / **Hide** 按钮；打开 details 不会静默创建 metadata。Details 将 metadata 显示为垂直分隔且带 label 的字段，并为当前 Key 的 metadata entry 提供需确认、感知 lock、可单次 Undo 的删除操作。
+- 单个 active text cell 持有 Editor-only draft；点击其他 control 或按 Enter 时通过一个 Undo transaction 提交。
+- Target-locale 的空字符串或纯空格 edit 会删除该 override 并恢复可见 fallback；authoring locale 则报告 missing source value。
+- Locked entry 拒绝 direct edit 和 import write。
 
-| 字段         | 类型                 | 描述                                      |
-| ------------ | -------------------- | ----------------------------------------- |
-| `Comment`    | `string`（TextArea） | 译者注释：上下文、语气、约束              |
-| `MaxLength`  | `int`                | 字符限制（0 = 无限制）— 运行时可用        |
-| `Locked`     | `bool`               | 标记已定稿的条目                          |
-| `Tags`       | `string`             | 逗号分隔的分类标签：`"menu,button,short"` |
-| `Screenshot` | `Texture2D`          | UI 参考截图（仅 Editor）                  |
+### 增量 CSV 交换
 
-### 区域变体（en-US / en-GB、zh-CN / zh-TW）
+CSV import/export 面向分批交付：
 
-同一语言的不同地区常有差异 — 美式与英式英语的拼写不同，简体与繁体中文的词汇不同。回退链天然支持此场景：**创建一张完整的基础表，区域表中只覆盖有差异的条目。**
+- **Export** 打开一个 configuration window，同时显示 destination、Key scope、language scope、encoding 与最终数量。
+- 人工交付（Excel 等）选择 **Spreadsheet (Recommended)**，机器 pipeline 选择 **Automation & CI**。Spreadsheet 写入 UTF-8 with BOM；Automation & CI 写入 UTF-8 without BOM；两者共用同一个有界 RFC 4180 writer。
+- **All Keys (N)** 与 **Current Results (N)** 显示准确 row scope。可从单一 selector 选择 **All Languages (N)**、**All Registered Languages (N)** 或 **Source + &lt;locale&gt;**。
+- Quoted comma、quote、newline 和 Unicode 通过 RFC 4180 parser 往返。Import 接受两种 UTF-8 形式，存在一个开头 BOM 时会移除，并拒绝无效 UTF-8。
+- 在 temporary model 中先校验 parsing、limit、header、key、revision、lock state 与 locale membership。Commit 前显示 change summary。
+- 只更新文件中存在的 locale column 和 key row；项目中未出现在文件里的 key 保持不变，因此翻译交付可以只包含任意经过校验的 subset。
+- Target value 为空或只有空格时按 `Missing` 导入，并移除已有 override 以恢复 fallback。
+- 使用一个 Undo group 提交接受的变更；parse、validation 或 commit failure 不修改现有翻译。
 
-示例：英语 + 英式覆盖
+将 exchange file 放在显式项目目录或外部交付目录中。它们不会自动导入，也不是 runtime source of truth。Export configuration 仅存在于当前 session，不写入 `EditorPrefs`、project settings 或 asset。
 
-```
-Locale 资产:
-  en     (基础英语 — 完整表，500 条)
-  en-GB  → fallback: [en]  (仅 30 条差异)
-```
+### Validation 与 catalog build
 
-```
-UI_en.asset:
-  settings_color    → "Color"
-  settings_favorite → "Favorite"
-  btn_ok            → "OK"
+在 locale、table、metadata 或 catalog 变化后运行 **Tools > CycloneGames > Localization > Validation**。Validation 覆盖：无效或重复 locale code；无效 default/authoring locale 配置；fallback cycle 和 excessive depth；重复 `(table ID, locale)` 资产与 duplicate key；按 effective fallback semantic 检查 sparse regional override；composite-format placeholder 一致性；metadata revision/status bound；缺失 runtime asset location；catalog schema、hash、ownership、count 与 string length limit。Validation 对大型项目有界且可取消。Error 会阻止 catalog creation；warning 表示内容可能有意如此，但需要确认。
 
-UI_en-GB.asset (仅覆盖):
-  settings_color    → "Colour"
-  settings_favorite → "Favourite"
-```
+`LocalizationCatalogBuildSettings` 显式引用项目 `LocalizationSettings` 资产和 output location。`Included Locales`、`Included Table IDs` 与 `Content Kind` 定义一个 partition；include list 为空表示包含全部已配置值。多个 build-settings 资产可分别生成 base catalog、per-locale pack、feature pack 或 live-service partition。Builder 会规范化 output 并限制在 `Assets/` 下，拒绝 traversal、无效名称、duplicate data 与配置的 limit violation，在 temporary memory 中构建 deterministic content，计算 canonical content hash，仅在完整 validation 成功后更新 target asset。Builder 不会对无关 dirty asset 调用全局 save 操作。
 
-`en-GB` 玩家的查找过程：
+## 常见场景
 
-- `"btn_ok"` → `en-GB` 表中没有 → 回退到 `en` → `"OK"` ✅
-- `"settings_color"` → 在 `en-GB` 表中找到 → `"Colour"` ✅（无需回退）
+### 不使用 DI 的 bootstrap
 
-中文同理：
+小型游戏在 `Awake` 中直接从 `LocalizationSettings` 资产初始化 service，并注册 bootstrap `StringTable` 资产（见 [快速上手](#快速上手)）。`MonoBehaviour` 拥有 service lifetime，并在 `OnDestroy` 中 dispose。
 
-```
-Locale 资产:
-  zh-CN  (基础中文 — 完整表)
-  zh-TW  → fallback: [zh-CN, en]  (覆盖: 信息→資訊, 软件→軟體, 鼠标→滑鼠 等)
-```
+### 热更新 owner
 
-系统语言检测会自动选择最佳匹配：`zh-TW` 系统会找到 `zh-TW` 语言；如果该 Locale 不存在，则回退到语言级匹配 `zh-CN`。
+Live-service 游戏通过 Addressables/YooAsset 加载 `LocalizationSettings`，初始化 service，安装 base catalog，再按需安装 per-locale pack。Owner 保留 settings handle 直到 service 生命周期结束，并在 shutdown 时释放（见 [热更新启动顺序](#热更新启动顺序)）。
 
-> **提示**：如果两个区域变体共享大部分内容，使用覆盖模式（节省翻译工作量）。如果语气和风格差异很大，使用两张独立的完整表。
+### Per-locale pack 安装
 
-### 资产本地化
+游戏发布时只带 `base-content` catalog（含 default locale），并按需下载 `locale-ja` / `locale-zh-Hans` pack。每个 pack 是独立 `LocalizationCatalog`，以各自 owner ID 安装；卸载 pack 时调用 `RemoveCatalog(ownerId)` 并重新发布剩余 snapshot。
+
+### Pseudo-localization QA
+
+QA 启用 pseudo-localization，在真实本地化到达前发现布局溢出和缺失翻译：
 
 ```csharp
-// 解析逐语言的精灵图
-[SerializeField] private LocalizedAsset<Sprite> flagIcon;
-
-AssetRef<Sprite> assetRef = localizationService.ResolveAsset(flagIcon);
-var handle = assetPackage.LoadAsync(assetRef);
-await handle.Task;
-image.sprite = handle.Asset;
+service.SetPseudoLocalizerEnabled(true);
+// 表现层组件会在下一次 Changed 时刷新。
 ```
 
----
+`PseudoLocalizer` 保护 placeholder 与 tag：在扩展和加重周围文本的同时保留 composite-format placeholder 与 markup tag。
 
-## 组件用法
+### 绑定 UIFramework window
 
-### LocalizeTMPText
+存在 `CycloneGames.UIFramework` 时，在 window composition 注册一个 `LocalizationWindowBinder`。Binder 对实例化的 window hierarchy 扫描一次，找到 `ILocalizationBindingTarget` component，按 hierarchy 顺序 Bind；任意 Bind 失败时按逆序 rollback；window 销毁时也按逆序 Unbind。`UILocaleLayout`、`LocalizeTMPText` 与 `LocalizeImage` 共享同一 window lifetime。
 
-挂载到任意 `TMP_Text` 上。在 Inspector 中赋值 `LocalizedString`。调用 `Bind()` 连接服务。
+## 性能与内存
 
-```csharp
-var locText = GetComponent<LocalizeTMPText>();
-locText.Bind(localizationService);
+Runtime lookup 是 event-driven，不包含 per-frame module loop。
 
-// 运行时更换 Key
-locText.LocalizedString = new LocalizedString("ui", "new_key");
+| 操作 | 预期成本 | Allocation 说明 |
+| --- | --- | --- |
+| Exact string/asset lookup | O(1) dictionary probe | Warm-up 后 raw string lookup 不创建 result |
+| Fallback lookup | O(configured fallback depth) | Chain 已预计算 |
+| Locale change | Owner-thread state commit 加 subscriber work | Cold operation；不执行 asset I/O |
+| Catalog replacement | O(candidate + committed table content) | Cold path；atomic publication 前构建 candidate |
+| Composite formatting | O(template + arguments) | 创建 formatted result；可能创建调用方 `params` array |
+| Pseudo-localization | O(text) | 创建 transformed output；用于 QA |
+| TMP/image refresh | Event-driven | Image loading 遵循 provider allocation behavior |
 
-// 设置格式化参数
-locText.SetArguments(playerName, score);
+`LocalizationLimits` 为 locale count、fallback depth、table count、entry、key/value length、owner ID、diagnostic 和 reentrant mutation 提供保守默认值。应根据实测 content profile 设置产品值。在 live registration 前拒绝 oversized catalog 比依赖 out-of-memory failure 更安全。
 
-// 设置复数参数（count 自动确定复数形式）
-locText.SetPluralArguments(itemCount, itemName);
+### 线程
+
+- `Initialize` 必须在 Unity main thread 执行；该线程成为 mutation owner。
+- `TrySetLocale`、table/catalog mutation、`Shutdown` 和 `Dispose` 在 owner thread 上执行。
+- Pure lookup method 捕获 immutable snapshot，可并发执行。
+- Worker-thread lookup code 不访问 Unity object。
+- 本模块不创建线程，WebGL 上也不要求同步原语。
+
+### 平台行为
+
+- **Windows、Linux、macOS**：支持 command-line selection 和 system culture；filesystem 与 download behavior 属于产品 catalog provider。
+- **iOS 与 Android**：避免让未使用 locale pack 常驻；在设备上测试 OS culture mapping、background cancellation 和 low-memory recovery。
+- **WebGL**：Runtime state 不要求线程。Catalog download/decode 必须使用 WebGL-compatible provider；大型同步 parsing 会阻塞 browser frame 时应使用有界增量工作。
+- **Dedicated Server**：Presentation component 可选。在 Unity server main thread 初始化和修改；只含 managed data 时 pure snapshot query 可供 worker job 使用。
+- **主机平台**：提供平台批准的 storage/download 与 asset adapter，遵守认证约束并验证 AOT/stripping。没有 target SDK build 证据时不声称主机支持已验证。
+
+Runtime code 使用显式构造，不依赖 runtime reflection 或 dynamic code generation。
+
+### 持久化与清理
+
+| 数据 | Owner 与路径 | 格式 | 清理与恢复 |
+| --- | --- | --- | --- |
+| Locale/settings/table/metadata 资产 | Project，在显式 `Assets/...` authoring folder 下 | Unity YAML assets | 从 VCS 恢复；merge 后 validation |
+| Built catalog | Project 选择的 `Assets/...` output | Unity ScriptableObject | 从 authoring asset 确定性重建 |
+| Translation CSV | 用户选择的交付目录 | UTF-8 with/without BOM、RFC 4180 | 从 authoring asset 重新导出；不会自动导入 |
+| Current locale preference | Application save/settings service | Application-defined、schema-versioned | 使用应用的 migration 与 corruption recovery |
+| Runtime snapshot 与 diagnostics | `LocalizationService` instance memory | Managed objects | 由 `Shutdown`/`Dispose` 释放；从 catalog 重建 |
+
+Localization configuration 或 production preference 不写入 `EditorPrefs`、`PlayerPrefs` 或其他隐藏全局位置。
+
+## 故障排查
+
+| 现象 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| `TrySetLocale` 返回 `false` | Locale 不在 `Available Locales`，或其 catalog 未安装 | 先安装该 locale 的 catalog 再选择；检查 `LocalizationSettings` |
+| `GetString` 返回 `null` | Key 缺失、locale 缺失，或 fallback chain 耗尽 | 查看有界 missing-key diagnostic；确认 key 拼写与 table ID |
+| Catalog 安装返回 `false` | Schema、hash、limit、locale、duplicate table/key 或 location validation 失败 | 运行 validation 窗口；检查 `LocalizationLimits` 与 partition ownership |
+| 两个 owner 冲突 | 都包含相同 `(table type, table ID, locale)` | 让各 partition ownership 互不重叠；重新安装同一 owner ID 以替换 |
+| 翻译显示 stale 内容 | Source text 推进了 revision；基于旧 revision 的翻译为 `Stale` | 重新翻译或 approve 受影响 entry；检查 `StringTableMetadata` 状态 |
+| CSV import 后翻译未变 | Parse、validation 或 commit failure 回滚了事务 | 查看 change summary；修复 header、encoding 或 lock state 后重新导入 |
+| `LocalizeImage` 不显示图片 | Asset provider fault、cancellation 或 stale completion | 查看 provider diagnostic；有效 last-known-good handle 会保留 |
+| Locale 切换无可见效果 | Presentation 未绑定，或 subscriber 抛出异常被隔离 | 确认调用了 `Bind`；查看 diagnostic sink 中的 subscriber exception |
+| Reentrant `Changed` handler 看到过期状态 | Nested commit 在外层 commit 之后串行化 | 使用有界 reentrant queue；把重活推迟到 `Changed` 爆发之后 |
+| 多次 catalog 安装后内存增长 | 旧 catalog 未移除，或 settings handle 未释放 | 对未用 owner 调用 `RemoveCatalog`；shutdown 时释放 settings handle |
+| IL2CPP/stripping 破坏 lookup | 假设了 runtime reflection（不支持） | 在目标 backend 上验证 AOT/stripping；本模块使用显式构造 |
+
+## 验证
+
+通过 Unity Test Runner 运行聚焦测试：
+
+```text
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Localization.Tests.Editor -testResults <result-path> -quit
 ```
 
-**缺失 Key 行为**：如果 Key 未找到，`Refresh()` 返回 `null`，TMP_Text 保留其现有内容 — 适用于翻译尚未完成的开发阶段。
-
-### LocalizeImage
-
-挂载到任意 `Image` 上。在 Inspector 中赋值 `LocalizedAsset<Sprite>`。
-
-```csharp
-var locImg = GetComponent<LocalizeImage>();
-locImg.Bind(localizationService, assetPackage);
-// 语言切换时精灵图自动更新；旧句柄被正确释放
-```
-
----
-
-## Yarn Spinner 集成
-
-`YarnLocaleSync` 将语言变更桥接到 Yarn Spinner 的 `LineProviderBehaviour`。无需修改 Yarn Spinner 源代码。
-
-```csharp
-var yarnSync = GetComponent<YarnLocaleSync>();
-yarnSync.Bind(localizationService);
-// 语言变更时，DialogueRunner.LineProvider.LocaleCode 自动更新
-```
-
-设置步骤：
-
-1. 将 `YarnLocaleSync` 添加到与 `DialogueRunner` 相同的 GameObject（或任何持久对象）。
-2. 在 Inspector 中赋值 `DialogueRunner` 引用。
-3. 使用 `ILocalizationService` 调用 `Bind()`。
-
----
-
-## 编辑器工具
-
-### 多语言字符串表编辑器
-
-**Tools → CycloneGames → Localization → Tables → String Table Editor**
-
-在单个窗口中并排编辑字符串表的所有语言变体。
-
-| 功能          | 描述                                                               |
-| ------------- | ------------------------------------------------------------------ |
-| 多语言视图    | 所有语言以列显示 — 在一个界面编辑所有翻译                          |
-| 冻结 Key 列   | Key 和操作列在水平滚动时保持固定                                   |
-| 自动滚动条    | 语言超出视口时显示水平滚动；条目过多时显示垂直滚动                 |
-| 元数据子行    | 可展开的逐条目元数据：Comment、MaxLength、Locked、Tags、Screenshot |
-| 搜索过滤      | 实时关键字/值搜索，跨所有语言                                      |
-| 添加/删除条目 | 以自动生成的唯一 Key 添加；删除同步所有语言表                      |
-| 重复检测      | 状态栏显示重复 Key 数量 — 重复项高亮显示                           |
-| CSV 导入/导出 | 批量导入导出，便于交付给翻译人员                                   |
-
-### 多语言资产表编辑器
-
-**Tools → CycloneGames → Localization → Tables → Asset Table Editor**
-
-与字符串表编辑器相同的架构，适配资产表。
-
-| 功能        | 描述                                                  |
-| ----------- | ----------------------------------------------------- |
-| 多语言视图  | 逐语言的 `AssetRef` 对象字段以列显示                  |
-| 冻结 Key 列 | Key 列在水平滚动时保持固定                            |
-| 元数据集成  | 可展开的元数据子行：Comment、Locked、Tags、Screenshot |
-| 自动滚动条  | 适应任意数量的语言和条目                              |
-
-### Property Drawer
-
-#### LocalizedString Drawer
-
-Inspector 中的两行下拉布局：
-
-1. **表选择器** — 列出所有已发现的 `StringTable` 资产
-2. **Key 选择器** — 列出所选表中的所有 Key
-
-#### LocalizedAsset Drawer
-
-`LocalizedAsset<T>` 的相同模式 — 从 `AssetTable` 资产中获取类型感知的 Key 下拉菜单。
-
-两个 Drawer 都使用 `LocalizedFieldHelper` 的版本缓存：表和 Key 列表仅在资产导入/删除时重建，而非每个 `OnGUI` 帧。
-
-### Locale Inspector
-
-`Locale` ScriptableObject 的自定义编辑器，展示：
-
-- BCP 47 语言代码
-- 显示名称和母语名称
-- 可视化回退链
-
----
-
-## 缺失 Key 调试
-
-在 **Editor** 和 **Development 构建** 中，系统在首次遇到缺失 Key 时向控制台输出警告：
-
-```
-[Localization] Missing key "ui/greeting" (locale: zh-CN)
-```
-
-每个唯一 Key 仅报告一次（通过 `HashSet` 去重）。这防止了控制台刷屏，同时确保不会遗漏任何缺失的 Key。
-
-### 行为概要
-
-| 场景                               | 返回值         | 副作用                                      |
-| ---------------------------------- | -------------- | ------------------------------------------- |
-| Key 已找到                         | 解析后的字符串 | —                                           |
-| Key 缺失                           | `null`         | 控制台警告（每个 Key 仅一次，仅限开发构建） |
-| `LocalizeTMPText` 收到 `null`      | 保持现有文本   | 预制体占位符被保留                          |
-| `LocalizedString.IsValid == false` | `string.Empty` | —                                           |
-
-### 控制警告
-
-```csharp
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-LocalizationService.LogMissingKeys = false; // 抑制警告
-#endif
-```
-
----
-
-## 复数规则参考
-
-下表展示各语言组使用的 `PluralCategory` 值。大多数项目只需关注前三行。
-
-| 类别                                     | 语言                                                                              |
-| ---------------------------------------- | --------------------------------------------------------------------------------- |
-| 仅 `Other`                               | zh、ja、ko、vi、th、id、ms                                                        |
-| `One` / `Other`                          | en、de、nl、sv、da、it、es、el、hu、fi、tr、bg、hi、bn 等                         |
-| `One`（n ≤ 1）/ `Other`                  | fr、pt（pt-PT 除外）                                                              |
-| `One` / `Few` / `Many`                   | ru、uk、be、hr、sr、bs、pl                                                        |
-| `One` / `Few` / `Other`                  | cs、sk、ro、mo、lt                                                                |
-| `Zero` / `One` / `Other`                 | lv                                                                                |
-| 全部 6 个类别                            | ar、cy — 完整规则见 [CLDR](https://cldr.unicode.org/index/cldr-spec/plural-rules) |
-| `One` / `Two` / `Few` / `Many` / `Other` | ga、mt                                                                            |
-| `One` / `Two` / `Few` / `Other`          | sl                                                                                |
-
----
+模块变更的最低验证：编译 Core、Runtime、Components、Editor、active UI integration 和 tests；运行 editor test assembly；校验 locale/table/catalog fixture（含 malformed 与 oversized input）；验证 CSV multiline Unicode round-trip、BOM/no-BOM byte output、transaction rollback 和 lock behavior；测试 component enable/disable、bind/unbind、image cancellation/fault/stale completion 和 service shutdown；profile 代表性 table size 与 locale switch；在产品 CI 环境执行所需 Player/AOT/platform matrix。Editor test 不能证明 IL2CPP、目标主机、设备内存、browser frame 或长期稳定性 —— 应分别记录。
 
 ## API 参考
 
-### `ILocalizationService`
+| API | 用途 |
+| --- | --- |
+| `LocaleId` | 经过校验的规范 locale identity |
+| `Locale` | Unity authoring metadata 与显式 fallback 引用 |
+| `LocalizationSettings` | Default、authoring 与 available locale 配置 |
+| `LocalizationOptions` | Immutable service initialization snapshot |
+| `LocalizationLimits` | 不可信内容与内存容量边界 |
+| `ILocalizationService` / `LocalizationService` | Runtime lookup、locale state、content ownership、lifecycle facade |
+| `LocalizationChange` | 带 revision 的 post-commit change notification |
+| `StringTable` / `AssetTable` | Per-table、per-locale authoring 与 direct bootstrap data |
+| `LocalizationCatalog` | Versioned、hashed、transactional content payload |
+| `LocalizedString` / `LocalizedAsset<T>` | Component 与 game data 使用的 serializable table/key reference |
+| `ILocaleSelector` | 无副作用的 startup locale selection policy |
+| `StringTableMetadata` | 译者上下文、source revision、status、lock、limit |
+| `ILocalizationBindingTarget` | 显式 presentation binding lifecycle |
+| `LocalizeTMPText` / `LocalizeImage` | TMP 与 UGUI presentation adapter |
+| `LocalizationWindowBinder` | UIFramework window binding lifecycle |
+| `PseudoLocalizer` | QA 使用、保护 placeholder/tag 的文本变换 |
 
-| 成员                                                        | 描述                                                    |
-| ----------------------------------------------------------- | ------------------------------------------------------- |
-| `CurrentLocale`                                             | 当前激活的 `LocaleId`                                   |
-| `AvailableLocales`                                          | 所有已配置 `Locale` 资产的只读列表                      |
-| `IsInitialized`                                             | `InitializeAsync` 是否已完成                            |
-| `PseudoMode`                                                | 获取/设置当前的 `PseudoLocaleMode` — 运行时切换 QA 变换 |
-| `OnLocaleChanged`                                           | 活跃语言变更时触发的事件                                |
-| `InitializeAsync(LocalizationOptions)`                      | 使用 `LocalizationSettings.ToOptions()` 的选项初始化    |
-| `SetLocaleAsync(LocaleId)`                                  | 切换活跃语言并触发 `OnLocaleChanged`                    |
-| `GetString(in LocalizedString)`                             | 通过回退链解析本地化字符串                              |
-| `GetString(string, string)`                                 | 通过表 ID 和 Key 解析                                   |
-| `GetFormattedString(in LocalizedString, params object[])`   | 解析并使用参数格式化                                    |
-| `GetFormattedString(string, string, params object[])`       | 通过表 ID 和 Key 解析并格式化                           |
-| `GetPluralString(in LocalizedString, int)`                  | 按 CLDR 规则解析复数形式                                |
-| `GetPluralString(in LocalizedString, int, params object[])` | 解析复数形式并附带额外参数                              |
-| `GetPluralString(string, string, int)`                      | 通过表 ID 和 Key 解析复数形式                           |
-| `GetPluralString(string, string, int, params object[])`     | 通过表 ID、Key 和额外参数解析复数                       |
-| `ResolveAsset(string, string)`                              | 通过表和 Key 解析资产引用                               |
-| `ResolveAsset<T>(LocalizedAsset<T>)`                        | 类型安全的资产解析                                      |
-| `GetMaxLength(string, string)`                              | 返回条目的最大字符限制（0 = 无限制）                    |
-| `RegisterStringTable(StringTable)`                          | 注册字符串表以供查找                                    |
-| `UnregisterStringTable(string, LocaleId)`                   | 移除字符串表                                            |
-| `RegisterAssetTable(AssetTable)`                            | 注册资产表                                              |
-| `UnregisterAssetTable(string, LocaleId)`                    | 移除资产表                                              |
-| `RegisterCatalog(LocalizationCatalog)`                      | 注册由生成器或包系统提供的编译 Catalog 数据              |
-| `RegisterMetadata(StringTableMetadata)`                     | 注册元数据用于 `GetMaxLength` 查询                      |
-| `UnregisterMetadata(string)`                                | 按表 ID 移除元数据                                      |
+在不可信或 optional boundary 使用 `Try...` API。Authoring validation error 应阻止 build；network、persistence 与 asset-provider failure policy 保持在各自 owner adapter 中。
 
-### `ILocalizationCatalogProvider`
+## 参考
 
-| 成员                                           | 描述                                  |
-| ---------------------------------------------- | ------------------------------------- |
-| `LoadCatalogAsync(CancellationToken)`          | 从项目定义的数据来源异步加载 catalog |
-
-### `LocaleId`
-
-| 成员       | 描述                                   |
-| ---------- | -------------------------------------- |
-| `Code`     | BCP 47 字符串（如 `"zh-CN"`） |
-| `IsValid`  | 当 `Code` 非 null 时为 `true`          |
-| `Language` | 仅语言部分：`"zh-CN"` → `"zh"`         |
-| `Invalid`  | 静态只读默认值（null code）            |
-
-### `StringTable`
-
-| 成员                              | 描述                                                  |
-| --------------------------------- | ----------------------------------------------------- |
-| `TableId`                         | 此表所有语言变体共享的标识符                          |
-| `LocaleId`                        | 此表提供翻译的语言                                    |
-| `Count`                           | 序列化编辑条目数                                      |
-| `Compile()`                       | 构建或返回缓存的 `CompiledStringTable` 运行时查找数据 |
-| `TryGetValue(string, out string)` | 通过编译后的运行时数据进行 O(1) 查找                  |
-
-### `AssetTable`
-
-| 成员                               | 描述                                                 |
-| ---------------------------------- | ---------------------------------------------------- |
-| `TableId`                          | 此资产表的标识符                                     |
-| `LocaleId`                         | 此表提供资产变体的语言                               |
-| `Count`                            | 序列化编辑条目数                                     |
-| `Compile()`                        | 构建或返回缓存的 `CompiledAssetTable` 运行时查找数据 |
-| `TryGetValue(string, out AssetRef)` | 通过编译后的运行时数据进行 O(1) 查找                 |
-
-### `PluralRules`
-
-| 成员                        | 描述                                                               |
-| --------------------------- | ------------------------------------------------------------------ |
-| `Resolve(LocaleId, int)`    | 返回对应语言和数量的 `PluralCategory`                              |
-| `GetSuffix(PluralCategory)` | 返回后缀字符串：`.zero`、`.one`、`.two`、`.few`、`.many`、`.other` |
-
-### `PseudoLocaleMode`
-
-| 值         | 描述                                                 |
-| ---------- | ---------------------------------------------------- |
-| `None`     | 禁用 — 直接返回原文本                                |
-| `Accents`  | 将 ASCII 字母替换为变音变体（`a→à`、`e→é`）          |
-| `Elongate` | 填充约 33% 额外字符，模拟较长的翻译                  |
-| `Brackets` | 用 `⟦⟧` 包裹文本，检测截断和硬编码字符串             |
-| `Mirror`   | 反转字符顺序，用于 RTL 测试                          |
-| `Full`     | `Accents \| Elongate \| Brackets` — 最常用的 QA 预设 |
-
-### `PseudoLocalizer`
-
-| 成员                                  | 描述                                          |
-| ------------------------------------- | --------------------------------------------- |
-| `Transform(string, PseudoLocaleMode)` | 按活跃的伪模式变换字符串；`None` 时返回原引用 |
-
-### `ILocaleSelector`
-
-| 成员                       | 描述                                              |
-| -------------------------- | ------------------------------------------------- |
-| `GetPreferredLocaleCode()` | 返回 BCP 47 语言代码，或 `null`（此来源无偏好时） |
-
-### `CommandLineLocaleSelector`
-
-| 成员                       | 描述                                                     |
-| -------------------------- | -------------------------------------------------------- |
-| `GetPreferredLocaleCode()` | 从命令行参数解析 `--locale <code>`；结果在首次调用后缓存 |
-
-### `PlayerPrefsLocaleSelector`
-
-| 成员                       | 描述                                                    |
-| -------------------------- | ------------------------------------------------------- |
-| `PrefsKey`                 | `"CycloneGames.Locale"` — 用于持久化的 `PlayerPrefs` 键 |
-| `GetPreferredLocaleCode()` | 从 `PlayerPrefs` 读取；未保存偏好时返回 `null`          |
-| `Save(LocaleId)`           | 静态方法 — 将语言保存到 `PlayerPrefs` 并调用 `Save()`   |
-| `Clear()`                  | 静态方法 — 删除已保存的偏好（恢复为系统语言检测）       |
-
-### `SystemLocaleSelector`
-
-| 成员                       | 描述                                                                                       |
-| -------------------------- | ------------------------------------------------------------------------------------------ |
-| `GetPreferredLocaleCode()` | 通过 `CultureInfo.CurrentUICulture` 检测系统语言；回退到 `Application.systemLanguage` 映射 |
-
-### `StringTableMetadata`
-
-| 成员                                        | 描述                                                               |
-| ------------------------------------------- | ------------------------------------------------------------------ |
-| `TableId`                                   | 将此元数据链接到 `StringTable` 的标识符                            |
-| `TableType`                                 | `TableType.String` 或 `TableType.Asset` — 允许按类型拥有独立元数据 |
-| `Entries`                                   | `EntryMetadata` 的只读列表                                         |
-| `TryGetMetadata(string, out EntryMetadata)` | 按条目 Key O(1) 查找                                               |
-| `GetMaxLength(string)`                      | 返回 Key 的最大字符数（0 = 无限制）                                |
-
-### `EntryMetadata`
-
-| 字段         | 类型        | 描述                           |
-| ------------ | ----------- | ------------------------------ |
-| `Key`        | `string`    | 此元数据关联的条目 Key         |
-| `Comment`    | `string`    | 译者注释（上下文、语气、约束） |
-| `MaxLength`  | `int`       | 最大字符数（0 = 无限制）       |
-| `Locked`     | `bool`      | 是否已定稿                     |
-| `Tags`       | `string`    | 逗号分隔的过滤标签             |
-| `Screenshot` | `Texture2D` | UI 参考截图（仅 Editor）       |
-
-### `LocalizationOptions`
-
-| 字段                   | 描述                                                             |
-| ---------------------- | ---------------------------------------------------------------- |
-| `DefaultLocale`        | 无选择器匹配时的回退 `Locale`                                    |
-| `AvailableLocales`     | 项目支持的所有语言                                               |
-| `DetectSystemLanguage` | 是否自动检测系统语言                                             |
-| `LocaleSelectors`      | 有序的 `ILocaleSelector` 列表（第一个匹配胜出）；`null` = 默认链 |
-| `PseudoMode`           | QA 测试的 `PseudoLocaleMode`；默认 `None`                        |
-
-### `LocalizeTMPText`
-
-| 成员                                       | 描述                                  |
-| ------------------------------------------ | ------------------------------------- |
-| `LocalizedString`                          | 获取/设置本地化字符串 Key（触发刷新） |
-| `Bind(ILocalizationService)`               | 连接到本地化服务                      |
-| `SetArguments(params object[])`            | 设置 `string.Format` 的格式化参数     |
-| `SetPluralArguments(int, params object[])` | 设置复数 count 和可选额外参数         |
-
-### `LocalizeImage`
-
-| 成员                                        | 描述                   |
-| ------------------------------------------- | ---------------------- |
-| `Bind(ILocalizationService, IAssetPackage)` | 连接到本地化和资产服务 |
-
-### 性能说明
-
-- **预热后 low/zero GC**：编译表查找使用 `StringComparer.Ordinal`；`LocaleId` 等值比较使用 ordinal 字符串比较，不产生临时分配
-- **事件驱动刷新**：组件仅在 `OnLocaleChanged` 触发时更新 — 零逐帧开销
-- **回退链缓存**：BFS 遍历每种语言仅执行一次并缓存，供后续所有查找使用
-- **复数规则**：复数类别解析使用纯静态整数运算。复数字符串查找可能构建带后缀的 Key，不应在未缓存的高频逐帧路径中调用。
-- **伪本地化零分配**：字符串 ≤ 512 字符时使用 `stackalloc`；`None` 时内联直接返回
-- **语言选择器缓存**：`CommandLineLocaleSelector` 和 `SystemLocaleSelector` 首次调用后缓存结果
-- **缺失 Key 去重**：HashSet 防止同一 Key 重复输出控制台警告
+- [Unicode CLDR language plural rules](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html) —— `PluralRules.RuleSetVersion` subset 来源
+- [BCP 47](https://www.rfc-editor.org/rfc/rfc5646) —— `LocaleId` 参考的 language tag 结构
+- [RFC 4180](https://www.rfc-editor.org/rfc/rfc4180) —— import/export 使用的 CSV 格式

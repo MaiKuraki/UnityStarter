@@ -19,8 +19,8 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         [Header("View")]
         [SerializeField] private float baseEyeHeight = 0.8f;
-        [SerializeField] private float maxLookUpAngle = 89f;
-        [SerializeField] private float maxLookDownAngle = 89f;
+        [SerializeField, Range(0f, 180f)] private float maxLookUpAngle = 89f;
+        [SerializeField, Range(0f, 180f)] private float maxLookDownAngle = 89f;
 
         public bool UseControllerRotationPitch => useControllerRotationPitch;
         public bool UseControllerRotationYaw => useControllerRotationYaw;
@@ -41,6 +41,8 @@ namespace CycloneGames.GameplayFramework.Runtime
             pawn.UseControllerRotationYaw = useControllerRotationYaw;
             pawn.UseControllerRotationRoll = useControllerRotationRoll;
             pawn.BaseEyeHeight = baseEyeHeight;
+            pawn.MaxLookUpAngle = maxLookUpAngle;
+            pawn.MaxLookDownAngle = maxLookDownAngle;
         }
     }
 }

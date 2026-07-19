@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.Utility.Tests.Editor",
+    "rootNamespace": "CycloneGames.Utility.Tests.Editor",
+    "references": [
+        "CycloneGames.Utility.Runtime",
+        "CycloneGames.Utility.Editor",
+        "CycloneGames.Utility.SplashScreenModifier.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

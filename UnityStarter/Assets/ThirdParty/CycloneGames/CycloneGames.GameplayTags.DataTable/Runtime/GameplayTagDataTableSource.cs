@@ -10,7 +10,7 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
     /// Registers gameplay tags from a typed DataTable, typically generated from Excel by Luban.
     /// Use this source when one row represents one tag definition.
     /// </summary>
-    public sealed class GameplayTagDataTableSource<TRow> : IGameplayTagSource where TRow : IDataRow
+    public sealed class GameplayTagDataTableSource<TRow> : IGameplayTagSource
     {
         private readonly IReadOnlyList<TRow> _rows;
         private readonly Func<TRow, string> _getName;
@@ -22,7 +22,7 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
 
         public GameplayTagDataTableSource(
             string sourceName,
-            IDataTable<TRow> table,
+            IDataTableRows<TRow> table,
             Func<TRow, string> getName,
             Func<TRow, string> getDescription = null,
             Func<TRow, GameplayTagFlags> getFlags = null,
@@ -60,8 +60,13 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
 
             for (int i = 0; i < _rows.Count; i++)
             {
+                if (context.IsRegistrationTerminated)
+                {
+                    return;
+                }
+
                 TRow row = _rows[i];
-                if (row == null || !_isEnabled(row))
+                if (row is null || !_isEnabled(row))
                 {
                     continue;
                 }
@@ -71,6 +76,11 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
                     _getDescription(row) ?? string.Empty,
                     _getFlags(row),
                     this);
+
+                if (context.IsRegistrationTerminated)
+                {
+                    return;
+                }
             }
         }
     }

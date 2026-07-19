@@ -14,5 +14,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
         HashComputationFailed = 9,
         HashMismatch = 10,
         IoError = 11,
+        SignatureRequired = 12,
+        HashAlgorithmRejected = 13,
     }
 }

@@ -2,9 +2,7 @@
     "name": "CycloneGames.GameplayAbilities.Core",
     "rootNamespace": "CycloneGames.GameplayAbilities.Core",
     "references": [
-        "CycloneGames.Logger",
         "CycloneGames.GameplayTags.Core",
-        "CycloneGames.Factory.Runtime",
         "CycloneGames.DeterministicMath.Core",
         "CycloneGames.Hash.Core"
     ],

@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using System.IO;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
@@ -7,8 +8,19 @@ using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
+    internal enum GameplayTagValidationScanStatus
+    {
+        NotRun,
+        Completed,
+        Canceled,
+        Failed
+    }
+
     public class GameplayTagValidationReporter : EditorWindow
     {
+        internal const int MaxInvalidTagEntries = 4096;
+        private const int EntriesPerPage = 50;
+
         private enum InvalidTagReferenceKind
         {
             SingleTag,
@@ -23,20 +35,32 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             public Object ContextObject; // The specific component or asset containing the tag.
             public string PropertyPath; // The path to the serialized GameplayTag or GameplayTagContainer.
             public InvalidTagReferenceKind Kind;
+            public bool CanFix;
 
-            public InvalidTagEntry(string assetPath, string tagName, Object contextObject, string propertyPath, InvalidTagReferenceKind kind)
+            public InvalidTagEntry(string assetPath, string tagName, Object contextObject, string propertyPath, InvalidTagReferenceKind kind, bool canFix)
             {
                 AssetPath = assetPath;
                 TagName = tagName;
                 ContextObject = contextObject;
                 PropertyPath = propertyPath;
                 Kind = kind;
+                CanFix = canFix;
             }
         }
 
-        private List<InvalidTagEntry> m_InvalidTags = new List<InvalidTagEntry>();
+        private readonly List<InvalidTagEntry> m_InvalidTags = new List<InvalidTagEntry>(128);
         private Vector2 m_ScrollPosition;
-        private bool m_HasScanned;
+        private int m_ResultPage;
+        private GameplayTagValidationScanStatus m_ScanStatus;
+        private string m_ScanFailureMessage;
+
+        internal GameplayTagValidationScanStatus ScanStatus => m_ScanStatus;
+        internal int InvalidTagCount => m_InvalidTags.Count;
+
+        internal static bool IsCleanScanResult(GameplayTagValidationScanStatus status, int invalidTagCount)
+        {
+            return status == GameplayTagValidationScanStatus.Completed && invalidTagCount == 0;
+        }
 
         [MenuItem("Tools/CycloneGames/GameplayTags/Tag Validation Window")]
         public static void ShowWindow()
@@ -57,11 +81,19 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             EditorGUILayout.Space();
 
-            if (!m_HasScanned)
+            if (m_ScanStatus == GameplayTagValidationScanStatus.NotRun)
             {
                 EditorGUILayout.HelpBox("Run a scan to find invalid GameplayTag and GameplayTagContainer references.", MessageType.None);
             }
-            else if (m_InvalidTags.Count == 0)
+            else if (m_ScanStatus == GameplayTagValidationScanStatus.Canceled)
+            {
+                EditorGUILayout.HelpBox("Scan canceled. Results are partial and must not be used as a clean validation result.", MessageType.Warning);
+            }
+            else if (m_ScanStatus == GameplayTagValidationScanStatus.Failed)
+            {
+                EditorGUILayout.HelpBox($"Scan failed. Results are partial. {m_ScanFailureMessage}", MessageType.Error);
+            }
+            else if (IsCleanScanResult(m_ScanStatus, m_InvalidTags.Count))
             {
                 EditorGUILayout.HelpBox("Scan complete. No invalid GameplayTags found.", MessageType.Info);
             }
@@ -69,8 +101,27 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             {
                 EditorGUILayout.HelpBox($"{m_InvalidTags.Count} invalid GameplayTag reference(s) found. Please review and fix.", MessageType.Warning);
 
+                int pageCount = (m_InvalidTags.Count + EntriesPerPage - 1) / EntriesPerPage;
+                m_ResultPage = Mathf.Clamp(m_ResultPage, 0, pageCount - 1);
+                EditorGUILayout.BeginHorizontal();
+                EditorGUI.BeginDisabledGroup(m_ResultPage == 0);
+                if (GUILayout.Button("Previous", GUILayout.Width(80)))
+                    m_ResultPage--;
+                EditorGUI.EndDisabledGroup();
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.LabelField($"Page {m_ResultPage + 1} / {pageCount}", GUILayout.Width(100));
+                GUILayout.FlexibleSpace();
+                EditorGUI.BeginDisabledGroup(m_ResultPage >= pageCount - 1);
+                if (GUILayout.Button("Next", GUILayout.Width(80)))
+                    m_ResultPage++;
+                EditorGUI.EndDisabledGroup();
+                EditorGUILayout.EndHorizontal();
+
+                int firstEntry = m_ResultPage * EntriesPerPage;
+                int lastEntryExclusive = Mathf.Min(firstEntry + EntriesPerPage, m_InvalidTags.Count);
+
                 m_ScrollPosition = EditorGUILayout.BeginScrollView(m_ScrollPosition);
-                for (int i = m_InvalidTags.Count - 1; i >= 0; i--) // Iterate backwards for safe removal
+                for (int i = lastEntryExclusive - 1; i >= firstEntry; i--)
                 {
                     var entry = m_InvalidTags[i];
                     EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
@@ -94,23 +145,27 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                         EditorGUIUtility.PingObject(entry.ContextObject);
                     }
 
-                    if (GUILayout.Button("Fix", GUILayout.Width(50), GUILayout.Height(EditorGUIUtility.singleLineHeight * 2 + 5)))
+                    EditorGUI.BeginDisabledGroup(!entry.CanFix);
+                    if (GUILayout.Button(entry.CanFix ? "Fix" : "Read-only", GUILayout.Width(58), GUILayout.Height(EditorGUIUtility.singleLineHeight * 2 + 5)))
                     {
                         FixSingleInvalidTag(entry, i);
                         // Since we modified the list, we should exit the loop for this frame
                         // to avoid issues with the collection being modified during iteration.
                         GUIUtility.ExitGUI();
                     }
+                    EditorGUI.EndDisabledGroup();
                     EditorGUILayout.EndVertical();
                     EditorGUILayout.EndHorizontal();
                 }
                 EditorGUILayout.EndScrollView();
 
                 EditorGUILayout.Space();
-                if (GUILayout.Button("Fix All Invalid Tags"))
+                EditorGUI.BeginDisabledGroup(!HasFixableEntries());
+                if (GUILayout.Button("Fix All Writable Invalid Tags"))
                 {
                     FixAllInvalidTags();
                 }
+                EditorGUI.EndDisabledGroup();
             }
         }
 
@@ -120,73 +175,101 @@ namespace CycloneGames.GameplayTags.Unity.Editor
         private void ScanForInvalidTags()
         {
             m_InvalidTags.Clear();
-            m_HasScanned = false;
-            GameplayTagManager.InitializeIfNeeded(); // Ensure the tag dictionary is up-to-date
-
-            // --- Part 1: Scan Project Assets (Prefabs and ScriptableObjects) ---
-            HashSet<string> assetGuids = new HashSet<string>();
-            foreach (string guid in AssetDatabase.FindAssets("t:ScriptableObject"))
-            {
-                assetGuids.Add(guid);
-            }
-
-            foreach (string guid in AssetDatabase.FindAssets("t:GameObject"))
-            {
-                assetGuids.Add(guid);
-            }
-
-            // Suppress "The referenced script (Unknown) on this Behaviour is missing!" warnings
-            // that Unity emits when loading prefabs with missing script references.
+            m_ResultPage = 0;
+            m_ScanStatus = GameplayTagValidationScanStatus.NotRun;
+            m_ScanFailureMessage = null;
             var previousFilterLogType = Debug.unityLogger.filterLogType;
-            Debug.unityLogger.filterLogType = LogType.Error;
             try
             {
-                int assetIndex = 0;
-                foreach (string assetGuid in assetGuids)
-                {
-                    assetIndex++;
-                    string assetPath = AssetDatabase.GUIDToAssetPath(assetGuid);
-                    if (EditorUtility.DisplayCancelableProgressBar("Scanning Project Assets", $"Scanning: {assetPath}", (float)assetIndex / assetGuids.Count))
-                    {
-                        break;
-                    }
-
-                    Object assetObject = AssetDatabase.LoadAssetAtPath<Object>(assetPath);
-                    if (assetObject == null) continue;
-
-                    CheckObjectForInvalidTags(assetObject, assetPath);
-                }
+                GameplayTagManager.InitializeIfNeeded();
+                Debug.unityLogger.filterLogType = LogType.Error;
+                if (!ScanProjectAssets() || !ScanOpenScenes())
+                    m_ScanStatus = GameplayTagValidationScanStatus.Canceled;
+                else
+                    m_ScanStatus = GameplayTagValidationScanStatus.Completed;
+            }
+            catch (System.Exception exception)
+            {
+                m_ScanStatus = GameplayTagValidationScanStatus.Failed;
+                m_ScanFailureMessage = exception.Message;
+                Debug.LogException(exception);
             }
             finally
             {
                 Debug.unityLogger.filterLogType = previousFilterLogType;
+                EditorUtility.ClearProgressBar();
+                Repaint();
             }
+        }
 
-            // --- Part 2: Scan All Open Scenes ---
+        private bool ScanProjectAssets()
+        {
+            HashSet<string> uniqueGuids = new HashSet<string>();
+            foreach (string guid in AssetDatabase.FindAssets("t:ScriptableObject"))
+                uniqueGuids.Add(guid);
+            foreach (string guid in AssetDatabase.FindAssets("t:Prefab"))
+                uniqueGuids.Add(guid);
+
+            List<string> assetGuids = new List<string>(uniqueGuids);
+            assetGuids.Sort(System.StringComparer.Ordinal);
+            HashSet<int> scannedInstanceIds = new HashSet<int>();
+            for (int assetIndex = 0; assetIndex < assetGuids.Count; assetIndex++)
+            {
+                string assetPath = AssetDatabase.GUIDToAssetPath(assetGuids[assetIndex]);
+                if (EditorUtility.DisplayCancelableProgressBar("Scanning Project Assets", $"Scanning: {assetPath}", (float)(assetIndex + 1) / assetGuids.Count))
+                    return false;
+
+                bool canFix = IsWritableProjectAsset(assetPath);
+                scannedInstanceIds.Clear();
+                ScanProjectAsset(assetPath, canFix, scannedInstanceIds);
+            }
+            return true;
+        }
+
+        internal void ScanProjectAsset(string assetPath, bool canFix)
+        {
+            ScanProjectAsset(assetPath, canFix, new HashSet<int>());
+        }
+
+        private void ScanProjectAsset(string assetPath, bool canFix, HashSet<int> scannedInstanceIds)
+        {
+            Object mainAsset = AssetDatabase.LoadMainAssetAtPath(assetPath);
+            Object[] assets = AssetDatabase.LoadAllAssetsAtPath(assetPath);
+
+            if (mainAsset is GameObject mainPrefab && scannedInstanceIds.Add(mainPrefab.GetInstanceID()))
+                CheckObjectForInvalidTags(mainPrefab, assetPath, canFix);
+
+            for (int i = 0; i < assets.Length; i++)
+            {
+                if (assets[i] is ScriptableObject scriptableObject &&
+                    scannedInstanceIds.Add(scriptableObject.GetInstanceID()))
+                {
+                    CheckObjectForInvalidTags(scriptableObject, assetPath, canFix);
+                }
+            }
+        }
+
+        private bool ScanOpenScenes()
+        {
             for (int i = 0; i < SceneManager.sceneCount; i++)
             {
                 Scene scene = SceneManager.GetSceneAt(i);
                 if (!scene.isLoaded) continue;
 
                 if (EditorUtility.DisplayCancelableProgressBar("Scanning Open Scenes", $"Scanning Scene: {scene.name}", (float)i / SceneManager.sceneCount))
-                {
-                    break;
-                }
+                    return false;
 
                 GameObject[] rootGameObjects = scene.GetRootGameObjects();
                 foreach (GameObject rootGo in rootGameObjects)
                 {
                     // For scene objects, the "asset path" is the scene's path.
-                    CheckObjectForInvalidTags(rootGo, scene.path);
+                    CheckObjectForInvalidTags(rootGo, scene.path, true);
                 }
             }
-
-            EditorUtility.ClearProgressBar();
-            m_HasScanned = true;
-            Repaint(); // Refresh the window to show results
+            return true;
         }
 
-        private void CheckObjectForInvalidTags(Object obj, string assetPath)
+        private void CheckObjectForInvalidTags(Object obj, string assetPath, bool canFix)
         {
             if (obj is GameObject go)
             {
@@ -194,16 +277,18 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                 foreach (MonoBehaviour component in components)
                 {
                     if (component == null) continue;
-                    ProcessSerializedObject(new SerializedObject(component), assetPath);
+                    using (SerializedObject serializedObject = new SerializedObject(component))
+                        ProcessSerializedObject(serializedObject, assetPath, canFix);
                 }
             }
             else if (obj is ScriptableObject scriptableObject)
             {
-                ProcessSerializedObject(new SerializedObject(scriptableObject), assetPath);
+                using (SerializedObject serializedObject = new SerializedObject(scriptableObject))
+                    ProcessSerializedObject(serializedObject, assetPath, canFix);
             }
         }
 
-        private void ProcessSerializedObject(SerializedObject serializedObject, string assetPath)
+        private void ProcessSerializedObject(SerializedObject serializedObject, string assetPath, bool canFix)
         {
             SerializedProperty property = serializedObject.GetIterator();
             if (property.NextVisible(true))
@@ -212,17 +297,17 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                 {
                     if (property.propertyType == SerializedPropertyType.Generic && property.type == "GameplayTagContainer")
                     {
-                        ProcessTagContainerProperty(serializedObject, property, assetPath);
+                        ProcessTagContainerProperty(serializedObject, property, assetPath, canFix);
                     }
                     else if (property.propertyType == SerializedPropertyType.Generic && property.type == "GameplayTag")
                     {
-                        ProcessSingleTagProperty(serializedObject, property, assetPath);
+                        ProcessSingleTagProperty(serializedObject, property, assetPath, canFix);
                     }
                 } while (property.NextVisible(true));
             }
         }
 
-        private void ProcessSingleTagProperty(SerializedObject serializedObject, SerializedProperty property, string assetPath)
+        private void ProcessSingleTagProperty(SerializedObject serializedObject, SerializedProperty property, string assetPath, bool canFix)
         {
             SerializedProperty nameProperty = property.FindPropertyRelative("m_Name");
             if (nameProperty == null)
@@ -233,11 +318,11 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             string tagName = nameProperty.stringValue;
             if (!string.IsNullOrEmpty(tagName) && !GameplayTagManager.TryRequestTag(tagName, out _))
             {
-                m_InvalidTags.Add(new InvalidTagEntry(assetPath, tagName, serializedObject.targetObject, property.propertyPath, InvalidTagReferenceKind.SingleTag));
+                AddInvalidTag(new InvalidTagEntry(assetPath, tagName, serializedObject.targetObject, property.propertyPath, InvalidTagReferenceKind.SingleTag, canFix));
             }
         }
 
-        private void ProcessTagContainerProperty(SerializedObject serializedObject, SerializedProperty property, string assetPath)
+        private void ProcessTagContainerProperty(SerializedObject serializedObject, SerializedProperty property, string assetPath, bool canFix)
         {
             SerializedProperty tagsArrayProperty = property.FindPropertyRelative("m_SerializedExplicitTags");
             if (tagsArrayProperty == null || !tagsArrayProperty.isArray)
@@ -252,9 +337,20 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
                 if (!string.IsNullOrEmpty(tagName) && !GameplayTagManager.TryRequestTag(tagName, out _))
                 {
-                    m_InvalidTags.Add(new InvalidTagEntry(assetPath, tagName, serializedObject.targetObject, property.propertyPath, InvalidTagReferenceKind.ContainerTag));
+                    AddInvalidTag(new InvalidTagEntry(assetPath, tagName, serializedObject.targetObject, property.propertyPath, InvalidTagReferenceKind.ContainerTag, canFix));
                 }
             }
+        }
+
+        private void AddInvalidTag(InvalidTagEntry entry)
+        {
+            if (m_InvalidTags.Count >= MaxInvalidTagEntries)
+            {
+                throw new InvalidDataException(
+                    $"Invalid gameplay tag result count exceeded the {MaxInvalidTagEntries}-entry scan budget.");
+            }
+
+            m_InvalidTags.Add(entry);
         }
 
         private void FixSingleInvalidTag(InvalidTagEntry entryToFix, int indexInList)
@@ -287,7 +383,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             for (int i = m_InvalidTags.Count - 1; i >= 0; i--)
             {
                 var entry = m_InvalidTags[i];
-                if (TryFixEntry(entry))
+                if (entry.CanFix && TryFixEntry(entry))
                 {
                     m_InvalidTags.RemoveAt(i);
                     fixedCount++;
@@ -304,7 +400,10 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
         private bool TryFixEntry(InvalidTagEntry entry)
         {
-            SerializedObject serializedObject = new SerializedObject(entry.ContextObject);
+            if (!entry.CanFix || entry.ContextObject == null)
+                return false;
+
+            using SerializedObject serializedObject = new SerializedObject(entry.ContextObject);
             SerializedProperty property = serializedObject.FindProperty(entry.PropertyPath);
             if (property == null)
             {
@@ -326,6 +425,26 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             serializedObject.ApplyModifiedProperties();
             MarkContextDirty(entry.ContextObject);
             return true;
+        }
+
+        private bool HasFixableEntries()
+        {
+            for (int i = 0; i < m_InvalidTags.Count; i++)
+            {
+                if (m_InvalidTags[i].CanFix)
+                    return true;
+            }
+            return false;
+        }
+
+        private static bool IsWritableProjectAsset(string assetPath)
+        {
+            if (string.IsNullOrEmpty(assetPath) ||
+                !assetPath.StartsWith("Assets/", System.StringComparison.Ordinal))
+            {
+                return false;
+            }
+            return AssetDatabase.IsOpenForEdit(assetPath, StatusQueryOptions.UseCachedIfPossible);
         }
 
         private static bool TryFixSingleTagProperty(SerializedProperty tagProperty, string tagName)

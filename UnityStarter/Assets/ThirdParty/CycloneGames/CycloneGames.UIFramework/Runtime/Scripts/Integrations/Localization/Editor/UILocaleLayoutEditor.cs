@@ -1,1102 +1,2093 @@
-#if UNITY_EDITOR
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using CycloneGames.Localization.Runtime;
+using CycloneGames.UIFramework.Editor;
 using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
 {
     [CustomEditor(typeof(UILocaleLayout))]
+    [CanEditMultipleObjects]
     public sealed class UILocaleLayoutEditor : UnityEditor.Editor
     {
-        private SerializedProperty _baseLocaleProp;
-        private SerializedProperty _elementsProp;
-        private SerializedProperty _snapshotsProp;
+        private const int MaxDisplayedIssues = 24;
+        private const double DiffRefreshIntervalSeconds = 0.5d;
 
-        private int _selectedLocaleIdx;
+        private static readonly GUIContent MoveUpContent = new GUIContent("Up", "Move this element up.");
+        private static readonly GUIContent MoveDownContent = new GUIContent("Down", "Move this element down.");
+        private static readonly GUIContent RemoveContent = new GUIContent("Remove", "Remove this element and its parallel snapshot values.");
+        private static readonly GUIContent RefreshContent = new GUIContent("Refresh", "Refresh validation and hierarchy differences.");
+        private static UILocaleLayoutEditor s_previewOwner;
+
+        private SerializedProperty _baseLocale;
+        private SerializedProperty _elements;
+        private SerializedProperty _snapshots;
+
+        private bool _showSetup = true;
         private bool _showElements = true;
-        private Vector2 _scrollPos;
+        private bool _showLocales = true;
+        private bool _showValidation = true;
+        private int _selectedSnapshotIndex;
+        private int _dirtyElementCount;
+        private int _errorCount;
+        private int _warningCount;
+        private int _totalIssueCount;
+        private bool _hasUnsupportedFutureSchema;
+        private double _nextDiffRefreshTime;
+        private string _newLocaleCode = string.Empty;
 
-        // Preview mode state
-        private bool _previewing;
-        private ElementSnapshot[] _previewBackup;
+        private readonly List<string> _issues = new List<string>(MaxDisplayedIssues);
+        private GUIContent[] _elementLabels = Array.Empty<GUIContent>();
+        private string[] _snapshotLabels = Array.Empty<string>();
+        private bool _snapshotLabelsDirty = true;
+        private bool _validationDirty = true;
 
-        // Diff cache
-        private bool[] _dirtyFlags;
-        private int _dirtyCount;
-        private bool _diffStale = true;
+        private LocalizationSettings _localizationSettings;
+        private int _localizationSettingsCount;
+        private bool _settingsCacheDirty = true;
+        private string[] _settingsLocaleCodes = Array.Empty<string>();
+        private string[] _settingsLocaleLabels = Array.Empty<string>();
 
-        // Locale discovery cache
-        private LocalizationSettings _cachedSettings;
-        private bool _settingsSearched;
-        private string[] _addableLocaleCodes;     // codes available to add
-        private string[] _addableLocaleLabels;     // display labels for popup
-        private int _addLocalePopupIdx;
-
-        // Cached styles
-        private static GUIStyle s_BoxStyle;
-        private static GUIStyle s_SectionStyle;
-        private static GUIStyle s_RichLabel;
-        private static GUIStyle s_ToolbarBtn;
-        private static readonly Color DirtyColor = new Color(0.85f, 0.55f, 0.1f, 0.25f);
-        private static readonly Color CleanColor = new Color(0.2f, 0.7f, 0.3f, 0.15f);
-        private static readonly Color MissingColor = new Color(0.85f, 0.2f, 0.2f, 0.25f);
-        private static readonly Color PreviewBg = new Color(0.3f, 0.6f, 0.9f, 0.15f);
-        private static readonly Color BaseTagColor = new Color(0.4f, 0.8f, 0.5f, 1f);
-
-        // Element grouping
-        private readonly Dictionary<string, bool> _groupFoldouts = new(16);
-        private const int GroupingThreshold = 6;
-        private const int ScrollThreshold = 15;
-
-        // Reusable lists for scanning
-        private static readonly List<TMP_Text> SharedTextCache = new(64);
-        private static readonly List<LocalizeImage> SharedImageCache = new(32);
-
-        private static GUIStyle BoxStyle => s_BoxStyle ??= new GUIStyle("HelpBox")
-        {
-            padding = new RectOffset(8, 8, 6, 6)
-        };
-
-        private static GUIStyle SectionStyle
-        {
-            get
-            {
-                if (s_SectionStyle == null)
-                {
-                    s_SectionStyle = new GUIStyle("HelpBox")
-                    {
-                        padding = new RectOffset(10, 10, 8, 8),
-                        margin = new RectOffset(0, 0, 4, 4)
-                    };
-                }
-                return s_SectionStyle;
-            }
-        }
-
-        private static GUIStyle RichLabel
-        {
-            get
-            {
-                if (s_RichLabel == null)
-                {
-                    s_RichLabel = new GUIStyle(EditorStyles.label) { richText = true };
-                }
-                return s_RichLabel;
-            }
-        }
-
-        private static GUIStyle ToolbarBtn
-        {
-            get
-            {
-                if (s_ToolbarBtn == null)
-                {
-                    s_ToolbarBtn = new GUIStyle(EditorStyles.miniButton)
-                    {
-                        fixedHeight = 26,
-                        fontSize = 11,
-                        padding = new RectOffset(10, 10, 2, 2)
-                    };
-                }
-                return s_ToolbarBtn;
-            }
-        }
+        private bool _isPreviewing;
 
         private void OnEnable()
         {
-            _baseLocaleProp = serializedObject.FindProperty("_baseLocale");
-            _elementsProp = serializedObject.FindProperty("_elements");
-            _snapshotsProp = serializedObject.FindProperty("_snapshots");
-            _diffStale = true;
-            _settingsSearched = false;
-            _cachedSettings = null;
+            _baseLocale = serializedObject.FindProperty("_baseLocale");
+            _elements = serializedObject.FindProperty("_elements");
+            _snapshots = serializedObject.FindProperty("_snapshots");
 
-            PrefabStage.prefabSaving += OnPrefabSaving;
-            PrefabStage.prefabStageClosing += OnPrefabStageClosing;
+            Undo.undoRedoPerformed += HandleExternalChange;
+            EditorApplication.hierarchyChanged += HandleExternalChange;
+            EditorApplication.projectChanged += HandleProjectChange;
+            EditorApplication.playModeStateChanged += HandlePlayModeChange;
+            AssemblyReloadEvents.beforeAssemblyReload += ExitPreviewBeforeReload;
+            PrefabStage.prefabSaving += HandlePrefabSaving;
+
+            serializedObject.Update();
+            RefreshSettingsCache();
+            RefreshValidation();
+            RefreshDifferences();
         }
 
         private void OnDisable()
         {
-            PrefabStage.prefabSaving -= OnPrefabSaving;
-            PrefabStage.prefabStageClosing -= OnPrefabStageClosing;
-
-            // Auto-exit preview if inspector is closed
-            if (_previewing) ExitPreview();
-        }
-
-        // ── Prefab Stage Hooks ──────────────────────────────────
-        private void OnPrefabSaving(GameObject prefabRoot)
-        {
-            if (target == null || _previewing) return;
-            if (_snapshotsProp.arraySize == 0) return;
-
-            var layout = target as UILocaleLayout;
-            if (layout == null || layout.gameObject != prefabRoot) return;
-
-            // Auto-capture on Ctrl+S if there are unsaved changes
-            serializedObject.Update();
-            RefreshDiff();
-            if (_dirtyCount > 0)
-            {
-                string code = GetSelectedLocaleCode();
-                CaptureSnapshot();
-                Debug.Log($"[UILocaleLayout] Auto-captured {_elementsProp.arraySize} elements " +
-                          $"for locale '{code}' on prefab save.");
-            }
-        }
-
-        private void OnPrefabStageClosing(PrefabStage stage)
-        {
-            if (target == null || _previewing) return;
-            if (_snapshotsProp.arraySize == 0) return;
-
-            var layout = target as UILocaleLayout;
-            if (layout == null) return;
-
-            // Check if this layout belongs to the closing prefab stage
-            var prefabRoot = stage.prefabContentsRoot;
-            if (prefabRoot == null) return;
-            if (!layout.transform.IsChildOf(prefabRoot.transform) && layout.gameObject != prefabRoot) return;
-
-            serializedObject.Update();
-            RefreshDiff();
-            if (_dirtyCount > 0)
-            {
-                string code = GetSelectedLocaleCode();
-                int choice = EditorUtility.DisplayDialogComplex(
-                    "Unsaved Layout Changes",
-                    $"UILocaleLayout on '{layout.name}' has {_dirtyCount} unsaved change(s) " +
-                    $"for locale '{code}'.\n\nSave before closing prefab?",
-                    "Save",
-                    "Discard",
-                    "Cancel");
-
-                if (choice == 0)
-                {
-                    CaptureSnapshot();
-                    Debug.Log($"[UILocaleLayout] Saved '{code}' snapshot before closing prefab.");
-                }
-            }
+            ExitPreview();
+            Undo.undoRedoPerformed -= HandleExternalChange;
+            EditorApplication.hierarchyChanged -= HandleExternalChange;
+            EditorApplication.projectChanged -= HandleProjectChange;
+            EditorApplication.playModeStateChanged -= HandlePlayModeChange;
+            AssemblyReloadEvents.beforeAssemblyReload -= ExitPreviewBeforeReload;
+            PrefabStage.prefabSaving -= HandlePrefabSaving;
         }
 
         public override void OnInspectorGUI()
         {
+            SynchronizePreviewState();
             serializedObject.Update();
+            EnsureSettingsCache();
 
-            // ── Preview banner ──
-            if (_previewing)
+            if (_validationDirty)
             {
-                var bannerRect = EditorGUILayout.BeginHorizontal(EditorStyles.helpBox);
-                EditorGUI.DrawRect(bannerRect, PreviewBg);
-                GUILayout.Label("\u25b6  PREVIEW MODE \u2014 Scene changes are temporary",
-                    EditorStyles.boldLabel);
-                GUILayout.FlexibleSpace();
-                if (GUILayout.Button("Exit Preview", GUILayout.Width(110), GUILayout.Height(22)))
-                    ExitPreview();
-                EditorGUILayout.EndHorizontal();
-                EditorGUILayout.Space(4);
+                RefreshValidation();
             }
 
-            DrawBaseLocale();
-            EditorGUILayout.Space(6);
-            DrawLocaleSelector();
-            EditorGUILayout.Space(6);
-            DrawToolbar();
-            EditorGUILayout.Space(4);
+            InspectorUiUtility.DrawInspectorTitle(
+                "UI Locale Layout",
+                "Event-driven per-locale layout snapshots",
+                InspectorUiUtility.AssetColor);
 
-            // Diff check
-            if (_diffStale) RefreshDiff();
-
-            if (_dirtyCount > 0 && !_previewing)
+            if (serializedObject.isEditingMultipleObjects)
             {
-                string code = GetSelectedLocaleCode();
-                EditorGUILayout.HelpBox(
-                    $"{_dirtyCount} element(s) differ from the saved '{code}' snapshot.\n" +
-                    "Click Capture to save, or Revert to discard scene changes.",
-                    MessageType.Warning);
-            }
-
-            DrawElements();
-
-            serializedObject.ApplyModifiedProperties();
-        }
-
-        // ── Base Locale ─────────────────────────────────────────
-        private void DrawBaseLocale()
-        {
-            EditorGUILayout.BeginVertical(SectionStyle);
-            EditorGUILayout.LabelField("Base Locale", EditorStyles.boldLabel);
-            EditorGUILayout.Space(2);
-
-            EditorGUILayout.BeginHorizontal();
-
-            // Show as dropdown from available locales if possible
-            var settings = FindLocalizationSettings();
-            if (settings != null && settings.AvailableLocales.Count > 0)
-            {
-                var locales = settings.AvailableLocales;
-                string current = _baseLocaleProp.stringValue;
-                int selectedIdx = -1;
-                string[] labels = new string[locales.Count];
-                for (int i = 0; i < locales.Count; i++)
-                {
-                    var loc = locales[i];
-                    if (loc == null) { labels[i] = "(null)"; continue; }
-                    labels[i] = FormatLocaleLabel(loc);
-                    if (string.Equals(loc.Id.ToString(), current, StringComparison.OrdinalIgnoreCase))
-                        selectedIdx = i;
-                }
-
-                if (selectedIdx < 0 && !string.IsNullOrEmpty(current))
-                {
-                    // Current value is not in available locales — show it but allow changing
-                    EditorGUILayout.LabelField($"\u26a0 '{current}' (not in LocalizationSettings)",
-                        RichLabel);
-                }
-
-                EditorGUI.BeginChangeCheck();
-                int newIdx = EditorGUILayout.Popup(selectedIdx, labels);
-                if (EditorGUI.EndChangeCheck() && newIdx >= 0 && newIdx < locales.Count && locales[newIdx] != null)
-                {
-                    _baseLocaleProp.stringValue = locales[newIdx].Id.ToString();
-                    InvalidateAddableLocales();
-                }
-            }
-            else
-            {
-                // Fallback: manual text field when no LocalizationSettings found
-                EditorGUILayout.PropertyField(_baseLocaleProp, GUIContent.none);
-            }
-
-            var prevColor = GUI.color;
-            GUI.color = BaseTagColor;
-            GUILayout.Label("= Prefab Default", EditorStyles.miniLabel, GUILayout.Width(100));
-            GUI.color = prevColor;
-
-            EditorGUILayout.EndHorizontal();
-            EditorGUILayout.EndVertical();
-        }
-
-        // ── Locale Selector ─────────────────────────────────────
-        private void DrawLocaleSelector()
-        {
-            EditorGUILayout.BeginVertical(SectionStyle);
-            EditorGUILayout.LabelField("Override Locales", EditorStyles.boldLabel);
-            EditorGUILayout.Space(2);
-
-            int count = _snapshotsProp.arraySize;
-            if (count == 0)
-            {
-                EditorGUILayout.LabelField(
-                    "No override locales yet. Add overrides for locales that need different layouts.",
-                    EditorStyles.wordWrappedMiniLabel);
-            }
-            else
-            {
-                // Build display names with native name annotation
-                string[] displayNames = new string[count];
-                var settings = FindLocalizationSettings();
-                for (int i = 0; i < count; i++)
-                {
-                    string code = _snapshotsProp.GetArrayElementAtIndex(i)
-                        .FindPropertyRelative("LocaleCode").stringValue;
-                    string label = code;
-                    if (settings != null)
-                    {
-                        var locale = FindLocaleByCode(settings, code);
-                        if (locale != null)
-                            label = FormatLocaleLabel(locale);
-                    }
-                    displayNames[i] = label;
-                }
-
-                int prevIdx = _selectedLocaleIdx;
-                _selectedLocaleIdx = Mathf.Clamp(_selectedLocaleIdx, 0, count - 1);
-
-                EditorGUI.BeginChangeCheck();
-                _selectedLocaleIdx = EditorGUILayout.Popup(
-                    new GUIContent("Editing Locale", "Select which override locale to edit"),
-                    _selectedLocaleIdx, displayNames);
-                if (EditorGUI.EndChangeCheck() && prevIdx != _selectedLocaleIdx)
-                {
-                    OnLocaleSwitch(prevIdx, _selectedLocaleIdx);
-                }
-            }
-
-            EditorGUILayout.Space(4);
-
-            // Add / Remove row
-            EditorGUILayout.BeginHorizontal();
-            {
-                // Build addable locale list from LocalizationSettings
-                RebuildAddableLocalesIfNeeded();
-
-                if (_addableLocaleCodes != null && _addableLocaleCodes.Length > 0)
-                {
-                    _addLocalePopupIdx = EditorGUILayout.Popup(_addLocalePopupIdx, _addableLocaleLabels);
-                    _addLocalePopupIdx = Mathf.Clamp(_addLocalePopupIdx, 0, _addableLocaleCodes.Length - 1);
-
-                    if (GUILayout.Button("+ Add Override", GUILayout.Width(110), GUILayout.Height(20)))
-                    {
-                        AddLocale(_addableLocaleCodes[_addLocalePopupIdx]);
-                        InvalidateAddableLocales();
-                    }
-                }
-                else if (_cachedSettings == null)
-                {
-                    // No settings found — show a help note
-                    EditorGUILayout.LabelField(
-                        "No LocalizationSettings asset found. Create one to auto-populate locales.",
-                        EditorStyles.wordWrappedMiniLabel);
-                }
-                else
-                {
-                    EditorGUILayout.LabelField(
-                        "All available locales are already added.",
-                        EditorStyles.miniLabel);
-                }
-
-                if (count > 0)
-                {
-                    GUILayout.FlexibleSpace();
-                    if (GUILayout.Button("\u2212 Remove Selected", GUILayout.Width(130), GUILayout.Height(20)))
-                    {
-                        string removeCode = GetSelectedLocaleCode();
-                        if (EditorUtility.DisplayDialog("Remove Override",
-                            $"Remove override locale '{removeCode}' and its snapshot data?",
-                            "Remove", "Cancel"))
-                        {
-                            _snapshotsProp.DeleteArrayElementAtIndex(_selectedLocaleIdx);
-                            _selectedLocaleIdx = Mathf.Max(0, _selectedLocaleIdx - 1);
-                            _diffStale = true;
-                            InvalidateAddableLocales();
-                        }
-                    }
-                }
-            }
-            EditorGUILayout.EndHorizontal();
-            EditorGUILayout.EndVertical();
-        }
-
-        // ── Toolbar ─────────────────────────────────────────────
-        private void DrawToolbar()
-        {
-            EditorGUILayout.BeginVertical(SectionStyle);
-            EditorGUILayout.LabelField("Actions", EditorStyles.boldLabel);
-            EditorGUILayout.Space(2);
-
-            EditorGUILayout.BeginHorizontal();
-            {
-                bool hasOverrides = _snapshotsProp.arraySize > 0;
-                bool hasElements = _elementsProp.arraySize > 0;
-
-                string scanLabel = hasElements ? "\u21bb Re-scan" : "\u2609 Scan Hierarchy";
-                if (GUILayout.Button(scanLabel, ToolbarBtn))
-                {
-                    ScanHierarchy();
-                    _diffStale = true;
-                }
-
-                EditorGUI.BeginDisabledGroup(!hasOverrides || _previewing);
-                if (GUILayout.Button("\u2b07 Capture", ToolbarBtn))
-                {
-                    if (!hasElements) ScanHierarchy();
-                    CaptureSnapshot();
-                    _diffStale = true;
-                }
-
-                if (GUILayout.Button("\u21a9 Revert", ToolbarBtn))
-                {
-                    ApplySnapshot();
-                    _diffStale = true;
-                }
-                EditorGUI.EndDisabledGroup();
-
-                EditorGUI.BeginDisabledGroup(!hasOverrides);
-                if (!_previewing)
-                {
-                    if (GUILayout.Button("\u25b6 Preview", ToolbarBtn))
-                        EnterPreview();
-                }
-                else
-                {
-                    if (GUILayout.Button("\u25a0 Stop Preview", ToolbarBtn))
-                        ExitPreview();
-                }
-                EditorGUI.EndDisabledGroup();
-            }
-            EditorGUILayout.EndHorizontal();
-
-            // Preview locale switcher
-            if (_previewing && _snapshotsProp.arraySize > 0)
-            {
-                EditorGUILayout.Space(4);
-                EditorGUILayout.BeginHorizontal();
-                GUILayout.Label("Switch:", EditorStyles.miniLabel, GUILayout.Width(45));
-
-                if (GUILayout.Button($"[Base] {_baseLocaleProp.stringValue}", EditorStyles.miniButton,
-                    GUILayout.MinWidth(60)))
-                    PreviewBase();
-
-                for (int i = 0; i < _snapshotsProp.arraySize; i++)
-                {
-                    string code = _snapshotsProp.GetArrayElementAtIndex(i)
-                        .FindPropertyRelative("LocaleCode").stringValue;
-                    if (GUILayout.Button(code, EditorStyles.miniButton, GUILayout.MinWidth(40)))
-                        PreviewLocale(i);
-                }
-                EditorGUILayout.EndHorizontal();
-            }
-
-            EditorGUILayout.EndVertical();
-        }
-
-        // ── Elements List ───────────────────────────────────────
-        private void DrawElements()
-        {
-            int totalCount = _elementsProp.arraySize;
-            _showElements = EditorGUILayout.Foldout(_showElements,
-                $"Tracked Elements ({totalCount})", true);
-            if (!_showElements) return;
-
-            if (totalCount == 0)
-            {
-                EditorGUILayout.LabelField(
-                    "No elements tracked. Click Scan Hierarchy or right-click a component \u2192 Track Layout.",
-                    EditorStyles.wordWrappedMiniLabel);
+                DrawMultiObjectInspector();
+                serializedObject.ApplyModifiedProperties();
                 return;
             }
 
-            var layout = (UILocaleLayout)target;
+            DrawStatusPanel();
 
-            // Build path info
-            var paths = new string[totalCount];
-            for (int i = 0; i < totalCount; i++)
+            if (_hasUnsupportedFutureSchema)
             {
-                var tgt = _elementsProp.GetArrayElementAtIndex(i)
-                    .FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                paths[i] = tgt != null ? GetRelativePath(layout.transform, tgt.transform) : "(null)";
+                EditorGUILayout.HelpBox(
+                    "This layout contains a snapshot schema newer than this editor understands. " +
+                    "Authoring actions are disabled so the unknown data cannot be rewritten or downgraded.",
+                    MessageType.Error);
             }
 
-            bool useGrouping = totalCount > GroupingThreshold;
-            bool useScroll = totalCount > ScrollThreshold;
-
-            if (useScroll)
-                _scrollPos = EditorGUILayout.BeginScrollView(_scrollPos, GUILayout.MaxHeight(350));
-
-            int removeIdx = useGrouping
-                ? DrawElementsGrouped(paths, layout)
-                : DrawElementsFlat(paths, layout);
-
-            if (removeIdx >= 0)
+            EditorGUI.BeginChangeCheck();
+            using (new EditorGUI.DisabledScope(_isPreviewing || _hasUnsupportedFutureSchema))
             {
-                _elementsProp.DeleteArrayElementAtIndex(removeIdx);
-                for (int s = 0; s < _snapshotsProp.arraySize; s++)
-                {
-                    var elems = _snapshotsProp.GetArrayElementAtIndex(s).FindPropertyRelative("Elements");
-                    if (removeIdx < elems.arraySize)
-                        elems.DeleteArrayElementAtIndex(removeIdx);
-                }
-                _diffStale = true;
+                DrawSetupSection();
+                DrawTrackedElementsSection();
+            }
+            DrawLocaleSnapshotsSection();
+            bool changed = EditorGUI.EndChangeCheck();
+
+            serializedObject.ApplyModifiedProperties();
+            if (changed)
+            {
+                InvalidateInspection();
+                serializedObject.Update();
+                RefreshValidation();
             }
 
-            if (useScroll)
-                EditorGUILayout.EndScrollView();
+            if (!_isPreviewing &&
+                Event.current.type == EventType.Layout &&
+                EditorApplication.timeSinceStartup >= _nextDiffRefreshTime)
+            {
+                RefreshDifferences();
+                _nextDiffRefreshTime = EditorApplication.timeSinceStartup + DiffRefreshIntervalSeconds;
+            }
+
+            DrawValidationSection();
         }
 
-        private int DrawElementsFlat(string[] paths, UILocaleLayout layout)
+        private void DrawMultiObjectInspector()
         {
-            int removeIdx = -1;
-            for (int i = 0; i < _elementsProp.arraySize; i++)
+            bool containsFutureSchema = AnyTargetHasUnsupportedFutureSchema();
+            EditorGUILayout.HelpBox(
+                "Multiple UILocaleLayout components are selected. Base locale editing is supported, " +
+                "while element and snapshot actions are disabled to protect parallel snapshot indices.",
+                MessageType.Info);
+
+            if (containsFutureSchema)
             {
-                int r = DrawElementRow(i, paths[i]);
-                if (r >= 0) removeIdx = r;
+                EditorGUILayout.HelpBox(
+                    "At least one selected layout contains an unsupported future schema. Base locale editing " +
+                    "is disabled so multi-object serialization cannot rewrite unknown data.",
+                    MessageType.Error);
             }
-            return removeIdx;
+
+            using (new EditorGUI.DisabledScope(containsFutureSchema))
+            {
+                EditorGUILayout.PropertyField(_baseLocale, new GUIContent("Base Locale"));
+            }
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUILayout.IntField("Selected Layouts", targets.Length);
+            }
         }
 
-        private int DrawElementsGrouped(string[] paths, UILocaleLayout layout)
+        private void DrawStatusPanel()
         {
-            // Build ordered groups by first path segment
-            var groupOrder = new List<string>(16);
-            var groupIndices = new Dictionary<string, List<int>>(16);
-            var shortNames = new string[paths.Length];
-
-            for (int i = 0; i < paths.Length; i++)
+            InspectorUiUtility.BeginPanel();
+            string validationLabel;
+            Color validationColor;
+            if (_errorCount > 0)
             {
-                string fullPath = paths[i];
-                int slash = fullPath.IndexOf('/');
-                string groupKey = slash >= 0 ? fullPath.Substring(0, slash) : fullPath;
-                shortNames[i] = slash >= 0 ? fullPath.Substring(slash + 1) : fullPath;
-
-                if (!groupIndices.TryGetValue(groupKey, out var list))
-                {
-                    list = new List<int>(8);
-                    groupIndices[groupKey] = list;
-                    groupOrder.Add(groupKey);
-                }
-                list.Add(i);
+                validationLabel = $"{_errorCount} error(s)";
+                validationColor = Color.red;
+            }
+            else if (_warningCount > 0)
+            {
+                validationLabel = $"{_warningCount} warning(s)";
+                validationColor = InspectorUiUtility.WarningColor;
+            }
+            else
+            {
+                validationLabel = "Ready";
+                validationColor = InspectorUiUtility.SuccessColor;
             }
 
-            int removeIdx = -1;
-
-            for (int g = 0; g < groupOrder.Count; g++)
+            InspectorUiUtility.DrawStatusRow(
+                "Base locale",
+                string.IsNullOrEmpty(_baseLocale.stringValue) ? "Not configured" : _baseLocale.stringValue,
+                string.IsNullOrEmpty(_baseLocale.stringValue)
+                    ? InspectorUiUtility.WarningColor
+                    : InspectorUiUtility.SuccessColor);
+            InspectorUiUtility.DrawStatusRow(
+                "Tracked elements",
+                _elements.arraySize.ToString(),
+                _elements.arraySize > 0 ? InspectorUiUtility.AssetColor : InspectorUiUtility.NeutralColor);
+            InspectorUiUtility.DrawStatusRow(
+                "Locale overrides",
+                _snapshots.arraySize.ToString(),
+                _snapshots.arraySize > 0 ? InspectorUiUtility.RuntimeColor : InspectorUiUtility.NeutralColor);
+            if (_hasUnsupportedFutureSchema)
             {
-                string groupKey = groupOrder[g];
-                var indices = groupIndices[groupKey];
-
-                // Single-element groups: show inline without foldout
-                if (indices.Count == 1)
-                {
-                    int r = DrawElementRow(indices[0], paths[indices[0]]);
-                    if (r >= 0) removeIdx = r;
-                    continue;
-                }
-
-                // Multi-element group: foldout header
-                if (!_groupFoldouts.TryGetValue(groupKey, out bool expanded))
-                {
-                    expanded = true;
-                    _groupFoldouts[groupKey] = true;
-                }
-
-                string statusSuffix = BuildGroupStatus(indices);
-
-                EditorGUILayout.BeginHorizontal();
-                _groupFoldouts[groupKey] = EditorGUILayout.Foldout(expanded,
-                    $"{groupKey}  ({indices.Count})", true);
-                if (!string.IsNullOrEmpty(statusSuffix))
-                    GUILayout.Label(statusSuffix, RichLabel, GUILayout.Width(90));
-                EditorGUILayout.EndHorizontal();
-
-                if (!_groupFoldouts[groupKey]) continue;
-
-                EditorGUI.indentLevel++;
-                for (int j = 0; j < indices.Count; j++)
-                {
-                    int idx = indices[j];
-                    int r = DrawElementRow(idx, shortNames[idx]);
-                    if (r >= 0) removeIdx = r;
-                }
-                EditorGUI.indentLevel--;
+                InspectorUiUtility.DrawStatusRow("Schema", "Unsupported", Color.red);
             }
-
-            return removeIdx;
+            InspectorUiUtility.DrawStatusRow("Validation", validationLabel, validationColor);
+            InspectorUiUtility.EndPanel();
         }
 
-        private string BuildGroupStatus(List<int> indices)
+        private void DrawSetupSection()
         {
-            if (_dirtyFlags == null || _previewing) return "";
-            int dirty = 0, missing = 0;
-            for (int j = 0; j < indices.Count; j++)
+            _showSetup = InspectorUiUtility.DrawFoldoutHeader(
+                "Locale Source",
+                _showSetup,
+                InspectorUiUtility.SetupColor,
+                _localizationSettings != null ? "Settings linked" : "Manual");
+            if (!_showSetup)
             {
-                int idx = indices[j];
-                var tgt = _elementsProp.GetArrayElementAtIndex(idx)
-                    .FindPropertyRelative("Target").objectReferenceValue;
-                if (tgt == null) missing++;
-                else if (idx < _dirtyFlags.Length && _dirtyFlags[idx]) dirty++;
-            }
-            if (missing > 0) return $"<color=#cc4444>{missing} missing</color>";
-            if (dirty > 0) return $"<color=#ddaa33>{dirty} modified</color>";
-            return "<color=#55bb66>all ok</color>";
-        }
-
-        private int DrawElementRow(int i, string label)
-        {
-            var elem = _elementsProp.GetArrayElementAtIndex(i);
-            var targetObj = elem.FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-            var textProp = elem.FindPropertyRelative("Text");
-
-            Color bgColor = Color.clear;
-            string statusIcon = "";
-            if (targetObj == null)
-            {
-                bgColor = MissingColor;
-                statusIcon = "<color=#cc4444>\u2716</color>";
-            }
-            else if (_dirtyFlags != null && i < _dirtyFlags.Length && !_previewing)
-            {
-                bgColor = _dirtyFlags[i] ? DirtyColor : CleanColor;
-                statusIcon = _dirtyFlags[i]
-                    ? "<color=#ddaa33>\u25cf</color>"
-                    : "<color=#55bb66>\u2714</color>";
+                return;
             }
 
-            var rect = EditorGUILayout.BeginHorizontal();
-            if (bgColor.a > 0) EditorGUI.DrawRect(rect, bgColor);
-
-            // Status icon (compact)
-            if (!string.IsNullOrEmpty(statusIcon))
-                GUILayout.Label(statusIcon, RichLabel, GUILayout.Width(16));
-
-            // Element name
-            EditorGUILayout.LabelField(label ?? "(null)", GUILayout.MinWidth(60));
-
-            // Font size badge
-            if (targetObj != null)
+            InspectorUiUtility.BeginPanel();
+            if (_localizationSettings != null && _settingsLocaleCodes.Length > 0)
             {
-                var tmpText = textProp.objectReferenceValue as TMP_Text;
-                if (tmpText != null)
-                    GUILayout.Label($"{tmpText.fontSize:F0}", EditorStyles.miniLabel, GUILayout.Width(28));
-            }
-
-            // Select button (icon with tooltip)
-            if (GUILayout.Button(new GUIContent("\u25ce", "Select in Hierarchy"),
-                EditorStyles.miniButton, GUILayout.Width(22)))
-            {
-                if (targetObj != null)
-                    Selection.activeGameObject = targetObj.gameObject;
-            }
-
-            // Remove button (icon with tooltip)
-            EditorGUI.BeginDisabledGroup(_previewing);
-            int result = -1;
-            if (GUILayout.Button(new GUIContent("\u2715", "Remove from tracking"),
-                EditorStyles.miniButton, GUILayout.Width(22)))
-                result = i;
-            EditorGUI.EndDisabledGroup();
-
-            EditorGUILayout.EndHorizontal();
-            return result;
-        }
-
-        // ── Locale Switch Guard ─────────────────────────────────
-        private void OnLocaleSwitch(int fromIdx, int toIdx)
-        {
-            if (_previewing) return; // Preview mode doesn't dirty
-
-            // Check if current locale has unsaved changes
-            RefreshDiff();
-            if (_dirtyCount > 0)
-            {
-                string fromCode = "";
-                if (fromIdx >= 0 && fromIdx < _snapshotsProp.arraySize)
-                    fromCode = _snapshotsProp.GetArrayElementAtIndex(fromIdx)
-                        .FindPropertyRelative("LocaleCode").stringValue;
-
-                int choice = EditorUtility.DisplayDialogComplex(
-                    "Unsaved Layout Changes",
-                    $"The '{fromCode}' layout has {_dirtyCount} unsaved change(s).\n\nSave before switching?",
-                    "Save & Switch",
-                    "Discard & Switch",
-                    "Cancel");
-
-                switch (choice)
+                int currentIndex = FindSettingsLocaleIndex(_baseLocale.stringValue);
+                int selected = EditorGUILayout.Popup(
+                    "Base Locale",
+                    currentIndex,
+                    _settingsLocaleLabels);
+                if (selected > 0 && selected != currentIndex)
                 {
-                    case 0: // Save
-                        _selectedLocaleIdx = fromIdx;
-                        CaptureSnapshot();
-                        _selectedLocaleIdx = toIdx;
-                        ApplySnapshot();
-                        break;
-                    case 1: // Discard
-                        _selectedLocaleIdx = toIdx;
-                        ApplySnapshot();
-                        break;
-                    case 2: // Cancel
-                        _selectedLocaleIdx = fromIdx;
-                        break;
+                    _baseLocale.stringValue = _settingsLocaleCodes[selected];
+                    _snapshotLabelsDirty = true;
+                }
+
+                if (selected == 0)
+                {
+                    EditorGUILayout.PropertyField(_baseLocale, new GUIContent("Custom Locale Code"));
+                }
+
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    EditorGUILayout.ObjectField(
+                        "Localization Settings",
+                        _localizationSettings,
+                        typeof(LocalizationSettings),
+                        false);
+                }
+
+                if (_localizationSettingsCount > 1)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Multiple LocalizationSettings assets were found. The lexicographically first asset path is used for authoring suggestions.",
+                        MessageType.Warning);
                 }
             }
             else
             {
-                // Apply the target locale's snapshot
-                _selectedLocaleIdx = toIdx;
-                ApplySnapshot();
+                EditorGUILayout.PropertyField(_baseLocale, new GUIContent("Base Locale"));
+                EditorGUILayout.HelpBox(
+                    "No LocalizationSettings asset was found. Locale codes can still be authored manually.",
+                    MessageType.Info);
             }
 
-            _diffStale = true;
+            EditorGUILayout.HelpBox(
+                "The prefab hierarchy is the base-locale layout. Overrides are stored only for locales that differ from it.",
+                MessageType.None);
+            InspectorUiUtility.EndPanel();
         }
 
-        // ── Preview Mode ────────────────────────────────────────
+        private void DrawTrackedElementsSection()
+        {
+            _showElements = InspectorUiUtility.DrawFoldoutHeader(
+                "Tracked Elements",
+                _showElements,
+                InspectorUiUtility.AssetColor,
+                _elements.arraySize.ToString());
+            if (!_showElements)
+            {
+                return;
+            }
+
+            InspectorUiUtility.BeginPanel();
+            EnsureElementLabels();
+
+            bool canReorder = CanReorderTrackedElements();
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                SerializedProperty element = _elements.GetArrayElementAtIndex(i);
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                EditorGUILayout.BeginHorizontal();
+                EditorGUILayout.LabelField(_elementLabels[i], EditorStyles.boldLabel);
+                using (new EditorGUI.DisabledScope(!canReorder || i == 0))
+                {
+                    if (GUILayout.Button(MoveUpContent, EditorStyles.miniButton, GUILayout.Width(44f)))
+                    {
+                        MoveTrackedElement(i, i - 1);
+                        GUIUtility.ExitGUI();
+                    }
+                }
+
+                using (new EditorGUI.DisabledScope(!canReorder || i >= _elements.arraySize - 1))
+                {
+                    if (GUILayout.Button(MoveDownContent, EditorStyles.miniButton, GUILayout.Width(50f)))
+                    {
+                        MoveTrackedElement(i, i + 1);
+                        GUIUtility.ExitGUI();
+                    }
+                }
+
+                if (GUILayout.Button(RemoveContent, EditorStyles.miniButton, GUILayout.Width(62f)))
+                {
+                    RemoveTrackedElement(i);
+                    GUIUtility.ExitGUI();
+                }
+
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.PropertyField(
+                    element.FindPropertyRelative(nameof(TrackedElement.Target)),
+                    new GUIContent("Rect Transform"));
+                EditorGUILayout.PropertyField(
+                    element.FindPropertyRelative(nameof(TrackedElement.Text)),
+                    new GUIContent("TMP Text", "Optional text metrics, alignment, and RTL direction."));
+                EditorGUILayout.PropertyField(
+                    element.FindPropertyRelative(nameof(TrackedElement.LayoutGroup)),
+                    new GUIContent("Layout Group", "Optional child alignment source."));
+                EditorGUILayout.EndVertical();
+            }
+
+            if (_elements.arraySize == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "Track an element from its component context menu or use discovery below.",
+                    MessageType.Info);
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Discover Text and Layout Groups"))
+            {
+                DiscoverElements();
+                GUIUtility.ExitGUI();
+            }
+
+            if (GUILayout.Button("Add Empty"))
+            {
+                AddEmptyTrackedElement();
+                GUIUtility.ExitGUI();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal();
+            if (GUILayout.Button("Remove Missing and Duplicate"))
+            {
+                CleanTrackedElements();
+                GUIUtility.ExitGUI();
+            }
+
+            if (GUILayout.Button("Migrate and Normalize Snapshots"))
+            {
+                NormalizeSnapshotsWithConfirmation();
+                GUIUtility.ExitGUI();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (!canReorder && _elements.arraySize > 1)
+            {
+                EditorGUILayout.HelpBox(
+                    "Reordering is disabled while a snapshot length differs from the tracked-element count. Normalize snapshots first.",
+                    MessageType.Warning);
+            }
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawLocaleSnapshotsSection()
+        {
+            _showLocales = InspectorUiUtility.DrawFoldoutHeader(
+                "Locale Overrides",
+                _showLocales,
+                InspectorUiUtility.RuntimeColor,
+                _snapshots.arraySize.ToString());
+            if (!_showLocales)
+            {
+                return;
+            }
+
+            InspectorUiUtility.BeginPanel();
+            if (_snapshots.arraySize == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "Add an override locale, apply it for editing, adjust the hierarchy, and capture the result.",
+                    MessageType.Info);
+                using (new EditorGUI.DisabledScope(_hasUnsupportedFutureSchema))
+                {
+                    DrawAddLocaleControls();
+                }
+                InspectorUiUtility.EndPanel();
+                return;
+            }
+
+            EnsureSnapshotLabels();
+            _selectedSnapshotIndex = Mathf.Clamp(
+                _selectedSnapshotIndex,
+                0,
+                _snapshots.arraySize - 1);
+
+            int selected = EditorGUILayout.Popup(
+                "Editing Locale",
+                _selectedSnapshotIndex,
+                _snapshotLabels);
+            if (selected != _selectedSnapshotIndex)
+            {
+                ExitPreview();
+                _selectedSnapshotIndex = selected;
+                RefreshDifferences();
+            }
+
+            SerializedProperty selectedSnapshot = _snapshots.GetArrayElementAtIndex(_selectedSnapshotIndex);
+            int schemaVersion = selectedSnapshot
+                .FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion))
+                .intValue;
+            string schemaLabel;
+            Color schemaColor;
+            if (schemaVersion > LocaleSnapshot.CurrentSchemaVersion)
+            {
+                schemaLabel = $"Unsupported {schemaVersion}";
+                schemaColor = Color.red;
+            }
+            else if (schemaVersion == LocaleSnapshot.CurrentSchemaVersion)
+            {
+                schemaLabel = $"Schema {schemaVersion}";
+                schemaColor = InspectorUiUtility.SuccessColor;
+            }
+            else
+            {
+                schemaLabel = "Legacy schema";
+                schemaColor = InspectorUiUtility.WarningColor;
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            InspectorUiUtility.DrawStatusBadge(schemaLabel, schemaColor, 112f);
+            GUILayout.FlexibleSpace();
+            if (GUILayout.Button(RefreshContent, EditorStyles.miniButton, GUILayout.Width(70f)))
+            {
+                RefreshValidation();
+                RefreshDifferences();
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (!_isPreviewing && _dirtyElementCount > 0)
+            {
+                EditorGUILayout.HelpBox(
+                    $"{_dirtyElementCount} tracked element(s) differ from the selected locale snapshot.",
+                    MessageType.Warning);
+            }
+
+            if (_isPreviewing)
+            {
+                EditorGUILayout.HelpBox(
+                    "Preview mode is temporary. It is restored before prefab save, play mode, domain reload, or inspector close.",
+                    MessageType.Info);
+            }
+
+            bool canApply = CanApplySelectedSnapshot(out string applyBlockedReason);
+            if (!canApply)
+            {
+                EditorGUILayout.HelpBox(applyBlockedReason, MessageType.Warning);
+            }
+
+            bool externalAnimationMode = AnimationMode.InAnimationMode() &&
+                                         s_previewOwner != this;
+            if (externalAnimationMode)
+            {
+                EditorGUILayout.HelpBox(
+                    "Another Unity animation preview is active. Stop it before previewing this locale layout.",
+                    MessageType.Warning);
+            }
+
+            using (new EditorGUI.DisabledScope(_isPreviewing || _hasUnsupportedFutureSchema))
+            {
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Capture Current Hierarchy"))
+                {
+                    CaptureSelectedSnapshot();
+                    GUIUtility.ExitGUI();
+                }
+
+                using (new EditorGUI.DisabledScope(!canApply))
+                {
+                    if (GUILayout.Button("Apply for Editing"))
+                    {
+                        ApplySelectedSnapshotForEditing();
+                        GUIUtility.ExitGUI();
+                    }
+                }
+                EditorGUILayout.EndHorizontal();
+            }
+
+            EditorGUILayout.BeginHorizontal();
+            using (new EditorGUI.DisabledScope(
+                       !_isPreviewing &&
+                       (_hasUnsupportedFutureSchema || !canApply || externalAnimationMode)))
+            {
+                if (GUILayout.Button(_isPreviewing ? "Exit Preview" : "Preview Snapshot"))
+                {
+                    if (_isPreviewing)
+                    {
+                        ExitPreview();
+                    }
+                    else
+                    {
+                        EnterPreview();
+                    }
+                    GUIUtility.ExitGUI();
+                }
+            }
+
+            using (new EditorGUI.DisabledScope(_isPreviewing || _hasUnsupportedFutureSchema))
+            {
+                if (GUILayout.Button("Remove Locale Override"))
+                {
+                    RemoveSelectedSnapshot();
+                    GUIUtility.ExitGUI();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.Space(4f);
+            using (new EditorGUI.DisabledScope(_isPreviewing || _hasUnsupportedFutureSchema))
+            {
+                DrawAddLocaleControls();
+            }
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawAddLocaleControls()
+        {
+            EditorGUILayout.BeginHorizontal();
+            _newLocaleCode = EditorGUILayout.TextField("New Locale", _newLocaleCode);
+            using (new EditorGUI.DisabledScope(string.IsNullOrWhiteSpace(_newLocaleCode)))
+            {
+                if (GUILayout.Button("Add", GUILayout.Width(52f)))
+                {
+                    AddLocale(_newLocaleCode.Trim());
+                    _newLocaleCode = string.Empty;
+                    GUIUtility.ExitGUI();
+                }
+            }
+            EditorGUILayout.EndHorizontal();
+
+            if (_localizationSettings != null && GUILayout.Button("Add from Localization Settings"))
+            {
+                ShowAddLocaleMenu();
+            }
+        }
+
+        private void DrawValidationSection()
+        {
+            _showValidation = InspectorUiUtility.DrawFoldoutHeader(
+                "Validation",
+                _showValidation,
+                _errorCount > 0
+                    ? new Color(0.72f, 0.2f, 0.2f)
+                    : InspectorUiUtility.WarningColor,
+                _totalIssueCount == 0 ? "Ready" : _totalIssueCount.ToString());
+            if (!_showValidation)
+            {
+                return;
+            }
+
+            InspectorUiUtility.BeginPanel();
+            if (_totalIssueCount == 0)
+            {
+                EditorGUILayout.HelpBox(
+                    "No authoring errors or warnings were detected.",
+                    MessageType.Info);
+            }
+            else
+            {
+                for (int i = 0; i < _issues.Count; i++)
+                {
+                    string issue = _issues[i];
+                    MessageType type = issue.StartsWith("Error:", StringComparison.Ordinal)
+                        ? MessageType.Error
+                        : MessageType.Warning;
+                    EditorGUILayout.HelpBox(issue, type);
+                }
+
+                if (_totalIssueCount > _issues.Count)
+                {
+                    EditorGUILayout.HelpBox(
+                        $"{_totalIssueCount - _issues.Count} additional issue(s) are not displayed.",
+                        MessageType.Warning);
+                }
+            }
+
+            if (GUILayout.Button("Run Validation"))
+            {
+                RefreshValidation();
+                RefreshDifferences();
+            }
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DiscoverElements()
+        {
+            if (!CanModifyAuthoring("discover tracked elements"))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Discover Locale Layout Elements");
+
+            List<TMP_Text> texts = new List<TMP_Text>(16);
+            List<LayoutGroup> layoutGroups = new List<LayoutGroup>(8);
+            layout.GetComponentsInChildren(true, texts);
+            layout.GetComponentsInChildren(true, layoutGroups);
+
+            for (int i = 0; i < texts.Count; i++)
+            {
+                TMP_Text text = texts[i];
+                AppendTrackedElement(
+                    text.rectTransform,
+                    text,
+                    text.GetComponent<LayoutGroup>());
+            }
+
+            for (int i = 0; i < layoutGroups.Count; i++)
+            {
+                LayoutGroup group = layoutGroups[i];
+                AppendTrackedElement(
+                    group.transform as RectTransform,
+                    group.GetComponent<TMP_Text>(),
+                    group);
+            }
+
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void AppendTrackedElement(
+            RectTransform rect,
+            TMP_Text text,
+            LayoutGroup layoutGroup)
+        {
+            if (rect == null || ContainsTrackedTarget(rect))
+            {
+                return;
+            }
+
+            int index = _elements.arraySize;
+            _elements.InsertArrayElementAtIndex(index);
+            SerializedProperty element = _elements.GetArrayElementAtIndex(index);
+            ClearTrackedElement(element);
+            element.FindPropertyRelative(nameof(TrackedElement.Target)).objectReferenceValue = rect;
+            element.FindPropertyRelative(nameof(TrackedElement.Text)).objectReferenceValue = text;
+            element.FindPropertyRelative(nameof(TrackedElement.LayoutGroup)).objectReferenceValue = layoutGroup;
+        }
+
+        private void AddEmptyTrackedElement()
+        {
+            if (!CanModifyAuthoring("add a tracked element"))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Add Locale Layout Element");
+            int index = _elements.arraySize;
+            _elements.InsertArrayElementAtIndex(index);
+            ClearTrackedElement(_elements.GetArrayElementAtIndex(index));
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void RemoveTrackedElement(int index)
+        {
+            if (!CanModifyAuthoring("remove a tracked element"))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Remove Locale Layout Element");
+
+            for (int snapshotIndex = 0; snapshotIndex < _snapshots.arraySize; snapshotIndex++)
+            {
+                SerializedProperty snapshotElements = _snapshots
+                    .GetArrayElementAtIndex(snapshotIndex)
+                    .FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+                if (index < snapshotElements.arraySize)
+                {
+                    snapshotElements.DeleteArrayElementAtIndex(index);
+                }
+            }
+
+            _elements.DeleteArrayElementAtIndex(index);
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void MoveTrackedElement(int sourceIndex, int destinationIndex)
+        {
+            if (!CanModifyAuthoring("reorder tracked elements"))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Reorder Locale Layout Element");
+            _elements.MoveArrayElement(sourceIndex, destinationIndex);
+            for (int snapshotIndex = 0; snapshotIndex < _snapshots.arraySize; snapshotIndex++)
+            {
+                SerializedProperty snapshotElements = _snapshots
+                    .GetArrayElementAtIndex(snapshotIndex)
+                    .FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+                snapshotElements.MoveArrayElement(sourceIndex, destinationIndex);
+            }
+
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void CleanTrackedElements()
+        {
+            if (!CanModifyAuthoring("clean tracked elements"))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Clean Locale Layout Elements");
+            HashSet<RectTransform> seen = new HashSet<RectTransform>();
+            for (int i = _elements.arraySize - 1; i >= 0; i--)
+            {
+                RectTransform rect = _elements
+                    .GetArrayElementAtIndex(i)
+                    .FindPropertyRelative(nameof(TrackedElement.Target))
+                    .objectReferenceValue as RectTransform;
+                if (rect == null || !seen.Add(rect))
+                {
+                    for (int snapshotIndex = 0; snapshotIndex < _snapshots.arraySize; snapshotIndex++)
+                    {
+                        SerializedProperty snapshotElements = _snapshots
+                            .GetArrayElementAtIndex(snapshotIndex)
+                            .FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+                        if (i < snapshotElements.arraySize)
+                        {
+                            snapshotElements.DeleteArrayElementAtIndex(i);
+                        }
+                    }
+
+                    _elements.DeleteArrayElementAtIndex(i);
+                }
+            }
+
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void NormalizeSnapshotsWithConfirmation()
+        {
+            if (!CanModifyAuthoring("migrate snapshots"))
+            {
+                return;
+            }
+
+            bool confirmed = EditorUtility.DisplayDialog(
+                "Migrate Locale Layout Snapshots",
+                "Every snapshot will be resized to the tracked-element count. Legacy snapshots will " +
+                "preserve their original fields and use the current hierarchy for newly supported anchor, " +
+                "pivot, scale, alignment, and RTL values. Review each locale after migration.",
+                "Migrate and Normalize",
+                "Cancel");
+            if (!confirmed)
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Migrate Locale Layout Snapshots");
+
+            for (int snapshotIndex = 0; snapshotIndex < _snapshots.arraySize; snapshotIndex++)
+            {
+                SerializedProperty localeSnapshot = _snapshots.GetArrayElementAtIndex(snapshotIndex);
+                SerializedProperty snapshotElements = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+                int oldCount = snapshotElements.arraySize;
+                int oldSchema = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion)).intValue;
+                ElementSnapshot[] oldValues = new ElementSnapshot[oldCount];
+                for (int i = 0; i < oldCount; i++)
+                {
+                    oldValues[i] = ReadSnapshot(snapshotElements.GetArrayElementAtIndex(i));
+                }
+
+                snapshotElements.arraySize = _elements.arraySize;
+                for (int i = 0; i < _elements.arraySize; i++)
+                {
+                    ElementSnapshot value = ElementSnapshot.Capture(ReadTrackedElement(i));
+                    if (i < oldValues.Length)
+                    {
+                        if (oldSchema < LocaleSnapshot.CurrentSchemaVersion)
+                        {
+                            CopyLegacyFields(ref value, oldValues[i]);
+                        }
+                        else
+                        {
+                            value = oldValues[i];
+                        }
+                    }
+                    else if (oldSchema >= LocaleSnapshot.CurrentSchemaVersion)
+                    {
+                        value = default;
+                    }
+
+                    WriteSnapshot(snapshotElements.GetArrayElementAtIndex(i), value);
+                }
+
+                localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion)).intValue =
+                    LocaleSnapshot.CurrentSchemaVersion;
+            }
+
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void CaptureSelectedSnapshot()
+        {
+            if (_snapshots.arraySize == 0 || !CanModifyAuthoring("capture a snapshot"))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Capture Locale Layout Snapshot");
+            SerializedProperty localeSnapshot = _snapshots.GetArrayElementAtIndex(_selectedSnapshotIndex);
+            SerializedProperty snapshotElements = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+            snapshotElements.arraySize = _elements.arraySize;
+
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                WriteSnapshot(
+                    snapshotElements.GetArrayElementAtIndex(i),
+                    ElementSnapshot.Capture(ReadTrackedElement(i)));
+            }
+
+            localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion)).intValue =
+                LocaleSnapshot.CurrentSchemaVersion;
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+            RefreshValidation();
+            RefreshDifferences();
+        }
+
+        private void ApplySelectedSnapshotForEditing()
+        {
+            if (_snapshots.arraySize == 0 || !CanModifyAuthoring("apply a snapshot"))
+            {
+                return;
+            }
+
+            if (!CanApplySelectedSnapshot(out string reason))
+            {
+                Debug.LogWarning($"[UI Locale Layout] {reason}", target);
+                return;
+            }
+
+            ExitPreview();
+            RecordTrackedObjects("Apply Locale Layout Snapshot");
+            ApplySelectedSnapshotToHierarchy();
+            RecordTrackedPrefabOverrides();
+            MarkSceneDirty(((UILocaleLayout)target).gameObject);
+            RefreshDifferences();
+        }
+
         private void EnterPreview()
         {
-            if (_previewing) return;
-            _previewing = true;
-
-            // Backup current scene state
-            int count = _elementsProp.arraySize;
-            _previewBackup = new ElementSnapshot[count];
-            for (int i = 0; i < count; i++)
+            if (_isPreviewing ||
+                _snapshots.arraySize == 0 ||
+                !CanModifyAuthoring("preview a snapshot"))
             {
-                var elem = _elementsProp.GetArrayElementAtIndex(i);
-                var rt = elem.FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                var tmp = elem.FindPropertyRelative("Text").objectReferenceValue as TMP_Text;
-                _previewBackup[i] = ElementSnapshot.Capture(rt, tmp);
+                return;
+            }
+
+            if (!CanApplySelectedSnapshot(out string reason))
+            {
+                Debug.LogWarning($"[UI Locale Layout] {reason}", target);
+                return;
+            }
+
+            if (AnimationMode.InAnimationMode() || s_previewOwner != null)
+            {
+                Debug.LogWarning(
+                    "[UI Locale Layout] Another Unity animation preview is active. Stop it before previewing this locale layout.",
+                    target);
+                return;
+            }
+
+            try
+            {
+                AnimationMode.StartAnimationMode();
+                s_previewOwner = this;
+                RegisterPreviewModifications();
+                _isPreviewing = true;
+                ApplySelectedSnapshotToHierarchy();
+                SceneView.RepaintAll();
+            }
+            catch (Exception exception)
+            {
+                if (s_previewOwner == this)
+                {
+                    s_previewOwner = null;
+                    if (AnimationMode.InAnimationMode())
+                    {
+                        AnimationMode.StopAnimationMode();
+                    }
+                }
+
+                _isPreviewing = false;
+                Debug.LogException(exception, target);
             }
         }
 
         private void ExitPreview()
         {
-            if (!_previewing) return;
-            _previewing = false;
-
-            // Restore backed-up state
-            if (_previewBackup != null)
+            bool ownsAnimationMode = s_previewOwner == this;
+            if (!_isPreviewing && !ownsAnimationMode)
             {
-                int count = Math.Min(_elementsProp.arraySize, _previewBackup.Length);
-                for (int i = 0; i < count; i++)
-                {
-                    var elem = _elementsProp.GetArrayElementAtIndex(i);
-                    var rt = elem.FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                    var tmp = elem.FindPropertyRelative("Text").objectReferenceValue as TMP_Text;
-                    _previewBackup[i].ApplyTo(rt, tmp);
-                    if (rt != null) EditorUtility.SetDirty(rt);
-                    if (tmp != null) EditorUtility.SetDirty(tmp);
-                }
-                _previewBackup = null;
-            }
-            _diffStale = true;
-        }
-
-        private void PreviewLocale(int snapIdx)
-        {
-            if (!_previewing || snapIdx < 0 || snapIdx >= _snapshotsProp.arraySize) return;
-
-            var elemsProp = _snapshotsProp.GetArrayElementAtIndex(snapIdx).FindPropertyRelative("Elements");
-            int count = Math.Min(_elementsProp.arraySize, elemsProp.arraySize);
-            for (int i = 0; i < count; i++)
-            {
-                var elem = _elementsProp.GetArrayElementAtIndex(i);
-                var rt = elem.FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                var tmp = elem.FindPropertyRelative("Text").objectReferenceValue as TMP_Text;
-                var snap = ReadSnapshot(elemsProp.GetArrayElementAtIndex(i));
-                snap.ApplyTo(rt, tmp);
-            }
-            SceneView.RepaintAll();
-        }
-
-        private void PreviewBase()
-        {
-            if (!_previewing || _previewBackup == null) return;
-
-            int count = Math.Min(_elementsProp.arraySize, _previewBackup.Length);
-            for (int i = 0; i < count; i++)
-            {
-                var elem = _elementsProp.GetArrayElementAtIndex(i);
-                var rt = elem.FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                var tmp = elem.FindPropertyRelative("Text").objectReferenceValue as TMP_Text;
-                _previewBackup[i].ApplyTo(rt, tmp);
-            }
-            SceneView.RepaintAll();
-        }
-
-        // ── Scan ────────────────────────────────────────────────
-        private void ScanHierarchy()
-        {
-            var layout = (UILocaleLayout)target;
-            Undo.RecordObject(layout, "Scan Hierarchy");
-
-            var existing = new HashSet<RectTransform>();
-            for (int i = 0; i < _elementsProp.arraySize; i++)
-            {
-                var obj = _elementsProp.GetArrayElementAtIndex(i)
-                    .FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                if (obj != null) existing.Add(obj);
-            }
-
-            int added = 0;
-
-            layout.GetComponentsInChildren(true, SharedTextCache);
-            for (int i = 0; i < SharedTextCache.Count; i++)
-            {
-                var tmp = SharedTextCache[i];
-                var rt = tmp.GetComponent<RectTransform>();
-                if (rt == null || existing.Contains(rt)) continue;
-
-                int idx = _elementsProp.arraySize;
-                _elementsProp.InsertArrayElementAtIndex(idx);
-                var entry = _elementsProp.GetArrayElementAtIndex(idx);
-                entry.FindPropertyRelative("Target").objectReferenceValue = rt;
-                entry.FindPropertyRelative("Text").objectReferenceValue = tmp;
-                existing.Add(rt);
-                added++;
-            }
-            SharedTextCache.Clear();
-
-            layout.GetComponentsInChildren(true, SharedImageCache);
-            for (int i = 0; i < SharedImageCache.Count; i++)
-            {
-                var rt = SharedImageCache[i].GetComponent<RectTransform>();
-                if (rt == null || existing.Contains(rt)) continue;
-
-                int idx = _elementsProp.arraySize;
-                _elementsProp.InsertArrayElementAtIndex(idx);
-                var entry = _elementsProp.GetArrayElementAtIndex(idx);
-                entry.FindPropertyRelative("Target").objectReferenceValue = rt;
-                entry.FindPropertyRelative("Text").objectReferenceValue = null;
-                existing.Add(rt);
-                added++;
-            }
-            SharedImageCache.Clear();
-
-            serializedObject.ApplyModifiedProperties();
-            EditorUtility.SetDirty(layout);
-
-            Debug.Log(added > 0
-                ? $"[UILocaleLayout] Scanned: added {added} element(s), total {_elementsProp.arraySize}."
-                : $"[UILocaleLayout] Scanned: no new elements. Total {_elementsProp.arraySize}.");
-        }
-
-        // ── Capture ─────────────────────────────────────────────
-        private void CaptureSnapshot()
-        {
-            if (_snapshotsProp.arraySize == 0 || _selectedLocaleIdx >= _snapshotsProp.arraySize) return;
-
-            var layout = (UILocaleLayout)target;
-            Undo.RecordObject(layout, "Capture Locale Snapshot");
-
-            var snapProp = _snapshotsProp.GetArrayElementAtIndex(_selectedLocaleIdx);
-            var elemsProp = snapProp.FindPropertyRelative("Elements");
-
-            int count = _elementsProp.arraySize;
-            elemsProp.arraySize = count;
-
-            for (int i = 0; i < count; i++)
-            {
-                var srcElem = _elementsProp.GetArrayElementAtIndex(i);
-                var rt = srcElem.FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                var tmp = srcElem.FindPropertyRelative("Text").objectReferenceValue as TMP_Text;
-
-                var snap = ElementSnapshot.Capture(rt, tmp);
-                WriteSnapshot(elemsProp.GetArrayElementAtIndex(i), snap);
-            }
-
-            serializedObject.ApplyModifiedProperties();
-            EditorUtility.SetDirty(layout);
-
-            string locale = GetSelectedLocaleCode();
-            Debug.Log($"[UILocaleLayout] Captured {count} elements for locale '{locale}'.");
-        }
-
-        // ── Apply / Revert ──────────────────────────────────────
-        private void ApplySnapshot()
-        {
-            if (_snapshotsProp.arraySize == 0 || _selectedLocaleIdx >= _snapshotsProp.arraySize) return;
-
-            var snapProp = _snapshotsProp.GetArrayElementAtIndex(_selectedLocaleIdx);
-            var elemsProp = snapProp.FindPropertyRelative("Elements");
-            int count = Math.Min(_elementsProp.arraySize, elemsProp.arraySize);
-
-            for (int i = 0; i < count; i++)
-            {
-                var rt = _elementsProp.GetArrayElementAtIndex(i)
-                    .FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                var tmp = _elementsProp.GetArrayElementAtIndex(i)
-                    .FindPropertyRelative("Text").objectReferenceValue as TMP_Text;
-
-                if (rt != null) Undo.RecordObject(rt, "Apply Locale Snapshot");
-                if (tmp != null) Undo.RecordObject(tmp, "Apply Locale Snapshot");
-
-                var snap = ReadSnapshot(elemsProp.GetArrayElementAtIndex(i));
-                snap.ApplyTo(rt, tmp);
-
-                if (rt != null) EditorUtility.SetDirty(rt);
-                if (tmp != null) EditorUtility.SetDirty(tmp);
-            }
-
-            string locale = GetSelectedLocaleCode();
-            Debug.Log($"[UILocaleLayout] Applied '{locale}' snapshot to {count} elements.");
-        }
-
-        // ── Diff ────────────────────────────────────────────────
-        private void RefreshDiff()
-        {
-            _diffStale = false;
-            _dirtyCount = 0;
-            int count = _elementsProp.arraySize;
-
-            if (_dirtyFlags == null || _dirtyFlags.Length != count)
-                _dirtyFlags = new bool[count];
-            else
-                Array.Clear(_dirtyFlags, 0, _dirtyFlags.Length);
-
-            if (_snapshotsProp.arraySize == 0 || _selectedLocaleIdx >= _snapshotsProp.arraySize) return;
-
-            var snapProp = _snapshotsProp.GetArrayElementAtIndex(_selectedLocaleIdx);
-            var elemsProp = snapProp.FindPropertyRelative("Elements");
-            int snapCount = elemsProp.arraySize;
-
-            for (int i = 0; i < count; i++)
-            {
-                var srcElem = _elementsProp.GetArrayElementAtIndex(i);
-                var rt = srcElem.FindPropertyRelative("Target").objectReferenceValue as RectTransform;
-                var tmp = srcElem.FindPropertyRelative("Text").objectReferenceValue as TMP_Text;
-
-                if (rt == null || i >= snapCount)
-                {
-                    _dirtyFlags[i] = true;
-                    _dirtyCount++;
-                    continue;
-                }
-
-                var live = ElementSnapshot.Capture(rt, tmp);
-                var saved = ReadSnapshot(elemsProp.GetArrayElementAtIndex(i));
-
-                if (!live.ApproximatelyEquals(saved))
-                {
-                    _dirtyFlags[i] = true;
-                    _dirtyCount++;
-                }
-            }
-        }
-
-        // ── Locale Discovery ────────────────────────────────────
-        private LocalizationSettings FindLocalizationSettings()
-        {
-            if (_settingsSearched) return _cachedSettings;
-            _settingsSearched = true;
-
-            string[] guids = AssetDatabase.FindAssets("t:LocalizationSettings");
-            if (guids.Length > 0)
-            {
-                string path = AssetDatabase.GUIDToAssetPath(guids[0]);
-                _cachedSettings = AssetDatabase.LoadAssetAtPath<LocalizationSettings>(path);
-            }
-            return _cachedSettings;
-        }
-
-        private void RebuildAddableLocalesIfNeeded()
-        {
-            if (_addableLocaleCodes != null) return;
-
-            var settings = FindLocalizationSettings();
-            if (settings == null || settings.AvailableLocales.Count == 0)
-            {
-                _addableLocaleCodes = Array.Empty<string>();
-                _addableLocaleLabels = Array.Empty<string>();
                 return;
             }
 
-            string baseLoc = _baseLocaleProp.stringValue;
-            var codes = new List<string>();
-            var labels = new List<string>();
-
-            for (int i = 0; i < settings.AvailableLocales.Count; i++)
+            _isPreviewing = false;
+            if (ownsAnimationMode)
             {
-                var locale = settings.AvailableLocales[i];
-                if (locale == null) continue;
-
-                string code = locale.Id.ToString();
-                if (string.Equals(code, baseLoc, StringComparison.OrdinalIgnoreCase)) continue;
-                if (HasLocale(code)) continue;
-
-                codes.Add(code);
-                labels.Add(FormatLocaleLabel(locale));
+                s_previewOwner = null;
+                if (AnimationMode.InAnimationMode())
+                {
+                    AnimationMode.StopAnimationMode();
+                }
             }
 
-            _addableLocaleCodes = codes.ToArray();
-            _addableLocaleLabels = labels.ToArray();
-            _addLocalePopupIdx = 0;
+            SceneView.RepaintAll();
+            RefreshDifferences();
         }
 
-        private void InvalidateAddableLocales()
+        private void ApplySelectedSnapshotToHierarchy()
         {
-            _addableLocaleCodes = null;
-            _addableLocaleLabels = null;
+            SerializedProperty localeSnapshot = _snapshots.GetArrayElementAtIndex(_selectedSnapshotIndex);
+            SerializedProperty snapshotElements = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+            int schemaVersion = localeSnapshot
+                .FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion))
+                .intValue;
+            if (schemaVersion != LocaleSnapshot.CurrentSchemaVersion ||
+                snapshotElements.arraySize != _elements.arraySize)
+            {
+                return;
+            }
+
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                TrackedElement tracked = ReadTrackedElement(i);
+                ElementSnapshot snapshot = ReadSnapshot(snapshotElements.GetArrayElementAtIndex(i));
+                if (snapshot.HasValue && IsCurrentSnapshotValueValid(in snapshot, in tracked))
+                {
+                    snapshot.ApplyTo(in tracked);
+                }
+            }
+        }
+
+        private void RegisterPreviewModifications()
+        {
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Transform root = layout.transform;
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                TrackedElement tracked = ReadTrackedElement(i);
+                RectTransform rect = tracked.Target;
+                RegisterPreviewModification(root, rect, "m_AnchorMin.x", rect.anchorMin.x);
+                RegisterPreviewModification(root, rect, "m_AnchorMin.y", rect.anchorMin.y);
+                RegisterPreviewModification(root, rect, "m_AnchorMax.x", rect.anchorMax.x);
+                RegisterPreviewModification(root, rect, "m_AnchorMax.y", rect.anchorMax.y);
+                RegisterPreviewModification(root, rect, "m_Pivot.x", rect.pivot.x);
+                RegisterPreviewModification(root, rect, "m_Pivot.y", rect.pivot.y);
+                RegisterPreviewModification(root, rect, "m_AnchoredPosition.x", rect.anchoredPosition.x);
+                RegisterPreviewModification(root, rect, "m_AnchoredPosition.y", rect.anchoredPosition.y);
+                RegisterPreviewModification(root, rect, "m_SizeDelta.x", rect.sizeDelta.x);
+                RegisterPreviewModification(root, rect, "m_SizeDelta.y", rect.sizeDelta.y);
+                RegisterPreviewModification(root, rect, "m_LocalScale.x", rect.localScale.x);
+                RegisterPreviewModification(root, rect, "m_LocalScale.y", rect.localScale.y);
+                RegisterPreviewModification(root, rect, "m_LocalScale.z", rect.localScale.z);
+
+                TMP_Text text = tracked.Text;
+                if (text != null)
+                {
+                    RegisterPreviewModification(root, text, "m_fontSize", text.fontSize);
+                    RegisterPreviewModification(root, text, "m_lineSpacing", text.lineSpacing);
+                    RegisterPreviewModification(root, text, "m_characterSpacing", text.characterSpacing);
+                    RegisterPreviewModification(root, text, "m_textAlignment", (int)text.alignment);
+                    RegisterPreviewModification(root, text, "m_isRightToLeft", text.isRightToLeftText);
+                }
+
+                LayoutGroup layoutGroup = tracked.LayoutGroup;
+                if (layoutGroup != null)
+                {
+                    RegisterPreviewModification(root, layoutGroup, "m_ChildAlignment", (int)layoutGroup.childAlignment);
+                }
+            }
+        }
+
+        private static void RegisterPreviewModification(
+            Transform root,
+            Component component,
+            string propertyPath,
+            float value)
+        {
+            RegisterPreviewModification(
+                root,
+                component,
+                propertyPath,
+                value.ToString("R", CultureInfo.InvariantCulture));
+        }
+
+        private static void RegisterPreviewModification(
+            Transform root,
+            Component component,
+            string propertyPath,
+            int value)
+        {
+            RegisterPreviewModification(
+                root,
+                component,
+                propertyPath,
+                value.ToString(CultureInfo.InvariantCulture));
+        }
+
+        private static void RegisterPreviewModification(
+            Transform root,
+            Component component,
+            string propertyPath,
+            bool value)
+        {
+            RegisterPreviewModification(root, component, propertyPath, value ? "1" : "0");
+        }
+
+        private static void RegisterPreviewModification(
+            Transform root,
+            Component component,
+            string propertyPath,
+            string value)
+        {
+            string transformPath = AnimationUtility.CalculateTransformPath(component.transform, root);
+            EditorCurveBinding binding = EditorCurveBinding.FloatCurve(
+                transformPath,
+                component.GetType(),
+                propertyPath);
+            PropertyModification modification = new PropertyModification
+            {
+                target = component,
+                propertyPath = propertyPath,
+                value = value
+            };
+            AnimationMode.AddPropertyModification(binding, modification, false);
+        }
+
+        private void SynchronizePreviewState()
+        {
+            if (!_isPreviewing)
+            {
+                if (s_previewOwner == this && !AnimationMode.InAnimationMode())
+                {
+                    s_previewOwner = null;
+                }
+                return;
+            }
+
+            if (s_previewOwner == this && AnimationMode.InAnimationMode())
+            {
+                return;
+            }
+
+            if (s_previewOwner == this)
+            {
+                s_previewOwner = null;
+            }
+            _isPreviewing = false;
+            RefreshDifferences();
+        }
+
+        private bool CanApplySelectedSnapshot(out string reason)
+        {
+            reason = string.Empty;
+            if (_snapshots.arraySize == 0)
+            {
+                reason = "No locale snapshot is selected.";
+                return false;
+            }
+
+            if (HasUnsupportedFutureSchema(_snapshots))
+            {
+                reason = "A future snapshot schema is present; apply and preview are disabled.";
+                return false;
+            }
+
+            int selectedIndex = Mathf.Clamp(_selectedSnapshotIndex, 0, _snapshots.arraySize - 1);
+            _selectedSnapshotIndex = selectedIndex;
+            SerializedProperty localeSnapshot = _snapshots.GetArrayElementAtIndex(selectedIndex);
+            int schemaVersion = localeSnapshot
+                .FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion))
+                .intValue;
+            if (schemaVersion != LocaleSnapshot.CurrentSchemaVersion)
+            {
+                reason = "Apply and preview require the current snapshot schema. Run migration and review the locale first.";
+                return false;
+            }
+
+            SerializedProperty snapshotElements = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+            if (snapshotElements.arraySize != _elements.arraySize)
+            {
+                reason = "Apply and preview require one snapshot value for every tracked element.";
+                return false;
+            }
+
+            UILocaleLayout layout = target as UILocaleLayout;
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                TrackedElement tracked = ReadTrackedElement(i);
+                if (tracked.Target == null ||
+                    layout == null ||
+                    (tracked.Target != layout.transform && !tracked.Target.IsChildOf(layout.transform)))
+                {
+                    reason = $"Tracked element {i} must reference a RectTransform inside this layout.";
+                    return false;
+                }
+
+                if ((tracked.Text != null && tracked.Text.rectTransform != tracked.Target) ||
+                    (tracked.LayoutGroup != null && tracked.LayoutGroup.transform != tracked.Target))
+                {
+                    reason = $"Tracked element {i} contains a component reference from a different RectTransform.";
+                    return false;
+                }
+
+                ElementSnapshot value = ReadSnapshot(snapshotElements.GetArrayElementAtIndex(i));
+                if (!value.HasValue || !IsCurrentSnapshotValueValid(in value, in tracked))
+                {
+                    reason = $"Tracked element {i} has an incomplete, non-finite, or invalid snapshot value.";
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private bool CanModifyAuthoring(string action)
+        {
+            if (!HasUnsupportedFutureSchema(_snapshots))
+            {
+                return true;
+            }
+
+            _hasUnsupportedFutureSchema = true;
+            _validationDirty = true;
+            Debug.LogWarning(
+                $"[UI Locale Layout] Cannot {action}: the layout contains an unsupported future snapshot schema.",
+                target);
+            return false;
+        }
+
+        internal static bool HasUnsupportedFutureSchema(SerializedProperty snapshots)
+        {
+            if (snapshots == null || !snapshots.isArray)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < snapshots.arraySize; i++)
+            {
+                int schemaVersion = snapshots
+                    .GetArrayElementAtIndex(i)
+                    .FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion))
+                    .intValue;
+                if (schemaVersion > LocaleSnapshot.CurrentSchemaVersion)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool AnyTargetHasUnsupportedFutureSchema()
+        {
+            for (int i = 0; i < targets.Length; i++)
+            {
+                UnityEngine.Object selectedTarget = targets[i];
+                if (selectedTarget == null)
+                {
+                    continue;
+                }
+
+                SerializedObject selectedObject = new SerializedObject(selectedTarget);
+                if (HasUnsupportedFutureSchema(selectedObject.FindProperty("_snapshots")))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void AddLocale(string localeCode)
+        {
+            if (!CanModifyAuthoring("add a locale override") ||
+                string.IsNullOrWhiteSpace(localeCode) ||
+                string.Equals(localeCode, _baseLocale.stringValue, StringComparison.OrdinalIgnoreCase) ||
+                HasLocaleSnapshot(localeCode))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Add Locale Layout Override");
+            int index = _snapshots.arraySize;
+            _snapshots.InsertArrayElementAtIndex(index);
+            SerializedProperty localeSnapshot = _snapshots.GetArrayElementAtIndex(index);
+            localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.LocaleCode)).stringValue = localeCode;
+            localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion)).intValue =
+                LocaleSnapshot.CurrentSchemaVersion;
+
+            SerializedProperty snapshotElements = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+            snapshotElements.arraySize = _elements.arraySize;
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                WriteSnapshot(
+                    snapshotElements.GetArrayElementAtIndex(i),
+                    ElementSnapshot.Capture(ReadTrackedElement(i)));
+            }
+
+            _selectedSnapshotIndex = index;
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void RemoveSelectedSnapshot()
+        {
+            if (_snapshots.arraySize == 0 || !CanModifyAuthoring("remove a locale override"))
+            {
+                return;
+            }
+
+            string localeCode = _snapshots
+                .GetArrayElementAtIndex(_selectedSnapshotIndex)
+                .FindPropertyRelative(nameof(LocaleSnapshot.LocaleCode))
+                .stringValue;
+            if (!EditorUtility.DisplayDialog(
+                    "Remove Locale Override",
+                    $"Remove the '{localeCode}' layout override?",
+                    "Remove",
+                    "Cancel"))
+            {
+                return;
+            }
+
+            ExitPreview();
+            UILocaleLayout layout = (UILocaleLayout)target;
+            Undo.RecordObject(layout, "Remove Locale Layout Override");
+            _snapshots.DeleteArrayElementAtIndex(_selectedSnapshotIndex);
+            _selectedSnapshotIndex = Mathf.Clamp(
+                _selectedSnapshotIndex,
+                0,
+                Mathf.Max(0, _snapshots.arraySize - 1));
+            serializedObject.ApplyModifiedProperties();
+            PrefabUtility.RecordPrefabInstancePropertyModifications(layout);
+            EditorUtility.SetDirty(layout);
+            MarkSceneDirty(layout.gameObject);
+            InvalidateInspection();
+        }
+
+        private void ShowAddLocaleMenu()
+        {
+            GenericMenu menu = new GenericMenu();
+            bool hasItem = false;
+            IReadOnlyList<Locale> locales = _localizationSettings.AvailableLocales;
+            for (int i = 0; i < locales.Count; i++)
+            {
+                Locale locale = locales[i];
+                if (locale == null)
+                {
+                    continue;
+                }
+
+                string code = locale.Id.Code;
+                if (string.IsNullOrEmpty(code) ||
+                    string.Equals(code, _baseLocale.stringValue, StringComparison.OrdinalIgnoreCase) ||
+                    HasLocaleSnapshot(code))
+                {
+                    continue;
+                }
+
+                string capturedCode = code;
+                menu.AddItem(
+                    new GUIContent(FormatLocaleLabel(locale)),
+                    false,
+                    () => AddLocale(capturedCode));
+                hasItem = true;
+            }
+
+            if (!hasItem)
+            {
+                menu.AddDisabledItem(new GUIContent("No available locale"));
+            }
+
+            menu.ShowAsContext();
+        }
+
+        private void RefreshDifferences()
+        {
+            _dirtyElementCount = 0;
+            if (_isPreviewing || _snapshots.arraySize == 0 || target == null)
+            {
+                return;
+            }
+
+            _selectedSnapshotIndex = Mathf.Clamp(
+                _selectedSnapshotIndex,
+                0,
+                _snapshots.arraySize - 1);
+            SerializedProperty localeSnapshot = _snapshots.GetArrayElementAtIndex(_selectedSnapshotIndex);
+            SerializedProperty snapshotElements = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+            bool legacy = localeSnapshot
+                .FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion))
+                .intValue < LocaleSnapshot.CurrentSchemaVersion;
+
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                if (i >= snapshotElements.arraySize)
+                {
+                    _dirtyElementCount++;
+                    continue;
+                }
+
+                ElementSnapshot saved = ReadSnapshot(snapshotElements.GetArrayElementAtIndex(i));
+                ElementSnapshot current = ElementSnapshot.Capture(ReadTrackedElement(i));
+                if (!saved.ApproximatelyEquals(current, legacy))
+                {
+                    _dirtyElementCount++;
+                }
+            }
+        }
+
+        private void RefreshValidation()
+        {
+            _issues.Clear();
+            _errorCount = 0;
+            _warningCount = 0;
+            _totalIssueCount = 0;
+            _hasUnsupportedFutureSchema = false;
+            _validationDirty = false;
+
+            UILocaleLayout layout = target as UILocaleLayout;
+            if (layout == null)
+            {
+                AddIssue(true, "The UILocaleLayout target is missing.");
+                return;
+            }
+
+            string baseCode = _baseLocale.stringValue;
+            if (string.IsNullOrWhiteSpace(baseCode))
+            {
+                AddIssue(true, "Base Locale is required.");
+            }
+            else if (!LooksLikeLocaleCode(baseCode))
+            {
+                AddIssue(false, $"Base locale '{baseCode}' is not a well-formed BCP 47-style code.");
+            }
+
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                SerializedProperty element = _elements.GetArrayElementAtIndex(i);
+                RectTransform rect = element
+                    .FindPropertyRelative(nameof(TrackedElement.Target))
+                    .objectReferenceValue as RectTransform;
+                TMP_Text text = element
+                    .FindPropertyRelative(nameof(TrackedElement.Text))
+                    .objectReferenceValue as TMP_Text;
+                LayoutGroup layoutGroup = element
+                    .FindPropertyRelative(nameof(TrackedElement.LayoutGroup))
+                    .objectReferenceValue as LayoutGroup;
+
+                if (rect == null)
+                {
+                    AddIssue(true, $"Tracked element {i} has no RectTransform.");
+                    continue;
+                }
+
+                if (rect != layout.transform && !rect.IsChildOf(layout.transform))
+                {
+                    AddIssue(true, $"Tracked element {i} is outside the UILocaleLayout hierarchy.");
+                }
+
+                for (int previous = 0; previous < i; previous++)
+                {
+                    RectTransform previousRect = _elements
+                        .GetArrayElementAtIndex(previous)
+                        .FindPropertyRelative(nameof(TrackedElement.Target))
+                        .objectReferenceValue as RectTransform;
+                    if (previousRect == rect)
+                    {
+                        AddIssue(true, $"Tracked element {i} duplicates element {previous}.");
+                        break;
+                    }
+                }
+
+                if (text != null && text.rectTransform != rect)
+                {
+                    AddIssue(true, $"Tracked element {i} references TMP text on a different RectTransform.");
+                }
+
+                if (layoutGroup != null && layoutGroup.transform != rect)
+                {
+                    AddIssue(true, $"Tracked element {i} references a LayoutGroup on a different RectTransform.");
+                }
+
+                Transform parent = rect.parent;
+                LayoutGroup parentLayoutGroup = parent != null
+                    ? parent.GetComponentInParent<LayoutGroup>(true)
+                    : null;
+                if (parentLayoutGroup != null)
+                {
+                    AddIssue(
+                        false,
+                        $"Tracked element {i} is controlled by parent LayoutGroup '{parentLayoutGroup.name}'. " +
+                        "That layout pass can overwrite locale geometry.");
+                }
+
+                ContentSizeFitter contentSizeFitter = rect.GetComponent<ContentSizeFitter>();
+                if (contentSizeFitter != null &&
+                    contentSizeFitter.isActiveAndEnabled &&
+                    (contentSizeFitter.horizontalFit != ContentSizeFitter.FitMode.Unconstrained ||
+                     contentSizeFitter.verticalFit != ContentSizeFitter.FitMode.Unconstrained))
+                {
+                    AddIssue(
+                        false,
+                        $"Tracked element {i} has an active ContentSizeFitter. Assign size authority to either " +
+                        "the fitter or the locale snapshot.");
+                }
+
+                AspectRatioFitter aspectRatioFitter = rect.GetComponent<AspectRatioFitter>();
+                if (aspectRatioFitter != null &&
+                    aspectRatioFitter.isActiveAndEnabled &&
+                    aspectRatioFitter.aspectMode != AspectRatioFitter.AspectMode.None)
+                {
+                    AddIssue(
+                        false,
+                        $"Tracked element {i} has an active AspectRatioFitter that can overwrite locale geometry.");
+                }
+
+                Animator animator = rect.GetComponentInParent<Animator>(true);
+                if (animator != null && animator.isActiveAndEnabled)
+                {
+                    AddIssue(
+                        false,
+                        $"Tracked element {i} is under active Animator '{animator.name}'. Confirm that no animation " +
+                        "curve writes the captured layout properties.");
+                }
+
+                if (text != null && text.enableAutoSizing)
+                {
+                    AddIssue(
+                        false,
+                        $"Tracked element {i} uses TMP auto-size. TMP owns the final font size after layout application.");
+                }
+            }
+
+            for (int i = 0; i < _snapshots.arraySize; i++)
+            {
+                SerializedProperty localeSnapshot = _snapshots.GetArrayElementAtIndex(i);
+                string localeCode = localeSnapshot
+                    .FindPropertyRelative(nameof(LocaleSnapshot.LocaleCode))
+                    .stringValue;
+                int schemaVersion = localeSnapshot
+                    .FindPropertyRelative(nameof(LocaleSnapshot.SchemaVersion))
+                    .intValue;
+                SerializedProperty snapshotElements = localeSnapshot.FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+
+                if (string.IsNullOrWhiteSpace(localeCode))
+                {
+                    AddIssue(true, $"Locale override {i} has no locale code.");
+                }
+                else
+                {
+                    if (string.Equals(localeCode, baseCode, StringComparison.OrdinalIgnoreCase))
+                    {
+                        AddIssue(true, $"Locale override '{localeCode}' duplicates the base locale.");
+                    }
+
+                    if (!LooksLikeLocaleCode(localeCode))
+                    {
+                        AddIssue(false, $"Locale override '{localeCode}' is not a well-formed BCP 47-style code.");
+                    }
+
+                    for (int previous = 0; previous < i; previous++)
+                    {
+                        string previousCode = _snapshots
+                            .GetArrayElementAtIndex(previous)
+                            .FindPropertyRelative(nameof(LocaleSnapshot.LocaleCode))
+                            .stringValue;
+                        if (string.Equals(previousCode, localeCode, StringComparison.OrdinalIgnoreCase))
+                        {
+                            AddIssue(true, $"Locale override '{localeCode}' is duplicated.");
+                            break;
+                        }
+                    }
+
+                    if (_localizationSettings != null && !SettingsContainLocaleOrLanguage(localeCode))
+                    {
+                        AddIssue(false, $"Locale override '{localeCode}' is not present in LocalizationSettings.");
+                    }
+                }
+
+                if (schemaVersion > LocaleSnapshot.CurrentSchemaVersion)
+                {
+                    _hasUnsupportedFutureSchema = true;
+                    AddIssue(true, $"Locale '{localeCode}' uses unsupported future schema {schemaVersion}.");
+                }
+                else if (schemaVersion < LocaleSnapshot.CurrentSchemaVersion)
+                {
+                    AddIssue(false, $"Locale '{localeCode}' uses legacy schema {schemaVersion}; migrate and review it.");
+                }
+
+                if (snapshotElements.arraySize != _elements.arraySize)
+                {
+                    AddIssue(false, $"Locale '{localeCode}' has {snapshotElements.arraySize} values for {_elements.arraySize} tracked elements.");
+                }
+
+                int valueCount = Mathf.Min(snapshotElements.arraySize, _elements.arraySize);
+                for (int elementIndex = 0; elementIndex < valueCount; elementIndex++)
+                {
+                    TrackedElement tracked = ReadTrackedElement(elementIndex);
+                    ElementSnapshot value = ReadSnapshot(snapshotElements.GetArrayElementAtIndex(elementIndex));
+                    if (schemaVersion >= LocaleSnapshot.CurrentSchemaVersion && !value.HasValue)
+                    {
+                        AddIssue(false, $"Locale '{localeCode}' has no override value for tracked element {elementIndex}; base layout will be used.");
+                        continue;
+                    }
+
+                    if (!IsFinite(
+                            in value,
+                            in tracked,
+                            schemaVersion < LocaleSnapshot.CurrentSchemaVersion))
+                    {
+                        AddIssue(true, $"Locale '{localeCode}' contains NaN or Infinity at tracked element {elementIndex}.");
+                    }
+                    else if (schemaVersion == LocaleSnapshot.CurrentSchemaVersion &&
+                              !IsCurrentSnapshotValueValid(in value, in tracked))
+                    {
+                        AddIssue(true, $"Locale '{localeCode}' contains an invalid alignment value at tracked element {elementIndex}.");
+                    }
+                }
+            }
+        }
+
+        private void RefreshSettingsCache()
+        {
+            _settingsCacheDirty = false;
+            _localizationSettings = null;
+            _localizationSettingsCount = 0;
+            _settingsLocaleCodes = new[] { string.Empty };
+            _settingsLocaleLabels = new[] { "Custom locale code" };
+
+            string[] guids = AssetDatabase.FindAssets("t:LocalizationSettings");
+            _localizationSettingsCount = guids.Length;
+            string selectedPath = null;
+            for (int i = 0; i < guids.Length; i++)
+            {
+                string path = AssetDatabase.GUIDToAssetPath(guids[i]);
+                if (string.IsNullOrEmpty(selectedPath) ||
+                    string.Compare(path, selectedPath, StringComparison.Ordinal) < 0)
+                {
+                    selectedPath = path;
+                }
+            }
+
+            if (!string.IsNullOrEmpty(selectedPath))
+            {
+                _localizationSettings = AssetDatabase.LoadAssetAtPath<LocalizationSettings>(selectedPath);
+            }
+
+            if (_localizationSettings == null)
+            {
+                return;
+            }
+
+            IReadOnlyList<Locale> locales = _localizationSettings.AvailableLocales;
+            _settingsLocaleCodes = new string[locales.Count + 1];
+            _settingsLocaleLabels = new string[locales.Count + 1];
+            _settingsLocaleCodes[0] = string.Empty;
+            _settingsLocaleLabels[0] = "Custom locale code";
+            for (int i = 0; i < locales.Count; i++)
+            {
+                Locale locale = locales[i];
+                _settingsLocaleCodes[i + 1] = locale != null ? locale.Id.Code : string.Empty;
+                _settingsLocaleLabels[i + 1] = locale != null
+                    ? FormatLocaleLabel(locale)
+                    : "(Missing locale asset)";
+            }
+        }
+
+        private void EnsureSettingsCache()
+        {
+            if (_settingsCacheDirty)
+            {
+                RefreshSettingsCache();
+                _validationDirty = true;
+            }
+        }
+
+        private void EnsureElementLabels()
+        {
+            if (_elementLabels.Length == _elements.arraySize)
+            {
+                return;
+            }
+
+            _elementLabels = new GUIContent[_elements.arraySize];
+            for (int i = 0; i < _elementLabels.Length; i++)
+            {
+                _elementLabels[i] = new GUIContent($"Element {i}");
+            }
+        }
+
+        private void EnsureSnapshotLabels()
+        {
+            if (!_snapshotLabelsDirty && _snapshotLabels.Length == _snapshots.arraySize)
+            {
+                return;
+            }
+
+            _snapshotLabelsDirty = false;
+            _snapshotLabels = new string[_snapshots.arraySize];
+            for (int i = 0; i < _snapshotLabels.Length; i++)
+            {
+                string code = _snapshots
+                    .GetArrayElementAtIndex(i)
+                    .FindPropertyRelative(nameof(LocaleSnapshot.LocaleCode))
+                    .stringValue;
+                _snapshotLabels[i] = string.IsNullOrEmpty(code) ? $"Override {i} (missing code)" : code;
+            }
+        }
+
+        private int FindSettingsLocaleIndex(string code)
+        {
+            for (int i = 1; i < _settingsLocaleCodes.Length; i++)
+            {
+                if (string.Equals(_settingsLocaleCodes[i], code, StringComparison.OrdinalIgnoreCase))
+                {
+                    return i;
+                }
+            }
+
+            return 0;
+        }
+
+        private bool SettingsContainLocaleOrLanguage(string code)
+        {
+            for (int i = 1; i < _settingsLocaleCodes.Length; i++)
+            {
+                string configured = _settingsLocaleCodes[i];
+                if (string.Equals(configured, code, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+
+                int separator = configured != null ? configured.IndexOf('-') : -1;
+                if (separator > 0 &&
+                    code.Length == separator &&
+                    string.Compare(configured, 0, code, 0, separator, StringComparison.OrdinalIgnoreCase) == 0)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool ContainsTrackedTarget(RectTransform rect)
+        {
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                if (_elements
+                        .GetArrayElementAtIndex(i)
+                        .FindPropertyRelative(nameof(TrackedElement.Target))
+                        .objectReferenceValue == rect)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool HasLocaleSnapshot(string localeCode)
+        {
+            for (int i = 0; i < _snapshots.arraySize; i++)
+            {
+                string existing = _snapshots
+                    .GetArrayElementAtIndex(i)
+                    .FindPropertyRelative(nameof(LocaleSnapshot.LocaleCode))
+                    .stringValue;
+                if (string.Equals(existing, localeCode, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool CanReorderTrackedElements()
+        {
+            for (int i = 0; i < _snapshots.arraySize; i++)
+            {
+                SerializedProperty snapshotElements = _snapshots
+                    .GetArrayElementAtIndex(i)
+                    .FindPropertyRelative(nameof(LocaleSnapshot.Elements));
+                if (snapshotElements.arraySize != _elements.arraySize)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private TrackedElement ReadTrackedElement(int index)
+        {
+            SerializedProperty element = _elements.GetArrayElementAtIndex(index);
+            return new TrackedElement
+            {
+                Target = element
+                    .FindPropertyRelative(nameof(TrackedElement.Target))
+                    .objectReferenceValue as RectTransform,
+                Text = element
+                    .FindPropertyRelative(nameof(TrackedElement.Text))
+                    .objectReferenceValue as TMP_Text,
+                LayoutGroup = element
+                    .FindPropertyRelative(nameof(TrackedElement.LayoutGroup))
+                    .objectReferenceValue as LayoutGroup
+            };
+        }
+
+        private void RecordTrackedObjects(string undoName)
+        {
+            List<UnityEngine.Object> objects = new List<UnityEngine.Object>(_elements.arraySize * 3);
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                TrackedElement element = ReadTrackedElement(i);
+                AddUnique(objects, element.Target);
+                AddUnique(objects, element.Text);
+                AddUnique(objects, element.LayoutGroup);
+            }
+
+            if (objects.Count > 0)
+            {
+                Undo.RecordObjects(objects.ToArray(), undoName);
+            }
+        }
+
+        private void RecordTrackedPrefabOverrides()
+        {
+            for (int i = 0; i < _elements.arraySize; i++)
+            {
+                TrackedElement element = ReadTrackedElement(i);
+                RecordPrefabOverride(element.Target);
+                RecordPrefabOverride(element.Text);
+                RecordPrefabOverride(element.LayoutGroup);
+            }
+        }
+
+        private static void AddUnique(List<UnityEngine.Object> objects, UnityEngine.Object value)
+        {
+            if (value != null && !objects.Contains(value))
+            {
+                objects.Add(value);
+            }
+        }
+
+        private static void RecordPrefabOverride(UnityEngine.Object value)
+        {
+            if (value != null)
+            {
+                PrefabUtility.RecordPrefabInstancePropertyModifications(value);
+                EditorUtility.SetDirty(value);
+            }
+        }
+
+        private static void ClearTrackedElement(SerializedProperty element)
+        {
+            element.FindPropertyRelative(nameof(TrackedElement.Target)).objectReferenceValue = null;
+            element.FindPropertyRelative(nameof(TrackedElement.Text)).objectReferenceValue = null;
+            element.FindPropertyRelative(nameof(TrackedElement.LayoutGroup)).objectReferenceValue = null;
+        }
+
+        private static void CopyLegacyFields(ref ElementSnapshot destination, in ElementSnapshot source)
+        {
+            destination.FontSize = source.FontSize;
+            destination.LineSpacing = source.LineSpacing;
+            destination.CharacterSpacing = source.CharacterSpacing;
+            destination.AnchoredPosition = source.AnchoredPosition;
+            destination.SizeDelta = source.SizeDelta;
+            destination.HasValue = true;
+        }
+
+        internal static void WriteSnapshot(SerializedProperty property, in ElementSnapshot snapshot)
+        {
+            property.FindPropertyRelative(nameof(ElementSnapshot.FontSize)).floatValue = snapshot.FontSize;
+            property.FindPropertyRelative(nameof(ElementSnapshot.LineSpacing)).floatValue = snapshot.LineSpacing;
+            property.FindPropertyRelative(nameof(ElementSnapshot.CharacterSpacing)).floatValue = snapshot.CharacterSpacing;
+            property.FindPropertyRelative(nameof(ElementSnapshot.AnchoredPosition)).vector2Value = snapshot.AnchoredPosition;
+            property.FindPropertyRelative(nameof(ElementSnapshot.SizeDelta)).vector2Value = snapshot.SizeDelta;
+            property.FindPropertyRelative(nameof(ElementSnapshot.AnchorMin)).vector2Value = snapshot.AnchorMin;
+            property.FindPropertyRelative(nameof(ElementSnapshot.AnchorMax)).vector2Value = snapshot.AnchorMax;
+            property.FindPropertyRelative(nameof(ElementSnapshot.Pivot)).vector2Value = snapshot.Pivot;
+            property.FindPropertyRelative(nameof(ElementSnapshot.LocalScale)).vector3Value = snapshot.LocalScale;
+            property.FindPropertyRelative(nameof(ElementSnapshot.TextAlignment)).intValue = (int)snapshot.TextAlignment;
+            property.FindPropertyRelative(nameof(ElementSnapshot.IsRightToLeftText)).boolValue = snapshot.IsRightToLeftText;
+            property.FindPropertyRelative(nameof(ElementSnapshot.ChildAlignment)).intValue = (int)snapshot.ChildAlignment;
+            property.FindPropertyRelative(nameof(ElementSnapshot.HasValue)).boolValue = snapshot.HasValue;
+        }
+
+        private static ElementSnapshot ReadSnapshot(SerializedProperty property)
+        {
+            return new ElementSnapshot
+            {
+                FontSize = property.FindPropertyRelative(nameof(ElementSnapshot.FontSize)).floatValue,
+                LineSpacing = property.FindPropertyRelative(nameof(ElementSnapshot.LineSpacing)).floatValue,
+                CharacterSpacing = property.FindPropertyRelative(nameof(ElementSnapshot.CharacterSpacing)).floatValue,
+                AnchoredPosition = property.FindPropertyRelative(nameof(ElementSnapshot.AnchoredPosition)).vector2Value,
+                SizeDelta = property.FindPropertyRelative(nameof(ElementSnapshot.SizeDelta)).vector2Value,
+                AnchorMin = property.FindPropertyRelative(nameof(ElementSnapshot.AnchorMin)).vector2Value,
+                AnchorMax = property.FindPropertyRelative(nameof(ElementSnapshot.AnchorMax)).vector2Value,
+                Pivot = property.FindPropertyRelative(nameof(ElementSnapshot.Pivot)).vector2Value,
+                LocalScale = property.FindPropertyRelative(nameof(ElementSnapshot.LocalScale)).vector3Value,
+                TextAlignment = (TextAlignmentOptions)property.FindPropertyRelative(nameof(ElementSnapshot.TextAlignment)).intValue,
+                IsRightToLeftText = property.FindPropertyRelative(nameof(ElementSnapshot.IsRightToLeftText)).boolValue,
+                ChildAlignment = (TextAnchor)property.FindPropertyRelative(nameof(ElementSnapshot.ChildAlignment)).intValue,
+                HasValue = property.FindPropertyRelative(nameof(ElementSnapshot.HasValue)).boolValue
+            };
+        }
+
+        private void AddIssue(bool error, string message)
+        {
+            _totalIssueCount++;
+            if (error)
+            {
+                _errorCount++;
+            }
+            else
+            {
+                _warningCount++;
+            }
+
+            if (_issues.Count < MaxDisplayedIssues)
+            {
+                _issues.Add((error ? "Error: " : "Warning: ") + message);
+            }
+        }
+
+        private void InvalidateInspection()
+        {
+            _elementLabels = Array.Empty<GUIContent>();
+            _snapshotLabelsDirty = true;
+            _validationDirty = true;
+            _nextDiffRefreshTime = 0d;
+        }
+
+        private void HandleExternalChange()
+        {
+            ExitPreview();
+            InvalidateInspection();
+            Repaint();
+        }
+
+        private void HandleProjectChange()
+        {
+            _settingsCacheDirty = true;
+            InvalidateInspection();
+            Repaint();
+        }
+
+        private void HandlePlayModeChange(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.ExitingEditMode)
+            {
+                ExitPreview();
+            }
+        }
+
+        private void ExitPreviewBeforeReload()
+        {
+            ExitPreview();
+        }
+
+        private void HandlePrefabSaving(GameObject prefabRoot)
+        {
+            if (!_isPreviewing || target == null)
+            {
+                return;
+            }
+
+            UILocaleLayout layout = (UILocaleLayout)target;
+            if (layout.gameObject == prefabRoot || layout.transform.IsChildOf(prefabRoot.transform))
+            {
+                ExitPreview();
+            }
         }
 
         private static string FormatLocaleLabel(Locale locale)
         {
-            string code = locale.Id.ToString();
-            string native = locale.NativeName;
-            string display = locale.DisplayName;
+            string code = locale.Id.Code;
+            if (!string.IsNullOrEmpty(locale.NativeName) &&
+                !string.Equals(locale.NativeName, code, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"{code} ({locale.NativeName})";
+            }
 
-            // Show "zh-CN (简体中文)" or "en (English)" format
-            if (!string.IsNullOrEmpty(native) && !string.Equals(native, code, StringComparison.OrdinalIgnoreCase))
-                return $"{code}  ({native})";
-            if (!string.IsNullOrEmpty(display) && !string.Equals(display, code, StringComparison.OrdinalIgnoreCase))
-                return $"{code}  ({display})";
+            if (!string.IsNullOrEmpty(locale.DisplayName) &&
+                !string.Equals(locale.DisplayName, code, StringComparison.OrdinalIgnoreCase))
+            {
+                return $"{code} ({locale.DisplayName})";
+            }
+
             return code;
         }
 
-        private static Locale FindLocaleByCode(LocalizationSettings settings, string code)
+        private static bool LooksLikeLocaleCode(string code)
         {
-            for (int i = 0; i < settings.AvailableLocales.Count; i++)
+            if (string.IsNullOrEmpty(code) || code.Length > 35 ||
+                code[0] == '-' || code[code.Length - 1] == '-')
             {
-                var loc = settings.AvailableLocales[i];
-                if (loc != null && string.Equals(loc.Id.ToString(), code, StringComparison.OrdinalIgnoreCase))
-                    return loc;
+                return false;
             }
-            return null;
-        }
 
-        // ── Helpers ─────────────────────────────────────────────
-        private string GetSelectedLocaleCode()
-        {
-            if (_snapshotsProp.arraySize == 0 || _selectedLocaleIdx >= _snapshotsProp.arraySize) return "";
-            return _snapshotsProp.GetArrayElementAtIndex(_selectedLocaleIdx)
-                .FindPropertyRelative("LocaleCode").stringValue;
-        }
-
-        private bool HasLocale(string code)
-        {
-            for (int i = 0; i < _snapshotsProp.arraySize; i++)
+            bool previousWasSeparator = false;
+            for (int i = 0; i < code.Length; i++)
             {
-                if (string.Equals(_snapshotsProp.GetArrayElementAtIndex(i)
-                    .FindPropertyRelative("LocaleCode").stringValue, code, StringComparison.OrdinalIgnoreCase))
-                    return true;
+                char character = code[i];
+                if (character == '-')
+                {
+                    if (previousWasSeparator)
+                    {
+                        return false;
+                    }
+
+                    previousWasSeparator = true;
+                    continue;
+                }
+
+                previousWasSeparator = false;
+                bool asciiLetter = (character >= 'A' && character <= 'Z') ||
+                                   (character >= 'a' && character <= 'z');
+                bool digit = character >= '0' && character <= '9';
+                if (!asciiLetter && !digit)
+                {
+                    return false;
+                }
             }
-            return false;
+
+            return true;
         }
 
-        private void AddLocale(string code)
+        private static bool IsFinite(
+            in ElementSnapshot snapshot,
+            in TrackedElement tracked,
+            bool legacyOnly)
         {
-            int idx = _snapshotsProp.arraySize;
-            _snapshotsProp.InsertArrayElementAtIndex(idx);
-            var snap = _snapshotsProp.GetArrayElementAtIndex(idx);
-            snap.FindPropertyRelative("LocaleCode").stringValue = code;
-            snap.FindPropertyRelative("Elements").arraySize = _elementsProp.arraySize;
-            _selectedLocaleIdx = idx;
-            serializedObject.ApplyModifiedProperties();
-            _diffStale = true;
-            InvalidateAddableLocales();
-        }
-
-        private static void WriteSnapshot(SerializedProperty prop, in ElementSnapshot snap)
-        {
-            prop.FindPropertyRelative("FontSize").floatValue = snap.FontSize;
-            prop.FindPropertyRelative("LineSpacing").floatValue = snap.LineSpacing;
-            prop.FindPropertyRelative("CharacterSpacing").floatValue = snap.CharacterSpacing;
-            prop.FindPropertyRelative("AnchoredPosition").vector2Value = snap.AnchoredPosition;
-            prop.FindPropertyRelative("SizeDelta").vector2Value = snap.SizeDelta;
-        }
-
-        private static ElementSnapshot ReadSnapshot(SerializedProperty prop)
-        {
-            return new ElementSnapshot
+            bool legacyFinite =
+                (tracked.Target == null ||
+                 (IsFinite(snapshot.AnchoredPosition) && IsFinite(snapshot.SizeDelta))) &&
+                (tracked.Text == null ||
+                 (IsFinite(snapshot.FontSize) &&
+                  IsFinite(snapshot.LineSpacing) &&
+                  IsFinite(snapshot.CharacterSpacing)));
+            if (!legacyFinite || legacyOnly)
             {
-                FontSize = prop.FindPropertyRelative("FontSize").floatValue,
-                LineSpacing = prop.FindPropertyRelative("LineSpacing").floatValue,
-                CharacterSpacing = prop.FindPropertyRelative("CharacterSpacing").floatValue,
-                AnchoredPosition = prop.FindPropertyRelative("AnchoredPosition").vector2Value,
-                SizeDelta = prop.FindPropertyRelative("SizeDelta").vector2Value,
-            };
-        }
-
-        private static string GetRelativePath(Transform root, Transform child)
-        {
-            if (child == root) return "(self)";
-            var parts = new List<string>(8);
-            var current = child;
-            while (current != null && current != root)
-            {
-                parts.Add(current.name);
-                current = current.parent;
+                return legacyFinite;
             }
-            if (parts.Count == 0) return child.name;
-            var sb = new System.Text.StringBuilder(64);
-            for (int i = parts.Count - 1; i >= 0; i--)
+
+            return tracked.Target == null ||
+                   (IsFinite(snapshot.AnchorMin) &&
+                    IsFinite(snapshot.AnchorMax) &&
+                    IsFinite(snapshot.Pivot) &&
+                    IsFinite(snapshot.LocalScale));
+        }
+
+        private static bool IsCurrentSnapshotValueValid(
+            in ElementSnapshot snapshot,
+            in TrackedElement tracked)
+        {
+            return IsFinite(in snapshot, in tracked, false) &&
+                   (tracked.Text == null || IsValidTextAlignment(snapshot.TextAlignment)) &&
+                   (tracked.LayoutGroup == null ||
+                    (snapshot.ChildAlignment >= TextAnchor.UpperLeft &&
+                     snapshot.ChildAlignment <= TextAnchor.LowerRight));
+        }
+
+        private static bool IsValidTextAlignment(TextAlignmentOptions alignment)
+        {
+            int value = (int)alignment;
+            if (value == (int)TextAlignmentOptions.Converted)
             {
-                if (sb.Length > 0) sb.Append('/');
-                sb.Append(parts[i]);
+                return true;
             }
-            return sb.ToString();
+
+            int horizontal = value & 0xFF;
+            int vertical = value & 0xFF00;
+            bool validHorizontal = horizontal == 0x1 ||
+                                   horizontal == 0x2 ||
+                                   horizontal == 0x4 ||
+                                   horizontal == 0x8 ||
+                                   horizontal == 0x10 ||
+                                   horizontal == 0x20;
+            bool validVertical = vertical == 0x100 ||
+                                 vertical == 0x200 ||
+                                 vertical == 0x400 ||
+                                 vertical == 0x800 ||
+                                 vertical == 0x1000 ||
+                                 vertical == 0x2000;
+            return validHorizontal && validVertical && (value & ~0xFFFF) == 0;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static bool IsFinite(Vector2 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y);
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static void MarkSceneDirty(GameObject gameObject)
+        {
+            if (gameObject.scene.IsValid() && gameObject.scene.isLoaded)
+            {
+                EditorSceneManager.MarkSceneDirty(gameObject.scene);
+            }
         }
     }
 }
-#endif

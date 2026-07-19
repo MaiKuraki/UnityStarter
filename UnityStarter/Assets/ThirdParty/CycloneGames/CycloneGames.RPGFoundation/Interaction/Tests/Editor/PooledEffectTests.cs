@@ -75,6 +75,7 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor
             public int CountActive => 0;
             public int CountInactive => 0;
             public Type ItemType => typeof(PooledEffect);
+            public PoolLifecycleState LifecycleState => PoolLifecycleState.Ready;
             public PoolCapacitySettings CapacitySettings => default;
             public PoolDiagnostics Diagnostics => default;
             public PoolProfile Profile => default;

@@ -5,6 +5,8 @@ namespace CycloneGames.Hash.Core
 {
     /// <summary>
     /// Stable non-zero 64-bit hash helpers for deterministic ids, manifests, and protocol compatibility checks.
+    /// Maps a zero digest to <see cref="NonZeroFallback"/> so callers can reserve 0 as an unset sentinel.
+    /// This mapping does not provide uniqueness or collision detection.
     /// </summary>
     public static class StableHash64
     {
@@ -44,6 +46,9 @@ namespace CycloneGames.Hash.Core
             return Fnv1a64.CombineUInt64LittleEndian(hash, value);
         }
 
+        /// <summary>
+        /// Maps 0 to <see cref="NonZeroFallback"/>. Call this on a final digest, not every intermediate state.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static ulong EnsureNonZero(ulong value)
         {

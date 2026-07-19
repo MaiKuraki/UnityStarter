@@ -19,6 +19,7 @@ namespace CycloneGames.InputSystem.Runtime
         readonly Observer<T> observer;
         CancellationTokenRegistration cancellationTokenRegistration;
         int isDisposed;
+        int cancellationRequested;
 
         public CancellableFrameRunnerWorkItemBase(Observer<T> observer, CancellationToken cancellationToken)
         {
@@ -29,8 +30,7 @@ namespace CycloneGames.InputSystem.Runtime
                 this.cancellationTokenRegistration = cancellationToken.UnsafeRegister(static state =>
                 {
                     var s = (CancellableFrameRunnerWorkItemBase<T>)state!;
-                    s.observer.OnCompleted();
-                    s.Dispose();
+                    Volatile.Write(ref s.cancellationRequested, 1);
                 }, this);
             }
         }
@@ -39,6 +39,13 @@ namespace CycloneGames.InputSystem.Runtime
         {
             if (Volatile.Read(ref isDisposed) != 0)
             {
+                return false;
+            }
+
+            if (Volatile.Read(ref cancellationRequested) != 0)
+            {
+                observer.OnCompleted();
+                Dispose();
                 return false;
             }
 

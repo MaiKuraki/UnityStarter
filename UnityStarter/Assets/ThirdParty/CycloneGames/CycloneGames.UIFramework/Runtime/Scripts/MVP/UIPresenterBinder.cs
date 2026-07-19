@@ -5,189 +5,50 @@ using CycloneGames.Logger;
 namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
-    /// Default MVP Window Binder. When registered with UIManager, this binder
-    /// automatically watches for window creation and destruction.
-    /// 
-    /// Usage:
-    /// uiService.RegisterWindowBinder(new UIPresenterBinder());
-    /// 
-    /// Presenters are resolved from explicit bindings registered by generated code,
-    /// composition roots, or manual calls to RegisterMapping.
+    /// Creates explicitly registered MVP presenter bindings for selected windows.
     /// </summary>
-    public class UIPresenterBinder : IUIWindowBinder
+    /// <remarks>
+    /// Registrations belong to this binder instance. Register them at the composition
+    /// root before opening windows. The binder does not perform reflection discovery and
+    /// does not assume whether a presenter is owned by a DI container or by the caller.
+    /// The release delegate defines that ownership policy explicitly.
+    /// </remarks>
+    public sealed class UIPresenterBinder : IUIWindowBinder
     {
-        private static readonly Dictionary<string, Type> _globalPresenterMap = new Dictionary<string, Type>(32);
-        private static readonly object _globalMapLock = new object();
-
-        private readonly Dictionary<string, Type> _presenterMap;
-        private readonly Dictionary<UIWindow, IUIPresenter> _activePresenters = new Dictionary<UIWindow, IUIPresenter>(16);
-        private IUIService _uiService;
-
-        public UIPresenterBinder()
+        private readonly struct PresenterRegistration
         {
-            lock (_globalMapLock)
+            public PresenterRegistration(
+                Func<UIWindowBindingContext, IUIPresenter> factory,
+                Action<IUIPresenter> release)
             {
-                _presenterMap = new Dictionary<string, Type>(_globalPresenterMap);
-            }
-        }
-
-        public bool LogMissingPresenterMappings { get; set; }
-
-        public static void RegisterGlobalMapping<TPresenter>(string windowName) where TPresenter : class, IUIPresenter
-        {
-            RegisterGlobalMapping(windowName, typeof(TPresenter));
-        }
-
-        public static void RegisterGlobalMapping(string windowName, Type presenterType)
-        {
-            ValidateMapping(windowName, presenterType);
-
-            lock (_globalMapLock)
-            {
-                _globalPresenterMap[windowName] = presenterType;
-            }
-        }
-
-        public static bool UnregisterGlobalMapping(string windowName)
-        {
-            if (string.IsNullOrEmpty(windowName))
-            {
-                return false;
+                Factory = factory;
+                Release = release;
             }
 
-            lock (_globalMapLock)
-            {
-                return _globalPresenterMap.Remove(windowName);
-            }
+            public Func<UIWindowBindingContext, IUIPresenter> Factory { get; }
+
+            public Action<IUIPresenter> Release { get; }
         }
 
-        public static void ClearGlobalMappings()
+        private sealed class PresenterBinding : IUIWindowBinding
         {
-            lock (_globalMapLock)
+            private IUIPresenter _presenter;
+            private Action<IUIPresenter> _release;
+
+            public PresenterBinding(IUIPresenter presenter, Action<IUIPresenter> release)
             {
-                _globalPresenterMap.Clear();
-            }
-        }
-
-        /// <summary>
-        /// Provides the IUIService reference to presenters so they can use NavigateTo / NavigateBack.
-        /// Call this once after UIService is initialized.
-        /// </summary>
-        public void SetUIService(IUIService uiService)
-        {
-            _uiService = uiService;
-        }
-
-        /// <summary>
-        /// Explicitly add a mapping without reflection if needed for zero-allocation strictness.
-        /// </summary>
-        public void RegisterMapping<TPresenter>(string windowName) where TPresenter : class, IUIPresenter
-        {
-            RegisterMapping(windowName, typeof(TPresenter));
-        }
-
-        public void RegisterMapping(string windowName, Type presenterType)
-        {
-            ValidateMapping(windowName, presenterType);
-
-            _presenterMap[windowName] = presenterType;
-        }
-
-        private static void ValidateMapping(string windowName, Type presenterType)
-        {
-            if (string.IsNullOrEmpty(windowName))
-            {
-                throw new ArgumentException("Window name cannot be null or empty.", nameof(windowName));
+                _presenter = presenter;
+                _release = release;
             }
 
-            if (presenterType == null)
+            public void OnWindowStateChanged(WindowStateCallbackType state)
             {
-                throw new ArgumentNullException(nameof(presenterType));
-            }
-
-            if (!typeof(IUIPresenter).IsAssignableFrom(presenterType))
-            {
-                throw new ArgumentException("Presenter type must implement IUIPresenter.", nameof(presenterType));
-            }
-        }
-
-        public void OnWindowCreated(UIWindow window)
-        {
-            if (window == null)
-            {
-                return;
-            }
-            
-            if (TryGetPresenterType(window.WindowName, out Type presenterType))
-            {
-                // Create the Presenter via UIPresenterFactory which handles DI and explicit registrations.
-                IUIPresenter presenter = UIPresenterFactory.Create(presenterType);
-                if (presenter != null)
+                IUIPresenter presenter = _presenter;
+                if (presenter == null)
                 {
-                    _activePresenters[window] = presenter;
-                    
-                    // Bind the view
-                    presenter.SetView(window);
-                    presenter.SetUIService(_uiService);
-                    
-                    // Hook into lifecycle manually or passively if UIWindow exposes events.
-                    // For now, UIWindow doesn't expose public events for opening/closing, 
-                    // To maintain true decoupling, UIWindow needs a way to signal its state to the Binder, 
-                    // OR the binder can just rely on the existing Virtual methods being invoked by linking to the window.
-                    // IMPORTANT: Currently we must inject into UIWindow's lifecycle or let UIWindow notify us.
+                    return;
                 }
-                else
-                {
-                    CLogger.LogError($"[UIPresenterBinder] Failed to create Presenter of type {presenterType.Name} for window {window.WindowName}.");
-                }
-            }
-            else if (LogMissingPresenterMappings)
-            {
-                CLogger.LogInfo($"[UIPresenterBinder] Window '{window.WindowName}' created without a registered Presenter. If MVP was expected, check generated or manual presenter registration.");
-            }
-        }
 
-        private bool TryGetPresenterType(string windowName, out Type presenterType)
-        {
-            if (_presenterMap.TryGetValue(windowName, out presenterType))
-            {
-                return true;
-            }
-
-            lock (_globalMapLock)
-            {
-                if (!_globalPresenterMap.TryGetValue(windowName, out presenterType))
-                {
-                    return false;
-                }
-            }
-
-            _presenterMap[windowName] = presenterType;
-            return true;
-        }
-
-        public void OnWindowDestroying(UIWindow window)
-        {
-            if (window == null)
-            {
-                return;
-            }
-            
-            if (_activePresenters.TryGetValue(window, out IUIPresenter presenter))
-            {
-                presenter.Dispose();
-                _activePresenters.Remove(window);
-            }
-        }
-
-        /// <summary>
-        /// Forwards UIWindow lifecycle calls to the Presenter.
-        /// This method must be called by the framework when window state changes.
-        /// </summary>
-        public void OnWindowStateChanged(UIWindow window, WindowStateCallbackType state)
-        {
-            if (_activePresenters.TryGetValue(window, out IUIPresenter presenter))
-            {
                 switch (state)
                 {
                     case WindowStateCallbackType.OnStartOpen:
@@ -202,8 +63,246 @@ namespace CycloneGames.UIFramework.Runtime
                     case WindowStateCallbackType.OnFinishedClose:
                         presenter.OnViewClosed();
                         break;
+                    default:
+                        throw new ArgumentOutOfRangeException(nameof(state), state, "Unknown window state callback.");
                 }
             }
+
+            public void Dispose()
+            {
+                IUIPresenter presenter = _presenter;
+                Action<IUIPresenter> release = _release;
+                if (presenter == null)
+                {
+                    return;
+                }
+
+                _presenter = null;
+                _release = null;
+                release(presenter);
+            }
+        }
+
+        private readonly Dictionary<string, PresenterRegistration> _registrations;
+
+        public UIPresenterBinder(int initialCapacity = 16)
+        {
+            if (initialCapacity < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(initialCapacity));
+            }
+
+            _registrations = new Dictionary<string, PresenterRegistration>(initialCapacity, StringComparer.Ordinal);
+        }
+
+        public bool LogMissingPresenterMappings { get; set; }
+
+        public void Register(
+            string windowName,
+            Func<IUIPresenter> factory,
+            Action<IUIPresenter> release)
+        {
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            RegisterCore(windowName, _ => factory(), release);
+        }
+
+        public void Register(string windowName, Func<IUIPresenter> factory)
+        {
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            RegisterCore(windowName, _ => factory(), presenter => presenter.Dispose());
+        }
+
+        public void RegisterContextual(
+            string windowName,
+            Func<UIWindowBindingContext, IUIPresenter> factory,
+            Action<IUIPresenter> release)
+        {
+            RegisterCore(windowName, factory, release);
+        }
+
+        public void RegisterContextual(
+            string windowName,
+            Func<UIWindowBindingContext, IUIPresenter> factory)
+        {
+            RegisterCore(windowName, factory, presenter => presenter.Dispose());
+        }
+
+        public void Register<TPresenter>(
+            string windowName,
+            Func<TPresenter> factory,
+            Action<TPresenter> release)
+            where TPresenter : class, IUIPresenter
+        {
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            if (release == null)
+            {
+                throw new ArgumentNullException(nameof(release));
+            }
+
+            RegisterCore(
+                windowName,
+                _ => factory(),
+                presenter => release((TPresenter)presenter));
+        }
+
+        public void Register<TPresenter>(string windowName, Func<TPresenter> factory)
+            where TPresenter : class, IUIPresenter
+        {
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            RegisterCore(
+                windowName,
+                _ => factory(),
+                presenter => ((TPresenter)presenter).Dispose());
+        }
+
+        public void RegisterContextual<TPresenter>(
+            string windowName,
+            Func<UIWindowBindingContext, TPresenter> factory,
+            Action<TPresenter> release)
+            where TPresenter : class, IUIPresenter
+        {
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            if (release == null)
+            {
+                throw new ArgumentNullException(nameof(release));
+            }
+
+            RegisterCore(
+                windowName,
+                context => factory(context),
+                presenter => release((TPresenter)presenter));
+        }
+
+        public void RegisterContextual<TPresenter>(
+            string windowName,
+            Func<UIWindowBindingContext, TPresenter> factory)
+            where TPresenter : class, IUIPresenter
+        {
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            RegisterCore(
+                windowName,
+                context => factory(context),
+                presenter => ((TPresenter)presenter).Dispose());
+        }
+
+        public void Register<TPresenter>(string windowName)
+            where TPresenter : class, IUIPresenter, new()
+        {
+            RegisterCore(
+                windowName,
+                _ => new TPresenter(),
+                presenter => ((TPresenter)presenter).Dispose());
+        }
+
+        public bool Unregister(string windowName)
+        {
+            return !string.IsNullOrEmpty(windowName) && _registrations.Remove(windowName);
+        }
+
+        public void ClearRegistrations()
+        {
+            _registrations.Clear();
+        }
+
+        public IUIWindowBinding Bind(UIWindowBindingContext context)
+        {
+            UIWindow window = context.Window;
+            if (window == null)
+            {
+                throw new ArgumentException("The binding context must contain a live window.", nameof(context));
+            }
+
+            if (context.UIService == null)
+            {
+                throw new ArgumentException("The binding context must contain a UI service.", nameof(context));
+            }
+
+            if (!_registrations.TryGetValue(window.WindowId, out PresenterRegistration registration))
+            {
+                if (LogMissingPresenterMappings)
+                {
+                    CLogger.LogWarning($"[UIPresenterBinder] No presenter registration exists for window '{window.WindowId}'.");
+                }
+
+                return null;
+            }
+
+            IUIPresenter presenter = registration.Factory(context);
+            if (presenter == null)
+            {
+                throw new InvalidOperationException(
+                    $"The presenter factory for window '{window.WindowId}' returned null.");
+            }
+
+            try
+            {
+                presenter.SetUIService(context.UIService);
+                presenter.SetView(window);
+                return new PresenterBinding(presenter, registration.Release);
+            }
+            catch (Exception bindingException)
+            {
+                try
+                {
+                    registration.Release(presenter);
+                }
+                catch (Exception releaseException)
+                {
+                    throw new AggregateException(
+                        $"Presenter binding and rollback both failed for window '{window.WindowId}'.",
+                        bindingException,
+                        releaseException);
+                }
+
+                throw;
+            }
+        }
+
+        private void RegisterCore(
+            string windowName,
+            Func<UIWindowBindingContext, IUIPresenter> factory,
+            Action<IUIPresenter> release)
+        {
+            if (string.IsNullOrEmpty(windowName))
+            {
+                throw new ArgumentException("Window name cannot be null or empty.", nameof(windowName));
+            }
+
+            if (factory == null)
+            {
+                throw new ArgumentNullException(nameof(factory));
+            }
+
+            if (release == null)
+            {
+                throw new ArgumentNullException(nameof(release));
+            }
+
+            _registrations.Add(windowName, new PresenterRegistration(factory, release));
         }
     }
 }

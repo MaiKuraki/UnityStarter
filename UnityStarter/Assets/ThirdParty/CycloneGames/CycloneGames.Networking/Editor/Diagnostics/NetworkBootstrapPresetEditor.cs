@@ -5,6 +5,7 @@ using UnityEngine;
 namespace CycloneGames.Networking.Editor.Diagnostics
 {
     [CustomEditor(typeof(NetworkBootstrapPreset))]
+    [CanEditMultipleObjects]
     public sealed class NetworkBootstrapPresetEditor : UnityEditor.Editor
     {
         private static readonly GUIContent RequiredFeaturesContent = new GUIContent(
@@ -15,13 +16,13 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             "Require Cyclone Transport",
             "Reports an error when no component implementing INetTransport exists in the open scenes.");
 
-        private static readonly GUIContent RequireSingleNetworkManagerContent = new GUIContent(
-            "Require Single Network Manager",
-            "Reports a warning when more than one INetworkManager is active in the open scenes.");
+        private static readonly GUIContent RequireSingleMessageEndpointContent = new GUIContent(
+            "Require Single Message Endpoint",
+            "Reports a warning when more than one INetworkMessageEndpoint is active in the open scenes.");
 
         private static readonly GUIContent RequireRuntimeContextContent = new GUIContent(
             "Require Runtime Context",
-            "Reports a warning when a Cyclone network manager does not expose INetworkRuntimeContext.");
+            "Reports a warning when a Cyclone message endpoint does not expose INetworkRuntimeContext.");
 
         private static readonly GUIContent CheckOptionalPackagesContent = new GUIContent(
             "Check Optional SDK Packages",
@@ -29,8 +30,8 @@ namespace CycloneGames.Networking.Editor.Diagnostics
 
         private SerializedProperty _requiredFeatures;
         private SerializedProperty _requireCycloneTransport;
-        private SerializedProperty _requireSingleNetworkManager;
-        private SerializedProperty _requireRuntimeContextForCycloneManagers;
+        private SerializedProperty _requireSingleMessageEndpoint;
+        private SerializedProperty _requireRuntimeContextForMessageEndpoints;
         private SerializedProperty _checkOptionalSdkPackages;
         private NetworkBootstrapReport _lastReport;
         private bool _rulesFoldout = true;
@@ -40,8 +41,8 @@ namespace CycloneGames.Networking.Editor.Diagnostics
         {
             _requiredFeatures = serializedObject.FindProperty("_requiredFeatures");
             _requireCycloneTransport = serializedObject.FindProperty("_requireCycloneTransport");
-            _requireSingleNetworkManager = serializedObject.FindProperty("_requireSingleNetworkManager");
-            _requireRuntimeContextForCycloneManagers = serializedObject.FindProperty("_requireRuntimeContextForCycloneManagers");
+            _requireSingleMessageEndpoint = serializedObject.FindProperty("_requireSingleMessageEndpoint");
+            _requireRuntimeContextForMessageEndpoints = serializedObject.FindProperty("_requireRuntimeContextForMessageEndpoints");
             _checkOptionalSdkPackages = serializedObject.FindProperty("_checkOptionalSdkPackages");
         }
 
@@ -64,14 +65,21 @@ namespace CycloneGames.Networking.Editor.Diagnostics
 
                 EditorGUILayout.PropertyField(_requiredFeatures, RequiredFeaturesContent);
                 EditorGUILayout.PropertyField(_requireCycloneTransport, RequireCycloneTransportContent);
-                EditorGUILayout.PropertyField(_requireSingleNetworkManager, RequireSingleNetworkManagerContent);
-                EditorGUILayout.PropertyField(_requireRuntimeContextForCycloneManagers, RequireRuntimeContextContent);
+                EditorGUILayout.PropertyField(_requireSingleMessageEndpoint, RequireSingleMessageEndpointContent);
+                EditorGUILayout.PropertyField(_requireRuntimeContextForMessageEndpoints, RequireRuntimeContextContent);
                 EditorGUILayout.PropertyField(_checkOptionalSdkPackages, CheckOptionalPackagesContent);
             }
 
             serializedObject.ApplyModifiedProperties();
 
             EditorGUILayout.Space(8f);
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                EditorGUILayout.HelpBox(
+                    "Run Check is available only when a single preset is selected. Shared serialized settings remain editable.",
+                    MessageType.Info);
+            }
+
             DrawToolbar();
 
             if (_lastReport == null)
@@ -95,11 +103,14 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             windowRect.x = runRect.xMax + 6f;
             windowRect.width = 102f;
 
-            if (GUI.Button(runRect, "Run Check"))
+            using (new EditorGUI.DisabledScope(serializedObject.isEditingMultipleObjects))
             {
-                _lastReport = NetworkBootstrapDiagnostics.Run((NetworkBootstrapPreset)target);
-                NetworkBootstrapDiagnostics.LogReport(_lastReport);
-                _resultFoldout = true;
+                if (GUI.Button(runRect, "Run Check"))
+                {
+                    _lastReport = NetworkBootstrapDiagnostics.Run((NetworkBootstrapPreset)target);
+                    NetworkBootstrapDiagnostics.LogReport(_lastReport);
+                    _resultFoldout = true;
+                }
             }
 
             if (GUI.Button(windowRect, "Open Window"))

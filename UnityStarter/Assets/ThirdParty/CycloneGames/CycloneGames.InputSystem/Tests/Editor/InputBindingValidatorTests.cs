@@ -55,16 +55,27 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         [Test]
-        public void DetectConflicts_ExpandsInline2DVectorComposite()
+        public void DetectConflicts_IncludesStructuredCompositeParts()
         {
             var config = CreateConfig(
                 new ActionBindingConfig
                 {
                     Type = ActionValueType.Vector2,
                     ActionName = "Move",
-                    DeviceBindings = new List<string>
+                    DeviceBindings = new List<string>(),
+                    CompositeBindings = new List<CompositeBindingConfig>
                     {
-                        "2DVector(up=<Keyboard>/w,down=<Keyboard>/s,left=<Keyboard>/a,right=<Keyboard>/d)"
+                        new CompositeBindingConfig
+                        {
+                            Name = "2DVector",
+                            Parts = new List<CompositePartBindingConfig>
+                            {
+                                new CompositePartBindingConfig { Name = "up", Path = "<Keyboard>/w" },
+                                new CompositePartBindingConfig { Name = "down", Path = "<Keyboard>/s" },
+                                new CompositePartBindingConfig { Name = "left", Path = "<Keyboard>/a" },
+                                new CompositePartBindingConfig { Name = "right", Path = "<Keyboard>/d" }
+                            }
+                        }
                     }
                 },
                 new ActionBindingConfig
@@ -78,6 +89,30 @@ namespace CycloneGames.InputSystem.Tests.Editor
 
             Assert.AreEqual(1, conflicts.Count);
             Assert.AreEqual("<Keyboard>/w", conflicts[0].BindingPath);
+        }
+
+        [Test]
+        public void DetectConflicts_SkipsNullAndOversizedUnvalidatedEntries()
+        {
+            var config = CreateConfig(
+                null,
+                new ActionBindingConfig
+                {
+                    Type = ActionValueType.Button,
+                    ActionName = "Confirm",
+                    DeviceBindings = new List<string> { null, new string('x', 1024), "<Keyboard>/enter" }
+                },
+                new ActionBindingConfig
+                {
+                    Type = ActionValueType.Button,
+                    ActionName = "Submit",
+                    DeviceBindings = new List<string> { "<keyboard>/ENTER" }
+                });
+
+            List<BindingConflict> conflicts = InputBindingValidator.DetectConflicts(config);
+
+            Assert.That(conflicts, Has.Count.EqualTo(1));
+            Assert.That(conflicts[0].Severity, Is.EqualTo(BindingConflictSeverity.Critical));
         }
 
         [Test]

@@ -208,7 +208,7 @@ public sealed class LoggerBenchmark : MonoBehaviour
             MaxQueuedMessages = Iterations * QueueCapacityMultiplier,
             UnityConsoleMaxQueuedMessages = ConsoleIterations * QueueCapacityMultiplier,
             OverflowPolicy = LogQueueOverflowPolicy.DropNewest,
-            GuaranteedLevel = LogLevel.Error,
+            CriticalLevel = LogLevel.Error,
             ShutdownDrainTimeoutMs = 5000
         });
 
@@ -328,13 +328,12 @@ public sealed class LoggerBenchmark : MonoBehaviour
 
     private static PoolSnapshot CapturePoolSnapshot()
     {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        var sbStats = CycloneGames.Logger.Util.StringBuilderPool.GetStatistics();
-        var msgStats = LogMessagePool.GetStatistics();
-        return new PoolSnapshot(sbStats.TotalMisses, msgStats.TotalMisses, sbStats.TotalDiscards, msgStats.TotalDiscards);
-#else
-        return default;
-#endif
+        LoggerMemoryStatistics statistics = CLogger.GetMemoryStatistics();
+        return new PoolSnapshot(
+            statistics.StringBuilderPoolMisses,
+            statistics.LogMessagePoolMisses,
+            statistics.StringBuilderPoolDiscards,
+            statistics.LogMessagePoolDiscards);
     }
 
     private void AppendHeader()

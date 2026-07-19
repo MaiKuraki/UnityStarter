@@ -11,6 +11,8 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private const float HeaderArrowWidth = 13f;
 
         private static GUIStyle foldoutLabelStyle;
+        private static readonly Vector3[] foldoutTrianglePoints = new Vector3[3];
+        private static readonly string[] noPropertyNames = Array.Empty<string>();
 
         public static bool DrawFoldoutHeader(string title, bool foldout, Color color)
         {
@@ -57,6 +59,14 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         public static void DrawSerializedProperties(SerializedObject serializedObject, params string[] paddedPropertyNames)
         {
+            DrawSerializedPropertiesExcluding(serializedObject, paddedPropertyNames, noPropertyNames);
+        }
+
+        public static void DrawSerializedPropertiesExcluding(
+            SerializedObject serializedObject,
+            string[] paddedPropertyNames,
+            string[] excludedPropertyNames)
+        {
             SerializedProperty iterator = serializedObject.GetIterator();
             bool enterChildren = true;
 
@@ -69,6 +79,11 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                     continue;
                 }
 
+                if (Array.IndexOf(excludedPropertyNames, iterator.name) >= 0)
+                {
+                    continue;
+                }
+
                 if (Array.IndexOf(paddedPropertyNames, iterator.name) >= 0)
                 {
                     DrawPaddedPropertyField(iterator, SectionContentPadding);
@@ -76,6 +91,58 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 }
 
                 EditorGUILayout.PropertyField(iterator, true);
+            }
+        }
+
+        public static void DrawActorTickConfiguration(
+            SerializedObject serializedObject,
+            ActorTickPhase? codeOwnedPhase = null)
+        {
+            DrawSectionHeader(
+                "Primary Actor Tick",
+                "World dispatches opt-in Actor Tick through one selected PlayerLoop phase. None removes the Actor from Tick dispatch.",
+                new Color(0.46f, 0.84f, 1f, 1f));
+
+            if (codeOwnedPhase.HasValue)
+            {
+                using (new EditorGUI.DisabledScope(true))
+                {
+                    EditorGUILayout.EnumPopup("Tick Phase", codeOwnedPhase.Value);
+                    EditorGUILayout.Toggle("Start With Tick Enabled", false);
+                }
+
+                EditorGUILayout.HelpBox(
+                    "This Actor type owns its Tick phase in code and enables Tick only while its runtime service is active.",
+                    MessageType.Info);
+                return;
+            }
+
+            SerializedProperty phaseProperty = serializedObject.FindProperty("PrimaryTickPhase");
+            SerializedProperty enabledProperty = serializedObject.FindProperty("StartWithTickEnabled");
+            if (phaseProperty == null || enabledProperty == null)
+            {
+                EditorGUILayout.HelpBox("Actor Tick configuration properties are unavailable.", MessageType.Error);
+                return;
+            }
+
+            using (new EditorGUI.DisabledScope(Application.isPlaying))
+            {
+                EditorGUILayout.PropertyField(phaseProperty, new GUIContent("Tick Phase"));
+                bool phaseIsNone = !phaseProperty.hasMultipleDifferentValues &&
+                                   phaseProperty.enumValueIndex == (int)ActorTickPhase.None;
+                using (new EditorGUI.DisabledScope(phaseIsNone))
+                {
+                    EditorGUILayout.PropertyField(
+                        enabledProperty,
+                        new GUIContent("Start With Tick Enabled"));
+                }
+            }
+
+            if (Application.isPlaying)
+            {
+                EditorGUILayout.HelpBox(
+                    "Use SetActorTickPhase and SetActorTickEnabled for runtime changes.",
+                    MessageType.None);
             }
         }
 
@@ -105,31 +172,24 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private static void DrawFoldoutTriangle(Rect rect, bool expanded)
         {
             Vector2 center = rect.center;
-            Vector3[] points;
 
             if (expanded)
             {
-                points = new[]
-                {
-                    new Vector3(center.x - 4f, center.y - 2f),
-                    new Vector3(center.x + 4f, center.y - 2f),
-                    new Vector3(center.x, center.y + 3f)
-                };
+                foldoutTrianglePoints[0] = new Vector3(center.x - 4f, center.y - 2f);
+                foldoutTrianglePoints[1] = new Vector3(center.x + 4f, center.y - 2f);
+                foldoutTrianglePoints[2] = new Vector3(center.x, center.y + 3f);
             }
             else
             {
-                points = new[]
-                {
-                    new Vector3(center.x - 2f, center.y - 4f),
-                    new Vector3(center.x - 2f, center.y + 4f),
-                    new Vector3(center.x + 3f, center.y)
-                };
+                foldoutTrianglePoints[0] = new Vector3(center.x - 2f, center.y - 4f);
+                foldoutTrianglePoints[1] = new Vector3(center.x - 2f, center.y + 4f);
+                foldoutTrianglePoints[2] = new Vector3(center.x + 3f, center.y);
             }
 
             Handles.BeginGUI();
             Color previousColor = Handles.color;
             Handles.color = new Color(0.90f, 0.90f, 0.90f, 0.95f);
-            Handles.DrawAAConvexPolygon(points);
+            Handles.DrawAAConvexPolygon(foldoutTrianglePoints);
             Handles.color = previousColor;
             Handles.EndGUI();
         }

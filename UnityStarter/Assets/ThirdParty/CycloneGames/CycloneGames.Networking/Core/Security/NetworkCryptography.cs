@@ -1,79 +1,10 @@
 using System;
 using System.Buffers;
 using System.Security.Cryptography;
+using System.Threading;
 
 namespace CycloneGames.Networking.Security
 {
-    public interface INetworkCryptoProvider
-    {
-        bool IsEnabled { get; }
-        int GetMaxProtectedBytes(int plaintextBytes);
-        bool TryProtect(
-            INetConnection connection,
-            in NetworkMessageEnvelope envelope,
-            ReadOnlySpan<byte> plaintext,
-            Span<byte> protectedPayload,
-            out int writtenBytes);
-        bool TryUnprotect(
-            INetConnection connection,
-            in NetworkMessageEnvelope envelope,
-            ReadOnlySpan<byte> protectedPayload,
-            Span<byte> plaintext,
-            out int writtenBytes);
-    }
-
-    public sealed class NoopNetworkCryptoProvider : INetworkCryptoProvider
-    {
-        public static readonly NoopNetworkCryptoProvider Instance = new NoopNetworkCryptoProvider();
-
-        private NoopNetworkCryptoProvider()
-        {
-        }
-
-        public bool IsEnabled => false;
-
-        public int GetMaxProtectedBytes(int plaintextBytes)
-        {
-            return Math.Max(0, plaintextBytes);
-        }
-
-        public bool TryProtect(
-            INetConnection connection,
-            in NetworkMessageEnvelope envelope,
-            ReadOnlySpan<byte> plaintext,
-            Span<byte> protectedPayload,
-            out int writtenBytes)
-        {
-            if (protectedPayload.Length < plaintext.Length)
-            {
-                writtenBytes = 0;
-                return false;
-            }
-
-            plaintext.CopyTo(protectedPayload);
-            writtenBytes = plaintext.Length;
-            return true;
-        }
-
-        public bool TryUnprotect(
-            INetConnection connection,
-            in NetworkMessageEnvelope envelope,
-            ReadOnlySpan<byte> protectedPayload,
-            Span<byte> plaintext,
-            out int writtenBytes)
-        {
-            if (plaintext.Length < protectedPayload.Length)
-            {
-                writtenBytes = 0;
-                return false;
-            }
-
-            protectedPayload.CopyTo(plaintext);
-            writtenBytes = protectedPayload.Length;
-            return true;
-        }
-    }
-
     public interface INetworkMessageSigner
     {
         bool IsEnabled { get; }
@@ -123,9 +54,18 @@ namespace CycloneGames.Networking.Security
         }
     }
 
+    /// <summary>
+    /// Authenticates the stable wire envelope and payload with HMAC-SHA256.
+    /// </summary>
+    /// <remarks>
+    /// Transport-local connection and player identifiers are not part of the signature because
+    /// they can differ at each endpoint. Deployments that require cross-connection isolation must
+    /// derive and scope keys per authenticated session or peer.
+    /// </remarks>
     public sealed class HmacSha256NetworkMessageSigner : INetworkMessageSigner, IDisposable
     {
         public const int SIGNATURE_LENGTH = 32;
+        public const int MINIMUM_KEY_LENGTH = 32;
 
         private readonly object _syncRoot = new object();
         private readonly HMACSHA256 _hmac;
@@ -133,17 +73,25 @@ namespace CycloneGames.Networking.Security
 
         public HmacSha256NetworkMessageSigner(ReadOnlySpan<byte> key)
         {
-            if (key.Length == 0)
+            if (key.Length < MINIMUM_KEY_LENGTH)
             {
-                throw new ArgumentException("HMAC key must not be empty.", nameof(key));
+                throw new ArgumentException(
+                    $"HMAC-SHA256 keys must contain at least {MINIMUM_KEY_LENGTH} bytes of cryptographic key material.",
+                    nameof(key));
             }
 
             byte[] keyCopy = key.ToArray();
-            _hmac = new HMACSHA256(keyCopy);
-            Array.Clear(keyCopy, 0, keyCopy.Length);
+            try
+            {
+                _hmac = new HMACSHA256(keyCopy);
+            }
+            finally
+            {
+                Array.Clear(keyCopy, 0, keyCopy.Length);
+            }
         }
 
-        public bool IsEnabled => !_disposed;
+        public bool IsEnabled => !Volatile.Read(ref _disposed);
         public int SignatureLength => SIGNATURE_LENGTH;
 
         public bool TrySign(
@@ -153,17 +101,43 @@ namespace CycloneGames.Networking.Security
             Span<byte> signature,
             out int writtenBytes)
         {
-            if (_disposed || signature.Length < SIGNATURE_LENGTH)
+            if (signature.Length < SIGNATURE_LENGTH)
             {
                 writtenBytes = 0;
                 return false;
             }
 
-            byte[] rented = RentCanonicalMessage(envelope, payload, out int byteCount);
+            if (!envelope.IsValid || envelope.PayloadLength != payload.Length)
+            {
+                writtenBytes = 0;
+                return false;
+            }
+
+            var header = new NetworkEnvelopeHeader(
+                envelope.MessageId,
+                envelope.Channel,
+                envelope.PayloadLength,
+                envelope.Sequence,
+                envelope.Checksum,
+                envelope.Flags,
+                envelope.Version);
+            if (!header.IsSupported)
+            {
+                writtenBytes = 0;
+                return false;
+            }
+
+            byte[] rented = RentCanonicalMessage(header, payload, out int byteCount);
             try
             {
                 lock (_syncRoot)
                 {
+                    if (_disposed)
+                    {
+                        writtenBytes = 0;
+                        return false;
+                    }
+
                     return _hmac.TryComputeHash(new ReadOnlySpan<byte>(rented, 0, byteCount), signature, out writtenBytes);
                 }
             }
@@ -179,7 +153,7 @@ namespace CycloneGames.Networking.Security
             ReadOnlySpan<byte> payload,
             ReadOnlySpan<byte> signature)
         {
-            if (_disposed || signature.Length != SIGNATURE_LENGTH)
+            if (signature.Length != SIGNATURE_LENGTH)
             {
                 return false;
             }
@@ -192,32 +166,29 @@ namespace CycloneGames.Networking.Security
 
         public void Dispose()
         {
-            if (_disposed)
+            lock (_syncRoot)
             {
-                return;
-            }
+                if (_disposed)
+                    return;
 
-            _disposed = true;
-            _hmac.Dispose();
+                _disposed = true;
+                _hmac.Dispose();
+            }
         }
 
         private static byte[] RentCanonicalMessage(
-            in NetworkMessageEnvelope envelope,
+            in NetworkEnvelopeHeader header,
             ReadOnlySpan<byte> payload,
             out int byteCount)
         {
-            const int metadataBytes = 16;
+            // Authenticate the exact stable wire header. Direction and transport-local
+            // identities are intentionally excluded because they are derived locally and
+            // are not fields in the current wire protocol.
+            const int metadataBytes = NetworkWireProtocol.HeaderLength;
             byteCount = metadataBytes + payload.Length;
             byte[] rented = ArrayPool<byte>.Shared.Rent(byteCount);
 
-            rented[0] = envelope.Version;
-            WriteUShort(rented, 1, envelope.MessageId);
-            rented[3] = (byte)envelope.Direction;
-            rented[4] = (byte)envelope.Channel;
-            WriteUShort(rented, 5, (ushort)envelope.Flags);
-            WriteInt(rented, 7, envelope.PayloadLength);
-            WriteUInt(rented, 11, envelope.Sequence);
-            rented[15] = 0;
+            NetworkFrameCodec.WriteHeader(rented, 0, header);
             payload.CopyTo(new Span<byte>(rented, metadataBytes, payload.Length));
             return rented;
         }
@@ -238,23 +209,5 @@ namespace CycloneGames.Networking.Security
             return diff == 0;
         }
 
-        private static void WriteUShort(byte[] buffer, int offset, ushort value)
-        {
-            buffer[offset] = (byte)value;
-            buffer[offset + 1] = (byte)(value >> 8);
-        }
-
-        private static void WriteInt(byte[] buffer, int offset, int value)
-        {
-            buffer[offset] = (byte)value;
-            buffer[offset + 1] = (byte)(value >> 8);
-            buffer[offset + 2] = (byte)(value >> 16);
-            buffer[offset + 3] = (byte)(value >> 24);
-        }
-
-        private static void WriteUInt(byte[] buffer, int offset, uint value)
-        {
-            WriteInt(buffer, offset, unchecked((int)value));
-        }
     }
 }

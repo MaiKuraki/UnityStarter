@@ -22,10 +22,10 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 out NetworkMessageDescriptor descriptor), Is.True);
             Assert.That(AIPerceptionNetworkProtocol.MessageRange.Contains(descriptor.MessageId), Is.True);
             Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
-            Assert.That(catalog.TryGetRegisteredModuleRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
+            Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
             Assert.That(range.Name, Is.EqualTo(AIPerceptionNetworkProtocol.MessageOwner));
             Assert.That(descriptor.Owner, Is.EqualTo(AIPerceptionNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.Kind, Is.EqualTo(NetworkMessageKind.Module));
+            Assert.That(descriptor.ContractId, Is.EqualTo("AIPerceptionDetectionEventMessage:v1"));
             Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.UnreliableSequenced));
         }
 
@@ -37,8 +37,67 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             AIPerceptionNetworkProtocol.RegisterMessageCatalog(catalog);
             AIPerceptionNetworkProtocol.RegisterMessageCatalog(catalog);
 
-            Assert.That(catalog.Count, Is.EqualTo(6));
-            Assert.That(catalog.ModuleRangeCount, Is.EqualTo(1));
+            Assert.That(catalog.MessageCount, Is.EqualTo(6));
+            Assert.That(catalog.ManifestCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        {
+            NetworkProtocolManifest manifest = AIPerceptionNetworkProtocol.CreateProtocolManifest();
+            string[] canonicalSchemaLiterals =
+            {
+                "AIPerceptionManifestHandshakeMessage:v1",
+                "AIPerceptionDetectionEventMessage:v1",
+                "AIPerceptionDetectionSnapshotMessage:v1",
+                "AIPerceptionDetectionSnapshotMessage:v1",
+                "AIPerceptionAuthorityTransferMessage:v1",
+                "AIPerceptionFullStateRequestMessage:v1"
+            };
+            ulong[] expectedSchemaHashes =
+            {
+                0xE24FD3DF9C74AB1CUL,
+                0x7FB1540691D2B0BFUL,
+                0xA9F15D28F3BC339DUL,
+                0xA9F15D28F3BC339DUL,
+                0xDD0A7C2010BB2D4CUL,
+                0xF715DC535205849DUL
+            };
+
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0xBD532624135D777FUL));
+            Assert.That(AIPerceptionNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
+            Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
+            Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
+            for (int i = 0; i < expectedSchemaHashes.Length; i++)
+            {
+                Assert.That(
+                    ComputeFnv1a64(canonicalSchemaLiterals[i]),
+                    Is.EqualTo(expectedSchemaHashes[i]),
+                    canonicalSchemaLiterals[i]);
+                Assert.That(manifest.Messages[i].SchemaHash, Is.EqualTo(expectedSchemaHashes[i]));
+                Assert.That(manifest.Messages[i].ContractId, Is.EqualTo(canonicalSchemaLiterals[i]));
+            }
+        }
+
+        private static ulong ComputeFnv1a64(string canonicalLiteral)
+        {
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offsetBasis;
+
+            for (int i = 0; i < canonicalLiteral.Length; i++)
+            {
+                char character = canonicalLiteral[i];
+                if (character > 0x7F)
+                {
+                    throw new AssertionException("Canonical schema literals must contain ASCII characters only.");
+                }
+
+                hash ^= (byte)character;
+                hash = unchecked(hash * prime);
+            }
+
+            return hash;
         }
 
         [Test]

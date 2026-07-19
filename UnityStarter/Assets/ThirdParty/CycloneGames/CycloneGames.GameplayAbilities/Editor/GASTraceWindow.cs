@@ -38,7 +38,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             "Effect Removed",
             "Prediction Open",
             "Prediction OK",
-            "Prediction Reject",
+            "Prediction Rollback",
             "Prediction Timeout",
             "Target OK",
             "Target Reject"
@@ -86,26 +86,31 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         private static GUIStyle headerStyle;
         private static GUIStyle rowStyle;
-        private static GUIStyle selectedRowStyle;
         private static GUIStyle mutedStyle;
         private static GUIStyle badgeStyle;
         private static GUIStyle detailStyle;
         private static bool stylesInitialized;
 
-        private readonly GASTraceEvent[] visibleEvents = new GASTraceEvent[MaxVisibleRows];
         private readonly RowCache[] rowCaches = new RowCache[MaxVisibleRows];
         private readonly StringBuilder builder = new StringBuilder(256);
         private Vector2 scroll;
-        private int selectedRecentIndex = -1;
+        private ulong selectedSequence;
+        private GASTraceEvent selectedTraceEvent;
+        private RowCache selectedRowCache;
+        private bool hasSelectedTraceEvent;
         private bool paused;
         private bool selectionOnly;
         private bool problemsOnly;
         private int requestedCapacity = GASTrace.DefaultCapacity;
         private ulong lastObservedSequence;
         private double lastRepaintTime;
+        private int cachedStatusCount = -1;
+        private int cachedStatusCapacity = -1;
+        private string cachedStatusText = string.Empty;
 
         private struct RowCache
         {
+            public bool Initialized;
             public ulong Sequence;
             public string Frame;
             public string Time;
@@ -115,6 +120,9 @@ namespace CycloneGames.GameplayAbilities.Editor
             public string Decision;
             public string Reason;
             public string Prediction;
+            public string Spec;
+            public string Level;
+            public string ReconciliationId;
         }
 
         [MenuItem(GameplayAbilitiesEditorMenuPaths.Trace)]
@@ -133,6 +141,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         private void OnDisable()
         {
             EditorApplication.update -= OnEditorUpdate;
+            ClearSelection();
         }
 
         private void OnEditorUpdate()
@@ -191,7 +200,7 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (GUI.Button(item, ClearContent, EditorStyles.toolbarButton))
             {
                 GASTrace.Clear();
-                selectedRecentIndex = -1;
+                ClearSelection();
                 lastObservedSequence = 0;
                 ClearRowCache();
             }
@@ -211,14 +220,14 @@ namespace CycloneGames.GameplayAbilities.Editor
             item.x += 66f;
             item.width = 72f;
             int nextCapacity = EditorGUI.IntField(item, requestedCapacity);
-            requestedCapacity = Mathf.Clamp(nextCapacity, 256, 65536);
+            requestedCapacity = Mathf.Clamp(nextCapacity, 256, GASTrace.MaxCapacity);
 
             item.x += 78f;
             item.width = 54f;
             if (GUI.Button(item, "Apply", EditorStyles.toolbarButton))
             {
                 GASTrace.SetCapacity(requestedCapacity);
-                selectedRecentIndex = -1;
+                ClearSelection();
                 ClearRowCache();
             }
         }
@@ -237,9 +246,17 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             item.x += leftWidth + 12f;
             item.width = middleWidth;
-            builder.Length = 0;
-            builder.Append("Events: ").Append(GASTrace.Count).Append(" / ").Append(GASTrace.Capacity);
-            GUI.Label(item, builder.ToString(), mutedStyle);
+            int count = GASTrace.Count;
+            int capacity = GASTrace.Capacity;
+            if (count != cachedStatusCount || capacity != cachedStatusCapacity)
+            {
+                cachedStatusCount = count;
+                cachedStatusCapacity = capacity;
+                builder.Length = 0;
+                builder.Append("Events: ").Append(count).Append(" / ").Append(capacity);
+                cachedStatusText = builder.ToString();
+            }
+            GUI.Label(item, cachedStatusText, mutedStyle);
 
             item.x += middleWidth + 12f;
             item.width = rightWidth;
@@ -250,7 +267,7 @@ namespace CycloneGames.GameplayAbilities.Editor
         {
             Rect header = new Rect(rect.x, rect.y, rect.width, HeaderHeight);
             EditorGUI.DrawRect(header, new Color(0.11f, 0.11f, 0.12f, 1f));
-            DrawColumns(header, true, default, -1);
+            DrawColumns(header, true, default);
 
             Rect view = new Rect(rect.x, rect.y + HeaderHeight, rect.width, rect.height - HeaderHeight);
             int sourceCount = GASTrace.Count;
@@ -285,9 +302,8 @@ namespace CycloneGames.GameplayAbilities.Editor
                     break;
                 }
 
-                visibleEvents[drawn] = traceEvent;
                 Rect rowRect = new Rect(0f, y, content.width, RowHeight);
-                DrawColumns(rowRect, false, traceEvent, recentIndex);
+                DrawColumns(rowRect, false, traceEvent);
                 drawn++;
                 row++;
             }
@@ -300,22 +316,25 @@ namespace CycloneGames.GameplayAbilities.Editor
             GUI.EndScrollView();
         }
 
-        private void DrawColumns(Rect rect, bool isHeader, GASTraceEvent traceEvent, int recentIndex)
+        private void DrawColumns(Rect rect, bool isHeader, GASTraceEvent traceEvent)
         {
             if (!isHeader)
             {
-                bool selected = recentIndex == selectedRecentIndex;
+                bool selected = hasSelectedTraceEvent && traceEvent.Sequence == selectedSequence;
                 EditorGUI.DrawRect(rect, selected ? new Color(0.22f, 0.34f, 0.52f, 1f) : RowColor(traceEvent));
                 if (GUI.Button(rect, GUIContent.none, GUIStyle.none))
                 {
-                    selectedRecentIndex = recentIndex;
+                    selectedSequence = traceEvent.Sequence;
+                    selectedTraceEvent = traceEvent;
+                    selectedRowCache = GetRowCache(in traceEvent);
+                    hasSelectedTraceEvent = true;
                 }
             }
 
             RowCache cache = default;
             if (!isHeader)
             {
-                cache = GetRowCache(in traceEvent, recentIndex);
+                cache = GetRowCache(in traceEvent);
             }
 
             float x = LeftPadding;
@@ -342,13 +361,14 @@ namespace CycloneGames.GameplayAbilities.Editor
             Rect title = new Rect(LeftPadding, rect.y + 8f, rect.width - 20f, 20f);
             GUI.Label(title, "Event Details", headerStyle);
 
-            if (selectedRecentIndex < 0 || !GASTrace.TryGetRecent(selectedRecentIndex, out var traceEvent))
+            if (!hasSelectedTraceEvent)
             {
                 GUI.Label(new Rect(LeftPadding, rect.y + 36f, rect.width - 20f, 20f), "Select an event row to inspect the decision context.", mutedStyle);
                 return;
             }
 
-            RowCache cache = GetRowCache(in traceEvent, selectedRecentIndex);
+            GASTraceEvent traceEvent = selectedTraceEvent;
+            RowCache cache = selectedRowCache;
             float y = rect.y + 38f;
             DrawDetailLine(rect.x + LeftPadding, y, "Event", cache.Type);
             DrawDetailLine(rect.x + LeftPadding + 260f, y, "Decision", cache.Decision);
@@ -360,9 +380,9 @@ namespace CycloneGames.GameplayAbilities.Editor
             DrawDetailLine(rect.x + LeftPadding + 520f, y, "Subject", cache.Subject);
 
             y += 26f;
-            DrawDetailLine(rect.x + LeftPadding, y, "Spec", FormatOptionalInt(traceEvent.AbilitySpecHandle));
-            DrawDetailLine(rect.x + LeftPadding + 260f, y, "Level", FormatOptionalInt(traceEvent.Level));
-            DrawDetailLine(rect.x + LeftPadding + 520f, y, "NetworkId", FormatOptionalInt(traceEvent.NetworkId));
+            DrawDetailLine(rect.x + LeftPadding, y, "Spec", cache.Spec);
+            DrawDetailLine(rect.x + LeftPadding + 260f, y, "Level", cache.Level);
+            DrawDetailLine(rect.x + LeftPadding + 520f, y, "Reconciliation ID", cache.ReconciliationId);
 
             y += 26f;
             DrawDetailLine(rect.x + LeftPadding, y, "Prediction", cache.Prediction);
@@ -396,28 +416,48 @@ namespace CycloneGames.GameplayAbilities.Editor
                 return true;
             }
 
-            return traceEvent.Target != null &&
-                (traceEvent.Target.AvatarGameObject == selectedObject || traceEvent.Target.OwnerUnityObject == selectedObject);
+            if (traceEvent.Target == null)
+            {
+                return false;
+            }
+
+            if (traceEvent.Target.AvatarGameObject == selectedObject || traceEvent.Target.OwnerUnityObject == selectedObject)
+            {
+                return true;
+            }
+
+            return traceEvent.Target.OwnerUnityObject is Component ownerComponent &&
+                ownerComponent.gameObject == selectedObject;
         }
 
-        private RowCache GetRowCache(in GASTraceEvent traceEvent, int rowIndex)
+        private RowCache GetRowCache(in GASTraceEvent traceEvent)
         {
-            ref RowCache cache = ref rowCaches[rowIndex % rowCaches.Length];
-            if (cache.Sequence == traceEvent.Sequence)
+            int cacheIndex = (int)(traceEvent.Sequence % (ulong)rowCaches.Length);
+            ref RowCache cache = ref rowCaches[cacheIndex];
+            if (cache.Initialized && cache.Sequence == traceEvent.Sequence)
             {
                 return cache;
             }
 
+            cache.Initialized = true;
             cache.Sequence = traceEvent.Sequence;
             cache.Frame = traceEvent.Frame.ToString();
             cache.Time = traceEvent.Time.ToString("0.00");
-            cache.Type = EventTypeNames[(int)traceEvent.Type];
+            cache.Type = GetEnumName(EventTypeNames, (int)traceEvent.Type);
             cache.Target = GetASCName(traceEvent.Target);
             cache.Subject = GetSubjectName(in traceEvent);
-            cache.Decision = DecisionNames[(int)traceEvent.Decision];
-            cache.Reason = ReasonNames[(int)traceEvent.Reason];
+            cache.Decision = GetEnumName(DecisionNames, (int)traceEvent.Decision);
+            cache.Reason = GetEnumName(ReasonNames, (int)traceEvent.Reason);
             cache.Prediction = BuildPredictionText(in traceEvent);
+            cache.Spec = FormatOptionalInt(traceEvent.AbilitySpecHandle);
+            cache.Level = FormatOptionalInt(traceEvent.Level);
+            cache.ReconciliationId = FormatOptionalInt(traceEvent.ReconciliationId);
             return cache;
+        }
+
+        private static string GetEnumName(string[] names, int index)
+        {
+            return (uint)index < (uint)names.Length ? names[index] : "<Unknown>";
         }
 
         private static string GetASCName(AbilitySystemComponent asc)
@@ -437,9 +477,9 @@ namespace CycloneGames.GameplayAbilities.Editor
 
         private static string GetSubjectName(in GASTraceEvent traceEvent)
         {
-            if (traceEvent.Ability != null)
+            if (traceEvent.AbilityDefinition != null)
             {
-                return traceEvent.Ability.Name;
+                return traceEvent.AbilityDefinition.Name;
             }
 
             if (traceEvent.Effect != null)
@@ -495,6 +535,14 @@ namespace CycloneGames.GameplayAbilities.Editor
             }
         }
 
+        private void ClearSelection()
+        {
+            selectedSequence = 0;
+            selectedTraceEvent = default;
+            selectedRowCache = default;
+            hasSelectedTraceEvent = false;
+        }
+
         private static void EnsureStyles()
         {
             if (stylesInitialized)
@@ -511,10 +559,6 @@ namespace CycloneGames.GameplayAbilities.Editor
             {
                 normal = { textColor = new Color(0.82f, 0.84f, 0.88f, 1f) },
                 clipping = TextClipping.Clip
-            };
-            selectedRowStyle = new GUIStyle(rowStyle)
-            {
-                normal = { textColor = Color.white }
             };
             mutedStyle = new GUIStyle(EditorStyles.label)
             {

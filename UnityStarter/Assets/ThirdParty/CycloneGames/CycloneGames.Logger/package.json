@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.logger",
   "version": "1.0.0",
   "displayName": "CycloneGames.Logger",
-  "description": "A thread-safe C# logging utility with asynchronous processing and category filtering. Supports multiple log levels (Trace to Fatal), whitelist/blacklist filtering, and parallel logging through pluggable ILogger implementations. Features background queue processing for minimal performance impact, making it suitable for high-throughput applications requiring flexible log routing and filtering.",
+  "description": "A bounded and observable logging framework for Unity and pure C# hosts, with explicit lifecycle management, failure-isolated sinks, Unity main-thread delivery, and resilient file output.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {},
@@ -18,8 +18,8 @@
   },
   "samples": [
     {
-      "displayName": "Logger Sample",
-      "description": "Logger Sample",
+      "displayName": "Logger Samples",
+      "description": "Beginner-to-advanced Unity examples for logging, bounded queue observation, file output, and local performance diagnostics.",
       "path": "Samples"
     }
   ]

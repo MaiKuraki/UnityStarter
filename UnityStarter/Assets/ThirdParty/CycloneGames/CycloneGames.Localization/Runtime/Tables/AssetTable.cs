@@ -61,15 +61,23 @@ namespace CycloneGames.Localization.Runtime
         {
             if (_compiled != null) return _compiled;
 
+            if (string.IsNullOrEmpty(tableId))
+                throw new InvalidOperationException("Asset table ID is required.");
+            if (!LocaleId.IsValid)
+                throw new InvalidOperationException("Asset table locale code is invalid.");
+
             var lookup = new Dictionary<string, AssetRef>(entries.Count, StringComparer.Ordinal);
             for (int i = 0; i < entries.Count; i++)
             {
                 var e = entries[i];
-                if (string.IsNullOrEmpty(e.Key)) continue;
-                lookup[e.Key] = e.Asset;
+                if (string.IsNullOrEmpty(e.Key))
+                    throw new InvalidOperationException("Asset table entries must have non-empty keys.");
+                if (lookup.ContainsKey(e.Key))
+                    throw new InvalidOperationException("Duplicate asset key '" + e.Key + "'.");
+                lookup.Add(e.Key, e.Asset);
             }
 
-            _compiled = new CompiledAssetTable(tableId, LocaleId, lookup);
+            _compiled = new CompiledAssetTable(tableId, LocaleId, lookup, true);
             return _compiled;
         }
 

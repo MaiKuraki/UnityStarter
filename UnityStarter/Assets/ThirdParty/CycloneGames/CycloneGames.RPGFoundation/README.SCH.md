@@ -148,7 +148,7 @@ Unity Physics 不是所有支持平台上的确定性 lockstep 真相来源。Un
 
 ## Package Manifest 说明
 
-本包存放在 `Assets/ThirdParty/CycloneGames/` 下。Unity 不会像已安装 UPM 包那样，基于同目录 `package.json` 的 dependency 字段自动启用或禁用本地 Assets 文件夹模块。真实编译边界由当前 checkout 中存在的 `.asmdef` 引用、define constraints、version defines 和源码文件决定。
+本包存放在 `Assets/ThirdParty/CycloneGames/` 下。Unity 不会像已安装 UPM 包那样，基于同目录 `package.json` 的 dependency 字段自动启用或禁用本地 Assets 文件夹模块。真实编译边界由项目中的 `.asmdef` 引用、define constraints、version defines 和源码文件决定。
 
 ## 持久化
 

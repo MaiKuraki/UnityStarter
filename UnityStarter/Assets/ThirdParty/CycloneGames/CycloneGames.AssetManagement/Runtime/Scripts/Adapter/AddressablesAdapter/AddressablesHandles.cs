@@ -1,557 +1,1501 @@
 #if CYCLONEGAMES_HAS_ADDRESSABLES
-using Cysharp.Threading.Tasks;
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Threading;
+
 using UnityEngine;
-using UnityEngine.SceneManagement;
 using UnityEngine.AddressableAssets;
 using UnityEngine.ResourceManagement.AsyncOperations;
 using UnityEngine.ResourceManagement.ResourceProviders;
+using UnityEngine.SceneManagement;
+
+using Cysharp.Threading.Tasks;
+
 using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    /// <summary>
-    /// Thread-safe object pool with soft/hard sizing limits and idle-based auto-shrink.
-    /// Soft limit: preferred steady-state pool size.
-    /// Hard limit: absolute cap; objects beyond it are discarded to prevent bloat.
-    /// Shrink: triggers only when the pool has been idle (no Get or Release) for SHRINK_THRESHOLD_MS.
-    /// </summary>
-    internal static class AdaptiveAddressablesPool<T> where T : class, new()
+    internal static class AddressablesOperationTask
     {
-        private const int SOFT_LIMIT = 64;
-        private const int HARD_LIMIT = 512;
-        private const int SHRINK_THRESHOLD_MS = 30000;
-        private const int SHRINK_BATCH_SIZE = 16;
-
-        private static readonly Stack<T> _pool = new Stack<T>(SOFT_LIMIT);
-        private static readonly object _poolLock = new object();
-        // Monotonic millisecond clock (Environment.TickCount64 is unavailable on Unity's runtime).
-        private static readonly double s_msPerTick = 1000.0 / System.Diagnostics.Stopwatch.Frequency;
-        private static long NowMs() => (long)(System.Diagnostics.Stopwatch.GetTimestamp() * s_msPerTick);
-        // Tracks the last idle start as monotonic ms; long.MaxValue means actively in use.
-        private static long _idleStartMs = long.MaxValue;
-        private static int _highWaterMark;
-
-        public static T Get()
+        public static async UniTask CompleteAsync<T>(
+            AsyncOperationHandle<T> operation,
+            string fallbackError)
         {
-            lock (_poolLock)
+            if (!operation.IsValid())
             {
-                _idleStartMs = long.MaxValue; // pool is active; reset idle timer
-                if (_pool.Count > 0) return _pool.Pop();
+                throw new InvalidOperationException($"{fallbackError} The provider handle is invalid.");
             }
-            return new T();
-        }
 
-        public static void Release(T item)
-        {
-            if (item == null) return;
-            lock (_poolLock)
+            if (!operation.IsDone)
             {
-                int count = _pool.Count;
-                if (count < HARD_LIMIT)
-                {
-                    _pool.Push(item);
-                    if (count + 1 > _highWaterMark) _highWaterMark = count + 1;
-                }
-
-                // Begin idle timer only after this release if pool is above soft limit.
-                if (_pool.Count > SOFT_LIMIT && _idleStartMs == long.MaxValue)
-                    _idleStartMs = NowMs();
-
-                TryShrinkIfIdle();
+                await operation.ToUniTask();
             }
-        }
 
-        private static void TryShrinkIfIdle()
-        {
-            if (_pool.Count <= SOFT_LIMIT || _idleStartMs == long.MaxValue) return;
-
-            long idleMs = NowMs() - _idleStartMs;
-            if (idleMs < SHRINK_THRESHOLD_MS) return;
-
-            int toRemove = Math.Min(SHRINK_BATCH_SIZE, _pool.Count - SOFT_LIMIT);
-            for (int i = 0; i < toRemove; i++) _pool.Pop();
-
-            if (_pool.Count <= SOFT_LIMIT) _idleStartMs = long.MaxValue;
-        }
-
-        public static (int current, int highWaterMark) GetStats()
-        {
-            lock (_poolLock) return (_pool.Count, _highWaterMark);
-        }
-
-        public static void Clear()
-        {
-            lock (_poolLock)
+            if (!operation.IsValid())
             {
-                _pool.Clear();
-                _highWaterMark = 0;
-                _idleStartMs = long.MaxValue;
+                throw new InvalidOperationException($"{fallbackError} The provider handle became invalid before completion.");
+            }
+
+            if (operation.Status != AsyncOperationStatus.Succeeded)
+            {
+                Exception providerException = operation.OperationException;
+                string message = providerException?.Message;
+                throw new InvalidOperationException(
+                    string.IsNullOrEmpty(message) ? fallbackError : message,
+                    providerException);
             }
         }
     }
 
-    internal abstract class AddressablesOperationHandle : IOperation
+    internal static class AddressablesSynchronousWait
     {
-        protected int Id;
+        public static void Complete<T>(AsyncOperationHandle<T> operation)
+        {
+            if (!operation.IsValid() || operation.IsDone)
+            {
+                return;
+            }
+
+#if UNITY_WEBGL
+            throw new PlatformNotSupportedException(
+                "Pending Addressables operations cannot be completed synchronously on WebGL. Await IOperation.Task instead.");
+#else
+            throw new NotSupportedException(
+                "Pending Addressables operations cannot be completed synchronously through this adapter. " +
+                "WaitForCompletion can stall every active Addressables load and is unsafe for remote bundles; await IOperation.Task instead.");
+#endif
+        }
+    }
+
+    internal abstract class AddressablesOperationHandle : IOperation, ITrackedAssetHandle
+    {
+        protected long Id;
+        long ITrackedAssetHandle.DiagnosticHandleId => Id;
+
         public abstract bool IsDone { get; }
         public abstract float Progress { get; }
         public abstract string Error { get; }
         public abstract UniTask Task { get; }
         public abstract void WaitForAsyncComplete();
 
-        protected AddressablesOperationHandle() { }
-        protected void SetId(int id) => Id = id;
+        protected void SetId(long id)
+        {
+            Id = id;
+        }
     }
 
-    internal sealed class AddressableAssetHandle<TAsset> : AddressablesOperationHandle, IAssetHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
+    internal sealed class AddressableAssetHandle<TAsset> : AddressablesOperationHandle,
+        IAssetHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint,
+        IAssetBackendLifetime
+        where TAsset : UnityEngine.Object
     {
         internal AsyncOperationHandle<TAsset> Raw;
-        public override bool IsDone => Raw.IsDone;
-        public override float Progress => Raw.PercentComplete;
-        public override string Error => Raw.OperationException?.Message;
+        internal string Location { get; private set; }
+        internal object Owner { get; private set; }
 
-        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters)
-        // instead of IEnumerator.ToUniTask() which creates a one-shot EnumeratorPromise.
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : Raw.Task.AsUniTask();
-
-        public TAsset Asset => Raw.Result;
-        public UnityEngine.Object AssetObject => Raw.Result;
-
+        private Cache.AssetCacheKey _cacheKey;
+        private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
+        private UniTask _task;
         private int _refCount;
-        private volatile bool _disposed;
-        // Stores the cache key so OnHandleReleased can be O(1) without scanning the active map.
-        private string _cacheKey;
-        private Action<string, IReferenceCounted> _onReleaseToCache;
+        private int _disposed;
 
-        public AddressableAssetHandle() { }
+        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public override float Progress => Raw.IsValid() ? Raw.PercentComplete : 0f;
+        public override string Error => Raw.IsValid() ? Raw.OperationException?.Message ?? string.Empty : string.Empty;
+        public override UniTask Task => _task;
+        public TAsset Asset => Raw.IsValid() ? Raw.Result : null;
+        public UnityEngine.Object AssetObject => Asset;
+        public int RefCount => Volatile.Read(ref _refCount);
 
-        public void Initialize(int id, string cacheKey, AsyncOperationHandle<TAsset> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        public static AddressableAssetHandle<TAsset> Create(
+            long id,
+            object owner,
+            Cache.AssetCacheKey cacheKey,
+            string location,
+            AsyncOperationHandle<TAsset> raw,
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache)
         {
-            SetId(id);
-            _cacheKey = cacheKey;
-            Raw = raw;
-            _onReleaseToCache = onReleaseToCache;
-            _disposed = false;
-            _refCount = 1;
+            var handle = new AddressableAssetHandle<TAsset>
+            {
+                Id = id,
+                Owner = owner,
+                _cacheKey = cacheKey,
+                Location = location,
+                Raw = raw,
+                _onReleaseToCache = onReleaseToCache,
+                _refCount = 1,
+            };
+            handle._task = AssetOperationBroadcast.Create(AddressablesOperationTask.CompleteAsync(
+                raw,
+                $"Addressables failed to load asset '{location}'."));
+            return handle;
         }
 
-        public static AddressableAssetHandle<TAsset> Create(int id, string cacheKey, AsyncOperationHandle<TAsset> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        public override void WaitForAsyncComplete()
         {
-            var h = AdaptiveAddressablesPool<AddressableAssetHandle<TAsset>>.Get();
-            h.Initialize(id, cacheKey, raw, onReleaseToCache, cancellationToken);
-            return h;
+            AssetRuntimeGuard.EnsureMainThread();
+            AddressablesSynchronousWait.Complete(Raw);
         }
-
-        public override void WaitForAsyncComplete() => Raw.WaitForCompletion();
-
-        public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
 
         public void Retain()
         {
-            if (_disposed) { CLogger.LogError("[AddressableAssetHandle] Retain called on a disposed handle."); return; }
-            Interlocked.Increment(ref _refCount);
-        }
-
-        public void Release()
-        {
-            int newCount = Interlocked.Decrement(ref _refCount);
-            if (newCount < 0)
+            if (Volatile.Read(ref _disposed) != 0)
             {
-                Interlocked.Increment(ref _refCount); // restore
-                CLogger.LogError("[AddressableAssetHandle] Release called more times than Retain. Ignoring extra release.");
+                CLogger.LogError("[AddressableAssetHandle] Retain called on a disposed handle.");
                 return;
             }
-            if (newCount == 0)
-            {
-                if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
-                else DisposeInternal();
-            }
-        }
 
-        public void Dispose() => Release();
-
-        internal void DisposeInternal()
-        {
-            _disposed = true;
-            if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
-            if (Raw.IsValid()) Addressables.Release(Raw);
-            Raw = default;
-            _cacheKey = null;
-            _onReleaseToCache = null;
-            AdaptiveAddressablesPool<AddressableAssetHandle<TAsset>>.Release(this);
-        }
-
-        void IInternalCacheable.ForceDispose() => DisposeInternal();
-        long IAssetMemoryFootprint.EstimateRuntimeBytes() => Raw.IsValid() ? Cache.AssetMemoryEstimator.Estimate(Raw.Result) : 0;
-    }
-
-    internal sealed class AddressableAllAssetsHandle<TAsset> : AddressablesOperationHandle, IAllAssetsHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint where TAsset : UnityEngine.Object
-    {
-        private AsyncOperationHandle<IList<TAsset>> raw;
-        public override bool IsDone => raw.IsDone;
-        public override float Progress => raw.PercentComplete;
-        public override string Error => raw.OperationException?.Message;
-
-        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters)
-        // instead of IEnumerator.ToUniTask() which creates a one-shot EnumeratorPromise.
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : raw.Task.AsUniTask();
-
-        public IReadOnlyList<TAsset> Assets => (IReadOnlyList<TAsset>)raw.Result;
-
-        private int _refCount;
-        private volatile bool _disposed;
-        private string _cacheKey;
-        private Action<string, IReferenceCounted> _onReleaseToCache;
-
-        public AddressableAllAssetsHandle() { }
-
-        public void Initialize(int id, string cacheKey, AsyncOperationHandle<IList<TAsset>> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
-        {
-            SetId(id);
-            _cacheKey = cacheKey;
-            this.raw = raw;
-            _onReleaseToCache = onReleaseToCache;
-            _disposed = false;
-            _refCount = 1;
-        }
-
-        public static AddressableAllAssetsHandle<TAsset> Create(int id, string cacheKey, AsyncOperationHandle<IList<TAsset>> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
-        {
-            var h = AdaptiveAddressablesPool<AddressableAllAssetsHandle<TAsset>>.Get();
-            h.Initialize(id, cacheKey, raw, onReleaseToCache, cancellationToken);
-            return h;
-        }
-
-        public override void WaitForAsyncComplete() => raw.WaitForCompletion();
-
-        public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
-
-        public void Retain()
-        {
-            if (_disposed) { CLogger.LogError("[AddressableAllAssetsHandle] Retain called on a disposed handle."); return; }
             Interlocked.Increment(ref _refCount);
         }
 
         public void Release()
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             int newCount = Interlocked.Decrement(ref _refCount);
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[AddressableAllAssetsHandle] Release called more times than Retain. Ignoring extra release.");
+                CLogger.LogError("[AddressableAssetHandle] Release called more times than Retain.");
                 return;
             }
+
             if (newCount == 0)
             {
-                if (_onReleaseToCache != null) _onReleaseToCache(_cacheKey, this);
-                else DisposeInternal();
+                if (_onReleaseToCache != null)
+                {
+                    _onReleaseToCache(_cacheKey, this);
+                }
+                else
+                {
+                    DisposeInternal();
+                }
             }
         }
 
-        public void Dispose() => Release();
+        public void Dispose()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            Release();
+        }
 
         internal void DisposeInternal()
         {
-            _disposed = true;
-            if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
-            if (raw.IsValid()) Addressables.Release(raw);
-            this.raw = default;
-            _cacheKey = null;
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            HandleTracker.Unregister(Id);
+            if (Raw.IsValid())
+            {
+                Addressables.Release(Raw);
+            }
+
+            Raw = default;
+            Owner = null;
+            Location = null;
+            _cacheKey = default;
             _onReleaseToCache = null;
-            AdaptiveAddressablesPool<AddressableAllAssetsHandle<TAsset>>.Release(this);
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
+        bool IAssetBackendLifetime.IsDisposed => Volatile.Read(ref _disposed) != 0;
+        long IAssetMemoryFootprint.EstimateRuntimeBytes() =>
+            Raw.IsValid() ? Cache.AssetMemoryEstimator.Estimate(Raw.Result) : 0L;
+    }
+
+    internal sealed class AddressableAllAssetsHandle<TAsset> : AddressablesOperationHandle,
+        IAllAssetsHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint,
+        IAssetBackendLifetime
+        where TAsset : UnityEngine.Object
+    {
+        private sealed class ReadOnlyListAdapter : IReadOnlyList<TAsset>
+        {
+            private IList<TAsset> _source;
+
+            public TAsset this[int index] => _source[index];
+            public int Count => _source?.Count ?? 0;
+            public void SetSource(IList<TAsset> source) => _source = source;
+            public void Clear() => _source = null;
+            public IEnumerator<TAsset> GetEnumerator() => (_source ?? Array.Empty<TAsset>()).GetEnumerator();
+            System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+        }
+
+        private AsyncOperationHandle<IList<TAsset>> _raw;
+        private readonly ReadOnlyListAdapter _assets = new ReadOnlyListAdapter();
+        private Cache.AssetCacheKey _cacheKey;
+        private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
+        private UniTask _task;
+        private int _refCount;
+        private int _disposed;
+
+        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public override float Progress => _raw.IsValid() ? _raw.PercentComplete : 0f;
+        public override string Error => _raw.IsValid() ? _raw.OperationException?.Message ?? string.Empty : string.Empty;
+        public override UniTask Task => _task;
+        public IReadOnlyList<TAsset> Assets
+        {
+            get
+            {
+                _assets.SetSource(_raw.IsValid() && _raw.IsDone ? _raw.Result : null);
+                return _assets;
+            }
+        }
+        public int RefCount => Volatile.Read(ref _refCount);
+
+        public static AddressableAllAssetsHandle<TAsset> Create(
+            long id,
+            Cache.AssetCacheKey cacheKey,
+            AsyncOperationHandle<IList<TAsset>> raw,
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache)
+        {
+            var handle = new AddressableAllAssetsHandle<TAsset>
+            {
+                Id = id,
+                _cacheKey = cacheKey,
+                _raw = raw,
+                _onReleaseToCache = onReleaseToCache,
+                _refCount = 1,
+            };
+            handle._task = AssetOperationBroadcast.Create(AddressablesOperationTask.CompleteAsync(
+                raw,
+                "Addressables failed to load the requested asset collection."));
+            return handle;
+        }
+
+        public override void WaitForAsyncComplete()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            AddressablesSynchronousWait.Complete(_raw);
+        }
+
+        public void Retain()
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                CLogger.LogError("[AddressableAllAssetsHandle] Retain called on a disposed handle.");
+                return;
+            }
+
+            Interlocked.Increment(ref _refCount);
+        }
+
+        public void Release()
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
+            int newCount = Interlocked.Decrement(ref _refCount);
+            if (newCount < 0)
+            {
+                Interlocked.Increment(ref _refCount);
+                CLogger.LogError("[AddressableAllAssetsHandle] Release called more times than Retain.");
+                return;
+            }
+
+            if (newCount == 0)
+            {
+                if (_onReleaseToCache != null)
+                {
+                    _onReleaseToCache(_cacheKey, this);
+                }
+                else
+                {
+                    DisposeInternal();
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            Release();
+        }
+
+        internal void DisposeInternal()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            HandleTracker.Unregister(Id);
+            if (_raw.IsValid())
+            {
+                Addressables.Release(_raw);
+            }
+
+            _raw = default;
+            _assets.Clear();
+            _cacheKey = default;
+            _onReleaseToCache = null;
+        }
+
+        void IInternalCacheable.ForceDispose() => DisposeInternal();
+        bool IAssetBackendLifetime.IsDisposed => Volatile.Read(ref _disposed) != 0;
+
         long IAssetMemoryFootprint.EstimateRuntimeBytes()
         {
-            if (!raw.IsValid() || raw.Result == null) return 0;
-            long total = 0;
-            var all = raw.Result;
-            for (int i = 0; i < all.Count; i++) total += Cache.AssetMemoryEstimator.Estimate(all[i]);
+            if (!_raw.IsValid() || _raw.Result == null)
+            {
+                return 0L;
+            }
+
+            long total = 0L;
+            IList<TAsset> all = _raw.Result;
+            for (int i = 0; i < all.Count; i++)
+            {
+                if (!Cache.AssetMemoryEstimator.TryAddToAggregate(all[i], ref total))
+                {
+                    return 0L;
+                }
+            }
+
             return total;
         }
     }
 
-    internal sealed class AddressableInstantiateHandle : AddressablesOperationHandle, IInstantiateHandle, IReferenceCounted, IInternalCacheable
+    internal sealed class AddressableInstantiateHandle : AddressablesOperationHandle,
+        IInstantiateHandle, IReferenceCounted, IInternalCacheable
     {
-        private AsyncOperationHandle<GameObject> raw;
-        public override bool IsDone => raw.IsDone;
-        public override float Progress => raw.PercentComplete;
-        public override string Error => raw.OperationException?.Message;
-
-        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters)
-        // instead of IEnumerator.ToUniTask() which creates a one-shot EnumeratorPromise.
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : raw.Task.AsUniTask();
-
-        public GameObject Instance => raw.Result;
-
+        private AsyncOperationHandle<GameObject> _raw;
+        private UniTask _task;
+        private Action<long> _onDisposed;
+        private bool _setActive;
         private int _refCount;
-        private volatile bool _disposed;
-        private Action<string, IReferenceCounted> _onReleaseToCache;
+        private int _callerDisposed;
+        private int _disposed;
 
-        public AddressableInstantiateHandle() { }
+        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public override float Progress => _raw.IsValid() ? _raw.PercentComplete : 0f;
+        public override string Error => _raw.IsValid() ? _raw.OperationException?.Message ?? string.Empty : string.Empty;
+        public override UniTask Task => _task;
+        public GameObject Instance => _raw.IsValid() ? _raw.Result : null;
+        public int RefCount => Volatile.Read(ref _refCount);
 
-        public void Initialize(int id, AsyncOperationHandle<GameObject> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        public static AddressableInstantiateHandle Create(
+            long id,
+            AsyncOperationHandle<GameObject> raw,
+            bool setActive,
+            Action<long> onDisposed)
         {
-            SetId(id);
-            this.raw = raw;
-            _onReleaseToCache = onReleaseToCache;
-            _disposed = false;
-            _refCount = 1;
+            var handle = new AddressableInstantiateHandle
+            {
+                Id = id,
+                _raw = raw,
+                _onDisposed = onDisposed,
+                _setActive = setActive,
+                _refCount = 1,
+            };
+            handle._task = AssetOperationBroadcast.Create(handle.CompleteAsync());
+            return handle;
         }
 
-        public static AddressableInstantiateHandle Create(int id, AsyncOperationHandle<GameObject> raw, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        public override void WaitForAsyncComplete()
         {
-            var h = AdaptiveAddressablesPool<AddressableInstantiateHandle>.Get();
-            h.Initialize(id, raw, onReleaseToCache, cancellationToken);
-            return h;
+            AssetRuntimeGuard.EnsureMainThread();
+            if (!_raw.IsValid())
+            {
+                return;
+            }
+
+            AddressablesSynchronousWait.Complete(_raw);
+            if (_raw.IsDone && _raw.Status == AsyncOperationStatus.Succeeded)
+            {
+                ApplyActiveState();
+            }
         }
 
-        public override void WaitForAsyncComplete() => raw.WaitForCompletion();
-
-        public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
-
-        public void Retain()
+        private async UniTask CompleteAsync()
         {
-            if (_disposed) { CLogger.LogError("[AddressableInstantiateHandle] Retain called on a disposed handle."); return; }
-            Interlocked.Increment(ref _refCount);
+            await AddressablesOperationTask.CompleteAsync(
+                _raw,
+                "Addressables failed to instantiate the requested asset.");
+            ApplyActiveState();
         }
+
+        private void ApplyActiveState()
+        {
+            if (!_setActive && _raw.IsValid() && _raw.Result != null)
+            {
+                _raw.Result.SetActive(false);
+            }
+        }
+
+        public void Retain() => Interlocked.Increment(ref _refCount);
 
         public void Release()
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             int newCount = Interlocked.Decrement(ref _refCount);
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[AddressableInstantiateHandle] Release called more times than Retain. Ignoring extra release.");
+                CLogger.LogError("[AddressableInstantiateHandle] Release called more times than Retain.");
                 return;
             }
+
             if (newCount == 0)
             {
-                if (_onReleaseToCache != null) _onReleaseToCache(null, this);
-                else DisposeInternal();
+                DisposeInternal();
             }
         }
 
-        public void Dispose() => Release();
+        public void Dispose()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Interlocked.Exchange(ref _callerDisposed, 1) == 0)
+            {
+                Release();
+            }
+        }
 
         internal void DisposeInternal()
         {
-            _disposed = true;
-            if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
-            if (raw.IsValid())
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
             {
-                if (!Addressables.ReleaseInstance(raw))
+                return;
+            }
+
+            HandleTracker.Unregister(Id);
+            try
+            {
+                if (_raw.IsValid())
                 {
-                    Addressables.Release(raw);
+                    Addressables.Release(_raw);
                 }
             }
-            this.raw = default;
-            _onReleaseToCache = null;
-            AdaptiveAddressablesPool<AddressableInstantiateHandle>.Release(this);
+            finally
+            {
+                Action<long> onDisposed = _onDisposed;
+                _onDisposed = null;
+                _raw = default;
+                onDisposed?.Invoke(Id);
+            }
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
     }
 
-    internal sealed class FailedInstantiateHandle : IInstantiateHandle
-    {
-        public bool IsDone => true;
-        public float Progress => 1f;
-        public string Error { get; private set; }
-        public UniTask Task => UniTask.CompletedTask;
-        public GameObject Instance => null;
-
-        public FailedInstantiateHandle(string error) { Error = error; }
-        public void WaitForAsyncComplete() { }
-        public void Dispose() { }
-    }
-
-    internal sealed class AddressableSceneHandle : AddressablesOperationHandle, ISceneHandle, IReferenceCounted, IInternalCacheable
+    internal sealed class AddressableSceneHandle : AddressablesOperationHandle,
+        ISceneHandle, IReferenceCounted
     {
         internal AsyncOperationHandle<SceneInstance> Raw;
-        internal int DebugId => Id;
-        public override bool IsDone => Raw.IsDone;
-        public override float Progress => Raw.PercentComplete;
-        public override string Error => Raw.OperationException?.Message;
+        internal long DebugId => Id;
+        internal object OwnerToken { get; private set; }
+        internal bool UnloadStarted => _unloadStarted;
+        internal bool IsProviderHandleReleased => !Raw.IsValid();
+        internal bool IsTerminallyReleased => Volatile.Read(ref _disposed) != 0;
+        internal bool RequiresShutdownActivation
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                if (IsTerminallyReleased ||
+                    _providerSceneUnloaded ||
+                    ActivationMode != SceneActivationMode.Manual)
+                {
+                    return false;
+                }
 
-        // Use AsyncOperationHandle.Task (System.Threading.Tasks.Task, supports multiple awaiters).
-        public override UniTask Task => IsDone ? UniTask.CompletedTask : Raw.Task.AsUniTask();
+                RefreshActivationState();
+                if (_activationState == SceneActivationState.Activated)
+                {
+                    return false;
+                }
 
+                return !Raw.IsValid() ||
+                       !Raw.IsDone ||
+                       Raw.Status != AsyncOperationStatus.Failed;
+            }
+        }
+
+        private int _refCount;
+        private int _disposed;
+        private SceneActivationState _activationState;
+        private bool _activationStarted;
+        private UniTask _activationTask;
+        private bool _unloadStarted;
+        private UniTask _unloadTask;
+        private UniTask _task;
+        private Scene _scene;
+        private int _callerDisposed;
+        private string _lifecycleError = string.Empty;
+        private bool _providerSceneUnloaded;
+
+        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public override float Progress
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return Raw.IsValid() ? Raw.PercentComplete : 0f;
+            }
+        }
+        public override string Error
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                if (!string.IsNullOrEmpty(_lifecycleError))
+                {
+                    return _lifecycleError;
+                }
+
+                return Raw.IsValid() ? Raw.OperationException?.Message ?? string.Empty : string.Empty;
+            }
+        }
+        public override UniTask Task => _task;
         public string ScenePath { get; private set; }
-        public Scene Scene => Raw.Result.Scene;
+        public Scene Scene
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                TryCaptureScene();
+                return _scene;
+            }
+        }
         public SceneActivationMode ActivationMode { get; private set; }
+        public bool SupportsManualActivation => true;
+        public int RefCount => Volatile.Read(ref _refCount);
+
         public SceneActivationState ActivationState
         {
             get
             {
+                AssetRuntimeGuard.EnsureMainThread();
                 RefreshActivationState();
                 return _activationState;
             }
         }
 
-        public bool SupportsManualActivation => true;
-
-        private int _refCount;
-        private volatile bool _disposed;
-        private Action<string, IReferenceCounted> _onReleaseToCache;
-        private SceneActivationState _activationState;
-
-        public AddressableSceneHandle() { }
-
-        public void Initialize(int id, AsyncOperationHandle<SceneInstance> raw, bool activateOnLoad, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        public static AddressableSceneHandle Create(
+            long id,
+            object ownerToken,
+            string scenePath,
+            AsyncOperationHandle<SceneInstance> raw,
+            bool activateOnLoad)
         {
-            SetId(id);
-            Raw = raw;
-            ScenePath = raw.DebugName;
-            ActivationMode = activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual;
-            _activationState = SceneActivationState.Loading;
-            _onReleaseToCache = onReleaseToCache;
-            _disposed = false;
-            _refCount = 1;
+            var handle = new AddressableSceneHandle
+            {
+                Id = id,
+                OwnerToken = ownerToken ?? throw new ArgumentNullException(nameof(ownerToken)),
+                Raw = raw,
+                ScenePath = scenePath,
+                ActivationMode = activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual,
+                _activationState = SceneActivationState.Loading,
+                _refCount = 1,
+            };
+            handle._task = AssetOperationBroadcast.Create(handle.CompleteLoadAsync(
+                raw,
+                scenePath));
+            return handle;
         }
 
-        public static AddressableSceneHandle Create(int id, AsyncOperationHandle<SceneInstance> raw, bool activateOnLoad, Action<string, IReferenceCounted> onReleaseToCache, CancellationToken cancellationToken)
+        private async UniTask CompleteLoadAsync(
+            AsyncOperationHandle<SceneInstance> raw,
+            string scenePath)
         {
-            var h = AdaptiveAddressablesPool<AddressableSceneHandle>.Get();
-            h.Initialize(id, raw, activateOnLoad, onReleaseToCache, cancellationToken);
-            return h;
+            await AddressablesOperationTask.CompleteAsync(
+                raw,
+                $"Addressables failed to load scene '{scenePath}'.");
+            TryCaptureScene();
         }
 
-        public override void WaitForAsyncComplete() => Raw.WaitForCompletion();
-
-        public async UniTask ActivateAsync(CancellationToken cancellationToken = default)
+        private bool TryCaptureScene()
         {
+            if (_scene.IsValid())
+            {
+                return true;
+            }
+
+            if (!Raw.IsValid() || !Raw.IsDone || Raw.Status != AsyncOperationStatus.Succeeded)
+            {
+                return false;
+            }
+
+            Scene providerScene = Raw.Result.Scene;
+            if (!providerScene.IsValid())
+            {
+                return false;
+            }
+
+            _scene = providerScene;
+            return true;
+        }
+
+        internal bool MatchesScene(Scene scene)
+        {
+            return scene.IsValid() && TryCaptureScene() && _scene == scene;
+        }
+
+        internal void OnProviderSceneUnloadObserved(Scene scene)
+        {
+            _providerSceneUnloaded = true;
+            if (scene.IsValid() && (!_scene.IsValid() || _scene == scene))
+            {
+                _scene = scene;
+            }
+        }
+
+        internal void OnProviderSceneUnloaded(Scene scene)
+        {
+            // Addressables owns automatic provider-handle release for Single-mode and external unloads.
+            // Only invalidate this wrapper; releasing Raw here can double-release the provider operation.
+            OnProviderSceneUnloadObserved(scene);
+            DisposeInternal();
+        }
+
+        public override void WaitForAsyncComplete()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            AddressablesSynchronousWait.Complete(Raw);
+        }
+
+        public UniTask ActivateAsync(CancellationToken cancellationToken = default)
+        {
+            return StartOrJoinActivation(cancellationToken, allowStartDuringUnload: false);
+        }
+
+        internal async UniTask ResolveShutdownActivationAsync()
+        {
+            if (!RequiresShutdownActivation)
+            {
+                return;
+            }
+
+            try
+            {
+                await ActivateAsync(CancellationToken.None);
+            }
+            catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
+            {
+                // A load that became terminally failed or a scene retired by Single/external unload no longer
+                // owns Unity's manual activation barrier. Any still-unresolved state must stop shutdown before
+                // a new unload operation is queued behind that barrier.
+                if (RequiresShutdownActivation)
+                {
+                    throw;
+                }
+            }
+        }
+
+        private UniTask StartOrJoinActivation(
+            CancellationToken cancellationToken,
+            bool allowStartDuringUnload)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                throw new ObjectDisposedException(nameof(AddressableSceneHandle));
+            }
+
             RefreshActivationState();
             if (_activationState == SceneActivationState.Activated)
             {
-                return;
+                return UniTask.CompletedTask;
             }
 
-            if (!IsDone)
+            if (_activationStarted)
             {
-                await Task.AttachExternalCancellation(cancellationToken);
+                return _activationTask;
             }
 
-            RefreshActivationState();
-            if (_activationState == SceneActivationState.Activated)
+            if (_unloadStarted && !allowStartDuringUnload)
             {
-                return;
+                throw new InvalidOperationException(
+                    "Scene activation cannot start after scene unload has been committed.");
             }
 
-            if (!Raw.IsValid())
-            {
-                return;
-            }
-
-            if (ActivationMode == SceneActivationMode.ActivateOnLoad)
-            {
-                _activationState = SceneActivationState.Activated;
-                return;
-            }
-
-            AsyncOperation activateOperation = Raw.Result.ActivateAsync();
-            while (activateOperation != null && !activateOperation.isDone)
+            if (!_activationStarted)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                await UniTask.Yield(cancellationToken);
+                _activationStarted = true;
+                _activationTask = AssetOperationBroadcast.Create(ActivateCoreAsync());
             }
 
-            _activationState = SceneActivationState.Activated;
+            return _activationTask;
+        }
+
+        private async UniTask ActivateCoreAsync()
+        {
+            try
+            {
+                // The broadcast task is repeatable. Always await it so a load that already faulted cannot be
+                // mistaken for a completed, activatable scene.
+                await Task;
+
+                if (!Raw.IsValid() || Raw.Status != AsyncOperationStatus.Succeeded)
+                {
+                    throw new InvalidOperationException("Addressables scene handle became invalid before activation.");
+                }
+
+                if (ActivationMode == SceneActivationMode.Manual)
+                {
+                    AsyncOperation operation = Raw.Result.ActivateAsync();
+                    while (operation != null && !operation.isDone)
+                    {
+                        await UniTask.Yield();
+                    }
+                }
+
+                EnsureActivationCompletionStillOwned();
+
+                _activationState = SceneActivationState.Activated;
+            }
+            catch
+            {
+                _activationStarted = false;
+                throw;
+            }
+        }
+
+        private void EnsureActivationCompletionStillOwned()
+        {
+            if (Volatile.Read(ref _disposed) != 0 ||
+                _providerSceneUnloaded ||
+                !Raw.IsValid() ||
+                Raw.Status != AsyncOperationStatus.Succeeded ||
+                !TryCaptureScene() ||
+                !_scene.isLoaded)
+            {
+                throw new InvalidOperationException(
+                    "Addressables scene activation completed after scene ownership had already been retired.");
+            }
+        }
+
+        internal UniTask UnloadAsync(CancellationToken cancellationToken)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return UniTask.CompletedTask;
+            }
+
+            if (!_unloadStarted)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                _unloadStarted = true;
+                _lifecycleError = string.Empty;
+                SceneTracker.MarkUnloadRequested(Id);
+                _unloadTask = AssetOperationBroadcast.Create(UnloadCoreAsync());
+            }
+
+            return _unloadTask;
+        }
+
+        private async UniTask UnloadCoreAsync()
+        {
+            AsyncOperationHandle<SceneInstance> unloadOperation = default;
+            try
+            {
+                if (Raw.IsValid() && Raw.IsDone && Raw.Status == AsyncOperationStatus.Failed)
+                {
+                    Addressables.Release(Raw);
+                    Raw = default;
+                    DisposeInternal();
+                    return;
+                }
+
+                if (ActivationMode == SceneActivationMode.Manual && ActivationState != SceneActivationState.Activated)
+                {
+                    try
+                    {
+                        await StartOrJoinActivation(
+                            CancellationToken.None,
+                            allowStartDuringUnload: true);
+                    }
+                    catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
+                    {
+                        if (IsKnownSceneAbsent())
+                        {
+                            DisposeInternal();
+                            return;
+                        }
+
+                        if (Raw.IsValid() && Raw.IsDone && Raw.Status == AsyncOperationStatus.Failed)
+                        {
+                            Addressables.Release(Raw);
+                            Raw = default;
+                            DisposeInternal();
+                            return;
+                        }
+
+                        throw;
+                    }
+                }
+
+                if (Raw.IsValid())
+                {
+                    unloadOperation = Addressables.UnloadSceneAsync(Raw, autoReleaseHandle: false);
+                    while (!unloadOperation.IsDone)
+                    {
+                        await UniTask.Yield();
+                    }
+                    if (unloadOperation.Status != AsyncOperationStatus.Succeeded)
+                    {
+                        throw new InvalidOperationException(
+                            unloadOperation.OperationException?.Message ?? "Addressables scene unload failed.",
+                            unloadOperation.OperationException);
+                    }
+                }
+
+                DisposeInternal();
+            }
+            catch (Exception exception)
+            {
+                if (AssetRuntimeGuard.IsRecoverableException(exception) && IsKnownSceneAbsent())
+                {
+                    DisposeInternal();
+                    return;
+                }
+
+                _unloadStarted = false;
+                if (AssetRuntimeGuard.IsRecoverableException(exception))
+                {
+                    _lifecycleError = exception.Message;
+                    SceneTracker.MarkUnloadFailed(Id, _lifecycleError);
+                }
+                throw;
+            }
+            finally
+            {
+                if (unloadOperation.IsValid())
+                {
+                    Addressables.Release(unloadOperation);
+                }
+            }
+        }
+
+        private bool IsKnownSceneAbsent()
+        {
+            if (_scene.IsValid() && _scene.isLoaded)
+            {
+                return false;
+            }
+
+            return _providerSceneUnloaded || !Raw.IsValid();
         }
 
         private void RefreshActivationState()
         {
-            if (_activationState != SceneActivationState.Loading || !IsDone)
+            if (_activationState != SceneActivationState.Loading ||
+                _task.Status != UniTaskStatus.Succeeded ||
+                !Raw.IsValid() ||
+                Raw.Status != AsyncOperationStatus.Succeeded)
             {
                 return;
             }
 
-            _activationState = ActivationMode == SceneActivationMode.Manual
+            _activationState = ActivationMode == SceneActivationMode.Manual && !_activationStarted
                 ? SceneActivationState.WaitingForActivation
-                : SceneActivationState.Activated;
+                : ActivationMode == SceneActivationMode.ActivateOnLoad
+                    ? SceneActivationState.Activated
+                    : SceneActivationState.Loading;
         }
 
-        public int RefCount => Interlocked.CompareExchange(ref _refCount, 0, 0);
-
-        public void Retain()
-        {
-            if (_disposed) { CLogger.LogError("[AddressableSceneHandle] Retain called on a disposed handle."); return; }
-            Interlocked.Increment(ref _refCount);
-        }
+        public void Retain() => Interlocked.Increment(ref _refCount);
 
         public void Release()
         {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             int newCount = Interlocked.Decrement(ref _refCount);
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[AddressableSceneHandle] Release called more times than Retain. Ignoring extra release.");
-                return;
+                CLogger.LogError("[AddressableSceneHandle] Release called more times than Retain.");
             }
-            if (newCount == 0)
+            else if (newCount == 0)
             {
-                CLogger.LogWarning("[AddressableSceneHandle] Release only releases caller ownership. Use IAssetPackage.UnloadSceneAsync to unload the scene.");
+                CLogger.LogWarning("[AddressableSceneHandle] Dispose releases caller ownership only. Use IAssetSceneLoader.UnloadSceneAsync to unload the scene.");
             }
         }
 
-        public void Dispose() => Release();
+        public void Dispose()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Interlocked.Exchange(ref _callerDisposed, 1) == 0)
+            {
+                Release();
+            }
+        }
 
         internal void DisposeInternal()
         {
-            _disposed = true;
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
             SceneTracker.Unregister(Id);
-            if (HandleTracker.Enabled) HandleTracker.Unregister(Id);
+            HandleTracker.Unregister(Id);
+            Interlocked.Exchange(ref _refCount, 0);
             Raw = default;
             ScenePath = null;
-            ActivationMode = SceneActivationMode.ActivateOnLoad;
-            _activationState = SceneActivationState.Loading;
-            _onReleaseToCache = null;
-            AdaptiveAddressablesPool<AddressableSceneHandle>.Release(this);
+            _activationTask = default;
+            _unloadTask = default;
         }
-
-        void IInternalCacheable.ForceDispose() => DisposeInternal();
     }
 
     internal sealed class AddressableDownloader : IDownloader
     {
-        private AsyncOperationHandle raw;
+        private static readonly long DOWNLOAD_STATUS_SAMPLE_INTERVAL_TICKS =
+            Math.Max(1L, Stopwatch.Frequency / 4L);
+
+        private readonly string[] _keys;
+        private readonly CancellationTokenSource _sharedCancellation = new CancellationTokenSource();
+        private readonly UniTaskCompletionSource _disposeCompletion = new UniTaskCompletionSource();
+        private Action<AddressableDownloader> _onDisposed;
+        private AsyncOperationHandle<long> _sizeOperation;
+        private AsyncOperationHandle _downloadOperation;
+        private bool _prepareStarted;
+        private bool _prepared;
+        private UniTask _prepareTask;
+        private UniTask _prepareCallerTask;
+        private bool _startStarted;
+        private UniTask _startTask;
+        private UniTask _startCallerTask;
+        private int _disposed;
         private bool _cancelled;
-        private readonly bool _completedWithoutWork;
-        public bool IsDone => _completedWithoutWork || _cancelled || (raw.IsValid() && raw.IsDone);
-        public bool Succeed => _completedWithoutWork || (!_cancelled && raw.IsValid() && raw.Status == AsyncOperationStatus.Succeeded);
-        public float Progress => _completedWithoutWork ? 1f : _cancelled ? 0f : raw.IsValid() ? raw.PercentComplete : 0f;
-        public int TotalDownloadCount => 0;
-        public int CurrentDownloadCount => 0;
-        public long TotalDownloadBytes => _completedWithoutWork || _cancelled || !raw.IsValid() ? 0 : raw.GetDownloadStatus().TotalBytes;
-        public long CurrentDownloadBytes => _completedWithoutWork || _cancelled || !raw.IsValid() ? 0 : raw.GetDownloadStatus().DownloadedBytes;
-        public string Error => _cancelled ? "Cancelled" : raw.IsValid() ? raw.OperationException?.Message : string.Empty;
+        private bool _succeeded;
+        private float _progress;
+        private long _totalBytes;
+        private long _downloadedBytes;
+        private long _nextDownloadStatusSampleTimestamp;
+        private bool _hasTerminalDownloadSnapshot;
+        private string _error = string.Empty;
 
-        public AddressableDownloader(AsyncOperationHandle raw)
+        public AddressableDownloader(
+            string[] keys,
+            Action<AddressableDownloader> onDisposed)
         {
-            this.raw = raw;
-            _completedWithoutWork = !raw.IsValid();
+            _keys = keys ?? throw new ArgumentNullException(nameof(keys));
+            _onDisposed = onDisposed;
+            if (_keys.Length == 0)
+            {
+                _prepared = true;
+                _succeeded = true;
+                _progress = 1f;
+            }
         }
 
-        public void Begin() { }
-        public UniTask StartAsync(CancellationToken cancellationToken = default)
+        internal int ScopeValueCount => _keys.Length;
+
+        public bool IsDone
         {
-            return _completedWithoutWork || _cancelled || !raw.IsValid()
-                ? UniTask.CompletedTask
-                : raw.ToUniTask(cancellationToken: cancellationToken);
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return IsDoneOnMainThread();
+            }
         }
-        public void Pause() => CLogger.LogWarning("[AddressableDownloader] Pause is not supported by Addressables.");
-        public void Resume() => CLogger.LogWarning("[AddressableDownloader] Resume is not supported by Addressables.");
+
+        public bool Succeed
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return SucceedOnMainThread();
+            }
+        }
+
+        public float Progress
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return CanReadDownloadOperation() && _downloadOperation.IsValid()
+                    ? _downloadOperation.PercentComplete
+                    : _progress;
+            }
+        }
+
+        // Addressables does not expose dependency bundle count on the operation handle.
+        // Report one aggregate work item so provider-neutral workflows do not mistake it for an empty download.
+        public int TotalDownloadCount
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return TotalDownloadCountOnMainThread();
+            }
+        }
+
+        public int CurrentDownloadCount
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return TotalDownloadCountOnMainThread() != 0 &&
+                       IsDoneOnMainThread() &&
+                       SucceedOnMainThread()
+                    ? 1
+                    : 0;
+            }
+        }
+
+        public long TotalDownloadBytes
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return _totalBytes;
+            }
+        }
+
+        public long CurrentDownloadBytes
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                RefreshDownloadSnapshotIfDue();
+                return _downloadedBytes;
+            }
+        }
+
+        public string Error
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return _cancelled
+                    ? "Cancelled"
+                    : _downloadOperation.IsValid()
+                        ? _downloadOperation.OperationException?.Message ?? string.Empty
+                        : _error;
+            }
+        }
+
+        public UniTask PrepareAsync(CancellationToken cancellationToken = default)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            if (_cancelled)
+            {
+                throw new OperationCanceledException("The Addressables download was cancelled.");
+            }
+
+            if (_prepared)
+            {
+                return UniTask.CompletedTask;
+            }
+
+            if (!_prepareStarted)
+            {
+                _prepareStarted = true;
+                _prepareTask = AssetOperationBroadcast.Create(PrepareCoreAsync());
+                _prepareCallerTask = AssetOperationBroadcast.CreateCallerView(
+                    _prepareTask,
+                    _sharedCancellation.Token);
+            }
+
+            return CreateWaitView(_prepareCallerTask, cancellationToken);
+        }
+
+        private async UniTask PrepareCoreAsync()
+        {
+            try
+            {
+                _sizeOperation = Addressables.GetDownloadSizeAsync(_keys);
+                await _sizeOperation.ToUniTask();
+                if (_cancelled)
+                {
+                    throw new OperationCanceledException("The Addressables download was cancelled.");
+                }
+
+                if (!_sizeOperation.IsValid() || _sizeOperation.Status != AsyncOperationStatus.Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        _sizeOperation.IsValid()
+                            ? _sizeOperation.OperationException?.Message ?? "Addressables download-size query failed."
+                            : "Addressables download-size handle became invalid.");
+                }
+
+                _totalBytes = Math.Max(0L, _sizeOperation.Result);
+                _prepared = true;
+                if (_totalBytes == 0L)
+                {
+                    _progress = 1f;
+                    _succeeded = true;
+                }
+            }
+            catch (Exception exception) when (
+                _cancelled && AssetRuntimeGuard.IsRecoverableException(exception))
+            {
+                throw new OperationCanceledException("The Addressables download was cancelled.");
+            }
+            catch (Exception exception) when (
+                Volatile.Read(ref _disposed) != 0 && AssetRuntimeGuard.IsRecoverableException(exception))
+            {
+                throw new ObjectDisposedException(nameof(AddressableDownloader));
+            }
+            catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
+            {
+                if (string.IsNullOrEmpty(_error))
+                {
+                    _error = $"Addressables download-size query failed ({exception.GetType().Name}).";
+                }
+
+                _prepareStarted = false;
+                throw;
+            }
+            finally
+            {
+                ReleaseSizeOperation();
+            }
+        }
+
+        public async UniTask StartAsync(CancellationToken cancellationToken = default)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            cancellationToken.ThrowIfCancellationRequested();
+            ThrowIfDisposed();
+            await PrepareAsync(cancellationToken);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (_cancelled)
+            {
+                throw new OperationCanceledException("The Addressables download was cancelled.");
+            }
+
+            if (_totalBytes == 0L)
+            {
+                return;
+            }
+
+            if (!_startStarted)
+            {
+                _startStarted = true;
+                _startTask = AssetOperationBroadcast.Create(StartCoreAsync());
+                _startCallerTask = AssetOperationBroadcast.CreateCallerView(
+                    _startTask,
+                    _sharedCancellation.Token);
+            }
+
+            await CreateWaitView(_startCallerTask, cancellationToken);
+        }
+
+        private async UniTask StartCoreAsync()
+        {
+            try
+            {
+                _downloadOperation = Addressables.DownloadDependenciesAsync(
+                    _keys,
+                    Addressables.MergeMode.Union,
+                    autoReleaseHandle: false);
+                await _downloadOperation.ToUniTask();
+                if (_cancelled)
+                {
+                    throw new OperationCanceledException("The Addressables download was cancelled.");
+                }
+
+                if (!_downloadOperation.IsValid() ||
+                    _downloadOperation.Status != AsyncOperationStatus.Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        _downloadOperation.IsValid()
+                            ? _downloadOperation.OperationException?.Message ?? "Addressables dependency download failed."
+                            : "Addressables dependency download handle became invalid.");
+                }
+
+                _succeeded = true;
+                _progress = 1f;
+                _downloadedBytes = _totalBytes;
+            }
+            catch (Exception exception) when (
+                _cancelled && AssetRuntimeGuard.IsRecoverableException(exception))
+            {
+                throw new OperationCanceledException("The Addressables download was cancelled.");
+            }
+            catch (Exception exception) when (
+                Volatile.Read(ref _disposed) != 0 && AssetRuntimeGuard.IsRecoverableException(exception))
+            {
+                throw new ObjectDisposedException(nameof(AddressableDownloader));
+            }
+            catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+            {
+                if (string.IsNullOrEmpty(_error))
+                {
+                    _error = $"Addressables dependency download failed ({ex.GetType().Name}).";
+                }
+                throw;
+            }
+            finally
+            {
+                ReleaseDownloadOperation();
+            }
+        }
+
         public void Cancel()
         {
-            if (!_cancelled && raw.IsValid()) Addressables.Release(raw);
-            raw = default;
+            AssetRuntimeGuard.EnsureMainThread();
+            if (_cancelled || Volatile.Read(ref _disposed) != 0 || HasTerminalCallerResult())
+            {
+                return;
+            }
+
             _cancelled = true;
+            _sharedCancellation.Cancel();
         }
-        public void Combine(IDownloader other) => CLogger.LogWarning("[AddressableDownloader] Combine is not supported by Addressables.");
+
+        public void Dispose()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            if (!_cancelled && !HasTerminalCallerResult())
+            {
+                _cancelled = true;
+            }
+
+            try
+            {
+                if (_cancelled)
+                {
+                    _sharedCancellation.Cancel();
+                }
+            }
+            finally
+            {
+                CompleteDisposeAfterProviderTerminalAsync().Forget();
+            }
+        }
+
+        internal UniTask WaitForDisposeCompletionAsync()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            return Volatile.Read(ref _disposed) != 0
+                ? _disposeCompletion.Task
+                : UniTask.CompletedTask;
+        }
+
+        private async UniTask CompleteDisposeAfterProviderTerminalAsync()
+        {
+            try
+            {
+                UniTask providerTask = _startStarted
+                    ? _startTask
+                    : _prepareStarted
+                        ? _prepareTask
+                        : UniTask.CompletedTask;
+                try
+                {
+                    await providerTask;
+                }
+                catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
+                {
+                    // The caller-visible result was already published. Disposal only waits for the provider-owned
+                    // operation to reach its terminal finally block so its handle can be released safely.
+                }
+            }
+            finally
+            {
+                try
+                {
+                    _sharedCancellation.Dispose();
+                }
+                finally
+                {
+                    try
+                    {
+                        Action<AddressableDownloader> onDisposed = _onDisposed;
+                        _onDisposed = null;
+                        onDisposed?.Invoke(this);
+                    }
+                    finally
+                    {
+                        _disposeCompletion.TrySetResult();
+                    }
+                }
+            }
+        }
+
+        private UniTask CreateWaitView(UniTask sharedTask, CancellationToken callerCancellation)
+        {
+            if (!callerCancellation.CanBeCanceled)
+            {
+                return sharedTask;
+            }
+
+            return WaitWithCallerCancellationOnMainThreadAsync(sharedTask, callerCancellation);
+        }
+
+        private static async UniTask WaitWithCallerCancellationOnMainThreadAsync(
+            UniTask sharedTask,
+            CancellationToken callerCancellation)
+        {
+            try
+            {
+                await AssetOperationBroadcast.CreateCallerView(sharedTask, callerCancellation);
+            }
+            catch (OperationCanceledException)
+            {
+                if (!PlayerLoopHelper.IsMainThread)
+                {
+                    await UniTask.SwitchToMainThread();
+                }
+
+                throw;
+            }
+        }
+
+        private void ReleaseDownloadOperation()
+        {
+            AsyncOperationHandle operation = _downloadOperation;
+            try
+            {
+                CaptureDownloadSnapshot();
+            }
+            finally
+            {
+                _downloadOperation = default;
+                if (operation.IsValid())
+                {
+                    Addressables.Release(operation);
+                }
+            }
+        }
+
+        private void ReleaseSizeOperation()
+        {
+            AsyncOperationHandle<long> operation = _sizeOperation;
+            _sizeOperation = default;
+            if (operation.IsValid())
+            {
+                Addressables.Release(operation);
+            }
+        }
+
+        private void CaptureDownloadSnapshot()
+        {
+            if (!_downloadOperation.IsValid())
+            {
+                return;
+            }
+
+            try
+            {
+                DownloadStatus status = _downloadOperation.GetDownloadStatus();
+                _totalBytes = Math.Max(_totalBytes, status.TotalBytes);
+                _downloadedBytes = status.DownloadedBytes;
+                _progress = _downloadOperation.PercentComplete;
+                _succeeded = _downloadOperation.IsDone &&
+                             _downloadOperation.Status == AsyncOperationStatus.Succeeded;
+                string providerError = _downloadOperation.OperationException?.Message;
+                if (!string.IsNullOrEmpty(providerError))
+                {
+                    _error = providerError;
+                }
+            }
+            catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
+            {
+                if (string.IsNullOrEmpty(_error))
+                {
+                    _error = $"Addressables download status sampling failed ({exception.GetType().Name}).";
+                }
+            }
+            finally
+            {
+                _hasTerminalDownloadSnapshot = _downloadOperation.IsDone;
+                _nextDownloadStatusSampleTimestamp = Stopwatch.GetTimestamp() +
+                                                     DOWNLOAD_STATUS_SAMPLE_INTERVAL_TICKS;
+            }
+        }
+
+        private void RefreshDownloadSnapshotIfDue()
+        {
+            if (!CanReadDownloadOperation() ||
+                _hasTerminalDownloadSnapshot ||
+                !_downloadOperation.IsValid())
+            {
+                return;
+            }
+
+            long timestamp = Stopwatch.GetTimestamp();
+            if (!_downloadOperation.IsDone && timestamp < _nextDownloadStatusSampleTimestamp)
+            {
+                return;
+            }
+
+            CaptureDownloadSnapshot();
+        }
+
+        private bool IsDoneOnMainThread()
+        {
+            return _cancelled ||
+                   Volatile.Read(ref _disposed) != 0 ||
+                   HasTerminalCallerResult();
+        }
+
+        private bool SucceedOnMainThread()
+        {
+            if (_cancelled)
+            {
+                return false;
+            }
+
+            if (_startStarted)
+            {
+                return _startCallerTask.Status == UniTaskStatus.Succeeded && _succeeded;
+            }
+
+            return _prepared &&
+                   _totalBytes == 0L &&
+                   (!_prepareStarted || _prepareCallerTask.Status == UniTaskStatus.Succeeded);
+        }
+
+        private bool HasTerminalCallerResult()
+        {
+            if (_startStarted)
+            {
+                return _startCallerTask.Status != UniTaskStatus.Pending;
+            }
+
+            return _prepared &&
+                   _totalBytes == 0L &&
+                   (!_prepareStarted || _prepareCallerTask.Status != UniTaskStatus.Pending);
+        }
+
+        private int TotalDownloadCountOnMainThread()
+        {
+            return _prepared && _totalBytes > 0L ? 1 : 0;
+        }
+
+        private bool CanReadDownloadOperation()
+        {
+            return !_cancelled && Volatile.Read(ref _disposed) == 0;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                throw new ObjectDisposedException(nameof(AddressableDownloader));
+            }
+        }
     }
 }
 #endif

@@ -13,6 +13,7 @@ namespace CycloneGames.GameplayAbilities.Core
         public void RegisterStaticCue(GameplayTag cueTag, string assetAddress) { }
         public void HandleCue(object asc, GameplayTag cueTag, EGameplayCueEvent eventType, GameplayCueEventParams parameters) { }
         public void RemoveAllCuesFor(object asc) { }
-        public void Initialize(object assetPackage) { }
+        public void CommitPredictedCues(object asc, GASPredictionKey predictionKey) { }
+        public void RollbackPredictedCues(object asc, GASPredictionKey predictionKey) { }
     }
 }

@@ -17,6 +17,11 @@ namespace CycloneGames.DataTable.Unity.Editor
         private const string DefaultAssetDir = "Assets/Editor/DataTable";
         private const string DefaultAssetName = "DataTableLubanSettings.asset";
 
+        /// <summary>
+        /// Safe fallback used by existing assets whose serialized timeout is zero or negative.
+        /// </summary>
+        public const int DefaultLubanTimeoutSeconds = 300;
+
         private static readonly Dictionary<Type, DataTableLubanSettings> CachedSettings =
             new Dictionary<Type, DataTableLubanSettings>(4);
 
@@ -25,7 +30,7 @@ namespace CycloneGames.DataTable.Unity.Editor
         /// Use "../" when the Luban project lives next to the Unity project folder.
         /// </summary>
         [Tooltip("Luban project directory, relative to the Unity project root. Use '../' to go above the Unity project folder.")]
-        public string LubanProjectDir = "../DataTable";
+        public string LubanProjectDir = "../DataTable/Luban";
 
         /// <summary>
         /// Name of the Luban code-generation script without file extension.
@@ -41,10 +46,11 @@ namespace CycloneGames.DataTable.Unity.Editor
         public string LubanScriptArguments;
 
         /// <summary>
-        /// Maximum seconds to wait for the external process. Zero or negative means no timeout.
+        /// Maximum seconds to wait for the external process. Zero or negative uses the safe default.
         /// </summary>
-        [Tooltip("Maximum seconds to wait for the external process. Zero or negative means no timeout.")]
-        public int LubanTimeoutSeconds = 0;
+        [Min(1)]
+        [Tooltip("Maximum seconds to wait for the external process. Zero or negative uses the 300-second safe default for existing assets.")]
+        public int LubanTimeoutSeconds = DefaultLubanTimeoutSeconds;
 
         /// <summary>
         /// Whether to call AssetDatabase.Refresh() after a successful Luban run.
@@ -178,14 +184,13 @@ namespace CycloneGames.DataTable.Unity.Editor
         /// </summary>
         public virtual int GetLubanTimeoutMilliseconds()
         {
-            if (LubanTimeoutSeconds <= 0)
-            {
-                return 0;
-            }
+            var timeoutSeconds = LubanTimeoutSeconds <= 0
+                ? DefaultLubanTimeoutSeconds
+                : LubanTimeoutSeconds;
 
-            return LubanTimeoutSeconds >= int.MaxValue / 1000
+            return timeoutSeconds >= int.MaxValue / 1000
                 ? int.MaxValue
-                : LubanTimeoutSeconds * 1000;
+                : timeoutSeconds * 1000;
         }
 
         /// <summary>
@@ -209,6 +214,7 @@ namespace CycloneGames.DataTable.Unity.Editor
                 Path.Combine(DefaultAssetDir, assetName).Replace('\\', '/'));
 
             AssetDatabase.CreateAsset(settings, path);
+            Undo.RegisterCreatedObjectUndo(settings, "Create DataTable Luban Settings");
             AssetDatabase.SaveAssets();
 
             Debug.Log(

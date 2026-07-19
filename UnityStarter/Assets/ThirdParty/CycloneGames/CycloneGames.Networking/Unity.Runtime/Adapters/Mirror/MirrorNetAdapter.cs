@@ -1,15 +1,11 @@
 #if CYCLONE_NETWORKING_HAS_MIRROR
 using System;
-using System.Buffers;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEngine;
 using Mirror;
-using CycloneGames.Networking.Buffers;
 using CycloneGames.Networking.Security;
-using CycloneGames.Networking.Serialization;
-using CycloneGames.Networking.Services;
 using CycloneGames.Logger;
 
 namespace CycloneGames.Networking.Adapter.Mirror
@@ -25,22 +21,14 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
     /// <summary>
     /// Mirror implementation of the Cyclone Networking stack.
-    /// Implements both low-level Transport and high-level NetworkManager.
+    /// Implements both low-level transport delivery and canonical message framing.
     /// </summary>
     [DisallowMultipleComponent]
-    public sealed class MirrorNetAdapter : MonoBehaviour, INetTransport, INetworkManager, INetworkSerializerConfigurable, INetworkSecurityPolicyConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
+    public sealed class MirrorNetAdapter : MonoBehaviour, INetTransport, INetworkMessageEndpoint, INetworkSecurityPolicyConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
     {
+        private const int MirrorArraySegmentLengthPrefixMaxBytes = 5;
         private const string MissingNetworkManagerError = "Mirror NetworkManager.singleton is not available.";
         private const string MissingTransportError = "Mirror Transport.active is not available.";
-
-        public static MirrorNetAdapter Instance { get; private set; }
-
-        [Header("Config")]
-        [Tooltip("If true, sets DontDestroyOnLoad.")]
-        [SerializeField] private bool _singleton = true;
-
-        [Tooltip("Use MessagePack serializer if available, otherwise Json.")]
-        [SerializeField] private bool _useRecommendedSerializer = true;
 
         [Header("Security")]
         [SerializeField] private bool _enableMessageValidation = true;
@@ -48,38 +36,67 @@ namespace CycloneGames.Networking.Adapter.Mirror
         [SerializeField] private bool _enableRateLimiter = true;
         [SerializeField] private int _maxMessagesPerSecond = 120;
         [SerializeField] private int _burstMessages = 40;
-        [SerializeField] private int _maxQueuedPackets = 1024;
-        [Tooltip("Maximum queued cross-thread sends processed per frame. Use 0 for unlimited draining.")]
-        [SerializeField] private int _maxQueuedPacketsPerFrame = 256;
         [SerializeField] private bool _requireAuthenticatedMessages = false;
         [SerializeField] private bool _requireEncryptedTransport = false;
 
         // INetTransport Properties
-        public bool IsServer => NetworkServer.active;
-        public bool IsClient => NetworkClient.active;
+        public bool IsServer
+        {
+            get
+            {
+                EnsureMainThread();
+                return NetworkServer.active;
+            }
+        }
+
+        public bool IsClient
+        {
+            get
+            {
+                EnsureMainThread();
+                return NetworkClient.active;
+            }
+        }
+
         public bool IsRunning => IsServer || IsClient;
-        public bool Available => global::Mirror.Transport.active != null && global::Mirror.Transport.active.Available();
-        public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport | NetworkBackendFeatures.Relay;
-        public NetworkTransportCapabilities Capabilities => new NetworkTransportCapabilities(
-            "Mirror",
-            NetworkTransportFeatureFlags.Client
-            | NetworkTransportFeatureFlags.Server
-            | NetworkTransportFeatureFlags.Host
-            | NetworkTransportFeatureFlags.Reliable
-            | NetworkTransportFeatureFlags.Unreliable
-            | NetworkTransportFeatureFlags.Backpressure
-            | NetworkTransportFeatureFlags.DedicatedServerCompatible,
-            NetworkChannelFlags.Reliable | NetworkChannelFlags.Unreliable,
-            NetworkConstants.DefaultMaxConnections,
-            GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
-            GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
-            GetMaxPacketSize(GetChannelId(NetworkChannel.Unreliable)),
-            _maxQueuedPackets);
+        public bool Available
+        {
+            get
+            {
+                EnsureMainThread();
+                global::Mirror.Transport transport = global::Mirror.Transport.active;
+                return transport != null && transport.Available();
+            }
+        }
+
+        public NetworkBackendFeatures Features => NetworkBackendFeatures.RealtimeTransport;
+        public NetworkTransportCapabilities Capabilities
+        {
+            get
+            {
+                EnsureMainThread();
+                return new NetworkTransportCapabilities(
+                    "Mirror",
+                    NetworkTransportFeatureFlags.Client
+                    | NetworkTransportFeatureFlags.Server
+                    | NetworkTransportFeatureFlags.Host
+                    | NetworkTransportFeatureFlags.Reliable
+                    | NetworkTransportFeatureFlags.Unreliable
+                    | NetworkTransportFeatureFlags.MainThreadOnly
+                    | NetworkTransportFeatureFlags.DedicatedServerCompatible,
+                    NetworkChannelFlags.Reliable | NetworkChannelFlags.Unreliable,
+                    NetworkConstants.DefaultMaxConnections,
+                    GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
+                    GetMaxPacketSize(GetChannelId(NetworkChannel.Reliable)),
+                    GetMaxPacketSize(GetChannelId(NetworkChannel.Unreliable)));
+            }
+        }
 
         public bool IsEncrypted
         {
             get
             {
+                EnsureMainThread();
                 var t = global::Mirror.Transport.active;
                 return t != null && t.IsEncrypted;
             }
@@ -92,24 +109,43 @@ namespace CycloneGames.Networking.Adapter.Mirror
             {
                 NetworkChannel.Reliable => Channels.Reliable,
                 NetworkChannel.Unreliable => Channels.Unreliable,
-                NetworkChannel.ReliableUnordered => Channels.Reliable,
-                NetworkChannel.UnreliableSequenced => Channels.Unreliable,
-                _ => Channels.Reliable
+                NetworkChannel.ReliableUnordered => throw new NotSupportedException("Mirror does not advertise a reliable-unordered channel."),
+                NetworkChannel.UnreliableSequenced => throw new NotSupportedException("Mirror does not advertise a distinct unreliable-sequenced channel."),
+                _ => throw new ArgumentOutOfRangeException(nameof(channel), channel, "Unknown network channel.")
             };
         }
 
         public int GetMaxPacketSize(int channelId)
         {
-            var t = global::Mirror.Transport.active;
-            return t != null ? t.GetMaxPacketSize(channelId) : 65535;
+            EnsureMainThread();
+            global::Mirror.Transport transport = global::Mirror.Transport.active;
+            if (transport == null)
+                return 0;
+
+            int maximumContentSize;
+            try
+            {
+                maximumContentSize = global::Mirror.NetworkMessages.MaxContentSize(channelId);
+            }
+            catch (Exception)
+            {
+                return 0;
+            }
+
+            int maximumPayloadSize = maximumContentSize
+                                     - MirrorArraySegmentLengthPrefixMaxBytes
+                                     - NetworkWireProtocol.HeaderLength;
+            return Math.Min(_maxPayloadSize, Math.Max(0, maximumPayloadSize));
         }
 
         private NetworkChannel GetNetworkChannel(int channelId)
         {
+            if (channelId == Channels.Reliable)
+                return NetworkChannel.Reliable;
             if (channelId == Channels.Unreliable)
                 return NetworkChannel.Unreliable;
 
-            return NetworkChannel.Reliable;
+            throw new ArgumentOutOfRangeException(nameof(channelId), channelId, "Mirror channel id is not supported.");
         }
 
         private int BuildFrame(ushort msgId, NetworkChannel channel, in ArraySegment<byte> payload, byte[] buffer)
@@ -119,17 +155,72 @@ namespace CycloneGames.Networking.Adapter.Mirror
             if (payload.Offset < 0 || payload.Count < 0 || payload.Offset > payload.Array.Length || payload.Count > payload.Array.Length - payload.Offset)
                 throw new ArgumentOutOfRangeException(nameof(payload));
 
-            int frameLength = NetworkFrameCodec.GetFrameLength(payload.Count);
+            return BuildFrame(
+                msgId,
+                channel,
+                new ReadOnlySpan<byte>(payload.Array, payload.Offset, payload.Count),
+                buffer);
+        }
+
+        private int BuildFrame(ushort msgId, NetworkChannel channel, ReadOnlySpan<byte> payload, byte[] buffer)
+        {
+            int maximumPayloadSize = GetMaxPayloadSize(msgId, channel);
+            if (maximumPayloadSize <= 0 || payload.Length > maximumPayloadSize)
+                throw new InvalidOperationException("Payload exceeds the available Mirror message route.");
+
+            return BuildFrameUnchecked(msgId, channel, payload, buffer);
+        }
+
+        private int BuildFrameUnchecked(ushort msgId, NetworkChannel channel, ReadOnlySpan<byte> payload, byte[] buffer)
+        {
+            int frameLength = NetworkFrameCodec.GetFrameLength(payload.Length);
             if (frameLength > buffer.Length)
                 throw new InvalidOperationException($"Frame size exceeds send buffer capacity: {frameLength}");
 
-            Buffer.BlockCopy(payload.Array, payload.Offset, buffer, NetworkWireProtocol.HeaderLength, payload.Count);
-            WriteFrameHeader(msgId, channel, buffer, payload.Count);
+            payload.CopyTo(new Span<byte>(buffer, NetworkWireProtocol.HeaderLength, payload.Length));
+            WriteFrameHeader(msgId, channel, buffer, payload.Length);
             return frameLength;
+        }
+
+        public int GetMaxPayloadSize(ushort messageId, NetworkChannel channel)
+        {
+            int channelId;
+            try
+            {
+                channelId = GetChannelId(channel);
+            }
+            catch (ArgumentException)
+            {
+                return 0;
+            }
+            catch (NotSupportedException)
+            {
+                return 0;
+            }
+
+            int transportLimit = GetMaxPacketSize(channelId);
+            int maximumPayloadSize = Math.Min(_maxPayloadSize, Math.Max(0, transportLimit));
+            if (RuntimeContext != null
+                && RuntimeContext.TryGetService(out INetworkMessageCatalog catalog))
+            {
+                if (catalog.TryGet(messageId, out NetworkMessageDescriptor descriptor))
+                {
+                    maximumPayloadSize = Math.Min(maximumPayloadSize, descriptor.MaxPayloadSize);
+                }
+                else if (messageId > NetworkConstants.SystemMsgIdMax)
+                {
+                    return 0;
+                }
+            }
+
+            return maximumPayloadSize;
         }
 
         private int WriteFrameHeader(ushort msgId, NetworkChannel channel, byte[] buffer, int payloadLength)
         {
+            if (payloadLength < 0 || payloadLength > _maxPayloadSize)
+                throw new InvalidOperationException("Payload exceeds the configured Mirror payload limit.");
+
             int frameLength = NetworkFrameCodec.GetFrameLength(payloadLength);
             if (frameLength > buffer.Length)
                 throw new InvalidOperationException($"Frame size exceeds send buffer capacity: {frameLength}");
@@ -165,17 +256,19 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
         public NetworkStatistics GetStatistics()
         {
+            EnsureMainThread();
             return new NetworkStatistics(
-                _bytesSent,
-                _bytesReceived,
-                _packetsSent,
-                _packetsReceived,
+                Interlocked.Read(ref _bytesSent),
+                Interlocked.Read(ref _bytesReceived),
+                Volatile.Read(ref _packetsSent),
+                Volatile.Read(ref _packetsReceived),
                 NetworkServer.active ? NetworkServer.connections.Count : (NetworkClient.active ? 1 : 0)
             );
         }
 
         public NetworkLifecycleSnapshot GetLifecycleSnapshot()
         {
+            EnsureMainThread();
             return new NetworkLifecycleSnapshot(
                 GetCurrentLifecycleState(),
                 Features,
@@ -189,7 +282,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
         }
 
         public INetTransport Transport => this;
-        public INetSerializer Serializer { get; private set; }
+        public bool IsAcceptingMessages => !_isDestroyed && IsRunning;
         public INetworkRuntimeContext RuntimeContext { get; private set; }
 
         // Events
@@ -201,24 +294,21 @@ namespace CycloneGames.Networking.Adapter.Mirror
         public event Action<INetConnection, ArraySegment<byte>, int> OnDataReceived;
 
         // Internal State
-        private readonly Dictionary<ushort, Action<INetConnection, ArraySegment<byte>>> _handlers =
-            new Dictionary<ushort, Action<INetConnection, ArraySegment<byte>>>();
+        private readonly NetworkMessageHandlerRegistry _messageHandlers =
+            new NetworkMessageHandlerRegistry();
 
         private readonly Dictionary<int, ulong> _playerIds = new Dictionary<int, ulong>();
         private readonly Dictionary<int, MirrorConnectionData> _connectionData = new Dictionary<int, MirrorConnectionData>();
+        private readonly Dictionary<int, MirrorNetConnection> _serverConnections =
+            new Dictionary<int, MirrorNetConnection>();
+        private MirrorNetConnection _authorityConnection;
 
-        [ThreadStatic]
-        private static byte[] _threadLocalSendBuffer;
+        private readonly byte[] _sendBuffer = new byte[NetworkConstants.MaxMTU];
 
-        private static byte[] GetThreadBuffer()
-        {
-            return _threadLocalSendBuffer ??= new byte[65535];
-        }
+        private byte[] GetSendBuffer() => _sendBuffer;
 
         private int _mainThreadId;
         private int _sendSequence;
-        private readonly ConcurrentQueue<QueuedPacket> _sendQueue = new ConcurrentQueue<QueuedPacket>();
-        private int _queuedPacketCount;
         private MessageValidator _messageValidator;
         private RateLimiter _rateLimiter;
         private MessageSecurityPolicyRegistry _messagePolicies;
@@ -227,17 +317,9 @@ namespace CycloneGames.Networking.Adapter.Mirror
         private TransportError _lastError;
         private string _lastErrorMessage = string.Empty;
         private bool _isDestroyed;
-
-        private struct QueuedPacket
-        {
-            public byte[] Data;
-            public int Length;
-            public int ChannelId;
-            public int TargetConnectionId;
-            public bool IsBroadcast;
-            public bool IsToServer;
-            public bool IsDisconnect;
-        }
+        private bool _clientCallbacksBound;
+        private bool _serverCallbacksBound;
+        private global::Mirror.Transport _boundTransport;
 
         // Tracks per-connection statistics
         internal struct MirrorConnectionData
@@ -252,33 +334,21 @@ namespace CycloneGames.Networking.Adapter.Mirror
         {
             _mainThreadId = Thread.CurrentThread.ManagedThreadId;
 
-            if (_singleton)
+            int maximumPayloadSize = NetworkConstants.MaxMTU - NetworkWireProtocol.HeaderLength;
+            if (_maxPayloadSize <= 0 || _maxPayloadSize > maximumPayloadSize)
             {
-                if (Instance != null && Instance != this)
-                {
-                    Destroy(gameObject);
-                    return;
-                }
-                Instance = this;
-                DontDestroyOnLoad(gameObject);
+                throw new InvalidOperationException(
+                    $"Max Payload Size must be between 1 and {maximumPayloadSize} bytes.");
             }
-            else
-            {
-                Instance ??= this;
-            }
-
-            NetServices.Register(this);
-
-            // Use recommended serializer (MessagePack if available, else Json)
-            Serializer = _useRecommendedSerializer
-                ? SerializerFactory.GetRecommended()
-                : SerializerFactory.GetDefault();
-
-            _messageValidator = new MessageValidator(Math.Max(1, _maxPayloadSize), 0);
+            if (_maxMessagesPerSecond <= 0)
+                throw new InvalidOperationException("Max Messages Per Second must be positive.");
+            if (_burstMessages < 0)
+                throw new InvalidOperationException("Burst Messages cannot be negative.");
+            _messageValidator = new MessageValidator(_maxPayloadSize, 0);
             _rateLimiter = new RateLimiter(
-                Math.Max(1, _maxMessagesPerSecond),
-                Math.Max(1, _maxPayloadSize) * Math.Max(1, _maxMessagesPerSecond),
-                Math.Max(0, _burstMessages));
+                _maxMessagesPerSecond,
+                (long)_maxPayloadSize * _maxMessagesPerSecond,
+                _burstMessages);
             _messagePolicies = new MessageSecurityPolicyRegistry(CreateDefaultSecurityPolicy());
             _securityPipeline = CreateSecurityPipeline();
             RuntimeContext = new NetworkRuntimeContext(
@@ -290,84 +360,16 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 .AddSecurityPipeline(_securityPipeline)
                 .Build();
 
-            // Mirror Events Hookup
-            NetworkClient.OnConnectedEvent += HandleClientConnected;
-            NetworkClient.OnDisconnectedEvent += HandleClientDisconnected;
-
-            NetworkClient.RegisterHandler<CycloneWireFrameMessage>(OnClientDataReceived);
-            NetworkServer.RegisterHandler<CycloneWireFrameMessage>(OnServerDataReceived);
         }
 
         private void Start()
         {
-            NetworkServer.OnConnectedEvent += OnMirrorServerConnected;
-            NetworkServer.OnDisconnectedEvent += OnMirrorServerDisconnected;
-
-            // Hook into Mirror error events
-            if (global::Mirror.Transport.active != null)
-            {
-                global::Mirror.Transport.active.OnClientError += HandleClientError;
-                global::Mirror.Transport.active.OnServerError += HandleServerError;
-            }
+            RefreshMirrorBindings(forceRebind: true);
         }
 
         private void Update()
         {
-            ProcessSendQueue();
-        }
-
-        private void ProcessSendQueue()
-        {
-            int processed = 0;
-            int maxPackets = _maxQueuedPacketsPerFrame <= 0 ? int.MaxValue : _maxQueuedPacketsPerFrame;
-            while (processed < maxPackets && _sendQueue.TryDequeue(out var packet))
-            {
-                processed++;
-
-                try
-                {
-                    if (packet.IsDisconnect)
-                    {
-                        if (NetworkServer.active && NetworkServer.connections.TryGetValue(packet.TargetConnectionId, out var conn))
-                        {
-                            conn.Disconnect();
-                        }
-                        else if (NetworkClient.active && packet.TargetConnectionId == 0)
-                        {
-                            NetworkManager.singleton.StopClient();
-                        }
-                        continue;
-                    }
-
-                    var segment = new ArraySegment<byte>(packet.Data, 0, packet.Length);
-
-                    if (packet.IsToServer)
-                    {
-                        SendFrameToServer(segment, packet.ChannelId);
-                    }
-                    else if (packet.IsBroadcast)
-                    {
-                        SendFrameBroadcast(segment, packet.ChannelId);
-                    }
-                    else if (NetworkServer.connections.TryGetValue(packet.TargetConnectionId, out var conn))
-                    {
-                        SendFrameToConnection(conn, segment, packet.ChannelId);
-                    }
-                }
-                catch (Exception e)
-                {
-                    CLogger.LogError($"Queue Process Error: {e}", LogCategory.Network);
-                }
-                finally
-                {
-                    if (packet.Data != null)
-                    {
-                        ArrayPool<byte>.Shared.Return(packet.Data);
-                    }
-
-                    Interlocked.Decrement(ref _queuedPacketCount);
-                }
-            }
+            RefreshMirrorBindings(forceRebind: false);
         }
 
         private void OnDestroy()
@@ -375,49 +377,139 @@ namespace CycloneGames.Networking.Adapter.Mirror
             _isDestroyed = true;
             _lifecycleState = NetworkLifecycleState.Disposed;
 
-            if (NetServices.IsAvailable && (object)NetServices.Instance == this)
-            {
-                NetServices.Unregister(this);
-            }
-
-            if (NetworkClient.active) NetworkClient.UnregisterHandler<CycloneWireFrameMessage>();
-            if (NetworkServer.active) NetworkServer.UnregisterHandler<CycloneWireFrameMessage>();
-
-            NetworkClient.OnConnectedEvent -= HandleClientConnected;
-            NetworkClient.OnDisconnectedEvent -= HandleClientDisconnected;
-            NetworkServer.OnConnectedEvent -= OnMirrorServerConnected;
-            NetworkServer.OnDisconnectedEvent -= OnMirrorServerDisconnected;
-
-            if (global::Mirror.Transport.active != null)
-            {
-                global::Mirror.Transport.active.OnClientError -= HandleClientError;
-                global::Mirror.Transport.active.OnServerError -= HandleServerError;
-            }
-
-            ClearQueuedPackets();
+            UnbindClientCallbacks();
+            UnbindServerCallbacks();
+            UnbindTransportErrors();
+            InvalidateAuthorityConnection();
+            InvalidateServerConnections();
+            _messageHandlers.Clear();
 
             RuntimeContext?.Dispose();
             RuntimeContext = null;
         }
 
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
-        private static void ResetStatics()
+        private void RefreshMirrorBindings(bool forceRebind)
         {
-            Instance = null;
-            _threadLocalSendBuffer = null;
+            EnsureMainThread();
+            bool clientActive = NetworkClient.active;
+            bool serverActive = NetworkServer.active;
+
+            if (clientActive)
+            {
+                if (forceRebind || !_clientCallbacksBound)
+                    BindClientCallbacks();
+            }
+            else if (_clientCallbacksBound)
+            {
+                UnbindClientCallbacks();
+                InvalidateAuthorityConnection();
+            }
+
+            if (serverActive)
+            {
+                if (forceRebind || !_serverCallbacksBound)
+                    BindServerCallbacks();
+            }
+            else if (_serverCallbacksBound)
+            {
+                UnbindServerCallbacks();
+                InvalidateServerConnections();
+            }
+
+            RefreshTransportErrorBinding();
+
+        }
+
+        private void BindClientCallbacks()
+        {
+            EnsureMainThread();
+            NetworkClient.OnConnectedEvent -= HandleClientConnected;
+            NetworkClient.OnDisconnectedEvent -= HandleClientDisconnected;
+            NetworkClient.OnConnectedEvent += HandleClientConnected;
+            NetworkClient.OnDisconnectedEvent += HandleClientDisconnected;
+
+            NetworkClient.UnregisterHandler<CycloneWireFrameMessage>();
+            NetworkClient.RegisterHandler<CycloneWireFrameMessage>(OnClientDataReceived);
+            _clientCallbacksBound = true;
+        }
+
+        private void UnbindClientCallbacks()
+        {
+            EnsureMainThread();
+            if (!_clientCallbacksBound)
+                return;
+
+            NetworkClient.OnConnectedEvent -= HandleClientConnected;
+            NetworkClient.OnDisconnectedEvent -= HandleClientDisconnected;
+            NetworkClient.UnregisterHandler<CycloneWireFrameMessage>();
+            _clientCallbacksBound = false;
+        }
+
+        private void BindServerCallbacks()
+        {
+            EnsureMainThread();
+            NetworkServer.OnConnectedEvent -= OnMirrorServerConnected;
+            NetworkServer.OnDisconnectedEvent -= OnMirrorServerDisconnected;
+            NetworkServer.OnConnectedEvent += OnMirrorServerConnected;
+            NetworkServer.OnDisconnectedEvent += OnMirrorServerDisconnected;
+
+            NetworkServer.UnregisterHandler<CycloneWireFrameMessage>();
+            NetworkServer.RegisterHandler<CycloneWireFrameMessage>(OnServerDataReceived);
+            _serverCallbacksBound = true;
+        }
+
+        private void UnbindServerCallbacks()
+        {
+            EnsureMainThread();
+            if (!_serverCallbacksBound)
+                return;
+
+            NetworkServer.OnConnectedEvent -= OnMirrorServerConnected;
+            NetworkServer.OnDisconnectedEvent -= OnMirrorServerDisconnected;
+            NetworkServer.UnregisterHandler<CycloneWireFrameMessage>();
+            _serverCallbacksBound = false;
+        }
+
+        private void RefreshTransportErrorBinding()
+        {
+            EnsureMainThread();
+            global::Mirror.Transport activeTransport = global::Mirror.Transport.active;
+            if (ReferenceEquals(_boundTransport, activeTransport))
+                return;
+
+            UnbindTransportErrors();
+            _boundTransport = activeTransport;
+            if (_boundTransport == null)
+                return;
+
+            _boundTransport.OnClientError += HandleClientError;
+            _boundTransport.OnServerError += HandleServerError;
+        }
+
+        private void UnbindTransportErrors()
+        {
+            EnsureMainThread();
+            if (_boundTransport == null)
+                return;
+
+            _boundTransport.OnClientError -= HandleClientError;
+            _boundTransport.OnServerError -= HandleServerError;
+            _boundTransport = null;
         }
 
         // Error Handlers
         private void HandleClientError(global::Mirror.TransportError error, string message)
         {
+            EnsureMainThread();
             RaiseError(null, ConvertError(error), message);
         }
 
         private void HandleServerError(int connectionId, global::Mirror.TransportError error, string message)
         {
+            EnsureMainThread();
             if (NetworkServer.connections.TryGetValue(connectionId, out var conn))
             {
-                RaiseError(new MirrorNetConnection(conn, GetConnectionData(connectionId)), ConvertError(error), message);
+                RaiseError(GetOrCreateServerConnection(conn), ConvertError(error), message);
             }
             else
             {
@@ -441,60 +533,179 @@ namespace CycloneGames.Networking.Adapter.Mirror
             };
         }
 
-        // Injection Setup
-        public void SetSerializer(INetSerializer serializer)
+        public MessageSecurityPolicy DefaultMessageSecurityPolicy
         {
-            Serializer = serializer ?? throw new ArgumentNullException(nameof(serializer));
+            get
+            {
+                EnsureMainThread();
+                return EnsureMessagePolicies().DefaultPolicy;
+            }
         }
-
-        public MessageSecurityPolicy DefaultMessageSecurityPolicy => EnsureMessagePolicies().DefaultPolicy;
 
         public void SetDefaultMessageSecurityPolicy(MessageSecurityPolicy policy)
         {
+            EnsureMainThread();
             EnsureMessagePolicies().SetDefaultPolicy(policy);
         }
 
         public void SetMessageSecurityPolicy(ushort messageId, MessageSecurityPolicy policy)
         {
+            EnsureMainThread();
             EnsureMessagePolicies().SetPolicy(messageId, policy);
         }
 
         public void ClearMessageSecurityPolicy(ushort messageId)
         {
+            EnsureMainThread();
             EnsureMessagePolicies().ClearPolicy(messageId);
         }
 
         // State Management
         public ulong GetPlayerId(int connectionId)
         {
+            EnsureMainThread();
             return _playerIds.TryGetValue(connectionId, out var id) ? id : 0;
         }
 
         public void SetPlayerId(int connectionId, ulong playerId)
         {
+            EnsureMainThread();
             _playerIds[connectionId] = playerId;
         }
 
         internal MirrorConnectionData GetConnectionData(int connectionId)
         {
+            EnsureMainThread();
             return _connectionData.TryGetValue(connectionId, out var data) ? data : default;
+        }
+
+        internal ulong GetPlayerId(MirrorNetConnection connection)
+        {
+            EnsureMainThread();
+            return IsCurrentConnection(connection)
+                ? GetPlayerId(connection.ConnectionId)
+                : 0UL;
+        }
+
+        internal void SetPlayerId(MirrorNetConnection connection, ulong playerId)
+        {
+            EnsureMainThread();
+            if (!IsCurrentConnection(connection))
+                throw new ObjectDisposedException(nameof(MirrorNetConnection));
+
+            SetPlayerId(connection.ConnectionId, playerId);
+        }
+
+        private MirrorNetConnection GetOrCreateServerConnection(NetworkConnectionToClient connection)
+        {
+            EnsureMainThread();
+            if (connection == null)
+                throw new ArgumentNullException(nameof(connection));
+
+            int connectionId = connection.connectionId;
+            if (_serverConnections.TryGetValue(connectionId, out MirrorNetConnection cached))
+            {
+                if (cached.Matches(connection))
+                {
+                    cached.Refresh(GetConnectionData(connectionId));
+                    return cached;
+                }
+
+                cached.Invalidate(GetConnectionData(connectionId));
+                _serverConnections.Remove(connectionId);
+                _playerIds.Remove(connectionId);
+                _connectionData[connectionId] = default;
+                _securityPipeline?.RemoveConnection(connectionId);
+            }
+
+            var created = new MirrorNetConnection(this, connection, GetConnectionData(connectionId));
+            _serverConnections.Add(connectionId, created);
+            return created;
+        }
+
+        private MirrorNetConnection GetOrCreateAuthorityConnection(NetworkConnection connection)
+        {
+            EnsureMainThread();
+            if (connection == null)
+                return null;
+
+            if (_authorityConnection != null)
+            {
+                if (_authorityConnection.Matches(connection))
+                {
+                    _authorityConnection.Refresh(default);
+                    return _authorityConnection;
+                }
+
+                InvalidateAuthorityConnection();
+            }
+
+            _authorityConnection = new MirrorNetConnection(this, connection, default);
+            return _authorityConnection;
+        }
+
+        private bool IsCurrentConnection(MirrorNetConnection connection)
+        {
+            if (connection == null || !connection.IsOwnedBy(this) || !connection.IsValid)
+                return false;
+
+            if (connection.IsServerConnection)
+            {
+                return ReferenceEquals(_authorityConnection, connection)
+                       && ReferenceEquals(NetworkClient.connection, connection.Connection);
+            }
+
+            return _serverConnections.TryGetValue(connection.ConnectionId, out MirrorNetConnection current)
+                   && ReferenceEquals(current, connection)
+                   && NetworkServer.connections.TryGetValue(connection.ConnectionId, out NetworkConnectionToClient mirrorConnection)
+                   && ReferenceEquals(mirrorConnection, connection.Connection);
+        }
+
+        private void InvalidateAuthorityConnection()
+        {
+            if (_authorityConnection == null)
+                return;
+
+            _authorityConnection.Invalidate(default);
+            _authorityConnection = null;
+            _securityPipeline?.RemoveConnection(0);
+        }
+
+        private void InvalidateServerConnections()
+        {
+            foreach (KeyValuePair<int, MirrorNetConnection> pair in _serverConnections)
+            {
+                pair.Value.Invalidate(GetConnectionData(pair.Key));
+                _securityPipeline?.RemoveConnection(pair.Key);
+            }
+
+            _serverConnections.Clear();
+            foreach (int connectionId in _connectionData.Keys)
+                _securityPipeline?.RemoveConnection(connectionId);
+            _playerIds.Clear();
+            _connectionData.Clear();
         }
 
         // Lifecycle Handlers
         private void HandleClientConnected()
         {
+            EnsureMainThread();
+            GetOrCreateAuthorityConnection(NetworkClient.connection);
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
             OnConnectedToServer?.Invoke();
         }
 
         private void HandleClientDisconnected()
         {
+            EnsureMainThread();
+            InvalidateAuthorityConnection();
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
             OnDisconnectedFromServer?.Invoke();
         }
 
         private void OnMirrorServerConnected(NetworkConnectionToClient conn)
         {
+            EnsureMainThread();
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
             _connectionData[conn.connectionId] = new MirrorConnectionData
             {
@@ -503,79 +714,36 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 Jitter = 0d,
                 LastPing = 0
             };
-            OnClientConnected?.Invoke(new MirrorNetConnection(conn, GetConnectionData(conn.connectionId)));
+            OnClientConnected?.Invoke(GetOrCreateServerConnection(conn));
         }
 
         private void OnMirrorServerDisconnected(NetworkConnectionToClient conn)
         {
+            EnsureMainThread();
+            MirrorNetConnection connection = GetOrCreateServerConnection(conn);
+            MirrorConnectionData data = GetConnectionData(conn.connectionId);
             _playerIds.Remove(conn.connectionId);
             _connectionData.Remove(conn.connectionId);
             _securityPipeline?.RemoveConnection(conn.connectionId);
+            _serverConnections.Remove(conn.connectionId);
+            connection.Invalidate(data);
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
-            OnClientDisconnected?.Invoke(new MirrorNetConnection(conn, default));
+            OnClientDisconnected?.Invoke(connection);
         }
 
-        private bool EnqueuePacket(byte[] sourceBuffer, int length, int channelId, bool toServer, bool broadcast, int targetConnId)
+        private void EnsureMainThread()
         {
-            if (sourceBuffer == null || length < 0 || length > sourceBuffer.Length)
-                return false;
-
-            if (!TryReserveQueueSlot())
-                return false;
-
-            try
+            if (_mainThreadId == 0 || Thread.CurrentThread.ManagedThreadId != _mainThreadId)
             {
-                byte[] rented = ArrayPool<byte>.Shared.Rent(length);
-                Buffer.BlockCopy(sourceBuffer, 0, rented, 0, length);
-
-                _sendQueue.Enqueue(new QueuedPacket
-                {
-                    Data = rented,
-                    Length = length,
-                    ChannelId = channelId,
-                    IsToServer = toServer,
-                    IsBroadcast = broadcast,
-                    TargetConnectionId = targetConnId,
-                    IsDisconnect = false
-                });
-                return true;
-            }
-            catch
-            {
-                Interlocked.Decrement(ref _queuedPacketCount);
-                throw;
+                throw new InvalidOperationException(
+                    "MirrorNetAdapter and the injected Mirror runtime must be accessed on the Unity main thread after Awake has completed.");
             }
         }
-
-        private void EnqueueDisconnect(int targetConnId)
-        {
-            if (!TryReserveQueueSlot())
-                return;
-
-            _sendQueue.Enqueue(new QueuedPacket
-            {
-                IsDisconnect = true,
-                TargetConnectionId = targetConnId,
-                Data = null
-            });
-        }
-
-        private bool TryReserveQueueSlot()
-        {
-            int queued = Interlocked.Increment(ref _queuedPacketCount);
-            if (_maxQueuedPackets <= 0 || queued <= _maxQueuedPackets)
-                return true;
-
-            Interlocked.Decrement(ref _queuedPacketCount);
-            CLogger.LogWarning("Mirror send queue limit reached. Dropping queued packet.", LogCategory.Network);
-            return false;
-        }
-
-        private bool IsMainThread => Thread.CurrentThread.ManagedThreadId == _mainThreadId;
 
         // INetTransport Implementation
         public void StartServer()
         {
+            EnsureMainThread();
             if (!TryGetNetworkManager(out NetworkManager manager))
                 return;
 
@@ -587,11 +755,13 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
             _lifecycleState = NetworkLifecycleState.StartingServer;
             manager.StartServer();
+            RefreshMirrorBindings(forceRebind: true);
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
         }
 
         public void StartClient(string address)
         {
+            EnsureMainThread();
             if (!TryGetNetworkManager(out NetworkManager manager))
                 return;
 
@@ -604,68 +774,50 @@ namespace CycloneGames.Networking.Adapter.Mirror
             _lifecycleState = NetworkLifecycleState.StartingClient;
             manager.networkAddress = address ?? string.Empty;
             manager.StartClient();
+            RefreshMirrorBindings(forceRebind: true);
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
         }
 
         public void Stop()
         {
-            if (!TryGetNetworkManager(out NetworkManager manager))
-            {
-                return;
-            }
-
+            EnsureMainThread();
             _lifecycleState = NetworkLifecycleState.Stopping;
+
+            if (!TryGetNetworkManager(out NetworkManager manager))
+                return;
+
             manager.StopHost();
-            ClearQueuedPackets();
+            RefreshMirrorBindings(forceRebind: false);
             _lifecycleState = NetworkLifecycle.GetTransportState(this);
-        }
-
-        private void ClearQueuedPackets()
-        {
-            while (_sendQueue.TryDequeue(out QueuedPacket packet))
-            {
-                if (packet.Data != null)
-                {
-                    ArrayPool<byte>.Shared.Return(packet.Data);
-                }
-
-                Interlocked.Decrement(ref _queuedPacketCount);
-            }
-
-            int count = Volatile.Read(ref _queuedPacketCount);
-            if (count < 0)
-            {
-                Interlocked.Exchange(ref _queuedPacketCount, 0);
-            }
         }
 
         public void Disconnect(INetConnection connection)
         {
-            if (connection is MirrorNetConnection mc)
+            EnsureMainThread();
+            if (connection is MirrorNetConnection mc && IsCurrentConnection(mc))
             {
-                if (IsMainThread)
+                if (mc.IsServerConnection)
                 {
-                    if (NetworkServer.active && NetworkServer.connections.TryGetValue(mc.ConnectionId, out var conn))
-                    {
-                        conn.Disconnect();
-                    }
+                    if (NetworkClient.active && NetworkManager.singleton != null)
+                        NetworkManager.singleton.StopClient();
                 }
-                else
+                else if (NetworkServer.active && NetworkServer.connections.TryGetValue(mc.ConnectionId, out var conn))
                 {
-                    EnqueueDisconnect(mc.ConnectionId);
+                    conn.Disconnect();
                 }
             }
         }
 
         public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
+            EnsureMainThread();
             if (!IsRunning)
                 return NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId, connection);
 
-            if (connection is not MirrorNetConnection mirrorConn)
+            if (connection is not MirrorNetConnection mirrorConn || !IsCurrentConnection(mirrorConn))
                 return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
 
-            byte[] buffer = GetThreadBuffer();
+            byte[] buffer = GetSendBuffer();
             NetworkChannel channel = GetNetworkChannel(channelId);
             int frameLength;
             try
@@ -677,40 +829,32 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, e.Message);
             }
 
-            if (IsMainThread)
+            var frame = new ArraySegment<byte>(buffer, 0, frameLength);
+            if (mirrorConn.IsServerConnection)
             {
-                var frame = new ArraySegment<byte>(buffer, 0, frameLength);
-                if (NetworkServer.active && NetworkServer.connections.TryGetValue(mirrorConn.ConnectionId, out var conn))
-                {
-                    Interlocked.Add(ref _bytesSent, frameLength);
-                    Interlocked.Increment(ref _packetsSent);
-                    SendFrameToConnection(conn, frame, channelId);
-                    return NetworkSendResult.Accepted(frameLength, channelId, connection);
-                }
+                if (!NetworkClient.active)
+                    return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
 
-                if (NetworkClient.active)
-                {
-                    Interlocked.Add(ref _bytesSent, frameLength);
-                    Interlocked.Increment(ref _packetsSent);
-                    SendFrameToServer(frame, channelId);
-                    return NetworkSendResult.Accepted(frameLength, channelId, connection);
-                }
-
-                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
-            }
-
-            if (EnqueuePacket(buffer, frameLength, channelId, false, false, mirrorConn.ConnectionId))
-            {
+                SendFrameToServer(frame, channelId);
                 Interlocked.Add(ref _bytesSent, frameLength);
                 Interlocked.Increment(ref _packetsSent);
-                return NetworkSendResult.Queued(frameLength, channelId, connection);
+                return NetworkSendResult.Accepted(frameLength, channelId, connection);
             }
 
-            return NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, connection, "Mirror send queue limit reached.");
+            if (NetworkServer.active && NetworkServer.connections.TryGetValue(mirrorConn.ConnectionId, out var conn))
+            {
+                SendFrameToConnection(conn, frame, channelId);
+                Interlocked.Add(ref _bytesSent, frameLength);
+                Interlocked.Increment(ref _packetsSent);
+                return NetworkSendResult.Accepted(frameLength, channelId, connection);
+            }
+
+            return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
         }
 
         public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
+            EnsureMainThread();
             if (connections == null)
                 throw new ArgumentNullException(nameof(connections));
 
@@ -723,7 +867,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 NetworkSendResult result = Send(connections[i], payload, channelId);
                 if (result.Succeeded)
                 {
-                    acceptedBytes += result.BytesAccepted;
+                    acceptedBytes = SaturatingAdd(acceptedBytes, result.BytesAccepted);
                     acceptedRecipients++;
                 }
                 else
@@ -742,6 +886,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
         private void SendFrameToServer(ArraySegment<byte> frame, int channelId)
         {
+            EnsureMainThread();
             if (!NetworkClient.active) return;
             var wireFrame = new CycloneWireFrameMessage { Frame = frame };
             NetworkClient.Send(wireFrame, channelId);
@@ -749,6 +894,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
         private void SendFrameBroadcast(ArraySegment<byte> frame, int channelId)
         {
+            EnsureMainThread();
             if (!NetworkServer.active) return;
             var wireFrame = new CycloneWireFrameMessage { Frame = frame };
             NetworkServer.SendToAll(wireFrame, channelId);
@@ -756,209 +902,248 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
         private void SendFrameToConnection(NetworkConnectionToClient conn, ArraySegment<byte> frame, int channelId)
         {
+            EnsureMainThread();
             var wireFrame = new CycloneWireFrameMessage { Frame = frame };
             conn.Send(wireFrame, channelId);
             RecordConnectionSent(conn.connectionId, frame.Count);
         }
 
-        // INetworkManager Implementation
-        public void RegisterHandler<T>(ushort msgId, Action<INetConnection, T> handler) where T : struct
+        // INetworkMessageEndpoint implementation
+        public NetworkMessageHandlerLease RegisterHandler(ushort messageId, NetworkMessageHandler handler)
         {
-            if (_handlers.ContainsKey(msgId))
-            {
-                CLogger.LogWarning($"Overwriting handler for MsgId {msgId}", LogCategory.Network);
-            }
-
-            _handlers[msgId] = (conn, payload) =>
-            {
-                try
-                {
-                    Interlocked.Add(ref _bytesReceived, payload.Count);
-                    Interlocked.Increment(ref _packetsReceived);
-
-                    var span = new ReadOnlySpan<byte>(payload.Array, payload.Offset, payload.Count);
-                    T msg = Serializer.Deserialize<T>(span);
-                    handler(conn, msg);
-                }
-                catch (Exception e)
-                {
-                    CLogger.LogError($"Error handling message {msgId}: {e}", LogCategory.Network);
-                }
-            };
+            EnsureMainThread();
+            return _messageHandlers.Register(messageId, handler);
         }
 
-        public void UnregisterHandler(ushort msgId)
+        public NetworkSendResult SendToServer(
+            ushort messageId,
+            ReadOnlySpan<byte> payload,
+            NetworkChannel channel = NetworkChannel.Reliable)
         {
-            _handlers.Remove(msgId);
-        }
+            EnsureMainThread();
+            if (!TryPrepareCanonicalPayload(messageId, channel, payload.Length, null, out int channelId, out NetworkSendResult failure))
+                return failure;
+            if (!NetworkClient.active)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId);
 
-        public void DisconnectClient(INetConnection connection)
-        {
-            Disconnect(connection);
-        }
-
-        public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
-        {
-            int channelId = GetChannelId(channel);
-            byte[] buffer = GetThreadBuffer();
-
+            byte[] buffer = GetSendBuffer();
             try
             {
-                Serializer.Serialize(message, buffer, NetworkWireProtocol.HeaderLength, out int written);
-                int frameLength = WriteFrameHeader(msgId, channel, buffer, written);
+                int frameLength = BuildFrameUnchecked(messageId, channel, payload, buffer);
+                SendFrameToServer(new ArraySegment<byte>(buffer, 0, frameLength), channelId);
                 Interlocked.Add(ref _bytesSent, frameLength);
                 Interlocked.Increment(ref _packetsSent);
-
-                if (IsMainThread)
-                {
-                    SendFrameToServer(new ArraySegment<byte>(buffer, 0, frameLength), channelId);
-                    return NetworkSendResult.Accepted(frameLength, channelId);
-                }
-                else
-                {
-                    return EnqueuePacket(buffer, frameLength, channelId, true, false, -1)
-                        ? NetworkSendResult.Queued(frameLength, channelId)
-                        : NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, reason: "Mirror send queue limit reached.");
-                }
+                return NetworkSendResult.Accepted(frameLength, channelId);
             }
             catch (Exception e)
             {
-                CLogger.LogError($"Failed to send message {msgId}: {e}", LogCategory.Network);
+                CLogger.LogError($"Failed to send canonical message {messageId}: {e}", LogCategory.Network);
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
 
-        public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult SendToClient(
+            INetConnection connection,
+            ushort messageId,
+            ReadOnlySpan<byte> payload,
+            NetworkChannel channel = NetworkChannel.Reliable)
         {
-            int channelId = GetChannelId(channel);
-            byte[] buffer = GetThreadBuffer();
+            EnsureMainThread();
+            if (!TryPrepareCanonicalPayload(messageId, channel, payload.Length, connection, out int channelId, out NetworkSendResult failure))
+                return failure;
+            if (connection is not MirrorNetConnection mirrorConnection || !IsCurrentConnection(mirrorConnection))
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
 
+            byte[] buffer = GetSendBuffer();
             try
             {
-                Serializer.Serialize(message, buffer, NetworkWireProtocol.HeaderLength, out int written);
-                int frameLength = WriteFrameHeader(msgId, channel, buffer, written);
+                int frameLength = BuildFrameUnchecked(messageId, channel, payload, buffer);
+                if (!NetworkServer.connections.TryGetValue(mirrorConnection.ConnectionId, out NetworkConnectionToClient conn))
+                    return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
+
+                SendFrameToConnection(conn, new ArraySegment<byte>(buffer, 0, frameLength), channelId);
                 Interlocked.Add(ref _bytesSent, frameLength);
                 Interlocked.Increment(ref _packetsSent);
-
-                if (IsMainThread)
-                {
-                    if (connection is MirrorNetConnection mc && NetworkServer.connections.TryGetValue(mc.ConnectionId, out var conn))
-                    {
-                        SendFrameToConnection(conn, new ArraySegment<byte>(buffer, 0, frameLength), channelId);
-                        return NetworkSendResult.Accepted(frameLength, channelId, connection);
-                    }
-                    return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
-                }
-                else if (connection is MirrorNetConnection mc)
-                {
-                    return EnqueuePacket(buffer, frameLength, channelId, false, false, mc.ConnectionId)
-                        ? NetworkSendResult.Queued(frameLength, channelId, connection)
-                        : NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, connection, "Mirror send queue limit reached.");
-                }
-
-                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId, connection);
+                return NetworkSendResult.Accepted(frameLength, channelId, connection);
             }
             catch (Exception e)
             {
-                CLogger.LogError($"Failed to send to client: {e}", LogCategory.Network);
+                CLogger.LogError($"Failed to send canonical message {messageId} to a client: {e}", LogCategory.Network);
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, e.Message);
             }
         }
 
-        public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult BroadcastToClients(
+            ushort messageId,
+            ReadOnlySpan<byte> payload,
+            NetworkChannel channel = NetworkChannel.Reliable)
         {
-            int channelId = GetChannelId(channel);
-            byte[] buffer = GetThreadBuffer();
+            EnsureMainThread();
+            if (!TryPrepareCanonicalPayload(messageId, channel, payload.Length, null, out int channelId, out NetworkSendResult failure))
+                return failure;
+            if (!NetworkServer.active)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId);
 
+            byte[] buffer = GetSendBuffer();
             try
             {
-                Serializer.Serialize(message, buffer, NetworkWireProtocol.HeaderLength, out int written);
-                int frameLength = WriteFrameHeader(msgId, channel, buffer, written);
-                Interlocked.Add(ref _bytesSent, frameLength);
-                Interlocked.Increment(ref _packetsSent);
-
-                if (IsMainThread)
-                {
-                    SendFrameBroadcast(new ArraySegment<byte>(buffer, 0, frameLength), channelId);
-                    int recipients = NetworkServer.active ? NetworkServer.connections.Count : 0;
-                    return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, frameLength * recipients, recipients, channelId);
-                }
-                else
-                {
-                    return EnqueuePacket(buffer, frameLength, channelId, false, true, 0)
-                        ? NetworkSendResult.Queued(frameLength, channelId)
-                        : NetworkSendResult.Fail(NetworkSendStatus.Backpressure, channelId, reason: "Mirror send queue limit reached.");
-                }
+                int frameLength = BuildFrameUnchecked(messageId, channel, payload, buffer);
+                SendFrameBroadcast(new ArraySegment<byte>(buffer, 0, frameLength), channelId);
+                int recipients = NetworkServer.connections.Count;
+                int acceptedBytes = SaturatingMultiply(frameLength, recipients);
+                Interlocked.Add(ref _bytesSent, acceptedBytes);
+                Interlocked.Add(ref _packetsSent, recipients);
+                return NetworkSendResult.Broadcast(
+                    NetworkSendStatus.Accepted,
+                    acceptedBytes,
+                    recipients,
+                    channelId);
             }
             catch (Exception e)
             {
-                CLogger.LogError($"Failed to broadcast: {e}", LogCategory.Network);
+                CLogger.LogError($"Failed to broadcast canonical message {messageId}: {e}", LogCategory.Network);
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
 
-        public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
+        public NetworkSendResult Broadcast(
+            IReadOnlyList<INetConnection> connections,
+            ushort messageId,
+            ReadOnlySpan<byte> payload,
+            NetworkChannel channel = NetworkChannel.Reliable)
         {
+            EnsureMainThread();
             if (connections == null)
                 throw new ArgumentNullException(nameof(connections));
+            if (!TryPrepareCanonicalPayload(messageId, channel, payload.Length, null, out int channelId, out NetworkSendResult failure))
+                return failure;
 
-            int acceptedBytes = 0;
-            int acceptedRecipients = 0;
-            NetworkSendResult lastFailure = default;
-
-            foreach (var conn in connections)
+            byte[] buffer = GetSendBuffer();
+            int frameLength;
+            try
             {
-                NetworkSendResult result = SendToClient(conn, msgId, message, channel);
-                if (result.Succeeded)
-                {
-                    acceptedBytes += result.BytesAccepted;
-                    acceptedRecipients++;
-                }
-                else
-                {
-                    lastFailure = result;
-                }
+                frameLength = BuildFrameUnchecked(messageId, channel, payload, buffer);
+            }
+            catch (Exception e)
+            {
+                return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
 
-            int channelId = GetChannelId(channel);
-            if (acceptedRecipients > 0)
-                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, acceptedBytes, acceptedRecipients, channelId);
+            var frame = new ArraySegment<byte>(buffer, 0, frameLength);
+            int acceptedRecipients = 0;
+            for (int i = 0; i < connections.Count; i++)
+            {
+                if (connections[i] is not MirrorNetConnection mirrorConnection
+                    || !IsCurrentConnection(mirrorConnection)
+                    || !NetworkServer.connections.TryGetValue(mirrorConnection.ConnectionId, out NetworkConnectionToClient connection))
+                {
+                    continue;
+                }
 
-            return connections.Count == 0
-                ? NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, channelId)
-                : lastFailure;
+                SendFrameToConnection(connection, frame, channelId);
+                acceptedRecipients++;
+            }
+
+            if (acceptedRecipients == 0 && connections.Count > 0)
+                return NetworkSendResult.Fail(NetworkSendStatus.NotConnected, channelId);
+
+            int acceptedBytes = SaturatingMultiply(frameLength, acceptedRecipients);
+            Interlocked.Add(ref _bytesSent, acceptedBytes);
+            Interlocked.Add(ref _packetsSent, acceptedRecipients);
+            return NetworkSendResult.Broadcast(
+                NetworkSendStatus.Accepted,
+                acceptedBytes,
+                acceptedRecipients,
+                channelId);
+        }
+
+        private bool TryPrepareCanonicalPayload(
+            ushort messageId,
+            NetworkChannel channel,
+            int payloadLength,
+            INetConnection connection,
+            out int channelId,
+            out NetworkSendResult failure)
+        {
+            try
+            {
+                channelId = GetChannelId(channel);
+            }
+            catch (Exception e) when (e is ArgumentException || e is NotSupportedException)
+            {
+                channelId = (int)channel;
+                failure = NetworkSendResult.Fail(NetworkSendStatus.ChannelUnavailable, channelId, connection, e.Message);
+                return false;
+            }
+
+            if (!IsAcceptingMessages)
+            {
+                failure = NetworkSendResult.Fail(NetworkSendStatus.NotRunning, channelId, connection);
+                return false;
+            }
+
+            int maximumPayloadSize = GetMaxPayloadSize(messageId, channel);
+            if (maximumPayloadSize <= 0)
+            {
+                failure = NetworkSendResult.Fail(NetworkSendStatus.ChannelUnavailable, channelId, connection);
+                return false;
+            }
+
+            if (payloadLength > maximumPayloadSize)
+            {
+                failure = NetworkSendResult.Fail(NetworkSendStatus.PayloadTooLarge, channelId, connection);
+                return false;
+            }
+
+            failure = default;
+            return true;
         }
 
         // Internal Handlers
         private void OnServerDataReceived(NetworkConnectionToClient conn, CycloneWireFrameMessage msg)
         {
-            var connection = new MirrorNetConnection(conn, GetConnectionData(conn.connectionId));
+            EnsureMainThread();
+            Interlocked.Add(ref _bytesReceived, msg.Frame.Count);
+            Interlocked.Increment(ref _packetsReceived);
+            RecordConnectionReceived(conn.connectionId, msg.Frame.Count);
+            MirrorNetConnection connection = GetOrCreateServerConnection(conn);
             if (!TryValidateIncoming(connection, msg.Frame, NetworkMessageDirection.ClientToServer, out NetworkEnvelopeHeader header, out ArraySegment<byte> payload))
                 return;
-
-            RecordConnectionReceived(conn.connectionId, msg.Frame.Count);
             OnDataReceived?.Invoke(connection, payload, GetChannelId(header.Channel));
-
-            if (_handlers.TryGetValue(header.MessageId, out var handler))
-            {
-                handler(connection, payload);
-            }
+            DispatchCanonicalMessage(connection, NetworkMessageDirection.ClientToServer, in header, in payload);
         }
 
         private void OnClientDataReceived(CycloneWireFrameMessage msg)
         {
+            EnsureMainThread();
             if (NetworkClient.connection == null)
                 return;
 
-            var connection = new MirrorNetConnection(NetworkClient.connection, default);
+            MirrorNetConnection connection = GetOrCreateAuthorityConnection(NetworkClient.connection);
+            Interlocked.Add(ref _bytesReceived, msg.Frame.Count);
+            Interlocked.Increment(ref _packetsReceived);
             if (!TryValidateIncoming(connection, msg.Frame, NetworkMessageDirection.ServerToClient, out NetworkEnvelopeHeader header, out ArraySegment<byte> payload))
                 return;
 
             OnDataReceived?.Invoke(connection, payload, GetChannelId(header.Channel));
+            DispatchCanonicalMessage(connection, NetworkMessageDirection.ServerToClient, in header, in payload);
+        }
 
-            if (_handlers.TryGetValue(header.MessageId, out var handler))
+        private void DispatchCanonicalMessage(
+            INetConnection connection,
+            NetworkMessageDirection direction,
+            in NetworkEnvelopeHeader header,
+            in ArraySegment<byte> payload)
+        {
+            try
             {
-                handler(connection, payload);
+                var bytes = new ReadOnlySpan<byte>(payload.Array, payload.Offset, payload.Count);
+                var message = new NetworkMessagePayload(connection, direction, in header, bytes);
+                _messageHandlers.TryDispatch(in message);
+            }
+            catch (Exception e)
+            {
+                CLogger.LogError($"Canonical message handler {header.MessageId} failed: {e}", LogCategory.Network);
             }
         }
 
@@ -979,6 +1164,10 @@ namespace CycloneGames.Networking.Adapter.Mirror
             if (payload.Array == null)
                 return false;
 
+            int routePayloadLimit = GetMaxPayloadSize(header.MessageId, header.Channel);
+            if (routePayloadLimit <= 0 || header.PayloadLength > routePayloadLimit)
+                return false;
+
             if (_enableMessageValidation)
             {
                 ValidationResult result = _messageValidator.Validate(header.MessageId, header.PayloadLength);
@@ -997,7 +1186,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
                 payloadSpan,
                 ReadOnlySpan<byte>.Empty,
                 IsEncrypted,
-                Time.unscaledTime,
+                Time.unscaledTimeAsDouble,
                 frame.Count);
             if (!securityResult.Accepted)
                 return false;
@@ -1012,6 +1201,8 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
             data.BytesSent += byteCount;
             _connectionData[connectionId] = data;
+            if (_serverConnections.TryGetValue(connectionId, out MirrorNetConnection connection))
+                connection.UpdateStatistics(data);
         }
 
         private void RecordConnectionReceived(int connectionId, int byteCount)
@@ -1021,13 +1212,15 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
             data.BytesReceived += byteCount;
             _connectionData[connectionId] = data;
+            if (_serverConnections.TryGetValue(connectionId, out MirrorNetConnection connection))
+                connection.UpdateStatistics(data);
         }
 
         private MessageSecurityPolicy CreateDefaultSecurityPolicy()
         {
             return new MessageSecurityPolicy(
                 NetworkMessageDirectionMask.Any,
-                Math.Max(1, _maxPayloadSize),
+                _maxPayloadSize,
                 _requireAuthenticatedMessages,
                 _requireEncryptedTransport,
                 enableReplayProtection: false);
@@ -1047,14 +1240,25 @@ namespace CycloneGames.Networking.Adapter.Mirror
             return new NetworkSecurityPipeline(new NetworkSecurityPipelineOptions
             {
                 MessagePolicies = EnsureMessagePolicies(),
-                RateLimiter = _rateLimiter,
-                EnableRateLimiting = _enableRateLimiter
+                RateLimiter = _enableRateLimiter ? _rateLimiter : null
             });
         }
 
         private NetworkSecurityPipeline EnsureSecurityPipeline()
         {
             return _securityPipeline ??= CreateSecurityPipeline();
+        }
+
+        private static int SaturatingMultiply(int left, int right)
+        {
+            long value = (long)left * right;
+            return value >= int.MaxValue ? int.MaxValue : (int)value;
+        }
+
+        private static int SaturatingAdd(int left, int right)
+        {
+            long value = (long)left + right;
+            return value >= int.MaxValue ? int.MaxValue : (int)value;
         }
 
         private NetworkLifecycleState GetCurrentLifecycleState()
@@ -1101,47 +1305,111 @@ namespace CycloneGames.Networking.Adapter.Mirror
     }
 
     /// <summary>
-    /// Readonly struct wrapping Mirror's NetworkConnection with extended metrics.
+    /// One cached wrapper per live Mirror route. The owner invalidates the wrapper on disconnect,
+    /// backend connection replacement, or adapter shutdown.
     /// </summary>
-    public readonly struct MirrorNetConnection : INetConnection
+    internal sealed class MirrorNetConnection : INetConnection
     {
+        private MirrorNetAdapter _owner;
+        private NetworkConnection _connection;
+
+        internal bool IsServerConnection { get; }
+        internal bool IsValid { get; private set; }
+        internal NetworkConnection Connection => _connection;
         public int ConnectionId { get; }
         public string RemoteAddress { get; }
-        public bool IsConnected { get; }
-        public bool IsAuthenticated { get; }
-        public int Ping { get; }
-        public ConnectionQuality Quality { get; }
-        public double Jitter { get; }
-        public long BytesSent { get; }
-        public long BytesReceived { get; }
+        public bool IsConnected { get; private set; }
+        public bool IsAuthenticated { get; private set; }
+        public int Ping { get; private set; }
+        public ConnectionQuality Quality { get; private set; }
+        public double Jitter { get; private set; }
+        public long BytesSent { get; private set; }
+        public long BytesReceived { get; private set; }
 
         public ulong PlayerId
         {
-            get => MirrorNetAdapter.Instance ? MirrorNetAdapter.Instance.GetPlayerId(ConnectionId) : 0;
-            set => MirrorNetAdapter.Instance?.SetPlayerId(ConnectionId, value);
+            get => _owner != null ? _owner.GetPlayerId(this) : 0UL;
+            set
+            {
+                MirrorNetAdapter owner = GetOwner();
+                owner.SetPlayerId(this, value);
+            }
         }
 
-        internal MirrorNetConnection(NetworkConnection conn, MirrorNetAdapter.MirrorConnectionData data)
+        internal MirrorNetConnection(
+            MirrorNetAdapter owner,
+            NetworkConnection conn,
+            MirrorNetAdapter.MirrorConnectionData data)
         {
+            _owner = owner != null ? owner : throw new ArgumentNullException(nameof(owner));
+            _connection = conn ?? throw new ArgumentNullException(nameof(conn));
+
             if (conn is NetworkConnectionToClient connToClient)
             {
+                IsServerConnection = false;
                 ConnectionId = connToClient.connectionId;
                 RemoteAddress = connToClient.address;
                 Ping = 0;
             }
             else
             {
+                IsServerConnection = true;
                 ConnectionId = 0;
                 RemoteAddress = "server";
-                Ping = (int)(NetworkTime.rtt * 1000);
             }
 
-            IsConnected = conn.isReady;
-            IsAuthenticated = conn.isAuthenticated;
+            IsValid = true;
+            Refresh(data);
+        }
+
+        internal bool IsOwnedBy(MirrorNetAdapter owner)
+        {
+            return ReferenceEquals(_owner, owner);
+        }
+
+        internal bool Matches(NetworkConnection connection)
+        {
+            return IsValid && ReferenceEquals(_connection, connection);
+        }
+
+        internal void Refresh(MirrorNetAdapter.MirrorConnectionData data)
+        {
+            if (!IsValid || _connection == null)
+                return;
+
+            IsConnected = _connection.isReady;
+            IsAuthenticated = _connection.isAuthenticated;
+            Ping = IsServerConnection ? (int)(NetworkTime.rtt * 1000d) : data.LastPing;
+            UpdateStatistics(data);
+        }
+
+        internal void UpdateStatistics(MirrorNetAdapter.MirrorConnectionData data)
+        {
             Jitter = data.Jitter;
             BytesSent = data.BytesSent;
             BytesReceived = data.BytesReceived;
             Quality = CalculateQuality(Ping, Jitter);
+        }
+
+        internal void Invalidate(MirrorNetAdapter.MirrorConnectionData data)
+        {
+            if (!IsValid)
+                return;
+
+            UpdateStatistics(data);
+            IsConnected = false;
+            IsAuthenticated = false;
+            IsValid = false;
+            _connection = null;
+            _owner = null;
+        }
+
+        private MirrorNetAdapter GetOwner()
+        {
+            if (_owner == null)
+                throw new ObjectDisposedException(nameof(MirrorNetAdapter));
+
+            return _owner;
         }
 
         private static ConnectionQuality CalculateQuality(int ping, double jitter)
@@ -1154,7 +1422,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
         public bool Equals(INetConnection other)
         {
-            return other != null && ConnectionId == other.ConnectionId;
+            return ReferenceEquals(this, other);
         }
 
         public override bool Equals(object obj)
@@ -1164,7 +1432,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
 
         public override int GetHashCode()
         {
-            return ConnectionId;
+            return RuntimeHelpers.GetHashCode(this);
         }
     }
 }

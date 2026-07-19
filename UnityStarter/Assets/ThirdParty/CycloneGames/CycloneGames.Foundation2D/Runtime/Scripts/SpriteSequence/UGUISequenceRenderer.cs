@@ -1,6 +1,6 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
-using System.Collections.Generic;
 
 namespace CycloneGames.Foundation2D.Runtime
 {
@@ -14,8 +14,9 @@ namespace CycloneGames.Foundation2D.Runtime
             ShaderFlipbookSharedMaterial = 1,
         }
 
+        internal const string FlipbookShaderName = "UI/FlipbookRemap";
+
         [SerializeField] private Image image;
-        [SerializeField] private CanvasGroup canvasGroup;
         [SerializeField] private UGUIRenderMode renderMode = UGUIRenderMode.SpriteSwap;
         [SerializeField] private Material flipbookSharedMaterial;
         [SerializeField] private FlipbookUVMeshEffect flipbookUvMeshEffect;
@@ -24,33 +25,68 @@ namespace CycloneGames.Foundation2D.Runtime
         private Vector4[] _targetUvRects;
         private int _targetUvCount;
         private Vector4 _baseUvRect;
+        private Vector4 _currentTargetUvRect;
         private bool _flipbookReady;
+        private bool _configurationWarningIssued;
+
+        private Image _materialOwner;
+        private Material _originalMaterial;
+        private Material _ownedMaterial;
+        private bool _originalUsedDefaultMaterial;
+        private Material _validatedFlipbookMaterial;
+        private Shader _validatedFlipbookShader;
+        private bool _ownsMaterial;
+
+        private FlipbookUVMeshEffect _meshEffectOwner;
+        private Vector4 _originalEffectBaseUvRect;
+        private Vector4 _originalEffectTargetUvRect;
+        private Vector4 _ownedEffectBaseUvRect;
+        private Vector4 _ownedEffectTargetUvRect;
+        private bool _ownsMeshEffectState;
+
+        private static readonly int FlipbookBaseRectId = Shader.PropertyToID("_FlipbookBaseRect");
+        private static readonly int FlipbookTargetRectId = Shader.PropertyToID("_FlipbookTargetRect");
 
         private void Awake()
         {
-            if (image == null)
-            {
-                image = GetComponent<Image>();
-            }
-
-            if (canvasGroup == null)
-            {
-                canvasGroup = GetComponent<CanvasGroup>();
-            }
-
-            if (flipbookUvMeshEffect == null)
-            {
-                flipbookUvMeshEffect = GetComponent<FlipbookUVMeshEffect>();
-            }
+            EnsureDependencies();
         }
+
+        private void OnEnable()
+        {
+            EnsureDependencies();
+            RestoreConfiguredRenderState();
+        }
+
+        private void OnDisable()
+        {
+            RestoreOwnedMaterial();
+            RestoreOwnedMeshEffectState();
+        }
+
+        private void OnDestroy()
+        {
+            RestoreOwnedMaterial();
+            RestoreOwnedMeshEffectState();
+        }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            EnsureDependencies();
+        }
+#endif
 
         public void Initialize(IReadOnlyList<Sprite> frames)
         {
-            _frames = frames;
-            _flipbookReady = false;
-            _targetUvCount = 0;
+            EnsureDependencies();
+            RestoreOwnedMaterial();
+            ResetFlipbookState();
 
-            if (image == null || _frames == null || _frames.Count == 0)
+            _frames = frames;
+            _configurationWarningIssued = false;
+
+            if (image == null || frames == null || frames.Count == 0)
             {
                 return;
             }
@@ -60,50 +96,48 @@ namespace CycloneGames.Foundation2D.Runtime
                 return;
             }
 
-            if (flipbookSharedMaterial == null)
+            if (!IsCompatibleFlipbookMaterial(flipbookSharedMaterial))
             {
+                FallbackToSpriteSwap(0, "The assigned material must use the " + FlipbookShaderName + " shader.");
                 return;
             }
 
-            if (flipbookUvMeshEffect == null)
+            if (!IsMeshEffectReady())
             {
-                flipbookUvMeshEffect = GetComponent<FlipbookUVMeshEffect>();
-            }
-
-            if (flipbookUvMeshEffect == null)
-            {
+                FallbackToSpriteSwap(
+                    0,
+                    "The FlipbookUVMeshEffect must be enabled on the same Image, and its Canvas must explicitly enable TexCoord1 and TexCoord2 shader channels.");
                 return;
             }
 
-            Sprite first = _frames[0];
-            if (first == null || first.texture == null)
+            EnsureUvCapacity(frames.Count);
+            if (!SpriteFlipbookCompatibility.TryValidateAndBuild(
+                    frames,
+                    _targetUvRects,
+                    out _baseUvRect,
+                    out SpriteFlipbookCompatibilityError error,
+                    out int errorFrameIndex))
             {
+                FallbackToSpriteSwap(
+                    errorFrameIndex,
+                    SpriteFlipbookCompatibility.GetErrorMessage(error));
                 return;
             }
 
-            Texture texture = first.texture;
-            EnsureUvCapacity(_frames.Count);
-            for (int i = 0; i < _frames.Count; i++)
-            {
-                Sprite s = _frames[i];
-                if (s == null || s.texture == null || s.texture != texture)
-                {
-                    _targetUvCount = 0;
-                    return;
-                }
-
-                _targetUvRects[i] = GetNormalizedRect(s);
-            }
-
-            _targetUvCount = _frames.Count;
-            _baseUvRect = _targetUvRects[0];
-            image.material = flipbookSharedMaterial;
-            image.sprite = first;
+            _targetUvCount = frames.Count;
+            _currentTargetUvRect = _targetUvRects[0];
+            _validatedFlipbookMaterial = flipbookSharedMaterial;
+            _validatedFlipbookShader = flipbookSharedMaterial.shader;
             _flipbookReady = true;
+
+            AcquireMaterial(flipbookSharedMaterial);
+            image.sprite = frames[0];
+            ApplyOwnedMeshEffectRects(_baseUvRect, _currentTargetUvRect);
         }
 
         public void ApplyFrame(int frameIndex, bool forceRefresh)
         {
+            EnsureDependencies();
             if (image == null || _frames == null || _frames.Count == 0)
             {
                 return;
@@ -116,15 +150,28 @@ namespace CycloneGames.Foundation2D.Runtime
                 return;
             }
 
-            if (_flipbookReady && renderMode == UGUIRenderMode.ShaderFlipbookSharedMaterial && frameIndex < _targetUvCount)
+            if (_flipbookReady &&
+                renderMode == UGUIRenderMode.ShaderFlipbookSharedMaterial &&
+                frameIndex < _targetUvCount &&
+                IsValidatedFlipbookMaterialCurrent() &&
+                IsMeshEffectReady())
             {
-                if (forceRefresh || image.sprite == null)
+                AcquireMaterial(flipbookSharedMaterial);
+                if (forceRefresh || image.sprite != _frames[0])
                 {
                     image.sprite = _frames[0];
                 }
 
-                flipbookUvMeshEffect.SetFlipbookRects(_baseUvRect, _targetUvRects[frameIndex]);
+                _currentTargetUvRect = _targetUvRects[frameIndex];
+                ApplyOwnedMeshEffectRects(_baseUvRect, _currentTargetUvRect);
                 return;
+            }
+
+            if (_flipbookReady)
+            {
+                DisableFlipbook();
+                WarnConfigurationOnce(
+                    "UGUI flipbook rendering became unavailable and fell back to sprite swapping. Verify the material, mesh effect, and Canvas TexCoord1/TexCoord2 channels.");
             }
 
             if (forceRefresh || image.sprite != sprite)
@@ -135,62 +182,243 @@ namespace CycloneGames.Foundation2D.Runtime
 
         public void SetVisible(bool visible)
         {
+            EnsureDependencies();
             if (image != null)
             {
                 image.enabled = visible;
             }
         }
 
-        public void SetAlpha(float alpha)
+        private void EnsureDependencies()
         {
-            if (canvasGroup != null)
+            if (image == null)
             {
-                canvasGroup.alpha = alpha;
+                image = GetComponent<Image>();
+            }
+
+            if (flipbookUvMeshEffect == null)
+            {
+                flipbookUvMeshEffect = GetComponent<FlipbookUVMeshEffect>();
+            }
+
+            if (_ownsMaterial && _materialOwner != image)
+            {
+                RestoreOwnedMaterial();
+            }
+
+            if (_ownsMeshEffectState && _meshEffectOwner != flipbookUvMeshEffect)
+            {
+                RestoreOwnedMeshEffectState();
             }
         }
 
-        public void SetScale(Vector3 scale)
+        private void RestoreConfiguredRenderState()
         {
-            transform.localScale = scale;
-        }
-
-        private void EnsureUvCapacity(int count)
-        {
-            if (count <= 0)
+            if (image == null || !_flipbookReady || _frames == null || _frames.Count == 0)
             {
                 return;
             }
 
+            if (!IsValidatedFlipbookMaterialCurrent() || !IsMeshEffectReady())
+            {
+                DisableFlipbook();
+                return;
+            }
+
+            AcquireMaterial(flipbookSharedMaterial);
+            image.sprite = _frames[0];
+            ApplyOwnedMeshEffectRects(_baseUvRect, _currentTargetUvRect);
+        }
+
+        private void AcquireMaterial(Material material)
+        {
+            if (image == null || material == null)
+            {
+                return;
+            }
+
+            if (_ownsMaterial &&
+                (_materialOwner != image || _materialOwner.material != _ownedMaterial))
+            {
+                ReleaseMaterialOwnership();
+            }
+
+            if (!_ownsMaterial)
+            {
+                _materialOwner = image;
+                _originalMaterial = image.material;
+                _originalUsedDefaultMaterial =
+                    _originalMaterial == image.defaultMaterial ||
+                    _originalMaterial == Image.defaultETC1GraphicMaterial;
+                _ownsMaterial = true;
+            }
+
+            if (image.material != material)
+            {
+                image.material = material;
+            }
+
+            _ownedMaterial = material;
+        }
+
+        private void RestoreOwnedMaterial()
+        {
+            if (!_ownsMaterial)
+            {
+                return;
+            }
+
+            if (_materialOwner != null && _materialOwner.material == _ownedMaterial)
+            {
+                _materialOwner.material = _originalUsedDefaultMaterial ? null : _originalMaterial;
+            }
+
+            ReleaseMaterialOwnership();
+        }
+
+        private void ReleaseMaterialOwnership()
+        {
+            _materialOwner = null;
+            _originalMaterial = null;
+            _ownedMaterial = null;
+            _originalUsedDefaultMaterial = false;
+            _ownsMaterial = false;
+        }
+
+        private void ApplyOwnedMeshEffectRects(in Vector4 baseRect, in Vector4 targetRect)
+        {
+            if (flipbookUvMeshEffect == null)
+            {
+                return;
+            }
+
+            if (_ownsMeshEffectState && _meshEffectOwner != flipbookUvMeshEffect)
+            {
+                RestoreOwnedMeshEffectState();
+            }
+
+            if (!_ownsMeshEffectState)
+            {
+                _meshEffectOwner = flipbookUvMeshEffect;
+                _meshEffectOwner.GetFlipbookRects(
+                    out _originalEffectBaseUvRect,
+                    out _originalEffectTargetUvRect);
+                _ownsMeshEffectState = true;
+            }
+
+            _ownedEffectBaseUvRect = baseRect;
+            _ownedEffectTargetUvRect = targetRect;
+            _meshEffectOwner.SetFlipbookRects(baseRect, targetRect);
+        }
+
+        private void RestoreOwnedMeshEffectState()
+        {
+            if (!_ownsMeshEffectState)
+            {
+                return;
+            }
+
+            if (_meshEffectOwner != null &&
+                _meshEffectOwner.HasFlipbookRects(_ownedEffectBaseUvRect, _ownedEffectTargetUvRect))
+            {
+                _meshEffectOwner.SetFlipbookRects(
+                    _originalEffectBaseUvRect,
+                    _originalEffectTargetUvRect);
+            }
+
+            _meshEffectOwner = null;
+            _originalEffectBaseUvRect = default;
+            _originalEffectTargetUvRect = default;
+            _ownedEffectBaseUvRect = default;
+            _ownedEffectTargetUvRect = default;
+            _ownsMeshEffectState = false;
+        }
+
+        private void DisableFlipbook()
+        {
+            _flipbookReady = false;
+            _targetUvCount = 0;
+            _validatedFlipbookMaterial = null;
+            _validatedFlipbookShader = null;
+            RestoreOwnedMaterial();
+            RestoreOwnedMeshEffectState();
+        }
+
+        private void ResetFlipbookState()
+        {
+            DisableFlipbook();
+            _baseUvRect = default;
+            _currentTargetUvRect = default;
+        }
+
+        private void FallbackToSpriteSwap(int frameIndex, string reason)
+        {
+            DisableFlipbook();
+            if (image != null && _frames != null && _frames.Count > 0 && _frames[0] != null)
+            {
+                image.sprite = _frames[0];
+            }
+
+            string location = frameIndex >= 0 ? " Frame index: " + frameIndex + "." : string.Empty;
+            WarnConfigurationOnce(
+                "UGUI flipbook initialization fell back to sprite swapping. " + reason + location);
+        }
+
+        private void WarnConfigurationOnce(string message)
+        {
+            if (_configurationWarningIssued)
+            {
+                return;
+            }
+
+            _configurationWarningIssued = true;
+            Debug.LogWarning(message, this);
+        }
+
+        private bool IsMeshEffectReady()
+        {
+            return flipbookUvMeshEffect != null &&
+                   flipbookUvMeshEffect.isActiveAndEnabled &&
+                   flipbookUvMeshEffect.IsReadyFor(image);
+        }
+
+        private bool IsValidatedFlipbookMaterialCurrent()
+        {
+            return flipbookSharedMaterial != null &&
+                   flipbookSharedMaterial == _validatedFlipbookMaterial &&
+                   flipbookSharedMaterial.shader == _validatedFlipbookShader;
+        }
+
+        private void EnsureUvCapacity(int count)
+        {
             if (_targetUvRects != null && _targetUvRects.Length >= count)
             {
                 return;
             }
 
-            int capacity = _targetUvRects == null ? 16 : _targetUvRects.Length;
-            while (capacity < count)
+            int capacity = _targetUvRects == null || _targetUvRects.Length < 16
+                ? 16
+                : _targetUvRects.Length;
+            while (capacity < count && capacity <= (int.MaxValue >> 1))
             {
                 capacity <<= 1;
+            }
+
+            if (capacity < count)
+            {
+                capacity = count;
             }
 
             _targetUvRects = new Vector4[capacity];
         }
 
-        private static Vector4 GetNormalizedRect(Sprite sprite)
+        private static bool IsCompatibleFlipbookMaterial(Material material)
         {
-            Rect r;
-            try
-            {
-                r = sprite.textureRect;
-            }
-            catch
-            {
-                r = sprite.rect;
-            }
-
-            Texture tex = sprite.texture;
-            float invW = 1f / Mathf.Max(1f, tex.width);
-            float invH = 1f / Mathf.Max(1f, tex.height);
-            return new Vector4(r.x * invW, r.y * invH, r.width * invW, r.height * invH);
+            return material != null &&
+                   material.shader != null &&
+                   material.shader.name == FlipbookShaderName &&
+                   material.HasProperty(FlipbookBaseRectId) &&
+                   material.HasProperty(FlipbookTargetRectId);
         }
     }
 }

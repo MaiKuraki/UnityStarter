@@ -27,6 +27,16 @@ namespace CycloneGames.Networking.Session
         DedicatedServer
     }
 
+    public enum NetworkSessionState : byte
+    {
+        Unknown = 0,
+        Lobby = 1,
+        Starting = 2,
+        InProgress = 3,
+        Ending = 4,
+        Closed = 5
+    }
+
     public readonly struct NetworkSessionDescriptor
     {
         public readonly string SessionId;
@@ -48,7 +58,7 @@ namespace CycloneGames.Networking.Session
         public readonly bool RequiresPassword;
         public readonly bool SupportsHostMigration;
         public readonly bool SupportsReconnection;
-        public readonly SessionState State;
+        public readonly NetworkSessionState State;
         public readonly NetworkSessionConnectivity Connectivity;
         public readonly NetworkSessionDiscoverySource Source;
         public readonly double LastSeenTime;
@@ -74,7 +84,7 @@ namespace CycloneGames.Networking.Session
             bool requiresPassword = false,
             bool supportsHostMigration = false,
             bool supportsReconnection = false,
-            SessionState state = SessionState.Lobby,
+            NetworkSessionState state = NetworkSessionState.Lobby,
             NetworkSessionConnectivity connectivity = NetworkSessionConnectivity.Direct,
             NetworkSessionDiscoverySource source = NetworkSessionDiscoverySource.Unknown,
             double lastSeenTime = 0d,
@@ -146,40 +156,6 @@ namespace CycloneGames.Networking.Session
             }
         }
 
-        public static NetworkSessionDescriptor FromSession(
-            NetworkSession session,
-            NetworkSessionDiscoverySource source,
-            NetworkSessionConnectivity connectivity,
-            string region = "",
-            string buildId = "",
-            int pingMs = -1,
-            double lastSeenTime = 0d)
-        {
-            if (session == null)
-            {
-                throw new ArgumentNullException(nameof(session));
-            }
-
-            return new NetworkSessionDescriptor(
-                session.SessionId,
-                session.Name,
-                session.GameMode,
-                session.CurrentPlayers,
-                session.MaxPlayers,
-                session.Map,
-                region,
-                buildId,
-                session.HostAddress,
-                session.Port,
-                pingMs: pingMs,
-                isPrivate: session.IsPrivate,
-                isJoinable: session.State == SessionState.Lobby || session.State == SessionState.InProgress,
-                state: session.State,
-                connectivity: connectivity,
-                source: source,
-                lastSeenTime: lastSeenTime,
-                properties: session.Properties);
-        }
     }
 
     public sealed class NetworkSessionSearchCriteria
@@ -450,7 +426,7 @@ namespace CycloneGames.Networking.Session
                 score += 25f;
             }
 
-            if (session.State == SessionState.Lobby)
+            if (session.State == NetworkSessionState.Lobby)
             {
                 score += 20f;
             }

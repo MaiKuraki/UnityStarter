@@ -10,6 +10,7 @@ namespace CycloneGames.InputSystem.Sample
         private int _playerId;
         private Color _playerColor;
         private Renderer _renderer;
+        private Material _runtimeMaterial;
 
         private const float MoveSpeed = 5f;
 
@@ -24,9 +25,26 @@ namespace CycloneGames.InputSystem.Sample
             _playerColor = color;
             if (_renderer)
             {
-                _renderer.material.color = _playerColor;
+                if (_runtimeMaterial == null)
+                {
+                    _runtimeMaterial = _renderer.material;
+                }
+
+                if (_runtimeMaterial != null)
+                {
+                    _runtimeMaterial.color = _playerColor;
+                }
             }
             gameObject.name = $"Player_{_playerId}";
+        }
+
+        private void OnDestroy()
+        {
+            if (_runtimeMaterial != null)
+            {
+                Destroy(_runtimeMaterial);
+                _runtimeMaterial = null;
+            }
         }
 
         public void OnMove(Vector2 direction)

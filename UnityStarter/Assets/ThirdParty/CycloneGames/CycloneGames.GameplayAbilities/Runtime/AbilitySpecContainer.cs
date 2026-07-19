@@ -7,7 +7,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// Owns granted ability specs, ticking specs, and ability specs granted by active effects.
     /// This mirrors Unreal GAS' dedicated ability spec container while keeping Unity runtime code allocation-aware.
     /// </summary>
-    public sealed class AbilitySpecContainer
+    internal sealed class AbilitySpecContainer
     {
         private readonly List<GameplayAbilitySpec> _activatableAbilities;
         private readonly Dictionary<int, GameplayAbilitySpec> _specByHandle;
@@ -80,7 +80,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         public bool AddSpec(GameplayAbilitySpec spec)
         {
-            if (spec == null || _indexBySpec.ContainsKey(spec))
+            if (spec == null || _indexBySpec.ContainsKey(spec) || _specByHandle.ContainsKey(spec.Handle))
             {
                 return false;
             }
@@ -88,6 +88,36 @@ namespace CycloneGames.GameplayAbilities.Runtime
             _indexBySpec[spec] = _activatableAbilities.Count;
             _activatableAbilities.Add(spec);
             _specByHandle[spec.Handle] = spec;
+            return true;
+        }
+
+        public bool TryReassignHandle(GameplayAbilitySpec spec, int newHandle)
+        {
+            if (spec == null || newHandle <= 0)
+            {
+                return false;
+            }
+
+            int oldHandle = spec.Handle;
+            if (!_specByHandle.TryGetValue(oldHandle, out GameplayAbilitySpec current) ||
+                !ReferenceEquals(current, spec))
+            {
+                return false;
+            }
+
+            if (oldHandle == newHandle)
+            {
+                return true;
+            }
+
+            if (_specByHandle.ContainsKey(newHandle))
+            {
+                return false;
+            }
+
+            _specByHandle.Add(newHandle, spec);
+            spec.AssignHandleFromContainer(newHandle);
+            _specByHandle.Remove(oldHandle);
             return true;
         }
 

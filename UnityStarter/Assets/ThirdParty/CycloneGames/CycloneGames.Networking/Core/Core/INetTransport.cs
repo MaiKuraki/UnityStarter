@@ -126,17 +126,18 @@ namespace CycloneGames.Networking
 
     public enum NetworkSendStatus : byte
     {
-        Accepted,
-        Queued,
-        Dropped,
-        NotRunning,
-        NotConnected,
-        InvalidPayload,
-        PayloadTooLarge,
-        ChannelUnavailable,
-        Backpressure,
-        Unsupported,
-        TransportUnavailable
+        Invalid = 0,
+        Accepted = 1,
+        Queued = 2,
+        Dropped = 3,
+        NotRunning = 4,
+        NotConnected = 5,
+        InvalidPayload = 6,
+        PayloadTooLarge = 7,
+        ChannelUnavailable = 8,
+        Backpressure = 9,
+        Unsupported = 10,
+        TransportUnavailable = 11
     }
 
     public readonly struct NetworkSendResult
@@ -499,16 +500,6 @@ namespace CycloneGames.Networking
         }
     }
 
-    public interface INetworkSnapshotProvider
-    {
-        bool TryWriteSnapshot(in NetworkSnapshotRequest request, Serialization.INetWriter writer, out NetworkSnapshotHeader header);
-    }
-
-    public interface INetworkSnapshotApplier
-    {
-        bool TryApplySnapshot(in NetworkSnapshotHeader header, Serialization.INetReader reader);
-    }
-
     public interface INetworkSnapshotAckStore
     {
         bool TryGetLastAck(INetConnection connection, out NetworkSnapshotAck ack);
@@ -744,8 +735,9 @@ namespace CycloneGames.Networking
         // --- Raw I/O ---
 
         /// <summary>
-        /// Send a raw payload to a connection using given channel.
-        /// Must be zero-allocation in hot paths.
+        /// Send a raw payload to a connection using the given channel.
+        /// Implementations must document payload ownership and backpressure. Recurring
+        /// hot-path allocations should be avoided and verified with a target benchmark.
         /// </summary>
         NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId);
 

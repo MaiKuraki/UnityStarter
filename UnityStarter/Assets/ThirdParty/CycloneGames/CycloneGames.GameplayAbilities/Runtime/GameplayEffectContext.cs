@@ -1,71 +1,195 @@
+using System;
 using CycloneGames.GameplayAbilities.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
-    public interface IGameplayEffectContext
-    {
-        AbilitySystemComponent Instigator { get; }
-        GameplayAbility AbilityInstance { get; }
-        TargetData TargetData { get; }
-        GASPredictionKey PredictionKey { get; set; }
-
-        void AddInstigator(AbilitySystemComponent instigator, GameplayAbility abilityInstance);
-        void AddTargetData(TargetData targetData);
-        void Reset();
-    }
-
     /// <summary>
     /// Context object carrying metadata about an effect's application.
-    /// Pooled via GASPool for zero-allocation runtime.
+    /// Released contexts are invalidated and discarded.
     /// </summary>
-    public class GameplayEffectContext : IGameplayEffectContext, IGASPoolable
+    public class GameplayEffectContext : IDisposable, IGASLeasedObject
     {
+        private enum ContextOwnership : byte
+        {
+            None,
+            Caller,
+            Spec
+        }
+
+        private GASRuntimeMemory memoryOwner;
+        private bool leaseActive;
+        private bool leaseEverAcquired;
+        private ContextOwnership ownership = ContextOwnership.Caller;
+        private GameplayEffectSpec owningSpec;
+        private GASPredictionKey predictionKey;
+
         public AbilitySystemComponent Instigator { get; private set; }
         public GameplayAbility AbilityInstance { get; private set; }
-        public TargetData TargetData { get; private set; }
-        public GASPredictionKey PredictionKey { get; set; }
+        public GASPredictionKey PredictionKey
+        {
+            get => predictionKey;
+            set
+            {
+                AssertMemoryOwnerThread();
+                EnsureCallerOwned();
+                predictionKey = value;
+            }
+        }
 
         public GameplayEffectContext() { }
 
-        #region IGASPoolable Implementation
-
-        void IGASPoolable.OnGetFromPool()
+        bool IGASLeasedObject.TryAcquireLease()
         {
-            // Initialization happens via AddInstigator/AddTargetData
+            if (leaseActive || leaseEverAcquired) return false;
+            leaseEverAcquired = true;
+            leaseActive = true;
+            return true;
         }
 
-        void IGASPoolable.OnReturnToPool()
+        bool IGASLeasedObject.TryReleaseLease()
         {
-            Reset();
+            if (!leaseActive) return false;
+            leaseActive = false;
+            return true;
         }
 
-        #endregion
+        void IGASLeasedObject.OnLeaseAcquired()
+        {
+            ResetState();
+            owningSpec = null;
+            ownership = ContextOwnership.Caller;
+        }
+
+        void IGASLeasedObject.OnLeaseReleased()
+        {
+            ResetState();
+            owningSpec = null;
+            ownership = ContextOwnership.None;
+        }
+
+        internal void SetMemoryOwner(GASRuntimeMemory owner) => memoryOwner = owner;
+        internal GASRuntimeMemory MemoryOwner => memoryOwner;
 
         public void AddInstigator(AbilitySystemComponent instigator, GameplayAbility abilityInstance)
         {
+            AssertMemoryOwnerThread();
+            EnsureCallerOwned();
             Instigator = instigator;
             AbilityInstance = abilityInstance;
         }
 
-        public void AddTargetData(TargetData data)
+        public void Reset()
         {
-            TargetData = data;
+            AssertMemoryOwnerThread();
+            EnsureCallerOwned();
+            ResetState();
         }
 
-        public void Reset()
+        private void ResetState()
         {
             Instigator = null;
             AbilityInstance = null;
-            TargetData = null;
-            PredictionKey = default;
+            predictionKey = default;
+            ResetCustomState();
         }
 
         /// <summary>
-        /// Returns this context to the pool.
+        /// Resets data introduced by a derived context when the lease is acquired or released.
         /// </summary>
-        public void ReturnToPool()
+        protected virtual void ResetCustomState() { }
+
+        internal void AttachToSpec(GameplayEffectSpec spec)
         {
-            GASPool<GameplayEffectContext>.Shared.Return(this);
+            if (spec == null) throw new ArgumentNullException(nameof(spec));
+            AssertMemoryOwnerThread();
+            EnsureCallerOwned();
+            owningSpec = spec;
+            ownership = ContextOwnership.Spec;
+        }
+
+        internal void SetPredictionKeyFromSpec(GameplayEffectSpec spec, GASPredictionKey value)
+        {
+            AssertMemoryOwnerThread();
+            EnsureOwnedBy(spec);
+
+            predictionKey = value;
+        }
+
+        internal GameplayAbility ConsumeAbilityInstance(GameplayEffectSpec spec)
+        {
+            AssertMemoryOwnerThread();
+            EnsureOwnedBy(spec);
+            GameplayAbility ability = AbilityInstance;
+            AbilityInstance = null;
+            return ability;
+        }
+
+        internal void ReturnFromSpec(GameplayEffectSpec spec)
+        {
+            AssertMemoryOwnerThread();
+            EnsureOwnedBy(spec);
+
+            if (memoryOwner != null)
+            {
+                memoryOwner.ReleaseEffectContext(this);
+            }
+            else
+            {
+                owningSpec = null;
+                ownership = ContextOwnership.None;
+                ResetState();
+            }
+        }
+
+        /// <summary>
+        /// Releases this context lease.
+        /// </summary>
+        public void Dispose()
+        {
+            AssertMemoryOwnerThread();
+            if (ownership == ContextOwnership.Spec)
+            {
+                throw new InvalidOperationException("GameplayEffectContext ownership has transferred to a GameplayEffectSpec and cannot be disposed by the caller.");
+            }
+
+            if (ownership == ContextOwnership.None)
+            {
+                return;
+            }
+
+            if (memoryOwner != null)
+            {
+                memoryOwner.ReleaseEffectContext(this);
+            }
+            else
+            {
+                owningSpec = null;
+                ownership = ContextOwnership.None;
+                ResetState();
+            }
+        }
+
+        internal void ReleaseRuntimeLease() => Dispose();
+
+        private void EnsureCallerOwned()
+        {
+            if (ownership != ContextOwnership.Caller)
+            {
+                throw new InvalidOperationException("GameplayEffectContext mutation is only valid before it is attached to a GameplayEffectSpec.");
+            }
+        }
+
+        private void EnsureOwnedBy(GameplayEffectSpec spec)
+        {
+            if (ownership != ContextOwnership.Spec || !ReferenceEquals(owningSpec, spec))
+            {
+                throw new InvalidOperationException("GameplayEffectContext can only be changed or released by its owning GameplayEffectSpec.");
+            }
+        }
+
+        private void AssertMemoryOwnerThread()
+        {
+            memoryOwner?.AssertOwnerThread();
         }
     }
 }

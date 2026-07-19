@@ -27,11 +27,12 @@ namespace CycloneGames.GameplayFramework.Runtime
             public float DurationOverride;
         }
 
-        // Struct (not class) — stored inline in the List<> array, zero per-entry heap allocation.
+        // Struct (not class): stored inline in the List<> array with no per-entry heap allocation.
         private struct ActiveAction
         {
             public string Key;
             public PresetCameraMode Mode;
+            public PlayerController Owner;
             public bool AutoRemove;
         }
 
@@ -44,11 +45,23 @@ namespace CycloneGames.GameplayFramework.Runtime
         [Tooltip("Instance-level entries that override the shared action map.")]
         [SerializeField] private List<CameraActionEntry> actionEntries = new List<CameraActionEntry>(8);
 
+        [Tooltip("Maximum number of camera actions this binding can track at the same time.")]
+        [SerializeField, Min(0)] private int maxActiveActions = 8;
+
+        [Tooltip("Maximum number of inactive preset modes retained by this binding.")]
+        [SerializeField, Min(0)] private int maxPooledModes = 8;
+
         private readonly List<ActiveAction> activeActions = new List<ActiveAction>(8);
 
         // Pool avoids one heap allocation per PlayPreset call.
         // Capacity 8 covers even the most action-dense frames without resizing.
         private readonly Stack<PresetCameraMode> modePool = new Stack<PresetCameraMode>(8);
+        private bool isStoppingAllActions;
+
+        public int ActiveActionCount => activeActions.Count;
+        public int PooledModeCount => modePool.Count;
+        public int MaxActiveActions => Mathf.Max(0, maxActiveActions);
+        public int MaxPooledModes => Mathf.Max(0, maxPooledModes);
 
         private void Awake()
         {
@@ -57,7 +70,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         private void OnDisable()
         {
-            // Fired on SetActive(false) and object-pool return — stop all actions so
+            // Fired on SetActive(false) and object-pool return. Stop all actions so
             // no orphaned CameraModes linger on the PlayerController's camera stack.
             StopAllActions();
         }
@@ -73,16 +86,14 @@ namespace CycloneGames.GameplayFramework.Runtime
         private void LateUpdate()
         {
             if (activeActions.Count == 0) return;
-            if (!TryResolvePlayerController()) return;
 
             for (int i = activeActions.Count - 1; i >= 0; i--)
             {
                 ActiveAction action = activeActions[i];
                 if (!action.AutoRemove || action.Mode == null || !action.Mode.IsFinished) continue;
 
-                playerController.RemoveCameraMode(action.Mode);
-                ReturnMode(action.Mode);
                 activeActions.RemoveAt(i);
+                ReleaseAction(action);
             }
         }
 
@@ -119,7 +130,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         public bool PlayPreset(string actionKey, CameraActionPreset preset, float overrideDuration = -1f,
             TriggerPolicy policy = TriggerPolicy.ReplaceSameKey, bool autoRemoveOnFinish = true)
         {
-            if (preset == null) return false;
+            if (string.IsNullOrEmpty(actionKey) || preset == null || isStoppingAllActions) return false;
             if (!TryResolvePlayerController()) return false;
 
             if (policy == TriggerPolicy.IgnoreIfRunning && IsActionRunning(actionKey))
@@ -132,14 +143,25 @@ namespace CycloneGames.GameplayFramework.Runtime
                 StopAction(actionKey);
             }
 
+            if (activeActions.Count >= MaxActiveActions)
+            {
+                return false;
+            }
+
             PresetCameraMode mode = RentMode();
             mode.Setup(preset, overrideDuration);
-            playerController.PushCameraMode(mode);
+            PlayerController actionOwner = playerController;
+            if (!actionOwner.TryPushCameraMode(mode))
+            {
+                ReturnMode(mode);
+                return false;
+            }
 
             activeActions.Add(new ActiveAction
             {
                 Key = actionKey,
                 Mode = mode,
+                Owner = actionOwner,
                 AutoRemove = autoRemoveOnFinish
             });
 
@@ -148,7 +170,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public bool StopAction(string actionKey)
         {
-            if (!TryResolvePlayerController()) return false;
+            if (string.IsNullOrEmpty(actionKey)) return false;
 
             bool removedAny = false;
             for (int i = activeActions.Count - 1; i >= 0; i--)
@@ -156,12 +178,8 @@ namespace CycloneGames.GameplayFramework.Runtime
                 ActiveAction action = activeActions[i];
                 if (!string.Equals(action.Key, actionKey, StringComparison.Ordinal)) continue;
 
-                if (action.Mode != null)
-                {
-                    playerController.RemoveCameraMode(action.Mode);
-                    ReturnMode(action.Mode);
-                }
                 activeActions.RemoveAt(i);
+                ReleaseAction(action);
                 removedAny = true;
             }
 
@@ -170,27 +188,30 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public void StopAllActions()
         {
-            if (!TryResolvePlayerController())
-            {
-                activeActions.Clear();
-                return;
-            }
+            if (isStoppingAllActions) return;
 
-            for (int i = activeActions.Count - 1; i >= 0; i--)
+            isStoppingAllActions = true;
+            try
             {
-                ActiveAction action = activeActions[i];
-                if (action.Mode != null)
+                while (activeActions.Count > 0)
                 {
-                    playerController.RemoveCameraMode(action.Mode);
-                    ReturnMode(action.Mode);
+                    int i = activeActions.Count - 1;
+                    ActiveAction action = activeActions[i];
+                    activeActions.RemoveAt(i);
+                    ReleaseAction(action);
                 }
             }
-
-            activeActions.Clear();
+            finally
+            {
+                activeActions.Clear();
+                isStoppingAllActions = false;
+            }
         }
 
         public bool IsActionRunning(string actionKey)
         {
+            if (string.IsNullOrEmpty(actionKey)) return false;
+
             for (int i = 0; i < activeActions.Count; i++)
             {
                 if (string.Equals(activeActions[i].Key, actionKey, StringComparison.Ordinal))
@@ -202,7 +223,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             return false;
         }
 
-        // ── Object pool ──────────────────────────────────────────────────────
+        // Object pool
         // IMPORTANT: RemoveCameraMode is assumed to be synchronous. Do not call
         // ReturnMode until after RemoveCameraMode to avoid use-after-return.
         // Note: Re-entrant PlayAction from within RemoveCameraMode callbacks is
@@ -218,7 +239,22 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (mode == null) return;
             // Clear preset reference so the pooled object does not keep a GC root.
             mode.Setup(null, -1f);
-            modePool.Push(mode);
+            if (modePool.Count < MaxPooledModes)
+            {
+                modePool.Push(mode);
+            }
+        }
+
+        private void ReleaseAction(in ActiveAction action)
+        {
+            if (action.Mode == null) return;
+
+            if (action.Owner != null)
+            {
+                action.Owner.RemoveCameraMode(action.Mode);
+            }
+
+            ReturnMode(action.Mode);
         }
 
         private int FindActionEntryIndex(string actionKey)

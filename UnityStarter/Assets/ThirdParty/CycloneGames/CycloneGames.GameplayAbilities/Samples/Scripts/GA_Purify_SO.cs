@@ -15,8 +15,12 @@ namespace CycloneGames.GameplayAbilities.Sample
         public GA_Purify(float radius, GameplayTagContainer required, GameplayTagContainer forbidden)
         {
             this.areaOfEffectRadius = radius;
-            this.targetRequiredFactions = required;
-            this.targetForbiddenFactions = forbidden;
+            this.targetRequiredFactions = required != null
+                ? new GameplayTagContainer(required)
+                : new GameplayTagContainer();
+            this.targetForbiddenFactions = forbidden != null
+                ? new GameplayTagContainer(forbidden)
+                : new GameplayTagContainer();
         }
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
@@ -41,7 +45,11 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         private void OnTargetDataReceived(TargetData data)
         {
-            CommitAbility(ActorInfo, Spec);
+            if (!CommitAbility(ActorInfo, Spec).Succeeded)
+            {
+                EndAbility();
+                return;
+            }
 
             var charactersToProcess = new HashSet<Character>();
 
@@ -54,9 +62,10 @@ namespace CycloneGames.GameplayAbilities.Sample
             var multiTargetData = data as GameplayAbilityTargetData_MultiTarget;
             if (multiTargetData != null)
             {
-                foreach (var targetObject in multiTargetData.Actors)
-                {
-                    var character = targetObject.GetComponent<Character>();
+            for (int i = 0; i < multiTargetData.ActorCount; i++)
+            {
+                var targetObject = multiTargetData.GetActor(i);
+                var character = targetObject.GetComponent<Character>();
                     if (character != null)
                     {
                         charactersToProcess.Add(character);
@@ -105,24 +114,9 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
 
 
-        public override GameplayAbility CreatePoolableInstance()
+        public override GameplayAbility CreateRuntimeInstance()
         {
-            var ability = new GA_Purify(this.areaOfEffectRadius, this.targetRequiredFactions, this.targetForbiddenFactions);
-
-            ability.Initialize(
-                this.Name,
-                this.InstancingPolicy,
-                this.NetExecutionPolicy,
-                this.CostEffectDefinition,
-                this.CooldownEffectDefinition,
-                this.AbilityTags,
-                this.ActivationBlockedTags,
-                this.ActivationRequiredTags,
-                this.CancelAbilitiesWithTag,
-                this.BlockAbilitiesWithTag
-            );
-
-            return ability;
+            return new GA_Purify(areaOfEffectRadius, targetRequiredFactions, targetForbiddenFactions);
         }
     }
 
@@ -138,23 +132,10 @@ namespace CycloneGames.GameplayAbilities.Sample
         [Tooltip("Targets found that have ANY of these faction tags will be ignored.")]
         public GameplayTagContainer TargetForbiddenFactions;
 
-        public override GameplayAbility CreateAbility()
+        protected override GameplayAbility CreateGameplayAbility()
         {
-            // Pass the tag containers to the ability's constructor.
             var ability = new GA_Purify(AreaOfEffectRadius, TargetRequiredFactions, TargetForbiddenFactions);
-
-            ability.Initialize(
-                AbilityName,
-                InstancingPolicy,
-                NetExecutionPolicy,
-                CostEffect?.GetGameplayEffect(),
-                CooldownEffect?.GetGameplayEffect(),
-                AbilityTags,
-                ActivationBlockedTags,
-                ActivationRequiredTags,
-                CancelAbilitiesWithTag,
-                BlockAbilitiesWithTag
-            );
+            InitializeAbility(ability);
             return ability;
         }
     }

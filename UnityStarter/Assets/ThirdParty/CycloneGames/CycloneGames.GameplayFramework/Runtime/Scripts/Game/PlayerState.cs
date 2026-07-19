@@ -1,161 +1,243 @@
+using System;
 using System.Runtime.Serialization;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
     /// <summary>
-    /// Plain-data transfer object for PlayerState.
-    /// Decoupled from MonoBehaviour so external serializers (protobuf-net, MessagePack,
-    /// FlatBuffers, System.Text.Json, etc.) can freely instantiate and annotate it.
-    ///
-    /// [DataContract] / [DataMember(Order=N)] are used instead of library-specific attributes
-    /// so that both MessagePack array-mode and protobuf-net recognise the base fields
-    /// without any additional annotations in the framework layer:
-    ///   - MessagePack:    [DataMember(Order=N)] acts as [Key(N)]
-    ///   - ProtoBuf-net:   [DataMember(Order=N)] acts as [ProtoMember(N)]
-    ///   - Newtonsoft.Json / System.Text.Json: recognised natively, no conflict
-    ///
-    /// Extend this class in your game to carry additional fields and override
-    /// ToDataObject / FromDataObject:
-    ///
-    ///   [DataContract]
-    ///   public class RPGPlayerStateData : PlayerStateData
-    ///   {
-    ///       [DataMember(Order = 10)] public float Score  { get; set; }
-    ///       [DataMember(Order = 11)] public int   TeamId { get; set; }
-    ///   }
+    /// Versioned, bounded DTO for persistence and network adapters. Restore accepts only the
+    /// current schema so adapters cannot silently interpret an incompatible payload.
     /// </summary>
     [DataContract]
-    public class PlayerStateData
+    public sealed class PlayerStateSnapshot
     {
-        [DataMember(Order = 1)] public string PlayerName  { get; set; }
-        [DataMember(Order = 2)] public int    PlayerId    { get; set; }
-        [DataMember(Order = 3)] public bool   IsSpectator { get; set; }
+        public const int CurrentSchemaVersion = 1;
+
+        [DataMember(Order = 1)] public int SchemaVersion { get; set; } = CurrentSchemaVersion;
+        [DataMember(Order = 2)] public string PlayerName { get; set; }
+        [DataMember(Order = 3)] public int PlayerId { get; set; }
+        [DataMember(Order = 4)] public bool IsSpectator { get; set; }
     }
 
-    public class PlayerState : Actor, IGameplayFrameworkSerializable
+    /// <summary>
+    /// Stable participant identity and shared state. It survives Pawn replacement but remains
+    /// scoped to one World unless an explicit travel adapter copies a snapshot.
+    /// </summary>
+    public class PlayerState : Actor
     {
-        /// <summary>
-        /// Fired when the pawn changes. Args: (PlayerState, NewPawn, OldPawn)
-        /// </summary>
-        public event System.Action<PlayerState, Pawn, Pawn> OnPawnSetEvent;
-
         [SerializeField] private string playerName;
+
         private int playerId;
         private bool bIsSpectator;
         private Pawn pawnPrivate;
+        private object identityLockOwner;
 
-        #region Pawn
+        public event Action<PlayerState, Pawn, Pawn> OnPawnSetEvent;
+
         public Pawn GetPawn() => pawnPrivate;
         public T GetPawn<T>() where T : Pawn => pawnPrivate as T;
 
-        public void SetPawnPrivate(Pawn InPawn)
+        internal Pawn SetPawnSilently(Pawn newPawn)
         {
-            if (ReferenceEquals(InPawn, pawnPrivate)) return;
-            Pawn oldPawn = pawnPrivate;
-            pawnPrivate = InPawn;
-            OnPawnSet(this, InPawn, oldPawn);
+            Pawn previousPawn = pawnPrivate;
+            pawnPrivate = newPawn;
+            return previousPawn;
         }
 
-        private void OnPawnSet(PlayerState ps, Pawn NewPawn, Pawn OldPawn)
+        internal void PublishPawnChanged(Pawn newPawn, Pawn oldPawn)
         {
-            OnPawnSetEvent?.Invoke(ps, NewPawn, OldPawn);
+            if (!ReferenceEquals(newPawn, oldPawn))
+            {
+                OnPawnSetEvent?.Invoke(this, newPawn, oldPawn);
+            }
         }
-        #endregion
 
-        #region Player Info
-        /// <summary>Display name of the player. Persists across respawns.</summary>
         public string GetPlayerName() => playerName;
-        public void SetPlayerName(string NewName) => playerName = NewName;
 
-        /// <summary>Unique session identifier assigned by GameMode/GameSession.</summary>
+        public void SetPlayerName(string newName)
+        {
+            if (newName != null && newName.Length > PlayerLoginRequest.MaxPlayerNameLength)
+            {
+                throw new ArgumentException(
+                    $"Player name exceeds {PlayerLoginRequest.MaxPlayerNameLength} characters.",
+                    nameof(newName));
+            }
+
+            playerName = newName;
+        }
+
         public int GetPlayerId() => playerId;
-        public void SetPlayerId(int NewId) => playerId = NewId;
+        public bool IsIdentityLocked => identityLockOwner != null;
 
-        /// <summary>
-        /// Whether this player is in spectator mode.
-        /// GameMode checks this in RestartPlayer to decide whether to spawn an active pawn.
-        /// To check if a controller is AI-driven, use <c>controller is AIController</c> instead.
-        /// </summary>
+        public void SetPlayerId(int newId)
+        {
+            if (newId < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(newId));
+            }
+
+            if (identityLockOwner != null && newId != playerId)
+            {
+                throw new InvalidOperationException(
+                    "PlayerId cannot change while the PlayerState is registered in a GameSession.");
+            }
+
+            playerId = newId;
+        }
+
+        internal void LockIdentity(object owner, int expectedPlayerId)
+        {
+            if (owner == null)
+            {
+                throw new ArgumentNullException(nameof(owner));
+            }
+
+            if (identityLockOwner != null)
+            {
+                throw new InvalidOperationException(
+                    "PlayerState is already registered in a GameSession.");
+            }
+
+            if (playerId != expectedPlayerId)
+            {
+                throw new InvalidOperationException("PlayerState identity changed during session registration.");
+            }
+
+            identityLockOwner = owner;
+        }
+
+        internal void UnlockIdentity(object owner)
+        {
+            if (identityLockOwner == null)
+            {
+                return;
+            }
+
+            if (!ReferenceEquals(identityLockOwner, owner))
+            {
+                throw new InvalidOperationException(
+                    "Only the owning GameSession can unlock PlayerState identity.");
+            }
+
+            identityLockOwner = null;
+        }
+
         public bool IsSpectator() => bIsSpectator;
-        public void SetIsSpectator(bool bNewIsSpectator) => bIsSpectator = bNewIsSpectator;
-        #endregion
 
-        #region Copy
-        /// <summary>
-        /// Copies framework-level identity properties from another PlayerState.
-        /// Called during seamless level travel to preserve player identity across scenes.
-        /// Override in subclasses to also copy game-specific fields (score, inventory, etc.)
-        /// </summary>
+        protected internal void SetIsSpectator(bool spectator)
+        {
+            if (identityLockOwner != null && spectator != bIsSpectator)
+            {
+                throw new InvalidOperationException(
+                    "Spectator status must be changed through the registered GameSession.");
+            }
+
+            bIsSpectator = spectator;
+        }
+
+        internal void SetRegisteredSpectatorStatus(object owner, bool spectator)
+        {
+            if (identityLockOwner == null)
+            {
+                throw new InvalidOperationException("PlayerState is not registered in a GameSession.");
+            }
+
+            if (!ReferenceEquals(identityLockOwner, owner))
+            {
+                throw new InvalidOperationException(
+                    "Only the owning GameSession can change registered spectator status.");
+            }
+
+            bIsSpectator = spectator;
+        }
+
         public virtual void CopyProperties(PlayerState other)
         {
-            if (other == null) return;
-            playerName   = other.playerName;
-            playerId     = other.playerId;
+            if (other == null)
+            {
+                throw new ArgumentNullException(nameof(other));
+            }
+
+            if (identityLockOwner != null && playerId != other.playerId)
+            {
+                throw new InvalidOperationException(
+                    "PlayerId cannot change while the PlayerState is registered in a GameSession.");
+            }
+
+            if (identityLockOwner != null && bIsSpectator != other.bIsSpectator)
+            {
+                throw new InvalidOperationException(
+                    "Spectator status must be changed through the registered GameSession.");
+            }
+
+            playerName = other.playerName;
+            playerId = other.playerId;
             bIsSpectator = other.bIsSpectator;
         }
-        #endregion
 
-        #region Serialization
-        /// <summary>
-        /// Write player state to data writer (save, network snapshot, etc.)
-        /// Override in subclasses to serialize additional game-specific fields.
-        /// </summary>
-        public virtual void Serialize(IDataWriter writer)
+        public virtual PlayerStateSnapshot CaptureSnapshot()
         {
-            if (writer == null) return;
-            writer.WriteString("PlayerName", playerName);
-            writer.WriteInt("PlayerId", playerId);
-            writer.WriteBool("IsSpectator", bIsSpectator);
-        }
-
-        /// <summary>
-        /// Read player state from data reader (load, network snapshot, etc.)
-        /// Override in subclasses to deserialize additional game-specific fields.
-        /// </summary>
-        public virtual void Deserialize(IDataReader reader)
-        {
-            if (reader == null) return;
-            playerName   = reader.ReadString("PlayerName");
-            playerId     = reader.ReadInt("PlayerId");
-            bIsSpectator = reader.ReadBool("IsSpectator");
-        }
-
-        /// <summary>
-        /// Export current state as a plain-data DTO.
-        /// Use this when the serialization library (protobuf-net, MessagePack, FlatBuffers,
-        /// System.Text.Json attribute-based serialization, etc.) needs a POCO it can freely
-        /// instantiate, annotate, and round-trip without touching MonoBehaviour.
-        /// Override in subclasses and return a derived <see cref="PlayerStateData"/> carrying
-        /// additional game-specific fields (score, inventory, team, etc.)
-        /// </summary>
-        public virtual PlayerStateData ToDataObject()
-        {
-            return new PlayerStateData
+            return new PlayerStateSnapshot
             {
-                PlayerName  = playerName,
-                PlayerId    = playerId,
+                SchemaVersion = PlayerStateSnapshot.CurrentSchemaVersion,
+                PlayerName = playerName,
+                PlayerId = playerId,
                 IsSpectator = bIsSpectator,
             };
         }
 
-        /// <summary>
-        /// Apply state from a plain-data DTO back onto this PlayerState.
-        /// Complement of <see cref="ToDataObject"/>.
-        /// </summary>
-        public virtual void FromDataObject(PlayerStateData data)
+        public virtual bool TryRestoreSnapshot(PlayerStateSnapshot snapshot, out string error)
         {
-            if (data == null) return;
-            playerName   = data.PlayerName;
-            playerId     = data.PlayerId;
-            bIsSpectator = data.IsSpectator;
+            if (snapshot == null)
+            {
+                error = "PlayerState snapshot is required.";
+                return false;
+            }
+
+            if (snapshot.SchemaVersion != PlayerStateSnapshot.CurrentSchemaVersion)
+            {
+                error = $"Unsupported PlayerState schema version {snapshot.SchemaVersion}.";
+                return false;
+            }
+
+            if (snapshot.PlayerId < 0)
+            {
+                error = "PlayerId cannot be negative.";
+                return false;
+            }
+
+            if (identityLockOwner != null && snapshot.PlayerId != playerId)
+            {
+                error = "PlayerId cannot change while the PlayerState is registered in a GameSession.";
+                return false;
+            }
+
+            if (identityLockOwner != null && snapshot.IsSpectator != bIsSpectator)
+            {
+                error = "Spectator status must be changed through the registered GameSession.";
+                return false;
+            }
+
+            if (snapshot.PlayerName != null &&
+                snapshot.PlayerName.Length > PlayerLoginRequest.MaxPlayerNameLength)
+            {
+                error = $"PlayerName exceeds {PlayerLoginRequest.MaxPlayerNameLength} characters.";
+                return false;
+            }
+
+            playerName = snapshot.PlayerName;
+            playerId = snapshot.PlayerId;
+            bIsSpectator = snapshot.IsSpectator;
+            error = null;
+            return true;
         }
-        #endregion
 
         protected override void OnDestroy()
         {
             OnPawnSetEvent = null;
             base.OnDestroy();
+            pawnPrivate = null;
+            identityLockOwner = null;
         }
     }
 }

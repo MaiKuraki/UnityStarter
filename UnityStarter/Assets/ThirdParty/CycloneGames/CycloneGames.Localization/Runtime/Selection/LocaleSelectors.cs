@@ -1,6 +1,5 @@
 using System;
 using System.Globalization;
-using CycloneGames.Localization.Core;
 using UnityEngine;
 
 namespace CycloneGames.Localization.Runtime
@@ -42,54 +41,12 @@ namespace CycloneGames.Localization.Runtime
     }
 
     /// <summary>
-    /// Selects locale from <see cref="PlayerPrefs"/> using the user's saved language preference.
-    /// Key: <c>"CycloneGames.Locale"</c>.
-    /// <para>
-    /// Second priority in the default chain; allows players to override system language.
-    /// </para>
-    /// </summary>
-    public sealed class PlayerPrefsLocaleSelector : ILocaleSelector
-    {
-        /// <summary>
-        /// The PlayerPrefs key used to store the player's locale preference.
-        /// </summary>
-        public const string PrefsKey = "CycloneGames.Locale";
-
-        public string GetPreferredLocaleCode()
-        {
-            string saved = PlayerPrefs.GetString(PrefsKey, string.Empty);
-            return saved.Length > 0 ? saved : null;
-        }
-
-        /// <summary>
-        /// Saves the player's locale preference. Call after <see cref="ILocalizationService.SetLocaleAsync"/>.
-        /// </summary>
-        public static void Save(LocaleId locale)
-        {
-            if (locale.IsValid)
-            {
-                PlayerPrefs.SetString(PrefsKey, locale.Code);
-                PlayerPrefs.Save();
-            }
-        }
-
-        /// <summary>
-        /// Clears the saved preference, reverting to system language detection on next launch.
-        /// </summary>
-        public static void Clear()
-        {
-            PlayerPrefs.DeleteKey(PrefsKey);
-            PlayerPrefs.Save();
-        }
-    }
-
-    /// <summary>
     /// Selects locale by detecting the OS/system language.
     /// Uses <see cref="CultureInfo.CurrentUICulture"/> with
     /// <see cref="Application.systemLanguage"/> as fallback for platforms that
     /// do not support CultureInfo.
     /// <para>
-    /// Third priority in the default chain.
+    /// Evaluated after the command-line selector in the default chain.
     /// </para>
     /// </summary>
     public sealed class SystemLocaleSelector : ILocaleSelector

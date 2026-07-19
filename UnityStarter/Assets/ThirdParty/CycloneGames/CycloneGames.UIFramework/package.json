@@ -2,16 +2,17 @@
   "name": "com.cyclone-games.ui-framework",
   "version": "1.0.0",
   "displayName": "CycloneGames.UIFramework",
-  "description": "A simple ui framework for CycloneGames develope",
+  "description": "Explicitly composed, main-thread-confined UI window lifecycle framework for Unity.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.cysharp.unitask": "2.0.0",
+    "com.cysharp.unitask": "2.5.11",
     "com.cyclone-games.asset-management": "1.0.0",
-    "com.cyclone-games.factory": "1.0.0",
     "com.cyclone-games.io": "1.0.0",
+    "com.cyclone-games.localization": "1.0.0",
     "com.cyclone-games.logger": "1.0.0",
-    "com.cyclone-games.service": "1.0.0"
+    "com.unity.textmeshpro": "3.0.9",
+    "com.unity.ugui": "1.0.0"
   },
   "keywords": [
     "CycloneGames",

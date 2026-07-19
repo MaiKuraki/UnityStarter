@@ -5,6 +5,15 @@ namespace CycloneGames.GameplayTags.Core
 {
    public static class GameplayTagUtility
    {
+      /// <summary>Maximum supported UTF-16 code-unit count for a registered tag name.</summary>
+      public const int MaxTagNameLength = 255;
+
+      /// <summary>Maximum supported number of hierarchy segments in a registered tag name.</summary>
+      public const int MaxHierarchyDepth = 32;
+
+      /// <summary>Maximum number of registered tags, excluding <see cref="GameplayTag.None"/>.</summary>
+      public const int MaxRegisteredTagCount = 65535;
+
       internal const ulong FnvOffsetBasis64 = Fnv1a64.OffsetBasis;
 
       public static ulong ComputeStableId(string tagName)
@@ -145,6 +154,12 @@ namespace CycloneGames.GameplayTags.Core
             return false;
          }
 
+         if (name.Length > MaxTagNameLength)
+         {
+            errorMessage = $"Tag name length cannot exceed {MaxTagNameLength} UTF-16 code units.";
+            return false;
+         }
+
          int position = 0;
          if (AcceptLabel(name, ref position))
          {
@@ -161,6 +176,12 @@ namespace CycloneGames.GameplayTags.Core
 
          if (position == name.Length)
          {
+            if (GetHierarchyLevelUnchecked(name) > MaxHierarchyDepth)
+            {
+               errorMessage = $"Tag hierarchy cannot exceed {MaxHierarchyDepth} segments.";
+               return false;
+            }
+
             errorMessage = null;
             return true;
          }
@@ -173,6 +194,18 @@ namespace CycloneGames.GameplayTags.Core
       {
          if (!IsNameValid(name, out string errorMessage))
             throw new ArgumentException(errorMessage);
+      }
+
+      private static int GetHierarchyLevelUnchecked(string name)
+      {
+         int level = 1;
+         for (int i = 0; i < name.Length; i++)
+         {
+            if (name[i] == '.')
+               level++;
+         }
+
+         return level;
       }
    }
 }

@@ -2,13 +2,12 @@
     "name": "CycloneGames.Utility.Runtime",
     "rootNamespace": "",
     "references": [
-        "Unity.Burst",
         "CycloneGames.Hash.Core",
-        "Unity.Mathematics"
+        "UnityEngine.UI"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": true,
+    "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,

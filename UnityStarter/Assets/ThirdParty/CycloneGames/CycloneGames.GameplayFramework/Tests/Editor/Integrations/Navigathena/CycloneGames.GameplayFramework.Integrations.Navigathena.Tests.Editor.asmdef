@@ -1,0 +1,33 @@
+{
+    "name": "CycloneGames.GameplayFramework.Integrations.Navigathena.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Integrations.Navigathena.Tests.Editor",
+    "references": [
+        "UniTask",
+        "MackySoft.Navigathena",
+        "MackySoft.Navigathena.SceneManagement",
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_NAVIGATHENA"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.mackysoft.navigathena",
+            "expression": "[1.1.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_NAVIGATHENA"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

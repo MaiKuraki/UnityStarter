@@ -1,428 +1,429 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Runtime.CompilerServices;
+
+using CycloneGames.Utility.Runtime;
+
 using UnityEditor;
 using UnityEngine;
-#if UNITY_6000_0_OR_NEWER
-using UnityEngine.UIElements;
-#endif
 using Object = UnityEngine.Object;
-using CycloneGames.Utility.Runtime;
+
+[assembly: InternalsVisibleTo("CycloneGames.Utility.Tests.Editor")]
 
 namespace CycloneGames.Utility.Editor
 {
-	[CustomEditor(typeof(Object), true, isFallback = true)]
-	[CanEditMultipleObjects]
-	public class PropertyGroupInspectorDrawer : UnityEditor.Editor
-	{
-		private readonly Dictionary<string, CacheFoldProp> _cacheFolds = new Dictionary<string, CacheFoldProp>();
-		private readonly List<object> _drawOrder = new List<object>(); // A list to hold groups and properties in correct order.
-		private SerializedProperty _scriptProperty;
-		private List<MethodInfo> _methods = new List<MethodInfo>();
-		private bool _initialized;
+    /// <summary>
+    /// Explicit opt-in Editor base for rendering paired PropertyGroup attributes.
+    /// </summary>
+    /// <remarks>
+    /// Register a target-specific <see cref="CustomEditor"/> derived from this type. This class does
+    /// not register a fallback Editor and therefore never intercepts unrelated Unity objects.
+    /// </remarks>
+    [CanEditMultipleObjects]
+    public class PropertyGroupInspectorDrawer : UnityEditor.Editor
+    {
+        private const string MixedTargetTypesMessage =
+            "Property groups are disabled because the selected objects have different concrete types.";
 
-		private void OnEnable()
-		{
-			_initialized = false;
-		}
+        private readonly Dictionary<string, bool> _foldoutStates =
+            new Dictionary<string, bool>(StringComparer.Ordinal);
 
-#if UNITY_6000_0_OR_NEWER
-		public override VisualElement CreateInspectorGUI()
-		{
-			// Unity 6+ uses UI Toolkit by default. Wrap our IMGUI inspector
-			// in an IMGUIContainer so the fallback editor is actually picked up.
-			var container = new IMGUIContainer(OnInspectorGUI);
-			return container;
-		}
-#endif
+        private bool _visualGroupActive;
+        private bool _visualGroupExpanded;
 
-		private void OnDisable()
-		{
-			if (target == null) return;
+        public override void OnInspectorGUI()
+        {
+            serializedObject.UpdateIfRequiredOrScript();
+            DrawBeforeGroupedProperties();
+            DrawGroupedProperties();
+            DrawAfterGroupedProperties();
+            serializedObject.ApplyModifiedProperties();
+        }
 
-			foreach (var c in _cacheFolds)
-			{
-				// Use string.Concat to avoid boxing allocations from string interpolation/format.
-				if (c.Value.Props.Count > 0)
-				{
-					string key = string.Concat(c.Value.Atr.GroupName, c.Value.Props[0].name, target.name);
-					EditorPrefs.SetBool(key, c.Value.Expanded);
-				}
-				c.Value.Dispose();
-			}
-		}
+        /// <summary>
+        /// Draws target-specific content before the grouped serialized properties.
+        /// </summary>
+        protected virtual void DrawBeforeGroupedProperties()
+        {
+        }
 
-		public override bool RequiresConstantRepaint()
-		{
-			return EditorFramework.NeedToRepaint;
-		}
+        /// <summary>
+        /// Draws target-specific content after the grouped serialized properties.
+        /// </summary>
+        protected virtual void DrawAfterGroupedProperties()
+        {
+        }
 
-		public override void OnInspectorGUI()
-		{
-			serializedObject.Update();
+        /// <summary>
+        /// Draws all top-level visible serialized properties in Unity's authoritative order.
+        /// </summary>
+        protected void DrawGroupedProperties()
+        {
+            _visualGroupActive = false;
+            _visualGroupExpanded = false;
 
-			Setup();
+            if (!TryGetSharedTargetType(out Type targetType))
+            {
+                EditorGUILayout.HelpBox(MixedTargetTypesMessage, MessageType.Info);
+                DrawUngroupedProperties();
+                return;
+            }
 
-			if (_drawOrder.Count == 0 && _cacheFolds.Count == 0)
-			{
-				DrawDefaultInspector();
-				return;
-			}
+            PropertyGroupTypeMetadata typeMetadata = PropertyGroupMetadataCache.Get(targetType);
+            if (!string.IsNullOrEmpty(typeMetadata.ErrorMessage))
+            {
+                EditorGUILayout.HelpBox(typeMetadata.ErrorMessage, MessageType.Warning);
+                DrawUngroupedProperties();
+                return;
+            }
 
-			// Header (Script field)
-			if (_scriptProperty != null)
-			{
-				using (new EditorGUI.DisabledScope(true))
-				{
-					EditorGUILayout.Space();
-					EditorGUILayout.PropertyField(_scriptProperty, true);
-					EditorGUILayout.Space();
-				}
-			}
+            PropertyGroupLayoutCursor layoutCursor = default;
+            SerializedProperty property = serializedObject.GetIterator();
+            bool enterChildren = true;
+            while (property.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+                if (property.propertyPath == "m_Script")
+                {
+                    InspectorUiUtility.DrawScriptProperty(property);
+                    continue;
+                }
 
-			// Body - Draw items in the order they were declared.
-			foreach (var item in _drawOrder)
-			{
-				if (item is CacheFoldProp group)
-				{
-					Foldout(group);
-					EditorGUILayout.Space();
-					EditorGUI.indentLevel = 0;
-				}
-				else if (item is SerializedProperty prop)
-				{
-					EditorGUILayout.PropertyField(prop, true);
-				}
-			}
+                typeMetadata.TryGetField(property.name, out PropertyGroupFieldMetadata fieldMetadata);
+                PropertyGroupLayoutInstruction instruction = layoutCursor.MoveNext(fieldMetadata);
 
-			EditorGUILayout.Space();
+                if (instruction.EndPreviousGroup)
+                {
+                    EndVisualGroup();
+                }
 
-			if (_methods == null) return;
+                if (!string.IsNullOrEmpty(instruction.ValidationMessage))
+                {
+                    EditorGUILayout.HelpBox(instruction.ValidationMessage, MessageType.Warning);
+                }
 
-			foreach (MethodInfo memberInfo in _methods)
-			{
-				this.UseButton(memberInfo);
-			}
+                if (instruction.BeginGroup)
+                {
+                    BeginVisualGroup(instruction.Group, property.propertyPath);
+                }
 
-			serializedObject.ApplyModifiedProperties();
-		}
+                if (!instruction.DrawInsideGroup || _visualGroupExpanded)
+                {
+                    EditorGUILayout.PropertyField(property, true);
+                }
 
-		private void Foldout(CacheFoldProp cache)
-		{
-			EditorLayoutHelper.BeginGroupLayout(StyleFramework.Box, cache.GroupColor);
+                if (instruction.CloseGroupAfterProperty)
+                {
+                    EndVisualGroup();
+                }
+            }
 
-			cache.Expanded = EditorGUILayout.Foldout(cache.Expanded, cache.Atr.GroupName, true, StyleFramework.Foldout);
-			if (cache.Expanded)
-			{
-				EditorGUI.indentLevel = 1;
-				for (int i = 0; i < cache.Props.Count; i++)
-				{
-					// Use cached GUIContent to avoid allocations.
-					EditorGUILayout.PropertyField(cache.Props[i], cache.HeaderLabels[i], true);
-				}
-			}
+            EndVisualGroup();
+        }
 
-			EditorLayoutHelper.EndGroupLayout();
-		}
+        private void DrawUngroupedProperties()
+        {
+            SerializedProperty property = serializedObject.GetIterator();
+            bool enterChildren = true;
+            while (property.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+                if (property.propertyPath == "m_Script")
+                {
+                    InspectorUiUtility.DrawScriptProperty(property);
+                }
+                else
+                {
+                    EditorGUILayout.PropertyField(property, true);
+                }
+            }
+        }
 
-		private void Setup()
-		{
-			EditorFramework.CurrentEvent = Event.current;
-			if (_initialized) return;
+        private bool TryGetSharedTargetType(out Type sharedType)
+        {
+            sharedType = null;
+            Object[] inspectedTargets = targets;
+            for (int i = 0; i < inspectedTargets.Length; i++)
+            {
+                Object inspectedTarget = inspectedTargets[i];
+                if (inspectedTarget == null)
+                {
+                    continue;
+                }
 
-			// Clear previous data
-			_cacheFolds.Clear();
-			_drawOrder.Clear();
-			_methods.Clear();
-			_scriptProperty = null;
+                Type candidate = inspectedTarget.GetType();
+                if (sharedType == null)
+                {
+                    sharedType = candidate;
+                }
+                else if (sharedType != candidate)
+                {
+                    sharedType = null;
+                    return false;
+                }
+            }
 
-			// 1. First, parse all members (fields and properties) with reflection to understand the group structure.
-			PropertyGroupAttribute prevFold = default;
-			var objectMembers = EditorTypes.GetMembers(target); // Use the new method to get both fields and properties
-			for (var i = 0; i < objectMembers.Count; i++)
-			{
-				var member = objectMembers[i];
-				if (Attribute.IsDefined(member, typeof(EndPropertyGroupAttribute)))
-				{
-					prevFold = null;
-					continue; // End group found, continue to next member
-				}
+            return sharedType != null;
+        }
 
-				var fold = Attribute.GetCustomAttribute(member, typeof(PropertyGroupAttribute)) as PropertyGroupAttribute;
-				if (fold != null)
-				{
-					prevFold = fold;
-					if (!_cacheFolds.ContainsKey(fold.GroupName))
-					{
-						string key = string.Concat(fold.GroupName, member.Name, target.name);
-						var expanded = EditorPrefs.GetBool(key, !fold.ClosedByDefault);
-						_cacheFolds.Add(fold.GroupName, new CacheFoldProp { Atr = fold, Expanded = expanded, GroupColor = Colors.GetColorAt(fold.GroupColorIndex) });
-					}
-				}
-				
-				// Add member to the group if it has the attribute or if the "group all" flag is on.
-				// This works for both fields and properties.
-				if (fold != null)
-				{
-					_cacheFolds[fold.GroupName].Types.Add(member.Name);
-				}
-				else if (prevFold != null && prevFold.GroupAllFieldsUntilNextGroupAttribute)
-				{
-					_cacheFolds[prevFold.GroupName].Types.Add(member.Name);
-				}
-			}
+        private void BeginVisualGroup(PropertyGroupAttribute group, string groupStartPropertyPath)
+        {
+            EndVisualGroup();
 
-			// 2. Now, iterate through serialized properties to build the final draw order list.
-			var property = serializedObject.GetIterator();
-			var addedGroups = new HashSet<string>();
-			if (property.NextVisible(true))
-			{
-				do
-				{
-					// Handle script property separately
-					if (property.propertyPath == "m_Script")
-					{
-						_scriptProperty = property.Copy();
-						continue;
-					}
+            if (!_foldoutStates.TryGetValue(groupStartPropertyPath, out bool expanded))
+            {
+                expanded = !group.ClosedByDefault;
+                _foldoutStates.Add(groupStartPropertyPath, expanded);
+            }
 
-					CacheFoldProp belongingGroup = null;
-					foreach (var pair in _cacheFolds)
-					{
-						if (pair.Value.Types.Contains(property.name))
-						{
-							belongingGroup = pair.Value;
-							break;
-						}
-					}
+            int colorIndex = Mathf.Clamp(group.GroupColorIndex, 0, Colors.ColorCount - 1);
+            Color groupColor = Colors.GetColorAt(colorIndex);
+            expanded = InspectorUiUtility.DrawFoldoutHeader(group.GroupName, expanded, groupColor);
+            _foldoutStates[groupStartPropertyPath] = expanded;
 
-					if (belongingGroup != null)
-					{
-						belongingGroup.Props.Add(property.Copy());
-						if (!addedGroups.Contains(belongingGroup.Atr.GroupName))
-						{
-							_drawOrder.Add(belongingGroup);
-							addedGroups.Add(belongingGroup.Atr.GroupName);
-						}
-					}
-					else
-					{
-						_drawOrder.Add(property.Copy());
-					}
-				} while (property.NextVisible(false));
-			}
+            _visualGroupActive = true;
+            _visualGroupExpanded = expanded;
+            if (_visualGroupExpanded)
+            {
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            }
+        }
 
-			// 3. Populate cached GUIContent for all groups.
-			foreach (var pair in _cacheFolds)
-			{
-				pair.Value.CacheGUIContent();
-			}
+        private void EndVisualGroup()
+        {
+            if (!_visualGroupActive)
+            {
+                return;
+            }
 
-			_initialized = true;
-		}
+            if (_visualGroupExpanded)
+            {
+                EditorGUILayout.EndVertical();
+            }
 
-		private class CacheFoldProp
-		{
-			public readonly HashSet<string> Types = new HashSet<string>();
-			public readonly List<SerializedProperty> Props = new List<SerializedProperty>();
-			public readonly List<GUIContent> HeaderLabels = new List<GUIContent>();
-			public PropertyGroupAttribute Atr;
-			public bool Expanded;
-			public Color GroupColor;
+            _visualGroupActive = false;
+            _visualGroupExpanded = false;
+        }
+    }
 
-			public void Dispose()
-			{
-				Props.Clear();
-				Types.Clear();
-				HeaderLabels.Clear();
-				Atr = null;
-			}
+    internal readonly struct PropertyGroupLayoutInstruction
+    {
+        public readonly bool EndPreviousGroup;
+        public readonly bool BeginGroup;
+        public readonly bool DrawInsideGroup;
+        public readonly bool CloseGroupAfterProperty;
+        public readonly PropertyGroupAttribute Group;
+        public readonly string ValidationMessage;
 
-			public void CacheGUIContent()
-			{
-				HeaderLabels.Clear();
-				for (int i = 0; i < Props.Count; i++)
-				{
-					HeaderLabels.Add(new GUIContent(Props[i].name.FirstLetterToUpperCase()));
-				}
-			}
-		}
-	}
+        public PropertyGroupLayoutInstruction(
+            bool endPreviousGroup,
+            bool beginGroup,
+            bool drawInsideGroup,
+            bool closeGroupAfterProperty,
+            PropertyGroupAttribute group,
+            string validationMessage)
+        {
+            EndPreviousGroup = endPreviousGroup;
+            BeginGroup = beginGroup;
+            DrawInsideGroup = drawInsideGroup;
+            CloseGroupAfterProperty = closeGroupAfterProperty;
+            Group = group;
+            ValidationMessage = validationMessage;
+        }
+    }
 
-	public static class EditorLayoutHelper
-	{
-		// Refactored to Begin/End pattern to avoid delegate allocation.
-		public static void BeginGroupLayout(GUIStyle style, Color groupColor)
-		{
-			EditorGUILayout.BeginHorizontal();
+    internal struct PropertyGroupLayoutCursor
+    {
+        private bool _continuousGroupActive;
 
-			const float colorBarWidth = 4;
-			const float xOffset = 4;
-			const float yOffset = 4;
+        public PropertyGroupLayoutInstruction MoveNext(PropertyGroupFieldMetadata fieldMetadata)
+        {
+            bool hasBoundary = fieldMetadata != null && fieldMetadata.IsBoundary;
+            bool endPreviousGroup = _continuousGroupActive && hasBoundary;
+            bool drawInsideGroup = _continuousGroupActive && !hasBoundary;
+            bool beginGroup = false;
+            bool closeGroupAfterProperty = false;
+            PropertyGroupAttribute group = null;
+            string validationMessage = fieldMetadata?.ValidationMessage;
 
-			Rect colorBarRect = GUILayoutUtility.GetRect(colorBarWidth, 0, GUILayout.ExpandHeight(true), GUILayout.ExpandWidth(false));
-			colorBarRect.y += yOffset;
-			colorBarRect.x += xOffset;
+            if (hasBoundary)
+            {
+                _continuousGroupActive = false;
+                if (fieldMetadata.CanBeginGroup)
+                {
+                    group = fieldMetadata.Group;
+                    beginGroup = true;
+                    drawInsideGroup = true;
+                    closeGroupAfterProperty = !group.GroupAllFieldsUntilNextGroupAttribute;
+                    _continuousGroupActive = group.GroupAllFieldsUntilNextGroupAttribute;
+                }
+            }
 
-			EditorGUI.DrawRect(colorBarRect, groupColor);
-			EditorGUILayout.BeginVertical(style);
-		}
+            return new PropertyGroupLayoutInstruction(
+                endPreviousGroup,
+                beginGroup,
+                drawInsideGroup,
+                closeGroupAfterProperty,
+                group,
+                validationMessage);
+        }
+    }
 
-		public static void EndGroupLayout()
-		{
-			EditorGUILayout.EndVertical();
-			EditorGUILayout.EndHorizontal();
-		}
+    internal sealed class PropertyGroupFieldMetadata
+    {
+        public readonly string PropertyName;
+        public readonly PropertyGroupAttribute Group;
+        public readonly bool HasGroupAttribute;
+        public readonly bool HasEndAttribute;
+        public readonly string ValidationMessage;
 
-		public static void UseButton(this UnityEditor.Editor e, MethodInfo m)
-		{
-			if (GUILayout.Button(m.Name))
-			{
-				m.Invoke(e.target, null);
-			}
-		}
-	}
+        public bool IsBoundary => HasGroupAttribute || HasEndAttribute;
+        public bool CanBeginGroup => HasGroupAttribute && !HasEndAttribute && Group != null &&
+                                     string.IsNullOrEmpty(ValidationMessage);
 
-	internal static class StyleFramework
-	{
-		private static GUIStyle _box;
-		private static GUIStyle _foldout;
-		private static bool _initialized;
-		private const int IconLeftPadding = 16;
+        public PropertyGroupFieldMetadata(
+            string propertyName,
+            PropertyGroupAttribute group,
+            bool hasGroupAttribute,
+            bool hasEndAttribute,
+            string validationMessage)
+        {
+            PropertyName = propertyName;
+            Group = group;
+            HasGroupAttribute = hasGroupAttribute;
+            HasEndAttribute = hasEndAttribute;
+            ValidationMessage = validationMessage;
+        }
+    }
 
-		public static GUIStyle Box
-		{
-			get
-			{
-				EnsureInitialized();
-				return _box;
-			}
-		}
+    internal sealed class PropertyGroupTypeMetadata
+    {
+        private readonly Dictionary<string, PropertyGroupFieldMetadata> _fields;
 
-		public static GUIStyle Foldout
-		{
-			get
-			{
-				EnsureInitialized();
-				return _foldout;
-			}
-		}
+        public readonly string ErrorMessage;
 
-		private static void EnsureInitialized()
-		{
-			if (_initialized && _box != null && _foldout != null) return;
+        public PropertyGroupTypeMetadata(
+            Dictionary<string, PropertyGroupFieldMetadata> fields,
+            string errorMessage = null)
+        {
+            _fields = fields;
+            ErrorMessage = errorMessage;
+        }
 
-			var uiTex_in = Resources.Load<Texture2D>("IN foldout focus-6510");
-			var uiTex_in_on = Resources.Load<Texture2D>("IN foldout focus on-5718");
+        public bool TryGetField(string propertyName, out PropertyGroupFieldMetadata fieldMetadata)
+        {
+            return _fields.TryGetValue(propertyName, out fieldMetadata);
+        }
+    }
 
-			var c_on = EditorGUIUtility.isProSkin ? Color.white : new Color(51 / 255f, 102 / 255f, 204 / 255f, 1);
+    internal static class PropertyGroupMetadataCache
+    {
+        private static readonly Dictionary<Type, PropertyGroupTypeMetadata> TypeMetadata =
+            new Dictionary<Type, PropertyGroupTypeMetadata>();
 
-			_foldout = new GUIStyle(EditorStyles.foldout)
-			{
-				padding = new RectOffset(IconLeftPadding, 0, -2, 0)
-			};
+        public static PropertyGroupTypeMetadata Get(Type targetType)
+        {
+            if (TypeMetadata.TryGetValue(targetType, out PropertyGroupTypeMetadata cached))
+            {
+                return cached;
+            }
 
-			_foldout.active.textColor = c_on;
-			if (uiTex_in != null) _foldout.active.background = uiTex_in;
-			_foldout.onActive.textColor = c_on;
-			if (uiTex_in_on != null) _foldout.onActive.background = uiTex_in_on;
-			_foldout.focused.textColor = c_on;
-			if (uiTex_in != null) _foldout.focused.background = uiTex_in;
-			_foldout.onFocused.textColor = c_on;
-			if (uiTex_in_on != null) _foldout.onFocused.background = uiTex_in_on;
-			_foldout.hover.textColor = c_on;
-			if (uiTex_in != null) _foldout.hover.background = uiTex_in;
-			_foldout.onHover.textColor = c_on;
-			if (uiTex_in_on != null) _foldout.onHover.background = uiTex_in_on;
+            PropertyGroupTypeMetadata metadata;
+            try
+            {
+                metadata = Build(targetType);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+                metadata = new PropertyGroupTypeMetadata(
+                    new Dictionary<string, PropertyGroupFieldMetadata>(StringComparer.Ordinal),
+                    string.Concat(
+                        "Property group metadata could not be built for ",
+                        targetType.FullName,
+                        ". All fields are drawn without grouping."));
+            }
 
-			_box = new GUIStyle(GUI.skin.box)
-			{
-				padding = new RectOffset(IconLeftPadding, 0, 6, 4)
-			};
+            TypeMetadata.Add(targetType, metadata);
+            return metadata;
+        }
 
-			_initialized = true;
-		}
+        private static PropertyGroupTypeMetadata Build(Type targetType)
+        {
+            var fieldsByName = new Dictionary<string, PropertyGroupFieldMetadata>(StringComparer.Ordinal);
+            var seenFieldNames = new HashSet<string>(StringComparer.Ordinal);
 
-		public static string FirstLetterToUpperCase(this string s)
-		{
-			if (string.IsNullOrEmpty(s))
-				return string.Empty;
+            const BindingFlags Flags =
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
 
-			var a = s.ToCharArray();
-			a[0] = char.ToUpper(a[0]);
-			return new string(a);
-		}
-	}
+            for (Type type = targetType; type != null && type != typeof(Object); type = type.BaseType)
+            {
+                FieldInfo[] fields = type.GetFields(Flags);
+                for (int i = 0; i < fields.Length; i++)
+                {
+                    FieldInfo field = fields[i];
+                    if (field.IsStatic)
+                    {
+                        continue;
+                    }
 
-	internal static class EditorTypes
-	{
-		private static readonly Dictionary<Type, List<MemberInfo>> MembersCache = new Dictionary<Type, List<MemberInfo>>();
+                    PropertyGroupAttribute group = field.GetCustomAttribute<PropertyGroupAttribute>(true);
+                    bool hasGroup = group != null;
+                    bool hasEnd = field.IsDefined(typeof(EndPropertyGroupAttribute), true);
+                    bool duplicateName = !seenFieldNames.Add(field.Name);
 
-		public static List<MemberInfo> GetMembers(Object target)
-		{
-			Type t = target.GetType();
-			if (MembersCache.TryGetValue(t, out var objectMembers))
-			{
-				return objectMembers;
-			}
+                    if (duplicateName)
+                    {
+                        if (hasGroup || hasEnd || fieldsByName.ContainsKey(field.Name))
+                        {
+                            fieldsByName[field.Name] = new PropertyGroupFieldMetadata(
+                                field.Name,
+                                null,
+                                true,
+                                true,
+                                string.Concat(
+                                    "Property group metadata for '",
+                                    field.Name,
+                                    "' is ambiguous across the inheritance hierarchy. The field is drawn ungrouped."));
+                        }
 
-			objectMembers = new List<MemberInfo>();
-			const BindingFlags flags = BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+                        continue;
+                    }
 
-			var typeHierarchy = new List<Type>();
-			for (var type = t; type != null; type = type.BaseType)
-			{
-				typeHierarchy.Add(type);
-			}
-			typeHierarchy.Reverse();
+                    if (!hasGroup && !hasEnd)
+                    {
+                        continue;
+                    }
 
-			foreach (var type in typeHierarchy)
-			{
-				// Add both fields and properties
-				objectMembers.AddRange(type.GetFields(flags));
-				objectMembers.AddRange(type.GetProperties(flags));
-			}
+                    string validationMessage = null;
+                    if (hasGroup && hasEnd)
+                    {
+                        validationMessage = string.Concat(
+                            "PropertyGroup and EndPropertyGroup cannot both decorate '",
+                            field.Name,
+                            "'. The field is drawn ungrouped.");
+                    }
+                    else if (hasGroup && string.IsNullOrEmpty(group.GroupName))
+                    {
+                        validationMessage = string.Concat(
+                            "PropertyGroup on '",
+                            field.Name,
+                            "' has an empty name. The field is drawn ungrouped.");
+                    }
 
-			MembersCache.Add(t, objectMembers);
-			return objectMembers;
-		}
-	}
+                    fieldsByName.Add(
+                        field.Name,
+                        new PropertyGroupFieldMetadata(
+                            field.Name,
+                            group,
+                            hasGroup,
+                            hasEnd,
+                            validationMessage));
+                }
+            }
 
-	[InitializeOnLoad]
-	internal static class EditorFramework
-	{
-		internal static bool NeedToRepaint;
-		internal static Event CurrentEvent;
-		private static float _t;
-
-		static EditorFramework()
-		{
-			EditorApplication.update += Updating;
-		}
-
-		private static void Updating()
-		{
-			CheckMouse();
-
-			if (NeedToRepaint)
-			{
-				_t += Time.deltaTime;
-
-				if (_t >= 0.3f)
-				{
-					_t = 0f;
-					NeedToRepaint = false;
-				}
-			}
-		}
-
-		private static void CheckMouse()
-		{
-			var ev = CurrentEvent;
-			if (ev?.type == EventType.MouseMove)
-			{
-				NeedToRepaint = true;
-			}
-		}
-	}
+            return new PropertyGroupTypeMetadata(fieldsByName);
+        }
+    }
 }

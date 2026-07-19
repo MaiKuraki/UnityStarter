@@ -6,9 +6,9 @@ using UnityEngine;
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
-    /// Runtime IMGUI debug overlay for all AbilitySystemComponents in the scene.
+    /// Runtime IMGUI debug overlay for an explicitly registered set of AbilitySystemComponents.
     /// Config: place a <see cref="GASOverlayConfig"/> asset in a Resources folder.
-    /// Toggle: <see cref="Toggle"/> or menu Tools/CycloneGames/GameplayAbilities/Overlay/Toggle In Play Mode.
+    /// Toggle: <see cref="Toggle(AbilitySystemComponent, GameObject, Transform, string)"/> or menu Tools/CycloneGames/GameplayAbilities/Overlay/Toggle In Play Mode.
     /// </summary>
     public class GASDebugOverlay : MonoBehaviour
     {
@@ -28,105 +28,197 @@ namespace CycloneGames.GameplayAbilities.Runtime
         #region Singleton
 
         private static GASDebugOverlay s_Instance;
-    private static bool s_Initialized;
+        private static bool s_Initialized;
 
-    public static bool IsActive => s_Instance != null && s_Instance.enabled;
+        public static bool IsActive => s_Instance != null && s_Instance.enabled;
 
-    public static bool IsInitialized => s_Initialized;
+        public static bool IsInitialized => s_Instance != null && s_Initialized;
 
-    /// <summary>
-    /// Initialize the overlay singleton. Call once at startup (0GC after first init).
-    /// For production builds, wrap with conditional compilation or config checks.
-    /// </summary>
-    public static void Initialize(bool enableAtStart = false, bool dontDestroyOnLoad = false)
-    {
-        if (s_Initialized) return; // Already initialized
-        s_Initialized = true;
-
-        if (s_Instance != null) return; // Already exists
-
-        var go = new GameObject("[GAS Debug Overlay]");
-        s_Instance = go.AddComponent<GASDebugOverlay>();
-        s_Instance.enabled = enableAtStart;
-
-        if (dontDestroyOnLoad)
-            DontDestroyOnLoad(go);
-    }
-
-    /// <summary>
-    /// Toggle the overlay on/off. 
-    /// If not initialized, automatically initializes first (for editor convenience).
-    /// Returns the final enabled state (0GC after first init).
-    /// </summary>
-    public static bool Toggle()
-    {
-        // Auto-initialize on first call from editor (friendly UX)
-        if (!s_Initialized)
+        /// <summary>
+        /// Gets the number of live targets currently bound to the overlay.
+        /// This diagnostics API must be called from the Unity main thread.
+        /// </summary>
+        public static int BoundTargetCount
         {
-            Initialize(enableAtStart: true);
-            return s_Instance != null && s_Instance.enabled;  // Return enabled state after init
+            get
+            {
+                if (s_Instance == null)
+                {
+                    return 0;
+                }
+
+                s_Instance.PruneInvalidTargets();
+                return s_Instance.boundASCs.Count;
+            }
         }
 
-        if (s_Instance == null)
+        /// <summary>
+        /// Gets the target capacity captured when the current overlay instance initialized, or zero before initialization.
+        /// The configured value is clamped to the supported range and remains fixed for that instance lifetime.
+        /// This diagnostics API must be called from the Unity main thread.
+        /// </summary>
+        public static int TargetCapacity => s_Instance != null ? s_Instance.GetTargetCapacity() : 0;
+
+        /// <summary>
+        /// Initialize the overlay singleton. Call once at startup.
+        /// For production builds, wrap with conditional compilation or config checks.
+        /// This API must be called from the Unity main thread.
+        /// </summary>
+        public static void Initialize(bool enableAtStart = false, bool dontDestroyOnLoad = false)
         {
-            Debug.LogWarning("[GAS Debug Overlay] Failed to toggle. Instance is null.");
-            return false;
+            if (s_Instance != null)
+            {
+                s_Initialized = true;
+                return;
+            }
+
+            var go = new GameObject("[GAS Debug Overlay]");
+            s_Instance = go.AddComponent<GASDebugOverlay>();
+            s_Instance.enabled = enableAtStart;
+            s_Initialized = true;
+
+            if (dontDestroyOnLoad)
+            {
+                DontDestroyOnLoad(go);
+            }
         }
 
-        // Toggle the state on subsequent calls
-        s_Instance.enabled = !s_Instance.enabled;
-        return s_Instance.enabled;
-    }
-
-    /// <summary>
-    /// Set the overlay enabled state. 0GC operation.
-    /// </summary>
-    public static void SetEnabled(bool enabled)
-    {
-        if (s_Instance != null)
-            s_Instance.enabled = enabled;
-    }
-
-    /// <summary>
-    /// <summary>
-    /// Destroy the overlay and free resources. Safe to call multiple times.
-    /// </summary>
-    public static void Cleanup()
-    {
-        if (s_Instance != null)
+        /// <summary>
+        /// Adds or updates one explicit non-owning target without changing overlay visibility.
+        /// Re-registering the same ASC updates its presentation metadata without consuming capacity.
+        /// Returns false for an invalid target or when the configured bounded capacity is full.
+        /// This cold diagnostics path may allocate display text and must run on the Unity main thread.
+        /// </summary>
+        public static bool TryAddTarget(
+            AbilitySystemComponent target,
+            GameObject owner = null,
+            Transform trackTarget = null,
+            string displayName = null)
         {
-            Destroy(s_Instance.gameObject);
+            if (target == null || target.IsDisposed)
+            {
+                return false;
+            }
+
+            if (s_Instance == null)
+            {
+                Initialize();
+            }
+
+            return s_Instance != null && s_Instance.TryBindOrUpdateTarget(target, owner, trackTarget, displayName);
+        }
+
+        /// <summary>
+        /// Removes one target registration without disposing the ASC or changing overlay visibility.
+        /// This API must be called from the Unity main thread.
+        /// </summary>
+        public static bool RemoveTarget(AbilitySystemComponent target)
+        {
+            return target != null && s_Instance != null && s_Instance.RemoveBoundTarget(target);
+        }
+
+        /// <summary>
+        /// Returns whether one live ASC is currently registered without changing overlay state.
+        /// This diagnostics query must be called from the Unity main thread.
+        /// </summary>
+        public static bool IsTargetRegistered(AbilitySystemComponent target)
+        {
+            if (target == null || s_Instance == null)
+            {
+                return false;
+            }
+
+            return !target.IsDisposed && s_Instance.IndexOfTarget(target) >= 0;
+        }
+
+        /// <summary>
+        /// Removes all target registrations without destroying the overlay or changing its visibility.
+        /// This API must be called from the Unity main thread.
+        /// </summary>
+        public static void ClearTargets()
+        {
+            if (s_Instance != null)
+            {
+                s_Instance.ClearBoundTargets();
+            }
+        }
+
+        /// <summary>
+        /// Replaces the target set with one explicit target and toggles overlay visibility.
+        /// If not initialized, automatically initializes first for diagnostics convenience.
+        /// Returns the final enabled state. Target binding is a cold diagnostics path and may allocate display text.
+        /// </summary>
+        public static bool Toggle(
+            AbilitySystemComponent target,
+            GameObject owner = null,
+            Transform trackTarget = null,
+            string displayName = null)
+        {
+            if (target == null || target.IsDisposed)
+            {
+                Debug.LogWarning("[GAS Debug Overlay] A live AbilitySystemComponent must be selected explicitly.");
+                return false;
+            }
+
+            if (s_Instance == null)
+            {
+                Initialize();
+            }
+
+            if (s_Instance == null || !s_Instance.ReplaceTarget(target, owner, trackTarget, displayName))
+            {
+                Debug.LogWarning("[GAS Debug Overlay] Failed to bind the selected AbilitySystemComponent.");
+                return false;
+            }
+
+            s_Instance.enabled = !s_Instance.enabled;
+            return s_Instance.enabled;
+        }
+
+        /// <summary>
+        /// Set the overlay enabled state without changing its target registrations.
+        /// </summary>
+        public static void SetEnabled(bool enabled)
+        {
+            if (s_Instance != null)
+            {
+                s_Instance.enabled = enabled;
+            }
+        }
+
+        /// <summary>
+        /// Destroy the overlay and free resources. Safe to call multiple times.
+        /// </summary>
+        public static void Cleanup()
+        {
+            GASDebugOverlay instance = s_Instance;
+            if (instance != null)
+            {
+                instance.enabled = false;
+                instance.ClearBoundTargets();
+                s_Instance = null;
+                Destroy(instance.gameObject);
+            }
+
+            s_Initialized = false;
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
             s_Instance = null;
-        }
-        s_Initialized = false;
-    }
-
-    #endregion
-
-    #region Configuration
-
-    [System.NonSerialized] public int MinPriority;
-
-        private static readonly Dictionary<AbilitySystemComponent, int> s_PriorityMap = new Dictionary<AbilitySystemComponent, int>();
-
-        public static void SetPriority(AbilitySystemComponent asc, int priority)
-        {
-            if (asc == null) return;
-            s_PriorityMap[asc] = priority;
-        }
-
-        public static void ClearPriority(AbilitySystemComponent asc)
-        {
-            if (asc != null) s_PriorityMap.Remove(asc);
+            s_Initialized = false;
         }
 
         #endregion
 
         #region State
 
-        private readonly List<DiscoveredASC> discoveredASCs = new List<DiscoveredASC>();
-        private float lastScanTime;
-        private const float ScanInterval = 1f;
+        private const int DefaultTargetCapacity = 8;
+        private const int AbsoluteTargetCapacity = 32;
+        private readonly List<BoundASC> boundASCs = new List<BoundASC>(DefaultTargetCapacity);
+        private int targetCapacity = DefaultTargetCapacity;
+        private int nextPanelKey = 1;
         private const float CameraLookupInterval = 0.5f;
         private float lastCameraLookupTime = -100f;
         private Camera cachedMainCamera;
@@ -142,7 +234,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly HashSet<int> collapsedPanels = new HashSet<int>();
         private GASOverlayConfig config;
 
-        // Dragging system (0GC design - reusable storage, pre-allocated bounds)
+        // Reusable dragging state.
         private int currentlyDraggingPanelKey = -1;
         private Vector2 cachedMousePos = Vector2.zero;
         private Vector2 dragStartMousePos = Vector2.zero;  // Position where drag started
@@ -154,7 +246,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private float nextAutoLayoutX;
         private float nextAutoLayoutY;
         private float lastAppliedLayoutScale = -1f;
-        // Reusable buffers for 0GC-ish periodic cleanup (Scan interval).
+        // Reusable buffers for periodic stale-panel cleanup.
         private readonly HashSet<int> activePanelKeys = new HashSet<int>();
         private readonly List<int> stalePanelKeyBuffer = new List<int>(16);
 
@@ -179,13 +271,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private readonly Dictionary<int, string> hexColorCache = new Dictionary<int, string>(32);
         private readonly Dictionary<string, string> shortNameCache = new Dictionary<string, string>(32);
 
-        private struct DiscoveredASC
+        private struct BoundASC
         {
             public AbilitySystemComponent ASC;
             public string DisplayName;
-            public int Priority;
             public GameObject OwnerGO;
             public Transform TrackTarget;
+            public int PanelKey;
         }
 
         #endregion
@@ -200,118 +292,198 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
             s_Instance = this;
+            s_Initialized = true;
             config = GASOverlayConfig.Load();
+            targetCapacity = Mathf.Clamp(
+                config != null ? config.MaxPanels : DefaultTargetCapacity,
+                1,
+                AbsoluteTargetCapacity);
             if (config != null) runtimeAlpha = config.PanelAlpha;
         }
 
         private void OnDestroy()
         {
-            if (s_Instance == this) s_Instance = null;
+            if (ReferenceEquals(s_Instance, this))
+            {
+                ClearBoundTargets();
+                s_Instance = null;
+                s_Initialized = false;
+            }
             if (barBgTex != null) Destroy(barBgTex);
             if (barFillTex != null) Destroy(barFillTex);
             if (panelBgTex != null) Destroy(panelBgTex);
         }
 
-        private void Update()
-        {
-            if (Time.unscaledTime - lastScanTime > ScanInterval)
-            {
-                lastScanTime = Time.unscaledTime;
-                ScanASCs();
-            }
-        }
-
         #endregion
 
-        #region ASC Discovery
+        #region Explicit ASC Binding
 
-        // Reflection cache: avoids re-allocating PropertyInfo[]/FieldInfo[] arrays every scan
-        private struct CachedTypeData
+        private bool ReplaceTarget(
+            AbilitySystemComponent asc,
+            GameObject owner,
+            Transform trackTarget,
+            string displayName)
         {
-            public System.Reflection.PropertyInfo[] Props;
-            public System.Reflection.FieldInfo[] Fields;
-        }
-        private static readonly Dictionary<System.Type, CachedTypeData> s_TypeCache
-            = new Dictionary<System.Type, CachedTypeData>();
-
-        private static CachedTypeData GetCachedTypeData(System.Type type)
-        {
-            if (s_TypeCache.TryGetValue(type, out var data)) return data;
-
-            const System.Reflection.BindingFlags flags
-                = System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance;
-
-            List<System.Reflection.PropertyInfo> props = null;
-            foreach (var p in type.GetProperties(flags))
-            {
-                if (p.PropertyType == typeof(AbilitySystemComponent) && p.CanRead)
-                    (props ??= new List<System.Reflection.PropertyInfo>(1)).Add(p);
-            }
-
-            List<System.Reflection.FieldInfo> fields = null;
-            foreach (var f in type.GetFields(flags))
-            {
-                if (f.FieldType == typeof(AbilitySystemComponent))
-                    (fields ??= new List<System.Reflection.FieldInfo>(1)).Add(f);
-            }
-
-            data = new CachedTypeData
-            {
-                Props = props?.ToArray(),
-                Fields = fields?.ToArray()
-            };
-            s_TypeCache[type] = data;
-            return data;
+            ClearBoundTargets();
+            return TryBindOrUpdateTarget(asc, owner, trackTarget, displayName);
         }
 
-        private void ScanASCs()
+        private bool TryBindOrUpdateTarget(
+            AbilitySystemComponent asc,
+            GameObject owner,
+            Transform trackTarget,
+            string displayName)
         {
-            discoveredASCs.Clear();
+            PruneInvalidTargets();
 
-            foreach (var mb in FindObjectsByType<MonoBehaviour>(FindObjectsSortMode.None))
+            int existingIndex = IndexOfTarget(asc);
+            if (existingIndex >= 0)
             {
-                if (mb == null) continue;
-                var data = GetCachedTypeData(mb.GetType());
-
-                if (data.Props != null)
-                {
-                    for (int i = 0; i < data.Props.Length; i++)
-                    {
-                        try
-                        {
-                            var asc = data.Props[i].GetValue(mb) as AbilitySystemComponent;
-                            if (asc != null && !ContainsASC(asc))
-                                AddDiscoveredASC(asc, mb);
-                        }
-                        catch { }
-                    }
-                }
-
-                if (data.Fields != null)
-                {
-                    for (int i = 0; i < data.Fields.Length; i++)
-                    {
-                        try
-                        {
-                            var asc = data.Fields[i].GetValue(mb) as AbilitySystemComponent;
-                            if (asc != null && !ContainsASC(asc))
-                                AddDiscoveredASC(asc, mb);
-                        }
-                        catch { }
-                    }
-                }
+                int panelKey = boundASCs[existingIndex].PanelKey;
+                boundASCs[existingIndex] = CreateBoundTarget(asc, owner, trackTarget, displayName, panelKey);
+                return true;
             }
 
-            discoveredASCs.Sort(ComparePriority);
+            if (boundASCs.Count >= GetTargetCapacity())
+            {
+                return false;
+            }
+
+            boundASCs.Add(CreateBoundTarget(asc, owner, trackTarget, displayName, AllocatePanelKey()));
             CleanupTransientPanelState();
+            return true;
+        }
+
+        private BoundASC CreateBoundTarget(
+            AbilitySystemComponent asc,
+            GameObject owner,
+            Transform trackTarget,
+            string displayName,
+            int panelKey)
+        {
+            GameObject ownerGO = owner != null ? owner : asc.AvatarGameObject;
+            Transform resolvedTrackTarget = trackTarget != null
+                ? trackTarget
+                : ownerGO != null ? ownerGO.transform : null;
+            string resolvedDisplayName = displayName;
+            if (string.IsNullOrWhiteSpace(resolvedDisplayName))
+            {
+                if (ownerGO != null)
+                {
+                    string ownerName = ownerGO.name;
+                    if (ownerName.EndsWith("(Clone)", System.StringComparison.Ordinal))
+                    {
+                        ownerName = ownerName.Substring(0, ownerName.Length - 7);
+                    }
+
+                    resolvedDisplayName = string.Concat(ownerName, " [ASC]");
+                }
+                else
+                {
+                    resolvedDisplayName = asc.OwnerActor?.ToString() ?? "AbilitySystemComponent";
+                }
+            }
+
+            return new BoundASC
+            {
+                ASC = asc,
+                DisplayName = resolvedDisplayName,
+                OwnerGO = ownerGO,
+                TrackTarget = resolvedTrackTarget,
+                PanelKey = panelKey
+            };
+        }
+
+        private bool RemoveBoundTarget(AbilitySystemComponent target)
+        {
+            PruneInvalidTargets();
+            int index = IndexOfTarget(target);
+            if (index < 0)
+            {
+                return false;
+            }
+
+            boundASCs.RemoveAt(index);
+            CleanupTransientPanelState();
+            return true;
+        }
+
+        private void ClearBoundTargets()
+        {
+            boundASCs.Clear();
+            CleanupTransientPanelState();
+        }
+
+        private int IndexOfTarget(AbilitySystemComponent target)
+        {
+            for (int i = 0; i < boundASCs.Count; i++)
+            {
+                if (ReferenceEquals(boundASCs[i].ASC, target))
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void PruneInvalidTargets()
+        {
+            bool removed = false;
+            for (int i = boundASCs.Count - 1; i >= 0; i--)
+            {
+                AbilitySystemComponent asc = boundASCs[i].ASC;
+                if (asc == null || asc.IsDisposed)
+                {
+                    boundASCs.RemoveAt(i);
+                    removed = true;
+                }
+            }
+
+            if (removed)
+            {
+                CleanupTransientPanelState();
+            }
+        }
+
+        private int GetTargetCapacity()
+        {
+            return targetCapacity;
+        }
+
+        private int AllocatePanelKey()
+        {
+            while (true)
+            {
+                int candidate = nextPanelKey++;
+                if (nextPanelKey <= 0)
+                {
+                    nextPanelKey = 1;
+                }
+
+                bool inUse = false;
+                for (int i = 0; i < boundASCs.Count; i++)
+                {
+                    if (boundASCs[i].PanelKey == candidate)
+                    {
+                        inUse = true;
+                        break;
+                    }
+                }
+
+                if (!inUse)
+                {
+                    return candidate;
+                }
+            }
         }
 
         private void CleanupTransientPanelState()
         {
             activePanelKeys.Clear();
-            for (int i = 0; i < discoveredASCs.Count; i++)
+            for (int i = 0; i < boundASCs.Count; i++)
             {
-                int key = GetPanelKey(discoveredASCs[i]);
+                int key = GetPanelKey(boundASCs[i]);
                 activePanelKeys.Add(key);
             }
 
@@ -339,7 +511,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (currentlyDraggingPanelKey >= 0 && !activePanelKeys.Contains(currentlyDraggingPanelKey))
                 currentlyDraggingPanelKey = -1;
 
-            if (discoveredASCs.Count == 0)
+            if (boundASCs.Count == 0)
                 autoLayoutCursorInitialized = false;
         }
 
@@ -384,15 +556,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return anchor;
         }
 
-        private static int GetPanelKey(DiscoveredASC entry)
+        private static int GetPanelKey(BoundASC entry)
         {
-            if (entry.OwnerGO != null)
-                return entry.OwnerGO.GetInstanceID();
-
-            // Fallback when owner is unavailable.
-            return entry.ASC != null
-                ? System.Runtime.CompilerServices.RuntimeHelpers.GetHashCode(entry.ASC)
-                : 0;
+            return entry.PanelKey;
         }
 
         private void SyncLayoutWithScale(float currentScale)
@@ -437,49 +603,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
             nextAutoLayoutY *= ratio;
 
             lastAppliedLayoutScale = currentScale;
-        }
-
-        private bool ContainsASC(AbilitySystemComponent asc)
-        {
-            for (int i = 0; i < discoveredASCs.Count; i++)
-            {
-                if (discoveredASCs[i].ASC == asc) return true;
-            }
-            return false;
-        }
-
-        private void AddDiscoveredASC(AbilitySystemComponent asc, MonoBehaviour holder)
-        {
-            s_PriorityMap.TryGetValue(asc, out int priority);
-
-            var go = holder.gameObject;
-            string goName = go.name;
-            if (goName.EndsWith("(Clone)"))
-                goName = goName.Substring(0, goName.Length - 7);
-
-            // Abbreviate verbose holder type names: strip known suffixes, then hard-cap at 16 chars
-            string holderType = holder.GetType().Name;
-            if (holderType.Length > 16)
-            {
-                if (holderType.EndsWith("ComponentHolder"))
-                    holderType = holderType.Substring(0, holderType.Length - 15);
-                else if (holderType.EndsWith("Component"))
-                    holderType = holderType.Substring(0, holderType.Length - 9);
-                else if (holderType.EndsWith("Holder"))
-                    holderType = holderType.Substring(0, holderType.Length - 6);
-                if (holderType.Length > 16)
-                    holderType = string.Concat(holderType.Substring(0, 14), "..");
-            }
-            string displayName = string.Concat(goName, " [", holderType, "]");
-
-            discoveredASCs.Add(new DiscoveredASC
-            {
-                ASC = asc,
-                DisplayName = displayName,
-                Priority = priority,
-                OwnerGO = go,
-                TrackTarget = go.transform
-            });
         }
 
         #endregion
@@ -623,6 +746,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private void OnGUI()
         {
+            PruneInvalidTargets();
+            if (boundASCs.Count == 0)
+            {
+                return;
+            }
+
             EnsureStyles();
             RefreshPanelAlpha();
 
@@ -637,7 +766,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             float panelSpacing = 4 * scale;
             float lineH = 16 * scale;
             float barH = 8 * scale;
-            int maxPanels = config != null ? config.MaxPanels : 8;
+            int maxPanels = GetTargetCapacity();
             bool preferTopLeftStack = config != null ? config.PreferTopLeftStackLayout : true;
             bool trackWorld = !preferTopLeftStack && (config == null || (config != null && config.TrackWorldPosition));
             bool stackedSingleColumn = config != null ? config.StackSingleColumn : true;
@@ -656,7 +785,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             Camera cam = GetOverlayCamera();
             
-            // Process dragging input (0GC per-frame caching)
+            // Cache dragging input once for this IMGUI pass.
             ProcessPanelDragging();
 
             float layoutRightBound = showConfig ? (configRect.xMin - margin) : (Screen.width - margin);
@@ -666,11 +795,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             float maxAvailableHeight = Screen.height - margin * 2f;
             int drawn = 0;
 
-            for (int i = 0; i < discoveredASCs.Count && drawn < maxPanels; i++)
+            for (int i = 0; i < boundASCs.Count && drawn < maxPanels; i++)
             {
-                var entry = discoveredASCs[i];
-                if (entry.ASC == null) continue;
-                if (entry.Priority < MinPriority) continue;
+                var entry = boundASCs[i];
+                if (entry.ASC == null || entry.ASC.IsDisposed) continue;
 
                 int panelKey = GetPanelKey(entry);
                 bool collapsed = collapsedPanels.Contains(panelKey);
@@ -745,7 +873,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                 }
 
-                // Apply drag offset if this panel is being dragged (0GC: just add offset)
+                // Apply the cached drag offset for this panel.
                 if (panelDragOffsets.TryGetValue(panelKey, out Vector2 dragOffset))
                 {
                     panelRect.x += dragOffset.x;
@@ -786,19 +914,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (drawn == 0)
             {
-                if (discoveredASCs.Count == 0)
-                {
-                    GUI.Label(new Rect(margin, margin + configH + 4, 300 * scale, lineH), "No ASC found in scene", tooltipStyle);
-                }
-                else
-                {
-                    sb.Clear();
-                    AppendInt(sb, discoveredASCs.Count);
-                    sb.Append(" ASC(s) filtered (MinPriority=");
-                    AppendInt(sb, MinPriority);
-                    sb.Append(')');
-                    GUI.Label(new Rect(margin, margin + configH + 4, 300 * scale, lineH), sb.ToString(), tooltipStyle);
-                }
+                GUI.Label(new Rect(margin, margin + configH + 4, 300 * scale, lineH), "No live ASC is bound", tooltipStyle);
             }
         }
 
@@ -838,15 +954,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             sb.Clear(); AppendFloat2(sb, runtimeScale);
             GUILayout.Label(sb.ToString(), GUILayout.Width(30 * baseScale));
-            GUILayout.EndHorizontal();
-
-            GUILayout.Space(4);
-
-            GUILayout.BeginHorizontal();
-            GUILayout.Label("Min Priority:", GUILayout.Width(72 * baseScale));
-            sb.Clear(); AppendInt(sb, MinPriority);
-            string priStr = GUILayout.TextField(sb.ToString(), GUILayout.Width(36 * baseScale));
-            if (int.TryParse(priStr, out int newPri)) MinPriority = newPri;
             GUILayout.EndHorizontal();
 
             GUILayout.Space(4);
@@ -891,8 +998,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             GUILayout.BeginHorizontal();
             if (GUILayout.Button("Collapse All", GUILayout.Height(18 * baseScale)))
             {
-                for (int i = 0; i < discoveredASCs.Count; i++)
-                        collapsedPanels.Add(GetPanelKey(discoveredASCs[i]));
+                for (int i = 0; i < boundASCs.Count; i++)
+                        collapsedPanels.Add(GetPanelKey(boundASCs[i]));
             }
             if (GUILayout.Button("Expand All", GUILayout.Height(18 * baseScale)))
             {
@@ -985,11 +1092,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         }
 
         /// <summary>
-        /// Process panel dragging with 0GC design:
-        /// - Caches mouse position per-frame to avoid repeated Input.mousePosition calls
-        /// - Updates drag offsets for currently dragging panel
-        /// - Handles mouse up to stop dragging
-        /// Per-frame 0GC cost: one Vector2 update + one dictionary lookup
+        /// Cache the current IMGUI mouse position once for the panel hover and drag handlers.
         /// </summary>
         private void ProcessPanelDragging()
         {
@@ -1019,13 +1122,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return lineH + 6 * scale;
         }
 
-        private void DrawCollapsedPanel(Rect rect, DiscoveredASC entry, int panelKey, float scale, float lineH, float barH)
+        private void DrawCollapsedPanel(Rect rect, BoundASC entry, int panelKey, float scale, float lineH, float barH)
         {
             var asc = entry.ASC;
             // Stable control ID for this panel's drag interaction.
             int dragControlID = GUIUtility.GetControlID(FocusType.Passive);
 
-            // Highlight if dragging or hovering (0GC: no allocation)
+            // Highlight if dragging or hovering.
             bool isPanelHovered = rect.Contains(cachedMousePos);
             if (GUIUtility.hotControl == dragControlID)
             {
@@ -1196,13 +1299,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return h + 12 * scale;
         }
 
-        private void DrawASCPanel(Rect rect, DiscoveredASC entry, int panelKey, float scale, float lineH, float barH)
+        private void DrawASCPanel(Rect rect, BoundASC entry, int panelKey, float scale, float lineH, float barH)
         {
             var asc = entry.ASC;
             // Stable control ID for this panel's drag interaction (sequential, consistent per draw order).
             int dragControlID = GUIUtility.GetControlID(FocusType.Passive);
 
-            // Highlight if dragging or hovering (0GC: no allocation)
+            // Highlight if dragging or hovering.
             bool isPanelHovered = rect.Contains(cachedMousePos);
             if (GUIUtility.hotControl == dragControlID)
             {
@@ -1225,12 +1328,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
             Rect toggleRect = new Rect(x, y, toggleW, lineH);
             sb.Clear();
             sb.Append("\u25BE <b>").Append(entry.DisplayName).Append("</b>");
-            if (entry.Priority != 0)
-            {
-                sb.Append(" <color=#B7E6FF>[P:");
-                AppendInt(sb, entry.Priority);
-                sb.Append("]</color>");
-            }
             GUI.Label(headerRect, sb.ToString(), headerStyle);
 
             // Handle mouse interaction
@@ -1665,11 +1762,6 @@ namespace CycloneGames.GameplayAbilities.Runtime
             sb.Append('.');
             sb.Append((char)('0' + (scaled / 10) % 10));
             sb.Append((char)('0' + scaled % 10));
-        }
-
-        private static int ComparePriority(DiscoveredASC a, DiscoveredASC b)
-        {
-            return b.Priority.CompareTo(a.Priority);
         }
 
         #endregion

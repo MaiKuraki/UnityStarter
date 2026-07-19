@@ -1,6 +1,6 @@
 {
     "name": "CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena",
-    "rootNamespace": "",
+    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena",
     "references": [
         "UniTask",
         "MackySoft.Navigathena",
@@ -12,13 +12,15 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
-    "defineConstraints": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_NAVIGATHENA"
+    ],
     "versionDefines": [
         {
             "name": "com.mackysoft.navigathena",
-            "expression": "",
-            "define": "NAVIGATHENA_PRESENT"
+            "expression": "[1.1.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_NAVIGATHENA"
         }
     ],
     "noEngineReferences": false

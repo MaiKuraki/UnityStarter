@@ -14,21 +14,22 @@ namespace CycloneGames.GameplayFramework.Networking
     /// </summary>
     public enum ServerDamageRejectReason : byte
     {
-        Accepted = 0,
-        InvalidPayload = 1,
-        OwnershipMismatch = 2,
-        TargetNotDamageable = 3,
-        OutOfRange = 4,
-        OnCooldown = 5,
+        Unknown = 0,
+        Accepted = 1,
+        InvalidPayload = 2,
+        OwnershipMismatch = 3,
+        TargetNotDamageable = 4,
+        OutOfRange = 5,
+        OnCooldown = 6,
 
         /// <summary>The integration layer could not resolve the target actor id to a live actor.</summary>
-        TargetNotFound = 6,
+        TargetNotFound = 7,
 
         /// <summary>
         /// Rejected by a game-specific <see cref="IServerDamageValidator"/> rule (friendly fire, invulnerability,
         /// line-of-sight, resource cost, etc.). Reserved so custom validators can reject without growing this enum.
         /// </summary>
-        Custom = 7
+        Custom = 8
     }
 
     /// <summary>
@@ -97,7 +98,7 @@ namespace CycloneGames.GameplayFramework.Networking
         public float AppliedDamage;
 
         /// <summary><see cref="ServerDamageRejectReason"/> encoded as a byte.</summary>
-        public byte ResultCode;
+        public ServerDamageRejectReason ResultCode;
 
         /// <summary>Damage category (<c>EDamageEventType</c> encoded as a byte).</summary>
         public byte DamageEventType;
@@ -143,11 +144,12 @@ namespace CycloneGames.GameplayFramework.Networking
 
         public static void WriteDamageResult(this INetWriter writer, in DamageResultMessage message)
         {
+            ValidateResultCode(message.ResultCode);
             writer.WriteUInt(message.RequestSequence);
             writer.WriteInt(message.InstigatorActorId);
             writer.WriteInt(message.TargetActorId);
             writer.WriteFloat(message.AppliedDamage);
-            writer.WriteByte(message.ResultCode);
+            writer.WriteByte((byte)message.ResultCode);
             writer.WriteByte(message.DamageEventType);
             WriteVector3(writer, message.HitLocation);
         }
@@ -159,7 +161,7 @@ namespace CycloneGames.GameplayFramework.Networking
             message.InstigatorActorId = reader.ReadInt();
             message.TargetActorId = reader.ReadInt();
             message.AppliedDamage = ReadFiniteFloat(reader, "AppliedDamage");
-            message.ResultCode = reader.ReadByte();
+            message.ResultCode = ReadResultCode(reader);
             message.DamageEventType = reader.ReadByte();
             message.HitLocation = ReadFiniteVector3(reader, "HitLocation");
             return message;
@@ -194,10 +196,35 @@ namespace CycloneGames.GameplayFramework.Networking
             return value;
         }
 
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static ServerDamageRejectReason ReadResultCode(INetReader reader)
+        {
+            ServerDamageRejectReason resultCode = (ServerDamageRejectReason)reader.ReadByte();
+            ValidateResultCode(resultCode);
+            return resultCode;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void ValidateResultCode(ServerDamageRejectReason resultCode)
+        {
+            byte value = (byte)resultCode;
+            if (value == (byte)ServerDamageRejectReason.Unknown
+                || value > (byte)ServerDamageRejectReason.Custom)
+            {
+                ThrowInvalidResultCode(value);
+            }
+        }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         private static void ThrowNotFinite(string field)
         {
             throw new System.InvalidOperationException("Damage message field '" + field + "' is not a finite number.");
+        }
+
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        private static void ThrowInvalidResultCode(byte value)
+        {
+            throw new System.InvalidOperationException("Damage result contains an invalid result code: " + value + ".");
         }
     }
 }

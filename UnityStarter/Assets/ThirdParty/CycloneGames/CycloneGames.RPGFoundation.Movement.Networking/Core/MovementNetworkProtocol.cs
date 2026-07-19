@@ -25,6 +25,15 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
         public const int DEFAULT_MAX_CORRECTION_PAYLOAD_SIZE = 512;
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
 
+        // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
+        private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0x0DD5DE0CCEFCE7E8UL;
+        private const ulong INPUT_COMMAND_SCHEMA_V1 = 0xAA87AB05419B69EFUL;
+        private const ulong SNAPSHOT_SCHEMA_V1 = 0x2BE4EE685C0790F4UL;
+        private const ulong CORRECTION_SCHEMA_V1 = 0x758234C52F9A9A0EUL;
+        private const ulong FULL_STATE_REQUEST_SCHEMA_V1 = 0xE17B11E352C841E9UL;
+        private const ulong AUTHORITY_TRANSFER_SCHEMA_V1 = 0xA29871158FF1EDD8UL;
+        private const ulong TELEPORT_SCHEMA_V1 = 0xCBBC9E08374EA4B9UL;
+
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
         public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
@@ -46,9 +55,9 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             return Module.IsSupportedProtocolVersion(protocolVersion);
         }
 
-        public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
+        public static bool TryRegisterMessageCatalog(INetworkMessageEndpoint messageEndpoint)
         {
-            return Module.TryRegister(networkManager);
+            return Module.TryRegister(messageEndpoint);
         }
 
         public static void RegisterMessageCatalog(INetworkMessageCatalog catalog)
@@ -61,8 +70,7 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             var builder = new NetworkProtocolManifestBuilder(
                 MessageOwner,
                 MESSAGE_ID_BASE,
-                MESSAGE_ID_MAX,
-                NetworkMessageKind.Module)
+                MESSAGE_ID_MAX)
             {
                 ProtocolId = "CycloneGames.RPGFoundation.Movement.Networking",
                 CurrentVersion = PROTOCOL_VERSION,
@@ -73,45 +81,51 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
                 .SetMetadata("module", "RPGFoundation.Movement")
                 .SetMetadata("authority", "Server-authoritative, owner-authoritative, host-migration, and relay-friendly movement contracts")
                 .SetMetadata("extension", "Project-specific movement actions should use project-owned User protocol manifests")
-                .AddMessage<MovementManifestHandshakeMessage>(
+                .AddMessage(
+                    "MovementManifestHandshakeMessage:v1",
                     MSG_MANIFEST_HANDSHAKE,
+                    MANIFEST_HANDSHAKE_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<MovementInputCommandMessage>(
+                .AddMessage(
+                    "MovementInputCommandMessage:v1",
                     MSG_INPUT_COMMAND,
+                    INPUT_COMMAND_SCHEMA_V1,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_INPUT_PAYLOAD_SIZE)
-                .AddMessage<MovementNetworkSnapshotMessage>(
+                .AddMessage(
+                    "MovementNetworkSnapshotMessage:v1",
                     MSG_AUTHORITATIVE_SNAPSHOT,
+                    SNAPSHOT_SCHEMA_V1,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
-                .AddMessage<MovementCorrectionMessage>(
+                .AddMessage(
+                    "MovementCorrectionMessage:v1",
                     MSG_CORRECTION,
+                    CORRECTION_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CORRECTION_PAYLOAD_SIZE)
-                .AddMessage<MovementFullStateRequestMessage>(
+                .AddMessage(
+                    "MovementFullStateRequestMessage:v1",
                     MSG_FULL_STATE_REQUEST,
+                    FULL_STATE_REQUEST_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<MovementAuthorityTransferMessage>(
+                .AddMessage(
+                    "MovementAuthorityTransferMessage:v1",
                     MSG_AUTHORITY_TRANSFER,
+                    AUTHORITY_TRANSFER_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<MovementTeleportMessage>(
+                .AddMessage(
+                    "MovementTeleportMessage:v1",
                     MSG_TELEPORT,
+                    TELEPORT_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE);
 
             return builder.Build();
         }
 
-        public static void RegisterMessage<T>(
-            INetworkMessageCatalog catalog,
-            ushort messageId,
-            NetworkChannel channel = NetworkChannel.Reliable,
-            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
-        {
-            Module.RegisterMessage<T>(catalog, messageId, channel, maxPayloadSize);
-        }
     }
 }

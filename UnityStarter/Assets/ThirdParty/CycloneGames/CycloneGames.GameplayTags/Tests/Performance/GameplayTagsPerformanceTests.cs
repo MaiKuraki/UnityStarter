@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 
 using CycloneGames.GameplayTags.Core;
@@ -13,24 +14,21 @@ namespace CycloneGames.GameplayTags.Tests.Performance
       private const int TAG_COUNT = 320;
       private const int SUBJECT_TAG_COUNT = 96;
       private const int QUERY_BRANCH_COUNT = 160;
+      private const int HIGH_SCALE_TAG_COUNT = 10_000;
+      private const int HIGH_SCALE_SUBJECT_TAG_COUNT = 1_024;
+      private const int HIGH_SCALE_ENTITY_COUNT = 10_000;
       private const int WARMUP_COUNT = 12;
       private const int MEASUREMENT_COUNT = 18;
       private const int ITERATIONS_PER_MEASUREMENT = 1000;
 
       private static bool s_BooleanSink;
-      private static int s_IntegerSink;
 
       private readonly List<GameplayTag> _allTags = new(TAG_COUNT);
       private readonly List<GameplayTag> _queryTags = new(QUERY_BRANCH_COUNT);
 
       private GameplayTagContainer _subjectContainer;
-      private GameplayTagContainer _previousContainer;
-      private GameplayTagContainer _requiredContainer;
-      private GameplayTagMask _subjectMask;
-      private GameplayTagMask _requiredMask;
+      private GameplayTagCountContainer _countContainer;
       private GameplayTagQuery _wideQuery;
-      private byte[] _fullPacketBuffer;
-      private byte[] _deltaPacketBuffer;
 
       [SetUp]
       public void SetUp()
@@ -41,11 +39,7 @@ namespace CycloneGames.GameplayTags.Tests.Performance
 
          RegisterBenchmarkTags();
          BuildContainers();
-         BuildMasks();
          BuildWideQuery();
-
-         _fullPacketBuffer = new byte[GameplayTagNetSerializer.GetFullSerializedSize(_subjectContainer)];
-         _deltaPacketBuffer = new byte[GameplayTagNetSerializer.GetDeltaSerializedSize(SUBJECT_TAG_COUNT / 2, SUBJECT_TAG_COUNT / 2)];
       }
 
       [TearDown]
@@ -77,16 +71,15 @@ namespace CycloneGames.GameplayTags.Tests.Performance
       }
 
       [Test, Performance]
-      public void Mask_HasAllAndHasAny_256Bit()
+      public void CountContainer_AddAndRemove_SparseStorage()
       {
-         GameplayTagMask subject = _subjectMask;
-         GameplayTagMask required = _requiredMask;
+         GameplayTagCountContainer counts = _countContainer;
+         GameplayTag tag = _allTags[SUBJECT_TAG_COUNT - 1];
 
          Measure.Method(() =>
             {
-               bool result = subject.HasAll(required);
-               result ^= subject.HasAny(required);
-               s_BooleanSink = result;
+               counts.AddTag(tag);
+               counts.RemoveTag(tag);
             })
             .WarmupCount(WARMUP_COUNT)
             .MeasurementCount(MEASUREMENT_COUNT)
@@ -114,15 +107,59 @@ namespace CycloneGames.GameplayTags.Tests.Performance
       }
 
       [Test, Performance]
-      public void NetSerializer_SerializeFull_PreallocatedBuffer()
+      public void CountContainer_TenThousandEntities_SingleTagChurn()
       {
-         GameplayTagContainer subject = _subjectContainer;
-         byte[] buffer = _fullPacketBuffer;
+         GameplayTag tag = _allTags[SUBJECT_TAG_COUNT - 1];
+         GameplayTagCountContainer[] containers = new GameplayTagCountContainer[HIGH_SCALE_ENTITY_COUNT];
+         for (int i = 0; i < containers.Length; i++)
+         {
+            GameplayTagCountContainer container = new();
+            container.AddTag(tag);
+            container.RemoveTag(tag);
+            containers[i] = container;
+         }
+
+         long before = GC.GetAllocatedBytesForCurrentThread();
+         MutateSingleTagAcrossContainers(containers, tag);
+         long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+         Assert.That(allocatedBytes, Is.Zero,
+            "Ten-thousand-container single-tag churn allocated after per-owner warm-up.");
+
+         Measure.Method(() => MutateSingleTagAcrossContainers(containers, tag))
+            .WarmupCount(4)
+            .MeasurementCount(10)
+            .IterationsPerMeasurement(1)
+            .GC()
+            .Run();
+      }
+
+      [Test, Performance]
+      public void Container_ContainsRuntimeIndex_TenThousandTagRegistry()
+      {
+         GameplayTagManager.ResetForTests();
+         List<string> names = new(HIGH_SCALE_TAG_COUNT);
+         for (int i = 0; i < HIGH_SCALE_TAG_COUNT; i++)
+            names.Add($"Scale.Tag{i:00000}");
+         GameplayTagManager.RegisterDynamicTags(names);
+
+         GameplayTagContainer subject = new();
+         for (int i = 0; i < HIGH_SCALE_SUBJECT_TAG_COUNT; i++)
+            subject.AddTag(GameplayTagManager.RequestTag(names[i]));
+
+         int hitIndex = GameplayTagManager.RequestTag(names[HIGH_SCALE_SUBJECT_TAG_COUNT - 1]).RuntimeIndex;
+         int missIndex = GameplayTagManager.RequestTag(names[HIGH_SCALE_TAG_COUNT - 1]).RuntimeIndex;
+         Assert.That(MeasureAllocatedBytes(() =>
+         {
+            bool result = subject.ContainsRuntimeIndex(hitIndex, explicitOnly: false);
+            result ^= subject.ContainsRuntimeIndex(missIndex, explicitOnly: false);
+            s_BooleanSink = result;
+         }), Is.Zero, "Ten-thousand-tag registry lookup allocated after warm-up.");
 
          Measure.Method(() =>
             {
-               int written = GameplayTagNetSerializer.SerializeFull(subject, buffer, 0);
-               s_IntegerSink = written;
+               bool result = subject.ContainsRuntimeIndex(hitIndex, explicitOnly: false);
+               result ^= subject.ContainsRuntimeIndex(missIndex, explicitOnly: false);
+               s_BooleanSink = result;
             })
             .WarmupCount(WARMUP_COUNT)
             .MeasurementCount(MEASUREMENT_COUNT)
@@ -131,32 +168,65 @@ namespace CycloneGames.GameplayTags.Tests.Performance
             .Run();
       }
 
-      [Test, Performance]
-      public void NetSerializer_SerializeDelta_PreallocatedBuffer()
+      [Test]
+      public void HotPaths_AllocateZeroBytesAfterWarmup()
       {
-         GameplayTagContainer subject = _subjectContainer;
-         GameplayTagContainer previous = _previousContainer;
-         byte[] buffer = _deltaPacketBuffer;
+         GameplayTag hit = _allTags[SUBJECT_TAG_COUNT - 1];
+         int hitIndex = hit.RuntimeIndex;
+         int missIndex = _allTags[TAG_COUNT - 1].RuntimeIndex;
 
-         Measure.Method(() =>
-            {
-               int written = GameplayTagNetSerializer.SerializeDelta(subject, previous, buffer, 0);
-               s_IntegerSink = written;
-            })
-            .WarmupCount(WARMUP_COUNT)
-            .MeasurementCount(MEASUREMENT_COUNT)
-            .IterationsPerMeasurement(ITERATIONS_PER_MEASUREMENT)
-            .GC()
-            .Run();
+         Assert.That(MeasureAllocatedBytes(() =>
+            _subjectContainer.ContainsRuntimeIndex(hitIndex, explicitOnly: false)), Is.Zero,
+            "Container hit lookup allocated after warm-up.");
+
+         Assert.That(MeasureAllocatedBytes(() =>
+            _subjectContainer.ContainsRuntimeIndex(missIndex, explicitOnly: false)), Is.Zero,
+            "Container miss lookup allocated after warm-up.");
+
+         Assert.That(MeasureAllocatedBytes(() => _wideQuery.Matches(_subjectContainer)), Is.Zero,
+            "Compiled query match allocated after warm-up.");
+
+         GameplayTag countTag = _allTags[SUBJECT_TAG_COUNT - 1];
+         Assert.That(MeasureAllocatedBytes(() =>
+         {
+            _countContainer.AddTag(countTag);
+            _countContainer.RemoveTag(countTag);
+         }), Is.Zero, "Sparse count mutation allocated after warm-up.");
+
+         Assert.That(MeasureAllocatedBytes(() =>
+         {
+            _countContainer.AddTags(_subjectContainer);
+            _countContainer.RemoveTags(_subjectContainer);
+         }), Is.Zero, "Owned batch scratch allocated after warm-up.");
+      }
+
+      private static void MutateSingleTagAcrossContainers(
+         GameplayTagCountContainer[] containers,
+         GameplayTag tag)
+      {
+         for (int i = 0; i < containers.Length; i++)
+         {
+            containers[i].AddTag(tag);
+            containers[i].RemoveTag(tag);
+         }
+      }
+
+      private static long MeasureAllocatedBytes(Action operation)
+      {
+         for (int i = 0; i < 32; i++)
+            operation();
+
+         long before = GC.GetAllocatedBytesForCurrentThread();
+         for (int i = 0; i < ITERATIONS_PER_MEASUREMENT; i++)
+            operation();
+         return GC.GetAllocatedBytesForCurrentThread() - before;
       }
 
       private static void RegisterBenchmarkTags()
       {
          for (int i = 0; i < TAG_COUNT; i++)
          {
-            string tagName = i < GameplayTagMask.MaxTags
-               ? $"Perf.Mask.Tag{i:000}"
-               : $"Perf.Large.Tag{i:000}";
+            string tagName = $"Perf.Tag{i:000}";
 
             GameplayTagManager.RegisterDynamicTag(tagName, "Performance benchmark tag.");
          }
@@ -167,14 +237,11 @@ namespace CycloneGames.GameplayTags.Tests.Performance
       private void BuildContainers()
       {
          _subjectContainer = new GameplayTagContainer();
-         _previousContainer = new GameplayTagContainer();
-         _requiredContainer = new GameplayTagContainer();
+         _countContainer = new GameplayTagCountContainer();
 
          for (int i = 0; i < TAG_COUNT; i++)
          {
-            string tagName = i < GameplayTagMask.MaxTags
-               ? $"Perf.Mask.Tag{i:000}"
-               : $"Perf.Large.Tag{i:000}";
+            string tagName = $"Perf.Tag{i:000}";
 
             _allTags.Add(GameplayTagManager.RequestTag(tagName));
          }
@@ -184,21 +251,6 @@ namespace CycloneGames.GameplayTags.Tests.Performance
             _subjectContainer.AddTag(_allTags[i]);
          }
 
-         for (int i = SUBJECT_TAG_COUNT / 2; i < SUBJECT_TAG_COUNT + SUBJECT_TAG_COUNT / 2; i++)
-         {
-            _previousContainer.AddTag(_allTags[i]);
-         }
-
-         for (int i = 8; i < 24; i++)
-         {
-            _requiredContainer.AddTag(_allTags[i]);
-         }
-      }
-
-      private void BuildMasks()
-      {
-         _subjectMask = GameplayTagMask.FromContainer(_subjectContainer);
-         _requiredMask = GameplayTagMask.FromContainer(_requiredContainer);
       }
 
       private void BuildWideQuery()

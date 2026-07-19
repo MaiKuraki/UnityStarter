@@ -1,4 +1,4 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
 using System.Diagnostics;
 
 namespace CycloneGames.GameplayTags.Core
@@ -9,7 +9,7 @@ namespace CycloneGames.GameplayTags.Core
       public struct Tag
       {
          [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-         private IGameplayTagContainer m_Container { get; set; }
+         private IReadOnlyGameplayTagContainer m_Container { get; set; }
 
          [DebuggerBrowsable(DebuggerBrowsableState.Never)]
          private GameplayTag m_Tag;
@@ -34,7 +34,7 @@ namespace CycloneGames.GameplayTags.Core
             }
          }
 
-         public Tag(IGameplayTagContainer container, GameplayTag tag)
+         public Tag(IReadOnlyGameplayTagContainer container, GameplayTag tag)
          {
             m_Container = container;
             m_Tag = tag;
@@ -42,7 +42,7 @@ namespace CycloneGames.GameplayTags.Core
       }
 
       [DebuggerBrowsable(DebuggerBrowsableState.Never)]
-      public IGameplayTagContainer Container { get; set; }
+      public IReadOnlyGameplayTagContainer Container { get; set; }
 
       [DebuggerBrowsable(DebuggerBrowsableState.RootHidden)]
       public Tag[] Tags
@@ -61,7 +61,7 @@ namespace CycloneGames.GameplayTags.Core
          }
       }
 
-      public GameplayTagContainerDebugView(IGameplayTagContainer container)
+      public GameplayTagContainerDebugView(IReadOnlyGameplayTagContainer container)
       {
          Container = container;
       }

@@ -262,7 +262,7 @@ namespace CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath
 
         private static FPVector3 NormalizeOrZero(FPVector3 value)
         {
-            return value.SqrMagnitude.RawValue == 0 ? FPVector3.Zero : value.Normalized;
+            return value.NormalizedOrZero;
         }
 
         private static FPVector3 Reflect(FPVector3 vector, FPVector3 normal)

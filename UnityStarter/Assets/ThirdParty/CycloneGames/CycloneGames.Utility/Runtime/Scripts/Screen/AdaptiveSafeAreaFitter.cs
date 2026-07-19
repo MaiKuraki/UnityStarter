@@ -1,41 +1,48 @@
-/*
- * A standalone, intelligent safe area handler that respects system-defined insets
- * while providing optional symmetry and home indicator exclusion.
- */
+using System;
 
 using UnityEngine;
+using UnityEngine.Serialization;
+
 namespace CycloneGames.Utility.Runtime
 {
-    [RequireComponent(typeof(RectTransform))]
+    /// <summary>
+    /// Drives a <see cref="RectTransform"/> so that it remains inside a bounded screen safe area.
+    /// </summary>
+    [DisallowMultipleComponent]
     [ExecuteAlways]
-    public class AdaptiveSafeAreaFitter : MonoBehaviour
+    [RequireComponent(typeof(RectTransform))]
+    public sealed class AdaptiveSafeAreaFitter : MonoBehaviour
     {
-        [Header("Behavior Settings")]
+        [FormerlySerializedAs("extendIntoBottomSafeArea")]
+        [SerializeField]
+        [Tooltip("Allows the fitted rectangle to extend behind the bottom system gesture area.")]
+        private bool _extendIntoBottomSafeArea = true;
 
-        [Tooltip("If true, the UI will extend into the bottom safe area. On iOS, this means drawing behind the Home Indicator. This is useful for creating a more immersive, full-screen background, but interactive elements in this zone may be hard to use due to system gestures.")]
-        public bool extendIntoBottomSafeArea = true;
+        [FormerlySerializedAs("enforceVerticalSymmetry")]
+        [SerializeField]
+        [Tooltip("After optional bottom extension, makes the bottom inset at least as large as the top inset. This can add bottom inset back to balance a top cutout.")]
+        private bool _enforceVerticalSymmetry = true;
 
-        [Tooltip("If true, the bottom inset is increased to match the top inset if the top is larger. Balances a top notch in portrait mode.")]
-        public bool enforceVerticalSymmetry = true;
+        [FormerlySerializedAs("enforceHorizontalSymmetry")]
+        [SerializeField]
+        [Tooltip("Uses the larger of the left and right insets on both sides.")]
+        private bool _enforceHorizontalSymmetry = true;
 
-        [Tooltip("If true, left/right insets are matched to the larger of the two. Balances a notch/indicator in landscape mode.")]
-        public bool enforceHorizontalSymmetry = true;
+        [FormerlySerializedAs("manualTopPadding")]
+        [SerializeField, Min(0f)]
+        private float _manualTopPadding;
 
+        [FormerlySerializedAs("manualBottomPadding")]
+        [SerializeField, Min(0f)]
+        private float _manualBottomPadding;
 
-        [Header("Manual Padding (in pixels)")]
+        [FormerlySerializedAs("manualLeftPadding")]
+        [SerializeField, Min(0f)]
+        private float _manualLeftPadding;
 
-        [Tooltip("Additional padding applied to the top inset.")]
-        public float manualTopPadding = 0f;
-
-        [Tooltip("Additional padding applied to the bottom inset.")]
-        public float manualBottomPadding = 0f;
-
-        [Tooltip("Additional padding applied to the left inset.")]
-        public float manualLeftPadding = 0f;
-
-        [Tooltip("Additional padding applied to the right inset.")]
-        public float manualRightPadding = 0f;
-
+        [FormerlySerializedAs("manualRightPadding")]
+        [SerializeField, Min(0f)]
+        private float _manualRightPadding;
 
         private RectTransform _rectTransform;
         private Rect _lastSafeArea;
@@ -45,163 +52,280 @@ namespace CycloneGames.Utility.Runtime
         private DrivenRectTransformTracker _tracker;
         private Vector2 _lastAppliedAnchorMin;
         private Vector2 _lastAppliedAnchorMax;
+        private bool _refreshRequested = true;
+        private bool _isApplying;
 
-        void OnEnable()
+        public bool ExtendIntoBottomSafeArea
         {
-            _rectTransform = GetComponent<RectTransform>();
+            get => _extendIntoBottomSafeArea;
+            set => SetAndRefresh(ref _extendIntoBottomSafeArea, value);
+        }
 
-            // Set up tracker once — locks anchors and offsets in Inspector to prevent manual edits
+        public bool EnforceVerticalSymmetry
+        {
+            get => _enforceVerticalSymmetry;
+            set => SetAndRefresh(ref _enforceVerticalSymmetry, value);
+        }
+
+        public bool EnforceHorizontalSymmetry
+        {
+            get => _enforceHorizontalSymmetry;
+            set => SetAndRefresh(ref _enforceHorizontalSymmetry, value);
+        }
+
+        public Vector4 PaddingPixels
+        {
+            get => new Vector4(
+                _manualLeftPadding,
+                _manualBottomPadding,
+                _manualRightPadding,
+                _manualTopPadding);
+            set
+            {
+                _manualLeftPadding = SanitizePadding(value.x);
+                _manualBottomPadding = SanitizePadding(value.y);
+                _manualRightPadding = SanitizePadding(value.z);
+                _manualTopPadding = SanitizePadding(value.w);
+                RequestRefresh();
+            }
+        }
+
+        [Obsolete("Use ExtendIntoBottomSafeArea.")]
+        public bool extendIntoBottomSafeArea
+        {
+            get => ExtendIntoBottomSafeArea;
+            set => ExtendIntoBottomSafeArea = value;
+        }
+
+        [Obsolete("Use EnforceVerticalSymmetry.")]
+        public bool enforceVerticalSymmetry
+        {
+            get => EnforceVerticalSymmetry;
+            set => EnforceVerticalSymmetry = value;
+        }
+
+        [Obsolete("Use EnforceHorizontalSymmetry.")]
+        public bool enforceHorizontalSymmetry
+        {
+            get => EnforceHorizontalSymmetry;
+            set => EnforceHorizontalSymmetry = value;
+        }
+
+        [Obsolete("Use PaddingPixels.w.")]
+        public float manualTopPadding
+        {
+            get => _manualTopPadding;
+            set => SetPaddingAndRefresh(ref _manualTopPadding, value);
+        }
+
+        [Obsolete("Use PaddingPixels.y.")]
+        public float manualBottomPadding
+        {
+            get => _manualBottomPadding;
+            set => SetPaddingAndRefresh(ref _manualBottomPadding, value);
+        }
+
+        [Obsolete("Use PaddingPixels.x.")]
+        public float manualLeftPadding
+        {
+            get => _manualLeftPadding;
+            set => SetPaddingAndRefresh(ref _manualLeftPadding, value);
+        }
+
+        [Obsolete("Use PaddingPixels.z.")]
+        public float manualRightPadding
+        {
+            get => _manualRightPadding;
+            set => SetPaddingAndRefresh(ref _manualRightPadding, value);
+        }
+
+        private void OnEnable()
+        {
+            if (!TryGetComponent(out _rectTransform))
+            {
+                enabled = false;
+                return;
+            }
+
             _tracker.Clear();
-            _tracker.Add(this, _rectTransform,
+            _tracker.Add(
+                this,
+                _rectTransform,
                 DrivenTransformProperties.Anchors |
                 DrivenTransformProperties.SizeDelta |
                 DrivenTransformProperties.AnchoredPosition);
 
-            // Force initial apply by invalidating cached state
-            _lastSafeArea = new Rect(0, 0, 0, 0);
-            _lastScreenWidth = 0;
-            _lastScreenHeight = 0;
-            _lastOrientation = Screen.orientation;
+            _refreshRequested = true;
             Refresh();
         }
 
-        void OnDisable()
+        private void OnDisable()
         {
             _tracker.Clear();
         }
 
-        void Update()
+        private void Update()
         {
-            int sw = Screen.width;
-            int sh = Screen.height;
-            Rect sa = Screen.safeArea;
-            ScreenOrientation orient = Screen.orientation;
-
-            bool screenChanged = sa != _lastSafeArea || sw != _lastScreenWidth || sh != _lastScreenHeight || orient != _lastOrientation;
-
-            // Detect anchor tampering (e.g. user changed anchor preset via Inspector popup)
-            bool anchorTampered = _rectTransform != null &&
-                (_rectTransform.anchorMin != _lastAppliedAnchorMin ||
-                 _rectTransform.anchorMax != _lastAppliedAnchorMax ||
-                 _rectTransform.offsetMin != Vector2.zero ||
-                 _rectTransform.offsetMax != Vector2.zero);
-
-            if (screenChanged || anchorTampered)
+            if (_rectTransform == null)
             {
-                _lastSafeArea = sa;
-                _lastScreenWidth = sw;
-                _lastScreenHeight = sh;
-                _lastOrientation = orient;
-                ApplySafeArea(sa, sw, sh);
+                return;
+            }
+
+            Rect safeArea = Screen.safeArea;
+            int screenWidth = Screen.width;
+            int screenHeight = Screen.height;
+            ScreenOrientation orientation = Screen.orientation;
+            bool screenChanged =
+                safeArea != _lastSafeArea ||
+                screenWidth != _lastScreenWidth ||
+                screenHeight != _lastScreenHeight ||
+                orientation != _lastOrientation;
+            bool drivenValuesChanged =
+                _rectTransform.anchorMin != _lastAppliedAnchorMin ||
+                _rectTransform.anchorMax != _lastAppliedAnchorMax ||
+                _rectTransform.offsetMin != Vector2.zero ||
+                _rectTransform.offsetMax != Vector2.zero;
+
+            if (_refreshRequested || screenChanged || drivenValuesChanged)
+            {
+                ApplySafeArea(safeArea, screenWidth, screenHeight, orientation);
+            }
+        }
+
+        private void OnRectTransformDimensionsChange()
+        {
+            if (!_isApplying)
+            {
+                RequestRefresh();
             }
         }
 
 #if UNITY_EDITOR
-        /// <summary>
-        /// Re-applies safe area when settings are changed in the Inspector.
-        /// </summary>
         private void OnValidate()
         {
-            // OnValidate can fire before OnEnable; guard against null
-            if (_rectTransform == null) return;
-            // Delay to avoid modifying transform during validation
-            UnityEditor.EditorApplication.delayCall += () =>
-            {
-                if (this != null && _rectTransform != null)
-                {
-                    Refresh();
-                }
-            };
+            _manualTopPadding = SanitizePadding(_manualTopPadding);
+            _manualBottomPadding = SanitizePadding(_manualBottomPadding);
+            _manualLeftPadding = SanitizePadding(_manualLeftPadding);
+            _manualRightPadding = SanitizePadding(_manualRightPadding);
+            RequestRefresh();
         }
 #endif
 
         /// <summary>
-        /// Forces an immediate safe area recalculation. Call this after programmatic
-        /// resolution changes or when re-enabling UI panels at runtime.
+        /// Recalculates and applies the current screen safe area immediately.
         /// </summary>
         public void Refresh()
         {
-            int sw = Screen.width;
-            int sh = Screen.height;
-            _lastSafeArea = Screen.safeArea;
-            _lastScreenWidth = sw;
-            _lastScreenHeight = sh;
-            _lastOrientation = Screen.orientation;
-            ApplySafeArea(_lastSafeArea, sw, sh);
+            if (_rectTransform == null && !TryGetComponent(out _rectTransform))
+            {
+                return;
+            }
+
+            ApplySafeArea(Screen.safeArea, Screen.width, Screen.height, Screen.orientation);
         }
 
-        /// <summary>
-        /// Calculates and applies the safe area insets to the RectTransform's anchors.
-        /// </summary>
-        private void ApplySafeArea(Rect safeArea, int screenWidth, int screenHeight)
+        private void ApplySafeArea(
+            Rect safeArea,
+            int screenWidth,
+            int screenHeight,
+            ScreenOrientation orientation)
         {
-            if (_rectTransform == null) return;
-            if (screenWidth <= 0 || screenHeight <= 0) return;
-
-            // Calculate initial pixel insets from screen edges.
-            float topInset = screenHeight - safeArea.yMax;
-            float bottomInset = safeArea.yMin;
-            float leftInset = safeArea.xMin;
-            float rightInset = screenWidth - safeArea.xMax;
-
-            #region Do not Change this pipe
-            // On modern iPhones, the bottom safe area is reserved for the Home Indicator.
-            // Swiping up from this area returns to the home screen. While it's generally
-            // best to avoid placing interactive UI here, extending non-interactive elements
-            // (like backgrounds) into this space can create a more seamless look.
-            // Large, easily tappable buttons may also be acceptable, as users are less
-            // likely to accidentally trigger the system gesture.
-            if (extendIntoBottomSafeArea)
+            _lastSafeArea = safeArea;
+            _lastScreenWidth = screenWidth;
+            _lastScreenHeight = screenHeight;
+            _lastOrientation = orientation;
+            if (_rectTransform == null)
             {
-                bottomInset = 0;
+                _refreshRequested = false;
+                return;
             }
 
-            // The symmetry logic is then applied to the *result* of the previous step.
-            // This ensures that even if the bottom inset was cleared, it can be restored
-            // to match the top inset (e.g., for a notch). This sequence guarantees that
-            // the aesthetic need for symmetry correctly overrides the functional choice
-            // to extend into the bottom area when a top notch is present.
-            if (enforceVerticalSymmetry)
+            SafeAreaPolicy policy = CreatePolicy();
+            if (!SafeAreaUtility.TryCalculateAnchors(
+                    safeArea,
+                    screenWidth,
+                    screenHeight,
+                    in policy,
+                    out Vector2 anchorMin,
+                    out Vector2 anchorMax))
             {
-                bottomInset = Mathf.Max(bottomInset, topInset);
-            }
-            #endregion
-
-            if (enforceHorizontalSymmetry)
-            {
-                float maxHorizontal = leftInset > rightInset ? leftInset : rightInset;
-                leftInset = maxHorizontal;
-                rightInset = maxHorizontal;
+                _refreshRequested = false;
+                return;
             }
 
-            // Apply final manual padding for fine-tuning.
-            topInset += manualTopPadding;
-            bottomInset += manualBottomPadding;
-            leftInset += manualLeftPadding;
-            rightInset += manualRightPadding;
+            _isApplying = true;
+            try
+            {
+                if (_rectTransform.anchorMin != anchorMin)
+                {
+                    _rectTransform.anchorMin = anchorMin;
+                }
 
-            // Convert final pixel insets to normalized anchor positions, clamped to [0,1].
-            float invW = 1f / screenWidth;
-            float invH = 1f / screenHeight;
+                if (_rectTransform.anchorMax != anchorMax)
+                {
+                    _rectTransform.anchorMax = anchorMax;
+                }
 
-            Vector2 anchorMin = new Vector2(
-                Mathf.Clamp01(leftInset * invW),
-                Mathf.Clamp01(bottomInset * invH));
-            Vector2 anchorMax = new Vector2(
-                Mathf.Clamp01(1f - rightInset * invW),
-                Mathf.Clamp01(1f - topInset * invH));
+                if (_rectTransform.offsetMin != Vector2.zero)
+                {
+                    _rectTransform.offsetMin = Vector2.zero;
+                }
 
-            _rectTransform.anchorMin = anchorMin;
-            _rectTransform.anchorMax = anchorMax;
-            // Zero out offsets so the RectTransform exactly matches the anchor-defined area.
-            // Without this, pre-existing offset values would shift the element away from
-            // the computed safe area, which is the most common source of incorrect fitting.
-            _rectTransform.offsetMin = Vector2.zero;
-            _rectTransform.offsetMax = Vector2.zero;
+                if (_rectTransform.offsetMax != Vector2.zero)
+                {
+                    _rectTransform.offsetMax = Vector2.zero;
+                }
 
-            // Cache applied values for tampering detection
-            _lastAppliedAnchorMin = anchorMin;
-            _lastAppliedAnchorMax = anchorMax;
+                _lastAppliedAnchorMin = anchorMin;
+                _lastAppliedAnchorMax = anchorMax;
+            }
+            finally
+            {
+                _isApplying = false;
+                _refreshRequested = false;
+            }
+        }
+
+        private SafeAreaPolicy CreatePolicy()
+        {
+            return new SafeAreaPolicy(
+                _extendIntoBottomSafeArea,
+                _enforceVerticalSymmetry,
+                _enforceHorizontalSymmetry,
+                PaddingPixels);
+        }
+
+        private void RequestRefresh()
+        {
+            _refreshRequested = true;
+        }
+
+        private void SetAndRefresh(ref bool field, bool value)
+        {
+            if (field == value)
+            {
+                return;
+            }
+
+            field = value;
+            RequestRefresh();
+        }
+
+        private void SetPaddingAndRefresh(ref float field, float value)
+        {
+            value = SanitizePadding(value);
+            if (Mathf.Approximately(field, value))
+            {
+                return;
+            }
+
+            field = value;
+            RequestRefresh();
+        }
+
+        private static float SanitizePadding(float value)
+        {
+            return float.IsNaN(value) || float.IsInfinity(value) ? 0f : Mathf.Max(0f, value);
         }
     }
 }

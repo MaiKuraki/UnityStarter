@@ -2,9 +2,9 @@
     "name": "CycloneGames.GameplayAbilities.Networking.Tests.Editor",
     "rootNamespace": "CycloneGames.GameplayAbilities.Networking.Tests.Editor",
     "references": [
+        "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Networking.Core",
-        "CycloneGames.Networking.Core",
-        "CycloneGames.DeterministicMath.Core"
+        "CycloneGames.Networking.Core"
     ],
     "includePlatforms": [
         "Editor"

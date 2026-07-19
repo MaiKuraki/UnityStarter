@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.Factory.Unity.Runtime",
+    "rootNamespace": "CycloneGames.Factory.Runtime",
+    "references": [
+        "CycloneGames.Factory.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

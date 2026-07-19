@@ -8,7 +8,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// <summary>
     /// Centralized logging utility for the GameplayAbilities system.
     /// Uses the [GAS] category tag for easy filtering in the CLogger system.
-    /// All logging methods use conditional compilation to eliminate overhead in Release.
+    /// Trace, debug, and info calls are compiled out unless diagnostic logging is enabled.
+    /// Warning, error, and fatal calls remain available in Release for operational failures.
     /// </summary>
     public static class GASLog
     {

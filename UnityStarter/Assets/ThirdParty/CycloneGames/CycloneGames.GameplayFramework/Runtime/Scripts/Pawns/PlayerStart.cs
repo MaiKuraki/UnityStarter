@@ -1,17 +1,13 @@
-using System.Collections.Generic;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
     /// <summary>
-    /// Spawn point for players. Uses static registry pattern for zero-GC lookup.
-    /// PlayerStart instances auto-register/unregister on enable/disable.
+    /// Spawn point for players. The owning World discovers and caches scene starts once during
+    /// initialization, avoiding cross-world static state and Domain Reload dependencies.
     /// </summary>
     public class PlayerStart : Actor
     {
-        private static readonly List<PlayerStart> _registry = new List<PlayerStart>(16);
-        private static bool _registryDirty;
-
 #if UNITY_EDITOR
         public enum EGizmoMode
         {
@@ -57,10 +53,6 @@ namespace CycloneGames.GameplayFramework.Runtime
         private float GizmoArrowLengthScale = 1f;
 #endif
 
-        public static IReadOnlyList<PlayerStart> GetAllPlayerStarts() => _registry;
-        public static bool IsRegistryDirty => _registryDirty;
-        public static void ClearRegistryDirtyFlag() => _registryDirty = false;
-
 #if UNITY_EDITOR
         public EGizmoMode GetGizmoMode() => GizmoMode;
         public EFacingAxis GetGizmoFacingAxis() => GizmoFacingAxis;
@@ -72,21 +64,5 @@ namespace CycloneGames.GameplayFramework.Runtime
         public float GetGizmoArrowLengthScale() => Mathf.Max(0.1f, GizmoArrowLengthScale);
 #endif
 
-        protected virtual void OnEnable()
-        {
-            if (!_registry.Contains(this))
-            {
-                _registry.Add(this);
-                _registryDirty = true;
-            }
-        }
-
-        protected virtual void OnDisable()
-        {
-            if (_registry.Remove(this))
-            {
-                _registryDirty = true;
-            }
-        }
     }
 }

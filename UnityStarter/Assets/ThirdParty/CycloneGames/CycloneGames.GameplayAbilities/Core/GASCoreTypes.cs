@@ -3,11 +3,10 @@ using System;
 namespace CycloneGames.GameplayAbilities.Core
 {
     /// <summary>
-    /// Stable network-visible identity for an AbilitySystemComponent.
-    /// Deliberately an int rather than an object reference — int values are safe to
-    /// serialize, compare across network boundaries, and use in headless server contexts
-    /// where Unity objects do not exist.
-    /// Value 0 means invalid/null.
+    /// Context-local identity for an AbilitySystemComponent.
+    /// The value is unique only within one GASRuntimeContext lifetime. It is not a wire,
+    /// save, or content identity and must be mapped to an authority-issued stable ID before
+    /// crossing a process boundary. Value 0 means invalid/null.
     /// </summary>
     public readonly struct GASEntityId : IEquatable<GASEntityId>
     {
@@ -146,23 +145,5 @@ namespace CycloneGames.GameplayAbilities.Core
         public override int GetHashCode() => Value;
         public static bool operator ==(GASAttributeId left, GASAttributeId right) => left.Equals(right);
         public static bool operator !=(GASAttributeId left, GASAttributeId right) => !left.Equals(right);
-    }
-
-    /// <summary>
-    /// Represents a point in fixed-timestep simulation time.
-    /// Separate from floating-point delta time so effect durations, cooldowns, and
-    /// periodic ticks are deterministic across clients and server — critical for
-    /// lockstep or replay-based networking models.
-    /// </summary>
-    public readonly struct GASFixedTime
-    {
-        public readonly int Tick;
-        public readonly int TickRate;
-
-        public GASFixedTime(int tick, int tickRate)
-        {
-            Tick = tick;
-            TickRate = tickRate > 0 ? tickRate : 1;
-        }
     }
 }

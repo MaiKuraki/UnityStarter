@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.RPGFoundation.Projectile.Runtime",
     "references": [
         "CycloneGames.Factory.Runtime",
+        "CycloneGames.Factory.Unity.Runtime",
         "CycloneGames.RPGFoundation.Projectile.Core"
     ],
     "includePlatforms": [],

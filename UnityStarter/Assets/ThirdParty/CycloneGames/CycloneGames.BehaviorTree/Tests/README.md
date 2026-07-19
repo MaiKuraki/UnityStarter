@@ -1,6 +1,8 @@
 # CycloneGames.BehaviorTree Test & Benchmark Guide
 
-This folder contains the formal validation and benchmarking workflow for `CycloneGames.BehaviorTree`, including more realistic runtime scheduling and soak-test coverage.
+[简体中文](README.SCH.md)
+
+This folder contains EditMode and PlayMode tests, benchmark runners, scheduling profiles, soak sampling, and result export for `CycloneGames.BehaviorTree`.
 
 ## Included parts
 
@@ -46,7 +48,7 @@ This folder contains the formal validation and benchmarking workflow for `Cyclon
 - `Medium`
 - `Heavy`
 
-The benchmark system now evaluates two dimensions:
+Each benchmark configuration selects two dimensions:
 
 - scale preset
 - complexity tier
@@ -78,7 +80,7 @@ The benchmark system now evaluates two dimensions:
   - benchmark-side approximation of priority-budgeted ticking
   - useful as a comparison baseline against full-rate and simpler LOD
 
-The benchmark surface now measures three dimensions:
+Scheduling profiles add a third dimension:
 
 - scale preset
 - complexity tier
@@ -98,7 +100,7 @@ Main files:
 - `Consistency/BehaviorTreeAuthoringCompilerTests.cs`
 - `Performance/BehaviorTreeBenchmarkTests.cs`
 
-Editor tests intentionally cover both success paths and failure paths. Any remote payload test should assert that malformed input is rejected before mutating local runtime state.
+Editor tests cover success and failure paths. Remote payload tests assert that malformed input is rejected before local runtime state changes.
 
 ## How to run PlayMode tests
 
@@ -118,7 +120,7 @@ Main file:
 4. Use `Run Scale Matrix For Selected Complexity` to compare all scale presets under the current complexity tier.
 5. Use `Run Full Matrix (Scale x Complexity)` to run the complete preset-by-complexity benchmark matrix with each preset's recommended scheduling profile.
 6. Use `Run PriorityManaged Comparison` to compare the current setup across `FullRate / PriorityLod / PriorityManaged / UltraLod`.
-7. Use `Run Production Certification Matrix` to run the heavyweight certification set with production budgets.
+7. Use `Run Production Certification Matrix` to run the matrix named by the tool with its configured budgets.
 8. Use `Create PlayMode Benchmark Scene` to generate a scene from the current config.
 9. Use `Create Scene From Preset` to generate a scene from the selected preset and complexity tier.
 10. Use `Create Scale Matrix Scene` to generate a PlayMode scene that runs all scale presets for the selected complexity tier.
@@ -138,7 +140,7 @@ Important config fields:
 - `Soak Sample Interval`
   - controls how often the soak phase samples managed memory
 - `Production Budgets`
-  - stores pass/fail thresholds for average frame time, max frame time, workload-scaled managed memory capacity, GC collections, and effective tick ratio
+  - stores pass/fail thresholds for average frame time, max frame time, workload-scaled managed memory capacity, GC collections, and effective tick ratio; passing these thresholds is not Player or platform certification
   - `Max Memory Delta` is a session-level retained-memory capacity budget, not a per-frame allocation budget; use GC collection counts, delta flush allocation guards, and soak memory drift for hot-path allocation stability
 
 PlayMode runner behavior:
@@ -169,10 +171,10 @@ After a single benchmark completes in the benchmark window:
 After a matrix run completes:
 
 1. Click `Export Last Matrix as CSV` or `Export Last Matrix as JSON`.
-2. Each row or JSON item represents one scale-plus-complexity case.
+2. Each row or JSON item represents one scale, complexity, and scheduling-profile case.
 3. Click `Export Last Matrix to Default Folder` to write both CSV and JSON into the default benchmark result folder.
 
-Key result fields:
+## Key Result Fields
 
 - `PotentialTicks`
   - theoretical ticks if every agent ran every frame
@@ -205,6 +207,6 @@ For PlayMode generated scenes, export is automatic. The runner logs the final fi
 2. Use the benchmark window for quick tuning of both scale and complexity.
 3. Use `Run Scale Matrix For Selected Complexity` when you want to answer “how far does this complexity tier scale?”
 4. Use `Run Full Matrix (Scale x Complexity)` when you want a product-level comparison surface for engineering and design decisions.
-5. Use `Run Production Certification Matrix` before claiming a configuration is production-ready.
-6. Use generated PlayMode benchmark scenes to profile real frame behavior, device differences, LOD scheduling tradeoffs, and long-running soak scenarios.
+5. Use `Run Production Certification Matrix` to evaluate the configured budgets, then repeat the workload in release Player builds on representative hardware.
+6. Use generated PlayMode benchmark scenes to inspect frame behavior, LOD scheduling tradeoffs, and long-running soak scenarios before target-device validation.
 7. Export CSV / JSON snapshots to compare benchmark runs over time or across hardware tiers.

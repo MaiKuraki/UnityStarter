@@ -91,9 +91,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
                 out NetworkMessageDescriptor descriptor), Is.True);
             Assert.That(InteractionNetworkProtocol.MessageRange.Contains(descriptor.MessageId), Is.True);
             Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
-            Assert.That(catalog.TryGetRegisteredModuleRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
+            Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
             Assert.That(range.Name, Is.EqualTo(InteractionNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.Kind, Is.EqualTo(NetworkMessageKind.Module));
+            Assert.That(descriptor.ContractId, Is.EqualTo("InteractionNetworkRequest:v1"));
             Assert.That(descriptor.Owner, Is.EqualTo(InteractionNetworkProtocol.MessageOwner));
             Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.Reliable));
         }
@@ -106,7 +106,63 @@ namespace CycloneGames.RPGFoundation.Interaction.Networking.Tests.Editor
             InteractionNetworkProtocol.RegisterMessageCatalog(catalog);
             InteractionNetworkProtocol.RegisterMessageCatalog(catalog);
 
-            Assert.That(catalog.Count, Is.EqualTo(4));
+            Assert.That(catalog.MessageCount, Is.EqualTo(4));
+            Assert.That(catalog.ManifestCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        {
+            NetworkProtocolManifest manifest = InteractionNetworkProtocol.CreateProtocolManifest();
+            string[] canonicalSchemaLiterals =
+            {
+                "InteractionNetworkRequest:v1",
+                "InteractionNetworkResult:v1",
+                "InteractionNetworkCancelRequest:v1",
+                "InteractionNetworkRequest:v1"
+            };
+            ulong[] expectedSchemaHashes =
+            {
+                0xD76DBACD901D2BB7UL,
+                0x50B6ECBD2F378EC9UL,
+                0x00E384398B2C4151UL,
+                0xD76DBACD901D2BB7UL
+            };
+
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0xCC0BA75DE490D6CEUL));
+            Assert.That(InteractionNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
+            Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
+            Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
+            for (int i = 0; i < expectedSchemaHashes.Length; i++)
+            {
+                Assert.That(
+                    ComputeFnv1a64(canonicalSchemaLiterals[i]),
+                    Is.EqualTo(expectedSchemaHashes[i]),
+                    canonicalSchemaLiterals[i]);
+                Assert.That(manifest.Messages[i].SchemaHash, Is.EqualTo(expectedSchemaHashes[i]));
+                Assert.That(manifest.Messages[i].ContractId, Is.EqualTo(canonicalSchemaLiterals[i]));
+            }
+        }
+
+        private static ulong ComputeFnv1a64(string canonicalLiteral)
+        {
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offsetBasis;
+
+            for (int i = 0; i < canonicalLiteral.Length; i++)
+            {
+                char character = canonicalLiteral[i];
+                if (character > 0x7F)
+                {
+                    throw new AssertionException("Canonical schema literals must contain ASCII characters only.");
+                }
+
+                hash ^= (byte)character;
+                hash = unchecked(hash * prime);
+            }
+
+            return hash;
         }
 
         [Test]

@@ -8,23 +8,17 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASDefinitionId AbilityDefinitionId;
         public readonly ushort Level;
         public readonly GASInstancingPolicy InstancingPolicy;
-        public readonly GASNetExecutionPolicy NetExecutionPolicy;
-        public readonly GASReplicationPolicy ReplicationPolicy;
 
         public GASAbilitySpecData(
             GASSpecHandle handle,
             GASDefinitionId abilityDefinitionId,
             ushort level,
-            GASInstancingPolicy instancingPolicy,
-            GASNetExecutionPolicy netExecutionPolicy,
-            GASReplicationPolicy replicationPolicy)
+            GASInstancingPolicy instancingPolicy)
         {
             Handle = handle;
             AbilityDefinitionId = abilityDefinitionId;
             Level = level;
             InstancingPolicy = instancingPolicy;
-            NetExecutionPolicy = netExecutionPolicy;
-            ReplicationPolicy = replicationPolicy;
         }
     }
 
@@ -96,21 +90,15 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASDefinitionId AbilityDefinitionId;
         public readonly ushort Level;
         public readonly GASInstancingPolicy InstancingPolicy;
-        public readonly GASNetExecutionPolicy NetExecutionPolicy;
-        public readonly GASReplicationPolicy ReplicationPolicy;
 
         public GASAbilityGrantRequest(
             GASDefinitionId abilityDefinitionId,
             ushort level,
-            GASInstancingPolicy instancingPolicy,
-            GASNetExecutionPolicy netExecutionPolicy,
-            GASReplicationPolicy replicationPolicy)
+            GASInstancingPolicy instancingPolicy)
         {
             AbilityDefinitionId = abilityDefinitionId;
             Level = level;
             InstancingPolicy = instancingPolicy;
-            NetExecutionPolicy = netExecutionPolicy;
-            ReplicationPolicy = replicationPolicy;
         }
     }
 
@@ -128,7 +116,7 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASEffectDurationPolicy DurationPolicy;
         public readonly ushort Level;
         public readonly ushort StackCount;
-        public readonly int StartTick;
+        public readonly long StartTick;
         public readonly int DurationTicks;
         public readonly GASModifierData[] Modifiers;
         public readonly int ModifierStart;
@@ -141,7 +129,7 @@ namespace CycloneGames.GameplayAbilities.Core
             GASEffectDurationPolicy durationPolicy,
             ushort level,
             ushort stackCount,
-            int startTick,
+            long startTick,
             int durationTicks,
             GASModifierData[] modifiers,
             int modifierStart,
@@ -158,22 +146,6 @@ namespace CycloneGames.GameplayAbilities.Core
             Modifiers = modifiers;
             ModifierStart = modifierStart;
             ModifierCount = modifierCount;
-        }
-    }
-
-    public readonly struct GASAbilityActivationResult
-    {
-        public readonly GASAbilityActivationResultCode Code;
-        public readonly GASSpecHandle SpecHandle;
-        public readonly GASPredictionKey PredictionKey;
-
-        public bool Succeeded => Code == GASAbilityActivationResultCode.Accepted || Code == GASAbilityActivationResultCode.Predicted;
-
-        public GASAbilityActivationResult(GASAbilityActivationResultCode code, GASSpecHandle specHandle, GASPredictionKey predictionKey)
-        {
-            Code = code;
-            SpecHandle = specHandle;
-            PredictionKey = predictionKey;
         }
     }
 
@@ -202,7 +174,7 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly GASEffectDurationPolicy DurationPolicy;
         public readonly ushort Level;
         public readonly ushort StackCount;
-        public readonly int StartTick;
+        public readonly long StartTick;
         public readonly int DurationTicks;
         public readonly uint ModifierStartIndex;
         public readonly ushort ModifierCount;
@@ -216,7 +188,7 @@ namespace CycloneGames.GameplayAbilities.Core
             GASEffectDurationPolicy durationPolicy,
             ushort level,
             ushort stackCount,
-            int startTick,
+            long startTick,
             int durationTicks,
             uint modifierStartIndex,
             ushort modifierCount)

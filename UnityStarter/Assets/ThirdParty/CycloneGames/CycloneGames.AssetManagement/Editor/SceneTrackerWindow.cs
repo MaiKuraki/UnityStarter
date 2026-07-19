@@ -14,7 +14,9 @@ namespace CycloneGames.AssetManagement.Editor
         private const float HEADER_HEIGHT = 22f;
         private const float RESIZE_HANDLE_WIDTH = 7f;
         private const float MAX_COLUMN_WIDTH = 1600f;
+        private const int VIRTUALIZED_ROW_OVERSCAN = 2;
         private const string MISSING_TEXT = "-";
+        private const double AUTO_REFRESH_INTERVAL_SECONDS = 0.5d;
 
         private const int COL_SCENE = 0;
         private const int COL_PROVIDER = 1;
@@ -22,11 +24,12 @@ namespace CycloneGames.AssetManagement.Editor
         private const int COL_BUCKET = 3;
         private const int COL_STATE = 4;
         private const int COL_MODE = 5;
-        private const int COL_ACTIVATION = 6;
-        private const int COL_PROGRESS = 7;
-        private const int COL_REFS = 8;
-        private const int COL_AGE = 9;
-        private const int COL_ERROR = 10;
+        private const int COL_PHYSICS = 6;
+        private const int COL_ACTIVATION = 7;
+        private const int COL_PROGRESS = 8;
+        private const int COL_REFS = 9;
+        private const int COL_AGE = 10;
+        private const int COL_ERROR = 11;
 
         private static readonly string[] StateOptions =
         {
@@ -41,8 +44,8 @@ namespace CycloneGames.AssetManagement.Editor
         private readonly List<SceneTracker.SceneInfo> _snapshot = new List<SceneTracker.SceneInfo>(16);
         private readonly List<SceneRowView> _views = new List<SceneRowView>(16);
         private readonly List<int> _filteredIndices = new List<int>(16);
-        private readonly HashSet<int> _selectedSceneIds = new HashSet<int>();
-        private readonly List<int> _sceneSelectionPruneList = new List<int>(16);
+        private readonly HashSet<long> _selectedSceneIds = new HashSet<long>();
+        private readonly List<long> _sceneSelectionPruneList = new List<long>(16);
         private readonly string[] _metricValues = new string[6];
         private readonly GUIContent _cell = new GUIContent();
         private readonly StringBuilder _copyBuilder = new StringBuilder(4096);
@@ -55,6 +58,7 @@ namespace CycloneGames.AssetManagement.Editor
         private Vector2 _scroll;
         private double _nextRepaint;
         private bool _hasSnapshot;
+        private bool _isVisible = true;
         private string _trackedText = "Tracked: 0";
         private string _selectedSceneText = string.Empty;
         private int _lastSelectedSceneVisibleIndex = -1;
@@ -98,25 +102,40 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void OnEnable()
         {
+            _isVisible = true;
+            _nextRepaint = 0d;
             EditorApplication.update += OnEditorUpdate;
-            RefreshSnapshot();
+            if (Application.isPlaying)
+                RefreshSnapshot();
+            else
+                _hasSnapshot = false;
         }
 
         private void OnDisable()
         {
+            _isVisible = false;
             EditorApplication.update -= OnEditorUpdate;
         }
 
+        private void OnBecameVisible()
+        {
+            _isVisible = true;
+            _nextRepaint = 0d;
+            _hasSnapshot = false;
+        }
+
+        private void OnBecameInvisible() => _isVisible = false;
+
         private void OnEditorUpdate()
         {
-            if (!Application.isPlaying)
+            if (!_isVisible || !Application.isPlaying)
             {
                 return;
             }
 
             if (EditorApplication.timeSinceStartup >= _nextRepaint)
             {
-                _nextRepaint = EditorApplication.timeSinceStartup + 0.15d;
+                _nextRepaint = EditorApplication.timeSinceStartup + AUTO_REFRESH_INTERVAL_SECONDS;
                 RefreshSnapshot();
                 Repaint();
             }
@@ -136,6 +155,21 @@ namespace CycloneGames.AssetManagement.Editor
             if (!_hasSnapshot)
             {
                 RefreshSnapshot();
+            }
+
+            if (SceneTracker.ObservationIncomplete)
+            {
+                EditorGUILayout.HelpBox(
+                    "Scene observation is incomplete. Tracking was disabled or cleared, or a previous Play Mode scene owner survived subsystem registration. " +
+                    "Rows cover only the current registry.",
+                    MessageType.Warning);
+            }
+
+            if (SceneTracker.DroppedRegistrationCount > 0L)
+            {
+                EditorGUILayout.HelpBox(
+                    "Scene registrations were dropped after the configured tracker capacity was reached. The table is incomplete.",
+                    MessageType.Warning);
             }
 
             if (_search != _lastSearch || _stateFilter != _lastStateFilter)
@@ -162,13 +196,38 @@ namespace CycloneGames.AssetManagement.Editor
             }
             else
             {
-                for (int i = 0; i < _filteredIndices.Count; i++)
-                {
-                    DrawRow(_views[_filteredIndices[i]], i);
-                }
+                DrawVirtualizedRows();
             }
 
             EditorGUILayout.EndScrollView();
+        }
+
+        private void DrawVirtualizedRows()
+        {
+            int rowCount = _filteredIndices.Count;
+            float rowViewportOffset = Mathf.Max(0f, _scroll.y - HEADER_HEIGHT);
+            int firstRow = Mathf.FloorToInt(rowViewportOffset / ROW_HEIGHT) - VIRTUALIZED_ROW_OVERSCAN;
+            firstRow = Mathf.Clamp(firstRow, 0, Mathf.Max(0, rowCount - 1));
+
+            int viewportRows = Mathf.CeilToInt(position.height / ROW_HEIGHT) +
+                VIRTUALIZED_ROW_OVERSCAN * 2;
+            int endRow = Mathf.Min(rowCount, firstRow + viewportRows);
+
+            if (firstRow > 0)
+            {
+                GUILayout.Space(firstRow * ROW_HEIGHT);
+            }
+
+            for (int i = firstRow; i < endRow; i++)
+            {
+                DrawRow(_views[_filteredIndices[i]], i);
+            }
+
+            int remainingRows = rowCount - endRow;
+            if (remainingRows > 0)
+            {
+                GUILayout.Space(remainingRows * ROW_HEIGHT);
+            }
         }
 
         private void BuildStyles()
@@ -283,25 +342,25 @@ namespace CycloneGames.AssetManagement.Editor
 
         private void RefreshSnapshot()
         {
-            _snapshot.Clear();
             _views.Clear();
 
-            var scenes = SceneTracker.GetTrackedScenes();
-            DateTime nowUtc = DateTime.UtcNow;
-            for (int i = 0; i < scenes.Count; i++)
+            int total = SceneTracker.CopyTrackedScenesTo(_snapshot, SceneTracker.Capacity);
+            long nowTimestamp = SceneTracker.GetMonotonicTimestamp();
+            for (int i = 0; i < _snapshot.Count; i++)
             {
-                var info = scenes[i];
-                _snapshot.Add(info);
-                _views.Add(BuildView(info, nowUtc));
+                var info = _snapshot[i];
+                _views.Add(BuildView(info, nowTimestamp));
             }
 
-            _trackedText = "Tracked: " + _snapshot.Count;
+            long dropped = SceneTracker.DroppedRegistrationCount;
+            _trackedText = "Tracked: " + total + " / " + SceneTracker.Capacity +
+                           (dropped > 0L ? "  Dropped: " + dropped : string.Empty);
             PruneSceneSelection();
             _displayDirty = true;
             _hasSnapshot = true;
         }
 
-        private static SceneRowView BuildView(SceneTracker.SceneInfo info, DateTime nowUtc)
+        private static SceneRowView BuildView(SceneTracker.SceneInfo info, long nowTimestamp)
         {
             bool hasError = !string.IsNullOrEmpty(info.Error);
             byte kind = hasError ? (byte)3
@@ -311,6 +370,7 @@ namespace CycloneGames.AssetManagement.Editor
             string label = !string.IsNullOrEmpty(info.RuntimeSceneName) ? info.RuntimeSceneName : info.SceneLocation;
             string sceneTooltip = !string.IsNullOrEmpty(info.ScenePath) ? info.ScenePath : info.SceneLocation;
             string loadMode = info.LoadMode.ToString();
+            string localPhysicsMode = info.LocalPhysicsMode.ToString();
             string activationMode = info.ActivationMode.ToString();
 
             return new SceneRowView
@@ -327,13 +387,17 @@ namespace CycloneGames.AssetManagement.Editor
                 Bucket = string.IsNullOrEmpty(info.Bucket) ? MISSING_TEXT : info.Bucket,
                 State = GetStateLabel(info),
                 LoadMode = loadMode,
+                LocalPhysicsMode = localPhysicsMode,
                 ActivationMode = activationMode,
                 SupportsManualActivation = info.SupportsManualActivation ? "Yes" : "No",
                 RuntimeSceneLoaded = info.RuntimeSceneLoaded ? "Yes" : "No",
                 IsDone = info.IsDone ? "Yes" : "No",
                 Progress = FormatPercent(info.Progress),
                 Refs = info.RefCount.ToString(),
-                Age = FormatAge(info.RegistrationTimeUtc, nowUtc),
+                Age = FormatAge(SceneTracker.GetAgeSeconds(info.RegistrationTimestamp, nowTimestamp)),
+                UnloadAge = info.UnloadRequestedTimeUtc.HasValue
+                    ? FormatAge(SceneTracker.GetAgeSeconds(info.UnloadRequestedTimestamp, nowTimestamp))
+                    : string.Empty,
                 Error = info.Error,
                 HasError = hasError,
                 StateKind = kind
@@ -427,6 +491,7 @@ namespace CycloneGames.AssetManagement.Editor
                 || Contains(view.Bucket, _search)
                 || Contains(view.State, _search)
                 || Contains(view.LoadMode, _search)
+                || Contains(view.LocalPhysicsMode, _search)
                 || Contains(view.ActivationMode, _search)
                 || Contains(view.Error, _search);
         }
@@ -516,10 +581,16 @@ namespace CycloneGames.AssetManagement.Editor
             DrawTextCell(NextCell(ref x, rowRect, COL_BUCKET), view.Bucket, _rowStyle, view.Bucket == MISSING_TEXT ? DimColor : Color.white, view.Bucket);
             DrawTextCell(NextCell(ref x, rowRect, COL_STATE), view.State, _rowStyle, GetStateColor(view.StateKind), GetStateTooltip(view));
             DrawTextCell(NextCell(ref x, rowRect, COL_MODE), view.LoadMode, _rowStyle, Color.white, view.LoadMode);
+            DrawTextCell(NextCell(ref x, rowRect, COL_PHYSICS), view.LocalPhysicsMode, _rowStyle, Color.white, view.LocalPhysicsMode);
             DrawTextCell(NextCell(ref x, rowRect, COL_ACTIVATION), view.ActivationMode, _rowStyle, Color.white, GetActivationTooltip(view));
             DrawTextCell(NextCell(ref x, rowRect, COL_PROGRESS), view.Progress, _numericStyle, Color.white, null);
             DrawTextCell(NextCell(ref x, rowRect, COL_REFS), view.Refs, _numericStyle, Color.white, null);
-            DrawTextCell(NextCell(ref x, rowRect, COL_AGE), view.Age, _numericStyle, Color.white, null);
+            DrawTextCell(
+                NextCell(ref x, rowRect, COL_AGE),
+                view.Age,
+                _numericStyle,
+                Color.white,
+                string.IsNullOrEmpty(view.UnloadAge) ? null : "Unload pending: " + view.UnloadAge);
             DrawTextCell(NextCell(ref x, rowRect, COL_ERROR), string.IsNullOrEmpty(view.Error) ? MISSING_TEXT : view.Error, _rowStyle, view.HasError ? ErrorTextColor : DimColor, view.Error);
 
             HandleRowInput(rowRect, view, rowIndex);
@@ -561,7 +632,7 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             float availableWidth = Mathf.Max(760f, position.width - 24f);
-            float fixedWidth = 100f + 120f + 130f + 110f + 82f + 104f + 74f + 52f + 70f + 160f;
+            float fixedWidth = 100f + 120f + 130f + 110f + 82f + 92f + 104f + 74f + 52f + 70f + 160f;
             float sceneWidth = Mathf.Max(220f, availableWidth - fixedWidth);
 
             _columns = new[]
@@ -572,6 +643,7 @@ namespace CycloneGames.AssetManagement.Editor
                 new TableColumn("Bucket", 130f, 88f, "Scene lifetime bucket."),
                 new TableColumn("State", 110f, 82f, "Scene loading or activation state."),
                 new TableColumn("Mode", 82f, 66f, "Unity scene load mode."),
+                new TableColumn("Physics", 92f, 76f, "Requested local physics mode; this does not prove that the world was created."),
                 new TableColumn("Activation", 104f, 86f, "Scene activation mode."),
                 new TableColumn("Progress", 74f, 66f, "Normalized loading progress."),
                 new TableColumn("Refs", 52f, 44f, "Scene handle reference count."),
@@ -715,7 +787,7 @@ namespace CycloneGames.AssetManagement.Editor
             evt.Use();
         }
 
-        private void SelectSceneRow(int id, int visibleIndex, Event evt)
+        private void SelectSceneRow(long id, int visibleIndex, Event evt)
         {
             bool additive = evt.control || evt.command;
             if (evt.shift && _lastSelectedSceneVisibleIndex >= 0)
@@ -747,7 +819,7 @@ namespace CycloneGames.AssetManagement.Editor
             UpdateSceneSelectionText();
         }
 
-        private void SelectSingleSceneRow(int id, int visibleIndex)
+        private void SelectSingleSceneRow(long id, int visibleIndex)
         {
             _selectedSceneIds.Clear();
             _selectedSceneIds.Add(id);
@@ -783,7 +855,7 @@ namespace CycloneGames.AssetManagement.Editor
             }
 
             _sceneSelectionPruneList.Clear();
-            foreach (int id in _selectedSceneIds)
+            foreach (long id in _selectedSceneIds)
             {
                 if (!ContainsSceneId(id))
                 {
@@ -804,7 +876,7 @@ namespace CycloneGames.AssetManagement.Editor
             UpdateSceneSelectionText();
         }
 
-        private bool ContainsSceneId(int id)
+        private bool ContainsSceneId(long id)
         {
             for (int i = 0; i < _views.Count; i++)
             {
@@ -844,6 +916,7 @@ namespace CycloneGames.AssetManagement.Editor
             AddCopyValue(menu, "Copy/Bucket", view.Bucket);
             AddCopyValue(menu, "Copy/State", view.State);
             AddCopyValue(menu, "Copy/Load Mode", view.LoadMode);
+            AddCopyValue(menu, "Copy/Local Physics Mode", view.LocalPhysicsMode);
             AddCopyValue(menu, "Copy/Activation Mode", view.ActivationMode);
             AddCopyValue(menu, "Copy/Progress", view.Progress);
             AddCopyValue(menu, "Copy/Refs", view.Refs);
@@ -902,6 +975,7 @@ namespace CycloneGames.AssetManagement.Editor
             _copyBuilder.AppendLine("Bucket: " + SafeText(view.Bucket));
             _copyBuilder.AppendLine("State: " + SafeText(view.State));
             _copyBuilder.AppendLine("Load Mode: " + SafeText(view.LoadMode));
+            _copyBuilder.AppendLine("Local Physics Mode: " + SafeText(view.LocalPhysicsMode));
             _copyBuilder.AppendLine("Activation Mode: " + SafeText(view.ActivationMode));
             _copyBuilder.AppendLine("Supports Manual Activation: " + SafeText(view.SupportsManualActivation));
             _copyBuilder.AppendLine("Runtime Scene Loaded: " + SafeText(view.RuntimeSceneLoaded));
@@ -909,6 +983,7 @@ namespace CycloneGames.AssetManagement.Editor
             _copyBuilder.AppendLine("Progress: " + SafeText(view.Progress));
             _copyBuilder.AppendLine("Refs: " + SafeText(view.Refs));
             _copyBuilder.AppendLine("Age: " + SafeText(view.Age));
+            _copyBuilder.AppendLine("Unload Pending: " + SafeText(view.UnloadAge));
             _copyBuilder.AppendLine("Error: " + SafeText(view.Error));
             return _copyBuilder.ToString();
         }
@@ -925,6 +1000,7 @@ namespace CycloneGames.AssetManagement.Editor
                 SanitizeTsv(view.Bucket) + "\t" +
                 SanitizeTsv(view.State) + "\t" +
                 SanitizeTsv(view.LoadMode) + "\t" +
+                SanitizeTsv(view.LocalPhysicsMode) + "\t" +
                 SanitizeTsv(view.ActivationMode) + "\t" +
                 SanitizeTsv(view.SupportsManualActivation) + "\t" +
                 SanitizeTsv(view.RuntimeSceneLoaded) + "\t" +
@@ -932,6 +1008,7 @@ namespace CycloneGames.AssetManagement.Editor
                 SanitizeTsv(view.Progress) + "\t" +
                 SanitizeTsv(view.Refs) + "\t" +
                 SanitizeTsv(view.Age) + "\t" +
+                SanitizeTsv(view.UnloadAge) + "\t" +
                 SanitizeTsv(view.Error);
         }
 
@@ -1020,7 +1097,7 @@ namespace CycloneGames.AssetManagement.Editor
 
         private static string GetSceneTsvHeader()
         {
-            return "ID\tScene\tLocation\tScenePath\tRuntimeSceneName\tProvider\tPackage\tBucket\tState\tLoadMode\tActivationMode\tSupportsManualActivation\tRuntimeSceneLoaded\tIsDone\tProgress\tRefs\tAge\tError";
+            return "ID\tScene\tLocation\tScenePath\tRuntimeSceneName\tProvider\tPackage\tBucket\tState\tLoadMode\tLocalPhysicsMode\tActivationMode\tSupportsManualActivation\tRuntimeSceneLoaded\tIsDone\tProgress\tRefs\tAge\tUnloadPending\tError";
         }
 
         private static void AppendSceneRowJson(StringBuilder builder, SceneRowView view)
@@ -1036,6 +1113,7 @@ namespace CycloneGames.AssetManagement.Editor
             AppendJsonProperty(builder, "bucket", view.Bucket, true);
             AppendJsonProperty(builder, "state", view.State, true);
             AppendJsonProperty(builder, "loadMode", view.LoadMode, true);
+            AppendJsonProperty(builder, "localPhysicsMode", view.LocalPhysicsMode, true);
             AppendJsonProperty(builder, "activationMode", view.ActivationMode, true);
             AppendJsonProperty(builder, "supportsManualActivation", view.SupportsManualActivation, true);
             AppendJsonProperty(builder, "runtimeSceneLoaded", view.RuntimeSceneLoaded, true);
@@ -1043,6 +1121,7 @@ namespace CycloneGames.AssetManagement.Editor
             AppendJsonProperty(builder, "progress", view.Progress, true);
             AppendJsonProperty(builder, "refs", view.Refs, true);
             AppendJsonProperty(builder, "age", view.Age, true);
+            AppendJsonProperty(builder, "unloadPending", view.UnloadAge, true);
             AppendJsonProperty(builder, "error", view.Error, true);
             builder.Append('}');
         }
@@ -1060,7 +1139,7 @@ namespace CycloneGames.AssetManagement.Editor
             AppendJsonString(builder, value ?? string.Empty);
         }
 
-        private static void AppendJsonProperty(StringBuilder builder, string name, int value, bool prependComma)
+        private static void AppendJsonProperty(StringBuilder builder, string name, long value, bool prependComma)
         {
             if (prependComma)
             {
@@ -1129,7 +1208,9 @@ namespace CycloneGames.AssetManagement.Editor
 
             if (view.StateKind == 1)
             {
-                return "Unload has been requested for this scene handle.";
+                return string.IsNullOrEmpty(view.UnloadAge)
+                    ? "Unload has been requested for this scene handle."
+                    : "Unload has been pending for " + view.UnloadAge + ".";
             }
 
             if (view.StateKind == 2)
@@ -1177,9 +1258,8 @@ namespace CycloneGames.AssetManagement.Editor
             return (normalized * 100f).ToString("F0") + "%";
         }
 
-        private static string FormatAge(DateTime registeredUtc, DateTime nowUtc)
+        private static string FormatAge(double seconds)
         {
-            double seconds = (nowUtc - registeredUtc).TotalSeconds;
             if (seconds < 60d)
             {
                 return seconds.ToString("F0") + "s";
@@ -1280,7 +1360,7 @@ namespace CycloneGames.AssetManagement.Editor
 
         private struct SceneRowView
         {
-            public int Id;
+            public long Id;
             public string IdText;
             public string SceneLabel;
             public string SceneLocation;
@@ -1292,6 +1372,7 @@ namespace CycloneGames.AssetManagement.Editor
             public string Bucket;
             public string State;
             public string LoadMode;
+            public string LocalPhysicsMode;
             public string ActivationMode;
             public string SupportsManualActivation;
             public string RuntimeSceneLoaded;
@@ -1299,6 +1380,7 @@ namespace CycloneGames.AssetManagement.Editor
             public string Progress;
             public string Refs;
             public string Age;
+            public string UnloadAge;
             public string Error;
             public bool HasError;
             public byte StateKind;

@@ -1,297 +1,477 @@
-## CycloneGames.Factory
+# CycloneGames.Factory
 
-<div align="left"><a href="./README.md">English</a> | 简体中文</div>
+[English | 简体中文](README.md)
 
----
+CycloneGames.Factory 为纯 C# 与 Unity 提供显式创建契约和有界对象池。纯 C# 核心暴露 `IFactory` 与 `ObjectPool`，包含所有权跟踪、容量策略、诊断和确定性清理；Unity 对象创建隔离在独立 adapter assembly 中；可选的 Native Collections assembly 为高数量 DOD workload 提供基于稳定句柄的密集 unmanaged pool。
 
-面向 Unity 与纯 C# 的高性能、低 GC 工厂与对象池工具集。模块化、可插拔，易于与 DI 框架集成。
+## 目录
 
-### 模块包含
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
-- **工厂接口**：`IFactory<TValue>`、`IFactory<TArg, TValue>` 用于对象创建；`IUnityObjectSpawner` 用于 Unity `Object` 实例化。
-- **默认 Spawner**：`DefaultUnityObjectSpawner` 基于 `Object.Instantiate`，可在非 DI 或作为 DI 默认实现直接使用。
-- **Prefab 工厂**：`MonoPrefabFactory<T>` 通过注入的 `IUnityObjectSpawner` 从 Prefab 创建（可选设置父节点），创建后的实例默认 `SetActive(false)`。
-- **PoolBase**：`PoolBase<TValue>` — 所有托管池的抽象基类。提供活跃对象跟踪（O(1) swap-remove）、`SoftCapacity`/`HardCapacity`/`OverflowPolicy`/`TrimPolicy`、诊断信息、批量操作（`DespawnStep`、`WarmupStep`）和协程辅助方法（`DespawnAllCoroutine`、`WarmupCoroutine`）。
-- **ObjectPool**：`ObjectPool<TParam1, TValue>` — sealed 密封类，带参数化 Spawn 的自动扩缩容池。需要 `IFactory<TValue>` 和 `TValue : IPoolable<TParam1, TValue>`。本身非线程安全。
-- **ConcurrentMemoryPool**：`ConcurrentMemoryPool<TValue>` — 基于 `lock` 的线程安全包装器，可包装任意 `IMemoryPool<TValue>`。
-- **FastObjectPool**：`FastObjectPool<T>` — 抽象轻量主线程池。无参数 `Spawn()`/`TrySpawn()`，继承 `PoolBase` 全部基础设施。
-- **MonoFastPool**：`MonoFastPool<T>` — 面向 Unity `Component` 的 `FastObjectPool` 具体实现；自动 `SetActive`、父节点管理、`Object.Destroy` 清理。
-- **NativePool**：`NativePool<T>`（DOD）— 简单索引式 `struct` 池，仅支持 `unmanaged` 类型。紧凑活跃数组，O(1) swap-and-pop 回收，批量 Spawn/Despawn。无句柄安全性。需要 `com.unity.collections`。
-- **NativeDensePool**：`NativeDensePool<T>`（DOD）— 基于句柄的 `struct` 池，使用 `NativePoolHandle`（slot + generation）。稳定引用，O(1) 操作，完整诊断信息。需要 `com.unity.collections`。
-- **NativeDenseColumnPool**：`NativeDenseColumnPool2<T0,T1>`、`ColumnPool3`、`ColumnPool4` — `NativeDensePool` 的 SoA（结构体数组）变体，提供并行的类型化数据流。
-- **EntityPool**：`EntityPool<TData>`（ECS）— ECS `Entity` 池，支持同步和 `EntityCommandBuffer` 路径的 Spawn/Despawn。需要 `com.unity.entities`。
-- **极低 GC 热路径**：swap-and-pop O(1) 回收；所有 DOD 池设计上零 GC（`NativeArray` 支撑）。
+## 概述
 
-### 池类型对比
+Factory 回答一个问题：谁在什么契约下构造这个对象？CycloneGames.Factory 用小型 `IFactory` 接口和托管 `ObjectPool` 回答它。Pool 从创建到销毁拥有每个 item，跟踪 active 与 inactive 状态，执行声明的容量策略，隔离 callback 失败，并以零逐帧分配暴露诊断快照。
 
-|                 | `ObjectPool`      | `FastObjectPool` / `MonoFastPool` | `ConcurrentMemoryPool` | `NativePool`       | `NativeDensePool` / `ColumnPoolN` | `EntityPool`            |
-| --------------- | ----------------- | --------------------------------- | ---------------------- | ------------------ | --------------------------------- | ----------------------- |
-| 线程安全        | 否                | 否（主线程）                      | 是（`lock`）           | 否（单线程 / Job） | 否（单线程 / Job）                | 否（主线程 / ECB）      |
-| 活跃对象跟踪    | 是（Dict + List） | 是（继承自 PoolBase）             | 委托给内部池           | 否（仅索引）       | 是（基于句柄）                    | 是（Dict + List）       |
-| 稳定引用        | 是（对象引用）    | 是（对象引用）                    | 委托                   | 否（索引会移动）   | 是（`NativePoolHandle`）          | 是（Entity）            |
-| 自动扩缩        | 扩容 + 收缩       | 扩容 + 收缩                       | 委托                   | 手动 `Resize`      | 手动 `Resize`                     | 通过工厂扩容            |
-| 诊断信息        | `PoolDiagnostics` | `PoolDiagnostics`                 | 委托                   | 无                 | `NativeDenseDiagnostics`          | `EntityPoolDiagnostics` |
-| 热路径 GC 分配  | 接近零            | 接近零                            | 接近零                 | 零                 | 零                                | 零（ECB 路径）          |
-| Burst/Jobs 安全 | 否                | 否                                | 否                     | `ActiveItems` 安全 | `ActiveItems` / `StreamN` 安全    | 否                      |
-| 适用场景        | 参数化 Spawn      | 简单主线程池化                    | 多线程访问             | DOD / Burst / Jobs | DOD 稳定句柄 / SoA                | ECS 实体                |
+模块分为三个 runtime assembly。纯 C# 核心不引用 `UnityEngine`，可用于测试、工具和服务端。Unity adapter 在主线程专用类型背后封装 `Object.Instantiate`、Prefab factory 和 `Component` pool。可选的 DOD assembly 提供基于 `NativeArray` 的密集 pool，使用 slot + generation 句柄服务 Burst/Jobs workload。
 
-### 兼容性
+适用场景：创建策略需要注入、热路径需要有界复用、或 Unity 对象创建需要经过可验证边界。不要用作 DI container、service registry、全局 pool registry、ECS lifecycle 或持久化格式——composition root 拥有每个 factory 与 pool instance。
 
-- Unity 2022.3+
-- .NET 4.x（Unity）/ 现代 .NET（纯 C# 示例）
-- **可选依赖**：`com.unity.collections` + `com.unity.burst`（`NativePool`、`NativeDensePool`）；`com.unity.entities` + `com.unity.mathematics` + `com.unity.transforms`（`EntityPool`）
+### 主要特性
 
-### 安装
+- **`IFactory<TValue>` / `IFactory<TArg, TValue>`**：无参和带参构造的最小创建契约。
+- **`ObjectPool<TArg, TValue>`**：single-owner 托管池，含生命周期 callback、容量策略、诊断与失败隔离。
+- **`FastObjectPool<T>`**：无参 pool base，适合不需要 spawn 参数的 `Component` 类型 item。
+- **`MonoPrefabFactory<T>` / `MonoFastPool<T>`**：Unity 主线程 adapter，用于 prefab 实例化与 `Component` 池化。
+- **`NativePool<T>` / `NativeDensePool<T>` / `NativeDenseColumnPool2/3/4`**：unmanaged 密集 pool，含稳定句柄与 SoA 列流。
 
-本仓库以内嵌包形式位于 `Assets/ThirdParty`。包名：`com.cyclone-games.factory`（Unity 2022.3+）。可直接使用或迁移到你自己的 UPM。
+## 架构
 
-### 快速上手
+| 程序集 | 路径 | 用途 |
+| --- | --- | --- |
+| `CycloneGames.Factory.Runtime` | `Runtime/Scripts/`（不含 `Unity/`） | 纯 C# factory、`PoolBase`、`ObjectPool`、`FastObjectPool`。`noEngineReferences: true`。 |
+| `CycloneGames.Factory.Unity.Runtime` | `Runtime/Scripts/Unity/` | `IUnityObjectSpawner`、`DefaultUnityObjectSpawner`、`MonoPrefabFactory<T>`、`MonoFastPool<T>`。引用核心 assembly 与 `UnityEngine`。 |
+| `CycloneGames.Factory.DOD.Runtime` | `DOD/Runtime/` | `NativePool<T>`、`NativeDensePool<T>`、`NativeDenseColumnPool2/3/4`。仅当已安装的 `com.unity.collections` 包定义 `PRESENT_COLLECTIONS` 时编译。 |
+| `CycloneGames.Factory.Tests.Editor` | `Tests/Editor/` | 核心与 Unity adapter 契约测试。 |
+| `CycloneGames.Factory.DOD.Tests.Editor` | `DOD/Tests/Editor/` | Native ownership 与 handle 测试。仅在安装 Collections 时启用。 |
+| `CycloneGames.Factory.Samples` | `Samples/` | 可选示例。`autoReferenced: false`。 |
 
-1）纯 C# 工厂
+```mermaid
+flowchart LR
+    Root["Composition Root"] --> Core["Factory Runtime\n纯 C# 契约与托管池"]
+    Root --> UnityAdapter["Unity Runtime\nInstantiate 与 Component adapter"]
+    Root --> DOD["DOD Runtime\n可选 Native Collections owner"]
+    UnityAdapter --> Core
+    DOD -. "独立可选能力" .-> Core
 
-```csharp
-using CycloneGames.Factory.Runtime;
-
-public class DefaultFactory<T> : IFactory<T> where T : new()
-{
-    public T Create() => new T();
-}
-
-var intFactory = new DefaultFactory<int>();
-int number = intFactory.Create();
+    classDef core fill:#dbeafe,stroke:#1d4ed8,color:#111827;
+    classDef adapter fill:#fef3c7,stroke:#b45309,color:#111827;
+    classDef optional fill:#dcfce7,stroke:#15803d,color:#111827;
+    class Core core;
+    class UnityAdapter adapter;
+    class DOD optional;
 ```
 
-2）Unity Prefab 生成（无 DI）
+所有者把构造与复用策略转换成 `PoolCapacitySettings` 值，pool 据此构建有界生命周期，所有者决定何时 spawn、despawn、trim 与 dispose。容量、溢出与 trim 策略都在调用处可见，绝不隐藏在隐式配置背后。
+
+## 快速上手
+
+在你的 asmdef 中引用 `CycloneGames.Factory.Runtime`，然后导入命名空间：
 
 ```csharp
-using UnityEngine;
 using CycloneGames.Factory.Runtime;
+```
 
-public class MySpawner
+### 池化托管对象
+
+```csharp
+public readonly struct ProjectileSpawn
 {
-    private readonly IUnityObjectSpawner spawner = new DefaultUnityObjectSpawner();
+    public readonly float Speed;
+    public ProjectileSpawn(float speed) => Speed = speed;
+}
 
-    public T Spawn<T>(T prefab) where T : Object
+public sealed class Projectile : IPoolable<ProjectileSpawn, Projectile>, IDisposable
+{
+    private IDespawnableMemoryPool<Projectile> _owner;
+
+    public float Speed { get; private set; }
+
+    public void OnSpawned(ProjectileSpawn data, IDespawnableMemoryPool<Projectile> pool)
     {
-        return spawner.Create(prefab); // 内部使用 Object.Instantiate
+        Speed = data.Speed;
+        _owner = pool;
     }
-}
-```
 
-3）Prefab 工厂 + ObjectPool
-
-```csharp
-using UnityEngine;
-using CycloneGames.Factory.Runtime;
-
-// 被池化的类型需实现 IPoolable<TParam1, TValue>
-// 第二个类型参数是自身类型（用于通过池引用自行回收）。
-// 注意：IPoolable 继承 IDisposable — 需实现 Dispose()。
-public sealed class Bullet : MonoBehaviour, IPoolable<BulletData, Bullet>
-{
-    private IDespawnableMemoryPool<Bullet> owningPool;
-    public void OnSpawned(BulletData data, IDespawnableMemoryPool<Bullet> pool)
+    public void OnDespawned()
     {
-        owningPool = pool;
-        // 从 data 初始化...
+        Speed = 0f;
+        _owner = null;
     }
-    public void OnDespawned() { owningPool = null; /* 重置状态 */ }
-    public void Dispose() { } // IDisposable 要求
 
-    public void ReturnToPool() => owningPool?.Despawn(this);
+    public void Return() => _owner?.Despawn(this);
+
+    public void Dispose() => _owner = null;
 }
 
-public struct BulletData { public Vector3 Position; public Vector3 Velocity; }
-
-// 组装
-var spawner = new DefaultUnityObjectSpawner();
-var factory = new MonoPrefabFactory<Bullet>(spawner, bulletPrefab, parentTransform);
-var pool = new ObjectPool<BulletData, Bullet>(factory,
-    new PoolCapacitySettings(softCapacity: 16, hardCapacity: 256));
-
-// 使用
-var bullet = pool.Spawn(new BulletData { Position = start, Velocity = dir });
-
-// 遍历活跃对象
-pool.ForEachActive(b => b.GameUpdate());
-
-// 批量回收（例如每帧处理 8 个）
-pool.DespawnStep(8);
+public sealed class ProjectileFactory : IFactory<Projectile>
+{
+    public Projectile Create() => new Projectile();
+}
 ```
 
-4）MonoFastPool（轻量 Unity 池）
+### 构造并使用 pool
 
 ```csharp
-using CycloneGames.Factory.Runtime;
-
-// 无需 IPoolable — 只需 Component + Prefab
-var pool = new MonoFastPool<MyComponent>(prefab,
-    initialCapacity: 32, root: parent, autoSetActive: true);
-var item = pool.Spawn();      // 激活并从池中取出
-pool.Despawn(item);            // 停用并归还池中
-
-// 用完后清理
-pool.Dispose();
-```
-
-5）NativePool（DOD — 简单索引式）
-
-```csharp
-using CycloneGames.Factory.DOD.Runtime;
-using Unity.Collections;
-
-var pool = new NativePool<BulletData>(capacity: 1024, Allocator.Persistent);
-
-int index = pool.Spawn(new BulletData { Position = float3.zero, Speed = 10f });
-
-// 活跃元素占据 [0..ActiveCount)，可安全用于 IJobParallelFor
-NativeArray<BulletData> active = pool.ActiveItems;
-
-// 批量回收（掩码方式）
-var mask = new NativeArray<bool>(pool.ActiveCount, Allocator.Temp);
-mask[index] = true;
-pool.DespawnBatch(mask);
-mask.Dispose();
-
-pool.Dispose(); // 必须：释放 NativeArray
-```
-
-6）NativeDensePool（DOD — 基于句柄的稳定引用）
-
-```csharp
-using CycloneGames.Factory.DOD.Runtime;
-using Unity.Collections;
-
-var pool = new NativeDensePool<EnemyData>(capacity: 512, Allocator.Persistent);
-
-// Spawn 返回稳定句柄（slot + generation）
-pool.TrySpawn(new EnemyData { Health = 100 }, out NativePoolHandle handle, out int denseIndex);
-
-// 通过句柄读写 — 即使其他元素被回收也安全
-pool.TryRead(handle, out EnemyData data);
-pool.TryWrite(handle, new EnemyData { Health = data.Health - 10 });
-
-// 句柄验证
-bool alive = pool.Contains(handle);
-
-// 通过句柄回收
-pool.Despawn(handle);
-
-pool.Dispose();
-```
-
-7）NativeDenseColumnPool（DOD — SoA 多流）
-
-```csharp
-using CycloneGames.Factory.DOD.Runtime;
-using Unity.Collections;
-using Unity.Mathematics;
-
-// 两个并行流：位置 + 速度
-var pool = new NativeDenseColumnPool2<float3, float3>(capacity: 1024, Allocator.Persistent);
-
-pool.TrySpawn(float3.zero, new float3(1, 0, 0), out NativePoolHandle handle, out int idx);
-
-// 获取密集数组供 Burst Jobs 使用
-NativeArray<float3> positions  = pool.Stream0; // [0..CountActive)
-NativeArray<float3> velocities = pool.Stream1;
-
-pool.Dispose();
-```
-
-### IPoolable 接口族
-
-```
-IPoolable                          → OnSpawned(), OnDespawned(), Dispose()
-IPoolable<in TParam1>              → OnSpawned(TParam1), OnDespawned(), Dispose()
-IPoolable<in TParam1, TValue>      → OnSpawned(TParam1, IDespawnableMemoryPool<TValue>), OnDespawned(), Dispose()
-ITickable                          → Tick()
-```
-
-所有 `IPoolable` 变体均继承 `IDisposable`。双参数变体的第二个参数接收池引用，使对象可以自行回收。
-
-`ObjectPool` 会自动调用 `OnSpawned`/`OnDespawned` 回调；`MonoFastPool` **不会**调用 `IPoolable` 回调（仅管理 `SetActive`）。
-
-### 池生命周期
-
-- **`SoftCapacity`** / **`HardCapacity`**：软容量是目标池大小（用于收缩判断）；硬容量是绝对上限（0 = 无限）。通过 `PoolCapacitySettings` 配置。
-- **`OverflowPolicy`**：`Throw`（默认）或 `ReturnNull`，当达到硬容量时触发。
-- **`TrimPolicy`**：`Manual`（默认）或 `TrimOnDespawn`（回收时自动销毁多余对象，当非活跃数量超过软容量时）。
-- **`Prewarm(count)`**：同步预创建对象。
-- **`WarmupCoroutine(count, batchSize)`**：跨帧预创建对象（避免加载时卡顿）。
-- **`WarmupStep(maxItems)`**：每次调用最多创建 N 个对象（用于手动帧分散预热）。
-- **`DespawnAll()`**：一次性归还所有活跃对象。
-- **`DespawnStep(maxItems)`**：每次调用最多回收 N 个活跃对象（用于渐进式批量回收）。
-- **`DespawnAllCoroutine(batchSize)`**：批量回收的协程版本。
-- **`TrimInactive(targetCount)`**：将多余的非活跃对象销毁至目标数量。
-- **`ForEachActive(action)`**：遍历所有活跃对象。
-- **`Clear()`**：移除所有非活跃对象，不销毁池本身。
-- **`Dispose()`**：释放所有池化对象。在 `OnDestroy` 或生命周期结束时调用。所有池类型均实现 `IDisposable`。
-
-```csharp
-// 配置容量
 var settings = new PoolCapacitySettings(
-    softCapacity: 64,
-    hardCapacity: 500,
+    softCapacity: 128,
+    hardCapacity: 512,
     overflowPolicy: PoolOverflowPolicy.ReturnNull,
     trimPolicy: PoolTrimPolicy.TrimOnDespawn);
-var pool = new ObjectPool<BulletData, Bullet>(factory, settings);
 
-// 加载期间预热
-StartCoroutine(pool.WarmupCoroutine(200, batchSize: 16));
+using var pool = new ObjectPool<ProjectileSpawn, Projectile>(
+    new ProjectileFactory(),
+    settings);
 
-// 清理
-pool.Dispose();
+if (pool.TrySpawn(new ProjectileSpawn(20f), out Projectile projectile))
+{
+    projectile.Return();
+}
 ```
 
-### 与 DI 集成
+`SoftCapacity` 预热 inactive item；`HardCapacity` 限制总所有权；`TrimOnDespawn` 在 inactive 数量超过 soft 目标时销毁返回的 item 而不是保留。
 
-- 绑定 `IUnityObjectSpawner` → `DefaultUnityObjectSpawner`（或你自己的实现，支持 Addressables/ECS）。
-- 绑定你的 `IFactory<T>` 或直接使用 `MonoPrefabFactory<T>`。
-- 需要线程安全时使用 `ConcurrentMemoryPool<T>` 包装。
-- 池根据生命周期选择注册为单例或作用域服务。
+## 核心概念
+
+### Factory 创建，Pool 拥有
+
+Factory 是单方法边界。Pool 调用它，调用方从不直接调用。Pool 在永久销毁前拥有每个被创建的 item。
 
 ```csharp
-builder.Register<IUnityObjectSpawner, DefaultUnityObjectSpawner>(Lifetime.Singleton);
-builder.Register<IFactory<Bullet>>(c => new MonoPrefabFactory<Bullet>(
-    c.Resolve<IUnityObjectSpawner>(), bulletPrefab, parent)).AsSelf();
+public sealed class MessageFactory : IFactory<Message>
+{
+    public Message Create() => new Message();
+}
+
+public sealed class SessionFactory : IFactory<SessionOptions, Session>
+{
+    public Session Create(SessionOptions options) => new Session(options);
+}
 ```
 
-### 程序集与依赖
+`IFactory<TValue>` 在 `TValue` 上协变；`IFactory<TArg, TValue>` 在 `TArg` 上逆变。Factory 不执行 ambient resolve，也不隐藏 lifetime scope。
 
-| 程序集                              | 可选依赖                                                                                       | 条件编译符号                                                  |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------- |
-| `CycloneGames.Factory.Runtime`      | —                                                                                              | —                                                             |
-| `CycloneGames.Factory.DOD.Runtime`  | `com.unity.collections`, `com.unity.burst`                                                     | `PRESENT_COLLECTIONS`, `PRESENT_BURST`                        |
-| `CycloneGames.Factory.ECS.Runtime`  | `com.unity.entities`, `com.unity.collections`, `com.unity.mathematics`, `com.unity.transforms` | `PRESENT_BURST`, `PRESENT_ECS`                                |
-| `CycloneGames.Factory.Samples`      | UniTask, Burst, Collections, Mathematics                                                       | `PRESENT_MATHEMATICS`, `PRESENT_COLLECTIONS`, `PRESENT_BURST` |
-| `CycloneGames.Factory.ECS.Samples`  | Entities, Burst, Collections, Mathematics, Transforms                                          | `PRESENT_BURST`, `PRESENT_ECS`                                |
-| `CycloneGames.Factory.Tests.Editor` | Collections, Burst, Entities（均为可选）                                                       | `PRESENT_COLLECTIONS`, `PRESENT_BURST`, `PRESENT_ECS`         |
+### 容量策略
 
-所有可选依赖通过 `.asmdef` 文件中的 `versionDefines` 管理。代码使用 `#if` 指令保护，因此无论安装了哪些包，程序集均可正常编译。
+`PoolCapacitySettings` 是构造时捕获的值类型：
 
-### 示例说明
+| 设置 | 含义 |
+| --- | --- |
+| `SoftCapacity` | 预热数量，也是 `TrimOnDespawn` 使用的 inactive 保留目标。 |
+| `HardCapacity` | Pool 可拥有的最大 item 数量；`-1` 表示无界。 |
+| `OverflowPolicy.Throw` | 达到 hard capacity 时，`Spawn` 抛出异常。 |
+| `OverflowPolicy.ReturnNull` | 达到 hard capacity 时，`Spawn` 返回 `null`（或 `default`）。 |
+| `TrimPolicy.Manual` | Inactive item 保留到 `TrimInactive`、`Clear` 或 `Dispose`。 |
+| `TrimPolicy.TrimOnDespawn` | 返回的 item 超过 `SoftCapacity` 时被永久销毁。 |
+| `TrySpawn` | 正常容量耗尽时始终返回 `false`，不受 `OverflowPolicy` 影响。 |
 
-位于 `Samples/`：
+Gameplay、remote input 和 overload-sensitive pool 应配置有限 `HardCapacity`。只有 owner 已通过其他机制证明输入有界时才使用无界 pool。
 
-- `PureCSharp/` — 使用 `ObjectPool` 的纯数据粒子系统模拟。
-- `PureUnity/` — `IUnityObjectSpawner` Prefab 生成 + `AdvancedObjectPoolSample`（`WarmupCoroutine`、`PoolCapacitySettings`、`Profile` 显示、`Dispose`）。
-- `OOPBullet/` — `MonoFastPool<Bullet>` 完整演示，含 `BulletSpawner`、`ITickable`、Rigidbody 子弹。
-- `DODBullet/` — 三种 DOD 方案：原始 NativeArray、Jobs、`NativePool<T>` — 含 GPU Instancing。
-- `Benchmarks/PureCSharp/` — 纯 C# 工厂模式和对象池的综合性能基准测试。
-- `Benchmarks/Unity/` — Unity GameObject 池化、Prefab 实例化和内存分析基准测试。
+### 生命周期状态
 
-位于 `ECS/Samples/`：
+```mermaid
+stateDiagram-v2
+    [*] --> Inactive: create 或 prewarm
+    Inactive --> Active: Spawn / TrySpawn
+    Active --> Inactive: Despawn 成功，reset 成功
+    Active --> Quarantined: reset 或 validation 失败
+    Inactive --> Destroyed: trim、clear 或 dispose
+    Quarantined --> Destroyed: 尽力完成永久清理
+    Destroyed --> [*]
+```
 
-- `BulletSpawnerAuthoring`、`BulletAuthoring`、`ECSHighLoadBenchmark` — ECS 实体池化演示。
+Pool 用 `ReferenceEquals` 跟踪身份，不依赖用户定义的值相等。Foreign return、duplicate return 与生命周期 callback reentrancy 都被拒绝并计数。Active iteration 可以归还当前正在访问的 item，但不能修改其他 active item。`Dispose` 幂等，即使单个 item 清理失败也会把对外状态设为 `Disposed`。
 
-### 性能预期（参考值）
+## 使用指南
 
-- **CPU**：对象池通常比直接 `Instantiate`/`Destroy` 快 2–10×。
-- **内存**：GC 分配减少 50–90%；预热池可实现接近零的运行时分配。
-- **NativePool / NativeDensePool**：设计上零 GC（unmanaged `NativeArray` 支撑）。
-- **Unity GameObjects**：典型成对对比中比 `Instantiate()`/`Destroy()` 快 5–20×。
+### Spawn、Despawn 与 Return
 
-### License
+```csharp
+// 溢出时抛出：
+Projectile p = pool.Spawn(new ProjectileSpawn(20f));
+p.Return();                   // 内部调用 Despawn
 
-See repository license.
+// 或使用 TrySpawn 优雅处理过载：
+if (pool.TrySpawn(new ProjectileSpawn(20f), out Projectile q))
+{
+    q.Return();
+}
+```
+
+Spawn 后 item 被调用方借用，且必须准确归还一次。`Return()` 委托 `IDespawnableMemoryPool<TValue>.Despawn`，这是返回 inactive 的唯一支持路径。
+
+### 查看诊断
+
+```csharp
+PoolProfile profile = pool.Profile;
+
+Console.WriteLine($"active={profile.CountActive} inactive={profile.CountInactive}");
+Console.WriteLine($"peakActive={profile.Diagnostics.PeakCountActive}");
+Console.WriteLine($"callbackFailures={profile.Diagnostics.CallbackFailures}");
+Console.WriteLine($"quarantined={profile.Diagnostics.QuarantinedItems}");
+```
+
+`PoolProfile` 与 `PoolDiagnostics` 是 readonly struct，读取不产生分配。长时间累计值使用 `long`；当前数量和容量仍使用 `int`，因为托管集合容量以 `int` 为上限。
+
+### Prewarm、trim 与 clear
+
+```csharp
+pool.Prewarm(64);                // 冷路径：最多创建到剩余容量
+int created = pool.WarmupStep(8); // 创建有界批次，返回实际创建数量
+pool.TrimInactive(32);           // 销毁超过目标的 inactive item
+pool.DespawnAll();               // 归还所有 active item
+int n = pool.DespawnStep(16);    // 归还有界批次
+pool.Clear();                    // 销毁所有 owned item
+```
+
+`WarmupCoroutine` 与 `DespawnAllCoroutine` 是用于分帧 loading/teardown 的便利迭代器，会分配 iterator state，不属于严格 zero-allocation 热路径。
+
+### ForEachActive 迭代
+
+```csharp
+pool.ForEachActive(projectile =>
+{
+    projectile.Tick(Time.deltaTime);
+});
+
+// 或带 state 以避免闭包：
+pool.ForEachActive(state, (item, s) =>
+{
+    item.Tick(s.DeltaTime);
+});
+```
+
+Callback 可以归还当前 item，但不能修改其他 active item。Pool 检测结构版本变化，并在违反 iteration 契约时抛出异常。
+
+### 失败隔离
+
+| 失败 | Pool 行为 |
+| --- | --- |
+| Factory 返回无效 item | 创建立即失败，item 不会进入 active tracking |
+| Spawn callback 失败但 reset 成功 | borrow 回滚，item 可以回到 inactive |
+| Spawn callback 与 reset 均失败 | item 进入 quarantine 并永久清理，绝不再次借出 |
+| Despawn callback 或 validation 失败 | 移除 active ownership、隔离 item、尝试清理并传播错误 |
+| `Clear`/`Dispose` 中一个 item 失败 | 继续处理其余 owned item，最终以 `AggregateException` 报告 |
+| Hard capacity 耗尽 | `TrySpawn` 返回 `false`；`Spawn` 遵循 `OverflowPolicy` |
+
+## 进阶主题
+
+### Unity adapter 组合
+
+Unity-facing API 仅允许在 Unity 主线程调用。创建必须通过其他已验证边界时注入自定义 `IUnityObjectSpawner`。
+
+```csharp
+using CycloneGames.Factory.Runtime;
+using UnityEngine;
+
+IUnityObjectSpawner spawner = new DefaultUnityObjectSpawner();
+var factory = new MonoPrefabFactory<Bullet>(spawner, bulletPrefab, poolRoot);
+var pool = new ObjectPool<BulletSpawn, Bullet>(
+    factory,
+    new PoolCapacitySettings(64, 256, PoolOverflowPolicy.ReturnNull));
+```
+
+`DefaultUnityObjectSpawner` 拒绝 null origin，并委托 `Object.Instantiate`。`MonoPrefabFactory<T>` 创建 inactive instance，让 pool 控制激活。`MonoFastPool<T>` 是轻量 `Component` pool，处理激活、可选 reparent 和永久清理时的 `Object.Destroy`，不需要 `IFactory`，因为它直接拥有创建。
+
+### 自定义 `FastObjectPool<T>` 子类
+
+Item 不需要 spawn 参数时，从 `FastObjectPool<T>` 派生并重写 `OnSpawn` / `OnDespawn`：
+
+```csharp
+public sealed class EffectPool : FastObjectPool<Effect>
+{
+    public EffectPool(PoolCapacitySettings settings) : base(settings) { }
+
+    protected override Effect CreateNew() => new Effect();
+    protected override void OnSpawn(Effect item) => item.Activate();
+    protected override void OnDespawn(Effect item) => item.Deactivate();
+}
+```
+
+需要自定义 validation 或 destruction 时重写 `IsValid` 与 `DestroyItem`。默认 `DestroyItem` 在 item 实现 `IDisposable` 时调用 `Dispose`。
+
+### DOD 密集 pool
+
+只有测量证明连续 unmanaged storage 对 workload 有收益时才使用 DOD pool。每个 pool 都是 sealed owner object，避免复制 pool value 导致 `NativeContainer` 被意外重复拥有。
+
+```csharp
+using CycloneGames.Factory.DOD.Runtime;
+using Unity.Collections;
+
+using var pool = new NativeDensePool<SimulationItem>(
+    capacity: 4096,
+    allocator: Allocator.Persistent);
+
+if (pool.TrySpawn(new SimulationItem(), out NativePoolHandle handle, out int denseIndex))
+{
+    pool.TryWrite(handle, new SimulationItem { Health = 100 });
+    pool.Despawn(handle);
+}
+```
+
+- `NativePool<T>` 使用 compact index；swap-and-pop despawn 会使外部 dense index 失效。
+- `NativeDensePool<T>` 使用 slot + generation handle，拒绝 stale access 与 double return。
+- `NativeDenseColumnPool2/3/4` 为 SoA workload 保存并行类型流。
+- Spawn、despawn、resize、clear、dispose 是 single-owner structural operation。
+- 只有 owner 保证期间不执行 structural operation 或 disposal 时，Job 才能借用 active array。执行结构变化前必须完成或正确串联所有 outstanding `JobHandle`。
+- `Resize` 属于冷路径分配。应按已声明 workload 预设容量，并把容量耗尽作为正常 overload result。
+
+### 手动与 DI 组合
+
+Core 不引用任何 DI container。手动组装与 container 组装使用相同 public constructor：
+
+```csharp
+var spawner = new DefaultUnityObjectSpawner();
+var factory = new MonoPrefabFactory<Bullet>(spawner, bulletPrefab, poolRoot);
+var pool = new ObjectPool<BulletSpawn, Bullet>(factory, capacitySettings);
+```
+
+Container 可以在 composition root 注册这些具体对象。Pool item 和 factory method 不应访问 container。
+
+## 常见场景
+
+### 带参数 spawn 的投射物 pool
+
+Gameplay 系统需要有界、预热的投射物，且每次 spawn 有独立参数：
+
+```csharp
+var settings = new PoolCapacitySettings(
+    softCapacity: 128,
+    hardCapacity: 1024,
+    overflowPolicy: PoolOverflowPolicy.ReturnNull,
+    trimPolicy: PoolTrimPolicy.TrimOnDespawn);
+
+using var pool = new ObjectPool<ProjectileSpawn, Projectile>(
+    new ProjectileFactory(),
+    settings);
+
+for (int i = 0; i < 64; i++)
+{
+    if (pool.TrySpawn(new ProjectileSpawn(speed: 20f + i), out Projectile p))
+    {
+        p.Launch();
+    }
+}
+```
+
+`TrySpawn` 在 hard capacity 耗尽时返回 `false`，gameplay 循环无需异常处理即可优雅降级。
+
+### 使用 `MonoFastPool<T>` 的 Unity Component pool
+
+VFX 系统需要 `Component` instance pool，激活并在 pool root 下 reparent：
+
+```csharp
+var pool = new MonoFastPool<EffectView>(
+    effectPrefab,
+    new PoolCapacitySettings(
+        softCapacity: 32,
+        hardCapacity: 256,
+        overflowPolicy: PoolOverflowPolicy.Throw),
+    root: transform,
+    autoSetActive: true);
+
+EffectView effect = pool.Spawn();
+pool.Despawn(effect);
+```
+
+`MonoFastPool<T>` 在永久清理时调用 `Object.Destroy`，owner 永远不应直接销毁 item。
+
+### 使用 `NativeDensePool<T>` 的 Jobs 友好模拟
+
+模拟需要跨数千 item 的 cache-friendly 迭代，且句柄能在 swap-and-pop despawn 后存活：
+
+```csharp
+using var pool = new NativeDensePool<AgentState>(
+    capacity: 8192,
+    allocator: Allocator.Persistent);
+
+NativeArray<NativePoolHandle> handles = new NativeArray<NativePoolHandle>(batch, Allocator.TempJob);
+NativeArray<AgentState> states = new NativeArray<AgentState>(batch, Allocator.TempJob);
+
+// 主线程批量 spawn：
+pool.SpawnBatch(states, batch, handles, allowPartial: false);
+
+// 把 ActiveItems 传入 Job：
+var job = new SimulationJob { States = pool.ActiveItems };
+JobHandle handle = job.Schedule(pool.CountActive, 64);
+handle.Complete();
+
+// 归还单个 handle：
+pool.Despawn(handles[0]);
+```
+
+外部代码绝不能把 `NativePoolHandle` 持久化超过其引用 slot 的生命周期。需要时通过 `GetHandleAtDenseIndex` 获取新 handle。
+
+### 冷路径注册表预热
+
+Loading screen 把预热分散到多帧，让首个 gameplay beat 不卡顿：
+
+```csharp
+IEnumerator PrewarmOverFrames(ObjectPool<ProjectileSpawn, Projectile> pool, int total, int batchSize)
+{
+    IEnumerator routine = pool.WarmupCoroutine(total, batchSize);
+    while (routine.MoveNext())
+    {
+        yield return routine.Current;
+    }
+}
+```
+
+`WarmupCoroutine` 与 `DespawnAllCoroutine` 会分配 iterator state，是分帧 loading 的便利 API，不属于严格 zero-allocation 热路径。
+
+## 性能与内存
+
+| 路径 | 时间复杂度 | 模块级分配 | 工作状态 |
+| --- | --- | --- | --- |
+| `Spawn` / `TrySpawn`（复用 inactive） | 摊销 `O(1)` | 0 字节 | `List<T>` + identity `Dictionary<T, int>` |
+| `Spawn`（新建） | 摊销 `O(1)` | Pool 0 字节；factory 可能分配 | 一次 factory 调用 |
+| `Despawn` | `O(1)` | 0 字节 | Active list 上 swap-and-pop |
+| `Prewarm` / `WarmupStep` | `O(n)` | 每次创建一个 item | 仅冷路径 |
+| `TrimInactive` | `O(n - target)` | Pool 0 字节 | Destroy callback 可能分配 |
+| `ForEachActive` | `O(active)` | 0 字节 | 快照校验迭代 |
+| DOD `TrySpawn` / `Despawn` | `O(1)` | 0 GC | `NativeArray` + slot map |
+| DOD `SpawnBatch` | `O(batch)` | 0 GC | 批量 slot 分配 |
+
+Tracking collection 按 `SoftCapacity` 预设容量。ownership 超出预设数量时，运行时增长可能产生分配。严格热路径前完成预热，并使用有限 hard capacity 避免增长尖峰。
+
+模块没有 static cache、全局 registry、隐藏偏好、后台线程或持久化文件。Pool 保留的 item 是由 pool instance 拥有的有界复用 cache。
+
+### 线程
+
+- 托管池是 single-owner，由外部同步。
+- Unity adapter 仅限主线程。
+- DOD pool structural operation 是 single-owner。
+- 借出的 `NativeArray` 段可在调用方维护的 dependency graph 下由 Job 处理。
+- 不要在持有未知外部 lock 时执行 pool 生命周期 callback。Producer 位于其他线程时，应把有界创建/归还意图排入 owner queue，而不是跨线程共享 pool。
+
+### 平台与 AOT
+
+Core 不使用反射、动态代码生成、文件系统、socket、native plugin 或 runtime type discovery。IL2CPP stripping 仍要求产品代码能够静态到达所需 closed generic form。Unity adapter 仅使用标准 Unity object API。DOD 支持范围由当前安装的 Collections 包和目标平台 capability 决定。
+
+Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与主机目标都需要独立 Player/AOT 证据。Editor 编译或 EditMode tests 不能认证这些目标。WebGL 是否具有线程能力取决于部署设置；无论能力如何，single-owner 契约都保持不变。
+
+## 故障排查
+
+| 现象 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| `TrySpawn` 返回 `false` | Hard capacity 耗尽或无可复用 item | 检查 `Profile` 和 workload 上限；提升 `HardCapacity` 或降低 spawn 速率 |
+| Spawn item 被 quarantine | reset 或 validity 契约失败 | 检查 `CallbackFailures` 与 `QuarantinedItems`；不要复用该 instance |
+| 预热后 pool 仍分配 | workload 超过 tracking 或 creation 的预设容量 | 根据测量增加预热，不要设置任意全局默认值 |
+| `Spawn` 溢出时抛出异常 | 设置了 `OverflowPolicy.Throw` 且容量耗尽 | 改用 `TrySpawn` 或提升 `HardCapacity` |
+| DOD 类型不可用 | 消费项目未解析 `com.unity.collections` | 检查 `Packages/manifest.json` 与 `packages-lock.json`，再确认 DOD asmdef 的 `PRESENT_COLLECTIONS` constraint 是否 active |
+| Native handle 失效 | item 已归还、pool 已 clear，或 generation 已改变 | 获取新 handle；禁止持久化 runtime handle |
+| Active iteration 抛出异常 | callback 修改了当前 item 以外的 active item | 只归还当前 item；其他修改推迟到迭代之后 |
+
+## 验证
+
+通过 Unity Test Runner 运行聚焦测试：
+
+```text
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Factory.Tests.Editor -testResults <result-path> -quit
+```
+
+安装 `com.unity.collections` 后，也运行 `CycloneGames.Factory.DOD.Tests.Editor`。托管测试覆盖 reference identity、容量耗尽、duplicate return、spawn rollback、quarantine、callback reentrancy、self-return iteration、dispose，以及预热后的当前线程 allocation assertion。DOD tests 覆盖 handle invalidation、swap-and-pop、batch churn、SoA stream、容量与诊断。
+
+声明性能结论前，在目标 Player build 中测量已定义 workload，并记录 warmup、GC、CPU 分布、peak memory、backend、device 和 Unity 版本。声明 IL2CPP/AOT 支持前，使用当前 stripping 配置构建并 smoke-test 受影响目标。
+
+## 参考
+
+- [Unity Collections 包](https://docs.unity3d.com/Packages/com.unity.collections@latest) —— DOD pool 支持的依赖。
+- [UniTask](https://github.com/Cysharp/UniTask)

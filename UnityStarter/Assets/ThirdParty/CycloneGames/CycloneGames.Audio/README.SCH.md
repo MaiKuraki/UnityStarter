@@ -1,73 +1,83 @@
 # CycloneGames.Audio
 
-<div align="left"><a href="./README.md">English</a> | 简体中文</div>
+[English | 简体中文](README.md)
 
-一个为 Unity 打造的增强型音频管理系统。其核心逻辑源自微软的 `Audio-Manager-for-Unity`，由 CycloneGames 在其基础上进行了扩展，专注于性能、内存效率与生产环境的健壮性。
+CycloneGames.Audio 是一个 Unity 音频创作与运行时包，围绕 `AudioBank` / `AudioEvent` 图、有界 `AudioSource` 池、分类感知的语音抢占以及有界工作线程命令队列构建。它同时提供静态 `AudioManager` facade 与用于依赖注入组合的 `IAudioService` 接口，并通过显式的 `OnBankUnloaded` 生命周期与外部资源系统集成。部分代码基于 Microsoft 的 [Audio-Manager-for-Unity](https://github.com/microsoft/Audio-Manager-for-Unity)，按 MIT License 使用。
 
-如果您的游戏**不**打算使用 **Wwise，CriWare，FMOD** 等成熟的中间件，此插件是作者比较推荐的，插件的逻辑与 **Wwise** 对音频的管理和编辑相似，包括了 **Bank, RTPC, Parameter, Multi-Bus** 等常用类 **Wwise** 的功能，更适合熟悉 **Wwise** 的开发者以及设计师使用。
+## 目录
 
-**上游源码**: https://github.com/microsoft/Audio-Manager-for-Unity
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
-此版本为生产环境引入了关键优化，包括性能监控、异步资源加载、GC 开销降低、DI 兼容架构、安全的资源生命周期管理，以及包含主机平台在内的全平台支持。
+## 概述
 
-## 特性
+游戏音频系统回答两个问题：应该播放哪个声音，以及应该由哪个 `AudioSource` 播放。CycloneGames.Audio 把创作（在 Editor 中编辑的 `AudioBank` / `AudioEvent` 图）、运行时分发（`AudioManager` / `IAudioService`）与物理播放（一组池化的 `AudioSource` 组件）解耦。所有者负责创作事件图并调用播放/停止 API；manager 解析 clip 引用、从池中选取语音、应用分类感知的抢占，并跟踪活跃事件直到其停止。
 
-- **AudioGraph 重绘**: 更合理好看的 AudioGraph 编辑界面，类虚幻引擎的快捷键 (Alt+鼠标点击操作连接线)。
-- **Selector 工作流增强**: Sequence/Switch/Random 三类选择器增加了更清晰的分支映射、按节点 Y 值自动排序，以及更易读的多分支编辑 UI。
-- **集中式音频控制**: 通过统一的 API 管理音效和音乐。
-- **DI 与非 DI 兼容**: 提供完整的 `IAudioService` 接口用于 DI 容器（VContainer、Zenject 等），同时保留 `AudioManager` 静态方法用于直接访问。
-- **智能音频池**: 智能 AudioSource 对象池，支持设备自适应、自动扩容、声音窃取和智能收缩。
-- **安全的资源生命周期**: `UnloadBank` 保证零悬空 `AudioSource.clip` 引用，并通过 `OnBankUnloaded` 事件钩子与外部资源管理系统集成。
-- **全平台支持**: Windows、macOS、Linux、Android、iOS、WebGL 和主机平台（Switch、PS4/PS5、Xbox），均支持平台自适应池大小。
-- **性能监控**: 内置的钩子和工具，用于实时监控音频系统的性能。
-- **异步加载**: 集成 `UniTask` 实现音频资源的非阻塞异步加载，确保流畅的游戏体验，避免卡顿。
-- **GC 优化**: 基于固定大小数组、结构体和对象池的零分配热路径，更新循环中无 `List<>` 或 LINQ。
-- **线程安全**: 基于无锁 `ConcurrentQueue` 的命令派发；来自工作线程的调用自动延迟至主线程执行。
-- **移动端优化**: 应用失去焦点时自动暂停/恢复音频，移动平台上的省电更新节流。
+本模块面向需要集中管理 SFX 与音乐、但又不希望引入完整中间件栈的 Unity 项目。它支持直接 clip 引用、外部 clip 加载器（Addressables、YooAsset、自定义 loader）、基于 `UniTask` 的预加载、平台感知的池大小以及少量命令式入口的工作线程提交。Unity 音频对象与 manager 状态仍由主线程持有；只有 [命令提交](#命令提交与主线程所有权) 列出的排队命令接受工作线程提交。
 
-## 安装与依赖
+当项目需要一个集成了 bank 创作、对象池、语音策略和外部资源管理的统一音频服务时使用本模块。不要将其作为加密或时间精度敏感的音频合成层 —— Unity 的 DSP 时钟与 `AudioSettings.dspTime` 驱动调度，manager 不提供超出 `PlayEventScheduled` 能力的采样级时间精度保证。
 
-- Unity: `2022.3`+
-- 依赖:
-  - `com.cysharp.unitask` ≥ `2.0.0`
+### 主要特性
 
-通过 UPM 安装或将包放置在 `Packages`/`Assets` 目录下。详情请参阅此文件夹中的 `package.json`。
+- **AudioGraph 创作**：节点连线编辑，使用 `Alt + 鼠标左键` 移除单条或选中节点上的全部连线。
+- **Selector 创作**：`SequenceSelector`、`SwitchSelector`、`RandomSelector` 提供显式分支映射、按节点 Y 值排序、权重与重复控制。
+- **双重访问模型**：`IAudioService` 用于显式依赖注入组合，`AudioManager` 静态入口用于直接访问。
+- **有界 `AudioSource` 池**：可配置初始值与上限，支持运行时扩容、分类感知的语音抢占、空闲收缩。
+- **外部 clip 加载**：外部 clip 解析与 bank 预加载提供 `UniTask` API；播放和控制 API 仍为同步。
+- **平台配置**：源码为 WebGL、Android/iOS、桌面和部分主机编译符号定义池与更新配置。
+- **Bank 卸载顺序**：主线程卸载路径停止匹配事件、清除其池化音源的 clip、移除注册项后触发 `OnBankUnloaded`。
+- **有界工作线程提交**：部分命令通过 `lock` 保护的固定容量环形缓冲区提交，并在主线程执行。
+- **运行时统计**：提供对象池、注册表、命令队列和外部 clip 缓存计数，用于诊断。
 
-## 文档导航
+## 架构
 
-- [运行时系统与 API（本文档）](./README.SCH.md)
-- 生产环境音频导入与优化指南（Unity 内置音频流程）：
-  - [English](../../../../../Docs/AudioBestPractices/AudioBestPractices.md)
-  - [简体中文](../../../../../Docs/AudioBestPractices/AudioBestPractices.SCH.md)
+本模块分为 Runtime、Editor 与 Tests 程序集：
 
-## 编辑器预览
+| 程序集 | 路径 | 用途 |
+| --- | --- | --- |
+| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`、`IAudioService`、`AudioBank`、`AudioEvent`、对象池、语音策略、外部 clip 解析。依赖 `UniTask`。 |
+| `CycloneGames.Audio.Editor` | `Editor/` | `AudioGraph` 窗口、`AudioBank`、`AudioPlatformProfile`、`AudioPoolConfig`、`AudioVoicePolicyProfile` 检视器、运行时总览、profiler。 |
+| `CycloneGames.Audio.Tests.Editor` | `Tests/Editor/` | `AudioClipReferencePathTests`、`AudioRandomSelectionTests`。 |
 
-- <img src="./Documents~/Preview_01.png" alt="Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
-- <img src="./Documents~/Preview_02.png" alt="Preview 2" style="width: 100%; height: auto; max-width: 800px;" />
-- <img src="./Documents~/Preview_03.png" alt="Preview 3" style="width: 100%; height: auto; max-width: 800px;" />
+```mermaid
+flowchart LR
+    Bank["AudioBank asset (authored graph)"] --> Event["AudioEvent nodes"]
+    Event --> Manager["AudioManager / IAudioService"]
+    Manager --> Registry["Name registry"]
+    Bank --> Registry
+    Manager --> Pool["AudioSource pool"]
+    Pool --> Source["Pooled AudioSource"]
+    External["External clip loader (Addressables / YooAsset / custom)"] --> Clip["AudioClip handle"]
+    Clip --> Source
+    Manager --> Unload["UnloadBank (main thread)"]
+    Unload --> Callback["OnBankUnloaded"]
+    Callback --> Owner["External asset owner releases handle"]
+```
 
-### 运行时监控与策略配置检视
-
-- AudioManager 运行时总览（池使用率、分类预算、Bank 概览）
-    - <img src="./Documents~/Preview_04.png" alt="AudioManager Runtime Dashboard" style="width: 100%; height: auto; max-width: 460px;" />
-- AudioPlatformProfile 检视器（焦点、节流、可听度剔除、LOD、遮挡）
-    - <img src="./Documents~/Preview_05.png" alt="Audio Platform Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
-- AudioPoolConfig 检视器（设备分层、扩容/收缩、运行时统计）
-    - <img src="./Documents~/Preview_06.png" alt="Audio Pool Config Inspector" style="width: 100%; height: auto; max-width: 460px;" />
-- AudioVoicePolicyProfile 检视器（分类级抢占/预算策略）
-    - <img src="./Documents~/Preview_07.png" alt="Audio Voice Policy Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
+所有者在 `AudioBank` 资源中创作事件图并调用播放/停止 API。`AudioManager` 解析 clip 引用（直接或通过已注册的外部 loader），从池中获取语音，在池耗尽时应用分类感知的抢占，并跟踪 `ActiveEvent` 直到其停止或被抢占。`UnloadBank` 在主线程执行，清除所有 clip 引用后触发 `OnBankUnloaded`，为外部资源 owner 提供安全的释放边界。
 
 ## 快速上手
 
-### 0) 创建 AudioEvent 资源
+在 asmdef 中添加对 `CycloneGames.Audio.Runtime` 的引用，然后导入命名空间：
 
-在播放音频之前，您需要在 Unity 中创建 AudioEvent 资源：
+```csharp
+using CycloneGames.Audio.Runtime;
+```
 
-1. 在项目窗口中右键点击
-2. 选择 **Create > CycloneGames > Audio > Audio Bank**
-3. 使用 AudioFile 节点和其他音频组件配置您的 AudioEvent 内部逻辑
+### 创建 AudioEvent 资源
 
-### 1) 播放音效 (SFX)
+1. 在项目窗口中右键，选择 **Create > CycloneGames > Audio > Audio Bank**。
+2. 打开 bank，添加 `AudioFile` 节点并指定 `AudioClip`。
+3. bank 的根 `AudioEvent` 即可播放。
+
+### 播放音效
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -80,25 +90,23 @@ public class AudioExample : MonoBehaviour
 
     void Start()
     {
-        // 播放一次性音效
+        // 一次性播放
         AudioManager.PlayEvent(jumpEvent, gameObject);
 
-        // 播放音效并获取句柄以便后续控制
-        var audioHandle = AudioManager.PlayEvent(machineGunEvent, gameObject);
-
-        // 5秒后停止循环音效
-        StartCoroutine(StopAfterDelay(audioHandle, 5f));
+        // 播放并保留 handle 以便后续控制
+        ActiveEvent handle = AudioManager.PlayEvent(machineGunEvent, gameObject);
+        StartCoroutine(StopAfterDelay(handle, 5f));
     }
 
-    private System.Collections.IEnumerator StopAfterDelay(ActiveEvent audioHandle, float delay)
+    private System.Collections.IEnumerator StopAfterDelay(ActiveEvent handle, float delay)
     {
         yield return new WaitForSeconds(delay);
-        audioHandle?.Stop();
+        handle?.Stop();
     }
 }
 ```
 
-### 2) 播放音乐
+### 播放音乐
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -108,19 +116,12 @@ public class MusicController : MonoBehaviour
 {
     [SerializeField] private AudioEvent backgroundMusic;
 
-    void Start()
-    {
-        AudioManager.PlayEvent(backgroundMusic, gameObject);
-    }
-
-    public void StopMusic()
-    {
-        AudioManager.StopAll(backgroundMusic);
-    }
+    void Start() => AudioManager.PlayEvent(backgroundMusic, gameObject);
+    public void StopMusic() => AudioManager.StopAll(backgroundMusic);
 }
 ```
 
-### 3) 通过依赖注入 (DI) 使用
+### 通过依赖注入使用
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -130,35 +131,26 @@ public class AudioConsumer
 {
     private readonly IAudioService _audio;
 
-    // 通过构造函数注入（VContainer、Zenject 等）
-    public AudioConsumer(IAudioService audio)
-    {
-        _audio = audio;
-    }
+    public AudioConsumer(IAudioService audio) => _audio = audio;
 
     public void PlayJump(GameObject emitter, AudioEvent jumpEvent)
-    {
-        _audio.PlayEvent(jumpEvent, emitter);
-    }
+        => _audio.PlayEvent(jumpEvent, emitter);
 
     public void SetMusicVolume(float volumeDb)
-    {
-        _audio.SetMixerVolume("MusicVolume", volumeDb);
-    }
+        => _audio.SetMixerVolume("MusicVolume", volumeDb);
 }
 ```
 
-在 DI 容器中注册 `AudioManager` 为 `IAudioService`：
+在 DI 容器中注册 `AudioManager` 为 `IAudioService`（VContainer 示例）：
 
 ```csharp
-// VContainer 示例
 builder.RegisterComponentInHierarchy<AudioManager>().As<IAudioService>();
 
 // 或注册外部创建的实例
 AudioManager.SetInstance(myAudioManagerInstance);
 ```
 
-### 4) Bank 加载与卸载
+### 加载 bank 并按名称播放
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -170,115 +162,240 @@ public class BankExample : MonoBehaviour
 
     void Start()
     {
-        // 加载 Bank — 注册事件用于字符串查找
-        AudioManager.LoadBank(sfxBank);
-
-        // 通过名称播放
-        AudioManager.PlayEvent("Jump_SFX", gameObject);
+        AudioManager.LoadBank(sfxBank);                 // 注册事件用于名称查找
+        AudioManager.PlayEvent("Jump_SFX", gameObject); // 按注册名称播放
     }
 
-    void OnDestroy()
-    {
-        // 卸载 Bank — 停止所有播放事件，清除所有 clip 引用，
-        // 然后触发 OnBankUnloaded 通知外部资源管理器
-        AudioManager.UnloadBank(sfxBank);
-    }
+    void OnDestroy() => AudioManager.UnloadBank(sfxBank);
 }
 ```
 
-### 5) Selector 工作流（Sequence / Switch / Random）
+## 核心概念
 
-选择器节点已经针对大型生产图做过优化，核心目标是让分支语义清晰、后期维护可控。
+### AudioBank 与 AudioEvent
 
-| 节点 | 最适用场景 | 编辑建议 |
-| --- | --- | --- |
-| `SequenceSelector` | 有顺序要求的播放（连击步骤、分段 VO、固定轮转） | 打开 `Auto Sort by Node Y`，按从上到下摆放输入节点，视觉顺序即播放顺序。 |
-| `SwitchSelector` | 状态驱动路由（`Surface`、`WeaponMode`、`Language` 等） | 在 `AudioSwitch` 中使用命名状态，并为每个分支做显式状态绑定，不要依赖连线先后。 |
-| `RandomSelector` | 变化池（脚步、打击、重复音效去同质化） | 用 `weights` 控制概率，搭配 `Avoid Repeat` 降低连续重复感。 |
+`AudioBank` 是一个 ScriptableObject，拥有一张音频节点图。根节点是 `AudioEvent`；子节点（`AudioFile`、`AudioSequenceSelector`、`AudioSwitchSelector`、`AudioRandomSelector`、`AudioBlendContainer` 等）定义事件的播放逻辑。同一个 `AudioEvent` 资源可以直接引用，也可以通过 `LoadBank` 按名称注册。
 
-推荐工作流：
+### AudioManager 与 IAudioService
 
-1. 连线前先给来源节点命名（例如 `Footstep_Concrete`、`Footstep_Wood`）。
-2. 默认保持 `Auto Sort by Node Y` 打开，让图布局和真实分支顺序一致。
-3. 把 `unassigned` / `duplicate` 警告当作发版前阻塞项处理。
-4. Random 权重先从等权开始，再根据实机听感或埋点数据迭代。
+`AudioManager` 是一个 `MonoBehaviour` 单例，持有 `AudioSource` 池、名称注册表、参数与状态存储以及工作线程命令队列。它实现 `IAudioService`，因此 DI consumer 依赖接口，由 composition root 决定实例。`AudioManager` 上的静态方法（如 `PlayEvent`、`StopAll`、`LoadBank`）转发到单例，覆盖直接访问工作流。
 
-## API 参考
+### ActiveEvent 与 AudioHandle
 
-### IAudioService 接口
+`PlayEvent` 返回 `ActiveEvent` —— 一个池化运行时对象，持有分配给本次播放的 `AudioSource`，并暴露 `Stop()`、`StopImmediate()`、`Pause()`、`Resume()`、`SetMute(bool)`、`SetSolo(bool)`、`IsPaused` 与 `EstimatedRemainingTime`。返回 `null` 表示播放失败（池耗尽且无语音可抢占、clip 缺失或 emitter 非法）。
 
-`IAudioService` 接口为 DI 环境提供完整的音频系统访问：
+`AudioHandle` 是一个轻量 struct，引用 `ActiveEvent` 而不持有强引用。当持有者可能比播放活得更久时使用：`IsValid`、`Stop()`、`StopImmediate()`、`IsPlaying`、`EstimatedRemainingTime`。
 
-| 方法                                                       | 描述                                                       |
-| ---------------------------------------------------------- | ---------------------------------------------------------- |
-| `PlayEvent(AudioEvent, GameObject)`                        | 在 GameObject 上播放事件，用于 3D 空间追踪                 |
-| `PlayEvent(AudioEvent, Vector3)`                           | 在固定世界坐标播放事件                                     |
-| `PlayEvent(string, GameObject)`                            | 播放已注册的命名事件（通过 `LoadBank` 注册）               |
-| `PlayEvent(string, Vector3)`                               | 在固定世界坐标播放命名事件                                 |
-| `PlayEventScheduled(AudioEvent, GameObject, double)`       | 在精确 DSP 时间调度播放（采样精确同步）                    |
-| `StopAll(AudioEvent)`                                      | 停止事件的所有实例，使用配置的淡出                         |
-| `StopAll(string)`                                          | 停止匹配名称的所有实例                                     |
-| `StopAll(int)`                                             | 停止指定组中的所有事件（互斥播放）                         |
-| `PauseAll()` / `ResumeAll()`                               | 暂停 / 恢复所有播放中的事件                                |
-| `PauseEvent(ActiveEvent)` / `ResumeEvent(ActiveEvent)`     | 暂停 / 恢复单个事件                                        |
-| `IsEventPlaying(string)`                                   | 查询命名事件是否有实例正在播放                             |
-| `SetGlobalVolume(float)` / `GetGlobalVolume()`             | 主音量，通过 `AudioListener.volume`（0–1，后置于混音器）   |
-| `SetMixerVolume(string, float)` / `GetMixerVolume(string)` | 通过 AudioMixer 暴露参数控制各总线音量（dB）               |
-| `LoadBank(AudioBank, bool)`                                | 加载 Bank 并注册其事件用于名称查找                         |
-| `UnloadBank(AudioBank)`                                    | 卸载 Bank，停止事件，清除 clip 引用，触发 `OnBankUnloaded` |
+### AudioSource 池
 
-#### 事件
+`AudioManager` 创建初始 `AudioSource` 集合，复用归还的 source，按需扩容到配置上限，耗尽时应用分类感知的语音抢占评分，并可把空闲 source 销毁至接近初始大小。大小由平台编译符号和内存阈值选择。
 
-| 事件             | 描述                                                                                                       |
-| ---------------- | ---------------------------------------------------------------------------------------------------------- |
-| `OnBankUnloaded` | 在 Bank 完全卸载且所有 `AudioSource.clip` 引用清除后触发。外部资源管理系统应订阅此事件以安全释放资源句柄。 |
+| 平台 | 条件 | 初始 | 最大 |
+| --- | --- | ---: | ---: |
+| WebGL | 始终 | 16 | 32 |
+| 移动端 | 内存 < 3GB | 32 | 48 |
+| 移动端 | 内存 3-6GB | 32 | 64 |
+| 移动端 | 内存 > 6GB | 32 | 96 |
+| 桌面端 | 内存 < 8GB | 80 | 128 |
+| 桌面端 | 内存 8-16GB | 80 | 192 |
+| 桌面端 | 内存 > 16GB | 80 | 256 |
+| Switch | 始终 | 32 | 64 |
+| 主机 (PS/Xbox) | 始终 | 64 | 192 |
 
-### AudioManager 静态方法
+这些数值是源码默认值和调优起点，不是经过测量的平台预算。应根据代表性内容做 profiling，并在目标硬件、Unity 音频 backend 或混音语音需求不同时通过 `AudioPoolConfig` 覆盖。
 
-所有 `IAudioService` 方法均可通过 `AudioManager` 的静态方法访问：
+### 分类与语音策略
 
-- `PlayEvent(AudioEvent, GameObject)` / `PlayEvent(AudioEvent, Vector3)` — 播放事件
-- `PlayEvent(string, GameObject)` / `PlayEvent(string, Vector3)` — 通过名称播放
-- `StopAll(AudioEvent)` / `StopAll(string)` / `StopAll(int)` — 停止事件
-- `PauseAll()` / `ResumeAll()` — 全局暂停/恢复
-- `SetGlobalVolume(float)` / `GetGlobalVolume()` — 主音量
-- `LoadBank(AudioBank, bool)` / `UnloadBank(AudioBank)` — Bank 管理
-- `IsEventPlaying(string)` — 查询播放状态
-- `SetInstance(AudioManager)` — 为 DI 注册外部创建的实例
-- `ValidateManager()` — 确保 AudioManager 单例存在
+`AudioEvent` 使用两层语音策略模型：
 
-### ActiveEvent 方法
+- `Category` 表达高层运行时意图（`CriticalUI`、`GameplaySFX`、`Voice`、`Ambient`、`Music`）。
+- `Use Category Defaults` 自动套用该分类的内建语音策略模板。
+- 只有特殊事件才需要单事件覆盖。
 
-- `Stop()` — 带淡出效果停止事件
-- `StopImmediate()` — 立即停止事件
-- `Pause()` / `Resume()` — 暂停/恢复单个事件
-- `SetMute(bool)` — 静音/取消静音事件
-- `SetSolo(bool)` — 独奏/取消独奏事件
-- `IsPaused` — 查询事件是否处于暂停状态
-- `EstimatedRemainingTime` — 估算距播放完成的剩余时间
+内建分类默认模板：
 
-### AudioHandle（结构体）
+| 分类 | Steal Resistance | Budget Weight | Allow Voice Steal | Allow Distance Steal | Protect Scheduled |
+| --- | ---: | ---: | :---: | :---: | :---: |
+| `CriticalUI` | 2.2 | 1.5 | false | false | true |
+| `GameplaySFX` | 1.0 | 1.0 | true | true | true |
+| `Voice` | 1.5 | 1.35 | true | false | true |
+| `Ambient` | 0.7 | 0.7 | true | true | false |
+| `Music` | 2.6 | 1.8 | false | false | true |
 
-轻量级安全句柄，用于引用 `ActiveEvent` 而不持有强引用：
+池耗尽时，可抢占语音按分类、策略、优先级、年龄、距离和预算数据比较；得分最低的语音被抢占。只有当某个事件需要超出分类模板的特殊行为时，才关闭 `Use Category Defaults`。
 
-- `IsValid` — 检查引用的事件是否仍然存活且正在播放
-- `Stop()` / `StopImmediate()` — 通过句柄控制播放
-- `EstimatedRemainingTime` / `IsPlaying` — 查询状态
+### 命令提交与主线程所有权
 
-## 外部资源管理集成
+`AudioManager`、`ActiveEvent`、Unity 对象、配置重载、参数状态、mixer 访问、运行时统计和事件订阅均由主线程持有。只有以下命令式静态入口实现了工作线程提交：
 
-`UnloadBank` 设计用于与外部资源管理系统的安全集成，如 **CycloneGames.AssetManagement**、**Addressables** 或 **Resources**。
+- `PlayEvent` 与 `PlayEventScheduled`
+- `StopAll`
+- `SetState`
+- `ExecuteActionEvent`
+- `LoadBank`、`UnloadBank` 与 `ClearEventNameMap`
 
-当调用 `UnloadBank` 时：
+提交队列是预分配的 `AudioCommand[4096]` 环形缓冲区，由 `lock` 保护。`AudioManager.Update` 根据队列深度每帧最多消费 16、64 或 128 条命令。队列已满时丢弃新命令；只有 Editor 或 Development build 会记录前五次丢弃警告。
 
-1. 该 Bank 的所有活跃事件被**立即停止**
-2. 所有 `AudioSource.clip` 引用被**设置为 null**（释放 clip 引用）
-3. Bank 事件从**名称注册表中移除**
-4. 触发 `OnBankUnloaded` 事件 — 外部系统可订阅此事件以释放资源句柄
+工作线程提交不提供完成通知、背压或结果。工作线程调用 `PlayEvent` / `PlayEventScheduled` 返回 `null`；`SetState(string, string)` 的 Boolean 返回值只表示其初始字符串检查通过 —— 命令仍可能被丢弃。队列持有的 Unity 对象引用必须在执行前保持有效。需要结果、handle、取消或保证送达时，调用方必须显式把整个工作流切到主线程。
 
-这保证了 `UnloadBank` 返回后，音频系统对该 Bank 的 `AudioClip` 资源持有**零引用**。
+### AudioClipReference 与外部加载器
 
-### 与 CycloneGames.AssetManagement 集成
+`AudioClipReference` 支持多种来源类型：
+
+- `FilePath`
+- `StreamingAssetsPath`
+- `PersistentDataPath`
+- `Url`
+- `AssetAddress`
+
+路径和 URL 类型由音频系统直接加载。`AssetAddress` 是逻辑键，不是本地文件路径；使用 `AssetAddress` 时需注册运行时 loader（见 [外部 clip 加载器](#外部-clip-加载器)）。
+
+## 使用指南
+
+### 播放事件
+
+```csharp
+// 按 AudioEvent 资源，挂到 GameObject 上做 3D 追踪
+ActiveEvent handle = AudioManager.PlayEvent(jumpEvent, gameObject);
+
+// 按 AudioEvent 资源，在固定世界坐标播放
+ActiveEvent handle2 = AudioManager.PlayEvent(jumpEvent, new Vector3(0, 5, 0));
+
+// 按注册名称播放
+AudioManager.PlayEvent("Jump_SFX", gameObject);
+
+// 基于 Unity DSP 时钟调度（采样级同步）
+AudioManager.PlayEventScheduled(musicEvent, gameObject, AudioSettings.dspTime + 0.5);
+```
+
+### 停止、暂停与恢复
+
+```csharp
+// 停止单个事件（按配置淡出）
+handle.Stop();
+handle.StopImmediate();
+
+// 停止某事件 / 名称 / 组的全部实例
+AudioManager.StopAll(jumpEvent);
+AudioManager.StopAll("Jump_SFX");
+AudioManager.StopAll(groupNum: 1); // 互斥播放组
+
+// 全局暂停/恢复
+AudioManager.PauseAll();
+AudioManager.ResumeAll();
+
+// 单事件暂停/恢复
+AudioManager.PauseEvent(handle);
+AudioManager.ResumeEvent(handle);
+
+bool playing = AudioManager.IsEventPlaying("Jump_SFX");
+```
+
+### 参数、状态与 mixer 音量
+
+```csharp
+// 全局游戏参数（RTPC 等价物）
+AudioManager.SetParameterValue("Distance", 12.5f);
+AudioManager.SetParameterValue("Distance", emitterObject, 8f); // emitter 范围覆盖
+bool found = AudioManager.TryGetParameterValue("Distance", out float current);
+
+// 全局音频状态（switch 等价物）
+AudioManager.SetState("Surface", "Wood");
+
+// AudioMixer 暴露参数，单位为分贝
+AudioManager.SetMixerParameter("MusicVolume", -6f);   // 静态辅助方法
+_audio.SetMixerVolume("MusicVolume", -6f);            // 通过 IAudioService
+
+// 通过 AudioListener.volume 的主音量（0–1，后置于 mixer）
+AudioManager.SetGlobalVolume(0.8f);
+```
+
+### Bank 加载与卸载
+
+```csharp
+AudioManager.LoadBank(sfxBank);                       // 按名称注册事件
+AudioManager.LoadBank(sfxBank, overwriteExisting: true);
+AudioManager.UnloadBank(sfxBank);                     // 停止事件、清除 clip、触发 OnBankUnloaded
+```
+
+主线程 `UnloadBank` 路径：停止 root 属于该 bank 的活跃事件、重置其池化 `AudioSource` 并清除 `clip` 引用、从名称注册表移除该 bank 的事件，然后触发 `OnBankUnloaded`。工作线程调用只提交卸载命令，并在清理完成前返回；外部资源释放应以事件而不是方法返回为边界。
+
+### 对象池配置
+
+通过配置资源覆盖内建池大小：
+
+1. 通过 **Create → CycloneGames → Audio → Audio Pool Config** 创建。
+2. 放在 `Assets` 下（Editor 自动发现）或放在 `Resources` 文件夹中用于构建。
+3. 项目中应只存在一个 `AudioPoolConfig`。
+
+对于使用 YooAsset 或 Addressables 的项目，可在运行时提供配置：
+
+```csharp
+// 在 AudioManager 初始化之前
+var handle = YooAssets.LoadAssetAsync<AudioPoolConfig>("AudioPoolConfig");
+await handle.Task;
+AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
+
+// 在 AudioManager 初始化之后，应用新的上限
+AudioManager.ReloadPoolConfig();
+```
+
+`ReloadPoolConfig()` 更新池大小限制，但保留已有的 `AudioSource` 实例。
+
+### 运行时监控
+
+```csharp
+Debug.Log($"Pool: {AudioManager.PoolStats.InUse}/{AudioManager.PoolStats.CurrentSize}");
+Debug.Log($"Max: {AudioManager.PoolStats.MaxSize}, Tier: {AudioManager.PoolStats.DeviceTier}");
+Debug.Log($"Peak: {AudioManager.PoolStats.PeakUsage}, Steals: {AudioManager.PoolStats.TotalSteals}");
+
+var stats = AudioManager.GetRuntimeStats(); // 池、注册表、队列、外部缓存计数
+```
+
+AudioManager Inspector 在 Play Mode 下也会显示实时池统计。
+
+## 进阶主题
+
+### 外部 clip 加载器
+
+当 `AudioClipReference` 使用 `AssetAddress`（或其他逻辑键）时，注册一个 loader 把键解析为 `AudioClip` 并返回释放回调。音频系统在 clip 不再使用时（事件停止、事件回收、bank 卸载、异步取消清理）调用 `Release()`。
+
+**单引用 loader：**
+
+```csharp
+AudioClipResolver.RegisterManagedReferenceLoader(audioClipReference, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null) return default;
+
+    return new ManagedAudioClipLoadResult(handle.Asset, () => handle.Release());
+});
+```
+
+**按来源类型注册 loader**（一个 loader 覆盖 `AssetAddress`、YooAsset、Addressables 等）：
+
+```csharp
+AudioClipResolver.RegisterManagedLocationKindLoader(AudioLocationKind.AssetAddress, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null) return default;
+
+    return new ManagedAudioClipLoadResult(handle.Asset, () => handle.Release());
+});
+```
+
+音频系统决定其获取的 clip handle 何时不再使用；外部资源系统决定如何释放底层资源 handle。接入时验证以下场景：
+
+- 开始播放后卸载所属 bank，确认外部释放回调只执行一次。
+- 异步加载尚未完成前停止事件，确认清理结束后没有悬空 handle。
+- 多个实例同时播放同一个 `AudioClipReference`，确认只有最后一个实例结束后才释放底层资源。
+- 强制外部 loader 失败，确认缓存统计记录失败且不泄漏半初始化 handle。
+
+### 外部资源管理集成
+
+`UnloadBank` 为 CycloneGames.AssetManagement、Addressables 或自定义 loader 等外部资源 owner 提供顺序边界。外部 owner 应在 `OnBankUnloaded` 中释放 bank handle。
+
+**CycloneGames.AssetManagement：**
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -294,28 +411,20 @@ public class AudioAssetBridge
     {
         _assets = assets;
         _audio = audio;
-
-        // 订阅一次 — 当音频系统完成 Bank 卸载后，释放底层资源句柄
         _audio.OnBankUnloaded += OnBankUnloaded;
     }
 
     public async UniTask LoadBankAsync(string bankAddress)
     {
         var handle = await _assets.LoadAssetAsync<AudioBank>(bankAddress);
-        var bank = handle.Asset;
-        _bankHandles[bank] = handle;
-        _audio.LoadBank(bank);
+        _bankHandles[handle.Asset] = handle;
+        _audio.LoadBank(handle.Asset);
     }
 
-    public void UnloadBank(AudioBank bank)
-    {
-        // 停止所有事件，清除所有 clip 引用，然后触发 OnBankUnloaded
-        _audio.UnloadBank(bank);
-    }
+    public void UnloadBank(AudioBank bank) => _audio.UnloadBank(bank);
 
     private void OnBankUnloaded(AudioBank bank)
     {
-        // 安全释放 — 音频系统已持有零 clip 引用
         if (_bankHandles.TryGetValue(bank, out var handle))
         {
             handle.Release();
@@ -325,7 +434,7 @@ public class AudioAssetBridge
 }
 ```
 
-### 与 Addressables 直接集成
+**Addressables（直接接入）：**
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -355,248 +464,132 @@ public class AddressablesAudioBridge
         AudioManager.LoadBank(bank);
     }
 
-    public void UnloadBank(AudioBank bank)
-    {
-        AudioManager.UnloadBank(bank); // OnBankUnloaded 会自动触发
-    }
+    public void UnloadBank(AudioBank bank) => AudioManager.UnloadBank(bank);
 }
 ```
 
-## CycloneGames 独有拓展
+### Selector 创作
 
-此实现对原始的微软音频管理器进行了显著的扩展。关键增强功能如下：
+Selector 节点用于在较大的图中明确表达分支语义。
 
-### 重绘 AudioGraph，类 UnrealEngine 的快捷键添加
+| 节点 | 最适用场景 | 创作建议 |
+| --- | --- | --- |
+| `SequenceSelector` | 有顺序要求的播放（连击步骤、分段 VO、固定轮转） | 打开 `Auto Sort by Node Y`，按从上到下摆放来源节点，视觉顺序即播放顺序。 |
+| `SwitchSelector` | 状态驱动路由（`Surface`、`WeaponMode`、`Language`） | 在 `AudioSwitch` 中使用命名状态，并为每个分支做显式状态绑定，不要依赖连线先后。 |
+| `RandomSelector` | 变化池（脚步、打击、重复音效去同质化） | 用 `weights` 控制概率，搭配 `Avoid Repeat` 降低连续重复感。 |
 
-重绘了 AudioGraph, 增强了 Node 连接曲线的绘制，增加了类似虚幻引擎的快捷键 Alt + 鼠标左键，删除单一曲线或删除当前选中节点上的所有曲线。
+创作清单：连线前先给来源节点命名；保持 `Auto Sort by Node Y` 打开，让图布局与真实分支顺序一致；把 `unassigned` 和 `duplicate` 警告当作发版阻塞项；Random 权重先从等权开始，再根据实机听感或埋点数据迭代。
 
-### DI 兼容架构
+### 平台配置
 
-系统暴露了简洁的 `IAudioService` 接口，可无缝集成任何 DI 容器。对于非 DI 项目，所有功能仍可通过 `AudioManager` 的静态方法访问。`SetInstance()` 方法允许外部代码将已有的 `AudioManager` 注册为单例。
+`AudioPlatformProfile` 暴露按平台调优的焦点/暂停处理、移动端更新节流、剔除、LOD 与遮挡。Runtime asmdef 没有平台排除；源码为 WebGL、Android/iOS、桌面 fallback，以及 `UNITY_SWITCH`、`UNITY_PS4`、`UNITY_PS5`、`UNITY_XBOXONE`、`UNITY_GAMECORE` 提供策略分支。源码存在不等于平台验证 —— 每个发布目标都必须验证编译、音频输出、焦点/暂停行为、语音上限、内存和延迟。
 
-### AudioClipReference 与外部加载器
+### Domain Reload
 
-`AudioClipReference` 支持多种来源类型：
+静态 reset hook 使用 `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]`。禁用 domain reload 的项目仍应在所用 Unity 版本中验证重复进入 Play Mode、shutdown、loader 注册和缓存清理。
 
-- `FilePath`
-- `StreamingAssetsPath`
-- `PersistentDataPath`
-- `Url`
-- `AssetAddress`
+## 常见场景
 
-这里最重要的设计原则是：
+### 脚步声变化池
 
-- 路径和 URL 类型可以由音频系统直接加载
-- `AssetAddress` 被视为逻辑地址，不等同于本地文件路径
-- 对于 `AssetAddress`，建议注册运行时加载器
-
-#### 为单个引用注册加载器
+角色需要按地面材质播放不同的脚步声。创作一个 `AudioEvent`，用 `RandomSelector` 分支到各材质对应的 `AudioFile` 节点，并用全局状态驱动材质选择：
 
 ```csharp
-AudioClipResolver.RegisterManagedReferenceLoader(audioClipReference, async (clipRef, ct) =>
-{
-    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
-    if (handle == null || handle.Asset == null)
-        return default;
-
-    return new ManagedAudioClipLoadResult(
-        handle.Asset,
-        () => handle.Release());
-});
+// 切换地面材质
+AudioManager.SetState("Surface", "Wood");
+AudioManager.PlayEvent("Footstep", emitter);
 ```
 
-#### 为整个来源类型注册加载器
+在 `RandomSelector` 上打开 `Avoid Repeat`，避免同一 clip 连续播放两次。
 
-这更适合 `AssetAddress`、YooAsset、Addressables 或你自己的运行时资源系统：
+### 带分支的音乐层
+
+Boss 战有 intro、loop 和 sting 层。在 `AudioEvent` 中用绑定到 `MusicPhase` switch 的 `SwitchSelector`，通过设置状态切换层：
 
 ```csharp
-AudioClipResolver.RegisterManagedLocationKindLoader(AudioLocationKind.AssetAddress, async (clipRef, ct) =>
-{
-    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
-    if (handle == null || handle.Asset == null)
-        return default;
+AudioManager.SetState("MusicPhase", "Intro");
+AudioManager.PlayEvent("BossTheme", emitter);
 
-    return new ManagedAudioClipLoadResult(
-        handle.Asset,
-        () => handle.Release());
-});
+// 切到 loop
+AudioManager.SetState("MusicPhase", "Loop");
 ```
 
-#### 生命周期保证
+### 由资源管理驱动的 bank 生命周期
 
-当外部加载器返回 `IAudioClipHandle` 后，音频系统会在不再使用该资源时自动调用 `Release()`，包括：
+场景通过 Addressables 加载音频 bank，并在场景卸载时释放。bridge 持有 bank handle，先让 `AudioManager.UnloadBank` 清除音频系统的引用，再在 `OnBankUnloaded` 中释放底层资源 handle（见 [外部资源管理集成](#外部资源管理集成)）。
 
-- 事件停止
-- 事件回收
-- Bank 卸载
-- 异步加载取消后的清理
+### DSP 调度的音乐切换
 
-这意味着：
-
-- 音频系统负责决定“什么时候已经不再引用这个 clip”
-- 外部资源系统负责决定“如何真正释放底层资源句柄”
-
-这样既能保证资源生命周期安全，也不会强迫 `CycloneGames.Audio` 直接耦合所有加载后端。
-
-#### 外部 Clip 生命周期验证清单
-
-对于将 `AudioClipReference` 接入 Addressables、YooAsset 或自定义资源系统的项目，建议至少验证以下场景：
-
-- 开始播放后卸载所属 Bank，确认外部释放回调只执行一次
-- 异步加载尚未完成前停止事件，确认清理结束后没有悬空句柄残留
-- 多个实例同时播放同一个 `AudioClipReference`，确认只有最后一个实例结束后底层资源才会被真正释放
-- 强制外部加载器失败，确认缓存统计记录失败，同时不会泄漏半初始化状态的句柄
-- 在 Play Mode 下清理或重载音频系统，确认已注册的 loader 和外部缓存 clip 都会被安全释放
-
-### Category 默认模板与语音策略覆盖
-
-`AudioEvent` 现在支持一个轻量的两层语音策略模型：
-
-- `Category` 用来表达高层运行时意图
-- `Use Category Defaults` 会自动套用该分类的内建语音策略模板
-- 只有极少数特殊事件，才需要做单事件覆盖
-
-这样常规工作流会简单很多。对大多数项目来说，设计师通常只需要给事件选一个分类：
-
-- `CriticalUI`
-- `GameplaySFX`
-- `Voice`
-- `Ambient`
-- `Music`
-
-当 `Use Category Defaults` 开启时，事件会自动解析出对应的语音策略。当前内建默认模板如下：
-
-| 分类 | Steal Resistance | Budget Weight | Allow Voice Steal | Allow Distance Steal | Protect Scheduled |
-| --- | ---: | ---: | :---: | :---: | :---: |
-| `CriticalUI` | `2.2` | `1.5` | `false` | `false` | `true` |
-| `GameplaySFX` | `1.0` | `1.0` | `true` | `true` | `true` |
-| `Voice` | `1.5` | `1.35` | `true` | `false` | `true` |
-| `Ambient` | `0.7` | `0.7` | `true` | `true` | `false` |
-| `Music` | `2.6` | `1.8` | `false` | `false` | `true` |
-
-推荐用法：
-
-- 将 BGM 和长期存在的音乐层设置为 `Music`
-- 将对白、旁白、字幕驱动的语音设置为 `Voice`
-- 将远景循环声和环境底噪设置为 `Ambient`
-- 大多数一次性玩法音效保留在 `GameplaySFX`
-- `CriticalUI` 留给菜单确认、警告、节奏提示或其他“必须被听见”的反馈
-
-只有当某个事件需要超出分类模板的特殊行为时，才建议关闭 `Use Category Defaults` 并改成自定义策略。
-
-### 线程安全的命令派发
-
-所有公共 API 方法均为线程安全。来自工作线程的调用会先写入结构化命令队列，再由主线程通过固定容量的环形缓冲区统一消费，从而降低热路径 GC 压力，并在高负载下保持更可预测的命令移交行为。
-
-### 安全的资源生命周期管理
-
-`UnloadBank` 执行即时清理：停止所有活跃事件、清除每个 `AudioSource.clip` 引用、触发 `OnBankUnloaded` 事件。这保证了外部资源管理系统可以安全释放底层资源，不会出现悬空引用或 use-after-free。
-
-### 异步操作
-
-所有资源密集型操作（例如加载 `AudioClip`）都使用 `UniTask` 异步执行。这避免了主线程阻塞，对消除游戏过程中引入新声音时的帧率下降至关重要。
-
-### GC 优化
-
-音频系统使用固定大小数组（`EventSource[8]`、`ActiveParameter[8]`）替代 `List<>`，使用基于结构体的 `EventSource` 和 `AudioHandle` 以实现栈分配，`ActiveEvent` 实例使用对象池，活跃事件列表使用 O(1) 交换移除。热路径 `Debug.Log` 调用使用 `#if UNITY_EDITOR || DEVELOPMENT_BUILD` 包裹。
-
-### 全平台支持
-
-支持 WebGL、Android/iOS、桌面端和主机平台（Nintendo Switch、PS4/PS5、Xbox One/Series）的平台自适应池大小配置。移动平台具有应用失去焦点时的自动音频暂停/恢复和省电更新节流。
-
-### 性能监控
-
-系统内置了性能检测工具，可为 **AudioManager** 提供内存监控数据，使开发人员能够快速诊断与音频相关的性能问题。
-
-### Domain Reload 安全
-
-静态状态通过 `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]` 正确重置，确保在启用 Unity「Enter Play Mode Options」（跳过域重载）时的正确行为。
-
-### 智能音频池管理
-
-音频系统配备了智能 AudioSource 对象池，能够自动适配不同设备并高效管理资源。
-
-#### 核心特性
-
-| 特性           | 描述                                                         |
-| -------------- | ------------------------------------------------------------ |
-| **设备自适应** | 池大小根据平台（WebGL/移动端/桌面端/主机）和设备内存自动调整 |
-| **自动扩容**   | 当需要更多音源时，池会动态增长                               |
-| **声音窃取**   | 当池已满时，停止最老的非循环音效以释放资源                   |
-| **智能收缩**   | 空闲期间逐步释放未使用的音源                                 |
-| **零 GC 分配** | AudioSource 永远不会在池外创建，防止内存泄漏                 |
-
-#### 默认池大小
-
-| 平台           | 条件        | 初始 | 最大 |
-| -------------- | ----------- | ---- | ---- |
-| WebGL          | 始终        | 16   | 32   |
-| 移动端         | 内存 < 3GB  | 32   | 48   |
-| 移动端         | 内存 3-6GB  | 32   | 64   |
-| 移动端         | 内存 > 6GB  | 32   | 96   |
-| 桌面端         | 内存 < 8GB  | 80   | 128  |
-| 桌面端         | 内存 8-16GB | 80   | 192  |
-| 桌面端         | 内存 > 16GB | 80   | 256  |
-| Switch         | 始终        | 32   | 64   |
-| 主机 (PS/Xbox) | 始终        | 64   | 192  |
-
-#### 自定义配置（可选）
-
-默认情况下，系统会为您的设备使用最优值。如需自定义：
-
-1. 创建配置资产：**Create → CycloneGames → Audio → Audio Pool Config**
-2. 放置在 `Assets` 目录下的任意位置
-3. 在 Inspector 中调整参数
-
-> [!NOTE]
->
-> - 在 **编辑器** 中，配置会从项目任意位置自动发现。
-> - 对于 **构建版本**，需将配置放在 `Resources` 文件夹中才能自动发现，否则将使用默认值。
-> - 项目中应只存在一个 `AudioPoolConfig`。
-
-#### 热更新支持
-
-对于使用 YooAsset 或 Addressables 等资产管理系统的项目：
-
-**方式一：在 AudioManager 初始化之前**（推荐）
+两段音乐需要在精确的小节边界交叉淡化。把进入的事件按 DSP 时钟调度，使其在目标采样点开始：
 
 ```csharp
-// 在启动场景中，AudioManager 初始化之前
-var handle = YooAssets.LoadAssetAsync<AudioPoolConfig>("AudioPoolConfig");
-await handle.Task;
-AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
-// AudioManager 初始化时会自动使用此配置
+double nextBar = AudioSettings.dspTime + ComputeSecondsToNextBar();
+AudioManager.PlayEventScheduled(incomingMusic, emitter, nextBar);
+AudioManager.StopAll(outgoingMusic); // 配置的淡出与进入开始重叠
 ```
 
-**方式二：在 AudioManager 初始化之后**
+### 按 emitter 的参数覆盖
+
+车辆引擎音高应反映每辆车各自的速度。使用 emitter 范围的参数覆盖，让同一 `AudioEvent` 的多个实例读到不同的值：
 
 ```csharp
-// 运行时加载并应用配置
-var handle = YooAssets.LoadAssetAsync<AudioPoolConfig>("AudioPoolConfig");
-await handle.Task;
-AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
-
-// 将新配置应用到正在运行的 AudioManager
-AudioManager.ReloadPoolConfig();
+AudioManager.SetParameterValue("EngineRPM", vehicleObject, rpm);
+AudioManager.PlayEvent("Engine", vehicleObject);
 ```
 
-> [!NOTE]
-> `ReloadPoolConfig()` 会更新池大小限制，但保留现有的 AudioSource。
+## 性能与内存
 
-#### 运行时监控
+| 路径 | 模块级分配 | 说明 |
+| --- | --- | --- |
+| 单事件播放 | 稳定状态 0 字节 | 复用固定 `EventSource[8]`、`ActiveParameter[8]`、池化 `ActiveEvent`、池化 `AudioSource`。 |
+| 池扩容/收缩 | 原生 `AudioSource` 创建/销毁 | 仅在增长或空闲收缩边界发生。 |
+| 工作线程命令提交 | 稳定状态 0 字节 | 预分配 `AudioCommand[4096]` 环形缓冲区；溢出丢弃。 |
+| 外部 clip 加载 | 调用方所有 | 异步状态机和外部 loader 的分配归调用方。 |
+| mixer / 参数 / 状态访问 | 稳定状态 0 字节 | 可复用集合，O(1) swap-remove bookkeeping。 |
 
-在运行时访问池统计数据：
+Runtime 复用固定的单事件数组、池化 `ActiveEvent`、池化 `AudioSource`、预处理事件数据和可复用集合。这些实现减少稳定状态下的托管内存 churn，但不构成整个包零分配的保证。初始化、对象池扩容/收缩、集合容量增长、异步状态机、delegate 回调、诊断以及 Unity 对象创建/销毁都可能分配或产生 native 开销。在设定 GC 或帧时间预算前，应针对代表性的语音数量、图结构、clip 来源和队列竞争，在各目标 backend 的 Player build 中测量。
 
-```csharp
-// 检查池状态
-Debug.Log($"池: {AudioManager.PoolStats.InUse}/{AudioManager.PoolStats.CurrentSize}");
-Debug.Log($"最大: {AudioManager.PoolStats.MaxSize}");
-Debug.Log($"设备等级: {AudioManager.PoolStats.DeviceTier}");
+### 线程
 
-// 性能指标
-Debug.Log($"峰值使用: {AudioManager.PoolStats.PeakUsage}");
-Debug.Log($"扩容次数: {AudioManager.PoolStats.TotalExpansions}");
-Debug.Log($"声音窃取: {AudioManager.PoolStats.TotalSteals}");
+- `AudioManager`、`ActiveEvent`、Unity 对象、配置重载、参数状态、mixer 访问、运行时统计和事件订阅均由主线程持有。
+- [命令提交](#命令提交与主线程所有权) 列出的命令式入口通过 `lock` 保护的环形缓冲区接受工作线程提交。
+- 独立的工作线程提交之间不会互相阻塞，但队列是单消费者（主线程 `Update`）。
+- 本模块不创建线程、不选择调度器。
+
+### 平台行为
+
+Runtime 程序集没有平台排除，也没有脱离 `UnityEngine` 的核心；它依赖 `AudioSource`、`AudioMixer` 和 `AudioListener`。源码为 WebGL、Android/iOS、桌面 fallback，以及 `UNITY_SWITCH`、`UNITY_PS4`、`UNITY_PS5`、`UNITY_XBOXONE`、`UNITY_GAMECORE` 提供策略分支。每个发布目标都必须验证编译、音频输出、焦点/暂停行为、语音上限、内存和延迟。未列出的未来主机平台需要显式 profile 与构建验证。
+
+### 运行时诊断
+
+`AudioManager.GetRuntimeStats()` 与 `AudioManager.PoolStats` 提供对象池、语音、注册表、命令队列和外部缓存计数。部分内存与播放计数只在 Editor 或 Development build 中编译。分配、DSP 与 native memory 分析仍需使用 Unity Profiler 和平台工具。
+
+## 故障排查
+
+| 现象 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| `PlayEvent` 返回 `null` | 池耗尽且无语音可抢占、clip 缺失或 emitter 非法 | 检查 `PoolStats`，提高池上限，调整分类抢占阻力，或预加载 clip |
+| 工作线程播放无效 | 队列溢出丢弃命令，或 Unity 对象引用在执行前失效 | 查看 Editor/Development 丢弃日志，降低提交速率，或切到主线程 |
+| 卸载后 bank clip 泄漏 | 外部资源 owner 在 `OnBankUnloaded` 之前就释放了 handle | 只在 `OnBankUnloaded` 中释放外部 handle，不要在 `UnloadBank` 返回时释放 |
+| 同一 `AudioClipReference` 被过早释放 | 多个实例共享一个 handle，owner 在第一个停止时就释放 | 确认外部 loader 的引用计数覆盖所有实例；音频系统在最后一个实例结束后才释放 |
+| `SetParameterValue` 无效 | 参数名未注册，或范围错误 | 加载注册该参数的 bank；确认是否需要 emitter 范围覆盖 |
+| `SetMixerVolume` 返回 0 | 未指定 mixer，或参数未在 AudioMixer 中暴露 | 在 AudioMixer 资源中暴露参数，并把 mixer 指定给 `AudioManager` |
+| 音乐切换不是采样级精确 | 用了 `PlayEvent` 而非 `PlayEventScheduled` | 用 `PlayEventScheduled` 基于 `AudioSettings.dspTime` 调度 |
+| 语音抢占切掉了重要声音 | 分类太低，或 `Protect Scheduled` 关闭 | 把事件移到更高抢占阻力的分类（`CriticalUI`、`Music`），或打开保护 |
+| 负载下池持续增长 | 上限过高，或空闲收缩阈值过松 | 针对目标平台调优 `AudioPoolConfig`，并对代表性内容做 profiling |
+
+## 验证
+
+通过 Unity Test Runner 运行聚焦测试：
+
+```text
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Audio.Tests.Editor -testResults <result-path> -quit
 ```
 
-AudioManager 的 Inspector 在播放模式下也会显示实时池统计数据。
+运行 `AudioRandomSelectionTests` 验证 selector 分布，运行 `AudioClipReferencePathTests` 验证路径解析。在每个发布 Player 与脚本后端中，用代表性内容验证外部 clip loader、池大小和语音抢占。
+
+## 参考
+
+- [Microsoft Audio-Manager-for-Unity](https://github.com/microsoft/Audio-Manager-for-Unity) —— 原始派生来源，MIT License
+- [Unity AudioMixer](https://docs.unity3d.com/Manual/class-AudioMixer.html) —— 暴露参数与快照切换
+- [Unity AudioSettings.dspTime](https://docs.unity3d.com/ScriptReference/AudioSettings-dspTime.html) —— DSP 时钟调度

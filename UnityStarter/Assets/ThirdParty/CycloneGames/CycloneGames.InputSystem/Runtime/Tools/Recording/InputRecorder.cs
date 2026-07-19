@@ -1,197 +1,551 @@
-using R3;
 using System;
 using System.Collections.Generic;
-using UnityEngine;
 
-namespace CycloneGames.InputSystem.Runtime
+using UnityEngine;
+using UnityEngine.InputSystem.LowLevel;
+
+using Cysharp.Threading.Tasks;
+using R3;
+
+using CycloneGames.InputSystem.Runtime;
+
+namespace CycloneGames.InputSystem.Tools
 {
+    public enum InputSampleValueKind : byte
+    {
+        Button,
+        Vector2,
+        Scalar
+    }
+
+    public enum InputSamplePhase : byte
+    {
+        Performed,
+        ValueChanged
+    }
+
+    /// <summary>
+    /// Immutable input sample captured on the Unity main thread.
+    /// Tick and Order are the authoritative replay ordering keys. TimeSinceStartSeconds is diagnostic only.
+    /// </summary>
+    public readonly struct InputSample
+    {
+        public int PlayerId { get; }
+        public int ActionId { get; }
+        public string ContextName { get; }
+        public string ActionMapName { get; }
+        public string ActionName { get; }
+        public InputSampleValueKind ValueKind { get; }
+        public InputSamplePhase Phase { get; }
+        public InputUpdateType UpdateType { get; }
+        public long Tick { get; }
+        public ulong Order { get; }
+        public double TimeSinceStartSeconds { get; }
+        public Vector2 Vector2Value { get; }
+        public float ScalarValue { get; }
+
+        internal InputSample(
+            int playerId,
+            int actionId,
+            string contextName,
+            string actionMapName,
+            string actionName,
+            InputSampleValueKind valueKind,
+            InputSamplePhase phase,
+            InputUpdateType updateType,
+            long tick,
+            ulong order,
+            double timeSinceStartSeconds,
+            Vector2 vector2Value,
+            float scalarValue)
+        {
+            PlayerId = playerId;
+            ActionId = actionId;
+            ContextName = contextName;
+            ActionMapName = actionMapName;
+            ActionName = actionName;
+            ValueKind = valueKind;
+            Phase = phase;
+            UpdateType = updateType;
+            Tick = tick;
+            Order = order;
+            TimeSinceStartSeconds = timeSinceStartSeconds;
+            Vector2Value = vector2Value;
+            ScalarValue = scalarValue;
+        }
+    }
+
+    /// <summary>
+    /// Main-thread-only, opt-in recorder with a fixed sample capacity.
+    /// Recording never grows its sample storage after construction.
+    /// </summary>
+    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, sourceNamespace: "CycloneGames.InputSystem.Runtime", sourceAssembly: "CycloneGames.InputSystem.Tools.Runtime")]
     public sealed class InputRecorder : IDisposable
     {
-        private readonly List<(string ActionMapName, string ActionName)> _actionsToRecord = new();
-        private readonly List<InputFrame> _recordedFrames = new();
+        public const int UNKNOWN_PLAYER_ID = -1;
+        public const int DEFAULT_SAMPLE_CAPACITY = 4096;
+        public const int MAX_SAMPLE_CAPACITY = 1_048_576;
+        public const int DEFAULT_ACTION_CAPACITY = 32;
+        public const int MAX_ACTION_COUNT = 1024;
+
+        private readonly List<RecordedAction> _actionsToRecord;
+        private readonly InputSampleBuffer _sampleBuffer;
         private CompositeDisposable _subscriptions;
-        private float _recordingStartTime;
+        private double _recordingStartTime;
+        private ulong _nextOrder;
+        private int _playerId;
+        private int _ownerThreadId;
         private bool _isRecording;
+        private bool _isDisposed;
 
         public bool IsRecording => _isRecording;
+        public int SampleCapacity => _sampleBuffer.Capacity;
+        public int RecordedSampleCount => _sampleBuffer.Count;
+        public int DroppedSampleCount => _sampleBuffer.DroppedSampleCount;
+        public bool HasOverflowed => _sampleBuffer.DroppedSampleCount > 0;
 
-        public void RecordAction(string actionMapName, string actionName)
+        public InputRecorder(
+            int sampleCapacity = DEFAULT_SAMPLE_CAPACITY,
+            int actionCapacity = DEFAULT_ACTION_CAPACITY)
         {
-            if (string.IsNullOrEmpty(actionMapName)) throw new ArgumentNullException(nameof(actionMapName));
-            if (string.IsNullOrEmpty(actionName)) throw new ArgumentNullException(nameof(actionName));
-            _actionsToRecord.Add((actionMapName, actionName));
+            if (sampleCapacity <= 0 || sampleCapacity > MAX_SAMPLE_CAPACITY)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sampleCapacity));
+            }
+
+            if (actionCapacity <= 0 || actionCapacity > MAX_ACTION_COUNT)
+            {
+                throw new ArgumentOutOfRangeException(nameof(actionCapacity));
+            }
+
+            _sampleBuffer = new InputSampleBuffer(sampleCapacity);
+            _actionsToRecord = new List<RecordedAction>(actionCapacity);
+        }
+
+        public void RecordAction(
+            string contextName,
+            string actionMapName,
+            string actionName)
+        {
+            ThrowIfDisposed();
+
+            if (_isRecording)
+            {
+                throw new InvalidOperationException("Actions cannot be changed while recording.");
+            }
+
+            if (string.IsNullOrWhiteSpace(contextName))
+            {
+                throw new ArgumentException("Context name is required.", nameof(contextName));
+            }
+
+            if (string.IsNullOrWhiteSpace(actionMapName))
+            {
+                throw new ArgumentException("Action map name is required.", nameof(actionMapName));
+            }
+
+            if (string.IsNullOrWhiteSpace(actionName))
+            {
+                throw new ArgumentException("Action name is required.", nameof(actionName));
+            }
+
+            for (int i = 0; i < _actionsToRecord.Count; i++)
+            {
+                RecordedAction existing = _actionsToRecord[i];
+                if (string.Equals(existing.ContextName, contextName, StringComparison.Ordinal) &&
+                    string.Equals(existing.ActionMapName, actionMapName, StringComparison.Ordinal) &&
+                    string.Equals(existing.ActionName, actionName, StringComparison.Ordinal))
+                {
+                    return;
+                }
+            }
+
+            if (_actionsToRecord.Count >= MAX_ACTION_COUNT)
+            {
+                throw new InvalidOperationException($"At most {MAX_ACTION_COUNT} actions can be recorded.");
+            }
+
+            _actionsToRecord.Add(new RecordedAction(
+                contextName,
+                actionMapName,
+                actionName,
+                InputHashUtility.GetActionId(contextName, actionMapName, actionName)));
         }
 
         public void StartRecording(IInputPlayer player)
         {
-            if (player == null) throw new ArgumentNullException(nameof(player));
-            if (_isRecording) return;
+            int playerId = player?.PlayerId ?? UNKNOWN_PLAYER_ID;
+            StartRecording(player, playerId);
+        }
 
-            _isRecording = true;
-            _recordedFrames.Clear();
-            _recordingStartTime = Time.realtimeSinceStartup;
+        public void StartRecording(IInputPlayer player, int playerId)
+        {
+            ThrowIfDisposed();
+
+            if (player == null)
+            {
+                throw new ArgumentNullException(nameof(player));
+            }
+
+            if (_isRecording)
+            {
+                throw new InvalidOperationException("The recorder is already running.");
+            }
+
+            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
+            {
+                throw new InvalidOperationException(
+                    "InputRecorder must be started on the Unity main thread.");
+            }
+
+            _ownerThreadId = Environment.CurrentManagedThreadId;
+            _playerId = playerId;
+            _recordingStartTime = Time.realtimeSinceStartupAsDouble;
+            _nextOrder = 0;
+            _sampleBuffer.Clear();
             _subscriptions?.Dispose();
             _subscriptions = new CompositeDisposable();
+            _isRecording = true;
 
-            for (int i = 0; i < _actionsToRecord.Count; i++)
+            try
             {
-                var (mapName, actionName) = _actionsToRecord[i];
+                for (int i = 0; i < _actionsToRecord.Count; i++)
+                {
+                    RecordedAction action = _actionsToRecord[i];
 
-                player.GetButtonObservable(mapName, actionName)
-                    .Subscribe(_ =>
-                    {
-                        _recordedFrames.Add(new InputFrame(
-                            Time.realtimeSinceStartup - _recordingStartTime,
-                            null, null, true));
-                    })
-                    .AddTo(_subscriptions);
+                    player.GetButtonObservable(
+                            action.ContextName,
+                            action.ActionMapName,
+                            action.ActionName)
+                        .Subscribe(_ => AppendSample(
+                            action,
+                            InputSampleValueKind.Button,
+                            InputSamplePhase.Performed,
+                            default,
+                            0f))
+                        .AddTo(_subscriptions);
 
-                player.GetVector2Observable(mapName, actionName)
-                    .Subscribe(v =>
-                    {
-                        _recordedFrames.Add(new InputFrame(
-                            Time.realtimeSinceStartup - _recordingStartTime,
-                            v, null, false));
-                    })
-                    .AddTo(_subscriptions);
+                    player.GetVector2Observable(
+                            action.ContextName,
+                            action.ActionMapName,
+                            action.ActionName)
+                        .Subscribe(value => AppendSample(
+                            action,
+                            InputSampleValueKind.Vector2,
+                            InputSamplePhase.ValueChanged,
+                            value,
+                            0f))
+                        .AddTo(_subscriptions);
 
-                player.GetScalarObservable(mapName, actionName)
-                    .Subscribe(f =>
-                    {
-                        _recordedFrames.Add(new InputFrame(
-                            Time.realtimeSinceStartup - _recordingStartTime,
-                            null, f, false));
-                    })
-                    .AddTo(_subscriptions);
+                    player.GetScalarObservable(
+                            action.ContextName,
+                            action.ActionMapName,
+                            action.ActionName)
+                        .Subscribe(value => AppendSample(
+                            action,
+                            InputSampleValueKind.Scalar,
+                            InputSamplePhase.ValueChanged,
+                            default,
+                            value))
+                        .AddTo(_subscriptions);
+                }
+            }
+            catch
+            {
+                _isRecording = false;
+                _subscriptions.Dispose();
+                _subscriptions = null;
+                _sampleBuffer.Clear();
+                throw;
             }
         }
 
         public InputRecording StopRecording()
         {
-            if (!_isRecording) return null;
+            ThrowIfDisposed();
 
+            if (!_isRecording)
+            {
+                return null;
+            }
+
+            EnsureOwnerThread();
             _isRecording = false;
             _subscriptions?.Dispose();
             _subscriptions = null;
 
-            var recording = _recordedFrames.Count > 0
-                ? new InputRecording(new List<InputFrame>(_recordedFrames))
-                : new InputRecording(new List<InputFrame>());
-            _recordedFrames.Clear();
+            var recording = new InputRecording(
+                _sampleBuffer.ToArray(),
+                _sampleBuffer.Capacity,
+                _sampleBuffer.DroppedSampleCount);
+            _sampleBuffer.Clear();
             return recording;
         }
 
         public void Dispose()
         {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            if (_isRecording)
+            {
+                EnsureOwnerThread();
+            }
+
             _isRecording = false;
             _subscriptions?.Dispose();
             _subscriptions = null;
-            _recordedFrames.Clear();
+            _sampleBuffer.Clear();
+            _isDisposed = true;
         }
-    }
 
-    internal readonly struct InputFrame
-    {
-        internal readonly float TimeSinceStart;
-        internal readonly Vector2? Vector2Value;
-        internal readonly float? FloatValue;
-        internal readonly bool HasUnitEvent;
-
-        internal InputFrame(float timeSinceStart, Vector2? vector2Value, float? floatValue, bool hasUnitEvent)
+        private void AppendSample(
+            RecordedAction action,
+            InputSampleValueKind valueKind,
+            InputSamplePhase phase,
+            Vector2 vector2Value,
+            float scalarValue)
         {
-            TimeSinceStart = timeSinceStart;
-            Vector2Value = vector2Value;
-            FloatValue = floatValue;
-            HasUnitEvent = hasUnitEvent;
+            if (!_isRecording)
+            {
+                return;
+            }
+
+            EnsureOwnerThread();
+
+            var sample = new InputSample(
+                _playerId,
+                action.ActionId,
+                action.ContextName,
+                action.ActionMapName,
+                action.ActionName,
+                valueKind,
+                phase,
+                InputState.currentUpdateType,
+                InputSystemFrameProvider.BeforeUpdate.GetFrameCount(),
+                _nextOrder,
+                Time.realtimeSinceStartupAsDouble - _recordingStartTime,
+                vector2Value,
+                scalarValue);
+
+            if (_sampleBuffer.TryAdd(sample))
+            {
+                _nextOrder++;
+            }
+        }
+
+        private void EnsureOwnerThread()
+        {
+            if (Environment.CurrentManagedThreadId != _ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    "InputRecorder is main-thread confined and must be used from its recording owner thread.");
+            }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(nameof(InputRecorder));
+            }
+        }
+
+        private readonly struct RecordedAction
+        {
+            internal readonly string ContextName;
+            internal readonly string ActionMapName;
+            internal readonly string ActionName;
+            internal readonly int ActionId;
+
+            internal RecordedAction(
+                string contextName,
+                string actionMapName,
+                string actionName,
+                int actionId)
+            {
+                ContextName = contextName;
+                ActionMapName = actionMapName;
+                ActionName = actionName;
+                ActionId = actionId;
+            }
         }
     }
 
+    internal sealed class InputSampleBuffer
+    {
+        private readonly List<InputSample> _samples;
+
+        internal int Capacity { get; }
+        internal int Count => _samples.Count;
+        internal int DroppedSampleCount { get; private set; }
+
+        internal InputSampleBuffer(int capacity)
+        {
+            Capacity = capacity;
+            _samples = new List<InputSample>(capacity);
+        }
+
+        internal bool TryAdd(InputSample sample)
+        {
+            if (_samples.Count >= Capacity)
+            {
+                if (DroppedSampleCount < int.MaxValue)
+                {
+                    DroppedSampleCount++;
+                }
+
+                return false;
+            }
+
+            _samples.Add(sample);
+            return true;
+        }
+
+        internal InputSample[] ToArray()
+        {
+            return _samples.ToArray();
+        }
+
+        internal void Clear()
+        {
+            _samples.Clear();
+            DroppedSampleCount = 0;
+        }
+    }
+
+    /// <summary>
+    /// Immutable recording ordered by Tick and Order.
+    /// Consumers drive replay explicitly through InputReplayCursor.
+    /// </summary>
+    [UnityEngine.Scripting.APIUpdating.MovedFrom(true, sourceNamespace: "CycloneGames.InputSystem.Runtime", sourceAssembly: "CycloneGames.InputSystem.Tools.Runtime")]
     public sealed class InputRecording
     {
-        private readonly List<InputFrame> _frames;
+        private readonly InputSample[] _samples;
 
-        internal InputRecording(List<InputFrame> frames)
+        public int SampleCount => _samples.Length;
+        public int TickCount { get; }
+        [Obsolete("Use TickCount. Input recordings count Input System update ticks, not rendered frames.")]
+        public int FrameCount => TickCount;
+        public int Capacity { get; }
+        public int DroppedSampleCount { get; }
+        public bool WasTruncated => DroppedSampleCount > 0;
+        public double DurationSeconds =>
+            _samples.Length > 0 ? _samples[_samples.Length - 1].TimeSinceStartSeconds : 0d;
+        public float Duration => (float)DurationSeconds;
+        public ReadOnlySpan<InputSample> Samples => _samples;
+        public InputSample this[int index] => _samples[index];
+
+        internal InputRecording(InputSample[] samples, int capacity, int droppedSampleCount)
         {
-            _frames = frames ?? throw new ArgumentNullException(nameof(frames));
+            _samples = samples ?? throw new ArgumentNullException(nameof(samples));
+            Capacity = capacity;
+            DroppedSampleCount = droppedSampleCount;
+            ValidateOrdering(_samples);
+            TickCount = CountUniqueTicks(_samples);
         }
 
-        public float Duration => _frames.Count > 0 ? _frames[_frames.Count - 1].TimeSinceStart : 0f;
-
-        public int FrameCount => _frames.Count;
-
-        internal List<InputFrame> Frames => _frames;
-
-        public Observable<Unit> CreateReplayObservable()
+        public InputReplayCursor CreateCursor()
         {
-            return CreateReplayUnitObservable();
+            return new InputReplayCursor(this);
         }
 
-        public Observable<Vector2> CreateReplayVector2Observable()
+        internal InputSample GetSample(int index)
         {
-            if (_frames.Count == 0) return Observable.Empty<Vector2>();
+            return _samples[index];
+        }
 
-            var list = new List<Observable<Vector2>>();
-            for (int i = 0; i < _frames.Count; i++)
+        private static void ValidateOrdering(InputSample[] samples)
+        {
+            for (int i = 1; i < samples.Length; i++)
             {
-                var frame = _frames[i];
-                if (frame.Vector2Value.HasValue)
+                InputSample previous = samples[i - 1];
+                InputSample current = samples[i];
+                if (current.Tick < previous.Tick ||
+                    (current.Tick == previous.Tick && current.Order <= previous.Order))
                 {
-                    var value = frame.Vector2Value.Value;
-                    list.Add(Observable.Timer(TimeSpan.FromSeconds(frame.TimeSinceStart))
-                        .Select(_ => value));
+                    throw new ArgumentException(
+                        "Input samples must be strictly ordered by tick and order.",
+                        nameof(samples));
                 }
             }
-            if (list.Count == 0) return Observable.Empty<Vector2>();
-            return MergeObservables(list);
         }
 
-        public Observable<float> CreateReplayFloatObservable()
+        private static int CountUniqueTicks(InputSample[] samples)
         {
-            if (_frames.Count == 0) return Observable.Empty<float>();
-
-            var list = new List<Observable<float>>();
-            for (int i = 0; i < _frames.Count; i++)
+            if (samples.Length == 0)
             {
-                var frame = _frames[i];
-                if (frame.FloatValue.HasValue)
+                return 0;
+            }
+
+            int count = 1;
+            long previousTick = samples[0].Tick;
+            for (int i = 1; i < samples.Length; i++)
+            {
+                long currentTick = samples[i].Tick;
+                if (currentTick == previousTick)
                 {
-                    var value = frame.FloatValue.Value;
-                    list.Add(Observable.Timer(TimeSpan.FromSeconds(frame.TimeSinceStart))
-                        .Select(_ => value));
+                    continue;
                 }
+
+                count++;
+                previousTick = currentTick;
             }
-            if (list.Count == 0) return Observable.Empty<float>();
-            return MergeObservables(list);
+
+            return count;
+        }
+    }
+
+    /// <summary>
+    /// Allocation-free cursor for deterministic, caller-driven replay.
+    /// </summary>
+    public struct InputReplayCursor
+    {
+        private readonly InputRecording _recording;
+        private int _nextIndex;
+
+        public int NextIndex => _nextIndex;
+        public bool HasNext => _recording != null && _nextIndex < _recording.SampleCount;
+
+        internal InputReplayCursor(InputRecording recording)
+        {
+            _recording = recording;
+            _nextIndex = 0;
         }
 
-        public Observable<Unit> CreateReplayUnitObservable()
+        public bool TryReadNext(out InputSample sample)
         {
-            if (_frames.Count == 0) return Observable.Empty<Unit>();
-
-            var list = new List<Observable<Unit>>();
-            for (int i = 0; i < _frames.Count; i++)
+            if (!HasNext)
             {
-                var frame = _frames[i];
-                if (frame.HasUnitEvent)
-                {
-                    list.Add(Observable.Timer(TimeSpan.FromSeconds(frame.TimeSinceStart))
-                        .Select(_ => Unit.Default));
-                }
+                sample = default;
+                return false;
             }
-            if (list.Count == 0) return Observable.Empty<Unit>();
-            return MergeObservables(list);
+
+            sample = _recording.GetSample(_nextIndex);
+            _nextIndex++;
+            return true;
         }
 
-        private static Observable<T> MergeObservables<T>(List<Observable<T>> sources)
+        public bool TryReadNext(long maximumTickInclusive, out InputSample sample)
         {
-            if (sources.Count == 1) return sources[0];
-
-            var merged = sources[0];
-            for (int i = 1; i < sources.Count; i++)
+            if (!HasNext)
             {
-                merged = merged.Merge(sources[i]);
+                sample = default;
+                return false;
             }
-            return merged;
+
+            InputSample next = _recording.GetSample(_nextIndex);
+            if (next.Tick > maximumTickInclusive)
+            {
+                sample = default;
+                return false;
+            }
+
+            sample = next;
+            _nextIndex++;
+            return true;
         }
     }
 }

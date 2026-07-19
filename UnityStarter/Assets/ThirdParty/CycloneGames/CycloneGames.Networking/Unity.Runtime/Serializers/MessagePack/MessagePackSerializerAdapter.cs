@@ -20,13 +20,13 @@ namespace CycloneGames.Networking.Serializer.MessagePack
         private readonly MessagePackSerializerOptions _options;
 
         public MessagePackSerializerAdapter()
-            : this(null)
+            : this(MessagePackSerializerOptions.Standard)
         {
         }
 
         public MessagePackSerializerAdapter(MessagePackSerializerOptions options)
         {
-            _options = options ?? MessagePackSerializerOptions.Standard;
+            _options = options ?? throw new ArgumentNullException(nameof(options));
         }
 
         public void Serialize<T>(in T value, byte[] buffer, int offset, out int writtenBytes) where T : struct

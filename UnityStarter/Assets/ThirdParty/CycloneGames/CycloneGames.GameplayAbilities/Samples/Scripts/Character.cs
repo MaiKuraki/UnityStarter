@@ -4,6 +4,7 @@ using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.Logger;
 using UnityEngine;
+using UnityEngine.Serialization;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
@@ -19,6 +20,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         public List<GameplayAbilitySO> InitialAbilities;
         public GameplayEffectSO InitialAttributesEffect;
         public List<GameplayEffectSO> InitialPassiveEffects;
+        [FormerlySerializedAs("LevelingData")]
         public LevelUpDataSO LevelUpData;
 
         [Header("Faction")]
@@ -78,7 +80,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 if (abilitySO != null)
                 {
-                    AbilitySystemComponent.GrantAbility(abilitySO.CreateAbility());
+                    AbilitySystemComponent.GrantAbility(abilitySO.GetGameplayAbility());
                 }
             }
         }

@@ -1,53 +1,227 @@
 using System;
 using System.Collections.Generic;
-using UnityEngine;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using Unity.Burst;
 using Unity.Mathematics;
+using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
+    /// <summary>
+    /// Selects the Unity PlayerLoop phase used by an Actor's primary Tick.
+    /// An Actor participates in at most one phase.
+    /// </summary>
+    public enum ActorTickPhase : byte
+    {
+        None = 0,
+        Update = 1,
+        FixedUpdate = 2,
+        LateUpdate = 3,
+    }
+
+    public enum ActorLifecycleState : byte
+    {
+        Constructed = 0,
+        Initialized = 1,
+        Playing = 2,
+        Ending = 3,
+        Ended = 4,
+        Destroyed = 5,
+    }
+
+    /// <summary>
+    /// Unity-facing gameplay object. Actor provides world membership, lifecycle, transform,
+    /// lightweight tags, visibility, and damage hooks. Network migration and persistence are
+    /// integration responsibilities.
+    /// </summary>
     public class Actor : MonoBehaviour
     {
+        public const int MaxActorTags = 64;
+        public const int MaxActorTagLength = 128;
+
         [SerializeField] private float initialLifeSpanSec;
         [SerializeField] private bool bCanBeDamaged = true;
         [SerializeField] private bool bHidden;
         [SerializeField, ActorTag] private List<string> tags;
+        [SerializeField] private ActorTickPhase PrimaryTickPhase = ActorTickPhase.None;
+        [SerializeField] private bool StartWithTickEnabled = true;
+
+        private Actor owner;
+        private Actor instigator;
+        private World world;
+        private List<Renderer> rendererBuffer;
+        private CancellationTokenSource lifeSpanCancellation;
+        private double lifeSpanDeadline;
+        private ActorLifecycleState lifecycleState = ActorLifecycleState.Constructed;
+        private EndPlayReason endPlayReason;
+        private bool worldUnboundNotified;
+        private bool actorTickEnabled;
+        private bool actorTickStateInitialized;
 
         public event Action<Actor> OnDestroyed;
         public event Action OwnerChanged;
         public event Action<float, DamageEvent, Controller, Actor> OnTakePointDamage;
         public event Action<float, DamageEvent, Controller, Actor> OnTakeRadialDamage;
 
-        private Actor owner;
-        private Actor instigator;
-        private string actorName;
-        private bool hasBegunPlay;
+        public World World => world;
+        public ActorLifecycleState LifecycleState => lifecycleState;
+        public bool HasBegunPlay => lifecycleState == ActorLifecycleState.Playing;
+        public bool CanEverTick => PrimaryTickPhase != ActorTickPhase.None;
+        public ActorTickPhase TickPhase => PrimaryTickPhase;
+        public bool IsTickEnabledAtStart => StartWithTickEnabled;
 
-        // Pre-allocated list for SetActorHiddenInGame to avoid GC
-        private static readonly List<Renderer> s_rendererBuffer = new List<Renderer>(16);
-
-        #region Owner
-        public Actor GetOwner() => owner;
-        public T GetOwner<T>() where T : Actor => owner as T;
-        public void SetOwner(Actor NewOwner)
+        #region Primary tick
+        /// <summary>
+        /// Returns whether this Actor's primary Tick is enabled. World lifecycle and component
+        /// activity are additional dispatch gates.
+        /// </summary>
+        public bool IsActorTickEnabled()
         {
-            if (ReferenceEquals(owner, NewOwner)) return;
-            owner = NewOwner;
-            OwnerChanged?.Invoke();
+            return CanEverTick && actorTickEnabled;
+        }
+
+        /// <summary>
+        /// Enables or disables this Actor's primary Tick. Enabling requires a configured phase.
+        /// </summary>
+        public void SetActorTickEnabled(bool enabled)
+        {
+            world?.AssertOwnerThread();
+            if (enabled && !CanEverTick)
+            {
+                throw new InvalidOperationException(
+                    "Actor Tick cannot be enabled while TickPhase is None. Configure a phase first.");
+            }
+
+            bool previousEnabled = IsActorTickEnabled();
+            actorTickStateInitialized = true;
+            actorTickEnabled = enabled;
+            bool nextEnabled = IsActorTickEnabled();
+            if (previousEnabled != nextEnabled)
+            {
+                world?.NotifyActorTickConfigurationChanged(
+                    this,
+                    PrimaryTickPhase,
+                    previousEnabled,
+                    PrimaryTickPhase,
+                    nextEnabled);
+            }
+        }
+
+        /// <summary>
+        /// Changes the primary Tick phase. Selecting None disables Tick immediately.
+        /// </summary>
+        public void SetActorTickPhase(ActorTickPhase phase)
+        {
+            ValidateTickPhase(phase);
+            world?.AssertOwnerThread();
+            if (PrimaryTickPhase == phase)
+            {
+                return;
+            }
+
+            ActorTickPhase previousPhase = PrimaryTickPhase;
+            bool previousEnabled = IsActorTickEnabled();
+            PrimaryTickPhase = phase;
+            actorTickStateInitialized = true;
+            if (phase == ActorTickPhase.None)
+            {
+                actorTickEnabled = false;
+            }
+
+            world?.NotifyActorTickConfigurationChanged(
+                this,
+                previousPhase,
+                previousEnabled,
+                phase,
+                IsActorTickEnabled());
+        }
+
+        /// <summary>
+        /// Establishes code-owned Tick defaults for a specialized Actor type.
+        /// Call from Awake after base.Awake().
+        /// </summary>
+        protected void ConfigureActorTick(ActorTickPhase phase, bool startWithTickEnabled)
+        {
+            ValidateTickPhase(phase);
+            world?.AssertOwnerThread();
+
+            ActorTickPhase previousPhase = PrimaryTickPhase;
+            bool previousEnabled = IsActorTickEnabled();
+            PrimaryTickPhase = phase;
+            StartWithTickEnabled = startWithTickEnabled;
+            actorTickEnabled = phase != ActorTickPhase.None && startWithTickEnabled;
+            actorTickStateInitialized = true;
+
+            bool nextEnabled = IsActorTickEnabled();
+            if (previousPhase != phase || previousEnabled != nextEnabled)
+            {
+                world?.NotifyActorTickConfigurationChanged(
+                    this,
+                    previousPhase,
+                    previousEnabled,
+                    phase,
+                    nextEnabled);
+            }
+        }
+
+        /// <summary>
+        /// Per-frame gameplay hook dispatched by World in the configured phase.
+        /// </summary>
+        protected virtual void Tick(float deltaSeconds) { }
+
+        internal void DispatchTick(float deltaSeconds)
+        {
+            Tick(deltaSeconds);
+        }
+
+        private void InitializeActorTickState()
+        {
+            if (actorTickStateInitialized)
+            {
+                return;
+            }
+
+            actorTickEnabled = PrimaryTickPhase != ActorTickPhase.None && StartWithTickEnabled;
+            actorTickStateInitialized = true;
+        }
+
+        private static void ValidateTickPhase(ActorTickPhase phase)
+        {
+            if (phase < ActorTickPhase.None || phase > ActorTickPhase.LateUpdate)
+            {
+                throw new ArgumentOutOfRangeException(nameof(phase), phase, "Unknown Actor Tick phase.");
+            }
         }
         #endregion
 
-        #region Instigator
+        #region Owner and instigator
+        public Actor GetOwner() => owner;
+        public T GetOwner<T>() where T : Actor => owner as T;
+
+        public void SetOwner(Actor newOwner)
+        {
+            if (ReferenceEquals(newOwner, this))
+            {
+                throw new InvalidOperationException("An Actor cannot own itself.");
+            }
+
+            if (ReferenceEquals(owner, newOwner))
+            {
+                return;
+            }
+
+            owner = newOwner;
+            OwnerChanged?.Invoke();
+        }
+
         public Actor GetInstigator() => instigator;
         public T GetInstigator<T>() where T : Actor => instigator as T;
-        public void SetInstigator(Actor NewInstigator) => instigator = NewInstigator;
+        public void SetInstigator(Actor newInstigator) => instigator = newInstigator;
         #endregion
 
-        #region Name
-        public string GetName() => actorName;
-        #endregion
-
-        #region Transform
+        #region Name and transform
+        public string GetName() => gameObject.name;
         public Vector3 GetActorLocation() => transform.position;
         public Quaternion GetActorRotation() => transform.rotation;
         public Vector3 GetActorScale() => transform.localScale;
@@ -55,13 +229,13 @@ namespace CycloneGames.GameplayFramework.Runtime
         public Vector3 GetActorForwardVector() => transform.forward;
         public Vector3 GetActorRightVector() => transform.right;
         public Vector3 GetActorUpVector() => transform.up;
+        public void SetActorLocation(Vector3 newLocation) => transform.position = newLocation;
+        public void SetActorRotation(Quaternion newRotation) => transform.rotation = newRotation;
+        public void SetActorScale(Vector3 newScale) => transform.localScale = newScale;
 
-        public void SetActorLocation(Vector3 NewLocation) => transform.position = NewLocation;
-        public void SetActorRotation(Quaternion NewRotation) => transform.rotation = NewRotation;
-        public void SetActorScale(Vector3 NewScale) => transform.localScale = NewScale;
-        public void SetActorLocationAndRotation(Vector3 NewLocation, Quaternion NewRotation)
+        public void SetActorLocationAndRotation(Vector3 newLocation, Quaternion newRotation)
         {
-            transform.SetPositionAndRotation(NewLocation, NewRotation);
+            transform.SetPositionAndRotation(newLocation, newRotation);
         }
         #endregion
 
@@ -81,108 +255,230 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         #region Visibility
         public bool IsHidden() => bHidden;
-        public virtual void SetActorHiddenInGame(bool bNewHidden)
+
+        public virtual void SetActorHiddenInGame(bool hidden)
         {
-            ApplyActorHiddenInGame(bNewHidden, false);
+            ApplyActorHiddenInGame(hidden, forceRendererSync: false);
         }
 
-        private void ApplyActorHiddenInGame(bool bNewHidden, bool forceRendererSync)
+        internal void ApplyActorHiddenInGame(bool hidden, bool forceRendererSync)
         {
-            if (bHidden == bNewHidden && !forceRendererSync) return;
-            bHidden = bNewHidden;
-            s_rendererBuffer.Clear();
-            GetComponentsInChildren(true, s_rendererBuffer);
-            for (int i = 0; i < s_rendererBuffer.Count; i++)
+            if (bHidden == hidden && !forceRendererSync)
             {
-                s_rendererBuffer[i].enabled = !bHidden;
+                return;
             }
-            s_rendererBuffer.Clear();
+
+            bHidden = hidden;
+            rendererBuffer ??= new List<Renderer>(16);
+            rendererBuffer.Clear();
+            GetComponentsInChildren(includeInactive: true, rendererBuffer);
+            for (int i = 0; i < rendererBuffer.Count; i++)
+            {
+                Renderer renderer = rendererBuffer[i];
+                if (renderer != null)
+                {
+                    renderer.enabled = !bHidden;
+                }
+            }
+
+            rendererBuffer.Clear();
         }
         #endregion
 
         #region Tags
+        public int TagCount => tags?.Count ?? 0;
+
+        public string GetTagAt(int index)
+        {
+            if (tags == null || index < 0 || index >= tags.Count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(index));
+            }
+
+            return tags[index];
+        }
+
         public bool ActorHasTag(string tag)
         {
-            if (tags == null) return false;
+            if (tags == null || string.IsNullOrEmpty(tag))
+            {
+                return false;
+            }
+
             for (int i = 0; i < tags.Count; i++)
             {
-                if (string.Equals(tags[i], tag, StringComparison.Ordinal)) return true;
+                if (string.Equals(tags[i], tag, StringComparison.Ordinal))
+                {
+                    return true;
+                }
             }
+
             return false;
         }
-        public void AddTag(string tag)
+
+        public bool AddTag(string tag)
         {
+            ValidateTag(tag);
             tags ??= new List<string>(4);
-            if (!ActorHasTag(tag)) tags.Add(tag);
+            if (ActorHasTag(tag))
+            {
+                return false;
+            }
+
+            if (tags.Count >= MaxActorTags)
+            {
+                throw new InvalidOperationException($"Actor tag capacity ({MaxActorTags}) was exceeded.");
+            }
+
+            tags.Add(tag);
+            return true;
         }
-        public void RemoveTag(string tag) => tags?.Remove(tag);
-        public IReadOnlyList<string> GetTags() => tags;
+
+        public bool RemoveTag(string tag)
+        {
+            return tags != null && tags.Remove(tag);
+        }
+
+        public int CopyTagsTo(string[] destination, int destinationIndex = 0)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            int count = TagCount;
+            if (destinationIndex < 0 || destinationIndex > destination.Length - count)
+            {
+                throw new ArgumentOutOfRangeException(nameof(destinationIndex));
+            }
+
+            for (int i = 0; i < count; i++)
+            {
+                destination[destinationIndex + i] = tags[i];
+            }
+
+            return count;
+        }
+
+        public void ReplaceTags(IReadOnlyList<string> replacement)
+        {
+            int count = replacement?.Count ?? 0;
+            if (count > MaxActorTags)
+            {
+                throw new ArgumentException($"At most {MaxActorTags} Actor tags are allowed.", nameof(replacement));
+            }
+
+            // Validate the complete input before mutating the current tag set.
+            for (int i = 0; i < count; i++)
+            {
+                ValidateTag(replacement[i]);
+            }
+
+            tags?.Clear();
+            if (count == 0)
+            {
+                return;
+            }
+
+            tags ??= new List<string>(count);
+            for (int i = 0; i < count; i++)
+            {
+                string tag = replacement[i];
+                if (!ActorHasTag(tag))
+                {
+                    tags.Add(tag);
+                }
+            }
+        }
+
+        private static void ValidateTag(string tag)
+        {
+            if (string.IsNullOrWhiteSpace(tag))
+            {
+                throw new ArgumentException("Actor tags cannot be null, empty, or whitespace.", nameof(tag));
+            }
+
+            if (tag.Length > MaxActorTagLength)
+            {
+                throw new ArgumentException(
+                    $"Actor tags cannot exceed {MaxActorTagLength} characters.",
+                    nameof(tag));
+            }
+        }
         #endregion
 
         #region Damage
         public bool CanBeDamaged() => bCanBeDamaged;
-        public void SetCanBeDamaged(bool bValue) => bCanBeDamaged = bValue;
+        public void SetCanBeDamaged(bool value) => bCanBeDamaged = value;
 
-        /// <summary>
-        /// Simple damage entry point for typeless damage. Delegates to the DamageEvent overload.
-        /// </summary>
-        public virtual float TakeDamage(float DamageAmount, Controller EventInstigator = null, Actor DamageCauser = null)
+        public virtual float TakeDamage(
+            float damageAmount,
+            Controller eventInstigator = null,
+            Actor damageCauser = null)
         {
-            return TakeDamage(DamageAmount, DamageEvent.MakeGenericDamage(), EventInstigator, DamageCauser);
+            return TakeDamage(damageAmount, DamageEvent.MakeGenericDamage(), eventInstigator, damageCauser);
         }
 
-        /// <summary>
-        /// Extended damage entry point with full DamageEvent context.
-        /// Routes to ReceivePointDamage/ReceiveRadialDamage based on event type,
-        /// then always calls ReceiveAnyDamage.
-        /// </summary>
-        public virtual float TakeDamage(float DamageAmount, DamageEvent damageEvent, Controller EventInstigator = null, Actor DamageCauser = null)
+        public virtual float TakeDamage(
+            float damageAmount,
+            DamageEvent damageEvent,
+            Controller eventInstigator = null,
+            Actor damageCauser = null)
         {
-            if (!bCanBeDamaged) return 0f;
-            float ActualDamage = InternalTakeDamage(DamageAmount, EventInstigator, DamageCauser);
+            if (!bCanBeDamaged || damageAmount <= 0f || float.IsNaN(damageAmount) || float.IsInfinity(damageAmount))
+            {
+                return 0f;
+            }
+
+            float actualDamage = InternalTakeDamage(damageAmount, eventInstigator, damageCauser);
+            if (actualDamage <= 0f || float.IsNaN(actualDamage) || float.IsInfinity(actualDamage))
+            {
+                return 0f;
+            }
 
             switch (damageEvent.EventType)
             {
                 case EDamageEventType.Point:
-                    ReceivePointDamage(ActualDamage, damageEvent, EventInstigator, DamageCauser);
-                    OnTakePointDamage?.Invoke(ActualDamage, damageEvent, EventInstigator, DamageCauser);
+                    ReceivePointDamage(actualDamage, damageEvent, eventInstigator, damageCauser);
+                    OnTakePointDamage?.Invoke(actualDamage, damageEvent, eventInstigator, damageCauser);
                     break;
                 case EDamageEventType.Radial:
-                    ReceiveRadialDamage(ActualDamage, damageEvent, EventInstigator, DamageCauser);
-                    OnTakeRadialDamage?.Invoke(ActualDamage, damageEvent, EventInstigator, DamageCauser);
+                    ReceiveRadialDamage(actualDamage, damageEvent, eventInstigator, damageCauser);
+                    OnTakeRadialDamage?.Invoke(actualDamage, damageEvent, eventInstigator, damageCauser);
                     break;
             }
 
-            ReceiveAnyDamage(ActualDamage, EventInstigator, DamageCauser);
-            return ActualDamage;
+            ReceiveAnyDamage(actualDamage, eventInstigator, damageCauser);
+            return actualDamage;
         }
 
-        protected virtual float InternalTakeDamage(float DamageAmount, Controller EventInstigator, Actor DamageCauser)
+        protected virtual float InternalTakeDamage(float damageAmount, Controller eventInstigator, Actor damageCauser)
         {
-            return DamageAmount;
+            return damageAmount;
         }
 
-        protected virtual void ReceiveAnyDamage(float Damage, Controller EventInstigator, Actor DamageCauser) { }
-        protected virtual void ReceivePointDamage(float Damage, DamageEvent damageEvent, Controller EventInstigator, Actor DamageCauser) { }
-        protected virtual void ReceiveRadialDamage(float Damage, DamageEvent damageEvent, Controller EventInstigator, Actor DamageCauser) { }
+        protected virtual void ReceiveAnyDamage(float damage, Controller eventInstigator, Actor damageCauser) { }
+        protected virtual void ReceivePointDamage(float damage, DamageEvent damageEvent, Controller eventInstigator, Actor damageCauser) { }
+        protected virtual void ReceiveRadialDamage(float damage, DamageEvent damageEvent, Controller eventInstigator, Actor damageCauser) { }
         #endregion
 
         #region Orientation
         public Vector3 GetOrientation()
         {
             float3 result = QuaternionToEulerXYZBurst(new quaternion(
-                transform.rotation.x, transform.rotation.y, transform.rotation.z, transform.rotation.w));
+                transform.rotation.x,
+                transform.rotation.y,
+                transform.rotation.z,
+                transform.rotation.w));
             return new Vector3(result.x, result.y, result.z);
         }
 
-        // Backward-compatible wrapper for managed callers
         public static Vector3 QuaternionToEulerXYZ(Quaternion rotation)
         {
             float3 result = QuaternionToEulerXYZBurst(new quaternion(rotation.x, rotation.y, rotation.z, rotation.w));
             return new Vector3(result.x, result.y, result.z);
         }
 
-        // Burst direct-call optimized path using pure Mathematics types
         [BurstCompile]
         public static float3 QuaternionToEulerXYZBurst(in quaternion q)
         {
@@ -193,179 +489,317 @@ namespace CycloneGames.GameplayFramework.Runtime
                 2f * q.value.y * q.value.w - 2f * q.value.x * q.value.z,
                 1f - 2f * q.value.y * q.value.y - 2f * q.value.z * q.value.z));
             float roll = math.degrees(math.asin(math.clamp(
-                2f * q.value.x * q.value.y + 2f * q.value.z * q.value.w, -1f, 1f)));
+                2f * q.value.x * q.value.y + 2f * q.value.z * q.value.w,
+                -1f,
+                1f)));
             return new float3(pitch, yaw, roll);
         }
         #endregion
 
         #region Lifespan
         public float GetLifeSpan() => initialLifeSpanSec;
+
+        public float GetRemainingLifeSpan()
+        {
+            if (lifeSpanCancellation == null || lifeSpanDeadline <= 0d)
+            {
+                return 0f;
+            }
+
+            return Mathf.Max(0f, (float)(lifeSpanDeadline - Time.timeAsDouble));
+        }
+
         public void SetLifeSpan(float newLifeSpan)
         {
-            initialLifeSpanSec = newLifeSpan;
-            if (initialLifeSpanSec > 0.001f)
+            if (float.IsNaN(newLifeSpan) || float.IsInfinity(newLifeSpan) || newLifeSpan < 0f)
             {
-                Destroy(gameObject, initialLifeSpanSec);
+                throw new ArgumentOutOfRangeException(nameof(newLifeSpan));
             }
+
+            initialLifeSpanSec = newLifeSpan;
+            CancelLifeSpan();
+
+            if (newLifeSpan <= 0.001f || lifecycleState == ActorLifecycleState.Destroyed)
+            {
+                return;
+            }
+
+            lifeSpanDeadline = Time.timeAsDouble + newLifeSpan;
+            lifeSpanCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                this.GetCancellationTokenOnDestroy());
+            ExpireAfterAsync(newLifeSpan, lifeSpanCancellation).Forget();
+        }
+
+        private async UniTask ExpireAfterAsync(float seconds, CancellationTokenSource cancellation)
+        {
+            try
+            {
+                await UniTask.Delay(
+                    TimeSpan.FromSeconds(seconds),
+                    DelayType.DeltaTime,
+                    PlayerLoopTiming.Update,
+                    cancellation.Token);
+
+                if (ReferenceEquals(lifeSpanCancellation, cancellation))
+                {
+                    lifeSpanCancellation = null;
+                    lifeSpanDeadline = 0d;
+                    cancellation.Dispose();
+
+                    if (world != null)
+                    {
+                        world.DestroyActor(this, EndPlayReason.Destroyed);
+                    }
+                    else if (this != null)
+                    {
+                        Destroy(gameObject);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is the normal path when lifespan changes or the Actor ends.
+            }
+        }
+
+        private void CancelLifeSpan()
+        {
+            CancellationTokenSource cancellation = lifeSpanCancellation;
+            lifeSpanCancellation = null;
+            lifeSpanDeadline = 0d;
+            if (cancellation == null)
+            {
+                return;
+            }
+
+            cancellation.Cancel();
+            cancellation.Dispose();
         }
         #endregion
 
-        #region World Bounds
-        public virtual void FellOutOfWorld() => Destroy(gameObject);
-        public virtual void OutsideWorldBounds() { }
-        #endregion
+        #region World and lifecycle
+        public virtual void FellOutOfWorld()
+        {
+            if (world != null)
+            {
+                world.DestroyActor(this, EndPlayReason.Destroyed);
+            }
+            else
+            {
+                Destroy(gameObject);
+            }
+        }
 
-        #region Lifecycle
+        public virtual void OutsideWorldBounds() { }
+        public virtual bool HasAuthority() => world == null || world.IsAuthority;
+
         protected virtual void Awake()
         {
-            actorName = gameObject.name;
+            lifecycleState = ActorLifecycleState.Initialized;
+            InitializeActorTickState();
         }
 
         protected virtual void Start()
         {
-            if (initialLifeSpanSec > 0.001f)
+            world?.NotifyActorEnabled(this);
+        }
+
+        protected virtual void OnEnable()
+        {
+            // Handles an inactive registered Actor becoming active after its one-time Unity
+            // Start callback. World still enforces the deferred-spawn publication barrier.
+            world?.NotifyActorEnabled(this);
+        }
+
+        internal void BindToWorld(World targetWorld, bool allowReentry)
+        {
+            if (targetWorld == null)
+            {
+                throw new ArgumentNullException(nameof(targetWorld));
+            }
+
+            if (world != null && !ReferenceEquals(world, targetWorld))
+            {
+                throw new InvalidOperationException("Actor already belongs to another World.");
+            }
+
+            if (lifecycleState == ActorLifecycleState.Ending ||
+                lifecycleState == ActorLifecycleState.Destroyed)
+            {
+                throw new InvalidOperationException("An ended Actor cannot enter a World.");
+            }
+
+            if (lifecycleState == ActorLifecycleState.Ended)
+            {
+                if (!allowReentry)
+                {
+                    throw new InvalidOperationException("An ended World-owned Actor cannot enter another World.");
+                }
+
+                lifecycleState = ActorLifecycleState.Initialized;
+            }
+            else if (lifecycleState == ActorLifecycleState.Constructed)
+            {
+                lifecycleState = ActorLifecycleState.Initialized;
+            }
+
+            world = targetWorld;
+            worldUnboundNotified = false;
+            InitializeActorTickState();
+        }
+
+        internal void NotifyWorldBeginPlay()
+        {
+            if (lifecycleState == ActorLifecycleState.Playing ||
+                lifecycleState == ActorLifecycleState.Ending ||
+                lifecycleState == ActorLifecycleState.Ended ||
+                lifecycleState == ActorLifecycleState.Destroyed)
+            {
+                return;
+            }
+
+            lifecycleState = ActorLifecycleState.Playing;
+            if (initialLifeSpanSec > 0.001f && lifeSpanCancellation == null)
             {
                 SetLifeSpan(initialLifeSpanSec);
             }
-            if (!hasBegunPlay)
+
+            BeginPlay();
+        }
+
+        internal void UnbindFromWorld(World sourceWorld, EndPlayReason reason)
+        {
+            if (!ReferenceEquals(world, sourceWorld))
             {
-                hasBegunPlay = true;
-                BeginPlay();
+                return;
+            }
+
+            try
+            {
+                NotifyEndPlay(reason);
+            }
+            finally
+            {
+                try
+                {
+                    NotifyWorldUnboundOnce(reason);
+                }
+                finally
+                {
+                    world = null;
+                    actorTickEnabled = false;
+                    actorTickStateInitialized = false;
+                }
             }
         }
 
-        /// <summary>
-        /// Called once after Start when this actor first enters play.
-        /// </summary>
         protected virtual void BeginPlay() { }
 
-        protected virtual void Update() { }
-        protected virtual void LateUpdate() { }
-        protected virtual void FixedUpdate() { }
+        protected virtual void EndPlay(EndPlayReason reason) { }
+
+        /// <summary>
+        /// Releases World-scoped resources even when the Actor never reached BeginPlay.
+        /// </summary>
+        protected virtual void OnWorldUnbound(EndPlayReason reason) { }
+
+        private void NotifyEndPlay(EndPlayReason reason)
+        {
+            if (lifecycleState != ActorLifecycleState.Playing)
+            {
+                if (lifecycleState != ActorLifecycleState.Ending &&
+                    lifecycleState != ActorLifecycleState.Destroyed)
+                {
+                    endPlayReason = reason;
+                    lifecycleState = ActorLifecycleState.Ended;
+                }
+                return;
+            }
+
+            endPlayReason = reason;
+            lifecycleState = ActorLifecycleState.Ending;
+            try
+            {
+                CancelLifeSpan();
+                EndPlay(reason);
+            }
+            finally
+            {
+                if (this == null || lifecycleState == ActorLifecycleState.Destroyed)
+                {
+                    lifecycleState = ActorLifecycleState.Destroyed;
+                }
+                else
+                {
+                    lifecycleState = ActorLifecycleState.Ended;
+                }
+            }
+        }
+
+        private void NotifyWorldUnboundOnce(EndPlayReason reason)
+        {
+            if (worldUnboundNotified)
+            {
+                return;
+            }
+
+            worldUnboundNotified = true;
+            OnWorldUnbound(reason);
+        }
 
         protected virtual void OnDestroy()
         {
-            if (hasBegunPlay)
+            CancelLifeSpan();
+            try
             {
-                EndPlay();
-                hasBegunPlay = false;
+                NotifyEndPlay(EndPlayReason.Destroyed);
             }
-            OnDestroyed?.Invoke(this);
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            try
+            {
+                NotifyWorldUnboundOnce(endPlayReason);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            World previousWorld = world;
+            world = null;
+            try
+            {
+                previousWorld?.NotifyActorDestroyed(this);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, this);
+            }
+
+            lifecycleState = ActorLifecycleState.Destroyed;
+            Action<Actor> destroyedHandlers = OnDestroyed;
             OnDestroyed = null;
             OnTakePointDamage = null;
             OnTakeRadialDamage = null;
             OwnerChanged = null;
             owner = null;
             instigator = null;
-        }
+            actorTickEnabled = false;
+            actorTickStateInitialized = false;
+            rendererBuffer?.Clear();
 
-        /// <summary>
-        /// Called when this actor is being destroyed or removed from play.
-        /// </summary>
-        protected virtual void EndPlay() { }
-        #endregion
-
-        #region Network Extensibility
-        /// <summary>
-        /// Override in network layer to return true only on the authoritative instance.
-        /// Default returns true (standalone/single-player).
-        /// </summary>
-        public virtual bool HasAuthority() => true;
-        #endregion
-
-        #region Migration
-        /// <summary>
-        /// Returns the prefab asset path used to re-instantiate this actor on a
-        /// target process during migration. Override for dynamic or pooled actors.
-        /// </summary>
-        /// <remarks>
-        /// The default returns <c>gameObject.name</c>. Override to return a stable
-        /// asset path (e.g., "Prefabs/Characters/PlayerPawn") for production use.
-        /// </remarks>
-        public virtual string GetMigrationPrefabAssetPath() => gameObject.name;
-
-        /// <summary>
-        /// Captures all mutable state needed to reconstruct this actor on another process.
-        /// Reference-typed fields (owner, instigator) are stored as integer identifiers
-        /// because UnityEngine.Object references are not valid across processes.
-        /// </summary>
-        /// <param name="ownerConnectionId">
-        /// The network connection ID to use for the owner field in the migration state.
-        /// Callers must resolve the owner Actor reference to a connection ID before calling.
-        /// </param>
-        /// <param name="instigatorActorId">
-        /// The globally unique actor ID to use for the instigator field, or 0 if none.
-        /// </param>
-        public virtual ActorMigrationState CaptureMigrationState(int ownerConnectionId, int instigatorActorId)
-        {
-            string[] tagCopy = tags != null && tags.Count > 0
-                ? tags.ToArray()
-                : System.Array.Empty<string>();
-
-            return new ActorMigrationState(
-                position: transform.position,
-                rotation: transform.rotation,
-                scale: transform.localScale,
-                prefabAssetPath: GetMigrationPrefabAssetPath(),
-                remainingLifeSpan: initialLifeSpanSec,
-                canBeDamaged: bCanBeDamaged,
-                hidden: bHidden,
-                tags: tagCopy,
-                ownerConnectionId: ownerConnectionId,
-                instigatorActorId: instigatorActorId,
-                actorName: actorName,
-                hasBegunPlay: hasBegunPlay
-            );
-        }
-
-        /// <summary>
-        /// Restores actor state from a migration snapshot received from another process.
-        /// Override to restore subclass-specific state, always calling the base implementation.
-        /// </summary>
-        public virtual void RestoreMigrationState(in ActorMigrationState state)
-        {
-            transform.SetPositionAndRotation(state.Position, state.Rotation);
-            transform.localScale = state.Scale;
-            initialLifeSpanSec = state.RemainingLifeSpan;
-            bCanBeDamaged = state.CanBeDamaged;
-            actorName = state.ActorName;
-
-            tags?.Clear();
-            if (state.Tags != null && state.Tags.Length > 0)
+            if (destroyedHandlers != null)
             {
-                tags ??= new System.Collections.Generic.List<string>(state.Tags.Length);
-                for (int i = 0; i < state.Tags.Length; i++)
+                try
                 {
-                    tags.Add(state.Tags[i]);
+                    destroyedHandlers.Invoke(this);
                 }
-            }
-
-            ApplyActorHiddenInGame(state.Hidden, true);
-
-            if (state.RemainingLifeSpan > 0.001f && hasBegunPlay)
-            {
-                Destroy(gameObject, state.RemainingLifeSpan);
-            }
-        }
-
-        /// <summary>
-        /// Called on the source process immediately before migration transfer.
-        /// Override to detach references, stop behavior trees, or serialize custom state.
-        /// Default implementation is a no-op.
-        /// </summary>
-        public virtual void PreMigration() { }
-
-        /// <summary>
-        /// Called on the target process after <see cref="RestoreMigrationState"/>
-        /// completes. Override to reinitialize subsystems, restart behavior trees,
-        /// or re-establish runtime references. Always call base.
-        /// </summary>
-        public virtual void PostMigration()
-        {
-            if (!hasBegunPlay)
-            {
-                hasBegunPlay = true;
-                BeginPlay();
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, this);
+                }
             }
         }
         #endregion

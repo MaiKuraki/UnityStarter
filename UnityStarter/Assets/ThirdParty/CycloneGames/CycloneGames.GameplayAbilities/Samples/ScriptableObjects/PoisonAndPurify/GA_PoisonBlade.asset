@@ -13,8 +13,8 @@ MonoBehaviour:
   m_Name: GA_PoisonBlade
   m_EditorClassIdentifier: 
   AbilityName: PoisonBlade
-  InstancingPolicy: 0
-  NetExecutionPolicy: 0
+  InstancingPolicy: 1
+  ExecutionPolicy: 1
   CostEffect: {fileID: 11400000, guid: c871b84b1fe1ce5489ecc41bf80d6c7c, type: 2}
   CooldownEffect: {fileID: 11400000, guid: 57ff3289480fa2141b06e94101262415, type: 2}
   AbilityTags:

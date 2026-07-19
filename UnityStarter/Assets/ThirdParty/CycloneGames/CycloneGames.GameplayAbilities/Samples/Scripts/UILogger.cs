@@ -1,60 +1,133 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
+using System.Threading;
 using CycloneGames.Logger;
-using UnityEngine;
-using UnityEngine.UI;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
-    public class UILogger : CycloneGames.Logger.ILogger
+    /// <summary>
+    /// Copies worker-thread log payloads into a bounded owned queue and renders them only
+    /// when Pump is called from the Unity main thread.
+    /// </summary>
+    public sealed class UILogger : CycloneGames.Logger.ILogger
     {
-        private readonly Text logTextComponent;
-        private readonly int maxLogLines;
-        private readonly Queue<string> logQueue;
-        private readonly StringBuilder stringBuilder = new StringBuilder();
-        private readonly Action<string> updateLogAction;
+        private const int MaxPendingMessages = 128;
 
-        public UILogger(Action<string> UpdateLog, int maxLines = 7)
+        private readonly Action<string> _updateLog;
+        private readonly int _maxLogLines;
+        private readonly ConcurrentQueue<string> _pending = new ConcurrentQueue<string>();
+        private readonly Queue<string> _visibleLines;
+        private readonly StringBuilder _renderBuilder = new StringBuilder();
+
+        private int _pendingCount;
+        private int _disposed;
+
+        public UILogger(Action<string> updateLog, int maxLines = 7)
         {
-            this.updateLogAction = UpdateLog ?? throw new ArgumentNullException(nameof(UpdateLog), "UpdateLog action cannot be null.");
-            this.maxLogLines = Mathf.Max(1, maxLines);
-            this.logQueue = new Queue<string>(this.maxLogLines);
-            if (this.logTextComponent != null)
-            {
-                this.logTextComponent.text = string.Empty;
-            }
+            _updateLog = updateLog ?? throw new ArgumentNullException(nameof(updateLog));
+            _maxLogLines = Math.Max(1, maxLines);
+            _visibleLines = new Queue<string>(_maxLogLines);
         }
-
-        public void Dispose() { }
 
         public void Log(LogMessage logMessage)
         {
-            // If the queue is full, remove the oldest log
-            while (logQueue.Count >= maxLogLines)
+            if (logMessage == null || Volatile.Read(ref _disposed) != 0)
             {
-                logQueue.Dequeue();
+                return;
             }
 
-            logQueue.Enqueue($"[{logMessage.Timestamp}] {logMessage.OriginalMessage}");
-
-            // Efficiently build the final string
-            stringBuilder.Clear();
-            var logLines = logQueue.ToArray();
-
-            for (int i = 0; i < logLines.Length; i++)
+            if (!TryReservePendingSlot())
             {
-                if (i == logLines.Length - 1)
+                return;
+            }
+
+            var builder = new StringBuilder(logMessage.MessageLength + 32);
+            builder.Append('[');
+            builder.Append(logMessage.Timestamp.ToUniversalTime().ToString("HH:mm:ss.fff"));
+            builder.Append("] ");
+            logMessage.AppendMessageTo(builder);
+            _pending.Enqueue(builder.ToString());
+        }
+
+        public void Pump(int maxMessages = 32)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || maxMessages <= 0)
+            {
+                return;
+            }
+
+            bool changed = false;
+            for (int i = 0; i < maxMessages && _pending.TryDequeue(out string message); i++)
+            {
+                Interlocked.Decrement(ref _pendingCount);
+                while (_visibleLines.Count >= _maxLogLines)
                 {
-                    stringBuilder.AppendLine($"<color=cyan>{logLines[i]}</color>");
+                    _visibleLines.Dequeue();
+                }
+
+                _visibleLines.Enqueue(message);
+                changed = true;
+            }
+
+            if (!changed)
+            {
+                return;
+            }
+
+            _renderBuilder.Clear();
+            int index = 0;
+            foreach (string line in _visibleLines)
+            {
+                if (index == _visibleLines.Count - 1)
+                {
+                    _renderBuilder.Append("<color=cyan>");
+                    _renderBuilder.Append(line);
+                    _renderBuilder.AppendLine("</color>");
                 }
                 else
                 {
-                    stringBuilder.AppendLine(logLines[i]);
+                    _renderBuilder.AppendLine(line);
                 }
+
+                index++;
             }
 
-            updateLogAction(stringBuilder.ToString());
+            _updateLog(_renderBuilder.ToString());
+        }
+
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            {
+                return;
+            }
+
+            while (_pending.TryDequeue(out _))
+            {
+            }
+
+            Volatile.Write(ref _pendingCount, 0);
+            _visibleLines.Clear();
+            _renderBuilder.Clear();
+        }
+
+        private bool TryReservePendingSlot()
+        {
+            while (true)
+            {
+                int current = Volatile.Read(ref _pendingCount);
+                if (current >= MaxPendingMessages)
+                {
+                    return false;
+                }
+
+                if (Interlocked.CompareExchange(ref _pendingCount, current + 1, current) == current)
+                {
+                    return true;
+                }
+            }
         }
     }
 }

@@ -4,9 +4,11 @@
     "references": [
         "CycloneGames.GameplayAbilities.Core",
         "CycloneGames.GameplayAbilities.Runtime",
+        "UniTask",
+        "Unity.PerformanceTesting",
         "CycloneGames.DeterministicMath.Core",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.GameplayTags.Core"
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.Logger"
     ],
     "includePlatforms": [
         "Editor"

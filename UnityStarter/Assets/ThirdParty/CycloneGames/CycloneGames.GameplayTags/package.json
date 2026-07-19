@@ -7,8 +7,6 @@
   "unityRelease": "0f1",
   "dependencies": {
     "com.cyclone-games.hash": "1.0.0",
-    "com.unity.burst": "1.8.29",
-    "com.unity.collections": "2.6.7",
     "com.unity.nuget.newtonsoft-json": "3.2.2"
   },
   "keywords": [

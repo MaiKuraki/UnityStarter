@@ -51,7 +51,11 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAssetHandle<TAsset> LoadAssetSync<TAsset>(string location, string tag = null, string owner = null)
             where TAsset : UnityEngine.Object
         {
-            return _package.LoadAssetSync<TAsset>(location, _bucket, tag ?? _tag, owner ?? _owner);
+            return RequireCapability<IAssetSyncOperations>().LoadAssetSync<TAsset>(
+                location,
+                _bucket,
+                tag ?? _tag,
+                owner ?? _owner);
         }
 
         public IAssetHandle<TAsset> LoadAssetAsync<TAsset>(string location, string tag = null, string owner = null, CancellationToken cancellationToken = default)
@@ -63,32 +67,62 @@ namespace CycloneGames.AssetManagement.Runtime
         public IAllAssetsHandle<TAsset> LoadAllAssetsAsync<TAsset>(string location, string tag = null, string owner = null, CancellationToken cancellationToken = default)
             where TAsset : UnityEngine.Object
         {
-            return _package.LoadAllAssetsAsync<TAsset>(location, _bucket, tag ?? _tag, owner ?? _owner, cancellationToken);
+            return RequireCapability<IAssetBulkLoader>().LoadAllAssetsAsync<TAsset>(
+                location,
+                _bucket,
+                tag ?? _tag,
+                owner ?? _owner,
+                cancellationToken);
         }
 
         public IRawFileHandle LoadRawFileSync(string location, string tag = null, string owner = null)
         {
-            return _package.LoadRawFileSync(location, _bucket, tag ?? _tag, owner ?? _owner);
+            return RequireCapability<IAssetRawFileLoader>().LoadRawFileSync(
+                location,
+                _bucket,
+                tag ?? _tag,
+                owner ?? _owner);
         }
 
         public IRawFileHandle LoadRawFileAsync(string location, string tag = null, string owner = null, CancellationToken cancellationToken = default)
         {
-            return _package.LoadRawFileAsync(location, _bucket, tag ?? _tag, owner ?? _owner, cancellationToken);
+            return RequireCapability<IAssetRawFileLoader>().LoadRawFileAsync(
+                location,
+                _bucket,
+                tag ?? _tag,
+                owner ?? _owner,
+                cancellationToken);
         }
 
-        public ISceneHandle LoadSceneSync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single)
+        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneParameters loadParameters, SceneActivationMode activationMode, int priority = 100)
         {
-            return _package.LoadSceneSync(sceneLocation, loadMode, _bucket);
-        }
-
-        public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode, SceneActivationMode activationMode, int priority = 100)
-        {
-            return _package.LoadSceneAsync(sceneLocation, loadMode, activationMode, priority, _bucket);
+            return RequireCapability<IAssetSceneLoader>().LoadSceneAsync(
+                sceneLocation,
+                loadParameters,
+                activationMode,
+                priority,
+                _bucket);
         }
 
         public ISceneHandle LoadSceneAsync(string sceneLocation, LoadSceneMode loadMode = LoadSceneMode.Single, bool activateOnLoad = true, int priority = 100)
         {
-            return _package.LoadSceneAsync(sceneLocation, loadMode, activateOnLoad, priority, _bucket);
+            return RequireCapability<IAssetSceneLoader>().LoadSceneAsync(
+                sceneLocation,
+                loadMode,
+                activateOnLoad,
+                priority,
+                _bucket);
+        }
+
+        private TCapability RequireCapability<TCapability>() where TCapability : class
+        {
+            if (_package is TCapability capability)
+            {
+                return capability;
+            }
+
+            throw new NotSupportedException(
+                $"Asset package '{_package.Name}' does not implement {typeof(TCapability).Name}.");
         }
     }
 

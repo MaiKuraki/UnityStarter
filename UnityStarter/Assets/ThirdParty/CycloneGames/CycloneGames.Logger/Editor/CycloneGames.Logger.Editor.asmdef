@@ -2,7 +2,8 @@
     "name": "CycloneGames.Logger.Editor",
     "rootNamespace": "CycloneGames.Logger.Editor",
     "references": [
-        "CycloneGames.Logger"
+        "CycloneGames.Logger",
+        "CycloneGames.Logger.Unity"
     ],
     "includePlatforms": [
         "Editor"

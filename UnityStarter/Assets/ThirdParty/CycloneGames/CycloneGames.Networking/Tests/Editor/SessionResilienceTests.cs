@@ -216,6 +216,29 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual(NetworkAuthorityTransferScope.SessionOwner | NetworkAuthorityTransferScope.MatchState, plan.TransferScopes);
         }
 
+        [Test]
+        public void HostMigrationCoordinator_MarkDisconnected_ThenUpdate_StartsMigration()
+        {
+            var coordinator = new HostMigrationCoordinator("session");
+            coordinator.UpsertParticipant(new NetworkHostParticipant(
+                connectionId: 1,
+                playerId: 100UL,
+                isConnected: true,
+                canHost: true));
+            coordinator.UpsertParticipant(new NetworkHostParticipant(
+                connectionId: 2,
+                playerId: 200UL,
+                isConnected: true,
+                canHost: true));
+            coordinator.SetCurrentHost(1, 100UL);
+
+            Assert.IsTrue(coordinator.MarkDisconnected(1, 5d, new NetworkTickId(10)));
+            Assert.AreEqual(HostMigrationState.HostSuspectedLost, coordinator.State);
+            Assert.IsTrue(coordinator.Update(5d, new NetworkTickId(11), out NetworkAuthorityTransferPlan plan));
+            Assert.AreEqual(2, plan.ToHostConnectionId);
+            Assert.AreEqual(HostMigrationState.Migrating, coordinator.State);
+        }
+
         private static NetworkSessionDescriptor CreateSession(
             string id,
             string gameMode,

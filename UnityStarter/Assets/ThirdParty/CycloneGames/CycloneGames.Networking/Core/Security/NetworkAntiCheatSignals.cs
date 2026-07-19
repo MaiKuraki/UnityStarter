@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Generic;
 
 namespace CycloneGames.Networking.Security
 {
@@ -98,26 +97,4 @@ namespace CycloneGames.Networking.Security
         }
     }
 
-    public sealed class RecordingNetworkAntiCheatSignalSink : INetworkAntiCheatSignalSink
-    {
-        private readonly List<NetworkAntiCheatSignal> _signals = new List<NetworkAntiCheatSignal>(8);
-
-        public IReadOnlyList<NetworkAntiCheatSignal> Signals
-        {
-            get
-            {
-                return _signals;
-            }
-        }
-
-        public void Report(in NetworkAntiCheatSignal signal)
-        {
-            _signals.Add(signal);
-        }
-
-        public void Clear()
-        {
-            _signals.Clear();
-        }
-    }
 }

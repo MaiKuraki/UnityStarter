@@ -92,6 +92,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
         [SerializeField, Min(30)] private int warmupFrames = 120;
         [SerializeField, Min(60)] private int sampleFrames = 600;
         [SerializeField] private bool compareMonoAndBurst = true;
+        [SerializeField] private SpriteSequenceBurstManager burstManager;
         [SerializeField] private bool includeBaselinePhase = true;
         [SerializeField] private bool silentMode = true;
 
@@ -134,10 +135,13 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
         [SerializeField] private string logCategory = "SpriteSequence.Benchmark";
 
         private FileLogger _fileLogger;
+        private CLogger _loggerOwner;
         private ProfilerRecorder _gcAllocRecorder;
         private bool _running;
+        private static readonly WaitForEndOfFrame EndOfFrameYield = new();
         private readonly List<SpriteSequenceController> _generatedControllers = new(512);
         private readonly List<SpriteSequenceController> _activeGeneratedFromPool = new(512);
+        private readonly List<SpriteSequenceController> _burstRegistrations = new(512);
         private MonoFastPool<SpriteSequenceController> _generatedControllerPool;
         private Transform _generatedRoot;
 
@@ -163,6 +167,15 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
         private IEnumerator RunBenchmarkCoroutine()
         {
             _running = true;
+            if (RequiresBurstManager() && (burstManager == null || !burstManager.isActiveAndEnabled))
+            {
+                CLogger.LogError(
+                    "Burst benchmark phases require an explicitly assigned, active SpriteSequenceBurstManager. The run was cancelled to prevent MonoUpdate fallback from being reported as BurstManaged.",
+                    logCategory);
+                _running = false;
+                yield break;
+            }
+
             AttachFileLogger();
 
             SpriteSequenceController[] sceneControllers = FindControllers(ignoreInactiveSceneControllers);
@@ -184,7 +197,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                     {
                         int targetCount = sweepStartCount + i * sweepStep;
                         SpriteSequenceController[] controllersForCase = BuildControllersForTarget(sceneControllers, targetCount);
-                        RefreshBurstManagersInScene();
 
                         BenchmarkCaseResult caseResult = default;
                         yield return RunSingleCaseCoroutine(targetCount, controllersForCase, r => caseResult = r);
@@ -193,7 +205,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 }
                 else
                 {
-                    RefreshBurstManagersInScene();
                     BenchmarkCaseResult caseResult = default;
                     yield return RunSingleCaseCoroutine(sceneControllers.Length, sceneControllers, r => caseResult = r);
                     caseResults.Add(caseResult);
@@ -215,37 +226,42 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                         capacityResults.Add(burstResult);
                     }
                 }
+
+                string report = BuildSuiteReport(caseResults, capacityResults);
+                CLogger.LogInfo(report, logCategory);
+                if (!silentMode)
+                {
+                    Debug.Log(report);
+                }
             }
             finally
             {
+                ReleaseBurstRegistrations();
                 SetGeneratedActiveCount(0);
                 if (cleanupGeneratedAfterRun)
                 {
                     CleanupGeneratedControllers();
                 }
-            }
 
-            string report = BuildSuiteReport(caseResults, capacityResults);
-            CLogger.LogInfo(report, logCategory);
-            if (!silentMode)
-            {
-                Debug.Log(report);
-            }
+                if (_gcAllocRecorder.Valid)
+                {
+                    _gcAllocRecorder.Dispose();
+                }
 
+                DetachFileLogger();
+                _running = false;
+            }
+        }
+
+        private void OnDisable()
+        {
+            ReleaseBurstRegistrations();
             if (_gcAllocRecorder.Valid)
             {
                 _gcAllocRecorder.Dispose();
             }
 
             _running = false;
-        }
-
-        private void OnDisable()
-        {
-            if (_gcAllocRecorder.Valid)
-            {
-                _gcAllocRecorder.Dispose();
-            }
 
             if (cleanupGeneratedAfterRun)
             {
@@ -257,12 +273,26 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
         private void AttachFileLogger()
         {
+#if UNITY_WEBGL && !UNITY_EDITOR
+            CLogger.LogWarning("Sprite benchmark file logging is unavailable on WebGL.", logCategory);
+            return;
+#else
             if (_fileLogger != null)
             {
                 return;
             }
 
-            string fileName = string.IsNullOrWhiteSpace(logFileName) ? "SpriteSequenceBenchmark.log" : logFileName;
+            string requestedFileName = string.IsNullOrWhiteSpace(logFileName) ? "SpriteSequenceBenchmark.log" : logFileName.Trim();
+            string fileName = Path.GetFileName(requestedFileName);
+            if (!string.Equals(requestedFileName, fileName, StringComparison.Ordinal) ||
+                string.IsNullOrWhiteSpace(fileName) ||
+                fileName.Length > 128 ||
+                fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+            {
+                CLogger.LogWarning($"Invalid benchmark log file name '{requestedFileName}'. Using SpriteSequenceBenchmark.log.", logCategory);
+                fileName = "SpriteSequenceBenchmark.log";
+            }
+
             string logPath = Path.Combine(Application.persistentDataPath, "Logs", fileName);
             var options = new FileLoggerOptions
             {
@@ -274,8 +304,10 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             };
 
             _fileLogger = new FileLogger(logPath, options);
-            CLogger.Instance.AddLogger(_fileLogger);
+            _loggerOwner = CLogger.Instance;
+            _loggerOwner.AddLogger(_fileLogger);
             CLogger.LogInfo($"Sprite benchmark logger attached: {logPath}", logCategory);
+#endif
         }
 
         private void DetachFileLogger()
@@ -285,9 +317,13 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 return;
             }
 
-            CLogger.Instance.RemoveLogger(_fileLogger);
-            _fileLogger.Dispose();
+            if (_loggerOwner != null && _loggerOwner.RemoveLogger(_fileLogger, 2000))
+            {
+                _fileLogger.Dispose();
+            }
+
             _fileLogger = null;
+            _loggerOwner = null;
         }
 
         private static SpriteSequenceController[] FindControllers(bool ignoreInactive)
@@ -312,7 +348,13 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
         private IEnumerator RunSingleCaseCoroutine(int targetCount, SpriteSequenceController[] controllers, Action<BenchmarkCaseResult> onComplete)
         {
-            CaptureOriginalState(controllers, out var originalDrivers, out var originalPlaying, out var originalEnabled);
+            CaptureOriginalState(
+                controllers,
+                out var originalDrivers,
+                out var originalPlaying,
+                out var originalPaused,
+                out var originalFrames,
+                out var originalEnabled);
 
             PhaseResult baseline = default;
             PhaseResult mono = default;
@@ -338,16 +380,29 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
                 if (compareMonoAndBurst)
                 {
-                    RefreshBurstManagersInScene();
-                    ApplyPhaseSetup(controllers, BenchmarkPhase.BurstManaged);
-                    yield return RunWarmup();
-                    yield return CapturePhaseCoroutine(BenchmarkPhase.BurstManaged, controllers, r => burst = r);
-                    ranBurst = true;
+                    PrepareBurstControllers(controllers);
+                    try
+                    {
+                        ApplyPhaseSetup(controllers, BenchmarkPhase.BurstManaged);
+                        yield return RunWarmup();
+                        yield return CapturePhaseCoroutine(BenchmarkPhase.BurstManaged, controllers, r => burst = r);
+                        ranBurst = true;
+                    }
+                    finally
+                    {
+                        ReleaseBurstRegistrations();
+                    }
                 }
             }
             finally
             {
-                RestoreOriginalControllerState(controllers, originalDrivers, originalPlaying, originalEnabled);
+                RestoreOriginalControllerState(
+                    controllers,
+                    originalDrivers,
+                    originalPlaying,
+                    originalPaused,
+                    originalFrames,
+                    originalEnabled);
             }
 
             onComplete?.Invoke(new BenchmarkCaseResult
@@ -561,7 +616,13 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             SpriteSequenceController.UpdateDriver driver,
             Action<PhaseResult> onComplete)
         {
-            CaptureOriginalState(controllers, out var originalDrivers, out var originalPlaying, out var originalEnabled);
+            CaptureOriginalState(
+                controllers,
+                out var originalDrivers,
+                out var originalPlaying,
+                out var originalPaused,
+                out var originalFrames,
+                out var originalEnabled);
 
             BenchmarkPhase phase = driver == SpriteSequenceController.UpdateDriver.BurstManaged
                 ? BenchmarkPhase.BurstManaged
@@ -572,7 +633,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             {
                 if (driver == SpriteSequenceController.UpdateDriver.BurstManaged)
                 {
-                    RefreshBurstManagersInScene();
+                    PrepareBurstControllers(controllers);
                 }
 
                 ApplyPhaseSetup(controllers, phase);
@@ -581,7 +642,14 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             }
             finally
             {
-                RestoreOriginalControllerState(controllers, originalDrivers, originalPlaying, originalEnabled);
+                ReleaseBurstRegistrations();
+                RestoreOriginalControllerState(
+                    controllers,
+                    originalDrivers,
+                    originalPlaying,
+                    originalPaused,
+                    originalFrames,
+                    originalEnabled);
             }
 
             onComplete?.Invoke(measured);
@@ -751,7 +819,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
             for (int i = 0; i < sampleFrames; i++)
             {
-                yield return new WaitForEndOfFrame();
+                yield return EndOfFrameYield;
 
                 double frameMs = Time.unscaledDeltaTime * 1000.0;
                 sumFrameMs += frameMs;
@@ -814,11 +882,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
         private void ApplyPhaseSetup(SpriteSequenceController[] controllers, BenchmarkPhase phase)
         {
-            if (phase == BenchmarkPhase.BurstManaged)
-            {
-                RefreshBurstManagersInScene();
-            }
-
             for (int i = 0; i < controllers.Length; i++)
             {
                 SpriteSequenceController controller = controllers[i];
@@ -853,10 +916,14 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             SpriteSequenceController[] controllers,
             out SpriteSequenceController.UpdateDriver[] originalDrivers,
             out bool[] originalPlaying,
+            out bool[] originalPaused,
+            out int[] originalFrames,
             out bool[] originalEnabled)
         {
             originalDrivers = new SpriteSequenceController.UpdateDriver[controllers.Length];
             originalPlaying = new bool[controllers.Length];
+            originalPaused = new bool[controllers.Length];
+            originalFrames = new int[controllers.Length];
             originalEnabled = new bool[controllers.Length];
 
             for (int i = 0; i < controllers.Length; i++)
@@ -869,6 +936,8 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
                 originalDrivers[i] = controller.CurrentUpdateDriver;
                 originalPlaying[i] = controller.IsPlaying;
+                originalPaused[i] = controller.IsPaused;
+                originalFrames[i] = controller.CurrentFrame;
                 originalEnabled[i] = controller.enabled;
             }
         }
@@ -877,26 +946,22 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             SpriteSequenceController[] controllers,
             SpriteSequenceController.UpdateDriver[] originalDrivers,
             bool[] originalPlaying,
+            bool[] originalPaused,
+            int[] originalFrames,
             bool[] originalEnabled)
         {
-            int len = Mathf.Min(controllers.Length, Mathf.Min(originalDrivers.Length, Mathf.Min(originalPlaying.Length, originalEnabled.Length)));
+            int len = Mathf.Min(
+                controllers.Length,
+                Mathf.Min(
+                    originalDrivers.Length,
+                    Mathf.Min(
+                        originalPlaying.Length,
+                        Mathf.Min(originalPaused.Length, Mathf.Min(originalFrames.Length, originalEnabled.Length)))));
             for (int i = 0; i < len; i++)
             {
                 SpriteSequenceController controller = controllers[i];
                 if (controller == null)
                 {
-                    continue;
-                }
-
-                if (!originalEnabled[i])
-                {
-                    if (controller.enabled)
-                    {
-                        controller.Stop();
-                    }
-
-                    controller.SetUpdateDriver(originalDrivers[i]);
-                    controller.enabled = false;
                     continue;
                 }
 
@@ -906,13 +971,24 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 }
 
                 controller.SetUpdateDriver(originalDrivers[i]);
-                if (originalPlaying[i])
+                if (originalPlaying[i] || originalPaused[i])
                 {
                     controller.Play();
+                    controller.GoToFrame(originalFrames[i]);
+                    if (originalPaused[i])
+                    {
+                        controller.Pause();
+                    }
                 }
                 else
                 {
                     controller.Stop();
+                    controller.GoToFrame(originalFrames[i]);
+                }
+
+                if (!originalEnabled[i])
+                {
+                    controller.enabled = false;
                 }
             }
         }
@@ -1058,25 +1134,55 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             return maxTarget;
         }
 
-        private static void RefreshBurstManagersInScene()
+        private bool RequiresBurstManager()
         {
-#if UNITY_2023_1_OR_NEWER
-        SpriteSequenceBurstManager[] managers = FindObjectsByType<SpriteSequenceBurstManager>(FindObjectsInactive.Include, FindObjectsSortMode.None);
-#else
-            SpriteSequenceBurstManager[] managers = FindObjectsOfType<SpriteSequenceBurstManager>(true);
-#endif
-            if (managers == null)
+            return compareMonoAndBurst || (enableCapacitySearch && capacitySearchTestBurst);
+        }
+
+        private void PrepareBurstControllers(SpriteSequenceController[] controllers)
+        {
+            ReleaseBurstRegistrations();
+            if (burstManager == null || !burstManager.isActiveAndEnabled)
+            {
+                throw new InvalidOperationException(
+                    "An active SpriteSequenceBurstManager must be assigned before a BurstManaged benchmark phase can run.");
+            }
+
+            for (int i = 0; i < controllers.Length; i++)
+            {
+                SpriteSequenceController controller = controllers[i];
+                if (controller == null)
+                {
+                    continue;
+                }
+
+                if (!burstManager.RegisterController(controller, out bool registrationAdded))
+                {
+                    ReleaseBurstRegistrations();
+                    throw new InvalidOperationException(
+                        $"SpriteSequenceBurstManager '{burstManager.name}' could not claim benchmark controller '{controller.name}'. Check ownership conflicts and maxControllerCapacity.");
+                }
+
+                if (registrationAdded)
+                {
+                    _burstRegistrations.Add(controller);
+                }
+            }
+        }
+
+        private void ReleaseBurstRegistrations()
+        {
+            if (_burstRegistrations.Count == 0)
             {
                 return;
             }
 
-            for (int i = 0; i < managers.Length; i++)
+            if (burstManager != null)
             {
-                if (managers[i] != null)
-                {
-                    managers[i].RefreshControllers();
-                }
+                burstManager.UnregisterControllers(_burstRegistrations);
             }
+
+            _burstRegistrations.Clear();
         }
 
         private SpriteSequenceController ResolveTemplate(SpriteSequenceController[] sceneControllers)

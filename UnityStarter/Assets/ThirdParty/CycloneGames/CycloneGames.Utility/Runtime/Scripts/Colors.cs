@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.CompilerServices;
 using UnityEngine;
 
@@ -9,6 +10,8 @@ namespace CycloneGames.Utility.Runtime
     /// </summary>
     public static class Colors
     {
+        private const string HexDigits = "0123456789ABCDEF";
+
         // CSS3 color definitions
         public static readonly Color AliceBlue = new Color32(240, 248, 255, 255);
         public static readonly Color AntiqueWhite = new Color32(250, 235, 215, 255);
@@ -184,11 +187,36 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
-        /// Returns a random color from the palette.
+        /// Attempts to get a palette color without using a fallback value.
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool TryGetColorAt(int index, out Color color)
+        {
+            if ((uint)index < (uint)ColorArray.Length)
+            {
+                color = ColorArray[index];
+                return true;
+            }
+            color = default;
+            return false;
+        }
+
+        /// <summary>
+        /// Returns a random color from the palette using Unity's global random state.
+        /// Use the System.Random overload when the caller owns deterministic random state.
         /// </summary>
         public static Color RandomColor()
         {
-            return ColorArray[Random.Range(0, ColorArray.Length)];
+            return ColorArray[UnityEngine.Random.Range(0, ColorArray.Length)];
+        }
+
+        /// <summary>
+        /// Returns a random palette color using caller-owned random state.
+        /// </summary>
+        public static Color RandomColor(System.Random random)
+        {
+            if (random == null) throw new ArgumentNullException(nameof(random));
+            return ColorArray[random.Next(ColorArray.Length)];
         }
 
         /// <summary>
@@ -196,19 +224,35 @@ namespace CycloneGames.Utility.Runtime
         /// </summary>
         public static Color RandomColor(Color min, Color max)
         {
+            ValidateRandomRange(min, max);
             return new Color
             {
-                r = Random.Range(min.r, max.r),
-                g = Random.Range(min.g, max.g),
-                b = Random.Range(min.b, max.b),
-                a = Random.Range(min.a, max.a)
+                r = UnityEngine.Random.Range(min.r, max.r),
+                g = UnityEngine.Random.Range(min.g, max.g),
+                b = UnityEngine.Random.Range(min.b, max.b),
+                a = UnityEngine.Random.Range(min.a, max.a)
             };
+        }
+
+        /// <summary>
+        /// Returns a random color within per-channel [min, max) bounds using caller-owned random state.
+        /// </summary>
+        public static Color RandomColor(Color min, Color max, System.Random random)
+        {
+            if (random == null) throw new ArgumentNullException(nameof(random));
+            ValidateRandomRange(min, max);
+
+            return new Color(
+                NextFloat(random, min.r, max.r),
+                NextFloat(random, min.g, max.g),
+                NextFloat(random, min.b, max.b),
+                NextFloat(random, min.a, max.a));
         }
 
         // --- Common Color Utilities ---
 
         /// <summary>
-        /// Returns a copy of the color with the specified alpha. 0GC (Color is a struct).
+        /// Returns a copy of the color with the specified alpha.
         /// </summary>
         public static Color WithAlpha(this Color color, float alpha)
         {
@@ -218,16 +262,48 @@ namespace CycloneGames.Utility.Runtime
 
         /// <summary>
         /// Converts a Color to a hex string (e.g. "#FF00AAFF").
-        /// Allocates one string.
+        /// The conversion quantizes and clamps channels through Color32 and allocates only the result string.
         /// </summary>
         public static string ToHexString(this Color color)
         {
-            Color32 c32 = color;
-            return string.Concat("#",
-                c32.r.ToString("X2"),
-                c32.g.ToString("X2"),
-                c32.b.ToString("X2"),
-                c32.a.ToString("X2"));
+            Span<char> buffer = stackalloc char[9];
+            TryFormatHex(color, buffer, out int charsWritten);
+            return new string(buffer.Slice(0, charsWritten));
+        }
+
+        /// <summary>
+        /// Attempts to write an uppercase hexadecimal color without intermediate allocations.
+        /// </summary>
+        public static bool TryFormatHex(
+            this Color color,
+            Span<char> destination,
+            out int charsWritten,
+            bool includeAlpha = true,
+            bool includeHash = true)
+        {
+            int requiredLength = (includeHash ? 1 : 0) + (includeAlpha ? 8 : 6);
+            if (destination.Length < requiredLength)
+            {
+                charsWritten = 0;
+                return false;
+            }
+
+            Color32 value = color;
+            int position = 0;
+            if (includeHash)
+            {
+                destination[position++] = '#';
+            }
+            WriteHexByte(value.r, destination, ref position);
+            WriteHexByte(value.g, destination, ref position);
+            WriteHexByte(value.b, destination, ref position);
+            if (includeAlpha)
+            {
+                WriteHexByte(value.a, destination, ref position);
+            }
+
+            charsWritten = position;
+            return true;
         }
 
         /// <summary>
@@ -236,20 +312,40 @@ namespace CycloneGames.Utility.Runtime
         /// </summary>
         public static bool TryParseHex(string hex, out Color color)
         {
-            color = Color.white;
-            if (string.IsNullOrEmpty(hex)) return false;
-
-            if (hex[0] == '#') hex = hex.Substring(1);
-
-            if (hex.Length != 6 && hex.Length != 8) return false;
-
-            if (!byte.TryParse(hex.Substring(0, 2), System.Globalization.NumberStyles.HexNumber, null, out byte r)) return false;
-            if (!byte.TryParse(hex.Substring(2, 2), System.Globalization.NumberStyles.HexNumber, null, out byte g)) return false;
-            if (!byte.TryParse(hex.Substring(4, 2), System.Globalization.NumberStyles.HexNumber, null, out byte b)) return false;
-            byte a = 255;
-            if (hex.Length == 8)
+            if (hex == null)
             {
-                if (!byte.TryParse(hex.Substring(6, 2), System.Globalization.NumberStyles.HexNumber, null, out a)) return false;
+                color = Color.white;
+                return false;
+            }
+            return TryParseHex(hex.AsSpan(), out color);
+        }
+
+        /// <summary>
+        /// Parses "#RRGGBB" or "#RRGGBBAA" from a character span without creating substrings.
+        /// </summary>
+        public static bool TryParseHex(ReadOnlySpan<char> hex, out Color color)
+        {
+            color = Color.white;
+            if (!hex.IsEmpty && hex[0] == '#')
+            {
+                hex = hex.Slice(1);
+            }
+            if (hex.Length != 6 && hex.Length != 8)
+            {
+                return false;
+            }
+
+            if (!TryReadHexByte(hex, 0, out byte r) ||
+                !TryReadHexByte(hex, 2, out byte g) ||
+                !TryReadHexByte(hex, 4, out byte b))
+            {
+                return false;
+            }
+
+            byte a = 255;
+            if (hex.Length == 8 && !TryReadHexByte(hex, 6, out a))
+            {
+                return false;
             }
 
             color = new Color32(r, g, b, a);
@@ -257,8 +353,8 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
-        /// Returns the perceived luminance of a color (BT.601 standard).
-        /// Useful for determining text color contrast, accessibility checks, etc.
+        /// Returns a simple BT.601 weighted luma value from the supplied RGB components.
+        /// This is not the WCAG relative luminance used for accessibility contrast.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float GetLuminance(this Color color)
@@ -267,8 +363,35 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
+        /// Returns WCAG relative luminance for gamma-encoded sRGB channels. Alpha is ignored.
+        /// Input channels are clamped to [0, 1].
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float GetRelativeLuminance(this Color color)
+        {
+            float r = LinearizeSrgb(Mathf.Clamp01(color.r));
+            float g = LinearizeSrgb(Mathf.Clamp01(color.g));
+            float b = LinearizeSrgb(Mathf.Clamp01(color.b));
+            return 0.2126f * r + 0.7152f * g + 0.0722f * b;
+        }
+
+        /// <summary>
+        /// Returns the WCAG contrast ratio between two opaque, gamma-encoded sRGB colors.
+        /// Alpha is ignored. The result is in the inclusive range [1, 21].
+        /// </summary>
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float GetContrastRatio(this Color first, Color second)
+        {
+            float firstLuminance = first.GetRelativeLuminance();
+            float secondLuminance = second.GetRelativeLuminance();
+            float lighter = Mathf.Max(firstLuminance, secondLuminance);
+            float darker = Mathf.Min(firstLuminance, secondLuminance);
+            return (lighter + 0.05f) / (darker + 0.05f);
+        }
+
+        /// <summary>
         /// Packs a Color into a single uint (RGBA, 8 bits per channel).
-        /// Ideal for network serialization, ECS components, and compact storage. 0GC.
+        /// The stable numeric layout is 0xRRGGBBAA. Color is quantized and clamped through Color32.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static uint ToUInt32(this Color color)
@@ -278,7 +401,7 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
-        /// Unpacks a uint (RGBA) back into a Color. 0GC.
+        /// Unpacks a stable 0xRRGGBBAA value back into a Color.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Color FromUInt32(uint packed)
@@ -291,7 +414,7 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
-        /// Returns the inverted color (1-r, 1-g, 1-b), preserving alpha. 0GC.
+        /// Returns the inverted color (1-r, 1-g, 1-b), preserving alpha.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Color Invert(this Color color)
@@ -302,10 +425,14 @@ namespace CycloneGames.Utility.Runtime
         /// <summary>
         /// Adjusts brightness in HSV space by multiplying the V channel.
         /// More visually natural than multiplying RGB directly.
-        /// factor > 1 = brighter, factor < 1 = darker. 0GC.
+        /// factor > 1 = brighter, factor between 0 and 1 = darker.
         /// </summary>
         public static Color AdjustBrightness(this Color color, float factor)
         {
+            if (!IsFinite(factor) || factor < 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(factor), factor, "Brightness factor must be finite and non-negative.");
+            }
             Color.RGBToHSV(color, out float h, out float s, out float v);
             v = Mathf.Clamp01(v * factor);
             Color result = Color.HSVToRGB(h, s, v);
@@ -315,10 +442,11 @@ namespace CycloneGames.Utility.Runtime
 
         /// <summary>
         /// Desaturates a color by the given amount (0 = original, 1 = full grayscale).
-        /// Uses luminance-preserving grayscale conversion. 0GC.
+        /// The amount is clamped to [0, 1].
         /// </summary>
         public static Color Desaturate(this Color color, float amount)
         {
+            amount = Mathf.Clamp01(amount);
             float gray = 0.299f * color.r + 0.587f * color.g + 0.114f * color.b;
             return new Color(
                 color.r + (gray - color.r) * amount,
@@ -329,7 +457,7 @@ namespace CycloneGames.Utility.Runtime
 
         /// <summary>
         /// Linearly interpolates between two colors without clamping t.
-        /// Allows overshoot for elastic/spring animations. 0GC.
+        /// Allows overshoot for elastic/spring animations.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Color LerpUnclamped(Color a, Color b, float t)
@@ -377,7 +505,14 @@ namespace CycloneGames.Utility.Runtime
             };
         }
 
-        public enum ColoringMode { Tint, Multiply, Replace, ReplaceKeepAlpha, Add }
+        public enum ColoringMode
+        {
+            Tint = 0,
+            Multiply = 1,
+            Replace = 2,
+            ReplaceKeepAlpha = 3,
+            Add = 4
+        }
 
         public static Color Colorize(this Color originalColor, Color targetColor, ColoringMode coloringMode, float lerpAmount = 1.0f)
         {
@@ -405,8 +540,70 @@ namespace CycloneGames.Utility.Runtime
                 case ColoringMode.Add:
                     resultColor = originalColor + targetColor;
                     break;
+                default:
+                    throw new ArgumentOutOfRangeException(nameof(coloringMode), coloringMode, "Unknown coloring mode.");
             }
             return Color.Lerp(originalColor, resultColor, lerpAmount);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteHexByte(byte value, Span<char> destination, ref int position)
+        {
+            destination[position++] = HexDigits[value >> 4];
+            destination[position++] = HexDigits[value & 0x0F];
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryReadHexByte(ReadOnlySpan<char> value, int index, out byte result)
+        {
+            int high = HexValue(value[index]);
+            int low = HexValue(value[index + 1]);
+            if ((high | low) < 0)
+            {
+                result = 0;
+                return false;
+            }
+            result = (byte)((high << 4) | low);
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static int HexValue(char value)
+        {
+            if ((uint)(value - '0') <= 9u) return value - '0';
+            if ((uint)(value - 'A') <= 5u) return value - 'A' + 10;
+            if ((uint)(value - 'a') <= 5u) return value - 'a' + 10;
+            return -1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float LinearizeSrgb(float channel)
+        {
+            return channel <= 0.04045f
+                ? channel / 12.92f
+                : Mathf.Pow((channel + 0.055f) / 1.055f, 2.4f);
+        }
+
+        private static void ValidateRandomRange(Color min, Color max)
+        {
+            if (!IsFinite(min.r) || !IsFinite(min.g) || !IsFinite(min.b) || !IsFinite(min.a) ||
+                !IsFinite(max.r) || !IsFinite(max.g) || !IsFinite(max.b) || !IsFinite(max.a) ||
+                min.r > max.r || min.g > max.g || min.b > max.b || min.a > max.a)
+            {
+                throw new ArgumentException("Color random bounds must be finite and ordered per channel.");
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static float NextFloat(System.Random random, float min, float max)
+        {
+            return (float)(min + ((double)max - min) * random.NextDouble());
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 }

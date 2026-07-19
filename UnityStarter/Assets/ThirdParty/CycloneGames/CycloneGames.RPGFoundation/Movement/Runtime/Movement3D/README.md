@@ -1,40 +1,52 @@
 # RPG Movement Component
 
-A high-performance, state machine-based character movement system for Unity RPG games and compatible with Gameplay Ability System (GAS).
+[English | 简体中文](README.SCH.md)
 
-<p align="left"><br> English | <a href="README.SCH.md">Simplified Chinese</a></p>
+A state-based 3D character movement component for Unity with explicit input, rotation, movement-state, snapshot, and optional GameplayAbilities integration boundaries.
 
-## GameplayFramework Integration
+## Table of Contents
 
-`MovementComponent` does not directly depend on `CycloneGames.GameplayFramework`. Movement and spawn ownership stay decoupled so the base Movement runtime can compile in Unity projects, headless tools, and package layouts that do not include GameplayFramework.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [Usage Guide](#usage-guide)
+- [Advanced Topics](#advanced-topics)
+- [Common Scenarios](#common-scenarios)
+- [Performance and Memory](#performance-and-memory)
+- [Troubleshooting](#troubleshooting)
 
-Strong-typed GameplayFramework integration belongs in a dedicated integration asmdef and is enabled by that asmdef through `versionDefines` and `defineConstraints`. Project-wide scripting define symbols are not the standard switch for this integration.
+## Overview
 
-If no GameplayFramework integration assembly is active, set the initial rotation from your spawn logic.
+`MovementComponent` provides explicit state-machine-driven 3D movement. Movement and rotation are decoupled — the component handles velocity, gravity, ground detection, jumping, and state transitions, while rotation is controlled separately via `SetLookDirection` and `SetRotation`. The optional GAS integration assembly compiles only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled.
 
-## GameplayAbilities Integration
+This package does not directly depend on `CycloneGames.GameplayFramework`. Movement and spawn ownership remain separate.
 
-`MovementComponent` can work with ability-owned movement verbs without making GameplayAbilities or GameplayTags a hard dependency of the base Movement runtime. The optional integration assembly is compiled only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled and both `CycloneGames.GameplayAbilities.Runtime` and `CycloneGames.GameplayTags.Core` are available.
+### Key Features
 
-When jump, roll, ladder-climb, wall-climb, or similar actions are implemented as abilities, the ability requests the movement state with `MovementStateRequestContext.FromAbility(this)`. Direct player input can still request states normally; the GAS authority decides whether to activate an ability, enter the state directly, or block the direct state transition.
+- **State machine** — Explicit states (Idle, Walk, Run, Sprint, Jump, Fall, Crouch, Roll, Climb, WallSlide)
+- **Decoupled rotation** — Movement does not auto-rotate; rotation controlled via `SetLookDirection` / `SetRotation`
+- **CharacterController physics** — Manual gravity, `CharacterController.Move` integration
+- **Snapshot support** — `MovementSnapshot` for network handoff
+- **Attribute modification** — Runtime overrides with optional GAS mapping
+- **Time scaling** — Global and component-local controls
+- **Climbing system** — Ladder and wall climbing
 
-### Controlling Rotation
+## Architecture
 
-**Movement and rotation are decoupled** - the `MovementComponent` handles only movement, not automatic rotation. You must manually control rotation using one of these methods:
-
-```csharp
-// Set look direction (smooth rotation towards target direction)
-movement.SetLookDirection(targetDirection);
-
-// Set rotation immediately
-movement.SetRotation(targetRotation, immediate: true);
-
-// Set rotation from direction
-movement.SetRotation(targetDirection, immediate: true);
-
-// Clear look direction (stop automatic rotation)
-movement.ClearLookDirection();
+```mermaid
+flowchart LR
+    Input["Input (direction, jump, sprint, crouch, roll, climb)"] --> MC["MovementComponent"]
+    MC --> Config["MovementConfig (ScriptableObject)"]
+    MC --> CC["CharacterController"]
+    MC --> Auth["IMovementAuthority<br/>(optional: attribute overrides, state gating)"]
+    Auth --> GAS["GASMovementAuthority<br/>(optional GameplayAbilities integration)"]
+    MC --> Snap["MovementSnapshot<br/>(network handoff)"]
 ```
+
+`MovementComponent` is a Unity component and must be called from the main thread. Use `MovementSnapshot` as network handoff data; threaded simulation belongs in pure data systems or deterministic integration assemblies.
+
+## Quick Start
 
 ### Core Runtime API
 
@@ -53,277 +65,208 @@ movement.ApplySnapshot(snapshot);
 movement.ResetFromSnapshot(snapshot);
 ```
 
-`MovementComponent` is a Unity component and must be called from the Unity main thread. Use `MovementSnapshot` as network handoff data only; threaded simulation belongs in pure data systems or deterministic integration assemblies.
-
-**Example: Separate movement and rotation inputs**
-
-Here are several common implementations for `CalculateLookDirection`:
-
-**Option 1: Mouse Look with Euler Angles (First/Third Person)**
+### Rotation API
 
 ```csharp
-using UnityEngine;
+movement.SetLookDirection(targetDirection);           // Smooth rotation toward direction
+movement.SetRotation(targetRotation, immediate: true); // Instant rotation
+movement.SetRotation(targetDirection, immediate: true); // Instant from direction
+movement.ClearLookDirection();                         // Stop automatic rotation
+```
+
+### Basic Player Controller
+
+```csharp
 using CycloneGames.RPGFoundation.Movement.Runtime;
 
 public class PlayerController : MonoBehaviour
 {
     private MovementComponent _movement;
-    private Camera _camera;
 
-    [Header("Rotation Settings")]
-    [SerializeField] private float mouseSensitivity = 2f;
-    [SerializeField] private float minVerticalAngle = -80f;
-    [SerializeField] private float maxVerticalAngle = 80f;
-
-    private float _verticalRotation = 0f;
-    private float _horizontalRotation = 0f;
-
-    void Awake()
-    {
-        _movement = GetComponent<MovementComponent>();
-        _camera = Camera.main; // Or assign your camera reference
-    }
+    void Awake() => _movement = GetComponent<MovementComponent>();
 
     void Update()
     {
-        // Movement input (local space - relative to character's forward/right)
         Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-        Vector3 localInput = new Vector3(moveInput.x, 0, moveInput.y);
-        _movement.SetInputDirection(localInput);
-
-        // Rotation input (mouse look)
-        Vector2 lookInput = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
-        Vector3 targetLookDirection = CalculateLookDirection(lookInput);
-        _movement.SetLookDirection(targetLookDirection);
-    }
-
-    private Vector3 CalculateLookDirection(Vector2 lookInput)
-    {
-        // Accumulate rotation
-        _horizontalRotation += lookInput.x * mouseSensitivity;
-        _verticalRotation -= lookInput.y * mouseSensitivity;
-        _verticalRotation = Mathf.Clamp(_verticalRotation, minVerticalAngle, maxVerticalAngle);
-
-        // Convert to direction vector
-        float horizontalRad = _horizontalRotation * Mathf.Deg2Rad;
-        float verticalRad = _verticalRotation * Mathf.Deg2Rad;
-
-        Vector3 direction = new Vector3(
-            Mathf.Sin(horizontalRad) * Mathf.Cos(verticalRad),
-            Mathf.Sin(verticalRad),
-            Mathf.Cos(horizontalRad) * Mathf.Cos(verticalRad)
-        );
-
-        return direction.normalized;
-    }
-}
-```
-
-**Option 2: Camera-Based Direction (Third Person with Camera Follow)**
-
-```csharp
-private Vector3 CalculateLookDirection(Vector2 lookInput)
-{
-    if (_camera == null) return transform.forward;
-
-    // Get camera's forward direction (projected onto horizontal plane)
-    Vector3 cameraForward = _camera.transform.forward;
-    cameraForward.y = 0f; // Remove vertical component
-    cameraForward.Normalize();
-
-    // Rotate based on mouse input
-    float horizontalRotation = lookInput.x * mouseSensitivity;
-    Quaternion rotation = Quaternion.Euler(0, horizontalRotation, 0);
-
-    return rotation * cameraForward;
-}
-```
-
-**Option 3: Screen-to-World Raycast (Click-to-Look)**
-
-```csharp
-private Vector3 CalculateLookDirection(Vector2 lookInput)
-{
-    // For click-to-look or screen-space input
-    if (Input.GetMouseButton(0) || Input.GetMouseButton(1))
-    {
-        Ray ray = _camera.ScreenPointToRay(Input.mousePosition);
-        RaycastHit hit;
-
-        if (Physics.Raycast(ray, out hit))
-        {
-            Vector3 direction = (hit.point - transform.position);
-            direction.y = 0f; // Keep horizontal
-            return direction.normalized;
-        }
-    }
-
-    // Fallback: use current forward direction
-    return transform.forward;
-}
-```
-
-**Option 4: Gamepad Right Stick**
-
-```csharp
-private Vector3 CalculateLookDirection(Vector2 lookInput)
-{
-    // For gamepad right stick input
-    if (lookInput.magnitude < 0.1f)
-        return transform.forward; // No input, maintain current direction
-
-    // Get camera's right and forward vectors (horizontal only)
-    Vector3 cameraRight = _camera.transform.right;
-    Vector3 cameraForward = _camera.transform.forward;
-    cameraRight.y = 0f;
-    cameraForward.y = 0f;
-    cameraRight.Normalize();
-    cameraForward.Normalize();
-
-    // Combine based on stick input
-    Vector3 direction = (cameraForward * lookInput.y + cameraRight * lookInput.x).normalized;
-    return direction;
-}
-```
-
-**Option 5: Third-Person Action Game (Camera-Relative Movement)**
-
-For third-person action games where:
-
-- Camera follows the character
-- Movement input is relative to camera direction (not character direction)
-- Character automatically faces movement direction
-
-```csharp
-using UnityEngine;
-using CycloneGames.RPGFoundation.Movement.Runtime;
-
-public class ThirdPersonPlayerController : MonoBehaviour
-{
-    private MovementComponent _movement;
-    private Camera _camera;
-
-    [Header("Movement Settings")]
-    [SerializeField] private bool autoFaceMovementDirection = true;
-    [SerializeField] private float rotationSmoothing = 10f;
-
-    void Awake()
-    {
-        _movement = GetComponent<MovementComponent>();
-        _camera = Camera.main; // Or assign your camera reference
-    }
-
-    void Update()
-    {
-        // Get input in camera space (relative to camera's forward/right)
-        Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
-
-        // Convert camera-relative input to world space direction
-        Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
-
-        // Convert world direction to local space for MovementComponent
-        // MovementComponent expects local space input (relative to character's forward/right)
-        Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
-        _movement.SetInputDirection(localInput);
-
-        // Optionally: Make character face movement direction
-        if (autoFaceMovementDirection && moveInput.magnitude > 0.1f)
-        {
-            Vector3 lookDirection = worldMoveDirection;
-            lookDirection.y = 0f; // Keep horizontal only
-            if (lookDirection.magnitude > 0.1f)
-            {
-                _movement.SetLookDirection(lookDirection.normalized);
-            }
-        }
-
-        // Other inputs
+        _movement.SetInputDirection(new Vector3(moveInput.x, 0, moveInput.y));
         _movement.SetJumpPressed(Input.GetButtonDown("Jump"));
         _movement.SetSprintHeld(Input.GetButton("Sprint"));
-        _movement.SetCrouchHeld(Input.GetKey(KeyCode.C));
-    }
-
-    /// <summary>
-    /// Converts camera-relative input (WASD) to world space movement direction.
-    /// This allows movement relative to camera, not character orientation.
-    /// </summary>
-    private Vector3 GetCameraRelativeMovementDirection(Vector2 input)
-    {
-        if (_camera == null || input.magnitude < 0.1f)
-            return Vector3.zero;
-
-        // Get camera's forward and right vectors (projected onto horizontal plane)
-        Vector3 cameraForward = _camera.transform.forward;
-        Vector3 cameraRight = _camera.transform.right;
-
-        // Remove vertical component to keep movement on horizontal plane
-        cameraForward.y = 0f;
-        cameraRight.y = 0f;
-        cameraForward.Normalize();
-        cameraRight.Normalize();
-
-        // Combine camera directions based on input
-        // input.y is forward/back (W/S), input.x is left/right (A/D)
-        Vector3 direction = (cameraForward * input.y + cameraRight * input.x).normalized;
-
-        return direction;
     }
 }
 ```
 
-**Alternative: Simpler Camera-Relative Movement (Without Auto-Rotation)**
+## Core Concepts
 
-If you want camera-relative movement but don't want automatic rotation:
+### Movement and Rotation Are Decoupled
+
+`MovementComponent` handles velocity, gravity, ground detection, jumping, and state transitions. It does not automatically rotate the character toward movement direction. Rotation must be controlled explicitly.
+
+### Rotation Techniques
+
+| Technique | API | Use Case |
+| --- | --- | --- |
+| Mouse look (Euler) | `SetLookDirection(dir)` | First/third person with mouse sensitivity and vertical clamp |
+| Camera-based direction | `SetLookDirection(cameraForward)` | Third-person with camera follow |
+| Screen-to-world raycast | `SetLookDirection(hitPoint - position)` | Click-to-look |
+| Gamepad right stick | `SetLookDirection(cameraDir)` | Console/cross-platform |
+| Camera-relative movement | `SetInputDirection(local) + SetLookDirection(worldMove)` | Third-person action games |
+
+### Camera-Relative Movement
+
+For third-person games where input is relative to camera direction:
 
 ```csharp
 void Update()
 {
-    // Get input in camera space
     Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
 
-    // Convert to world space direction relative to camera
-    Vector3 worldMoveDirection = GetCameraRelativeMovementDirection(moveInput);
+    // Camera-relative world direction
+    Vector3 camForward = _camera.transform.forward;
+    Vector3 camRight = _camera.transform.right;
+    camForward.y = 0f; camRight.y = 0f;
+    camForward.Normalize(); camRight.Normalize();
+    Vector3 worldMove = (camForward * moveInput.y + camRight * moveInput.x).normalized;
 
-    // Convert world direction to character's local space
-    Vector3 localInput = transform.InverseTransformDirection(worldMoveDirection);
-    _movement.SetInputDirection(localInput);
-
-    // Rotation is controlled separately (e.g., by camera or mouse look)
-    // You can use Option 1 or Option 2 for rotation control
+    // Convert to local space for MovementComponent, and set look direction
+    _movement.SetInputDirection(transform.InverseTransformDirection(worldMove));
+    if (moveInput.magnitude > 0.1f)
+        _movement.SetLookDirection(worldMove);
 }
 ```
 
-## Extending the System
+### GAS Movement Authority
 
-### Adding New States
+When jump, roll, or climb are implemented as abilities, the ability requests the movement state with `MovementStateRequestContext.FromAbility(this)`. The GAS authority decides whether to activate an ability, enter the state directly, or block the transition.
 
-1. Create a new state class inheriting from `MovementStateBase`
-2. Implement required methods (`OnEnter`, `OnUpdate`, `OnExit`, `EvaluateTransition`)
-3. Add the state to `MovementStateType` enum
-4. Register in `MovementComponent.GetStateByType()`
+## Usage Guide
 
-Example:
+### Mouse Look with Euler Angles
 
 ```csharp
-public class DashState : MovementStateBase
+private float _verticalRotation = 0f;
+private float _horizontalRotation = 0f;
+
+void Update()
 {
-    public override MovementStateType StateType => MovementStateType.Dash;
+    Vector2 moveInput = new Vector2(Input.GetAxis("Horizontal"), Input.GetAxis("Vertical"));
+    _movement.SetInputDirection(new Vector3(moveInput.x, 0, moveInput.y));
 
-    public override void OnEnter(ref MovementContext context)
-    {
-        // Initialize dash
-    }
+    Vector2 lookInput = new Vector2(Input.GetAxis("Mouse X"), Input.GetAxis("Mouse Y"));
+    _horizontalRotation += lookInput.x * 2f;
+    _verticalRotation = Mathf.Clamp(_verticalRotation - lookInput.y * 2f, -80f, 80f);
 
-    public override void OnUpdate(ref MovementContext context, out float3 displacement)
-    {
-        // Execute dash movement
-        displacement = context.InputDirection * context.Config.dashSpeed * context.DeltaTime;
-    }
+    float hRad = _horizontalRotation * Mathf.Deg2Rad;
+    float vRad = _verticalRotation * Mathf.Deg2Rad;
+    Vector3 direction = new Vector3(
+        Mathf.Sin(hRad) * Mathf.Cos(vRad),
+        Mathf.Sin(vRad),
+        Mathf.Cos(hRad) * Mathf.Cos(vRad)
+    );
+    _movement.SetLookDirection(direction.normalized);
+}
+```
 
-    public override MovementStateBase EvaluateTransition(ref MovementContext context)
+### Gamepad Right Stick Rotation
+
+```csharp
+Vector2 lookInput = new Vector2(Input.GetAxis("RightStickX"), Input.GetAxis("RightStickY"));
+if (lookInput.magnitude < 0.1f) return;
+
+Vector3 camRight = _camera.transform.right;
+Vector3 camForward = _camera.transform.forward;
+camRight.y = 0f; camForward.y = 0f;
+camRight.Normalize(); camForward.Normalize();
+
+Vector3 direction = (camForward * lookInput.y + camRight * lookInput.x).normalized;
+_movement.SetLookDirection(direction);
+```
+
+### Click-to-Look
+
+```csharp
+if (Input.GetMouseButton(0))
+{
+    Ray ray = _camera.ScreenPointToRay(Input.mousePosition);
+    if (Physics.Raycast(ray, out RaycastHit hit))
     {
-        // Return to walk when dash completes
-        return StatePool.GetState<WalkState>();
+        Vector3 direction = (hit.point - transform.position);
+        direction.y = 0f;
+        _movement.SetLookDirection(direction.normalized);
     }
 }
 ```
+
+### Animation
+
+```csharp
+void Update()
+{
+    var movement = GetComponent<MovementComponent>();
+    animator.SetFloat("Speed", movement.CurrentSpeed);
+    animator.SetBool("IsGrounded", movement.IsGrounded);
+    animator.SetBool("IsCrouching", movement.CurrentState == MovementStateType.Crouch);
+}
+```
+
+## Advanced Topics
+
+### GameplayAbilities Integration
+
+The integration assembly compiles only when `CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES` is enabled and both `CycloneGames.GameplayAbilities.Runtime` and `CycloneGames.GameplayTags.Core` are available. When movement verbs are owned by abilities, use `MovementStateRequestContext.FromAbility(this)` to request states.
+
+### Attribute Modification
+
+```csharp
+var movement = GetComponent<MovementComponent>();
+var authority = gameObject.AddComponent<MovementAttributeAuthority>();
+movement.MovementAuthority = authority;
+
+authority.SetBaseValueOverride(MovementAttribute.RunSpeed, 7f);
+authority.SetMultiplier(MovementAttribute.JumpForce, 1.2f);
+```
+
+### Time Scaling
+
+```csharp
+Time.timeScale = 0.2f;
+movementComponent.LocalTimeScale = 1.5f;
+movementComponent.IgnoreTimeScale = true;
+```
+
+## Common Scenarios
+
+### Separate Movement and Rotation
+
+Movement input controls velocity; camera or mouse controls rotation independently. Use `SetInputDirection` for movement and `SetLookDirection` for rotation.
+
+### Auto-face Movement Direction
+
+```csharp
+Vector3 worldMove = GetCameraRelativeMovementDirection(moveInput);
+if (moveInput.magnitude > 0.1f)
+{
+    _movement.SetInputDirection(transform.InverseTransformDirection(worldMove));
+    _movement.SetLookDirection(worldMove);
+}
+```
+
+### Multi-jump
+
+Configure `maxJumpCount` in the movement config. Each press consumes one jump count; ground contact resets it.
+
+## Performance and Memory
+
+- Uses `CharacterController.Move` for displacement — allocations depend on Unity's physics backend.
+- Snapshots are `readonly struct` with no heap allocation when passed by `in`.
+- `MovementComponent` is main-thread only. Threaded simulation belongs in pure data systems.
+- Use `MovementAttributeAuthority` instead of per-frame attribute computation.
+
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| Character falls through ground | `CharacterController` not attached or `groundCheck` misplaced | Add `CharacterController`, place ground check at feet |
+| Rotation not applied | Missing `SetLookDirection` or `SetRotation` call | Movement does not auto-rotate — call rotation API explicitly |
+| Jump not triggering | `CanEnterState` blocked by `IMovementAuthority` | Check authority implementation |
+| Climbing not working | Missing `enableClimbing` in config or wrong layer | Verify config and layer masks |
+| Performance issues | Heavy per-frame attribute recalculation | Use `MovementAttributeAuthority` for cached overrides |

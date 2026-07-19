@@ -1,292 +1,411 @@
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+
+using CycloneGames.Utility.Runtime;
+
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.Utility.Runtime;
 
 namespace CycloneGames.Utility.Editor
 {
-    [CustomEditor(typeof(TransformKeyRegistry))]
     [CanEditMultipleObjects]
+    [CustomEditor(typeof(TransformKeyRegistry))]
     public sealed class TransformKeyRegistryEditor : UnityEditor.Editor
     {
-        private const float SMALL_BUTTON_WIDTH = 24f;
-        private const float SPACING = 4f;
+        private const float SmallButtonWidth = 24f;
+        private const float Spacing = 4f;
 
-        private static readonly GUIContent AutoBuildLabel = new GUIContent("Auto Build On Awake");
-        private static readonly GUIContent IncludeNestedLabel = new GUIContent("Include Nested Registries");
-        private static readonly GUIContent FindFallbackLabel = new GUIContent("Use Transform.Find Fallback");
-        private static readonly GUIContent EntriesLabel = new GUIContent("Entries");
-        private static readonly GUIContent AddLabel = new GUIContent("Add");
-        private static readonly GUIContent RemoveLabel = new GUIContent("-");
-        private static readonly GUIContent CollectChildrenLabel = new GUIContent("Collect Direct Children");
-        private static readonly GUIContent RebuildLabel = new GUIContent("Rebuild Runtime Index");
-        private static readonly GUIContent KeyLabel = new GUIContent("Key");
-        private static readonly GUIContent TransformLabel = new GUIContent("Transform");
+        private static readonly Color IndexColor = new Color(0.17f, 0.49f, 0.67f, 1f);
+        private static readonly Color EntriesColor = new Color(0.45f, 0.32f, 0.68f, 1f);
+        private static readonly GUIContent RemoveContent = new GUIContent("-", "Remove this entry.");
+        private static readonly GUIContent AddContent = new GUIContent("Add Entry");
+        private static readonly GUIContent BuildOnAwakeContent = new GUIContent("Build On Awake");
+        private static readonly GUIContent IncludeNestedContent = new GUIContent("Include Nested Registries");
+        private static readonly GUIContent FindFallbackContent = new GUIContent("Transform.Find Fallback");
+        private static readonly GUIContent CollectContent = new GUIContent("Collect Direct Children");
+        private static readonly GUIContent RebuildContent = new GUIContent("Rebuild Runtime Index");
 
-        private SerializedProperty _scriptProperty;
-        private SerializedProperty _entriesProperty;
-        private SerializedProperty _autoBuildProperty;
-        private SerializedProperty _includeNestedProperty;
-        private SerializedProperty _findFallbackProperty;
+        private readonly HashSet<string> _validationKeys = new HashSet<string>(StringComparer.Ordinal);
+        private readonly HashSet<Transform> _collectTransforms = new HashSet<Transform>();
+
+        private SerializedProperty _script;
+        private SerializedProperty _entries;
+        private SerializedProperty _autoBuild;
+        private SerializedProperty _includeNested;
+        private SerializedProperty _findFallback;
+
+        private bool _indexExpanded = true;
+        private bool _entriesExpanded = true;
+        private bool _validationDirty = true;
+        private ValidationSummary _validation;
+        private string _emptyKeyMessage;
+        private string _missingTransformMessage;
+        private string _duplicateKeyMessage;
+        private string _externalTransformMessage;
+        private int _cachedEntryCount = int.MinValue;
+        private int _cachedDuplicateCount = int.MinValue;
+        private int _cachedInvalidCount = int.MinValue;
+        private string _entryCountText = string.Empty;
+        private string _duplicateCountText = string.Empty;
+        private string _invalidCountText = string.Empty;
 
         private void OnEnable()
         {
-            _scriptProperty = serializedObject.FindProperty("m_Script");
-            _entriesProperty = serializedObject.FindProperty("Entries");
-            _autoBuildProperty = serializedObject.FindProperty("AutoBuildOnAwake");
-            _includeNestedProperty = serializedObject.FindProperty("IncludeNestedRegistries");
-            _findFallbackProperty = serializedObject.FindProperty("UseTransformFindFallback");
+            _script = serializedObject.FindProperty("m_Script");
+            _entries = serializedObject.FindProperty("Entries");
+            _autoBuild = serializedObject.FindProperty("AutoBuildOnAwake");
+            _includeNested = serializedObject.FindProperty("IncludeNestedRegistries");
+            _findFallback = serializedObject.FindProperty("UseTransformFindFallback");
+            Undo.undoRedoPerformed += InvalidateValidation;
+            EditorApplication.hierarchyChanged += InvalidateValidation;
+            _validationDirty = true;
+        }
+
+        private void OnDisable()
+        {
+            Undo.undoRedoPerformed -= InvalidateValidation;
+            EditorApplication.hierarchyChanged -= InvalidateValidation;
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
+            InspectorUiUtility.DrawScriptProperty(_script);
+            InspectorUiUtility.DrawModuleHeader(
+                "Transform Key Registry",
+                "Builds a deterministic key index. Empty entries are ignored and the first valid duplicate key wins.");
 
-            DrawScriptField();
-            EditorGUILayout.PropertyField(_autoBuildProperty, AutoBuildLabel);
-            EditorGUILayout.PropertyField(_includeNestedProperty, IncludeNestedLabel);
-            EditorGUILayout.PropertyField(_findFallbackProperty, FindFallbackLabel);
+            EditorGUI.BeginChangeCheck();
 
-            DrawEntries();
+            _indexExpanded = InspectorUiUtility.DrawFoldoutHeader("Index Policy", _indexExpanded, IndexColor);
+            if (_indexExpanded)
+            {
+                using (new EditorGUI.IndentLevelScope())
+                {
+                    EditorGUILayout.PropertyField(_autoBuild, BuildOnAwakeContent);
+                    EditorGUILayout.PropertyField(_includeNested, IncludeNestedContent);
+                    EditorGUILayout.PropertyField(_findFallback, FindFallbackContent);
+                }
+
+                if (!_findFallback.hasMultipleDifferentValues && _findFallback.boolValue)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Transform.Find is an unbounded compatibility slow path. Do not call it from a frame hot path.",
+                        MessageType.Warning);
+                }
+            }
+
+            _entriesExpanded = InspectorUiUtility.DrawFoldoutHeader("Entries", _entriesExpanded, EntriesColor);
+            if (_entriesExpanded)
+            {
+                if (serializedObject.isEditingMultipleObjects)
+                {
+                    EditorGUILayout.HelpBox(
+                        "Multi-object editing uses Unity's standard array editor so different array sizes remain explicit.",
+                        MessageType.Info);
+                    EditorGUILayout.PropertyField(_entries, true);
+                }
+                else
+                {
+                    DrawSingleTargetEntries();
+                }
+            }
+
+            bool controlsChanged = EditorGUI.EndChangeCheck();
+            bool applied = serializedObject.ApplyModifiedProperties();
+            if (controlsChanged || applied)
+            {
+                InvalidateValidation();
+            }
+
             DrawValidation();
             DrawActions();
-
-            serializedObject.ApplyModifiedProperties();
+            DrawRuntimeStatus();
         }
 
-        private void DrawScriptField()
+        private void DrawSingleTargetEntries()
         {
-            if (_scriptProperty == null)
-            {
-                return;
-            }
-
-            using (new EditorGUI.DisabledScope(true))
-            {
-                EditorGUILayout.PropertyField(_scriptProperty);
-            }
-        }
-
-        private void DrawEntries()
-        {
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField(EntriesLabel, EditorStyles.boldLabel);
-
             Rect sizeRect = EditorGUILayout.GetControlRect();
             EditorGUI.BeginChangeCheck();
-            int newSize = EditorGUI.IntField(sizeRect, EntriesLabel, _entriesProperty.arraySize);
+            int requestedSize = EditorGUI.IntField(sizeRect, "Size", _entries.arraySize);
             if (EditorGUI.EndChangeCheck())
             {
-                _entriesProperty.arraySize = newSize < 0 ? 0 : newSize;
+                _entries.arraySize = Mathf.Max(0, requestedSize);
             }
 
             Rect headerRect = EditorGUILayout.GetControlRect();
-            float keyWidth = (headerRect.width - SMALL_BUTTON_WIDTH - SPACING * 2f) * 0.38f;
-            float transformWidth = headerRect.width - keyWidth - SMALL_BUTTON_WIDTH - SPACING * 2f;
-            Rect keyHeaderRect = new Rect(headerRect.x, headerRect.y, keyWidth, headerRect.height);
-            Rect transformHeaderRect = new Rect(keyHeaderRect.xMax + SPACING, headerRect.y, transformWidth, headerRect.height);
+            float keyWidth = (headerRect.width - SmallButtonWidth - Spacing * 2f) * 0.38f;
+            float transformWidth = headerRect.width - keyWidth - SmallButtonWidth - Spacing * 2f;
+            Rect keyHeader = new Rect(headerRect.x, headerRect.y, keyWidth, headerRect.height);
+            Rect transformHeader = new Rect(keyHeader.xMax + Spacing, headerRect.y, transformWidth, headerRect.height);
+            EditorGUI.LabelField(keyHeader, "Key");
+            EditorGUI.LabelField(transformHeader, "Transform");
 
-            EditorGUI.LabelField(keyHeaderRect, KeyLabel);
-            EditorGUI.LabelField(transformHeaderRect, TransformLabel);
-
-            for (int i = 0; i < _entriesProperty.arraySize; i++)
+            for (int i = 0; i < _entries.arraySize; i++)
             {
-                SerializedProperty entryProperty = _entriesProperty.GetArrayElementAtIndex(i);
-                SerializedProperty keyProperty = entryProperty.FindPropertyRelative("Key");
-                SerializedProperty transformProperty = entryProperty.FindPropertyRelative("Transform");
-
-                Rect rowRect = EditorGUILayout.GetControlRect();
-                Rect keyRect = new Rect(rowRect.x, rowRect.y, keyWidth, rowRect.height);
-                Rect transformRect = new Rect(keyRect.xMax + SPACING, rowRect.y, transformWidth, rowRect.height);
-                Rect removeRect = new Rect(transformRect.xMax + SPACING, rowRect.y, SMALL_BUTTON_WIDTH, rowRect.height);
-
-                EditorGUI.PropertyField(keyRect, keyProperty, GUIContent.none);
+                SerializedProperty entry = _entries.GetArrayElementAtIndex(i);
+                SerializedProperty key = entry.FindPropertyRelative("Key");
+                SerializedProperty transformProperty = entry.FindPropertyRelative("Transform");
+                Rect row = EditorGUILayout.GetControlRect();
+                Rect keyRect = new Rect(row.x, row.y, keyWidth, row.height);
+                Rect transformRect = new Rect(keyRect.xMax + Spacing, row.y, transformWidth, row.height);
+                Rect removeRect = new Rect(transformRect.xMax + Spacing, row.y, SmallButtonWidth, row.height);
+                EditorGUI.PropertyField(keyRect, key, GUIContent.none);
                 EditorGUI.PropertyField(transformRect, transformProperty, GUIContent.none);
 
-                if (GUI.Button(removeRect, RemoveLabel))
+                if (GUI.Button(removeRect, RemoveContent))
                 {
-                    _entriesProperty.DeleteArrayElementAtIndex(i);
+                    _entries.DeleteArrayElementAtIndex(i);
                     break;
                 }
             }
 
             Rect addRect = EditorGUILayout.GetControlRect();
-            if (GUI.Button(new Rect(addRect.x, addRect.y, 86f, addRect.height), AddLabel))
+            addRect.width = 100f;
+            if (GUI.Button(addRect, AddContent))
             {
-                int index = _entriesProperty.arraySize;
-                _entriesProperty.arraySize++;
-                SerializedProperty entryProperty = _entriesProperty.GetArrayElementAtIndex(index);
-                entryProperty.FindPropertyRelative("Key").stringValue = string.Empty;
-                entryProperty.FindPropertyRelative("Transform").objectReferenceValue = null;
+                int index = _entries.arraySize;
+                _entries.arraySize++;
+                SerializedProperty entry = _entries.GetArrayElementAtIndex(index);
+                entry.FindPropertyRelative("Key").stringValue = string.Empty;
+                entry.FindPropertyRelative("Transform").objectReferenceValue = null;
             }
         }
 
         private void DrawValidation()
         {
-            int emptyKeyCount = 0;
-            int missingTransformCount = 0;
-            int duplicateKeyCount = 0;
-            int externalTransformCount = 0;
-
-            TransformKeyRegistry registry = target as TransformKeyRegistry;
-            Transform root = registry == null ? null : registry.transform;
-
-            for (int i = 0; i < _entriesProperty.arraySize; i++)
+            if (_validationDirty && Event.current.type == EventType.Layout)
             {
-                SerializedProperty entryProperty = _entriesProperty.GetArrayElementAtIndex(i);
-                SerializedProperty keyProperty = entryProperty.FindPropertyRelative("Key");
-                SerializedProperty transformProperty = entryProperty.FindPropertyRelative("Transform");
-                string key = keyProperty.stringValue;
-                Transform value = transformProperty.objectReferenceValue as Transform;
-
-                if (string.IsNullOrEmpty(key))
-                {
-                    emptyKeyCount++;
-                }
-
-                if (value == null)
-                {
-                    missingTransformCount++;
-                }
-                else if (root != null && value != root && !value.IsChildOf(root))
-                {
-                    externalTransformCount++;
-                }
-
-                if (!string.IsNullOrEmpty(key) && IsDuplicateKey(i, key))
-                {
-                    duplicateKeyCount++;
-                }
+                RebuildValidation();
             }
 
-            if (emptyKeyCount > 0)
+            if (_validation.EmptyKeyCount > 0)
             {
-                EditorGUILayout.HelpBox("Some entries have empty keys. They are ignored by the runtime index.", MessageType.Warning);
+                EditorGUILayout.HelpBox(_emptyKeyMessage, MessageType.Warning);
             }
 
-            if (missingTransformCount > 0)
+            if (_validation.MissingTransformCount > 0)
             {
-                EditorGUILayout.HelpBox("Some entries have no Transform reference. They are ignored by the runtime index.", MessageType.Warning);
+                EditorGUILayout.HelpBox(_missingTransformMessage, MessageType.Warning);
             }
 
-            if (duplicateKeyCount > 0)
+            if (_validation.DuplicateKeyCount > 0)
             {
-                EditorGUILayout.HelpBox("Duplicate keys exist in this registry. The first matching entry wins at runtime.", MessageType.Error);
+                EditorGUILayout.HelpBox(_duplicateKeyMessage, MessageType.Error);
             }
 
-            if (externalTransformCount > 0)
+            if (_validation.ExternalTransformCount > 0)
             {
-                EditorGUILayout.HelpBox("Some entries reference Transforms outside this registry root. This is allowed, but check ownership carefully.", MessageType.Info);
+                EditorGUILayout.HelpBox(_externalTransformMessage, MessageType.Info);
             }
-
-            if (_findFallbackProperty.boolValue)
-            {
-                EditorGUILayout.HelpBox("Transform.Find fallback is a slow path. Keep it out of runtime hot paths.", MessageType.Info);
-            }
-        }
-
-        private bool IsDuplicateKey(int currentIndex, string key)
-        {
-            for (int i = 0; i < currentIndex; i++)
-            {
-                SerializedProperty entryProperty = _entriesProperty.GetArrayElementAtIndex(i);
-                SerializedProperty keyProperty = entryProperty.FindPropertyRelative("Key");
-                if (string.Equals(keyProperty.stringValue, key, System.StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return false;
         }
 
         private void DrawActions()
         {
-            EditorGUILayout.Space();
-            Rect rowRect = EditorGUILayout.GetControlRect();
-            float halfWidth = (rowRect.width - SPACING) * 0.5f;
-            Rect collectRect = new Rect(rowRect.x, rowRect.y, halfWidth, rowRect.height);
-            Rect rebuildRect = new Rect(collectRect.xMax + SPACING, rowRect.y, halfWidth, rowRect.height);
+            EditorGUILayout.Space(4f);
+            Rect row = EditorGUILayout.GetControlRect();
+            float halfWidth = (row.width - Spacing) * 0.5f;
+            Rect collectRect = new Rect(row.x, row.y, halfWidth, row.height);
+            Rect rebuildRect = new Rect(collectRect.xMax + Spacing, row.y, halfWidth, row.height);
 
-            if (GUI.Button(collectRect, CollectChildrenLabel))
+            if (GUI.Button(collectRect, CollectContent))
             {
-                serializedObject.ApplyModifiedProperties();
                 CollectDirectChildrenForTargets();
             }
 
-            if (GUI.Button(rebuildRect, RebuildLabel))
+            if (GUI.Button(rebuildRect, RebuildContent))
             {
-                serializedObject.ApplyModifiedProperties();
                 RebuildTargets();
-                serializedObject.Update();
             }
+        }
+
+        private void DrawRuntimeStatus()
+        {
+            if (serializedObject.isEditingMultipleObjects || !(target is TransformKeyRegistry registry))
+            {
+                return;
+            }
+
+            EditorGUILayout.Space(3f);
+            UpdateRuntimeStatusText(registry);
+            InspectorUiUtility.DrawReadOnlyStat("Index State", registry.IsBuilt ? "Built" : "Not built");
+            InspectorUiUtility.DrawReadOnlyStat("Indexed Entries", _entryCountText);
+            if (registry.IsBuilt)
+            {
+                InspectorUiUtility.DrawReadOnlyStat("Ignored Duplicates", _duplicateCountText);
+                InspectorUiUtility.DrawReadOnlyStat("Invalid Entries", _invalidCountText);
+            }
+        }
+
+        private void UpdateRuntimeStatusText(TransformKeyRegistry registry)
+        {
+            if (_cachedEntryCount != registry.EntryCount)
+            {
+                _cachedEntryCount = registry.EntryCount;
+                _entryCountText = _cachedEntryCount.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (_cachedDuplicateCount != registry.DuplicateKeyCount)
+            {
+                _cachedDuplicateCount = registry.DuplicateKeyCount;
+                _duplicateCountText = _cachedDuplicateCount.ToString(CultureInfo.InvariantCulture);
+            }
+
+            if (_cachedInvalidCount != registry.InvalidEntryCount)
+            {
+                _cachedInvalidCount = registry.InvalidEntryCount;
+                _invalidCountText = _cachedInvalidCount.ToString(CultureInfo.InvariantCulture);
+            }
+        }
+
+        private void RebuildValidation()
+        {
+            ValidationSummary summary = default;
+            for (int targetIndex = 0; targetIndex < targets.Length; targetIndex++)
+            {
+                TransformKeyRegistry registry = targets[targetIndex] as TransformKeyRegistry;
+                if (registry == null)
+                {
+                    continue;
+                }
+
+                using (var registryObject = new SerializedObject(registry))
+                {
+                    registryObject.UpdateIfRequiredOrScript();
+                    SerializedProperty entries = registryObject.FindProperty("Entries");
+                    _validationKeys.Clear();
+                    Transform root = registry.transform;
+
+                    for (int i = 0; i < entries.arraySize; i++)
+                    {
+                        SerializedProperty entry = entries.GetArrayElementAtIndex(i);
+                        string key = entry.FindPropertyRelative("Key").stringValue;
+                        Transform value = entry.FindPropertyRelative("Transform").objectReferenceValue as Transform;
+                        if (string.IsNullOrEmpty(key))
+                        {
+                            summary.EmptyKeyCount++;
+                        }
+
+                        if (value == null)
+                        {
+                            summary.MissingTransformCount++;
+                        }
+                        else
+                        {
+                            if (!string.IsNullOrEmpty(key) && !_validationKeys.Add(key))
+                            {
+                                summary.DuplicateKeyCount++;
+                            }
+
+                            if (value != root && !value.IsChildOf(root))
+                            {
+                                summary.ExternalTransformCount++;
+                            }
+                        }
+                    }
+                }
+            }
+
+            _validation = summary;
+            _emptyKeyMessage = summary.EmptyKeyCount > 0
+                ? string.Concat(summary.EmptyKeyCount, " entries have empty keys and are ignored.")
+                : null;
+            _missingTransformMessage = summary.MissingTransformCount > 0
+                ? string.Concat(summary.MissingTransformCount, " entries have no Transform and are ignored.")
+                : null;
+            _duplicateKeyMessage = summary.DuplicateKeyCount > 0
+                ? string.Concat(
+                    summary.DuplicateKeyCount,
+                    " duplicate keys are ignored after the first valid authored entry.")
+                : null;
+            _externalTransformMessage = summary.ExternalTransformCount > 0
+                ? string.Concat(
+                    summary.ExternalTransformCount,
+                    " entries reference Transforms outside their registry root. Verify ownership and lifetime.")
+                : null;
+            _validationDirty = false;
         }
 
         private void CollectDirectChildrenForTargets()
         {
-            Object[] selectedTargets = targets;
-            for (int i = 0; i < selectedTargets.Length; i++)
+            serializedObject.ApplyModifiedProperties();
+            for (int targetIndex = 0; targetIndex < targets.Length; targetIndex++)
             {
-                TransformKeyRegistry registry = selectedTargets[i] as TransformKeyRegistry;
+                TransformKeyRegistry registry = targets[targetIndex] as TransformKeyRegistry;
                 if (registry == null)
                 {
                     continue;
                 }
 
-                SerializedObject registryObject = new SerializedObject(registry);
-                SerializedProperty entriesProperty = registryObject.FindProperty("Entries");
-                Transform root = registry.transform;
-                int childCount = root.childCount;
-
-                for (int childIndex = 0; childIndex < childCount; childIndex++)
+                using (var registryObject = new SerializedObject(registry))
                 {
-                    Transform child = root.GetChild(childIndex);
-                    if (ContainsTransform(entriesProperty, child))
+                    registryObject.UpdateIfRequiredOrScript();
+                    SerializedProperty entries = registryObject.FindProperty("Entries");
+                    _collectTransforms.Clear();
+                    for (int i = 0; i < entries.arraySize; i++)
                     {
-                        continue;
+                        Transform existing = entries
+                            .GetArrayElementAtIndex(i)
+                            .FindPropertyRelative("Transform")
+                            .objectReferenceValue as Transform;
+                        if (existing != null)
+                        {
+                            _collectTransforms.Add(existing);
+                        }
                     }
 
-                    int entryIndex = entriesProperty.arraySize;
-                    entriesProperty.arraySize++;
-                    SerializedProperty entryProperty = entriesProperty.GetArrayElementAtIndex(entryIndex);
-                    entryProperty.FindPropertyRelative("Key").stringValue = child.name;
-                    entryProperty.FindPropertyRelative("Transform").objectReferenceValue = child;
-                }
+                    Transform root = registry.transform;
+                    int childCount = root.childCount;
+                    for (int childIndex = 0; childIndex < childCount; childIndex++)
+                    {
+                        Transform child = root.GetChild(childIndex);
+                        if (!_collectTransforms.Add(child))
+                        {
+                            continue;
+                        }
 
-                registryObject.ApplyModifiedProperties();
-                EditorUtility.SetDirty(registry);
+                        int entryIndex = entries.arraySize;
+                        entries.arraySize++;
+                        SerializedProperty entry = entries.GetArrayElementAtIndex(entryIndex);
+                        entry.FindPropertyRelative("Key").stringValue = child.name;
+                        entry.FindPropertyRelative("Transform").objectReferenceValue = child;
+                    }
+
+                    registryObject.ApplyModifiedProperties();
+                }
             }
 
             serializedObject.Update();
-        }
-
-        private static bool ContainsTransform(SerializedProperty entriesProperty, Transform transform)
-        {
-            for (int i = 0; i < entriesProperty.arraySize; i++)
-            {
-                SerializedProperty entryProperty = entriesProperty.GetArrayElementAtIndex(i);
-                SerializedProperty transformProperty = entryProperty.FindPropertyRelative("Transform");
-                if (transformProperty.objectReferenceValue == transform)
-                {
-                    return true;
-                }
-            }
-
-            return false;
+            InvalidateValidation();
         }
 
         private void RebuildTargets()
         {
-            Object[] selectedTargets = targets;
-            for (int i = 0; i < selectedTargets.Length; i++)
+            serializedObject.ApplyModifiedProperties();
+            for (int i = 0; i < targets.Length; i++)
             {
-                TransformKeyRegistry registry = selectedTargets[i] as TransformKeyRegistry;
-                if (registry == null)
+                if (targets[i] is TransformKeyRegistry registry)
                 {
-                    continue;
+                    registry.BuildIndex();
                 }
-
-                registry.BuildIndex();
             }
+
+            Repaint();
+        }
+
+        private void InvalidateValidation()
+        {
+            _validationDirty = true;
+            Repaint();
+        }
+
+        private struct ValidationSummary
+        {
+            public int EmptyKeyCount;
+            public int MissingTransformCount;
+            public int DuplicateKeyCount;
+            public int ExternalTransformCount;
         }
     }
 }

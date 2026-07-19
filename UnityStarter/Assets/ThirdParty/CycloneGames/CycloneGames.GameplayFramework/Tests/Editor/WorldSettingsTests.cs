@@ -1,210 +1,328 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayFramework.Runtime;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
+using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Tests.Editor
 {
     public sealed class WorldSettingsTests
     {
+        private const string SampleWorldSettingsPath = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/Samples/Sample.PureUnity/Settings/UnitySampleWorldSettings.asset";
+        private const string SampleGameModePrefabPath = "Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/Samples/Sample.PureUnity/Prefabs/UnitySampleGameMode.prefab";
+
+        private readonly List<GameObject> objects = new List<GameObject>(6);
         private WorldSettings settings;
-        private GameObject gameModeObject;
-        private GameObject playerControllerObject;
-        private GameObject pawnObject;
 
         [TearDown]
         public void TearDown()
         {
-            PathResolver.Instance.Reset();
-            WorldSettingsReferenceResolverRegistry.Unregister(PathResolver.Instance);
-
-            if (settings != null)
+            if (settings != null) Object.DestroyImmediate(settings);
+            for (int i = objects.Count - 1; i >= 0; i--)
             {
-                Object.DestroyImmediate(settings);
+                if (objects[i] != null) Object.DestroyImmediate(objects[i]);
             }
-
-            if (gameModeObject != null)
-            {
-                Object.DestroyImmediate(gameModeObject);
-            }
-
-            if (playerControllerObject != null)
-            {
-                Object.DestroyImmediate(playerControllerObject);
-            }
-
-            if (pawnObject != null)
-            {
-                Object.DestroyImmediate(pawnObject);
-            }
+            objects.Clear();
         }
 
         [Test]
-        public void Validate_ReturnsFalse_WhenRequiredDirectReferencesAreMissing()
+        public void Validate_RequiresGameModeControllerPawnAndPlayerState()
         {
             settings = ScriptableObject.CreateInstance<WorldSettings>();
-
             Assert.IsFalse(settings.Validate(logWarnings: false));
-            Assert.IsFalse(settings.HasConfiguredGameMode);
-            Assert.IsFalse(settings.HasConfiguredPlayerController);
-            Assert.IsFalse(settings.HasConfiguredPawn);
-            Assert.IsFalse(settings.UsesExternalReferences);
-        }
 
-        [Test]
-        public void Validate_ReturnsTrue_WhenRequiredDirectReferencesAreAssigned()
-        {
-            settings = ScriptableObject.CreateInstance<WorldSettings>();
-            AssignRequiredDirectReferences(settings);
+            AssignRequiredDirectReferences();
 
             Assert.IsTrue(settings.Validate(logWarnings: false));
             Assert.IsTrue(settings.HasConfiguredGameMode);
             Assert.IsTrue(settings.HasConfiguredPlayerController);
             Assert.IsTrue(settings.HasConfiguredPawn);
-            Assert.AreSame(gameModeObject.GetComponent<GameMode>(), settings.GameModeClass);
-            Assert.AreSame(playerControllerObject.GetComponent<PlayerController>(), settings.PlayerControllerClass);
-            Assert.AreSame(pawnObject.GetComponent<Pawn>(), settings.PawnClass);
+            Assert.IsTrue(settings.HasConfiguredPlayerState);
+            Assert.IsFalse(settings.UsesExternalReferences);
         }
 
         [Test]
-        public void ResolveReferencesAsync_UsesRegisteredResolverForExternalReferences()
+        public void SampleWorldSettings_GameModeDirectReference_ResolvesPersistedPrefabComponent()
+        {
+            WorldSettings sampleSettings = AssetDatabase.LoadAssetAtPath<WorldSettings>(SampleWorldSettingsPath);
+            GameObject gameModePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(SampleGameModePrefabPath);
+
+            Assert.IsNotNull(sampleSettings);
+            Assert.IsNotNull(gameModePrefab);
+
+            GameMode expectedGameMode = gameModePrefab.GetComponent<GameMode>();
+            Assert.IsNotNull(expectedGameMode);
+            Assert.AreEqual(
+                "CycloneGames.GameplayFramework.Runtime.Sample.PureUnity.UnitySampleGameMode",
+                expectedGameMode.GetType().FullName);
+
+            var serializedSettings = new SerializedObject(sampleSettings);
+            serializedSettings.Update();
+            SerializedProperty gameModeProperty = serializedSettings.FindProperty("gameModeClass");
+
+            Assert.AreSame(expectedGameMode, gameModeProperty.objectReferenceValue);
+            Assert.AreEqual(WorldSettingsReferenceSource.DirectReference, sampleSettings.GameModeSource);
+            Assert.AreSame(expectedGameMode, sampleSettings.GameModeClass);
+            Assert.IsTrue(sampleSettings.HasConfiguredGameMode);
+            Assert.IsTrue(sampleSettings.Validate(logWarnings: false));
+
+            using WorldDefinition definition = sampleSettings
+                .ResolveDefinitionAsync()
+                .GetAwaiter()
+                .GetResult();
+            Assert.AreSame(expectedGameMode, definition.GameModeClass);
+
+            GameMode instance = null;
+            try
+            {
+                instance = new DefaultUnityObjectSpawner().Create(definition.GameModeClass);
+                Assert.AreEqual(expectedGameMode.GetType(), instance.GetType());
+                Assert.AreNotSame(expectedGameMode, instance);
+            }
+            finally
+            {
+                if (instance != null)
+                {
+                    Object.DestroyImmediate(instance.gameObject);
+                }
+            }
+        }
+
+        [Test]
+        public void ResolveDefinition_UsesExplicitResolverWithoutMutatingAuthoringAsset()
         {
             settings = ScriptableObject.CreateInstance<WorldSettings>();
-            AssignRequiredDirectReferences(settings);
-            SetSource(settings, "pawnSource", WorldSettingsReferenceSource.PathLocation);
-            SetString(settings, "pawnAssetLocation", "resolved/pawn");
-            Pawn resolvedPawn = CreateComponent<Pawn>(ref pawnObject, "ResolvedPawn");
-            PathResolver.Instance.Asset = resolvedPawn;
-            WorldSettingsReferenceResolverRegistry.Register(PathResolver.Instance);
+            AssignRequiredDirectReferences();
+            Pawn authoringPawn = settings.PawnClass;
+            Pawn resolvedPawn = CreateComponent<Pawn>("ResolvedPawn");
+            SetSource("pawnSource", WorldSettingsReferenceSource.PathLocation);
+            SetString("pawnAssetLocation", "world/pawn");
+            var resolver = new TestResolver { Asset = resolvedPawn };
 
-            bool resolved = settings.ResolveReferencesAsync(CancellationToken.None, logWarnings: false).GetAwaiter().GetResult();
+            using WorldDefinition definition = settings
+                .ResolveDefinitionAsync(resolver)
+                .GetAwaiter()
+                .GetResult();
 
-            Assert.IsTrue(resolved);
+            Assert.AreSame(resolvedPawn, definition.PawnClass);
+            Assert.AreSame(authoringPawn, settings.PawnClass);
+            Assert.AreEqual("world/pawn", resolver.LastLocation);
             Assert.IsTrue(settings.UsesExternalReferences);
-            Assert.AreSame(resolvedPawn, settings.PawnClass);
-            Assert.AreEqual("resolved/pawn", PathResolver.Instance.LastLocation);
         }
 
         [Test]
-        public void ClearResolvedReferences_RemovesExternalResolvedValue()
+        public void WorldDefinition_DisposesExternalLeaseExactlyOnce()
         {
             settings = ScriptableObject.CreateInstance<WorldSettings>();
-            AssignRequiredDirectReferences(settings);
-            SetSource(settings, "pawnSource", WorldSettingsReferenceSource.PathLocation);
-            SetString(settings, "pawnAssetLocation", "resolved/pawn");
-            Pawn resolvedPawn = CreateComponent<Pawn>(ref pawnObject, "ResolvedPawn");
-            PathResolver.Instance.Asset = resolvedPawn;
-            WorldSettingsReferenceResolverRegistry.Register(PathResolver.Instance);
-            settings.ResolveReferencesAsync(CancellationToken.None, logWarnings: false).GetAwaiter().GetResult();
-
-            settings.ClearResolvedReferences();
-
-            Assert.IsNull(settings.PawnClass);
-        }
-
-        [Test]
-        public void ResolveReferencesAsync_ReturnsFalse_WhenAssetReferenceHasNoResolver()
-        {
-            settings = ScriptableObject.CreateInstance<WorldSettings>();
-            AssignRequiredDirectReferences(settings);
-            SetSource(settings, "pawnSource", WorldSettingsReferenceSource.AssetReference);
-            SetString(settings, "pawnAssetLocation", "assets/pawn");
-
-            bool resolved = settings.ResolveReferencesAsync(CancellationToken.None, logWarnings: false).GetAwaiter().GetResult();
-
-            Assert.IsFalse(resolved);
-            Assert.IsNull(settings.PawnClass);
-        }
-
-        [Test]
-        public void ClearResolvedReferences_ReleasesExternalLease()
-        {
-            settings = ScriptableObject.CreateInstance<WorldSettings>();
-            AssignRequiredDirectReferences(settings);
-            SetSource(settings, "pawnSource", WorldSettingsReferenceSource.PathLocation);
-            SetString(settings, "pawnAssetLocation", "resolved/pawn");
-            Pawn resolvedPawn = CreateComponent<Pawn>(ref pawnObject, "ResolvedPawn");
+            AssignRequiredDirectReferences();
+            SetSource("pawnSource", WorldSettingsReferenceSource.PathLocation);
+            SetString("pawnAssetLocation", "world/pawn");
             var lease = new TestLease();
-            PathResolver.Instance.Asset = resolvedPawn;
-            PathResolver.Instance.Lease = lease;
-            WorldSettingsReferenceResolverRegistry.Register(PathResolver.Instance);
-            settings.ResolveReferencesAsync(CancellationToken.None, logWarnings: false).GetAwaiter().GetResult();
+            var resolver = new TestResolver
+            {
+                Asset = CreateComponent<Pawn>("ResolvedPawn"),
+                Lease = lease,
+            };
 
-            settings.ClearResolvedReferences();
+            WorldDefinition definition = settings.ResolveDefinitionAsync(resolver).GetAwaiter().GetResult();
+            Assert.IsFalse(lease.Disposed);
+
+            definition.Dispose();
+            definition.Dispose();
 
             Assert.IsTrue(lease.Disposed);
-            Assert.IsNull(settings.PawnClass);
+            Assert.AreEqual(1, lease.DisposeCount);
         }
 
-        private void AssignRequiredDirectReferences(WorldSettings worldSettings)
+        [Test]
+        public void WorldDefinition_WorkerThreadDisposeIsRejectedAndCanRetryOnOwnerThread()
         {
-            SetObject(worldSettings, "gameModeClass", CreateComponent<GameMode>(ref gameModeObject, "GameMode"));
-            SetObject(worldSettings, "playerControllerClass", CreateComponent<PlayerController>(ref playerControllerObject, "PlayerController"));
-            SetObject(worldSettings, "pawnClass", CreateComponent<Pawn>(ref pawnObject, "Pawn"));
-        }
-
-        private static T CreateComponent<T>(ref GameObject gameObject, string name) where T : Component
-        {
-            if (gameObject != null)
+            settings = ScriptableObject.CreateInstance<WorldSettings>();
+            AssignRequiredDirectReferences();
+            SetSource("pawnSource", WorldSettingsReferenceSource.PathLocation);
+            SetString("pawnAssetLocation", "world/pawn");
+            var lease = new TestLease();
+            var resolver = new TestResolver
             {
-                Object.DestroyImmediate(gameObject);
-            }
+                Asset = CreateComponent<Pawn>("ResolvedPawn"),
+                Lease = lease,
+            };
+            WorldDefinition definition = settings.ResolveDefinitionAsync(resolver).GetAwaiter().GetResult();
+            Exception workerException = null;
+            var worker = new Thread(() =>
+            {
+                try
+                {
+                    definition.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    workerException = exception;
+                }
+            });
 
-            gameObject = new GameObject(name);
+            worker.Start();
+            Assert.IsTrue(worker.Join(5000), "Worker thread did not finish within the test timeout.");
+            Assert.IsInstanceOf<InvalidOperationException>(workerException);
+            Assert.IsFalse(definition.IsDisposed);
+            Assert.AreEqual(0, lease.DisposeCount);
+
+            definition.Dispose();
+
+            Assert.IsTrue(definition.IsDisposed);
+            Assert.AreEqual(1, lease.DisposeCount);
+        }
+
+        [Test]
+        public void ResolveDefinition_ThrowsWhenExternalResolverIsMissing()
+        {
+            settings = ScriptableObject.CreateInstance<WorldSettings>();
+            AssignRequiredDirectReferences();
+            SetSource("pawnSource", WorldSettingsReferenceSource.AssetReference);
+            SetString("pawnAssetLocation", "assets/pawn");
+
+            Assert.Throws<InvalidOperationException>(() =>
+                settings.ResolveDefinitionAsync().GetAwaiter().GetResult());
+        }
+
+        [Test]
+        public void ResolveDefinition_PropagatesCancellation()
+        {
+            settings = ScriptableObject.CreateInstance<WorldSettings>();
+            AssignRequiredDirectReferences();
+            SetSource("pawnSource", WorldSettingsReferenceSource.PathLocation);
+            SetString("pawnAssetLocation", "world/pawn");
+            using var cancellation = new CancellationTokenSource();
+            cancellation.Cancel();
+
+            Assert.Throws<OperationCanceledException>(() =>
+                settings.ResolveDefinitionAsync(new TestResolver(), cancellation.Token)
+                    .GetAwaiter()
+                    .GetResult());
+        }
+
+        [Test]
+        public void ResolveDefinition_CancellationAfterResolveDisposesUntransferredLease()
+        {
+            settings = ScriptableObject.CreateInstance<WorldSettings>();
+            AssignRequiredDirectReferences();
+            SetSource("pawnSource", WorldSettingsReferenceSource.PathLocation);
+            SetString("pawnAssetLocation", "world/pawn");
+            using var cancellation = new CancellationTokenSource();
+            var lease = new TestLease();
+            var resolver = new TestResolver
+            {
+                Asset = CreateComponent<Pawn>("ResolvedPawn"),
+                Lease = lease,
+                OnResolve = cancellation.Cancel,
+            };
+
+            Assert.Throws<OperationCanceledException>(() =>
+                settings.ResolveDefinitionAsync(resolver, cancellation.Token)
+                    .GetAwaiter()
+                    .GetResult());
+            Assert.AreEqual(1, lease.DisposeCount);
+        }
+
+        [UnityTest]
+        public IEnumerator ResolveDefinition_WorkerFaultRollsBackPriorLeaseOnMainThread()
+        {
+            return UniTask.ToCoroutine(async () =>
+            {
+                int ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+                settings = ScriptableObject.CreateInstance<WorldSettings>();
+                AssignRequiredDirectReferences();
+                SetSource("pawnSource", WorldSettingsReferenceSource.PathLocation);
+                SetString("pawnAssetLocation", "world/pawn");
+                SetSource("playerStateSource", WorldSettingsReferenceSource.PathLocation);
+                SetString("playerStateAssetLocation", "world/player-state");
+                var lease = new TestLease();
+                var resolver = new WorkerFaultResolver(
+                    CreateComponent<Pawn>("ResolvedPawn"),
+                    lease);
+
+                InvalidOperationException failure = null;
+                try
+                {
+                    await settings.ResolveDefinitionAsync(resolver);
+                }
+                catch (InvalidOperationException exception)
+                {
+                    failure = exception;
+                }
+
+                Assert.IsNotNull(failure);
+                Assert.AreEqual(1, lease.DisposeCount);
+                Assert.AreEqual(ownerThreadId, lease.DisposeThreadId);
+            });
+        }
+
+        private void AssignRequiredDirectReferences()
+        {
+            SetObject("gameModeClass", CreateComponent<GameMode>("GameMode"));
+            SetObject("playerControllerClass", CreateComponent<PlayerController>("PlayerController"));
+            SetObject("pawnClass", CreateComponent<Pawn>("Pawn"));
+            SetObject("playerStateClass", CreateComponent<PlayerState>("PlayerState"));
+        }
+
+        private T CreateComponent<T>(string name) where T : Component
+        {
+            var gameObject = new GameObject(name);
+            objects.Add(gameObject);
             return gameObject.AddComponent<T>();
         }
 
-        private static void SetObject(WorldSettings worldSettings, string propertyName, Object value)
+        private void SetObject(string fieldName, Object value)
         {
-            SerializedObject serializedObject = new SerializedObject(worldSettings);
-            serializedObject.FindProperty(propertyName).objectReferenceValue = value;
+            var serializedObject = new SerializedObject(settings);
+            serializedObject.FindProperty(fieldName).objectReferenceValue = value;
             serializedObject.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static void SetSource(WorldSettings worldSettings, string propertyName, WorldSettingsReferenceSource source)
+        private void SetSource(string fieldName, WorldSettingsReferenceSource source)
         {
-            SerializedObject serializedObject = new SerializedObject(worldSettings);
-            serializedObject.FindProperty(propertyName).enumValueIndex = (int)source;
+            var serializedObject = new SerializedObject(settings);
+            serializedObject.FindProperty(fieldName).enumValueIndex = (int)source;
             serializedObject.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private static void SetString(WorldSettings worldSettings, string propertyName, string value)
+        private void SetString(string fieldName, string value)
         {
-            SerializedObject serializedObject = new SerializedObject(worldSettings);
-            serializedObject.FindProperty(propertyName).stringValue = value;
+            var serializedObject = new SerializedObject(settings);
+            serializedObject.FindProperty(fieldName).stringValue = value;
             serializedObject.ApplyModifiedPropertiesWithoutUndo();
         }
 
-        private sealed class PathResolver : IWorldSettingsReferenceResolver
+        private sealed class TestResolver : IWorldSettingsReferenceResolver
         {
-            public static readonly PathResolver Instance = new PathResolver();
-
             public Object Asset { get; set; }
             public IDisposable Lease { get; set; }
+            public Action OnResolve { get; set; }
             public string LastLocation { get; private set; }
-
-            public void Reset()
-            {
-                Asset = null;
-                Lease = null;
-                LastLocation = null;
-            }
 
             public bool Supports(WorldSettingsReferenceSource source)
             {
-                return source == WorldSettingsReferenceSource.PathLocation;
+                return source == WorldSettingsReferenceSource.PathLocation ||
+                       source == WorldSettingsReferenceSource.AssetReference;
             }
 
-            public UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(string location, CancellationToken cancellationToken) where T : Object
+            public UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
+                string location,
+                CancellationToken cancellationToken) where T : Object
             {
+                cancellationToken.ThrowIfCancellationRequested();
                 LastLocation = location;
-                T asset = Asset as T;
-                return UniTask.FromResult(asset != null
-                    ? new WorldSettingsAssetLoadResult<T>(true, asset, null, Lease)
+                T typedAsset = Asset as T;
+                OnResolve?.Invoke();
+                return UniTask.FromResult(typedAsset != null
+                    ? new WorldSettingsAssetLoadResult<T>(true, typedAsset, null, Lease)
                     : new WorldSettingsAssetLoadResult<T>(false, null, "Missing test asset."));
             }
         }
@@ -212,10 +330,51 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         private sealed class TestLease : IDisposable
         {
             public bool Disposed { get; private set; }
+            public int DisposeCount { get; private set; }
+            public int DisposeThreadId { get; private set; }
 
             public void Dispose()
             {
                 Disposed = true;
+                DisposeCount++;
+                DisposeThreadId = Thread.CurrentThread.ManagedThreadId;
+            }
+        }
+
+        private sealed class WorkerFaultResolver : IWorldSettingsReferenceResolver
+        {
+            private readonly Object successfulAsset;
+            private readonly IDisposable lease;
+
+            public WorkerFaultResolver(Object successfulAsset, IDisposable lease)
+            {
+                this.successfulAsset = successfulAsset;
+                this.lease = lease;
+            }
+
+            public bool Supports(WorldSettingsReferenceSource source)
+            {
+                return source == WorldSettingsReferenceSource.PathLocation;
+            }
+
+            public UniTask<WorldSettingsAssetLoadResult<T>> ResolveAsync<T>(
+                string location,
+                CancellationToken cancellationToken) where T : Object
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                if (location == "world/pawn")
+                {
+                    return UniTask.FromResult(new WorldSettingsAssetLoadResult<T>(
+                        true,
+                        successfulAsset as T,
+                        null,
+                        lease));
+                }
+
+                var completion = new UniTaskCompletionSource<WorldSettingsAssetLoadResult<T>>();
+                ThreadPool.QueueUserWorkItem(_ => completion.TrySetException(
+                    new InvalidOperationException("Worker resolver failure requested by test.")));
+                return completion.Task;
             }
         }
     }

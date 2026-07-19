@@ -3,8 +3,12 @@
     "rootNamespace": "CycloneGames.InputSystem.Tests.Editor",
     "references": [
         "CycloneGames.InputSystem.Runtime",
+        "CycloneGames.InputSystem.Editor",
+        "CycloneGames.InputSystem.Tools.Runtime",
         "R3.Unity",
         "Unity.InputSystem",
+        "UniTask",
+        "VYaml.Core",
         "UnityEngine.TestRunner",
         "UnityEditor.TestRunner"
     ],
@@ -16,7 +20,8 @@
     "overrideReferences": true,
     "precompiledReferences": [
         "nunit.framework.dll",
-        "R3.dll"
+        "R3.dll",
+        "VYaml.dll"
     ],
     "autoReferenced": false,
     "defineConstraints": [

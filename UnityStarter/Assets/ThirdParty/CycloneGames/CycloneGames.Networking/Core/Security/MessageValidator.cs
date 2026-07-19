@@ -62,11 +62,12 @@ namespace CycloneGames.Networking.Security
 
     public enum ValidationResult : byte
     {
-        Valid,
-        InvalidMessageId,
-        PayloadTooSmall,
-        PayloadTooLarge,
-        MalformedHeader
+        Invalid = 0,
+        Valid = 1,
+        InvalidMessageId = 2,
+        PayloadTooSmall = 3,
+        PayloadTooLarge = 4,
+        MalformedHeader = 5
     }
 
     public enum NetworkMessageDirection : byte
@@ -127,6 +128,11 @@ namespace CycloneGames.Networking.Security
         public const int PayloadLengthOffset = 14;
         public const int ChecksumOffset = 18;
         public const int HeaderLength = ChecksumOffset + UInt32Size;
+        public const NetworkMessageFlags KnownFlags = NetworkMessageFlags.Reliable
+                                                       | NetworkMessageFlags.Ordered
+                                                       | NetworkMessageFlags.Fragmented
+                                                       | NetworkMessageFlags.Compressed
+                                                       | NetworkMessageFlags.Encrypted;
         public const uint ChecksumSeed = Fnv1a32.OffsetBasis; // FNV-1a 32-bit offset basis.
         public const uint ChecksumPrime = Fnv1a32.Prime; // FNV-1a 32-bit prime.
     }
@@ -173,8 +179,11 @@ namespace CycloneGames.Networking.Security
         public bool IsSupported =>
             Version >= NetworkWireProtocol.MinSupportedVersion
             && Version <= NetworkWireProtocol.CurrentVersion
-            && HeaderLength >= NetworkWireProtocol.HeaderLength
-            && PayloadLength >= 0;
+            && HeaderLength == NetworkWireProtocol.HeaderLength
+            && PayloadLength >= 0
+            && (Flags & ~NetworkWireProtocol.KnownFlags) == 0
+            && Channel >= NetworkChannel.Reliable
+            && Channel <= NetworkChannel.UnreliableSequenced;
 
         public NetworkMessageEnvelope ToEnvelope(NetworkMessageDirection direction)
         {
@@ -192,14 +201,18 @@ namespace CycloneGames.Networking.Security
 
     public enum NetworkFrameResult : byte
     {
-        Valid,
-        BufferTooSmall,
-        InvalidBufferRange,
-        InvalidMagic,
-        UnsupportedVersion,
-        InvalidHeaderLength,
-        InvalidPayloadLength,
-        InvalidChecksum
+        Invalid = 0,
+        Valid = 1,
+        BufferTooSmall = 2,
+        InvalidBufferRange = 3,
+        InvalidMagic = 4,
+        UnsupportedVersion = 5,
+        InvalidHeaderLength = 6,
+        InvalidFlags = 7,
+        InvalidChannel = 8,
+        InvalidReservedByte = 9,
+        InvalidPayloadLength = 10,
+        InvalidChecksum = 11
     }
 
     /// <summary>
@@ -213,7 +226,8 @@ namespace CycloneGames.Networking.Security
         {
             if (payloadLength < 0)
                 throw new ArgumentOutOfRangeException(nameof(payloadLength));
-            return NetworkWireProtocol.HeaderLength + payloadLength;
+
+            return checked(NetworkWireProtocol.HeaderLength + payloadLength);
         }
 
         public static NetworkFrameResult TryReadHeader(ArraySegment<byte> frame, out NetworkEnvelopeHeader header)
@@ -242,17 +256,26 @@ namespace CycloneGames.Networking.Security
                 return NetworkFrameResult.UnsupportedVersion;
 
             byte headerLength = frame[NetworkWireProtocol.HeaderLengthOffset];
-            if (headerLength < NetworkWireProtocol.HeaderLength || headerLength > frame.Length)
+            if (headerLength != NetworkWireProtocol.HeaderLength)
                 return NetworkFrameResult.InvalidHeaderLength;
 
             var flags = (NetworkMessageFlags)ReadUShort(frame, NetworkWireProtocol.FlagsOffset);
+            if ((flags & ~NetworkWireProtocol.KnownFlags) != 0)
+                return NetworkFrameResult.InvalidFlags;
+
             ushort messageId = ReadUShort(frame, NetworkWireProtocol.MessageIdOffset);
             var channel = (NetworkChannel)frame[NetworkWireProtocol.ChannelOffset];
+            if (channel < NetworkChannel.Reliable || channel > NetworkChannel.UnreliableSequenced)
+                return NetworkFrameResult.InvalidChannel;
+
+            if (frame[NetworkWireProtocol.ReservedOffset] != 0)
+                return NetworkFrameResult.InvalidReservedByte;
+
             uint sequence = ReadUInt(frame, NetworkWireProtocol.SequenceOffset);
             int payloadLength = ReadInt(frame, NetworkWireProtocol.PayloadLengthOffset);
             uint checksum = ReadUInt(frame, NetworkWireProtocol.ChecksumOffset);
 
-            if (payloadLength < 0 || payloadLength > frame.Length - headerLength)
+            if (payloadLength < 0 || payloadLength != frame.Length - headerLength)
                 return NetworkFrameResult.InvalidPayloadLength;
 
             header = new NetworkEnvelopeHeader(
@@ -296,6 +319,8 @@ namespace CycloneGames.Networking.Security
                 throw new ArgumentNullException(nameof(buffer));
             if (offset < 0 || offset > buffer.Length || NetworkWireProtocol.HeaderLength > buffer.Length - offset)
                 throw new ArgumentOutOfRangeException(nameof(offset));
+            if (!header.IsSupported)
+                throw new ArgumentException("Network frame header contains unsupported values.", nameof(header));
 
             WriteUShort(buffer, offset + NetworkWireProtocol.MagicOffset, NetworkWireProtocol.Magic);
             buffer[offset + NetworkWireProtocol.VersionOffset] = header.Version;
@@ -382,8 +407,6 @@ namespace CycloneGames.Networking.Security
 
     public readonly struct NetworkMessageEnvelope
     {
-        public const byte CurrentVersion = NetworkWireProtocol.CurrentVersion;
-
         public readonly byte Version;
         public readonly ushort MessageId;
         public readonly NetworkMessageDirection Direction;
@@ -401,7 +424,7 @@ namespace CycloneGames.Networking.Security
             uint sequence = 0u,
             uint checksum = 0u,
             NetworkMessageFlags flags = NetworkMessageFlags.None,
-            byte version = CurrentVersion)
+            byte version = NetworkWireProtocol.CurrentVersion)
         {
             Version = version;
             MessageId = messageId;
@@ -521,17 +544,18 @@ namespace CycloneGames.Networking.Security
 
     public enum MessageSecurityResult : byte
     {
-        Valid,
-        MalformedEnvelope,
-        UnsupportedVersion,
-        DirectionRejected,
-        PayloadTooLarge,
-        AuthenticationRequired,
-        EncryptionRequired,
-        ReplayRejected,
-        SignatureRequired,
-        SignatureRejected,
-        RateLimited
+        Invalid = 0,
+        Valid = 1,
+        MalformedEnvelope = 2,
+        UnsupportedVersion = 3,
+        DirectionRejected = 4,
+        PayloadTooLarge = 5,
+        AuthenticationRequired = 6,
+        EncryptionRequired = 7,
+        ReplayRejected = 8,
+        SignatureRequired = 9,
+        SignatureRejected = 10,
+        RateLimited = 11
     }
 
     public interface INetworkSecurityPolicyConfigurable
@@ -545,7 +569,7 @@ namespace CycloneGames.Networking.Security
     public sealed class MessageSecurityPolicyRegistry
     {
         private readonly object _syncRoot = new object();
-        private RegistrySnapshot _snapshot;
+        private volatile RegistrySnapshot _snapshot;
         private volatile bool _frozen;
 
         public MessageSecurityPolicyRegistry()
@@ -633,70 +657,225 @@ namespace CycloneGames.Networking.Security
 
     public sealed class NetworkReplayGuard
     {
-        private readonly ConcurrentDictionary<ReplayKey, uint> _lastSequences = new ConcurrentDictionary<ReplayKey, uint>();
+        private const int DefaultMaxConnections = 4096;
+        private const int DefaultMaxStreamsPerConnection = 256;
+        private const double DefaultIdleTimeoutSeconds = 120d;
 
-        public bool TryAccept(int connectionId, ushort messageId, uint sequence)
+        private readonly ConcurrentDictionary<int, ConnectionReplayState> _connections = new ConcurrentDictionary<int, ConnectionReplayState>();
+        private readonly object _creationLock = new object();
+        private readonly int _maxConnections;
+        private readonly int _maxStreamsPerConnection;
+        private readonly double _idleTimeoutSeconds;
+
+        public NetworkReplayGuard(
+            int maxConnections = DefaultMaxConnections,
+            int maxStreamsPerConnection = DefaultMaxStreamsPerConnection,
+            double idleTimeoutSeconds = DefaultIdleTimeoutSeconds)
         {
-            if (connectionId <= 0 || sequence == 0u)
+            if (maxConnections <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxConnections));
+            if (maxStreamsPerConnection <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxStreamsPerConnection));
+            if (idleTimeoutSeconds <= 0d || double.IsNaN(idleTimeoutSeconds) || double.IsInfinity(idleTimeoutSeconds))
+                throw new ArgumentOutOfRangeException(nameof(idleTimeoutSeconds));
+
+            _maxConnections = maxConnections;
+            _maxStreamsPerConnection = maxStreamsPerConnection;
+            _idleTimeoutSeconds = idleTimeoutSeconds;
+        }
+
+        public bool TryAccept(int connectionId, ushort messageId, uint sequence, double currentTime)
+        {
+            if (connectionId <= 0 || sequence == 0u || !IsFiniteNonNegative(currentTime))
                 return false;
 
-            var key = new ReplayKey(connectionId, messageId);
-            while (true)
+            if (!_connections.TryGetValue(connectionId, out ConnectionReplayState state))
             {
-                if (!_lastSequences.TryGetValue(key, out uint current))
-                    return _lastSequences.TryAdd(key, sequence);
+                lock (_creationLock)
+                {
+                    if (!_connections.TryGetValue(connectionId, out state))
+                    {
+                        if (_connections.Count >= _maxConnections)
+                            PruneExpired(currentTime, Math.Max(1, _maxConnections / 16));
+                        if (_connections.Count >= _maxConnections)
+                            return false;
 
-                if (sequence <= current)
-                    return false;
-
-                if (_lastSequences.TryUpdate(key, sequence, current))
-                    return true;
+                        state = new ConnectionReplayState(_maxStreamsPerConnection, currentTime);
+                        if (!_connections.TryAdd(connectionId, state)
+                            && !_connections.TryGetValue(connectionId, out state))
+                        {
+                            return false;
+                        }
+                    }
+                }
             }
+
+            return state.TryAccept(messageId, sequence, currentTime, _idleTimeoutSeconds);
+        }
+
+        public int PruneExpired(double currentTime, int maxRemovals = int.MaxValue)
+        {
+            if (!IsFiniteNonNegative(currentTime))
+                throw new ArgumentOutOfRangeException(nameof(currentTime));
+            if (maxRemovals < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxRemovals));
+
+            int removed = 0;
+            foreach (var pair in _connections)
+            {
+                if (removed >= maxRemovals)
+                    break;
+
+                if (pair.Value.TryRetireIfExpired(currentTime, _idleTimeoutSeconds)
+                    && ((ICollection<KeyValuePair<int, ConnectionReplayState>>)_connections).Remove(pair))
+                {
+                    removed++;
+                }
+            }
+
+            return removed;
         }
 
         public void RemoveConnection(int connectionId)
         {
-            if (connectionId <= 0)
-                return;
-
-            foreach (ReplayKey key in _lastSequences.Keys)
+            if (connectionId <= 0
+                || !_connections.TryGetValue(connectionId, out ConnectionReplayState state))
             {
-                if (key.ConnectionId == connectionId)
-                    _lastSequences.TryRemove(key, out _);
+                return;
             }
+
+            state.Retire();
+            ((ICollection<KeyValuePair<int, ConnectionReplayState>>)_connections).Remove(
+                new KeyValuePair<int, ConnectionReplayState>(connectionId, state));
         }
 
         public void Clear()
         {
-            _lastSequences.Clear();
+            lock (_creationLock)
+            {
+                foreach (var pair in _connections)
+                {
+                    pair.Value.Retire();
+                    ((ICollection<KeyValuePair<int, ConnectionReplayState>>)_connections).Remove(pair);
+                }
+            }
         }
 
-        private readonly struct ReplayKey : IEquatable<ReplayKey>
+        private static bool IsFiniteNonNegative(double value)
         {
-            public readonly int ConnectionId;
-            public readonly ushort MessageId;
+            return value >= 0d && !double.IsNaN(value) && !double.IsInfinity(value);
+        }
 
-            public ReplayKey(int connectionId, ushort messageId)
+        private sealed class ConnectionReplayState
+        {
+            private const int WindowBitCount = 64;
+
+            private readonly object _syncRoot = new object();
+            private readonly int _maxStreams;
+            private readonly Dictionary<ushort, SequenceWindow> _windows;
+            private double _lastSeen;
+            private bool _retired;
+
+            public ConnectionReplayState(int maxStreams, double currentTime)
             {
-                ConnectionId = connectionId;
-                MessageId = messageId;
+                _maxStreams = maxStreams;
+                _windows = new Dictionary<ushort, SequenceWindow>(Math.Min(maxStreams, 32));
+                _lastSeen = currentTime;
             }
 
-            public bool Equals(ReplayKey other)
+            public bool TryAccept(ushort messageId, uint sequence, double currentTime, double idleTimeoutSeconds)
             {
-                return ConnectionId == other.ConnectionId && MessageId == other.MessageId;
-            }
-
-            public override bool Equals(object obj)
-            {
-                return obj is ReplayKey other && Equals(other);
-            }
-
-            public override int GetHashCode()
-            {
-                unchecked
+                lock (_syncRoot)
                 {
-                    return (ConnectionId * 397) ^ MessageId;
+                    if (_retired || currentTime < _lastSeen)
+                        return false;
+
+                    _lastSeen = currentTime;
+                    if (!_windows.TryGetValue(messageId, out SequenceWindow window))
+                    {
+                        if (_windows.Count >= _maxStreams)
+                            PruneOneExpiredStream(currentTime, idleTimeoutSeconds);
+                        if (_windows.Count >= _maxStreams)
+                            return false;
+
+                        _windows.Add(messageId, new SequenceWindow(sequence, currentTime));
+                        return true;
+                    }
+
+                    int forward = unchecked((int)(sequence - window.Highest));
+                    if (forward > 0)
+                    {
+                        window.SeenMask = forward >= WindowBitCount
+                            ? 1UL
+                            : (window.SeenMask << forward) | 1UL;
+                        window.Highest = sequence;
+                        window.LastSeen = currentTime;
+                        _windows[messageId] = window;
+                        return true;
+                    }
+
+                    int age = unchecked((int)(window.Highest - sequence));
+                    if (age < 0 || age >= WindowBitCount)
+                        return false;
+
+                    ulong bit = 1UL << age;
+                    if ((window.SeenMask & bit) != 0UL)
+                        return false;
+
+                    window.SeenMask |= bit;
+                    window.LastSeen = currentTime;
+                    _windows[messageId] = window;
+                    return true;
+                }
+            }
+
+            public bool TryRetireIfExpired(double currentTime, double idleTimeoutSeconds)
+            {
+                lock (_syncRoot)
+                {
+                    if (_retired || currentTime - _lastSeen < idleTimeoutSeconds)
+                        return false;
+
+                    _retired = true;
+                    return true;
+                }
+            }
+
+            public void Retire()
+            {
+                lock (_syncRoot)
+                    _retired = true;
+            }
+
+            private void PruneOneExpiredStream(double currentTime, double idleTimeoutSeconds)
+            {
+                ushort expiredMessageId = 0;
+                bool found = false;
+                foreach (var pair in _windows)
+                {
+                    if (currentTime - pair.Value.LastSeen < idleTimeoutSeconds)
+                        continue;
+
+                    expiredMessageId = pair.Key;
+                    found = true;
+                    break;
+                }
+
+                if (found)
+                    _windows.Remove(expiredMessageId);
+            }
+
+            private struct SequenceWindow
+            {
+                public uint Highest;
+                public ulong SeenMask;
+                public double LastSeen;
+
+                public SequenceWindow(uint highest, double lastSeen)
+                {
+                    Highest = highest;
+                    SeenMask = 1UL;
+                    LastSeen = lastSeen;
                 }
             }
         }

@@ -3,36 +3,84 @@ using System;
 namespace CycloneGames.DataTable
 {
     /// <summary>
-    /// Internal logging bridge. Core provides safe defaults (Console.WriteLine).
-    /// <para>
-    /// The Unity adapter (<see cref="CycloneGames.DataTable.Unity.DataTableUnityBootstrap"/>)
-    /// routes to Unity's Debug.Log* at startup, but only if the delegates are still at
-    /// their default values. To use your own logger (e.g. CycloneGames.Logger), set the
-    /// delegates BEFORE Unity initializes — or at any later point; they are simple
-    /// static properties and the last write wins.
-    /// </para>
+    /// Process-wide logging bridge. A composition root may replace the delegates. Unity adapters
+    /// should reset and inject them during subsystem registration so domain-reload-disabled play
+    /// sessions do not retain stale delegates.
     /// </summary>
     public static class DataTableLogger
     {
-        // Named methods instead of lambdas so the bootstrap can detect that the
-        // defaults haven't been replaced yet.
-        private static void DefaultWarning(string msg) => Console.WriteLine($"[DataTable] WARNING: {msg}");
-        private static void DefaultError(string msg) => Console.Error.WriteLine($"[DataTable] ERROR: {msg}");
-        private static void DefaultInfo(string msg) => Console.WriteLine($"[DataTable] {msg}");
+        private static Action<string> _logWarning = DefaultWarning;
+        private static Action<string> _logError = DefaultError;
+        private static Action<string> _logInfo = DefaultInfo;
 
-        /// <summary>Log a warning.</summary>
-        public static Action<string> LogWarning { get; set; } = DefaultWarning;
+        private static void DefaultWarning(string message)
+        {
+            Console.WriteLine($"[DataTable] WARNING: {message}");
+        }
 
-        /// <summary>Log an error.</summary>
-        public static Action<string> LogError { get; set; } = DefaultError;
+        private static void DefaultError(string message)
+        {
+            Console.Error.WriteLine($"[DataTable] ERROR: {message}");
+        }
 
-        /// <summary>Log info.</summary>
-        public static Action<string> LogInfo { get; set; } = DefaultInfo;
+        private static void DefaultInfo(string message)
+        {
+            Console.WriteLine($"[DataTable] {message}");
+        }
+
+        public static Action<string> LogWarning
+        {
+            get => _logWarning;
+            set => _logWarning = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        public static Action<string> LogError
+        {
+            get => _logError;
+            set => _logError = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        public static Action<string> LogInfo
+        {
+            get => _logInfo;
+            set => _logInfo = value ?? throw new ArgumentNullException(nameof(value));
+        }
+
+        public static bool IsDefault =>
+            LogWarning == (Action<string>)DefaultWarning &&
+            LogError == (Action<string>)DefaultError &&
+            LogInfo == (Action<string>)DefaultInfo;
+
+        public static void ResetToDefaults()
+        {
+            LogWarning = DefaultWarning;
+            LogError = DefaultError;
+            LogInfo = DefaultInfo;
+        }
 
         /// <summary>
-        /// True if the logging delegates have been replaced with non-default implementations.
-        /// The bootstrap uses this to avoid overwriting externally injected loggers.
+        /// Best-effort logging for paths whose authoritative state transition has already committed.
+        /// A diagnostic adapter failure must not make the completed transition appear to have failed.
         /// </summary>
-        public static bool IsDefault => LogWarning == (Action<string>)DefaultWarning;
+        internal static void LogCommittedInfoNoThrow(string message)
+        {
+            try
+            {
+                LogInfo(message);
+            }
+            catch (Exception exception)
+            {
+                try
+                {
+                    DefaultError(
+                        $"An injected info logger threw after a committed state transition. " +
+                        $"LoggerException={exception.GetType().FullName}: {exception.Message}");
+                }
+                catch (Exception)
+                {
+                    // Diagnostics are deliberately best-effort after the authoritative commit.
+                }
+            }
+        }
     }
 }

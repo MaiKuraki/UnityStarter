@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.networking",
   "version": "1.0.0",
   "displayName": "CycloneGames.Networking",
-  "description": "Comprehensive networking framework with pluggable transport adapters (Mirror, Mirage), tick-based simulation, client prediction & reconciliation, snapshot interpolation, lag compensation, interest management (grid/group/composite), network variable sync, RPC system, session/lobby/matchmaking, compression (delta/quantized), security (rate limiting, validation), platform-specific configuration, and full diagnostics.",
+  "description": "Experimental transport-neutral networking foundation with explicit versioned protocol manifests, bounded memory and transport primitives, replication/session/simulation/security contracts, diagnostics, and optional transport and serializer integrations. Backend SDKs and product policy remain separately owned.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
@@ -18,9 +18,10 @@
     "Transport",
     "Mirror",
     "Mirage",
+    "Nakama",
+    "Protocol",
     "Prediction",
-    "Interpolation",
-    "SyncVar"
+    "Interpolation"
   ],
   "author": {
     "name": "CycloneGames",

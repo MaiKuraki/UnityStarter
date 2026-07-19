@@ -1,215 +1,729 @@
 using System;
-using System.Buffers;
 using System.IO;
-using System.Text;
 using System.Threading;
 using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
-using UnityEngine.Networking;
-using VYaml.Serialization;
 
 namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
-    /// Loads input configuration and initializes InputManager. Supports user config with default fallback.
+    /// Controls whether bootstrap is skipped, tolerates an absent configuration, or requires one.
+    /// </summary>
+    public enum InputSystemBootstrapMode
+    {
+        Disabled,
+        Optional,
+        Required
+    }
+
+    /// <summary>
+    /// Immutable composition-root policy for configuration discovery and optional user persistence.
+    /// The runtime core does not assign meaning to source keys or assume a Unity asset location.
+    /// </summary>
+    public sealed class InputSystemBootstrapOptions
+    {
+        public InputSystemBootstrapMode Mode { get; }
+        public IInputConfigurationSource DefaultSource { get; }
+        public string DefaultKey { get; }
+        public IInputConfigurationStore UserStore { get; }
+        public string UserKey { get; }
+        public bool PersistDefaultToUser { get; }
+
+        public static InputSystemBootstrapOptions Disabled { get; } =
+            new InputSystemBootstrapOptions(InputSystemBootstrapMode.Disabled);
+
+        public InputSystemBootstrapOptions(
+            InputSystemBootstrapMode mode,
+            IInputConfigurationSource defaultSource = null,
+            string defaultKey = null,
+            IInputConfigurationStore userStore = null,
+            string userKey = null,
+            bool persistDefaultToUser = false)
+        {
+            if ((uint)mode > (uint)InputSystemBootstrapMode.Required)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mode));
+            }
+
+            if (mode != InputSystemBootstrapMode.Disabled)
+            {
+                ValidateSourceKey(defaultSource, defaultKey, nameof(defaultSource), nameof(defaultKey));
+                ValidateSourceKey(userStore, userKey, nameof(userStore), nameof(userKey));
+                if (defaultSource == null && userStore == null)
+                {
+                    throw new ArgumentException(
+                        "Optional and required bootstrap modes need at least one configuration source.");
+                }
+            }
+
+            if (persistDefaultToUser && userStore == null)
+            {
+                throw new ArgumentException(
+                    "Default persistence requires an explicit user store.",
+                    nameof(persistDefaultToUser));
+            }
+
+            Mode = mode;
+            DefaultSource = defaultSource;
+            DefaultKey = defaultKey;
+            UserStore = userStore;
+            UserKey = userKey;
+            PersistDefaultToUser = persistDefaultToUser;
+        }
+
+        private static void ValidateSourceKey(
+            object source,
+            string key,
+            string sourceParameter,
+            string keyParameter)
+        {
+            if (source == null)
+            {
+                if (!string.IsNullOrEmpty(key))
+                {
+                    throw new ArgumentException(
+                        "A configuration key cannot be supplied without its source.",
+                        keyParameter);
+                }
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                throw new ArgumentException(
+                    "A configuration source requires a non-empty logical key.",
+                    sourceParameter);
+            }
+        }
+    }
+
+    public enum InputSystemLoadStatus
+    {
+        SuccessFromUserConfiguration,
+        SuccessFromDefaultConfiguration,
+        DefaultConfigurationUnavailable,
+        ConfigurationInvalid,
+        InitializationFailed,
+        NotConfigured
+    }
+
+    public enum InputSystemPersistenceStatus
+    {
+        NotRequested,
+        Succeeded,
+        Failed,
+        Canceled,
+        SerializationFailed
+    }
+
+    public readonly struct InputSystemLoadResult
+    {
+        public InputSystemLoadStatus Status { get; }
+        public InputConfigurationStorageStatus UserStorageStatus { get; }
+        public string Error { get; }
+        public InputSystemPersistenceStatus PersistenceStatus { get; }
+        public string PersistenceError { get; }
+        public bool IsSuccess =>
+            Status == InputSystemLoadStatus.SuccessFromUserConfiguration ||
+            Status == InputSystemLoadStatus.SuccessFromDefaultConfiguration;
+        public bool IsBootstrapComplete =>
+            IsSuccess || Status == InputSystemLoadStatus.NotConfigured;
+        public bool IsPersistenceComplete =>
+            PersistenceStatus == InputSystemPersistenceStatus.NotRequested ||
+            PersistenceStatus == InputSystemPersistenceStatus.Succeeded;
+
+        public InputSystemLoadResult(
+            InputSystemLoadStatus status,
+            InputConfigurationStorageStatus userStorageStatus,
+            string error = null)
+            : this(
+                status,
+                userStorageStatus,
+                error,
+                InputSystemPersistenceStatus.NotRequested,
+                null)
+        {
+        }
+
+        public InputSystemLoadResult(
+            InputSystemLoadStatus status,
+            InputConfigurationStorageStatus userStorageStatus,
+            string error,
+            InputSystemPersistenceStatus persistenceStatus,
+            string persistenceError)
+        {
+            Status = status;
+            UserStorageStatus = userStorageStatus;
+            Error = error;
+            PersistenceStatus = persistenceStatus;
+            PersistenceError = persistenceError;
+        }
+    }
+
+    /// <summary>
+    /// Coordinates bounded configuration loading and commits only a validated configuration to an InputManager.
     /// </summary>
     public static class InputSystemLoader
     {
-        private const string DEBUG_FLAG = "[InputSystemLoader]";
+        private const string LogPrefix = "[InputSystemLoader]";
 
-        /// <summary>
-        /// Loads config from userConfigUri, falls back to defaultConfigUri if not found.
-        /// </summary>
         public static UniTask InitializeAsync(string defaultConfigUri, string userConfigUri)
         {
             return InitializeAsync(defaultConfigUri, userConfigUri, default);
         }
 
         /// <summary>
-        /// Loads config from userConfigUri, falls back to defaultConfigUri if not found.
+        /// Compatibility entry point. Default files must be inside StreamingAssets and user files must be inside
+        /// persistentDataPath. Use the source/store overload for WebGL or platform-specific persistence.
         /// </summary>
-        public static UniTask InitializeAsync(string defaultConfigUri, string userConfigUri, CancellationToken cancellationToken)
-        {
-            return InitializeInternalAsync(defaultConfigUri, userConfigUri, cancellationToken, false);
-        }
-
-        private static async UniTask InitializeInternalAsync(
+        public static async UniTask InitializeAsync(
             string defaultConfigUri,
             string userConfigUri,
-            CancellationToken cancellationToken,
-            bool forceReinitialize)
+            CancellationToken cancellationToken)
         {
-            string yamlContent = null;
-            string defaultYamlContent = null;
-            bool loadedFromUserConfig = false;
-            bool userConfigCorrupted = false;
-
-            // Always load default config first for fallback
-            if (!string.IsNullOrEmpty(defaultConfigUri))
+            if (!TryCreateCompatibilityStorage(
+                    userConfigUri,
+                    out IInputConfigurationStore userStore,
+                    out string userKey,
+                    out string storageError))
             {
-                (bool success, string content) = await InputConfigurationFileLoader.LoadTextFromUriAsync(defaultConfigUri, DEBUG_FLAG, cancellationToken);
-                if (success)
-                {
-                    defaultYamlContent = content;
-                    CLogger.LogInfo($"{DEBUG_FLAG} Loaded default config from: {defaultConfigUri}");
-                }
+                CLogger.LogWarning($"{LogPrefix} User configuration storage is unavailable: {storageError}");
             }
 
-            // Try loading user config
-            if (!string.IsNullOrEmpty(userConfigUri))
+            InputSystemLoadResult result = await LoadAndInitializeCompatibilityAsync(
+                new UriInputConfigurationSource(),
+                defaultConfigUri,
+                userStore,
+                userKey,
+                InputManager.Instance,
+                userStore == null ? null : userConfigUri,
+                false,
+                cancellationToken);
+
+            if (!result.IsSuccess)
             {
-                (bool success, string content) = await InputConfigurationFileLoader.LoadTextFromUriAsync(userConfigUri, DEBUG_FLAG, cancellationToken);
-                if (success && !string.IsNullOrEmpty(content))
+                CLogger.LogError($"{LogPrefix} Initialization failed: {result.Status}. {result.Error}");
+            }
+        }
+
+        public static UniTask<InputSystemLoadResult> LoadAndInitializeAsync(
+            IInputConfigurationSource defaultSource,
+            string defaultKey,
+            IInputConfigurationStore userStore,
+            string userKey,
+            InputManager manager,
+            bool forceReinitialize = false,
+            CancellationToken cancellationToken = default)
+        {
+            if (defaultSource == null)
+            {
+                throw new ArgumentNullException(nameof(defaultSource));
+            }
+
+            return LoadAndInitializeCoreAsync(
+                defaultSource,
+                defaultKey,
+                userStore,
+                userKey,
+                manager,
+                null,
+                InputSystemBootstrapMode.Required,
+                true,
+                forceReinitialize,
+                cancellationToken);
+        }
+
+        public static UniTask<InputSystemLoadResult> LoadAndInitializeAsync(
+            InputSystemBootstrapOptions options,
+            InputManager manager,
+            bool forceReinitialize = false,
+            CancellationToken cancellationToken = default)
+        {
+            if (options == null)
+            {
+                throw new ArgumentNullException(nameof(options));
+            }
+
+            return LoadAndInitializeCoreAsync(
+                options.DefaultSource,
+                options.DefaultKey,
+                options.UserStore,
+                options.UserKey,
+                manager,
+                null,
+                options.Mode,
+                options.PersistDefaultToUser,
+                forceReinitialize,
+                cancellationToken);
+        }
+
+        internal static UniTask<InputSystemLoadResult> LoadAndInitializeCompatibilityAsync(
+            IInputConfigurationSource defaultSource,
+            string defaultKey,
+            IInputConfigurationStore userStore,
+            string userKey,
+            InputManager manager,
+            string managerUserConfigUri,
+            bool forceReinitialize = false,
+            CancellationToken cancellationToken = default)
+        {
+            return LoadAndInitializeCoreAsync(
+                defaultSource,
+                defaultKey,
+                userStore,
+                userKey,
+                manager,
+                managerUserConfigUri,
+                InputSystemBootstrapMode.Required,
+                true,
+                forceReinitialize,
+                cancellationToken);
+        }
+
+        private static async UniTask<InputSystemLoadResult> LoadAndInitializeCoreAsync(
+            IInputConfigurationSource defaultSource,
+            string defaultKey,
+            IInputConfigurationStore userStore,
+            string userKey,
+            InputManager manager,
+            string managerUserConfigUri,
+            InputSystemBootstrapMode bootstrapMode,
+            bool persistDefaultToUser,
+            bool forceReinitialize,
+            CancellationToken cancellationToken)
+        {
+            if (manager == null)
+            {
+                throw new ArgumentNullException(nameof(manager));
+            }
+
+            if (bootstrapMode == InputSystemBootstrapMode.Disabled)
+            {
+                return new InputSystemLoadResult(
+                    InputSystemLoadStatus.NotConfigured,
+                    InputConfigurationStorageStatus.Unsupported);
+            }
+
+            InputConfigurationReadResult userRead = userStore == null || string.IsNullOrEmpty(userKey)
+                ? InputConfigurationReadResult.Failure(InputConfigurationStorageStatus.Unsupported)
+                : await userStore.LoadAsync(userKey, cancellationToken);
+
+            string userValidationError = null;
+            bool useUserConfiguration = userRead.IsSuccess;
+            if (useUserConfiguration && userRead.WasRecoveredFromBackup)
+            {
+                CLogger.LogWarning(
+                    $"{LogPrefix} The primary user configuration was unavailable; " +
+                    "the last committed backup is active for this session.");
+            }
+
+            InputConfigurationReadResult defaultRead = default;
+            string selectedContent;
+            if (useUserConfiguration)
+            {
+                selectedContent = userRead.Content;
+            }
+            else
+            {
+                defaultRead = defaultSource == null
+                    ? InputConfigurationReadResult.Failure(
+                        InputConfigurationStorageStatus.NotFound,
+                        "No default configuration source is configured.")
+                    : await defaultSource.LoadAsync(defaultKey, cancellationToken);
+                if (!defaultRead.IsSuccess)
                 {
-                    // Validate user config before use
-                    if (ValidateYamlContent(content))
+                    if (bootstrapMode == InputSystemBootstrapMode.Optional &&
+                        defaultRead.Status == InputConfigurationStorageStatus.NotFound &&
+                        (userRead.Status == InputConfigurationStorageStatus.NotFound ||
+                         userRead.Status == InputConfigurationStorageStatus.Unsupported))
                     {
-                        yamlContent = content;
-                        loadedFromUserConfig = true;
-                        CLogger.LogInfo($"{DEBUG_FLAG} Loaded and validated user config from: {userConfigUri}");
+                        return new InputSystemLoadResult(
+                            InputSystemLoadStatus.NotConfigured,
+                            userRead.Status);
                     }
-                    else
-                    {
-                        CLogger.LogWarning($"{DEBUG_FLAG} User config is corrupted or invalid, will use default config. Uri: {userConfigUri}");
-                        userConfigCorrupted = true;
-                        
-                        // Delete corrupted user config file
-                        await InputConfigurationFileLoader.DeleteTextAtUriAsync(userConfigUri, DEBUG_FLAG, cancellationToken);
-                    }
+
+                    return new InputSystemLoadResult(
+                        InputSystemLoadStatus.DefaultConfigurationUnavailable,
+                        userRead.Status,
+                        defaultRead.Error);
                 }
+
+                selectedContent = defaultRead.Content;
             }
 
-            // Fallback to default config
-            if (string.IsNullOrEmpty(yamlContent))
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!PlayerLoopHelper.IsMainThread)
             {
-                if (string.IsNullOrEmpty(defaultYamlContent))
-                {
-                    CLogger.LogError($"{DEBUG_FLAG} Both config URIs invalid. Initialization failed.");
-                    return;
-                }
-                yamlContent = defaultYamlContent;
+                await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (!forceReinitialize && manager.IsInitialized)
+            {
+                return new InputSystemLoadResult(
+                    InputSystemLoadStatus.InitializationFailed,
+                    userRead.Status,
+                    "InputManager is already initialized. Set forceReinitialize only after removing active players.");
             }
 
-            if (!string.IsNullOrEmpty(yamlContent))
+            InputManagerInitializationResult initialization = forceReinitialize
+                ? manager.ReinitializeWithResult(selectedContent, managerUserConfigUri)
+                : manager.InitializeWithResult(selectedContent, managerUserConfigUri);
+            if (!initialization.IsSuccess &&
+                useUserConfiguration &&
+                IsConfigurationContentFailure(initialization.Status))
             {
-                if (forceReinitialize)
+                userValidationError =
+                    $"{initialization.Status}: {initialization.Message}";
+                defaultRead = defaultSource == null
+                    ? InputConfigurationReadResult.Failure(
+                        InputConfigurationStorageStatus.NotFound,
+                        "No default configuration source is configured.")
+                    : await defaultSource.LoadAsync(defaultKey, cancellationToken);
+                if (!defaultRead.IsSuccess)
                 {
-                    InputManager.Instance.Reinitialize(yamlContent, userConfigUri);
+                    return new InputSystemLoadResult(
+                        InputSystemLoadStatus.DefaultConfigurationUnavailable,
+                        userRead.Status,
+                        defaultRead.Error);
+                }
+
+                cancellationToken.ThrowIfCancellationRequested();
+                if (!PlayerLoopHelper.IsMainThread)
+                {
+                    await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
+                }
+                cancellationToken.ThrowIfCancellationRequested();
+
+                selectedContent = defaultRead.Content;
+                useUserConfiguration = false;
+                initialization = forceReinitialize
+                    ? manager.ReinitializeWithResult(selectedContent, managerUserConfigUri)
+                    : manager.InitializeWithResult(selectedContent, managerUserConfigUri);
+            }
+
+            if (!initialization.IsSuccess)
+            {
+                return new InputSystemLoadResult(
+                    !useUserConfiguration && IsConfigurationContentFailure(initialization.Status)
+                        ? InputSystemLoadStatus.ConfigurationInvalid
+                        : InputSystemLoadStatus.InitializationFailed,
+                    userRead.Status,
+                    $"{initialization.Status}: {initialization.Message}");
+            }
+
+            if (persistDefaultToUser &&
+                !useUserConfiguration &&
+                userRead.Status == InputConfigurationStorageStatus.NotFound &&
+                userStore != null &&
+                !string.IsNullOrEmpty(userKey))
+            {
+                InputSystemPersistenceStatus persistenceStatus;
+                string persistenceError = null;
+                string persistenceContent = defaultRead.Content;
+                if (initialization.Validation?.WasMigrated == true &&
+                    !InputConfigurationYamlCodec.TrySerialize(
+                        initialization.Validation.Configuration,
+                        out persistenceContent,
+                        out string serializationError))
+                {
+                    CLogger.LogWarning(
+                        $"{LogPrefix} Initialized from migrated defaults but could not serialize the prepared configuration: " +
+                        serializationError);
+                    persistenceStatus = InputSystemPersistenceStatus.SerializationFailed;
+                    persistenceError = serializationError;
+                    persistenceContent = null;
                 }
                 else
                 {
-                    InputManager.Instance.Initialize(yamlContent, userConfigUri);
+                    persistenceStatus = InputSystemPersistenceStatus.NotRequested;
                 }
-                 
-                // Save user config if: not loaded from user config OR user config was corrupted
-                if (!loadedFromUserConfig || userConfigCorrupted)
+
+                if (persistenceContent != null)
                 {
-                    await InputManager.Instance.SaveUserConfigurationAsync(cancellationToken);
-                    CLogger.LogInfo($"{DEBUG_FLAG} Saved fresh user config.");
+                    try
+                    {
+                        // Runtime commit is the final caller-cancellation point. Keep the token on the
+                        // storage operation so a custom implementation remains stoppable, but convert
+                        // post-commit cancellation into an explicit persistence status.
+                        InputConfigurationStoreResult saveResult =
+                            await userStore.SaveAsync(userKey, persistenceContent, cancellationToken);
+                        persistenceStatus = saveResult.IsSuccess
+                            ? InputSystemPersistenceStatus.Succeeded
+                            : InputSystemPersistenceStatus.Failed;
+                        persistenceError = saveResult.Error;
+                        if (!saveResult.IsSuccess)
+                        {
+                            CLogger.LogWarning(
+                                $"{LogPrefix} Runtime initialization succeeded, but user configuration persistence failed: " +
+                                $"{saveResult.Status}. {saveResult.Error}");
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        persistenceStatus = InputSystemPersistenceStatus.Canceled;
+                        persistenceError = "Persistence was canceled after runtime commit.";
+                        CLogger.LogWarning(
+                            $"{LogPrefix} Runtime initialization succeeded, but user configuration persistence was canceled.");
+                    }
+                    catch (Exception exception) when (IsRecoverableException(exception))
+                    {
+                        persistenceStatus = InputSystemPersistenceStatus.Failed;
+                        persistenceError = $"Persistence provider failed ({exception.GetType().Name}).";
+                        CLogger.LogWarning(
+                            $"{LogPrefix} Runtime initialization succeeded, but the persistence provider failed " +
+                            $"({exception.GetType().Name}).");
+                    }
                 }
+
+                return new InputSystemLoadResult(
+                    InputSystemLoadStatus.SuccessFromDefaultConfiguration,
+                    userRead.Status,
+                    null,
+                    persistenceStatus,
+                    persistenceError);
             }
-        }
-
-        /// <summary>
-        /// Validates YAML content by attempting to parse it.
-        /// Returns true if valid, false if corrupted/invalid.
-        /// </summary>
-        private static bool ValidateYamlContent(string yamlContent)
-        {
-            if (string.IsNullOrEmpty(yamlContent)) return false;
-
-            try
+            else if (userRead.IsSuccess && !useUserConfiguration)
             {
-                // Normalize line endings to handle cross-platform issues (Windows CRLF vs Unix LF)
-                string normalizedContent = NormalizeLineEndings(yamlContent);
-                
-                // Try to parse the YAML
-                var config = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(normalizedContent));
-                if (config == null || config.PlayerSlots == null) return false;
-
-#if UNITY_EDITOR
-                // Schema fingerprint check: editor-only, not needed in shipped builds
-                if (config.SchemaFingerprint != InputSchemaFingerprint.Current)
-                {
-                    CLogger.LogWarning($"{DEBUG_FLAG} Schema fingerprint mismatch: file has [{config.SchemaFingerprint ?? "none"}], current is [{InputSchemaFingerprint.Current}]. " +
-                                       "Some settings may use default values. Re-save in editor to upgrade.");
-                }
-#endif
-
-                return true;
+                CLogger.LogWarning(
+                    $"{LogPrefix} User configuration is invalid and was preserved. " +
+                    $"Defaults were used for this session. {userValidationError}");
             }
-            catch (Exception e)
-            {
-                CLogger.LogWarning($"{DEBUG_FLAG} YAML validation failed: {e.Message}");
-                return false;
-            }
+
+            return new InputSystemLoadResult(
+                useUserConfiguration
+                    ? InputSystemLoadStatus.SuccessFromUserConfiguration
+                    : InputSystemLoadStatus.SuccessFromDefaultConfiguration,
+                userRead.Status);
         }
 
-        /// <summary>
-        /// Normalizes line endings to Unix-style (LF only) for cross-platform compatibility.
-        /// </summary>
-        private static string NormalizeLineEndings(string content)
-        {
-            if (string.IsNullOrEmpty(content)) return content;
-            // Replace CRLF with LF, then any remaining CR with LF
-            return content.Replace("\r\n", "\n").Replace("\r", "\n");
-        }
-
-        /// <summary>
-        /// Resets user configuration to default. Deletes user config file and reinitializes with default config.
-        /// Cross-platform compatible: Windows, macOS, Linux, Android, iOS, WebGL.
-        /// </summary>
-        /// <param name="defaultConfigUri">URI to default config (e.g., StreamingAssets)</param>
-        /// <param name="userConfigUri">URI to user config (e.g., PersistentData)</param>
-        /// <returns>True if reset was successful</returns>
         public static UniTask<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri)
         {
             return ResetToDefaultAsync(defaultConfigUri, userConfigUri, default);
         }
 
         /// <summary>
-        /// Resets user configuration to default. Deletes user config file and reinitializes with default config.
-        /// Cross-platform compatible: Windows, macOS, Linux, Android, iOS, WebGL.
+        /// Validates and commits the default to the runtime, then atomically persists it as user configuration.
+        /// A persistence failure leaves the validated default active for the current session and retains the prior file.
         /// </summary>
-        /// <param name="defaultConfigUri">URI to default config (e.g., StreamingAssets)</param>
-        /// <param name="userConfigUri">URI to user config (e.g., PersistentData)</param>
-        /// <param name="cancellationToken">Cancellation token for file and UnityWebRequest loading.</param>
-        /// <returns>True if reset was successful</returns>
-        public static async UniTask<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri, CancellationToken cancellationToken)
+        public static async UniTask<bool> ResetToDefaultAsync(
+            string defaultConfigUri,
+            string userConfigUri,
+            CancellationToken cancellationToken)
         {
-            if (string.IsNullOrEmpty(defaultConfigUri))
+            if (!TryCreateCompatibilityStorage(
+                    userConfigUri,
+                    out IInputConfigurationStore store,
+                    out string userKey,
+                    out string error))
             {
-                CLogger.LogError($"{DEBUG_FLAG} Cannot reset: defaultConfigUri is null or empty.");
+                CLogger.LogError($"{LogPrefix} Cannot reset user configuration: {error}");
                 return false;
             }
 
-            bool deleteSuccess = await InputConfigurationFileLoader.DeleteTextAtUriAsync(userConfigUri, DEBUG_FLAG, cancellationToken);
-            if (!deleteSuccess)
+            var source = new UriInputConfigurationSource();
+            InputConfigurationReadResult defaultRead = await source.LoadAsync(defaultConfigUri, cancellationToken);
+            if (!defaultRead.IsSuccess)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Failed to delete user config, but will continue with reset.");
+                CLogger.LogError(
+                    $"{LogPrefix} Cannot reset because the default configuration is unavailable. " +
+                    $"{defaultRead.Error}");
+                return false;
             }
 
-            await InitializeInternalAsync(defaultConfigUri, userConfigUri, cancellationToken, true);
-            
-            CLogger.LogInfo($"{DEBUG_FLAG} Reset to default configuration completed.");
+            cancellationToken.ThrowIfCancellationRequested();
+            if (!PlayerLoopHelper.IsMainThread)
+            {
+                await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
+            }
+            cancellationToken.ThrowIfCancellationRequested();
+
+            InputManagerInitializationResult initialization =
+                InputManager.Instance.ReinitializeWithResult(defaultRead.Content, null);
+            if (!initialization.IsSuccess)
+            {
+                CLogger.LogError(
+                    $"{LogPrefix} Runtime reset was rejected before persistence: " +
+                    $"{initialization.Status}. {initialization.Message}");
+                return false;
+            }
+
+            string persistenceContent = defaultRead.Content;
+            if (initialization.Validation?.WasMigrated == true &&
+                !InputConfigurationYamlCodec.TrySerialize(
+                    initialization.Validation.Configuration,
+                    out persistenceContent,
+                    out string serializationError))
+            {
+                CLogger.LogError(
+                    $"{LogPrefix} The migrated default is active for this session, but serialization failed: " +
+                    serializationError);
+                return false;
+            }
+
+            InputConfigurationStoreResult save;
+            try
+            {
+                // Runtime commit is the final caller-cancellation point; see LoadAndInitializeAsync.
+                save = await store.SaveAsync(userKey, persistenceContent, cancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                CLogger.LogWarning(
+                    $"{LogPrefix} The default is active for this session, but persistence was canceled.");
+                return false;
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                CLogger.LogError(
+                    $"{LogPrefix} The default is active for this session, but the persistence provider failed " +
+                    $"({exception.GetType().Name}).");
+                return false;
+            }
+            if (!save.IsSuccess)
+            {
+                CLogger.LogError(
+                    $"{LogPrefix} The default is active for this session, but persistence failed: " +
+                    $"{save.Status}. {save.Error}");
+                return false;
+            }
+
             return true;
         }
 
-        /// <summary>
-        /// Deletes user config file. Cross-platform compatible.
-        /// </summary>
-        /// <param name="userConfigUri">URI to user config file</param>
-        /// <returns>True if deletion was successful or file didn't exist</returns>
+        [Obsolete("Use an explicit IInputConfigurationStore. This compatibility API is confined to persistentDataPath.")]
         public static bool TryDeleteUserConfigFile(string userConfigUri)
         {
-            return InputConfigurationFileLoader.TryDeleteTextAtUri(userConfigUri, DEBUG_FLAG);
+            if (!TryCreateCompatibilityStorage(
+                    userConfigUri,
+                    out IInputConfigurationStore store,
+                    out string userKey,
+                    out _))
+            {
+                return false;
+            }
+
+            // The obsolete synchronous facade must never queue work behind an async path gate: doing
+            // so can deadlock the Unity main thread or outlive a false return. Busy paths fail closed.
+            return store is FileInputConfigurationStore fileStore &&
+                   fileStore.TryDeleteSynchronously(userKey).IsSuccess;
+        }
+
+        private static bool IsConfigurationContentFailure(InputManagerInitializationStatus status)
+        {
+            return status == InputManagerInitializationStatus.EmptyContent ||
+                   status == InputManagerInitializationStatus.ParseFailed ||
+                   status == InputManagerInitializationStatus.ValidationFailed ||
+                   status == InputManagerInitializationStatus.InputSystemPreflightFailed;
+        }
+
+        private static bool IsRecoverableException(Exception exception)
+        {
+            return exception is not OutOfMemoryException &&
+                   exception is not AccessViolationException &&
+                   exception is not StackOverflowException;
+        }
+
+        private static bool TryCreateCompatibilityStorage(
+            string userConfigUri,
+            out IInputConfigurationStore store,
+            out string key,
+            out string error)
+        {
+            store = null;
+            key = null;
+            error = null;
+
+#if UNITY_WEBGL && !UNITY_EDITOR
+            error = "WebGL requires an explicit IInputConfigurationStore backed by browser storage.";
+            return false;
+#else
+            if (string.IsNullOrWhiteSpace(userConfigUri))
+            {
+                error = "A user configuration path is required.";
+                return false;
+            }
+
+            if (!TryGetLocalPath(userConfigUri, out string candidate))
+            {
+                error = "User configuration must be a local path.";
+                return false;
+            }
+
+            string root;
+            try
+            {
+                root = Path.GetFullPath(Application.persistentDataPath);
+                candidate = Path.GetFullPath(candidate);
+            }
+            catch (Exception exception) when (
+                exception is ArgumentException ||
+                exception is NotSupportedException ||
+                exception is PathTooLongException)
+            {
+                error = $"The user configuration path is invalid ({exception.GetType().Name}).";
+                return false;
+            }
+
+            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? root
+                : root + Path.DirectorySeparatorChar;
+            StringComparison comparison =
+                Application.platform == RuntimePlatform.WindowsEditor ||
+                Application.platform == RuntimePlatform.WindowsPlayer
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+            if (!candidate.StartsWith(rootPrefix, comparison))
+            {
+                error = "User configuration must be inside persistentDataPath.";
+                return false;
+            }
+
+            key = candidate.Substring(rootPrefix.Length)
+                .Replace(Path.DirectorySeparatorChar, '/')
+                .Replace(Path.AltDirectorySeparatorChar, '/');
+            store = new FileInputConfigurationStore(root);
+            return true;
+#endif
+        }
+
+        private static bool TryGetLocalPath(string value, out string path)
+        {
+            path = null;
+            try
+            {
+                if (value.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
+                {
+                    var parsed = new Uri(value);
+                    if (!parsed.IsFile)
+                    {
+                        return false;
+                    }
+
+                    path = parsed.LocalPath;
+                    return true;
+                }
+
+                if (Path.IsPathRooted(value))
+                {
+                    path = value;
+                    return true;
+                }
+            }
+            catch
+            {
+                return false;
+            }
+
+            return false;
         }
     }
 
     /// <summary>
-    /// Centralized text configuration storage for local files, WebGL player storage, and UnityWebRequest-only locations.
+    /// Restricted compatibility facade. Writes and deletes are accepted only inside persistentDataPath.
     /// </summary>
+    [Obsolete("Use IInputConfigurationSource and IInputConfigurationStore with InputSystemLoader.LoadAndInitializeAsync.")]
     public static class InputConfigurationFileLoader
     {
         public static async UniTask<(bool Success, string Content)> LoadTextFromUriAsync(
@@ -217,31 +731,23 @@ namespace CycloneGames.InputSystem.Runtime
             string logPrefix,
             CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrEmpty(uri))
+            InputConfigurationReadResult result;
+            if (TryCreatePersistentStore(uri, out IInputConfigurationStore store, out string key))
             {
-                return (false, null);
+                result = await store.LoadAsync(key, cancellationToken);
+            }
+            else
+            {
+                var source = new UriInputConfigurationSource();
+                result = await source.LoadAsync(uri, cancellationToken);
             }
 
-#if UNITY_WEBGL && !UNITY_EDITOR
-            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
-            await SwitchToUnityMainThreadAsync(cancellationToken);
-            if (PlayerPrefs.HasKey(playerPrefsKey))
+            if (!result.IsSuccess && result.Status != InputConfigurationStorageStatus.NotFound)
             {
-                return (true, PlayerPrefs.GetString(playerPrefsKey));
+                CLogger.LogWarning($"{logPrefix} Configuration load failed: {result.Status}. {result.Error}");
             }
 
-            if (LooksLikeLocalFileUri(uri))
-            {
-                return (false, null);
-            }
-#endif
-
-            if (TryGetLocalFilePath(uri, out string filePath))
-            {
-                return await LoadTextFromLocalFileAsync(filePath, logPrefix, cancellationToken);
-            }
-
-            return await LoadTextFromUnityWebRequestAsync(uri, logPrefix, cancellationToken);
+            return (result.IsSuccess, result.Content);
         }
 
         public static async UniTask<bool> SaveTextToUriAsync(
@@ -250,341 +756,107 @@ namespace CycloneGames.InputSystem.Runtime
             string logPrefix,
             CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrEmpty(uri))
+            if (!TryCreatePersistentStore(uri, out IInputConfigurationStore store, out string key))
             {
+                CLogger.LogWarning($"{logPrefix} Write rejected because the path is outside persistentDataPath.");
                 return false;
             }
 
-            content ??= string.Empty;
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            await SwitchToUnityMainThreadAsync(cancellationToken);
-            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
-            PlayerPrefs.SetString(playerPrefsKey, content);
-            PlayerPrefs.Save();
-            CLogger.LogInfo($"{logPrefix} Saved text config to PlayerPrefs: {playerPrefsKey}");
-            return true;
-#else
-            if (!TryGetLocalFilePath(uri, out string filePath))
+            InputConfigurationStoreResult result = await store.SaveAsync(key, content, cancellationToken);
+            if (!result.IsSuccess)
             {
-                CLogger.LogWarning($"{logPrefix} Cannot save config because URI is not a local writable file: {uri}");
-                return false;
+                CLogger.LogWarning($"{logPrefix} Configuration save failed: {result.Status}. {result.Error}");
             }
 
-            try
-            {
-                string directory = Path.GetDirectoryName(filePath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                await WriteAllTextToLocalFileAsync(filePath, content, cancellationToken);
-                CLogger.LogInfo($"{logPrefix} Saved text config to: {filePath}");
-                return true;
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception e)
-            {
-                CLogger.LogError($"{logPrefix} Failed to save config to '{filePath}': {e.Message}");
-                return false;
-            }
-#endif
+            return result.IsSuccess;
         }
 
-        public static UniTask<bool> DeleteTextAtUriAsync(
+        public static async UniTask<bool> DeleteTextAtUriAsync(
             string uri,
             string logPrefix,
             CancellationToken cancellationToken = default)
         {
-            if (string.IsNullOrEmpty(uri))
+            if (!TryCreatePersistentStore(uri, out IInputConfigurationStore store, out string key))
             {
-                return UniTask.FromResult(true);
+                CLogger.LogWarning($"{logPrefix} Delete rejected because the path is outside persistentDataPath.");
+                return false;
             }
 
-#if UNITY_WEBGL && !UNITY_EDITOR
-            return DeleteTextAtUriWebGLAsync(uri, logPrefix, cancellationToken);
-#else
-            return UniTask.FromResult(TryDeleteTextAtUri(uri, logPrefix));
-#endif
+            InputConfigurationStoreResult result = await store.DeleteAsync(key, cancellationToken);
+            return result.IsSuccess;
         }
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-        private static async UniTask<bool> DeleteTextAtUriWebGLAsync(
-            string uri,
-            string logPrefix,
-            CancellationToken cancellationToken)
-        {
-            await SwitchToUnityMainThreadAsync(cancellationToken);
-            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
-            if (PlayerPrefs.HasKey(playerPrefsKey))
-            {
-                PlayerPrefs.DeleteKey(playerPrefsKey);
-                PlayerPrefs.Save();
-                CLogger.LogInfo($"{logPrefix} Deleted text config from PlayerPrefs: {playerPrefsKey}");
-            }
-
-            return true;
-        }
-#endif
 
         public static bool TryDeleteTextAtUri(string uri, string logPrefix)
         {
-            if (string.IsNullOrEmpty(uri))
-            {
-                return true;
-            }
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
-            {
-                CLogger.LogWarning($"{logPrefix} Cannot delete WebGL PlayerPrefs config from a non-main thread. Use DeleteTextAtUriAsync instead.");
-                return false;
-            }
-
-            string playerPrefsKey = GetPlayerPrefsKeyFromUri(uri);
-            if (PlayerPrefs.HasKey(playerPrefsKey))
-            {
-                PlayerPrefs.DeleteKey(playerPrefsKey);
-                PlayerPrefs.Save();
-                CLogger.LogInfo($"{logPrefix} Deleted text config from PlayerPrefs: {playerPrefsKey}");
-            }
-
-            return true;
-#else
-            try
-            {
-                if (!TryGetLocalFilePath(uri, out string filePath))
-                {
-                    return false;
-                }
-
-                if (File.Exists(filePath))
-                {
-                    File.Delete(filePath);
-                    CLogger.LogInfo($"{logPrefix} Deleted text config file: {filePath}");
-                }
-
-                return true;
-            }
-            catch (Exception e)
-            {
-                CLogger.LogWarning($"{logPrefix} Failed to delete config '{uri}': {e.Message}");
-                return false;
-            }
-#endif
+            return DeleteTextAtUriAsync(uri, logPrefix).GetAwaiter().GetResult();
         }
 
         public static bool TryGetLocalFilePath(string uri, out string filePath)
         {
             filePath = null;
-
-            if (string.IsNullOrEmpty(uri) ||
-                uri.StartsWith("jar:file://", StringComparison.OrdinalIgnoreCase) ||
-                uri.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                uri.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            if (!TryCreatePersistentStore(uri, out _, out _))
             {
                 return false;
             }
 
+            try
+            {
+                filePath = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
+                    ? new Uri(uri).LocalPath
+                    : Path.GetFullPath(uri);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool TryCreatePersistentStore(
+            string uri,
+            out IInputConfigurationStore store,
+            out string key)
+        {
+            store = null;
+            key = null;
 #if UNITY_WEBGL && !UNITY_EDITOR
             return false;
 #else
+            if (string.IsNullOrWhiteSpace(uri))
+            {
+                return false;
+            }
+
+            string path;
             try
             {
-                if (uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parsedUri = new Uri(uri);
-                    if (!parsedUri.IsFile)
-                    {
-                        return false;
-                    }
-
-                    filePath = parsedUri.LocalPath;
-                    return !string.IsNullOrEmpty(filePath);
-                }
-
-                if (Path.IsPathRooted(uri))
-                {
-                    filePath = uri;
-                    return true;
-                }
-
-                if (Uri.TryCreate(uri, UriKind.Absolute, out Uri absoluteUri) && absoluteUri.IsFile)
-                {
-                    filePath = absoluteUri.LocalPath;
-                    return !string.IsNullOrEmpty(filePath);
-                }
+                path = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
+                    ? new Uri(uri).LocalPath
+                    : Path.GetFullPath(uri);
             }
-            catch (Exception e)
+            catch
             {
-                CLogger.LogWarning($"[InputConfigurationFileLoader] Failed to parse URI '{uri}': {e.Message}");
+                return false;
             }
 
-            return false;
+            string root = Path.GetFullPath(Application.persistentDataPath);
+            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
+                ? root
+                : root + Path.DirectorySeparatorChar;
+            StringComparison comparison =
+                Application.platform == RuntimePlatform.WindowsEditor ||
+                Application.platform == RuntimePlatform.WindowsPlayer
+                    ? StringComparison.OrdinalIgnoreCase
+                    : StringComparison.Ordinal;
+            if (!path.StartsWith(rootPrefix, comparison))
+            {
+                return false;
+            }
+
+            key = path.Substring(rootPrefix.Length);
+            store = new FileInputConfigurationStore(root);
+            return true;
 #endif
         }
-
-        private static async UniTask<(bool Success, string Content)> LoadTextFromLocalFileAsync(
-            string filePath,
-            string logPrefix,
-            CancellationToken cancellationToken)
-        {
-            try
-            {
-                if (!File.Exists(filePath))
-                {
-                    return (false, null);
-                }
-
-                string content = await ReadAllTextFromLocalFileAsync(filePath, cancellationToken);
-                return (true, content);
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception e)
-            {
-                CLogger.LogWarning($"{logPrefix} Failed to load local config from '{filePath}': {e.Message}");
-                return (false, null);
-            }
-        }
-
-        private static async UniTask<string> ReadAllTextFromLocalFileAsync(
-            string filePath,
-            CancellationToken cancellationToken)
-        {
-            using (var stream = new FileStream(
-                       filePath,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.Read,
-                       4096,
-                       FileOptions.Asynchronous | FileOptions.SequentialScan))
-            {
-                long length = stream.Length;
-                if (length == 0L)
-                {
-                    return string.Empty;
-                }
-
-                if (length > int.MaxValue)
-                {
-                    throw new IOException($"Input config file is too large: {length} bytes.");
-                }
-
-                byte[] rentedBuffer = ArrayPool<byte>.Shared.Rent((int)length);
-                try
-                {
-                    int totalRead = 0;
-                    while (totalRead < length)
-                    {
-                        int read = await stream.ReadAsync(rentedBuffer, totalRead, (int)length - totalRead, cancellationToken);
-                        if (read == 0)
-                        {
-                            break;
-                        }
-
-                        totalRead += read;
-                    }
-
-                    return Encoding.UTF8.GetString(rentedBuffer, 0, totalRead);
-                }
-                finally
-                {
-                    ArrayPool<byte>.Shared.Return(rentedBuffer);
-                }
-            }
-        }
-
-        private static async UniTask WriteAllTextToLocalFileAsync(
-            string filePath,
-            string content,
-            CancellationToken cancellationToken)
-        {
-            byte[] bytes = Encoding.UTF8.GetBytes(content);
-            using (var stream = new FileStream(
-                       filePath,
-                       FileMode.Create,
-                       FileAccess.Write,
-                       FileShare.None,
-                       4096,
-                       FileOptions.Asynchronous | FileOptions.SequentialScan))
-            {
-                await stream.WriteAsync(bytes, 0, bytes.Length, cancellationToken);
-            }
-        }
-
-        private static async UniTask<(bool Success, string Content)> LoadTextFromUnityWebRequestAsync(
-            string uri,
-            string logPrefix,
-            CancellationToken cancellationToken)
-        {
-            try
-            {
-                await SwitchToUnityMainThreadAsync(cancellationToken);
-
-                using (UnityWebRequest uwr = UnityWebRequest.Get(uri))
-                {
-                    var asyncOperation = uwr.SendWebRequest();
-                    while (!asyncOperation.isDone)
-                    {
-                        await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
-                    }
-
-                    if (uwr.result == UnityWebRequest.Result.Success)
-                    {
-                        return (true, uwr.downloadHandler.text);
-                    }
-
-                    if (!IsNotFoundError(uwr.error))
-                    {
-                        CLogger.LogWarning($"{logPrefix} Failed to load from '{uri}': {uwr.error}");
-                    }
-
-                    return (false, null);
-                }
-            }
-            catch (OperationCanceledException)
-            {
-                throw;
-            }
-            catch (Exception e)
-            {
-                CLogger.LogError($"{logPrefix} Exception loading from '{uri}': {e.Message}");
-                return (false, null);
-            }
-        }
-
-        private static async UniTask SwitchToUnityMainThreadAsync(CancellationToken cancellationToken)
-        {
-            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
-            {
-                await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
-            }
-        }
-
-        private static bool IsNotFoundError(string error)
-        {
-            return error != null &&
-                   (error.IndexOf("not found", StringComparison.OrdinalIgnoreCase) >= 0 ||
-                    error.IndexOf("404", StringComparison.OrdinalIgnoreCase) >= 0);
-        }
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-        private static string GetPlayerPrefsKeyFromUri(string uri)
-        {
-            return $"InputConfig_{InputHashUtility.GetDeterministicHashCode(uri):X8}";
-        }
-
-        private static bool LooksLikeLocalFileUri(string uri)
-        {
-            return uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase) || Path.IsPathRooted(uri);
-        }
-#endif
     }
 }

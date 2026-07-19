@@ -1,8 +1,8 @@
 namespace CycloneGames.AssetManagement.Runtime.Trust
 {
     /// <summary>
-    /// Optional signature boundary for product-specific trust policies.
-    /// Implementations should verify a canonical signed manifest representation owned by the project.
+    /// Signature boundary used by the RequireSignature content trust policy.
+    /// Implementations should verify a canonical signed manifest representation owned by the product.
     /// </summary>
     public interface IContentTrustSignatureVerifier
     {

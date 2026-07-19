@@ -340,7 +340,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     /// <summary>
     /// Resolves a modifier magnitude from GameplayEffectSpec SetByCaller data.
-    /// Use GameplayTag keys for replicated effects; name keys are local/legacy convenience keys.
+    /// Use GameplayTag keys for replicated effects; name keys are limited to non-replicated local workflows.
     /// </summary>
     [System.Serializable]
     public readonly struct SetByCallerMagnitude

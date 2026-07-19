@@ -10,8 +10,9 @@ namespace CycloneGames.GameplayAbilities.Sample
         protected LayerMask TraceLayerMask;
         protected TargetingQuery Query;
         protected GameObject CasterGameObject;
-        public event Action<TargetData> OnTargetDataReady;
-        public event Action OnCanceled;
+        protected GameplayAbility OwningAbility { get; private set; }
+        private Action<TargetData> onTargetDataReady;
+        private Action onCanceled;
 
         public GameplayAbilityTargetActor_TraceBase(LayerMask layerMask, TargetingQuery query)
         {
@@ -21,8 +22,9 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public virtual void Configure(GameplayAbility ability, Action<TargetData> onTargetDataReady, Action onCancelled)
         {
-            this.OnTargetDataReady = onTargetDataReady;
-            this.OnCanceled = onCancelled;
+            OwningAbility = ability;
+            this.onTargetDataReady = onTargetDataReady;
+            onCanceled = onCancelled;
 
             if (ability.ActorInfo.AvatarGameObject is GameObject casterGO)
             {
@@ -73,9 +75,10 @@ namespace CycloneGames.GameplayAbilities.Sample
         }
         public virtual void Destroy()
         {
-            OnTargetDataReady = null;
-            OnCanceled = null;
+            onTargetDataReady = null;
+            onCanceled = null;
             CasterGameObject = null;
+            OwningAbility = null;
         }
 
         /// <summary>
@@ -84,7 +87,19 @@ namespace CycloneGames.GameplayAbilities.Sample
         /// </summary>
         protected void BroadcastReady(TargetData data)
         {
-            OnTargetDataReady?.Invoke(data);
+            if (data == null)
+            {
+                throw new ArgumentNullException(nameof(data));
+            }
+
+            Action<TargetData> callback = onTargetDataReady;
+            if (callback == null)
+            {
+                data.Release();
+                throw new InvalidOperationException("Targeting completed without a TargetData receiver.");
+            }
+
+            callback(data);
         }
 
         /// <summary>
@@ -92,7 +107,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         /// </summary>
         protected void BroadcastCancelled()
         {
-            OnCanceled?.Invoke();
+            onCanceled?.Invoke();
         }
     }
 }

@@ -1,171 +1,174 @@
 using System;
-using System.Collections.Concurrent;
 using System.Threading;
 
 namespace CycloneGames.Logger
 {
-    /// <summary>
-    /// Thread-safe object pool for LogMessage instances with three-tier adaptive capacity management.
-    /// - Target: Normal operating capacity, maintained during steady state
-    /// - Peak: Maximum capacity during load spikes, allows auto-expansion without GC
-    /// - Max: Absolute hard limit to prevent memory leaks
-    /// </summary>
-    public static class LogMessagePool
+    internal static class LogMessagePool
     {
-        private static readonly ConcurrentQueue<LogMessage> Pool = new();
+        private const int DefaultPrewarmCount = 256;
+        private const int MaxRetainedCount = 4096;
 
-        private const int TargetPoolSize = 256;
-        private const int PeakPoolSize = 4096;
-        private const int MaxPoolSize = 8192;
+        private static readonly object SyncRoot = new object();
+        private static readonly LogMessage[] Items = new LogMessage[MaxRetainedCount];
 
-        private static int _poolSize = 0;
-        private static int _isTrimming = 0;
+        private static int _count;
+        private static int _peakSize;
+        private static long _totalGets;
+        private static long _totalReturns;
+        private static long _totalMisses;
+        private static long _totalDiscards;
+        private static long _invalidReturns;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private static long _totalGets = 0;
-        private static long _totalReturns = 0;
-        private static long _totalMisses = 0;
-        private static long _totalDiscards = 0;
-        private static long _trimCount = 0;
-        private static int _peakSize = 0;
-#endif
-
-        public static LogMessage Get()
+        internal static LogMessage Get()
         {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
             Interlocked.Increment(ref _totalGets);
-#endif
-            if (Pool.TryDequeue(out var message))
+
+            lock (SyncRoot)
             {
-                Interlocked.Decrement(ref _poolSize);
-                return message;
+                if (_count > 0)
+                {
+                    int index = --_count;
+                    LogMessage message = Items[index];
+                    Items[index] = null;
+                    if (!message.TryMarkRented())
+                    {
+                        throw new InvalidOperationException("LogMessage pool state is corrupted.");
+                    }
+
+                    return message;
+                }
             }
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
+
             Interlocked.Increment(ref _totalMisses);
-#endif
             return new LogMessage();
         }
 
-        public static void Return(LogMessage message)
+        internal static void Return(LogMessage message)
         {
-            if (message == null) return;
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Interlocked.Increment(ref _totalReturns);
-#endif
-
-            int currentSize = Volatile.Read(ref _poolSize);
-
-            // Hard limit: discard only when exceeding absolute maximum
-            if (currentSize >= MaxPoolSize)
+            if (message == null)
             {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Interlocked.Increment(ref _totalDiscards);
-#endif
-                message.Reset();
+                return;
+            }
+
+            Interlocked.Increment(ref _totalReturns);
+            if (!message.TryMarkReturned())
+            {
+                Interlocked.Increment(ref _invalidReturns);
                 return;
             }
 
             message.Reset();
-            Pool.Enqueue(message);
-            int newSize = Interlocked.Increment(ref _poolSize);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            int peak = Volatile.Read(ref _peakSize);
-            if (newSize > peak)
+            lock (SyncRoot)
             {
-                Interlocked.CompareExchange(ref _peakSize, newSize, peak);
-            }
-#endif
-
-            // Trigger trimming when exceeding peak capacity
-            if (newSize > PeakPoolSize)
-            {
-                TryTrimExcess();
-            }
-        }
-
-        /// <summary>
-        /// Prewarms the pool to target capacity to reduce cold-start allocations.
-        /// </summary>
-        public static void Prewarm(int count = TargetPoolSize)
-        {
-            count = Math.Min(Math.Max(count, 0), PeakPoolSize);
-            int current = Volatile.Read(ref _poolSize);
-            int toAdd = Math.Min(count - current, PeakPoolSize - current);
-
-            for (int i = 0; i < toAdd; i++)
-            {
-                Pool.Enqueue(new LogMessage());
-                Interlocked.Increment(ref _poolSize);
-            }
-        }
-
-        private static void TryTrimExcess()
-        {
-            if (Interlocked.CompareExchange(ref _isTrimming, 1, 0) != 0)
-                return;
-
-            try
-            {
-                int currentSize = Volatile.Read(ref _poolSize);
-                int toRemove = currentSize - TargetPoolSize;
-
-                if (toRemove <= 0) return;
-
-                for (int i = 0; i < toRemove && Pool.TryDequeue(out _); i++)
+                if (_count >= Items.Length)
                 {
-                    Interlocked.Decrement(ref _poolSize);
+                    Interlocked.Increment(ref _totalDiscards);
+                    return;
                 }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Interlocked.Increment(ref _trimCount);
-#endif
-            }
-            finally
-            {
-                Volatile.Write(ref _isTrimming, 0);
+                Items[_count++] = message;
+                if (_count > _peakSize)
+                {
+                    _peakSize = _count;
+                }
             }
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        public static PoolStatistics GetStatistics()
+        internal static void Prewarm(int count = DefaultPrewarmCount)
         {
-            return new PoolStatistics
+            count = Math.Min(Math.Max(count, 0), Items.Length);
+            lock (SyncRoot)
             {
-                CurrentSize = Volatile.Read(ref _poolSize),
-                PeakSize = Volatile.Read(ref _peakSize),
-                TotalGets = Interlocked.Read(ref _totalGets),
-                TotalReturns = Interlocked.Read(ref _totalReturns),
-                TotalMisses = Interlocked.Read(ref _totalMisses),
-                TotalDiscards = Interlocked.Read(ref _totalDiscards),
-                TrimCount = Interlocked.Read(ref _trimCount)
-            };
+                while (_count < count)
+                {
+                    var message = new LogMessage();
+                    if (!message.TryMarkReturned())
+                    {
+                        throw new InvalidOperationException("Unable to initialize LogMessage pool state.");
+                    }
+
+                    Items[_count++] = message;
+                }
+
+                if (_count > _peakSize)
+                {
+                    _peakSize = _count;
+                }
+            }
         }
 
-        public static void ResetStatistics()
+        internal static void Clear()
+        {
+            lock (SyncRoot)
+            {
+                Array.Clear(Items, 0, _count);
+                _count = 0;
+            }
+        }
+
+        internal static PoolStatistics GetStatistics()
+        {
+            int count;
+            int peak;
+            lock (SyncRoot)
+            {
+                count = _count;
+                peak = _peakSize;
+            }
+
+            return new PoolStatistics(
+                count,
+                peak,
+                Interlocked.Read(ref _totalGets),
+                Interlocked.Read(ref _totalReturns),
+                Interlocked.Read(ref _totalMisses),
+                Interlocked.Read(ref _totalDiscards),
+                Interlocked.Read(ref _invalidReturns));
+        }
+
+        internal static void ResetStatistics()
         {
             Interlocked.Exchange(ref _totalGets, 0);
             Interlocked.Exchange(ref _totalReturns, 0);
             Interlocked.Exchange(ref _totalMisses, 0);
             Interlocked.Exchange(ref _totalDiscards, 0);
-            Interlocked.Exchange(ref _trimCount, 0);
-            Interlocked.Exchange(ref _peakSize, 0);
+            Interlocked.Exchange(ref _invalidReturns, 0);
+            lock (SyncRoot)
+            {
+                _peakSize = _count;
+            }
         }
 
-        public struct PoolStatistics
+        internal readonly struct PoolStatistics
         {
-            public int CurrentSize;
-            public int PeakSize;
-            public long TotalGets;
-            public long TotalReturns;
-            public long TotalMisses;
-            public long TotalDiscards;
-            public long TrimCount;
+            internal readonly int CurrentSize;
+            internal readonly int PeakSize;
+            internal readonly long TotalGets;
+            internal readonly long TotalReturns;
+            internal readonly long TotalMisses;
+            internal readonly long TotalDiscards;
+            internal readonly long InvalidReturns;
 
-            public double HitRate => TotalGets > 0 ? 1.0 - (double)TotalMisses / TotalGets : 1.0;
-            public double DiscardRate => TotalReturns > 0 ? (double)TotalDiscards / TotalReturns : 0;
+            internal double HitRate => TotalGets > 0 ? 1.0 - (double)TotalMisses / TotalGets : 1.0;
+            internal double DiscardRate => TotalReturns > 0 ? (double)TotalDiscards / TotalReturns : 0.0;
+
+            internal PoolStatistics(
+                int currentSize,
+                int peakSize,
+                long totalGets,
+                long totalReturns,
+                long totalMisses,
+                long totalDiscards,
+                long invalidReturns)
+            {
+                CurrentSize = currentSize;
+                PeakSize = peakSize;
+                TotalGets = totalGets;
+                TotalReturns = totalReturns;
+                TotalMisses = totalMisses;
+                TotalDiscards = totalDiscards;
+                InvalidReturns = invalidReturns;
+            }
         }
-#endif
     }
 }

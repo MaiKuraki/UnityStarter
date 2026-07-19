@@ -1,7 +1,9 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Text;
+using CycloneGames.Logger.Editor;
 using NUnit.Framework;
 
 namespace CycloneGames.Logger.Tests.Editor
@@ -174,6 +176,8 @@ namespace CycloneGames.Logger.Tests.Editor
             using var logger = CLoggerFactory.CreateSingleThreaded(new LoggerProcessingOptions
             {
                 MaxQueuedMessages = 2,
+                ReservedCriticalMessages = 0,
+                ReservedCriticalCharacters = 0,
                 OverflowPolicy = LogQueueOverflowPolicy.DropNewest
             });
             var recording = new RecordingLogger();
@@ -191,24 +195,24 @@ namespace CycloneGames.Logger.Tests.Editor
         }
 
         [Test]
-        public void ProcessingQueue_GuaranteedLevelDisplacesOldestMessage()
+        public void ProcessingQueue_CriticalReservationPreservesOldestNormalMessage()
         {
             using var logger = CLoggerFactory.CreateSingleThreaded(new LoggerProcessingOptions
             {
                 MaxQueuedMessages = 2,
                 OverflowPolicy = LogQueueOverflowPolicy.DropNewest,
-                GuaranteedLevel = LogLevel.Error
+                CriticalLevel = LogLevel.Error
             });
             var recording = new RecordingLogger();
             logger.AddLogger(recording);
 
-            logger.EnqueueMessage(LogLevel.Info, "first", "Queue", "CLoggerTests.cs", 100, nameof(ProcessingQueue_GuaranteedLevelDisplacesOldestMessage));
-            logger.EnqueueMessage(LogLevel.Info, "second", "Queue", "CLoggerTests.cs", 101, nameof(ProcessingQueue_GuaranteedLevelDisplacesOldestMessage));
-            logger.EnqueueMessage(LogLevel.Error, "error", "Queue", "CLoggerTests.cs", 102, nameof(ProcessingQueue_GuaranteedLevelDisplacesOldestMessage));
+            logger.EnqueueMessage(LogLevel.Info, "first", "Queue", "CLoggerTests.cs", 100, nameof(ProcessingQueue_CriticalReservationPreservesOldestNormalMessage));
+            logger.EnqueueMessage(LogLevel.Info, "second", "Queue", "CLoggerTests.cs", 101, nameof(ProcessingQueue_CriticalReservationPreservesOldestNormalMessage));
+            logger.EnqueueMessage(LogLevel.Error, "error", "Queue", "CLoggerTests.cs", 102, nameof(ProcessingQueue_CriticalReservationPreservesOldestNormalMessage));
             logger.Pump(16);
 
             Assert.AreEqual(2, recording.Count);
-            Assert.AreEqual("second", recording[0].Message);
+            Assert.AreEqual("first", recording[0].Message);
             Assert.AreEqual("error", recording[1].Message);
             Assert.AreEqual(1, logger.GetProcessingStatistics().DroppedMessageCount);
         }
@@ -289,6 +293,9 @@ namespace CycloneGames.Logger.Tests.Editor
         [Test]
         public void UnityLoggerFormatMessage_UsesHrefPathAndLineForConsoleNavigation()
         {
+            LoggerEditorPathResolver.Configure(
+                UnityEngine.Application.dataPath,
+                UnityEngine.Application.platform == UnityEngine.RuntimePlatform.WindowsEditor);
             var message = LogMessagePool.Get();
             string sourcePath = Path.Combine(UnityEngine.Application.dataPath, "Game", "Foo.cs");
             string expectedFullPath = sourcePath.Replace('\\', '/');
@@ -315,6 +322,46 @@ namespace CycloneGames.Logger.Tests.Editor
             finally
             {
                 LogMessagePool.Return(message);
+            }
+        }
+
+        [Test]
+        public void UnityConsoleDoubleClickBridge_IsAvailableForCurrentEditor()
+        {
+            Assert.IsTrue(
+                LoggerUnityConsoleBridge.IsAvailable,
+                "The current Unity Editor no longer exposes the Console entry callback contract used for caller navigation.");
+        }
+
+        [Test]
+        public void EditorLinkIdentityAndLineParsing_AreIndependentOfCurrentCulture()
+        {
+            CultureInfo previousCulture = CultureInfo.CurrentCulture;
+            var registrationCulture = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+            registrationCulture.NumberFormat.NegativeSign = new string('!', 1024);
+            var lookupCulture = (CultureInfo)CultureInfo.InvariantCulture.Clone();
+            lookupCulture.NumberFormat.NegativeSign = "?";
+            try
+            {
+                LoggerEditorLinkRegistry.Reset();
+                CultureInfo.CurrentCulture = registrationCulture;
+                LoggerEditorLinkRegistry.Register("Assets/Game/Foo.cs", -123, "C:/Project/Assets/Game/Foo.cs");
+
+                CultureInfo.CurrentCulture = lookupCulture;
+                Assert.IsTrue(LoggerEditorLinkRegistry.TryGetFullPath("Assets/Game/Foo.cs", -123, out string fullPath));
+                Assert.AreEqual("C:/Project/Assets/Game/Foo.cs", fullPath);
+
+                var parseMethod = typeof(LoggerHyperLinkHandler).GetMethod(
+                    "ParseLineNumber",
+                    System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
+                Assert.IsNotNull(parseMethod);
+                int parsed = (int)parseMethod.Invoke(null, new object[] { null, null, null, "-123" });
+                Assert.AreEqual(-123, parsed);
+            }
+            finally
+            {
+                CultureInfo.CurrentCulture = previousCulture;
+                LoggerEditorLinkRegistry.Reset();
             }
         }
 

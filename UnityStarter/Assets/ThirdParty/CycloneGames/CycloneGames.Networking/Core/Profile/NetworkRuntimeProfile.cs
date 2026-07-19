@@ -3,11 +3,6 @@ using System.Collections.Generic;
 
 namespace CycloneGames.Networking
 {
-    public interface INetworkRuntimeProfileProvider
-    {
-        NetworkRuntimeProfile RuntimeProfile { get; }
-    }
-
     public sealed class NetworkRuntimeProfile
     {
         private readonly Dictionary<string, int> _intSettings;

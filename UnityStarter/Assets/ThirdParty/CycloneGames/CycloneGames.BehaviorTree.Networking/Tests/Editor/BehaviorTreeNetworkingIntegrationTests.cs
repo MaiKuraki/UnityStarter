@@ -21,10 +21,10 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
                 out NetworkMessageDescriptor descriptor), Is.True);
             Assert.That(BehaviorTreeNetworkProtocol.MessageRange.Contains(descriptor.MessageId), Is.True);
             Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
-            Assert.That(catalog.TryGetRegisteredModuleRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
+            Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
             Assert.That(range.Name, Is.EqualTo(BehaviorTreeNetworkProtocol.MessageOwner));
             Assert.That(descriptor.Owner, Is.EqualTo(BehaviorTreeNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.Kind, Is.EqualTo(NetworkMessageKind.Module));
+            Assert.That(descriptor.ContractId, Is.EqualTo("BehaviorTreeStatePayloadMessage:v1"));
             Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.Reliable));
         }
 
@@ -36,8 +36,67 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
             BehaviorTreeNetworkProtocol.RegisterMessageCatalog(catalog);
             BehaviorTreeNetworkProtocol.RegisterMessageCatalog(catalog);
 
-            Assert.That(catalog.Count, Is.EqualTo(6));
-            Assert.That(catalog.ModuleRangeCount, Is.EqualTo(1));
+            Assert.That(catalog.MessageCount, Is.EqualTo(6));
+            Assert.That(catalog.ManifestCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        {
+            NetworkProtocolManifest manifest = BehaviorTreeNetworkProtocol.CreateProtocolManifest();
+            string[] canonicalSchemaLiterals =
+            {
+                "BehaviorTreeManifestHandshakeMessage:v1",
+                "BehaviorTreeStatePayloadMessage:v1",
+                "BehaviorTreeStatePayloadMessage:v1",
+                "BehaviorTreeDesyncReportMessage:v1",
+                "BehaviorTreeTickControlMessage:v1",
+                "BehaviorTreeAuthorityTransferMessage:v1"
+            };
+            ulong[] expectedSchemaHashes =
+            {
+                0x059263302E9505CDUL,
+                0xA5D8529342EA168CUL,
+                0xA5D8529342EA168CUL,
+                0x7CA942FF64163207UL,
+                0x6299F932DCE53765UL,
+                0x94B78D8EED490D89UL
+            };
+
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0xA694B4E414728407UL));
+            Assert.That(BehaviorTreeNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
+            Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
+            Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
+            for (int i = 0; i < expectedSchemaHashes.Length; i++)
+            {
+                Assert.That(
+                    ComputeFnv1a64(canonicalSchemaLiterals[i]),
+                    Is.EqualTo(expectedSchemaHashes[i]),
+                    canonicalSchemaLiterals[i]);
+                Assert.That(manifest.Messages[i].SchemaHash, Is.EqualTo(expectedSchemaHashes[i]));
+                Assert.That(manifest.Messages[i].ContractId, Is.EqualTo(canonicalSchemaLiterals[i]));
+            }
+        }
+
+        private static ulong ComputeFnv1a64(string canonicalLiteral)
+        {
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offsetBasis;
+
+            for (int i = 0; i < canonicalLiteral.Length; i++)
+            {
+                char character = canonicalLiteral[i];
+                if (character > 0x7F)
+                {
+                    throw new AssertionException("Canonical schema literals must contain ASCII characters only.");
+                }
+
+                hash ^= (byte)character;
+                hash = unchecked(hash * prime);
+            }
+
+            return hash;
         }
 
         [Test]

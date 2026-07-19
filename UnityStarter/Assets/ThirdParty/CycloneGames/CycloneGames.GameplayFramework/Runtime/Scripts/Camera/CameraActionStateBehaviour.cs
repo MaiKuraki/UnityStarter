@@ -1,33 +1,7 @@
 using UnityEngine;
-using System.Collections.Generic;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
-    /// <summary>
-    /// Defines the per-frame evaluation logic for mid-state normalized-time triggers.
-    /// Implement this interface and override <see cref="CameraActionStateBehaviour.ResolveProgressStrategy"/>
-    /// in a subclass to inject custom trigger timing behaviour without modifying base-package code.
-    /// </summary>
-    public interface ICameraProgressTriggerStrategy
-    {
-        /// <summary>Returns true when the strategy decides the action should fire this frame.</summary>
-        bool ShouldFire(in CameraActionStateBehaviour.TriggerState state, int currentLoop, float currentNormalizedInLoop, float threshold);
-
-        /// <summary>Advances the state record after the fire decision has been made.</summary>
-        void UpdateStateAfterEvaluation(ref CameraActionStateBehaviour.TriggerState state, int currentLoop, float currentNormalizedInLoop, bool fired);
-    }
-
-    /// <summary>
-    /// Defines the action taken on Animator state exit.
-    /// Implement this interface and override <see cref="CameraActionStateBehaviour.ResolveExitActionStrategy"/>
-    /// in a subclass to inject custom exit behaviour without modifying base-package code.
-    /// </summary>
-    public interface ICameraExitActionStrategy
-    {
-        /// <summary>Executes the exit action against the provided binding.</summary>
-        void Execute(CameraActionBinding binding, string stopKey, string playKey, float durationOverride);
-    }
-
     /// <summary>
     /// StateMachineBehaviour that triggers camera action presets when entering or exiting an Animator state.
     ///
@@ -37,93 +11,13 @@ namespace CycloneGames.GameplayFramework.Runtime
     ///   3. Fill in OnEnterActionKey (play on enter) and/or OnExitActionKey (stop on exit).
     ///
     /// The binding is resolved automatically from the Animator's GameObject or its parents.
-    ///
-    /// Extension points for external packages:
-    ///   - Subclass this class and override <see cref="ResolveProgressStrategy"/> to swap in a custom
-    ///     <see cref="ICameraProgressTriggerStrategy"/> (e.g. multi-threshold firing).
-    ///   - Override <see cref="ResolveExitActionStrategy"/> to replace the built-in exit behaviour.
-    ///   - Override OnStateEnter / OnStateUpdate / OnStateExit for full control.
+    /// Progress state is tracked for a fixed number of concurrent Animator/layer pairs. When that
+    /// capacity is exhausted, enter and exit actions continue while additional progress triggers
+    /// are skipped until a tracked state exits.
     /// </summary>
     public class CameraActionStateBehaviour : StateMachineBehaviour
     {
-
-        private sealed class OncePerStateProgressStrategy : ICameraProgressTriggerStrategy
-        {
-            public bool ShouldFire(in TriggerState state, int currentLoop, float currentNormalizedInLoop, float threshold)
-            {
-                if (state.FiredThisLoop) return false;
-                return DidCrossThreshold(state.LastLoop, state.LastNormalizedInLoop, currentLoop, currentNormalizedInLoop, threshold);
-            }
-
-            public void UpdateStateAfterEvaluation(ref TriggerState state, int currentLoop, float currentNormalizedInLoop, bool fired)
-            {
-                if (fired)
-                {
-                    state.FiredThisLoop = true;
-                }
-                state.LastLoop = currentLoop;
-                state.LastNormalizedInLoop = currentNormalizedInLoop;
-                state.Initialized = true;
-            }
-        }
-
-        private sealed class OncePerLoopProgressStrategy : ICameraProgressTriggerStrategy
-        {
-            public bool ShouldFire(in TriggerState state, int currentLoop, float currentNormalizedInLoop, float threshold)
-            {
-                bool alreadyFiredThisLoop = state.FiredThisLoop && currentLoop == state.LastLoop;
-                if (alreadyFiredThisLoop) return false;
-                return DidCrossThreshold(state.LastLoop, state.LastNormalizedInLoop, currentLoop, currentNormalizedInLoop, threshold);
-            }
-
-            public void UpdateStateAfterEvaluation(ref TriggerState state, int currentLoop, float currentNormalizedInLoop, bool fired)
-            {
-                if (currentLoop > state.LastLoop)
-                {
-                    state.FiredThisLoop = false;
-                }
-
-                if (fired)
-                {
-                    state.FiredThisLoop = true;
-                }
-
-                state.LastLoop = currentLoop;
-                state.LastNormalizedInLoop = currentNormalizedInLoop;
-                state.Initialized = true;
-            }
-        }
-
-        private sealed class NoExitActionStrategy : ICameraExitActionStrategy
-        {
-            public void Execute(CameraActionBinding binding, string stopKey, string playKey, float durationOverride)
-            {
-            }
-        }
-
-        private sealed class StopExitActionStrategy : ICameraExitActionStrategy
-        {
-            public void Execute(CameraActionBinding binding, string stopKey, string playKey, float durationOverride)
-            {
-                if (!string.IsNullOrEmpty(stopKey))
-                    binding.StopAction(stopKey);
-            }
-        }
-
-        private sealed class PlayExitActionStrategy : ICameraExitActionStrategy
-        {
-            public void Execute(CameraActionBinding binding, string stopKey, string playKey, float durationOverride)
-            {
-                if (!string.IsNullOrEmpty(playKey))
-                    binding.PlayAction(playKey, durationOverride);
-            }
-        }
-
-        private static readonly ICameraProgressTriggerStrategy OncePerStateStrategy = new OncePerStateProgressStrategy();
-        private static readonly ICameraProgressTriggerStrategy OncePerLoopStrategy = new OncePerLoopProgressStrategy();
-        private static readonly ICameraExitActionStrategy ExitNoneStrategy = new NoExitActionStrategy();
-        private static readonly ICameraExitActionStrategy ExitStopStrategy = new StopExitActionStrategy();
-        private static readonly ICameraExitActionStrategy ExitPlayStrategy = new PlayExitActionStrategy();
+        private const int MaxTrackedStateCount = 8;
 
         public enum ExitActionMode
         {
@@ -132,49 +26,19 @@ namespace CycloneGames.GameplayFramework.Runtime
             PlayActionKey
         }
 
-        private readonly struct StateKey : System.IEquatable<StateKey>
+        private struct TriggerState
         {
-            public readonly int AnimatorId;
-            public readonly int Layer;
-
-            public StateKey(int animatorId, int layer)
-            {
-                AnimatorId = animatorId;
-                Layer = layer;
-            }
-
-            public bool Equals(StateKey other)
-            {
-                return AnimatorId == other.AnimatorId && Layer == other.Layer;
-            }
-
-            public override bool Equals(object obj)
-            {
-                return obj is StateKey other && Equals(other);
-            }
-
-            public override int GetHashCode()
-            {
-                // Deterministic 32-bit hash combine, stable across platforms.
-                unchecked
-                {
-                    uint hash = (uint)AnimatorId;
-                    hash ^= (uint)Layer + 0x9e3779b9u + (hash << 6) + (hash >> 2);
-                    return (int)hash;
-                }
-            }
-        }
-
-        /// <summary>
-        /// Per-Animator per-layer frame tracking state used by <see cref="ICameraProgressTriggerStrategy"/>.
-        /// Public so external strategy implementations can read and mutate it through the interface contract.
-        /// </summary>
-        public struct TriggerState
-        {
-            public bool Initialized;
             public int LastLoop;
             public float LastNormalizedInLoop;
             public bool FiredThisLoop;
+        }
+
+        private struct TrackedState
+        {
+            public Animator Animator;
+            public int LayerIndex;
+            public TriggerState Progress;
+            public bool IsOccupied;
         }
 
         [Tooltip("Action key to play when entering this state. Leave empty to skip.")]
@@ -212,12 +76,15 @@ namespace CycloneGames.GameplayFramework.Runtime
         // get a fresh lookup instead of reusing a stale binding from the previous owner.
         private Animator ownerAnimator;
         private CameraActionBinding cachedBinding;
-        private readonly Dictionary<StateKey, TriggerState> triggerStates = new Dictionary<StateKey, TriggerState>(4);
+        private readonly TrackedState[] trackedStates = new TrackedState[MaxTrackedStateCount];
+        private bool capacityWarningLogged;
 
         public override void OnStateEnter(Animator animator, AnimatorStateInfo stateInfo, int layerIndex)
         {
-            StateKey key = BuildStateKey(animator, layerIndex);
-            triggerStates[key] = BuildInitialTriggerState(stateInfo);
+            if (!string.IsNullOrEmpty(onProgressActionKey))
+            {
+                TryStartTracking(animator, layerIndex, stateInfo, out _);
+            }
 
             if (string.IsNullOrEmpty(onEnterActionKey)) return;
             if (!allowEnterTriggerInTransition && animator.IsInTransition(layerIndex)) return;
@@ -229,45 +96,41 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             if (string.IsNullOrEmpty(onProgressActionKey)) return;
 
-            StateKey key = BuildStateKey(animator, layerIndex);
-            TriggerState state;
-            if (!triggerStates.TryGetValue(key, out state) || !state.Initialized)
+            int trackedIndex = FindTrackedState(animator, layerIndex);
+            if (trackedIndex < 0 && !TryStartTracking(animator, layerIndex, stateInfo, out trackedIndex))
             {
-                state = BuildInitialTriggerState(stateInfo);
+                return;
             }
 
+            TriggerState state = trackedStates[trackedIndex].Progress;
             int currentLoop;
             float currentNormalizedInLoop;
             DecomposeNormalizedTime(stateInfo.normalizedTime, out currentLoop, out currentNormalizedInLoop);
 
             if (!allowProgressTriggerInTransition && animator.IsInTransition(layerIndex))
             {
-                state.Initialized = true;
                 state.LastLoop = currentLoop;
                 state.LastNormalizedInLoop = currentNormalizedInLoop;
-                triggerStates[key] = state;
+                trackedStates[trackedIndex].Progress = state;
                 return;
             }
 
-            ICameraProgressTriggerStrategy strategy = ResolveProgressStrategy();
-            bool shouldFire = strategy.ShouldFire(state, currentLoop, currentNormalizedInLoop, triggerNormalizedTime);
+            bool shouldFire = ShouldFireProgress(state, currentLoop, currentNormalizedInLoop);
             if (shouldFire)
             {
                 CameraActionBinding binding = GetOrResolveBinding(animator);
                 binding?.PlayAction(onProgressActionKey, durationOverride);
             }
 
-            strategy.UpdateStateAfterEvaluation(ref state, currentLoop, currentNormalizedInLoop, shouldFire);
-            triggerStates[key] = state;
+            UpdateProgressState(ref state, currentLoop, currentNormalizedInLoop, shouldFire);
+            trackedStates[trackedIndex].Progress = state;
         }
 
         public override void OnStateExit(Animator animator, AnimatorStateInfo stateInfo, int layerIndex)
         {
-            triggerStates.Remove(BuildStateKey(animator, layerIndex));
-            CameraActionBinding binding = GetOrResolveBinding(animator);
-            if (binding == null) return;
-
-            ResolveExitActionStrategy().Execute(binding, onExitActionKey, onExitPlayActionKey, durationOverride);
+            ReleaseTrackedState(animator, layerIndex);
+            ExecuteExitAction(animator);
+            ClearBindingCacheIfUnused(animator);
         }
 
         private CameraActionBinding GetOrResolveBinding(Animator animator)
@@ -280,9 +143,102 @@ namespace CycloneGames.GameplayFramework.Runtime
             return cachedBinding;
         }
 
-        private static StateKey BuildStateKey(Animator animator, int layerIndex)
+        private bool TryStartTracking(Animator animator, int layerIndex, AnimatorStateInfo stateInfo, out int trackedIndex)
         {
-            return new StateKey(animator.GetInstanceID(), layerIndex);
+            trackedIndex = FindTrackedState(animator, layerIndex);
+            if (trackedIndex < 0)
+            {
+                trackedIndex = FindAvailableTrackedState();
+            }
+
+            if (trackedIndex < 0)
+            {
+                ReportTrackingCapacityReached();
+                return false;
+            }
+
+            trackedStates[trackedIndex] = new TrackedState
+            {
+                Animator = animator,
+                LayerIndex = layerIndex,
+                Progress = BuildInitialTriggerState(stateInfo),
+                IsOccupied = true
+            };
+            return true;
+        }
+
+        private int FindTrackedState(Animator animator, int layerIndex)
+        {
+            for (int i = 0; i < trackedStates.Length; i++)
+            {
+                TrackedState trackedState = trackedStates[i];
+                if (trackedState.IsOccupied && trackedState.Animator == animator && trackedState.LayerIndex == layerIndex)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private int FindAvailableTrackedState()
+        {
+            for (int i = 0; i < trackedStates.Length; i++)
+            {
+                if (!trackedStates[i].IsOccupied)
+                {
+                    return i;
+                }
+
+                if (trackedStates[i].Animator == null)
+                {
+                    trackedStates[i] = default;
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private void ReleaseTrackedState(Animator animator, int layerIndex)
+        {
+            int trackedIndex = FindTrackedState(animator, layerIndex);
+            if (trackedIndex < 0) return;
+
+            trackedStates[trackedIndex] = default;
+            capacityWarningLogged = false;
+        }
+
+        private bool HasTrackedState(Animator animator)
+        {
+            for (int i = 0; i < trackedStates.Length; i++)
+            {
+                if (trackedStates[i].IsOccupied && trackedStates[i].Animator == animator)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private void ReportTrackingCapacityReached()
+        {
+            if (capacityWarningLogged) return;
+
+            capacityWarningLogged = true;
+            Debug.LogWarning(
+                "CameraActionStateBehaviour reached its fixed capacity of 8 concurrent Animator/layer pairs. " +
+                "Enter and exit actions continue, but progress triggers for additional pairs are skipped until a slot is released.",
+                this);
+        }
+
+        private void ClearBindingCacheIfUnused(Animator animator)
+        {
+            if (ownerAnimator != animator || HasTrackedState(animator)) return;
+
+            ownerAnimator = null;
+            cachedBinding = null;
         }
 
         private static TriggerState BuildInitialTriggerState(AnimatorStateInfo stateInfo)
@@ -292,7 +248,6 @@ namespace CycloneGames.GameplayFramework.Runtime
             DecomposeNormalizedTime(stateInfo.normalizedTime, out loop, out normalizedInLoop);
             return new TriggerState
             {
-                Initialized = true,
                 LastLoop = loop,
                 LastNormalizedInLoop = normalizedInLoop,
                 FiredThisLoop = false
@@ -321,29 +276,68 @@ namespace CycloneGames.GameplayFramework.Runtime
             return lastNorm < threshold || currentNorm >= threshold;
         }
 
-        /// <summary>
-        /// Returns the strategy used to decide when the progress threshold trigger fires.
-        /// Override in a subclass to inject a custom <see cref="ICameraProgressTriggerStrategy"/>.
-        /// The default implementation selects between once-per-state and once-per-loop based on
-        /// the serialized <c>triggerEveryLoop</c> field.
-        /// </summary>
-        protected virtual ICameraProgressTriggerStrategy ResolveProgressStrategy()
+        private bool ShouldFireProgress(TriggerState state, int currentLoop, float currentNormalizedInLoop)
         {
-            return triggerEveryLoop ? OncePerLoopStrategy : OncePerStateStrategy;
+            if (triggerEveryLoop)
+            {
+                bool alreadyFiredThisLoop = state.FiredThisLoop && currentLoop == state.LastLoop;
+                if (alreadyFiredThisLoop) return false;
+            }
+            else if (state.FiredThisLoop)
+            {
+                return false;
+            }
+
+            return DidCrossThreshold(
+                state.LastLoop,
+                state.LastNormalizedInLoop,
+                currentLoop,
+                currentNormalizedInLoop,
+                triggerNormalizedTime);
         }
 
-        /// <summary>
-        /// Returns the strategy that executes on <c>OnStateExit</c>.
-        /// Override in a subclass to inject a custom <see cref="ICameraExitActionStrategy"/>.
-        /// The default implementation dispatches based on the serialized <c>onExitMode</c> enum.
-        /// </summary>
-        protected virtual ICameraExitActionStrategy ResolveExitActionStrategy()
+        private void UpdateProgressState(
+            ref TriggerState state,
+            int currentLoop,
+            float currentNormalizedInLoop,
+            bool fired)
         {
+            if (triggerEveryLoop && currentLoop > state.LastLoop)
+            {
+                state.FiredThisLoop = false;
+            }
+
+            if (fired)
+            {
+                state.FiredThisLoop = true;
+            }
+
+            state.LastLoop = currentLoop;
+            state.LastNormalizedInLoop = currentNormalizedInLoop;
+        }
+
+        private void ExecuteExitAction(Animator animator)
+        {
+            if (onExitMode == ExitActionMode.None) return;
+
+            CameraActionBinding binding = GetOrResolveBinding(animator);
+            if (binding == null) return;
+
             switch (onExitMode)
             {
-                case ExitActionMode.StopActionKey: return ExitStopStrategy;
-                case ExitActionMode.PlayActionKey: return ExitPlayStrategy;
-                default: return ExitNoneStrategy;
+                case ExitActionMode.StopActionKey:
+                    if (!string.IsNullOrEmpty(onExitActionKey))
+                    {
+                        binding.StopAction(onExitActionKey);
+                    }
+                    break;
+
+                case ExitActionMode.PlayActionKey:
+                    if (!string.IsNullOrEmpty(onExitPlayActionKey))
+                    {
+                        binding.PlayAction(onExitPlayActionKey, durationOverride);
+                    }
+                    break;
             }
         }
     }

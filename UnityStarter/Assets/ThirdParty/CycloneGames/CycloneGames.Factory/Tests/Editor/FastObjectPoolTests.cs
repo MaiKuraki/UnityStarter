@@ -18,7 +18,7 @@ namespace CycloneGames.Factory.Tests.Editor
             Assert.That(pool.Despawn(a), Is.True);
             Assert.That(pool.Despawn(b), Is.True);
             Assert.That(pool.CountInactive, Is.EqualTo(1));
-            Assert.That(pool.Diagnostics.DestroyedOnTrim, Is.EqualTo(1));
+            Assert.That(pool.Diagnostics.TotalDestroyed, Is.EqualTo(1));
             Assert.That(pool.Despawn(b), Is.False);
             Assert.That(pool.Diagnostics.InvalidDespawns, Is.EqualTo(1));
         }

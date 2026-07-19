@@ -1,0 +1,28 @@
+{
+    "name": "CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement",
+    "rootNamespace": "",
+    "references": [
+        "UniTask",
+        "CycloneGames.InputSystem.Runtime",
+        "CycloneGames.InputSystem.Runtime.Integrations.VContainer",
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.Logger"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "VCONTAINER_PRESENT"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "VCONTAINER_PRESENT"
+        }
+    ],
+    "noEngineReferences": false
+}

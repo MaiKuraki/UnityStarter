@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.IO.Tests.SystemIO",
+    "rootNamespace": "CycloneGames.IO.Tests.SystemIO",
+    "references": [
+        "CycloneGames.IO.Core",
+        "CycloneGames.IO.SystemIO"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

@@ -1,24 +1,14 @@
 using System;
-using System.Threading;
 
 namespace CycloneGames.GameplayAbilities.Core
 {
     /// <summary>
-    /// Unique identifier assigned to a client-side predicted activation.
-    /// 
-    /// When an ability with <see cref="GASNetExecutionPolicy.LocalPredicted"/> activates,
-    /// the client generates a new PredictionKey and runs the ability immediately.
-    /// All effects applied under this key are tracked as provisional — if the server later
-    /// rejects the activation (<see cref="GASAbilitySystemState.RejectPrediction"/>),
-    /// every effect and attribute change linked to this key is automatically rolled back.
-    /// 
-    /// Thread-safe key generation via <see cref="Interlocked.Increment"/> ensures
-    /// concurrent predicted activations on different threads never collide.
+    /// ASC-scoped identity for one local optimistic transaction.
+    /// The owning runtime creates keys and uses them to associate provisional effects,
+    /// attribute snapshots, gameplay cues, and ability tasks with one commit or rollback boundary.
     /// </summary>
     public readonly struct GASPredictionKey : IEquatable<GASPredictionKey>
     {
-        private static int s_NextKey = 1;
-
         public readonly int Value;
         public readonly GASEntityId Owner;
         public readonly int InputSequence;
@@ -35,26 +25,6 @@ namespace CycloneGames.GameplayAbilities.Core
             Value = value;
             Owner = owner;
             InputSequence = inputSequence;
-        }
-
-        public static GASPredictionKey NewKey()
-        {
-            return NewKey(default, 0);
-        }
-
-        /// <summary>
-        /// Generates a new thread-safe prediction key.
-        /// Wraps around to 1 when approaching int.MaxValue to avoid overflow in long-running sessions.
-        /// </summary>
-        public static GASPredictionKey NewKey(GASEntityId owner, int inputSequence)
-        {
-            int key = Interlocked.Increment(ref s_NextKey);
-            if (key >= int.MaxValue - 1)
-            {
-                Interlocked.Exchange(ref s_NextKey, 1);
-            }
-
-            return new GASPredictionKey(key, owner, inputSequence);
         }
 
         public bool Equals(GASPredictionKey other)
@@ -81,8 +51,8 @@ namespace CycloneGames.GameplayAbilities.Core
     public enum GASPredictionWindowStatus : byte
     {
         Open,
-        Confirmed,
-        Rejected,
+        Committed,
+        RolledBack,
         TimedOut
     }
 
@@ -97,14 +67,13 @@ namespace CycloneGames.GameplayAbilities.Core
         AbilityTasks = 1 << 4,
         AbilityCancelled = 1 << 5,
         DependentWindows = 1 << 6,
-        StaleMessage = 1 << 7
+        StaleClosure = 1 << 7
     }
 
     /// <summary>
-    /// Tracks the lifecycle of a single in-flight prediction window.
-    /// Opened when a client predicts an activation; closed when the server confirms or rejects.
-    /// The cumulative effects, attribute snapshots, and cues applied under this window
-    /// are counted here so the rollback system knows exactly what to undo.
+    /// Tracks one local optimistic transaction from opening through commit, rollback, or timeout.
+    /// The cumulative effects, attribute snapshots, cues, and tasks applied under this window are
+    /// counted so the owner can release or roll back exactly the provisional state it created.
     /// </summary>
     public struct GASPredictionWindowData
     {
@@ -112,14 +81,14 @@ namespace CycloneGames.GameplayAbilities.Core
         public GASPredictionKey ParentPredictionKey;
         public GASSpecHandle SpecHandle;
         public int AbilitySpecHandle;
-        public int OpenFrame;
-        public int TimeoutFrame;
+        public long OpenFrame;
+        public long TimeoutFrame;
         public int PredictedEffectCount;
         public int PredictedAttributeSnapshotCount;
         public int PredictedGameplayCueCount;
         public int PredictedAbilityTaskCount;
         public GASPredictionWindowStatus Status;
-        public int CloseFrame;
+        public long CloseFrame;
         public GASPredictionRollbackFlags RollbackFlags;
 
         public GASPredictionWindowData(
@@ -127,8 +96,8 @@ namespace CycloneGames.GameplayAbilities.Core
             GASPredictionKey parentPredictionKey,
             GASSpecHandle specHandle,
             int abilitySpecHandle,
-            int openFrame,
-            int timeoutFrame)
+            long openFrame,
+            long timeoutFrame)
         {
             PredictionKey = predictionKey;
             ParentPredictionKey = parentPredictionKey;
@@ -154,16 +123,16 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly int AbilitySpecHandle;
         public readonly GASPredictionWindowStatus Status;
         public readonly GASPredictionRollbackFlags RollbackFlags;
-        public readonly int OpenFrame;
-        public readonly int CloseFrame;
-        public readonly int TimeoutFrame;
+        public readonly long OpenFrame;
+        public readonly long CloseFrame;
+        public readonly long TimeoutFrame;
         public readonly int PredictedEffectCount;
         public readonly int PredictedAttributeSnapshotCount;
         public readonly int PredictedGameplayCueCount;
         public readonly int PredictedAbilityTaskCount;
-        public readonly int DurationFrames;
+        public readonly long DurationFrames;
 
-        public GASPredictionTransactionRecord(GASPredictionWindowData window, GASPredictionWindowStatus status, GASPredictionRollbackFlags rollbackFlags, int closeFrame)
+        public GASPredictionTransactionRecord(GASPredictionWindowData window, GASPredictionWindowStatus status, GASPredictionRollbackFlags rollbackFlags, long closeFrame)
         {
             PredictionKey = window.PredictionKey;
             ParentPredictionKey = window.ParentPredictionKey;
@@ -187,17 +156,17 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly int OpenCount;
         public readonly int ParentLinkedCount;
         public readonly int ExpirableCount;
-        public readonly int EarliestTimeoutFrame;
+        public readonly long EarliestTimeoutFrame;
         public readonly int PredictedEffectCount;
         public readonly int PredictedAttributeSnapshotCount;
         public readonly int PredictedGameplayCueCount;
         public readonly int PredictedAbilityTaskCount;
         public readonly long TotalOpenedCount;
-        public readonly long TotalConfirmedCount;
-        public readonly long TotalRejectedCount;
+        public readonly long TotalCommittedCount;
+        public readonly long TotalRolledBackCount;
         public readonly long TotalTimedOutCount;
-        public readonly long StaleConfirmCount;
-        public readonly long StaleRejectCount;
+        public readonly long StaleCommitCount;
+        public readonly long StaleRollbackCount;
         public readonly int ClosedTransactionRecordCount;
         public readonly int ClosedTransactionRecordCapacity;
 
@@ -205,17 +174,17 @@ namespace CycloneGames.GameplayAbilities.Core
             int openCount,
             int parentLinkedCount,
             int expirableCount,
-            int earliestTimeoutFrame,
+            long earliestTimeoutFrame,
             int predictedEffectCount,
             int predictedAttributeSnapshotCount,
             int predictedGameplayCueCount,
             int predictedAbilityTaskCount,
             long totalOpenedCount,
-            long totalConfirmedCount,
-            long totalRejectedCount,
+            long totalCommittedCount,
+            long totalRolledBackCount,
             long totalTimedOutCount,
-            long staleConfirmCount,
-            long staleRejectCount,
+            long staleCommitCount,
+            long staleRollbackCount,
             int closedTransactionRecordCount,
             int closedTransactionRecordCapacity)
         {
@@ -228,11 +197,11 @@ namespace CycloneGames.GameplayAbilities.Core
             PredictedGameplayCueCount = predictedGameplayCueCount;
             PredictedAbilityTaskCount = predictedAbilityTaskCount;
             TotalOpenedCount = totalOpenedCount;
-            TotalConfirmedCount = totalConfirmedCount;
-            TotalRejectedCount = totalRejectedCount;
+            TotalCommittedCount = totalCommittedCount;
+            TotalRolledBackCount = totalRolledBackCount;
             TotalTimedOutCount = totalTimedOutCount;
-            StaleConfirmCount = staleConfirmCount;
-            StaleRejectCount = staleRejectCount;
+            StaleCommitCount = staleCommitCount;
+            StaleRollbackCount = staleRollbackCount;
             ClosedTransactionRecordCount = closedTransactionRecordCount;
             ClosedTransactionRecordCapacity = closedTransactionRecordCapacity;
         }

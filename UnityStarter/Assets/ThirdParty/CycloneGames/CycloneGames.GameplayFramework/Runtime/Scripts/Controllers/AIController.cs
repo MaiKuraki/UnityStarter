@@ -1,5 +1,4 @@
 using UnityEngine;
-using CycloneGames.Logger;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
@@ -14,9 +13,20 @@ namespace CycloneGames.GameplayFramework.Runtime
         private Vector3? focalPoint;
         private bool bIsRunningAI;
 
+        protected override void Awake()
+        {
+            base.Awake();
+            EnsureActorTickConfiguration();
+        }
+
         #region Focus
         public void SetFocus(Actor NewFocus)
         {
+            if (NewFocus != null && World != null && !ReferenceEquals(NewFocus.World, World))
+            {
+                throw new System.InvalidOperationException("AI focus must belong to the same World.");
+            }
+
             focusActor = NewFocus;
             focalPoint = null;
         }
@@ -49,21 +59,31 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public virtual void RunAI()
         {
+            EnsureActorTickConfiguration();
             bIsRunningAI = true;
+            SetActorTickEnabled(true);
         }
 
         public virtual void StopAI()
         {
             bIsRunningAI = false;
+            SetActorTickEnabled(false);
         }
 
         public bool IsRunningAI() => bIsRunningAI;
+
+        private void EnsureActorTickConfiguration()
+        {
+            if (TickPhase != ActorTickPhase.Update || IsTickEnabledAtStart)
+            {
+                ConfigureActorTick(ActorTickPhase.Update, startWithTickEnabled: false);
+            }
+        }
         #endregion
 
         protected override void OnPossess(Pawn InPawn)
         {
             base.OnPossess(InPawn);
-            InitPlayerState();
             if (bStartAILogicOnPossess) RunAI();
         }
 
@@ -74,9 +94,22 @@ namespace CycloneGames.GameplayFramework.Runtime
             base.OnUnPossess();
         }
 
-        protected override void Update()
+        protected override void OnWorldUnbound(EndPlayReason reason)
         {
-            base.Update();
+            try
+            {
+                base.OnWorldUnbound(reason);
+            }
+            finally
+            {
+                StopAI();
+                ClearFocus();
+            }
+        }
+
+        protected override void Tick(float deltaSeconds)
+        {
+            _ = deltaSeconds;
             if (!bIsRunningAI || GetPawn() == null) return;
 
             // Auto-rotate toward focus target

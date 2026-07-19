@@ -4,81 +4,49 @@ using VContainer;
 
 namespace CycloneGames.UIFramework.Runtime.Integrations
 {
-    public sealed class VContainerWindowBinder : IUIWindowBinder, IDisposable
+    /// <summary>
+    /// Injects dependencies into each window through one explicit VContainer scope.
+    /// </summary>
+    public sealed class VContainerWindowBinder : IUIWindowBinder
     {
+        private sealed class InjectedWindowBinding : IUIWindowBinding
+        {
+            public static readonly InjectedWindowBinding Instance = new InjectedWindowBinding();
+
+            private InjectedWindowBinding()
+            {
+            }
+
+            public void OnWindowStateChanged(WindowStateCallbackType state)
+            {
+            }
+
+            public void Dispose()
+            {
+            }
+        }
+
         private readonly IObjectResolver _resolver;
-        private readonly Func<Type, object> _serviceResolver;
-        private readonly Func<Type, IUIPresenter> _presenterResolver;
-        private bool _disposed;
 
         public VContainerWindowBinder(IObjectResolver resolver)
         {
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
-            
-            _serviceResolver = ResolveService;
-            _presenterResolver = ResolvePresenter;
-            
-            UIPresenterFactory.CustomFactory = _presenterResolver;
-            UIServiceLocator.PushResolver(_serviceResolver);
         }
 
-        private IUIPresenter ResolvePresenter(Type presenterType)
+        public IUIWindowBinding Bind(UIWindowBindingContext context)
         {
-            try
+            if (context.Window == null)
             {
-                return (IUIPresenter)_resolver.Resolve(presenterType);
-            }
-            catch (VContainerException)
-            {
-                return null;
-            }
-        }
-
-        private object ResolveService(Type serviceType)
-        {
-            try
-            {
-                return _resolver.Resolve(serviceType);
-            }
-            catch (VContainerException)
-            {
-                return null;
-            }
-        }
-
-        public void OnWindowCreated(UIWindow window)
-        {
-            if (window == null)
-            {
-                return;
+                throw new ArgumentException("The binding context must contain a live window.", nameof(context));
             }
 
-            _resolver.Inject(window);
-        }
-
-        public void OnWindowDestroying(UIWindow window)
-        {
-        }
-
-        public void OnWindowStateChanged(UIWindow window, WindowStateCallbackType state)
-        {
-        }
-
-        public void Dispose()
-        {
-            if (_disposed)
+            if (context.UIService == null)
             {
-                return;
+                throw new ArgumentException("The binding context must contain a UI service.", nameof(context));
             }
 
-            _disposed = true;
-
-            UIServiceLocator.PopResolver();
-            
-            if (UIPresenterFactory.CustomFactory == _presenterResolver)
-            {
-                UIPresenterFactory.CustomFactory = null;
-            }
+            _resolver.Inject(context.Window);
+            return InjectedWindowBinding.Instance;
         }
     }
 }

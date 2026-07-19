@@ -20,7 +20,11 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            CommitAbility(actorInfo, spec);
+            if (!CommitAbility(actorInfo, spec).Succeeded)
+            {
+                EndAbility();
+                return;
+            }
             
             var caster = actorInfo.AvatarGameObject;
 
@@ -116,7 +120,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             return closest;
         }
 
-        public override GameplayAbility CreatePoolableInstance() => new GA_ChainLightning(lightningDamageEffect, maxBounces, damageFalloffPerBounce);
+        public override GameplayAbility CreateRuntimeInstance() => new GA_ChainLightning(lightningDamageEffect, maxBounces, damageFalloffPerBounce);
     }
 
 
@@ -129,22 +133,11 @@ namespace CycloneGames.GameplayAbilities.Sample
         [Range(0f, 1f)]
         public float DamageFalloffPerBounce = 0.25f;
 
-        public override GameplayAbility CreateAbility()
+        protected override GameplayAbility CreateGameplayAbility()
         {
             var effect = LightningDamageEffect ? LightningDamageEffect.GetGameplayEffect() : null;
             var ability = new GA_ChainLightning(effect, MaxBounces, DamageFalloffPerBounce);
-            ability.Initialize(
-                AbilityName,
-                InstancingPolicy,
-                NetExecutionPolicy,
-                CostEffect?.GetGameplayEffect(),
-                CooldownEffect?.GetGameplayEffect(),
-                AbilityTags,
-                ActivationBlockedTags,
-                ActivationRequiredTags,
-                CancelAbilitiesWithTag,
-                BlockAbilitiesWithTag
-            );
+            InitializeAbility(ability);
             return ability;
         }
     }

@@ -13,9 +13,10 @@ namespace CycloneGames.InputSystem.Runtime
             return UnityEngine.InputSystem.InputSystem.onAnyButtonPress.ToObservable();
         }
 
-        public static Observable<InputEventPtr> OnEvent()
+        public static Observable<InputEventSnapshot> OnEvent()
         {
-            return UnityEngine.InputSystem.InputSystem.onEvent.ToObservable();
+            return UnityEngine.InputSystem.InputSystem.onEvent.ToObservable()
+                .Select(static eventPtr => new InputEventSnapshot(eventPtr));
         }
 
         public static Observable<Unit> OnBeforeUpdate(CancellationToken cancellationToken = default)

@@ -11,14 +11,14 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         public void SetUp()
         {
             NetworkBufferPool.Clear();
-            NetworkBufferPool.ResetConfiguration();
+            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [TearDown]
         public void TearDown()
         {
             NetworkBufferPool.Clear();
-            NetworkBufferPool.ResetConfiguration();
+            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [Test]
@@ -53,7 +53,7 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
         }
 
         [Test]
-        public void Read_Rejects_NonFinite_Position()
+        public void Write_Rejects_NonFinite_Position()
         {
             var state = new ActorMigrationState(
                 new Vector3(float.NaN, 0f, 0f),
@@ -70,14 +70,11 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 hasBegunPlay: false);
 
             using NetworkBuffer buffer = NetworkBufferPool.Get();
-            buffer.WriteMigrationState(state);
-            buffer.FlipForRead();
-
-            Assert.Throws<System.InvalidOperationException>(() => buffer.ReadMigrationState());
+            Assert.Throws<System.InvalidOperationException>(() => buffer.WriteMigrationState(state));
         }
 
         [Test]
-        public void Read_Rejects_NonFinite_LifeSpan()
+        public void Write_Rejects_NonFinite_LifeSpan()
         {
             var state = new ActorMigrationState(
                 Vector3.zero,
@@ -94,14 +91,11 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 hasBegunPlay: false);
 
             using NetworkBuffer buffer = NetworkBufferPool.Get();
-            buffer.WriteMigrationState(state);
-            buffer.FlipForRead();
-
-            Assert.Throws<System.InvalidOperationException>(() => buffer.ReadMigrationState());
+            Assert.Throws<System.InvalidOperationException>(() => buffer.WriteMigrationState(state));
         }
 
         [Test]
-        public void Read_Rejects_Excessive_Tag_Count()
+        public void Write_Rejects_Excessive_Runtime_Tag_Count()
         {
             var tags = new string[200];
             for (int i = 0; i < tags.Length; i++)
@@ -124,16 +118,13 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
                 hasBegunPlay: false);
 
             using NetworkBuffer buffer = NetworkBufferPool.Get();
-            buffer.WriteMigrationState(state);
-            buffer.FlipForRead();
-
-            Assert.Throws<System.InvalidOperationException>(() => buffer.ReadMigrationState());
+            Assert.Throws<System.InvalidOperationException>(() => buffer.WriteMigrationState(state));
         }
 
         [Test]
-        public void Read_Allows_Tags_Up_To_Custom_Limit()
+        public void Read_CustomLimitCannotExceedActorRuntimeCapacity()
         {
-            var tags = new string[200];
+            var tags = new string[Actor.MaxActorTags];
             for (int i = 0; i < tags.Length; i++)
             {
                 tags[i] = "T";
@@ -159,7 +150,40 @@ namespace CycloneGames.GameplayFramework.Networking.Tests.Editor
 
             ActorMigrationState roundTripped = buffer.ReadMigrationState(maxRuntimeTagCount: 256);
 
-            Assert.AreEqual(200, roundTripped.Tags.Length);
+            Assert.AreEqual(Actor.MaxActorTags, roundTripped.Tags.Length);
+        }
+
+        [Test]
+        public void CaptureAndApply_UseExplicitDefinitionIdAndRuntimeBounds()
+        {
+            var sourceObject = new GameObject("SourceActor");
+            var targetObject = new GameObject("TargetActor");
+            try
+            {
+                Actor source = sourceObject.AddComponent<Actor>();
+                source.SetActorLocation(new Vector3(1f, 2f, 3f));
+                source.SetActorScale(new Vector3(2f, 2f, 2f));
+                source.AddTag("Player");
+                ActorMigrationState state = source.CaptureMigrationState(
+                    "characters/player",
+                    ownerConnectionId: 7,
+                    instigatorActorId: 9);
+
+                Actor target = targetObject.AddComponent<Actor>();
+                target.ApplyMigrationState(state);
+
+                Assert.AreEqual("characters/player", state.PrefabAssetPath);
+                Assert.AreEqual(source.GetActorLocation(), target.GetActorLocation());
+                Assert.AreEqual(source.GetActorScale(), target.GetActorScale());
+                Assert.IsTrue(target.ActorHasTag("Player"));
+                Assert.AreEqual(7, state.OwnerConnectionId);
+                Assert.AreEqual(9, state.InstigatorActorId);
+            }
+            finally
+            {
+                Object.DestroyImmediate(sourceObject);
+                Object.DestroyImmediate(targetObject);
+            }
         }
     }
 }

@@ -52,7 +52,7 @@ namespace CycloneGames.RPGFoundation.Projectile.Integrations.DeterministicMath
                     aimPoint += input.TargetVelocity * definition.LeadPredictionTime;
                 }
 
-                FPVector3 desiredDirection = (aimPoint - state.Position).Normalized;
+                FPVector3 desiredDirection = (aimPoint - state.Position).NormalizedOrZero;
                 direction = MoveTowardsDirection(
                     direction,
                     desiredDirection,
@@ -77,6 +77,19 @@ namespace CycloneGames.RPGFoundation.Projectile.Integrations.DeterministicMath
             FPVector3 target,
             FPInt64 maxDelta)
         {
+            if (!current.TryNormalize(out FPVector3 currentNormalized))
+            {
+                return FPVector3.Zero;
+            }
+
+            if (!target.TryNormalize(out FPVector3 targetNormalized))
+            {
+                return currentNormalized;
+            }
+
+            current = currentNormalized;
+            target = targetNormalized;
+
             if (maxDelta.RawValue <= 0)
             {
                 return current;
@@ -95,7 +108,10 @@ namespace CycloneGames.RPGFoundation.Projectile.Integrations.DeterministicMath
             }
 
             FPInt64 distance = FPInt64.Sqrt(sqrMagnitude);
-            return (current + delta * (maxDelta / distance)).Normalized;
+            FPVector3 candidate = current + delta * (maxDelta / distance);
+            return candidate.TryNormalize(out FPVector3 normalized)
+                ? normalized
+                : current;
         }
     }
 }

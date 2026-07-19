@@ -1,4 +1,5 @@
 using CycloneGames.Logger;
+using CycloneGames.UIFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
 
@@ -34,6 +35,12 @@ namespace CycloneGames.UIFramework.Editor
 
             try
             {
+                UIWindow placeholder = prefabRoot.GetComponent<UIWindow>();
+                if (placeholder != null && placeholder.GetType() == typeof(UIWindow) && scriptType != typeof(UIWindow))
+                {
+                    Object.DestroyImmediate(placeholder, true);
+                }
+
                 prefabRoot.AddComponent(scriptType);
                 PrefabUtility.SaveAsPrefabAsset(prefabRoot, prefabPathFull);
             }
