@@ -1,24 +1,32 @@
-using VContainer;
-using VContainer.Unity;
-using UnityEngine;
+using System;
 using CycloneGames.Factory.Runtime;
 using CycloneGames.GameplayFramework.Runtime;
+using UnityEngine;
+using VContainer;
+using VContainer.Unity;
 
 namespace CycloneGames.GameplayFramework.Sample.VContainer
 {
-    public class VContainerSampleLifetimeScope : LifetimeScope
+    public sealed class VContainerSampleLifetimeScope : LifetimeScope
     {
         [SerializeField] private WorldSettings worldSettings;
 
         protected override void Configure(IContainerBuilder builder)
         {
+            if (worldSettings == null)
+            {
+                throw new InvalidOperationException(
+                    "VContainerSampleLifetimeScope requires WorldSettings.");
+            }
+
+            builder.RegisterInstance(worldSettings);
             builder.Register<IUnityObjectSpawner, VContainerSampleObjectSpawner>(Lifetime.Singleton);
-            builder.RegisterInstance<IWorldSettings>(worldSettings); //  Register the instance as interface, don't register as class
-            builder.RegisterComponentInNewPrefab<IGameMode, VContainerSampleGameMode>(prefab => (VContainerSampleGameMode)worldSettings.GameModeClass, Lifetime.Singleton);
+            builder.Register(
+                resolver => new GameInstance(resolver.Resolve<IUnityObjectSpawner>()),
+                Lifetime.Singleton);
 
             builder.UseEntryPoints(Lifetime.Singleton, entryPoints =>
             {
-                //  Start Game Logic
                 entryPoints.Add<VContainerSampleEntryPoints>();
             });
         }

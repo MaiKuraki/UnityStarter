@@ -6,6 +6,7 @@
         "UniTask",
         "CycloneGames.Logger",
         "CycloneGames.Factory.Runtime",
+        "CycloneGames.Factory.Unity.Runtime",
         "CycloneGames.GameplayFramework.Runtime"
     ],
     "includePlatforms": [],
@@ -14,7 +15,15 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_VCONTAINER"
+    ],
+    "versionDefines": [
+        {
+            "name": "jp.hadashikick.vcontainer",
+            "expression": "",
+            "define": "CYCLONEGAMES_HAS_VCONTAINER"
+        }
+    ],
     "noEngineReferences": false
 }
