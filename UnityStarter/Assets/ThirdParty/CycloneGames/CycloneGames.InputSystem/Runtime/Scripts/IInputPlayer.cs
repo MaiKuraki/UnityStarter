@@ -9,9 +9,11 @@ namespace CycloneGames.InputSystem.Runtime
     /// </summary>
     public interface IInputPlayer
     {
+        int PlayerId { get; }
         ReadOnlyReactiveProperty<string> ActiveContextName { get; }
         ReadOnlyReactiveProperty<InputDeviceKind> ActiveDeviceKind { get; }
         event Action<string> OnContextChanged;
+        event Action<InputPlayerDeviceStatus> OnDeviceStatusChanged;
 
         /// <summary>
         /// Returns an observable that only emits ActiveDeviceKind changes when the specified context is active (at the top of the stack).
@@ -21,10 +23,12 @@ namespace CycloneGames.InputSystem.Runtime
 
         Observable<Vector2> GetVector2Observable(string actionName);
         Observable<Vector2> GetVector2Observable(string actionMapName, string actionName);
+        Observable<Vector2> GetVector2Observable(string contextName, string actionMapName, string actionName);
         Observable<Vector2> GetVector2Observable(int actionId);
 
         Observable<Unit> GetButtonObservable(string actionName);
         Observable<Unit> GetButtonObservable(string actionMapName, string actionName);
+        Observable<Unit> GetButtonObservable(string contextName, string actionMapName, string actionName);
         Observable<Unit> GetButtonObservable(int actionId);
 
         /// <summary>
@@ -32,6 +36,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         Observable<Unit> GetLongPressObservable(string actionName);
         Observable<Unit> GetLongPressObservable(string actionMapName, string actionName);
+        Observable<Unit> GetLongPressObservable(string contextName, string actionMapName, string actionName);
         Observable<Unit> GetLongPressObservable(int actionId);
 
         /// <summary>
@@ -40,6 +45,7 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         Observable<float> GetLongPressProgressObservable(string actionName);
         Observable<float> GetLongPressProgressObservable(string actionMapName, string actionName);
+        Observable<float> GetLongPressProgressObservable(string contextName, string actionMapName, string actionName);
         Observable<float> GetLongPressProgressObservable(int actionId);
 
         /// <summary>
@@ -47,10 +53,12 @@ namespace CycloneGames.InputSystem.Runtime
         /// </summary>
         Observable<bool> GetPressStateObservable(string actionName);
         Observable<bool> GetPressStateObservable(string actionMapName, string actionName);
+        Observable<bool> GetPressStateObservable(string contextName, string actionMapName, string actionName);
         Observable<bool> GetPressStateObservable(int actionId);
 
         Observable<float> GetScalarObservable(string actionName);
         Observable<float> GetScalarObservable(string actionMapName, string actionName);
+        Observable<float> GetScalarObservable(string contextName, string actionMapName, string actionName);
         Observable<float> GetScalarObservable(int actionId);
 
         // Context Management - Object Based
@@ -127,6 +135,29 @@ namespace CycloneGames.InputSystem.Runtime
         /// Returns an empty array if the action is not found.
         /// </summary>
         string[] GetActionBindings(string actionMapName, string actionName);
+
+        /// <summary>
+        /// Context-qualified overloads for configurations that reuse an action map and action name.
+        /// </summary>
+        bool RebindAction(string contextName, string actionMapName, string actionName, string oldBinding, string newBinding);
+        bool ResetActionBinding(string contextName, string actionMapName, string actionName);
+        string[] GetActionBindings(string contextName, string actionMapName, string actionName);
+
+        /// <summary>
+        /// Exports or imports the module-owned, versioned stable binding override JSON format.
+        /// Records use context/map/action identity plus binding ordinal and original binding metadata.
+        /// </summary>
+        string ExportBindingOverridesJson();
+        bool TryExportBindingOverridesJson(out string json);
+        bool ImportBindingOverridesJson(string json, bool removeExisting = true);
+
+        /// <summary>
+        /// Reads an advanced value synchronously on the Unity main thread without exposing CallbackContext.
+        /// </summary>
+        bool TryReadValue<TValue>(string contextName, string actionMapName, string actionName, out TValue value)
+            where TValue : struct;
+        bool TryReadValue<TValue>(int actionId, out TValue value)
+            where TValue : struct;
 
         /// <summary>
         /// Emits when two button actions are pressed within the specified time window of each other.

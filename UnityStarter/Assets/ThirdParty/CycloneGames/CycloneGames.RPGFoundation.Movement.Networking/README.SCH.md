@@ -58,6 +58,8 @@ CycloneGames.RPGFoundation.Movement.Networking/
 
 Core assembly 引用 `CycloneGames.RPGFoundation.Movement.Core`、`CycloneGames.Networking.Core` 和 `Unity.Mathematics`。它不引用后端 SDK 类型、PlayerSettings scripting define symbols 或特定 DI 容器。
 
+Core 与 EditMode test assembly 都设置 `autoReferenced: false`。Consumer asmdef 必须显式引用 Core。无需 PlayerSettings scripting define。
+
 ## 核心概念
 
 | 类型 | 作用 |
@@ -90,24 +92,26 @@ graph TD
     SnapshotHistory["MovementNetworkSnapshotHistory"]
     Reconcile["MovementNetworkReconciliation"]
     Correction["MovementCorrectionMessage"]
-    Manager["INetworkManager"]
+    Endpoint["INetworkMessageEndpoint"]
 
     Input --> Action
     Input --> InputAuthority
     InputAuthority --> InputHistory
-    InputAuthority --> Manager
+    InputAuthority --> Endpoint
     Provider --> Bridge
     Bridge --> Snapshot
     Snapshot --> SnapshotHistory
     SnapshotHistory --> Reconcile
     Reconcile --> Correction
-    Snapshot --> Manager
-    Correction --> Manager
+    Snapshot --> Endpoint
+    Correction --> Endpoint
 ```
 
 ## 协议
 
-`MovementNetworkProtocol` 在 Cyclone module range 中拥有 `16000-16999` 消息 ID。
+`MovementNetworkProtocol` 在共享 `NetworkMessageRanges.Module` 范围（`1000-29999`）内拥有 `16000-16999` 消息 ID。`CreateProtocolManifest` 构造完整 manifest，`RegisterMessageCatalog` / `TryRegisterMessageCatalog` 通过 `TryRegisterProtocolManifest` 提交它。Catalog 要么同时提交 range 和全部 descriptor，要么拒绝 manifest 且不留下部分注册。
+
+每个 descriptor 都声明显式的可打印 ASCII `ContractId`，例如 `MovementNetworkSnapshotMessage:v1`。非零 `SchemaHash` 是该标识符原文的 FNV-1a 64-bit hash；manifest validation 会拒绝不匹配的组合。Protocol fingerprint 包含 range，以及每个 descriptor 的 message ID、contract identity、schema hash、channel 和 payload limit。CLR type name 与 reflection 不是协议 identity。Payload layout、codec 或语义兼容性变化必须分配新 contract identity，并在所有通信 peer 之间协调 `CurrentVersion` / `MinimumSupportedVersion`。必须在 gameplay traffic 前拒绝不兼容 peer。项目专用消息应放入独立的项目自有 manifest，并使用未占用的 `NetworkMessageRanges.User` 子范围；本模块不提供动态 descriptor 注册 facade。
 
 | Message | ID | Channel | Payload |
 | --- | ---: | --- | --- |
@@ -259,7 +263,7 @@ if (MovementNetworkReconciliation.TryCreateCorrection(
 
 ## 扩展点
 
-- 项目自有 movement verb 通过项目拥有的 `NetworkMessageKind.User` manifest 定义。
+- 项目自有 movement verb 通过独立的项目自有 manifest 定义，并使用未占用的 `NetworkMessageRanges.User` 子范围。
 - 后端 connection、ownership 和 host/session 逻辑保留在 network adapter 中。
 - `CustomFlags` 和项目自有 button mask 用于表达 generic DTO 字段之外的输入概念。
 - 当 ability tag、stamina、vehicle ownership、mounted state、anti-cheat rule 或平台特定 authority rule 必须在接受输入前检查时，提供项目自定义 `IMovementNetworkInputValidator`。

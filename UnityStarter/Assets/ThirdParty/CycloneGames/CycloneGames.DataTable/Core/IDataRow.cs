@@ -1,12 +1,21 @@
 namespace CycloneGames.DataTable
 {
     /// <summary>
-    /// Marker interface for a single row in a data table.
-    /// Every generated config row class must implement this.
+    /// Exposes the primary key of a row when a generated model can implement a framework interface.
     /// </summary>
-    public interface IDataRow
+    /// <typeparam name="TKey">The stable primary-key type.</typeparam>
+    public interface IDataRow<out TKey>
     {
-        /// <summary>Primary key — unique within the table.</summary>
-        int Id { get; }
+        /// <summary>Gets the primary key, which must be unique within one table.</summary>
+        TKey Id { get; }
+    }
+
+    /// <summary>
+    /// Convenience contract for the common integer-keyed generated-row shape.
+    /// Backends that cannot implement this interface can use <see cref="DataTable{TKey, TRow}"/>
+    /// with an explicit key selector.
+    /// </summary>
+    public interface IDataRow : IDataRow<int>
+    {
     }
 }

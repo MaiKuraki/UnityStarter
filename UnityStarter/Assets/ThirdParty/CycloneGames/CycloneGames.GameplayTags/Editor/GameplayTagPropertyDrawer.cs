@@ -22,6 +22,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
     public class GameplayTagPropertyDrawer : PropertyDrawer
     {
         private static readonly GUIContent s_TempContent = new();
+        private static readonly GUIContent s_InvalidPropertyContent = new("Invalid Tag Property");
 
         public override void OnGUI(Rect position, SerializedProperty property, GUIContent label)
         {
@@ -35,24 +36,32 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             if (nameProperty == null)
             {
-                EditorGUI.LabelField(position, label, new GUIContent("Invalid Tag Property"));
+                EditorGUI.LabelField(position, label, s_InvalidPropertyContent);
+                EditorGUI.indentLevel = oldIndentLevel;
                 EditorGUI.EndProperty();
                 return;
             }
 
-            GameplayTag tag = GameplayTagManager.RequestTag(nameProperty.stringValue, false);
+            bool hasMixedValues = HasMixedTagValues(nameProperty);
+            GameplayTag tag = hasMixedValues
+                ? GameplayTag.None
+                : GameplayTagManager.RequestTag(nameProperty.stringValue, false);
 
-            bool hasValue = !string.IsNullOrEmpty(nameProperty.stringValue);
+            bool hasValue = !hasMixedValues && !string.IsNullOrEmpty(nameProperty.stringValue);
             bool isValid = hasValue && tag.IsValid;
 
-            if (!hasValue)
+            if (hasMixedValues)
+                s_TempContent.text = "Mixed Values";
+            else if (!hasValue)
                 s_TempContent.text = "None";
             else if (!isValid)
                 s_TempContent.text = nameProperty.stringValue + " (Invalid)";
             else
                 s_TempContent.text = tag.Name;
 
-            s_TempContent.tooltip = isValid
+            s_TempContent.tooltip = hasMixedValues
+                ? "The selected objects contain different gameplay tags. Choose a tag to assign it to all selected objects."
+                : isValid
                 ? tag.Description
                 : hasValue
                     ? "This tag is not registered. Open the GameplayTag Validation Window or clear the field."
@@ -60,13 +69,17 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             // Draw clear button when a tag is selected
             Rect clearRect = default;
-            if (hasValue)
+            if (hasValue || hasMixedValues)
             {
                 clearRect = new Rect(position.xMax - 18, position.y, 18, position.height);
                 position.width -= 20;
             }
 
-            if (EditorGUI.DropdownButton(position, s_TempContent, FocusType.Keyboard))
+            bool previousMixedValue = EditorGUI.showMixedValue;
+            EditorGUI.showMixedValue = hasMixedValues;
+            bool openPicker = EditorGUI.DropdownButton(position, s_TempContent, FocusType.Keyboard);
+            EditorGUI.showMixedValue = previousMixedValue;
+            if (openPicker)
             {
                 Action<GameplayTag> onTagSelected = newTag =>
                 {
@@ -79,7 +92,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                 PopupWindow.Show(position, content);
             }
 
-            if (hasValue)
+            if (hasValue || hasMixedValues)
             {
                 Color prev = GUI.color;
                 if (!isValid) GUI.color = new Color(1f, 0.4f, 0.4f);
@@ -93,6 +106,11 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             EditorGUI.indentLevel = oldIndentLevel;
             EditorGUI.EndProperty();
+        }
+
+        internal static bool HasMixedTagValues(SerializedProperty nameProperty)
+        {
+            return nameProperty != null && nameProperty.hasMultipleDifferentValues;
         }
 
         private class TagPickerPopup : PopupWindowContent

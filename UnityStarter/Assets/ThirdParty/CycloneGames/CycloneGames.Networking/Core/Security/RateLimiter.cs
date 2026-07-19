@@ -1,111 +1,199 @@
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 
 namespace CycloneGames.Networking.Security
 {
     /// <summary>
-    /// Per-connection rate limiter using token bucket algorithm.
-    /// Protects against packet flooding and DDoS from malicious clients.
+    /// Bounded per-connection token bucket. Configuration is immutable after construction.
+    /// Callers must provide a finite monotonic timestamp in seconds.
     /// </summary>
     public sealed class RateLimiter
     {
-        private readonly ConcurrentDictionary<int, ConnectionBucket> _buckets = new();
+        private const int DefaultMaxTrackedConnections = 4096;
+        private const double DefaultIdleTimeoutSeconds = 120d;
 
-        public int MaxMessagesPerSecond { get; set; }
-        public long MaxBytesPerSecond { get; set; }
-        public int BurstLimit { get; set; }
+        private readonly ConcurrentDictionary<int, ConnectionBucket> _buckets = new ConcurrentDictionary<int, ConnectionBucket>();
+        private readonly object _creationLock = new object();
 
-        public RateLimiter(int maxMessagesPerSecond = 60, long maxBytesPerSecond = 65536, int burstLimit = 20)
+        public RateLimiter(
+            int maxMessagesPerSecond = 60,
+            long maxBytesPerSecond = 65536,
+            int burstLimit = 20,
+            int maxTrackedConnections = DefaultMaxTrackedConnections,
+            double idleTimeoutSeconds = DefaultIdleTimeoutSeconds)
         {
+            if (maxMessagesPerSecond <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxMessagesPerSecond));
+            if (maxBytesPerSecond <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxBytesPerSecond));
+            if (burstLimit < 0)
+                throw new ArgumentOutOfRangeException(nameof(burstLimit));
+            if (maxTrackedConnections <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxTrackedConnections));
+            if (!IsFiniteNonNegative(idleTimeoutSeconds) || idleTimeoutSeconds == 0d)
+                throw new ArgumentOutOfRangeException(nameof(idleTimeoutSeconds));
+
             MaxMessagesPerSecond = maxMessagesPerSecond;
             MaxBytesPerSecond = maxBytesPerSecond;
             BurstLimit = burstLimit;
+            MaxTrackedConnections = maxTrackedConnections;
+            IdleTimeoutSeconds = idleTimeoutSeconds;
         }
 
-        /// <summary>
-        /// Check if a message from this connection should be allowed.
-        /// Returns false if the connection has exceeded its rate limit.
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryConsume(int connectionId, int payloadBytes, float currentTime)
-        {
-            if (payloadBytes < 0) return false;
+        public int MaxMessagesPerSecond { get; }
+        public long MaxBytesPerSecond { get; }
+        public int BurstLimit { get; }
+        public int MaxTrackedConnections { get; }
+        public double IdleTimeoutSeconds { get; }
+        public int TrackedConnectionCount => _buckets.Count;
 
-            ConnectionBucket bucket = _buckets.GetOrAdd(connectionId,
-                _ => new ConnectionBucket(MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit, currentTime));
-            return bucket.TryConsume(payloadBytes, currentTime, MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit);
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryConsume(int connectionId, int payloadBytes, double currentTime)
+        {
+            if (connectionId <= 0 || payloadBytes < 0 || !IsFiniteNonNegative(currentTime))
+                return false;
+
+            ConnectionBucket bucket = GetOrCreateBucket(connectionId, currentTime);
+            return bucket != null && bucket.TryConsume(payloadBytes, currentTime);
         }
 
-        /// <summary>
-        /// Check without consuming. Useful for pre-validation.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool WouldAllow(int connectionId, float currentTime)
+        public bool WouldAllow(int connectionId, double currentTime)
         {
-            return !_buckets.TryGetValue(connectionId, out var bucket)
-                   || bucket.WouldAllow(currentTime, MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit);
+            if (connectionId <= 0 || !IsFiniteNonNegative(currentTime))
+                return false;
+
+            if (_buckets.TryGetValue(connectionId, out ConnectionBucket bucket))
+                return bucket.WouldAllow(currentTime);
+
+            return _buckets.Count < MaxTrackedConnections;
         }
 
         public void RemoveConnection(int connectionId)
         {
-            _buckets.TryRemove(connectionId, out _);
+            if (connectionId <= 0
+                || !_buckets.TryGetValue(connectionId, out ConnectionBucket bucket))
+            {
+                return;
+            }
+
+            bucket.Retire();
+            ((ICollection<KeyValuePair<int, ConnectionBucket>>)_buckets).Remove(
+                new KeyValuePair<int, ConnectionBucket>(connectionId, bucket));
+        }
+
+        public int PruneExpired(double currentTime, int maxRemovals = int.MaxValue)
+        {
+            if (!IsFiniteNonNegative(currentTime))
+                throw new ArgumentOutOfRangeException(nameof(currentTime));
+            if (maxRemovals < 0)
+                throw new ArgumentOutOfRangeException(nameof(maxRemovals));
+
+            int removed = 0;
+            foreach (var pair in _buckets)
+            {
+                if (removed >= maxRemovals)
+                    break;
+
+                if (pair.Value.TryRetireIfExpired(currentTime, IdleTimeoutSeconds)
+                    && ((ICollection<KeyValuePair<int, ConnectionBucket>>)_buckets).Remove(pair))
+                {
+                    removed++;
+                }
+            }
+
+            return removed;
         }
 
         public void Clear()
         {
-            _buckets.Clear();
+            lock (_creationLock)
+            {
+                foreach (var pair in _buckets)
+                {
+                    pair.Value.Retire();
+                    ((ICollection<KeyValuePair<int, ConnectionBucket>>)_buckets).Remove(pair);
+                }
+            }
         }
 
-        /// <summary>
-        /// Get current one-second-equivalent consumed budget for a connection.
-        /// </summary>
-        public bool GetStats(int connectionId, out int messagesThisSecond, out long bytesThisSecond)
+        public bool GetStats(int connectionId, out int consumedMessages, out long consumedBytes)
         {
-            if (_buckets.TryGetValue(connectionId, out var bucket))
+            if (_buckets.TryGetValue(connectionId, out ConnectionBucket bucket))
             {
-                bucket.GetStats(MaxMessagesPerSecond, MaxBytesPerSecond, BurstLimit,
-                    out messagesThisSecond, out bytesThisSecond);
+                bucket.GetStats(out consumedMessages, out consumedBytes);
                 return true;
             }
-            messagesThisSecond = 0;
-            bytesThisSecond = 0;
+
+            consumedMessages = 0;
+            consumedBytes = 0;
             return false;
         }
 
-        /// <summary>
-        /// Token bucket per connection. The lock is per connection, so contention is
-        /// isolated to the connection currently being checked.
-        /// </summary>
+        private ConnectionBucket GetOrCreateBucket(int connectionId, double currentTime)
+        {
+            if (_buckets.TryGetValue(connectionId, out ConnectionBucket existing))
+                return existing;
+
+            lock (_creationLock)
+            {
+                if (_buckets.TryGetValue(connectionId, out existing))
+                    return existing;
+
+                if (_buckets.Count >= MaxTrackedConnections)
+                    PruneExpired(currentTime, Math.Max(1, MaxTrackedConnections / 16));
+                if (_buckets.Count >= MaxTrackedConnections)
+                    return null;
+
+                var created = new ConnectionBucket(this, currentTime);
+                return _buckets.TryAdd(connectionId, created)
+                    ? created
+                    : (_buckets.TryGetValue(connectionId, out existing) ? existing : null);
+            }
+        }
+
+        private static bool IsFiniteNonNegative(double value)
+        {
+            return value >= 0d && !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
         private sealed class ConnectionBucket
         {
             private readonly object _syncRoot = new object();
+            private readonly double _messageCapacity;
+            private readonly double _byteCapacity;
+            private readonly double _messagesPerSecond;
+            private readonly double _bytesPerSecond;
+
             private double _messageTokens;
             private double _byteTokens;
-            private float _windowStart;
-            private int _violations;
-
-            public int Violations => _violations;
-
-            public ConnectionBucket(int maxMessages, long maxBytes, int burstLimit, float currentTime)
+            private double _lastTimestamp;
+            private bool _retired;
+            public ConnectionBucket(RateLimiter owner, double currentTime)
             {
-                _messageTokens = GetMessageCapacity(maxMessages, burstLimit);
-                _byteTokens = GetByteCapacity(maxBytes);
-                _windowStart = currentTime;
+                _messageCapacity = (double)owner.MaxMessagesPerSecond + owner.BurstLimit;
+                _byteCapacity = owner.MaxBytesPerSecond;
+                _messagesPerSecond = owner.MaxMessagesPerSecond;
+                _bytesPerSecond = owner.MaxBytesPerSecond;
+                _messageTokens = _messageCapacity;
+                _byteTokens = _byteCapacity;
+                _lastTimestamp = currentTime;
             }
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool TryConsume(int bytes, float currentTime, int maxMessages, long maxBytes, int burstLimit)
+            public bool TryConsume(int bytes, double currentTime)
             {
                 lock (_syncRoot)
                 {
-                    Refill(currentTime, maxMessages, maxBytes, burstLimit);
+                    if (_retired)
+                        return false;
+
+                    if (!TryRefill(currentTime))
+                        return false;
 
                     if (_messageTokens < 1d || _byteTokens < bytes)
-                    {
-                        _violations++;
                         return false;
-                    }
 
                     _messageTokens -= 1d;
                     _byteTokens -= bytes;
@@ -113,51 +201,57 @@ namespace CycloneGames.Networking.Security
                 }
             }
 
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            public bool WouldAllow(float currentTime, int maxMessages, long maxBytes, int burstLimit)
+            public bool WouldAllow(double currentTime)
             {
                 lock (_syncRoot)
                 {
-                    Refill(currentTime, maxMessages, maxBytes, burstLimit);
+                    if (_retired)
+                        return false;
+
+                    if (!TryRefill(currentTime))
+                        return false;
+
                     return _messageTokens >= 1d;
                 }
             }
 
-            public void GetStats(int maxMessages, long maxBytes, int burstLimit,
-                out int messagesThisSecond, out long bytesThisSecond)
+            public bool TryRetireIfExpired(double currentTime, double idleTimeoutSeconds)
             {
                 lock (_syncRoot)
                 {
-                    double messageCapacity = GetMessageCapacity(maxMessages, burstLimit);
-                    double byteCapacity = GetByteCapacity(maxBytes);
+                    if (_retired || currentTime - _lastTimestamp < idleTimeoutSeconds)
+                        return false;
 
-                    messagesThisSecond = (int)Math.Max(0d, Math.Ceiling(messageCapacity - _messageTokens));
-                    bytesThisSecond = (long)Math.Max(0d, Math.Ceiling(byteCapacity - _byteTokens));
+                    _retired = true;
+                    return true;
                 }
             }
 
-            private void Refill(float currentTime, int maxMessages, long maxBytes, int burstLimit)
+            public void Retire()
             {
-                float elapsed = currentTime - _windowStart;
-                if (elapsed < 0f)
-                    elapsed = 0f;
-
-                double messageCapacity = GetMessageCapacity(maxMessages, burstLimit);
-                double byteCapacity = GetByteCapacity(maxBytes);
-
-                _messageTokens = Math.Min(messageCapacity, _messageTokens + elapsed * maxMessages);
-                _byteTokens = Math.Min(byteCapacity, _byteTokens + elapsed * maxBytes);
-                _windowStart = currentTime;
+                lock (_syncRoot)
+                    _retired = true;
             }
 
-            private static double GetMessageCapacity(int maxMessages, int burstLimit)
+            public void GetStats(out int consumedMessages, out long consumedBytes)
             {
-                return Math.Max(1, maxMessages) + Math.Max(0, burstLimit);
+                lock (_syncRoot)
+                {
+                    consumedMessages = (int)Math.Max(0d, Math.Ceiling(_messageCapacity - _messageTokens));
+                    consumedBytes = (long)Math.Max(0d, Math.Ceiling(_byteCapacity - _byteTokens));
+                }
             }
 
-            private static double GetByteCapacity(long maxBytes)
+            private bool TryRefill(double currentTime)
             {
-                return Math.Max(1L, maxBytes);
+                double elapsed = currentTime - _lastTimestamp;
+                if (elapsed < 0d)
+                    return false;
+
+                _messageTokens = Math.Min(_messageCapacity, _messageTokens + elapsed * _messagesPerSecond);
+                _byteTokens = Math.Min(_byteCapacity, _byteTokens + elapsed * _bytesPerSecond);
+                _lastTimestamp = currentTime;
+                return true;
             }
         }
     }

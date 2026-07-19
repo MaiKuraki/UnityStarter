@@ -127,7 +127,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         [Range(0.15f, 1f)]
         public float PanelAlpha = 0.8f;
 
-        [Tooltip("Maximum number of panels to display at once.")]
+        [Tooltip("Maximum number of explicitly registered panels. The overlay captures this capacity when it initializes.")]
         [Range(1, 32)]
         public int MaxPanels = 8;
 

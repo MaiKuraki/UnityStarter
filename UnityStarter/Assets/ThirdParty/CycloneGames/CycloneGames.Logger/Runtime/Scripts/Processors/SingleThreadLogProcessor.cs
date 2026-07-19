@@ -1,140 +1,167 @@
 using System;
-using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Threading;
 
 namespace CycloneGames.Logger
 {
-    /// <summary>
-    /// Single-thread (manual pump) processing strategy. Suitable for platforms without threads.
-    /// Use <see cref="CLogger.Pump"/> to bound per-frame processing.
-    /// </summary>
-    internal sealed class SingleThreadLogProcessor : ILogProcessor, ILogProcessorDiagnostics
+    internal sealed class SingleThreadLogProcessor : ILogProcessor
     {
         private readonly CLogger _owner;
-        private readonly LoggerProcessingOptions _options;
-        private readonly ConcurrentQueue<LogMessage> _queue = new();
-        private volatile bool _isDisposing;
-        private volatile bool _isStopped;
-        private int _queueCount;
-        private long _droppedMessageCount;
-        private long _processedMessageCount;
+        private readonly BoundedLogQueue _queue;
+        private int _shutdownState;
+        private int _pumpGate;
 
-        public bool IsStopped => _isStopped;
+        public bool IsStopped => Volatile.Read(ref _shutdownState) == 2 && _queue.IsStopped;
 
-        public SingleThreadLogProcessor(CLogger owner, LoggerProcessingOptions options = null)
+        internal SingleThreadLogProcessor(CLogger owner, LoggerProcessingOptions options = null)
         {
             _owner = owner ?? throw new ArgumentNullException(nameof(owner));
-            _options = LoggerProcessingOptions.CreateValidated(options);
+            _queue = new BoundedLogQueue(options);
         }
 
-        public void Enqueue(LogMessage message)
+        public bool TryReserve(LogLevel level, int estimatedCharacters, bool allowEviction, out int reservedCharacters)
         {
-            if (message == null) return;
-            if (_isDisposing)
+            return _queue.TryReserve(level, estimatedCharacters, allowEviction, out reservedCharacters);
+        }
+
+        public bool TryCommit(LogMessage message, int reservedCharacters, int actualCharacters)
+        {
+            return _queue.TryCommit(message, reservedCharacters, actualCharacters);
+        }
+
+        public void CancelReservation(int reservedCharacters)
+        {
+            _queue.CancelReservation(reservedCharacters);
+        }
+
+        public void Pump(int maxItems, int budgetMilliseconds)
+        {
+            if (maxItems <= 0)
             {
-                LogMessagePool.Return(message);
                 return;
             }
 
-            if (!TryEnqueue(message))
+            if (Interlocked.CompareExchange(ref _pumpGate, 1, 0) != 0)
             {
-                DropMessage(message);
                 return;
             }
 
-            _queue.Enqueue(message);
+            long startTimestamp = Stopwatch.GetTimestamp();
+            long budgetTicks = budgetMilliseconds < 0
+                ? long.MaxValue
+                : Math.Max(1L, Stopwatch.Frequency * budgetMilliseconds / 1000L);
+            try
+            {
+                int processed = 0;
+                while (processed < maxItems && _queue.TryDequeue(out LogMessage message, out int characters))
+                {
+                    try
+                    {
+                        _owner.DispatchToLoggers(message);
+                    }
+                    finally
+                    {
+                        LogMessagePool.Return(message);
+                        _queue.CompleteProcessing(characters);
+                    }
+
+                    processed++;
+                    if (budgetMilliseconds >= 0
+                        && Stopwatch.GetTimestamp() - startTimestamp >= budgetTicks)
+                    {
+                        break;
+                    }
+                }
+
+                _owner.PerformSinkMaintenance();
+            }
+            finally
+            {
+                Volatile.Write(ref _pumpGate, 0);
+            }
         }
 
-        public void Pump(int maxItems)
+        public bool TryFlush(int timeoutMs)
         {
-            if (maxItems <= 0) return;
-
-            int processed = 0;
-            while (processed < maxItems && _queue.TryDequeue(out var msg))
+            if (timeoutMs == 0)
             {
-                Interlocked.Decrement(ref _queueCount);
-                try
-                {
-                    _owner.DispatchToLoggers(msg);
-                    Interlocked.Increment(ref _processedMessageCount);
-                }
-                finally
-                {
-                    LogMessagePool.Return(msg);
-                }
-                processed++;
+                return _queue.WaitUntilIdle(0);
             }
+
+            long startTimestamp = Stopwatch.GetTimestamp();
+            while (!_queue.IsStopped && !_queue.WaitUntilIdle(0))
+            {
+                int remaining = timeoutMs < 0
+                    ? -1
+                    : Math.Max(0, timeoutMs - GetElapsedMilliseconds(startTimestamp));
+                Pump(256, remaining);
+                if (_queue.WaitUntilIdle(0))
+                {
+                    return true;
+                }
+
+                if (timeoutMs >= 0 && GetElapsedMilliseconds(startTimestamp) >= timeoutMs)
+                {
+                    return false;
+                }
+
+#if !UNITY_WEBGL || UNITY_EDITOR
+                Thread.Yield();
+#endif
+            }
+
+            return _queue.WaitUntilIdle(0);
+        }
+
+        private static int GetElapsedMilliseconds(long startTimestamp)
+        {
+            long elapsedTicks = Stopwatch.GetTimestamp() - startTimestamp;
+            long elapsedSeconds = elapsedTicks / Stopwatch.Frequency;
+            if (elapsedSeconds >= int.MaxValue / 1000L)
+            {
+                return int.MaxValue;
+            }
+
+            long remainder = elapsedTicks % Stopwatch.Frequency;
+            long elapsedMilliseconds = elapsedSeconds * 1000L
+                + remainder * 1000L / Stopwatch.Frequency;
+            return elapsedMilliseconds >= int.MaxValue ? int.MaxValue : (int)elapsedMilliseconds;
+        }
+
+        public LoggerShutdownResult Shutdown(int timeoutMs)
+        {
+            int previous = Interlocked.CompareExchange(ref _shutdownState, 1, 0);
+            if (previous == 2 && _queue.IsStopped)
+            {
+                return new LoggerShutdownResult(LoggerShutdownStatus.AlreadyStopped, GetStatistics().DroppedMessageCount, true);
+            }
+
+            _queue.CompleteAdding();
+            bool drained = TryFlush(timeoutMs);
+            if (!drained)
+            {
+                _queue.DrainPendingAsDropped();
+            }
+
+            Volatile.Write(ref _shutdownState, 2);
+            LogProcessingStatistics statistics = GetStatistics();
+            LoggerShutdownStatus status = drained
+                ? statistics.DroppedMessageCount == 0
+                    ? LoggerShutdownStatus.Completed
+                    : LoggerShutdownStatus.CompletedWithDrops
+                : LoggerShutdownStatus.TimedOut;
+            return new LoggerShutdownResult(status, statistics.DroppedMessageCount, false);
         }
 
         public LogProcessingStatistics GetStatistics()
         {
-            return new LogProcessingStatistics(Volatile.Read(ref _queueCount), Interlocked.Read(ref _droppedMessageCount), Interlocked.Read(ref _processedMessageCount));
+            return _queue.GetStatistics();
         }
 
         public void Dispose()
         {
-            if (_isDisposing) return;
-            _isDisposing = true;
-            Pump(int.MaxValue);
-            DrainPendingMessagesAsDropped();
-            _isStopped = true;
-        }
-
-        private bool TryEnqueue(LogMessage message)
-        {
-            if (TryReserveSlot()) return true;
-
-            if (message.Level >= _options.GuaranteedLevel && TryDropOldest())
-            {
-                return TryReserveSlot();
-            }
-
-            switch (_options.OverflowPolicy)
-            {
-                case LogQueueOverflowPolicy.Block:
-                    if (_options.EnqueueBlockTimeoutMs <= 0) return false;
-                    return SpinWait.SpinUntil(TryReserveSlot, _options.EnqueueBlockTimeoutMs);
-
-                case LogQueueOverflowPolicy.DropOldest:
-                    return TryDropOldest() && TryReserveSlot();
-
-                default:
-                    return false;
-            }
-        }
-
-        private bool TryReserveSlot()
-        {
-            while (true)
-            {
-                int current = Volatile.Read(ref _queueCount);
-                if (current >= _options.MaxQueuedMessages) return false;
-                if (Interlocked.CompareExchange(ref _queueCount, current + 1, current) == current) return true;
-            }
-        }
-
-        private bool TryDropOldest()
-        {
-            if (!_queue.TryDequeue(out var dropped)) return false;
-
-            Interlocked.Decrement(ref _queueCount);
-            DropMessage(dropped);
-            return true;
-        }
-
-        private void DropMessage(LogMessage message)
-        {
-            LogMessagePool.Return(message);
-            Interlocked.Increment(ref _droppedMessageCount);
-        }
-
-        private void DrainPendingMessagesAsDropped()
-        {
-            while (_queue.TryDequeue(out var message))
-            {
-                Interlocked.Decrement(ref _queueCount);
-                DropMessage(message);
-            }
+            Shutdown(LoggerProcessingOptions.DefaultShutdownDrainTimeoutMs);
+            _queue.Dispose();
         }
     }
 }

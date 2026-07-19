@@ -1,87 +1,57 @@
 # CycloneGames RPGFoundation Trajectory
 
-`Trajectory` solves immediate travel paths: rays, sphere/circle sweeps, pierce chains, and reflection segments. It is not a projectile lifecycle system. Use `Projectile` for spawned flying entities with lifetime, guidance, visual ownership, pooling, and network entity state. Use `Trajectory` for hitscan weapons, beam previews, ricochet lasers, targeting prediction, server hit validation, and gameplay ability queries that need a fixed output buffer.
+[English | 简体中文](README.SCH.md)
 
-## Module Layout
+`Trajectory` solves immediate travel paths: rays, sphere/circle sweeps, pierce chains, and reflection segments. It is a stateless path solver, not a projectile lifecycle system. Use `Projectile` for spawned flying entities; use `Trajectory` for hitscan weapons, beam previews, ricochet lasers, targeting prediction, and server hit validation.
+
+## Table of Contents
+
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [Usage Guide](#usage-guide)
+- [Advanced Topics](#advanced-topics)
+- [Common Scenarios](#common-scenarios)
+- [Performance and Memory](#performance-and-memory)
+- [Troubleshooting](#troubleshooting)
+
+## Overview
+
+`TrajectorySolver.Trace` takes a `TrajectoryQuery`, queries an `ITrajectoryCollisionWorld`, and writes segment and hit records into a caller-owned `TrajectoryTraceBuffer`. The solver always uses swept segment casts rather than endpoint-only checks. Core has no Unity dependency; Unity Physics adapters convert the sweep requests to `RaycastNonAlloc` / `SphereCastNonAlloc` / `CircleCastNonAlloc`.
+
+### Key Features
+
+- **Ray and radius sweeps** — 2D and 3D, with swept from-to casts (no tunneling)
+- **Reflection and pierce** — Configurable continuation with fixed iteration budget
+- **Caller-owned buffers** — No per-trace managed allocation when buffers are reused
+- **Unity-free Core** — `noEngineReferences: true`, usable in headless/server contexts
+- **DeterministicMath integration** — Fixed-point solver for lockstep, rollback, replay
+- **Editor presets** — `TrajectoryQueryPresetAsset` with Hitscan, Ricochet Beam, Piercing Beam presets
+- **Debug probe** — Scene view preview with segment, hit point, and normal visualization
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    Core["Trajectory Core\npure C#"] --> Runtime["Unity Runtime adapters\nPhysics / Physics2D"]
-    Core --> Deterministic["DeterministicMath integration\nFPVector3 / FPInt64"]
+    Core["Trajectory Core<br/>pure C#"] --> Runtime["Unity Runtime adapters<br/>Physics / Physics2D"]
+    Core --> Deterministic["DeterministicMath integration<br/>FPVector3 / FPInt64"]
     Ability["GameplayAbilities"] --> Core
     Projectile["Projectile"] -. may consume query output .-> Core
 ```
 
-- `Core/` contains Unity-free data structures, `TrajectorySolver`, fixed-capacity buffers, and collision-world contracts.
-- `Runtime/` contains Unity Physics adapters for 3D and 2D collision queries.
-- `Runtime/Integrations/DeterministicMath/` contains a fixed-point solver for lockstep, rollback, server replay, or deterministic validation.
-- `Tests/Editor/` covers nearest-hit selection, reflection continuation, pierce ignore state, and deterministic repeatability.
+### Module Layout
 
-## Core Concepts
+| Area | Purpose |
+| --- | --- |
+| `Core/` | Unity-free data structures, `TrajectorySolver`, fixed-capacity buffers, collision-world contracts. |
+| `Runtime/` | Unity Physics adapters for 3D and 2D collision queries. |
+| `Runtime/Integrations/DeterministicMath/` | Fixed-point solver for lockstep, rollback, server replay, or deterministic validation. |
+| `Tests/Editor/` | Nearest-hit selection, reflection continuation, pierce ignore state, deterministic repeatability. |
 
-`TrajectoryQuery` is the immutable input. It includes origin, direction, maximum distance, radius, collision layer mask, reflection count, pierce count, hit count, iteration cap, and the initial ignored target.
+## Quick Start
 
-`ITrajectoryCollisionWorld` is the narrow collision adapter boundary. Core never knows about Unity colliders, scenes, transforms, or physics scenes. A server can provide a deterministic broadphase or spatial index through the same interface.
-
-`TrajectoryTraceBuffer` is caller-owned. It preallocates segment, hit, and cast scratch arrays, so repeated tracing does not allocate managed memory after setup.
-
-`TrajectorySolver.Trace` writes `TrajectorySegment` and `TrajectoryHit` records into the buffer and returns a `TrajectoryTraceResult`. The solver always uses swept segment casts rather than teleport-style endpoint checks.
-
-`TrajectoryQueryValidator` validates authoring or runtime queries into caller-owned issue arrays. Use it from Inspectors, CI asset checks, server configuration validation, or command-line tools before executing large batches of traces.
-
-## Projectile vs Trajectory
-
-`Projectile` represents an entity over time. It updates every tick, owns current velocity, lifetime, guidance, bounce/pierce counters, hit events, visual views, and optional networking messages.
-
-`Trajectory` represents a solved path now. It does not spawn objects, does not tick lifetime, and does not own visual state. A projectile may use trajectory solving for special collision behavior, but the concepts are intentionally separate.
-
-Typical mapping:
-
-- Fireball, arcane missile, homing missile: `Projectile`.
-- Laser pointer, railgun, shotgun pellet trace, ricochet beam: `Trajectory`.
-- Ability targeting preview: `Trajectory`.
-- Server-authoritative validation of a hitscan shot: `Trajectory`.
-
-## Collision, Tunneling, and Reflection
-
-Core treats every query as a sweep from `From` to `To`. Runtime adapters map that to:
-
-- 3D ray: `Physics.RaycastNonAlloc`
-- 3D radius sweep: `Physics.SphereCastNonAlloc`
-- 2D ray: `Physics2D.RaycastNonAlloc`
-- 2D radius sweep: `Physics2D.CircleCastNonAlloc`
-
-Collision worlds return `TrajectoryHitResponse`:
-
-- `Stop`: record the hit and end the trace.
-- `Reflect`: record the hit, reflect direction around the hit normal, offset from the surface, and continue with the remaining distance.
-- `Pierce`: record the hit, move slightly forward, ignore the just-hit target for the next cast, and continue with the remaining distance.
-
-The solver selects the nearest valid hit from every non-alloc cast result. Equal-distance ties are resolved by stable target identity where available. Unity instance IDs are not stable across machines, so deterministic multiplayer should use server-authoritative results or a deterministic collision world that supplies stable target IDs.
-
-## Multiplayer Consistency
-
-Core uses `float` because it is a Unity-free, general-purpose path solver for clients, tools, and server authority. This is suitable for server-authoritative or client-predicted gameplay when the server owns final hit validation.
-
-For lockstep or rollback gameplay, use `CycloneGames.RPGFoundation.Trajectory.Integrations.DeterministicMath`. It mirrors the query, buffer, hit, segment, and solver model with `FPVector3` and `FPInt64`. Determinism still depends on the collision world. Unity Physics is not deterministic across all platforms and should not be the source of truth for lockstep hit results.
-
-Recommended multiplayer patterns:
-
-- Server authoritative: clients trace for responsiveness, the server traces or validates with authoritative state, then sends confirmed hit data.
-- Rollback: deterministic simulation owns both movement state and trajectory collision data; clients replay the same inputs.
-- Lockstep: use fixed-point query data, stable target IDs, stable hit ordering, and deterministic spatial queries.
-
-## Performance and Threading
-
-- No per-trace managed allocation occurs when the caller reuses `TrajectoryTraceBuffer`.
-- Core is stateless and thread-safe.
-- Buffers are mutable and caller-owned; use one buffer per worker, actor, ability execution, or job-equivalent owner.
-- Unity Runtime adapters wrap Unity Physics and must be called on Unity's supported thread/context.
-- DeterministicMath integration is Unity-free and can run in headless/server code when its collision world is also thread-safe.
-
-## GameplayAbilities Usage
-
-A GameplayAbility can build a `TrajectoryQuery`, call `TrajectorySolver.Trace`, then convert hits into target data, gameplay effects, cue events, or prediction confirmation payloads.
+Build a query, call `Trace`, read results:
 
 ```csharp
 var buffer = new TrajectoryTraceBuffer(segmentCapacity: 8, hitCapacity: 8, castHitCapacity: 16);
@@ -102,32 +72,154 @@ for (int i = 0; i < buffer.HitCount; i++)
 }
 ```
 
-## Editor Tooling
+## Core Concepts
 
-`TrajectoryQueryPresetAsset` stores reusable authoring data for hitscan, beam, ricochet, and target-preview traces. It builds pure Core `TrajectoryQuery` values at runtime and can be subclassed by product code for additional target filters, gameplay tags, ability metadata, or team rules.
+### Data Model
 
-`TrajectoryDebugProbe` is a scene authoring helper. Assign a query preset, choose a Unity 3D or 2D collision adapter, configure reflection and pierce layer masks, and select the probe in the Scene View to preview segments, hit points, and normals.
+| Type | Purpose |
+| --- | --- |
+| `TrajectoryQuery` | Immutable input: origin, direction, max distance, radius, collision mask, reflection count, pierce count, hit cap, iteration cap, initial ignored target. |
+| `ITrajectoryCollisionWorld` | Narrow collision adapter boundary. Core never knows about Unity colliders, scenes, transforms, or physics scenes. |
+| `TrajectoryTraceBuffer` | Caller-owned preallocated arrays for segments, hits, and cast scratch. Reuse avoids allocation. |
+| `TrajectorySolver.Trace` | Writes `TrajectorySegment` and `TrajectoryHit` records into the buffer; returns `TrajectoryTraceResult`. |
+| `TrajectoryQueryValidator` | Validates queries into caller-owned issue arrays — reusable from Inspectors, CI, server config. |
 
-Editor tooling is designed for extension:
+### Projectile vs Trajectory
 
-- `TrajectoryQueryPresetAsset` and `TrajectoryDebugProbe` are inheritable.
-- `TrajectoryQueryPresetAsset.BuildQuery` is virtual.
-- `TrajectoryQueryPresetAsset.BuildAuthoringQuery` exposes raw authoring values for validation before runtime sanitization.
-- `TrajectoryDebugProbe` exposes protected virtual buffer and collision-world creation paths.
-- Custom inspectors draw known fields first and then draw unhandled serialized fields from derived classes.
-- Scene preview settings are serialized on the probe rather than stored in `EditorPrefs`.
+`Projectile` represents an entity over time. It updates every tick, owns velocity, lifetime, guidance, bounce/pierce counters, hit events, visual views, and optional networking messages.
 
-The query preset inspector includes Hitscan, Ricochet Beam, and Piercing Beam presets. Presets adjust only query shape and traversal budgets; they preserve collision layer masks, initial ignored targets, and derived-class extension fields.
+`Trajectory` represents a solved path now. It does not spawn objects, tick lifetime, or own visual state.
 
-The debug probe is an authoring and validation tool. Production gameplay should usually create queries from gameplay systems, abilities, or server logic rather than treating a probe as global state.
+| Use case | Module |
+| --- | --- |
+| Fireball, arcane missile, homing missile | `Projectile` |
+| Laser pointer, railgun, shotgun pellet trace, ricochet beam | `Trajectory` |
+| Ability targeting preview | `Trajectory` |
+| Server-authoritative hitscan validation | `Trajectory` |
 
-## Persistence
+### Collision Response Types
+
+Collision worlds return `TrajectoryHitResponse`:
+
+- `Stop` — Record the hit and end the trace.
+- `Reflect` — Record the hit, reflect direction around the hit normal, offset from surface, continue with remaining distance.
+- `Pierce` — Record the hit, move forward, ignore the just-hit target, continue with remaining distance.
+
+The solver selects the nearest valid hit from each non-alloc cast result. Equal-distance ties resolve by stable target identity where available.
+
+## Usage Guide
+
+### Creating a Ray Trace
+
+```csharp
+var query = TrajectoryQuery.CreateRay(
+    traceId: 1,
+    ownerEntityId: 0,
+    collisionLayerMask: ~0,
+    origin: transform.position,
+    direction: transform.forward,
+    maxDistance: 100f,
+    maxReflectionCount: 0);
+```
+
+### Creating a Sweep Trace
+
+```csharp
+var query = TrajectoryQuery.CreateSweep(
+    radius: 0.5f,
+    traceId: 1,
+    ownerEntityId: 0,
+    collisionLayerMask: ~0,
+    origin: transform.position,
+    direction: transform.forward,
+    maxDistance: 50f,
+    maxReflectionCount: 2,
+    maxPierceCount: 3);
+```
+
+### Reusing Buffers
+
+```csharp
+// Create once per owner (actor, ability, worker)
+private TrajectoryTraceBuffer _buffer = new(segmentCapacity: 8, hitCapacity: 8, castHitCapacity: 16);
+
+void Update()
+{
+    _buffer.Clear();
+    var result = TrajectorySolver.Trace(in _query, collisionWorld, _buffer);
+    // Process hits...
+}
+```
+
+### Unity Physics Adapters
+
+| Adapter | 3D Query | 2D Query |
+| --- | --- | --- |
+| Ray | `Physics.RaycastNonAlloc` | `Physics2D.RaycastNonAlloc` |
+| Radius sweep | `Physics.SphereCastNonAlloc` | `Physics2D.CircleCastNonAlloc` |
+
+## Advanced Topics
+
+### Multiplayer Consistency
+
+Core uses `float` — suitable for server-authoritative or client-predicted gameplay where the server owns final hit validation.
+
+For lockstep or rollback, use the `DeterministicMath` integration with `FPVector3` and `FPInt64`. Determinism still depends on the collision world; Unity Physics is not deterministic across all platforms.
+
+**Recommended patterns:**
+
+- **Server authoritative**: clients trace for responsiveness, server validates with authoritative state, sends confirmed hit data.
+- **Rollback**: deterministic simulation owns both movement and trajectory collision data.
+- **Lockstep**: use fixed-point query data, stable target IDs, stable hit ordering, and deterministic spatial queries.
+
+### DeterministicMath Integration
+
+Enabled by `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`. Mirrors the query, buffer, hit, segment, and solver model with `FPVector3` and `FPInt64`.
+
+### Editor Tooling
+
+`TrajectoryQueryPresetAsset` stores reusable authoring data with presets (Hitscan, Ricochet Beam, Piercing Beam). `TrajectoryDebugProbe` previews segments, hit points, and normals in the Scene View. Both are inheritable; custom inspectors draw known fields first, then unhandled derived fields.
+
+## Common Scenarios
+
+### Hitscan weapon
+
+Create a `TrajectoryQuery.CreateRay` from muzzle position in aim direction with `maxReflectionCount = 0`. Process first hit as the target.
+
+### Ricochet beam
+
+Set `maxReflectionCount = 2` or higher. Each reflection records a hit, reflects direction, and continues — visualized as a bouncing laser.
+
+### Piercing shot
+
+Set `maxPierceCount = 3`. The trace records each hit, ignores the hit target for subsequent casts, and continues through the remaining distance.
+
+### Server hit validation
+
+Server builds an identical `TrajectoryQuery` from the client's reported aim data and validates that the authoritative trace matches the client-reported hit within tolerance.
+
+## Performance and Memory
+
+- No per-trace managed allocation when the caller reuses `TrajectoryTraceBuffer`.
+- Core is stateless and thread-safe.
+- Buffers are mutable and caller-owned — use one buffer per worker, actor, or ability execution.
+- Unity adapters wrap Unity Physics and must be called on Unity's supported thread/context.
+- DeterministicMath integration is Unity-free and can run in headless/server code.
+
+### Persistence
 
 This module writes no files, assets, preferences, save data, or caches at runtime. Buffers and adapters are explicit runtime objects owned by the caller.
 
+## Troubleshooting
+
+| Symptom | Cause | Resolution |
+| --- | --- | --- |
+| No hits detected | Wrong collision mask or layer setup | Verify `collisionLayerMask` and ensure colliders exist on the configured layer |
+| Missed hits (tunneling) | Teleport-style endpoint check instead of sweep | Use sweep-based adapters (`SphereCastNonAlloc` / `CircleCastNonAlloc`) |
+| Reflection not working | Missing `maxReflectionCount` or reflection collision mask | Set `maxReflectionCount > 0` and configure reflection layer mask |
+| Deterministic mismatch | Unity Physics non-determinism | Switch to `DeterministicMath` integration with a deterministic collision world |
+| GC allocations | Buffer recreated per trace | Preallocate and reuse `TrajectoryTraceBuffer` across calls |
+
 ## Validation
 
-- Run EditMode tests for `CycloneGames.RPGFoundation.Trajectory.Tests.Editor`.
-- When `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` is enabled, run `CycloneGames.RPGFoundation.Trajectory.DeterministicMath.Tests.Editor`.
-- In Unity scenes, validate 3D and 2D adapters with ray and radius sweeps against stop, reflect, and pierce layers.
-- For multiplayer, test both the client prediction path and the authoritative server or deterministic replay path with identical query inputs.
+Run EditMode tests: `CycloneGames.RPGFoundation.Trajectory.Tests.Editor`. When `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` is enabled, also run `CycloneGames.RPGFoundation.Trajectory.DeterministicMath.Tests.Editor`. For multiplayer, test both client prediction and authoritative server/replay paths with identical query inputs.

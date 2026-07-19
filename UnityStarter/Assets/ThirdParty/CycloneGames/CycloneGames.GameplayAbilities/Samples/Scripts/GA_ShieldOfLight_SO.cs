@@ -19,24 +19,11 @@ namespace CycloneGames.GameplayAbilities.Samples
         [Tooltip("The conditional defense buff")]
         public GameplayEffectSO ShieldEffect;
 
-        public override GameplayAbility CreateAbility()
+        protected override GameplayAbility CreateGameplayAbility()
         {
             var shieldEffect = ShieldEffect ? ShieldEffect.GetGameplayEffect() : null;
             var ability = new GA_ShieldOfLight(shieldEffect);
-            
-            ability.Initialize(
-                AbilityName,
-                InstancingPolicy,
-                NetExecutionPolicy,
-                CostEffect?.GetGameplayEffect(),
-                CooldownEffect?.GetGameplayEffect(),
-                AbilityTags,
-                ActivationBlockedTags,
-                ActivationRequiredTags,
-                CancelAbilitiesWithTag,
-                BlockAbilitiesWithTag
-            );
-            
+            InitializeAbility(ability);
             return ability;
         }
     }
@@ -52,7 +39,11 @@ namespace CycloneGames.GameplayAbilities.Samples
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            CommitAbility(actorInfo, spec);
+            if (!CommitAbility(actorInfo, spec).Succeeded)
+            {
+                EndAbility();
+                return;
+            }
             
             var owner = spec.Owner;
             
@@ -67,23 +58,9 @@ namespace CycloneGames.GameplayAbilities.Samples
             EndAbility();
         }
 
-        public override GameplayAbility CreatePoolableInstance()
+        public override GameplayAbility CreateRuntimeInstance()
         {
-            var ability = new GA_ShieldOfLight(this.shieldEffect);
-            
-            ability.Initialize(
-                this.Name,
-                this.InstancingPolicy,
-                this.NetExecutionPolicy,
-                this.CostEffectDefinition,
-                this.CooldownEffectDefinition,
-                this.AbilityTags,
-                this.ActivationBlockedTags,
-                this.ActivationRequiredTags,
-                this.CancelAbilitiesWithTag,
-                this.BlockAbilitiesWithTag
-            );
-            return ability;
+            return new GA_ShieldOfLight(shieldEffect);
         }
     }
 }

@@ -1,85 +1,126 @@
-#if NAVIGATHENA_PRESENT
+using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using MackySoft.Navigathena.SceneManagement;
-using MackySoft.Navigathena.Transitions;
-using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena
 {
+    public enum NavigathenaSceneTransitionOperation : byte
+    {
+        Change = 0,
+        Push = 1,
+        Replace = 2
+    }
+
+    public delegate LoadSceneRequest NavigathenaLoadSceneRequestFactory(
+        NavigathenaSceneTransitionOperation operation,
+        string sceneName);
+
+    public delegate PopSceneRequest NavigathenaPopSceneRequestFactory();
+
     /// <summary>
-    /// Adapts Navigathena's ISceneNavigator to CycloneGames.GameplayFramework's ISceneTransitionHandler.
-    ///
-    /// Usage (at bootstrap):
-    /// <code>
-    /// var sceneNavigator = /* inject or locate your ISceneNavigator */;
-    /// var handler = new NavigathenaSceneTransitionHandler(sceneNavigator);
-    /// gameMode.SetSceneTransitionHandler(handler);
-    ///
-    /// // With a custom transition director (e.g., loading screen):
-    /// var handler = new NavigathenaSceneTransitionHandler(sceneNavigator, myTransitionDirector);
-    /// </code>
-    ///
-    /// Navigathena handles scene lifecycle (ISceneEntryPoint callbacks, history, transition animations).
-    /// GameMode.TravelToLevel performs game-side cleanup then calls ChangeScene —
-    /// the new scene's ISceneEntryPoint.OnInitialize bootstraps its own GameMode.
+    /// Adapts Navigathena scene navigation to the GameplayFramework travel contract.
     /// </summary>
-    public class NavigathenaSceneTransitionHandler : ISceneTransitionHandler
+    public sealed class NavigathenaSceneTransitionHandler : ISceneTransitionHandler
     {
         private readonly ISceneNavigator navigator;
-        private readonly ITransitionDirector transitionDirector;
+        private readonly NavigathenaLoadSceneRequestFactory loadRequestFactory;
+        private readonly NavigathenaPopSceneRequestFactory popRequestFactory;
 
-        /// <param name="navigator">The Navigathena scene navigator (typically injected via DI).</param>
-        /// <param name="transitionDirector">
-        /// Optional transition director for loading screen animations.
-        /// Pass null to use Navigathena's empty (instant) transition.
-        /// </param>
-        public NavigathenaSceneTransitionHandler(ISceneNavigator navigator, ITransitionDirector transitionDirector = null)
+        /// <summary>
+        /// Creates a handler that uses <see cref="BuiltInSceneIdentifier"/> and the
+        /// navigator's configured default transition behavior.
+        /// </summary>
+        public NavigathenaSceneTransitionHandler(ISceneNavigator navigator)
+            : this(navigator, CreateDefaultLoadRequest, CreateDefaultPopRequest)
         {
-            this.navigator = navigator;
-            this.transitionDirector = transitionDirector ?? TransitionDirector.Empty();
         }
 
         /// <summary>
-        /// Navigate to the specified scene and reset navigation history.
-        /// Typical use: level-to-level travel (stage 1 → stage 2).
+        /// Creates a handler with explicit request factories. Factories can select
+        /// identifiers, transition directors, scene data, and interrupt operations.
         /// </summary>
-        public UniTask ChangeScene(string sceneName, CancellationToken cancellationToken = default)
+        public NavigathenaSceneTransitionHandler(
+            ISceneNavigator navigator,
+            NavigathenaLoadSceneRequestFactory loadRequestFactory,
+            NavigathenaPopSceneRequestFactory popRequestFactory = null)
         {
-            var identifier = new BuiltInSceneIdentifier(sceneName);
-            var request = new LoadSceneRequest(identifier, transitionDirector, null, null);
+            this.navigator = navigator ?? throw new ArgumentNullException(nameof(navigator));
+            this.loadRequestFactory = loadRequestFactory ??
+                throw new ArgumentNullException(nameof(loadRequestFactory));
+            this.popRequestFactory = popRequestFactory ?? CreateDefaultPopRequest;
+        }
+
+        public UniTask ChangeScene(
+            string sceneName,
+            CancellationToken cancellationToken = default)
+        {
+            LoadSceneRequest request = CreateLoadRequest(
+                NavigathenaSceneTransitionOperation.Change,
+                sceneName);
             return navigator.Change(request, cancellationToken);
         }
 
-        /// <summary>
-        /// Navigate to the specified scene and push current scene onto history.
-        /// Typical use: opening a menu scene over gameplay.
-        /// </summary>
-        public UniTask PushScene(string sceneName, CancellationToken cancellationToken = default)
+        public UniTask PushScene(
+            string sceneName,
+            CancellationToken cancellationToken = default)
         {
-            var identifier = new BuiltInSceneIdentifier(sceneName);
-            var request = new LoadSceneRequest(identifier, transitionDirector, null, null);
+            LoadSceneRequest request = CreateLoadRequest(
+                NavigathenaSceneTransitionOperation.Push,
+                sceneName);
             return navigator.Push(request, cancellationToken);
         }
 
-        /// <summary>
-        /// Go back to the previous scene in history.
-        /// </summary>
         public UniTask PopScene(CancellationToken cancellationToken = default)
         {
-            var request = new PopSceneRequest(transitionDirector, null);
-            return navigator.Pop(request, cancellationToken);
+            return navigator.Pop(popRequestFactory(), cancellationToken);
         }
 
-        /// <summary>
-        /// Replace current scene in history with the specified scene.
-        /// </summary>
-        public UniTask ReplaceScene(string sceneName, CancellationToken cancellationToken = default)
+        public UniTask ReplaceScene(
+            string sceneName,
+            CancellationToken cancellationToken = default)
         {
-            var identifier = new BuiltInSceneIdentifier(sceneName);
-            var request = new LoadSceneRequest(identifier, transitionDirector, null, null);
+            LoadSceneRequest request = CreateLoadRequest(
+                NavigathenaSceneTransitionOperation.Replace,
+                sceneName);
             return navigator.Replace(request, cancellationToken);
+        }
+
+        private LoadSceneRequest CreateLoadRequest(
+            NavigathenaSceneTransitionOperation operation,
+            string sceneName)
+        {
+            if (string.IsNullOrWhiteSpace(sceneName))
+            {
+                throw new ArgumentException("Scene name is required.", nameof(sceneName));
+            }
+
+            LoadSceneRequest request = loadRequestFactory(operation, sceneName);
+            if (request.Scene == null)
+            {
+                throw new InvalidOperationException(
+                    "The Navigathena load request factory returned a request without a scene identifier.");
+            }
+
+            return request;
+        }
+
+        private static LoadSceneRequest CreateDefaultLoadRequest(
+            NavigathenaSceneTransitionOperation operation,
+            string sceneName)
+        {
+            return new LoadSceneRequest(
+                new BuiltInSceneIdentifier(sceneName),
+                transitionDirector: null,
+                data: null,
+                interruptOperation: null);
+        }
+
+        private static PopSceneRequest CreateDefaultPopRequest()
+        {
+            return new PopSceneRequest(
+                overrideTransitionDirector: null,
+                interruptOperation: null);
         }
     }
 }
-#endif

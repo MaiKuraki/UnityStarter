@@ -6,46 +6,35 @@ using UnityEngine;
 namespace CycloneGames.Networking.Compression
 {
     /// <summary>
-    /// Interface for pluggable message compression.
-    /// </summary>
-    public interface INetworkCompressor
-    {
-        int Compress(ReadOnlySpan<byte> source, Span<byte> destination);
-        int Decompress(ReadOnlySpan<byte> source, Span<byte> destination);
-        int MaxCompressedSize(int sourceSize);
-    }
-
-    /// <summary>
     /// Quantized Vector3 for bandwidth-efficient position synchronization.
-    /// Compresses 12 bytes (Vector3) down to 2-8 bytes depending on precision needs.
+    /// The wire contract uses exactly 100 quantized units per Unity world unit.
     /// </summary>
     public struct QuantizedVector3
     {
+        /// <summary>
+        /// Frozen wire-scale used by both encoding and decoding. Changing this value is a protocol change.
+        /// </summary>
+        public const int QuantizationUnitsPerWorldUnit = 100;
+
         public int X;
         public int Y;
         public int Z;
-
-        [System.ThreadStatic]
-        private static float _precisionOverride;
-        private static volatile float _precision = 100f; // 0.01 unit precision
-
-        public static void SetPrecision(float precision) => _precision = precision;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static QuantizedVector3 FromVector3(Vector3 v)
         {
             return new QuantizedVector3
             {
-                X = Mathf.RoundToInt(v.x * _precision),
-                Y = Mathf.RoundToInt(v.y * _precision),
-                Z = Mathf.RoundToInt(v.z * _precision)
+                X = Mathf.RoundToInt(v.x * QuantizationUnitsPerWorldUnit),
+                Y = Mathf.RoundToInt(v.y * QuantizationUnitsPerWorldUnit),
+                Z = Mathf.RoundToInt(v.z * QuantizationUnitsPerWorldUnit)
             };
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public Vector3 ToVector3()
         {
-            float inv = 1f / _precision;
+            const float inv = 1f / QuantizationUnitsPerWorldUnit;
             return new Vector3(X * inv, Y * inv, Z * inv);
         }
 
@@ -80,7 +69,7 @@ namespace CycloneGames.Networking.Compression
         {
             while (value >= 0x80)
             {
-                writer.WriteByte((byte)(value | 0x80));
+                writer.WriteByte((byte)((value & 0x7F) | 0x80));
                 value >>= 7;
             }
             writer.WriteByte((byte)value);
@@ -89,15 +78,27 @@ namespace CycloneGames.Networking.Compression
         private static uint ReadVarInt(INetReader reader)
         {
             uint result = 0;
-            int shift = 0;
-            byte b;
-            do
+            for (int byteIndex = 0; byteIndex < 5; byteIndex++)
             {
-                b = reader.ReadByte();
-                result |= (uint)(b & 0x7F) << shift;
-                shift += 7;
-            } while ((b & 0x80) != 0 && shift < 32);
-            return result;
+                byte value = reader.ReadByte();
+                if (byteIndex == 4 && (value & 0xF0) != 0)
+                {
+                    throw new FormatException("VarUInt32 exceeds 32 bits or has an unterminated fifth byte.");
+                }
+
+                result |= (uint)(value & 0x7F) << (byteIndex * 7);
+                if ((value & 0x80) == 0)
+                {
+                    if (byteIndex > 0 && (value & 0x7F) == 0)
+                    {
+                        throw new FormatException("VarUInt32 uses a non-canonical overlong encoding.");
+                    }
+
+                    return result;
+                }
+            }
+
+            throw new FormatException("VarUInt32 is unterminated.");
         }
     }
 
@@ -186,6 +187,9 @@ namespace CycloneGames.Networking.Compression
     /// </summary>
     public sealed class DeltaCompressor
     {
+        private const DeltaFlags SupportedReadFlags =
+            DeltaFlags.DeltaPosition | DeltaFlags.FullPosition | DeltaFlags.FullRotation;
+
         private Vector3 _lastPosition;
         private Quaternion _lastRotation;
         private bool _hasBaseline;
@@ -219,8 +223,8 @@ namespace CycloneGames.Networking.Compression
             {
                 flags = DeltaFlags.FullPosition | DeltaFlags.FullRotation;
                 writer.WriteByte((byte)flags);
-                writer.WriteBlittable(position);
-                writer.WriteBlittable(rotation);
+                WriteVector3(writer, position);
+                WriteQuaternion(writer, rotation);
             }
             else
             {
@@ -255,10 +259,11 @@ namespace CycloneGames.Networking.Compression
         public void ReadDelta(INetReader reader, out Vector3 position, out Quaternion rotation)
         {
             var flags = (DeltaFlags)reader.ReadByte();
+            ValidateReadFlags(flags);
 
             if ((flags & DeltaFlags.FullPosition) != 0)
             {
-                position = reader.ReadBlittable<Vector3>();
+                position = ReadVector3(reader);
             }
             else if ((flags & DeltaFlags.DeltaPosition) != 0)
             {
@@ -273,7 +278,7 @@ namespace CycloneGames.Networking.Compression
             if ((flags & DeltaFlags.FullRotation) != 0)
             {
                 if ((flags & DeltaFlags.FullPosition) != 0) // Full baseline includes raw quat
-                    rotation = reader.ReadBlittable<Quaternion>();
+                    rotation = ReadQuaternion(reader);
                 else
                     rotation = QuantizedQuaternion.ReadFrom(reader).ToQuaternion();
             }
@@ -285,6 +290,66 @@ namespace CycloneGames.Networking.Compression
             _lastPosition = position;
             _lastRotation = rotation;
             _hasBaseline = true;
+        }
+
+        private void ValidateReadFlags(DeltaFlags flags)
+        {
+            if ((flags & ~SupportedReadFlags) != 0)
+            {
+                throw new FormatException($"Delta payload contains unsupported flags: 0x{(byte)flags:X2}.");
+            }
+
+            bool hasFullPosition = (flags & DeltaFlags.FullPosition) != 0;
+            bool hasDeltaPosition = (flags & DeltaFlags.DeltaPosition) != 0;
+            bool hasFullRotation = (flags & DeltaFlags.FullRotation) != 0;
+
+            if (hasFullPosition && hasDeltaPosition)
+            {
+                throw new FormatException("Delta payload cannot contain both full and delta position data.");
+            }
+
+            if (hasFullPosition && !hasFullRotation)
+            {
+                throw new FormatException("A full-position baseline must include a full rotation.");
+            }
+
+            if (!_hasBaseline && flags != (DeltaFlags.FullPosition | DeltaFlags.FullRotation))
+            {
+                throw new FormatException("The first delta payload must contain a complete baseline.");
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteVector3(INetWriter writer, Vector3 value)
+        {
+            writer.WriteFloat(value.x);
+            writer.WriteFloat(value.y);
+            writer.WriteFloat(value.z);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Vector3 ReadVector3(INetReader reader)
+        {
+            return new Vector3(reader.ReadFloat(), reader.ReadFloat(), reader.ReadFloat());
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static void WriteQuaternion(INetWriter writer, Quaternion value)
+        {
+            writer.WriteFloat(value.x);
+            writer.WriteFloat(value.y);
+            writer.WriteFloat(value.z);
+            writer.WriteFloat(value.w);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static Quaternion ReadQuaternion(INetReader reader)
+        {
+            return new Quaternion(
+                reader.ReadFloat(),
+                reader.ReadFloat(),
+                reader.ReadFloat(),
+                reader.ReadFloat());
         }
 
         public void Reset()

@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.IO.SystemIO",
+    "rootNamespace": "CycloneGames.IO",
+    "references": [
+        "CycloneGames.IO.Core",
+        "CycloneGames.Hash.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

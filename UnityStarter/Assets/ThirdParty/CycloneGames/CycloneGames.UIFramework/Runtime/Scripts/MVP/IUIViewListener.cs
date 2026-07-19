@@ -1,8 +1,8 @@
 namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
-    /// Marker interface for zero-GC communication between View and Presenter.
-    /// Implement this on your Presenter, and have your View maintain a reference to it.
+    /// Marker interface for direct, strongly typed communication from a view to its presenter.
+    /// Implement this on a presenter and let the view retain the interface reference while bound.
     /// 
     /// Usage:
     /// public interface ILoginViewListener : IUIViewListener {

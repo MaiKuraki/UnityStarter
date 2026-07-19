@@ -66,7 +66,7 @@ namespace CycloneGames.Factory.DODBullet
         void OnDestroy()
         {
             _jobHandle.Complete();
-            _bulletPool.Dispose();
+            _bulletPool?.Dispose();
             if (_matrices.IsCreated) _matrices.Dispose();
             if (_colorArray.IsCreated) _colorArray.Dispose();
             if (_despawnMask.IsCreated) _despawnMask.Dispose();

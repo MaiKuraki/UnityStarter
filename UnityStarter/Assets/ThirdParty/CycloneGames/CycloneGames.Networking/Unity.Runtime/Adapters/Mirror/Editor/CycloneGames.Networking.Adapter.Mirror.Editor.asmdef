@@ -1,0 +1,28 @@
+{
+    "name": "CycloneGames.Networking.Adapter.Mirror.Editor",
+    "rootNamespace": "CycloneGames.Networking.Adapter.Mirror.Editor",
+    "references": [
+        "CycloneGames.Networking.Adapter.Mirror",
+        "CycloneGames.Networking.Core",
+        "Mirror"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONE_NETWORKING_HAS_MIRROR"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.mirror-networking.mirror",
+            "expression": "",
+            "define": "CYCLONE_NETWORKING_HAS_MIRROR"
+        }
+    ],
+    "noEngineReferences": false
+}

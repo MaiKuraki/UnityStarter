@@ -13,34 +13,56 @@ namespace CycloneGames.Localization.Runtime.Integrations.YarnSpinner
     /// No modification to Yarn Spinner source required.
     /// </summary>
     [AddComponentMenu("CycloneGames/Localization/Yarn Spinner Locale Bridge")]
-    public sealed class YarnLocaleSync : MonoBehaviour
+    public sealed class YarnLocaleSync : MonoBehaviour, ILocalizationBindingTarget
     {
         [SerializeField] private DialogueRunner dialogueRunner;
 
         private ILocalizationService _service;
+        private bool _subscribed;
 
-        public void Bind(ILocalizationService service)
+        public void Bind(in LocalizationBindingContext context)
         {
             Unbind();
 
-            _service = service;
-            _service.OnLocaleChanged += OnLocaleChanged;
-
+            _service = context.Localization;
+            if (isActiveAndEnabled) Subscribe();
             SyncLocale(_service.CurrentLocale);
         }
 
-        private void OnDestroy() => Unbind();
-
-        private void Unbind()
+        public void Unbind()
         {
-            if (_service != null)
-            {
-                _service.OnLocaleChanged -= OnLocaleChanged;
-                _service = null;
-            }
+            Unsubscribe();
+            _service = null;
         }
 
-        private void OnLocaleChanged(LocaleId newLocale) => SyncLocale(newLocale);
+        private void OnEnable()
+        {
+            Subscribe();
+            if (_service != null) SyncLocale(_service.CurrentLocale);
+        }
+
+        private void OnDisable() => Unsubscribe();
+        private void OnDestroy() => Unbind();
+
+        private void OnLocalizationChanged(LocalizationChange change)
+        {
+            if (change.Reason != LocalizationChangeReason.Shutdown)
+                SyncLocale(change.CurrentLocale);
+        }
+
+        private void Subscribe()
+        {
+            if (_subscribed || _service == null) return;
+            _service.Changed += OnLocalizationChanged;
+            _subscribed = true;
+        }
+
+        private void Unsubscribe()
+        {
+            if (!_subscribed) return;
+            _service.Changed -= OnLocalizationChanged;
+            _subscribed = false;
+        }
 
         private void SyncLocale(LocaleId locale)
         {

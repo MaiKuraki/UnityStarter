@@ -6,6 +6,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
     {
         public Action OnFinishDelay;
         private double timeRemaining;
+        private bool terminalCallbackStarted;
+
+        public override void InitTask(GameplayAbility ability)
+        {
+            base.InitTask(ability);
+            terminalCallbackStarted = false;
+        }
 
         public static AbilityTask_WaitDelay WaitDelay(GameplayAbility ability, float duration)
         {
@@ -18,11 +25,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (timeRemaining <= 0d)
             {
-                if (!IsCancelled)
-                {
-                    OnFinishDelay?.Invoke();
-                }
-                EndTask();
+                CompleteDelay();
             }
         }
 
@@ -33,11 +36,36 @@ namespace CycloneGames.GameplayAbilities.Runtime
             timeRemaining -= deltaTime;
             if (timeRemaining <= 0d)
             {
-                if (!IsCancelled)
-                {
-                    OnFinishDelay?.Invoke();
-                }
-                EndTask();
+                CompleteDelay();
+            }
+        }
+
+        private void CompleteDelay()
+        {
+            if (IsCancelled ||
+                !AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            try
+            {
+                OnFinishDelay?.Invoke();
+            }
+            finally
+            {
+                EndTaskIfCurrentLease(leaseGeneration);
+            }
+        }
+
+        public override void CancelTask()
+        {
+            if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            if (IsCurrentLease(leaseGeneration))
+            {
+                base.CancelTask();
             }
         }
 

@@ -3,14 +3,11 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "CycloneGames.Logger",
-        "CycloneGames.Service.Runtime",
-        "CycloneGames.Factory.Runtime",
-        "CycloneGames.AssetManagement.Runtime"
+        "CycloneGames.Logger"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": true,
+    "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": true,

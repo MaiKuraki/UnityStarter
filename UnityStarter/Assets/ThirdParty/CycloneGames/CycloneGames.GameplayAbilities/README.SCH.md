@@ -2,469 +2,350 @@
 
 [English](./README.md) | 简体中文
 
-`CycloneGames.GameplayAbilities` 是一个受 Unreal Engine Gameplay Ability System 设计目标启发的 Unity Gameplay Ability 框架。它提供一套可复用基础能力，用于管理 ability、attribute、gameplay effect、gameplay tag、gameplay cue、prediction、replication state 和 Editor authoring。
-
-该包面向动作 RPG、多人共斗、Roguelike 地牢刷怪、大型 Boss 战、局域网房间制游戏，以及其他需要数据驱动、可扩展、可观察并能承受较高运行时压力的战斗系统。
-
-本文既是模块说明，也是上手教程。它解释什么是 GAS、为什么要使用这种架构、当前包如何组织，以及如何循序渐进地制作一个 gameplay ability。
-
-## 示例预览与资源
-
-- 示例项目: [https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample](https://github.com/MaiKuraki/UnityGameplayAbilitySystemSample)
-  - <img src="./Documents~/DemoPreview_2.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
-
-- 包内示例场景: [In-Package Sample](./Samples)
-  - <img src="./Documents~/DemoPreview_1.gif" alt="演示预览" style="width: 100%; max-width: 800px;" />
+以虚幻引擎的 Gameplay Ability System（GAS）为蓝本，CycloneGames.GameplayAbilities 将属性驱动的 Ability 激活、标签状态拦截、堆叠 GameplayEffect、预测记录和表现层 Cue 引入 Unity。如果你用过 GAS，`AbilitySystemComponent`、`GameplayAbility`、`GameplayEffect`、`AttributeSet`、`AbilityTask` 这些概念不会陌生——核心设计直接对应，但实现上为 Unity 生态量身打造，核心状态模型不含 `UnityEngine` 依赖，可以在 headless sim、CLI 测试和 Dedicated Server 中直接运行。
 
 ## 目录
 
-- [CycloneGames.GameplayAbilities](#cyclonegamesgameplayabilities)
-  - [示例预览与资源](#示例预览与资源)
-  - [目录](#目录)
-  - [GAS 解决的问题](#gas-解决的问题)
-  - [适用场景](#适用场景)
-  - [程序集边界](#程序集边界)
-  - [核心概念](#核心概念)
-  - [运行时架构](#运行时架构)
-  - [Unreal GAS 对照](#unreal-gas-对照)
-  - [激活与 Effect 流程](#激活与-effect-流程)
-  - [教程：制作一个最小 Ability](#教程制作一个最小-ability)
-    - [步骤 1：定义 Tag 词汇](#步骤-1定义-tag-词汇)
-    - [步骤 2：创建 AttributeSet](#步骤-2创建-attributeset)
-    - [步骤 3：创建并持有 ASC](#步骤-3创建并持有-asc)
-    - [步骤 4：定义 Effect](#步骤-4定义-effect)
-    - [步骤 5：实现 Ability](#步骤-5实现-ability)
-    - [步骤 6：授予并激活 Ability](#步骤-6授予并激活-ability)
-  - [GameplayTags 使用指南](#gameplaytags-使用指南)
-  - [ScriptableObject Authoring 工作流](#scriptableobject-authoring-工作流)
-  - [Cost、Cooldown、Buff、Debuff 与 Passive](#costcooldownbuffdebuff-与-passive)
-  - [Modifier 聚合与 Channel](#modifier-聚合与-channel)
-  - [Modifier Magnitude 类型](#modifier-magnitude-类型)
-  - [AbilityTask](#abilitytask)
-  - [Targeting 系统](#targeting-系统)
-  - [Execution Calculation](#execution-calculation)
-  - [DataTable 驱动数值调优](#datatable-驱动数值调优)
-  - [GameplayCue](#gameplaycue)
-  - [示例演练](#示例演练)
-  - [网络](#网络)
-  - [性能模型](#性能模型)
-  - [线程策略](#线程策略)
-  - [Editor 工具](#editor-工具)
-  - [与其他 CycloneGames 模块集成](#与其他-cyclonegames-模块集成)
-  - [持久化](#持久化)
-  - [常见问题与故障排除](#常见问题与故障排除)
-  - [依赖项](#依赖项)
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
-## GAS 解决的问题
+## 概述
 
-在小型游戏中，一个技能可以写成一个脚本：检查输入、扣 mana、进入 cooldown、播放 VFX、对目标造成伤害、刷新 UI。到了大型项目，这种写法很快会难以维护，因为每个功能都需要知道太多其他功能的细节。
+每个动作密集型游戏都会遇到相同的问题：玩家现在能用这个技能吗？消耗什么？怎么改角色属性？效果什么时候过期？什么会拦截什么？GAS 用一条一致的管线回答这些问题——Ability 在激活前检查 Tag 和 Attribute，Effect 随时间修改 Attribute，每一步都留 prediction trail 供权威端提交或回滚。
 
-GAS 将战斗拆成稳定概念：
+输入、传输、存档、匹配和动画都在各自的模块中——本框架只处理规则层，也只会处理规则层。
 
-| 概念 | 含义 |
+Gameplay 行为具备以下一项或多项需求时，可以使用本模块：
+
+- 可复用的激活规则、Cost、Cooldown、取消和阻塞；
+- 由 Instant、Duration、Infinite 或 Periodic Effect 修改的数值 Attribute；
+- 由 Tag 驱动的眩晕、免疫、Cooldown、伤害类型或 Ability 分类等状态；
+- Stacking、Overflow、Dispel、Ability 授予和 Effect Execution Calculation；
+- 具有显式 Commit 与 Rollback 的 Local Prediction Bookkeeping；不提供 Remote-prediction Transport API；
+- 与权威 Gameplay 状态隔离的表现层 GameplayCue；
+- 具有目标数量上限和 Local Validation 的可复用目标选择任务；
+- 用于 Headless 模拟、校验或测试的 Unity-free 状态表示。
+
+本模块不提供特定游戏的战斗模型、输入系统、网络 Transport、账号系统、存档格式、匹配层、动画图或项目级 Service Container。这些职责通过 Composition Code 和窄 Adapter 接入。
+
+通用 API 不假设游戏品类、相机模型、2D/3D 物理、实时/回合制调度、Peer-to-Peer/Server Authority 或固定的实体规模。基于物理的 TargetActor 与视觉 Cue 属于 Unity 表现层；权威规则属于 Attribute、Effect、Ability 和项目 Domain Service。
+
+## 架构
+
+| 路径 | 职责 |
 | --- | --- |
-| Ability | 可被授予、激活、阻塞、取消、预测和复制的玩法动作。例如 fireball、dodge、heal、combo attack、boss slam。 |
-| Attribute | 由 actor 持有的数值型玩法状态。例如 health、mana、attack power、defense、movement speed。 |
-| Gameplay Effect | 应用到 Ability System Component 的数据驱动变化。Effect 处理伤害、治疗、Buff、Debuff、Cooldown、Cost、周期伤害、Stack、Tag 和临时授予 Ability。 |
-| Gameplay Tag | 描述状态和规则的层级标识符。例如 `State.Stunned`、`Ability.Fire.Fireball`、`Cooldown.Fireball`、`Damage.Type.Fire`。 |
-| Gameplay Cue | 与 gameplay state 绑定的表现事件。Cue 驱动 VFX、SFX、camera shake、hit reaction 等表现层行为，但不拥有玩法权威。 |
-| Prediction | 客户端临时执行，用于保持本地操作响应，同时服务端仍保持权威。 |
-| Replication State | 可跨网络发送或用于 full-state recovery 的紧凑 gameplay change 表示。 |
+| `Core/` | Unity-free 定点数数据、状态/Facade API、稳定 ID、预测记录、Registry、Process-local Reconciliation Buffer 与 Authoritative Activation Result |
+| `Runtime/` | `AbilitySystemComponent`、Ability、Effect、Attribute、Task、TargetData、Cue、Unity 创作桥接与运行时诊断 |
+| `Editor/` | Inspector、PropertyDrawer、Debugger、Trace Window 与 Overlay 配置工具 |
+| `Runtime/Integrations/AssetManagement/` | 从 `CycloneGames.AssetManagement` Handle 到 Cue 侧 `IResourceLocator` 契约的已激活 Adapter |
+| `Runtime/Integrations/DataTable/` | 独立 Integration Assembly 中由 UPM 条件激活的可选 DataTable Adapter |
+| `Samples/` | 可运行示例、创作资产、TargetActor、手动组合、Headless 组合和可选 DI 组合 |
+| `Tests/Editor/` | Core 强化、确定性行为、Attribute 注册、Lease/Cache、Runtime 契约与 Integration 测试 |
+| `Tests/PlayMode/` | Runtime Overlay 注册、容量、清理与 Unity 生命周期测试 |
 
-Unreal Engine 的 GAS 将这套模型推广到生产项目中，因为它能让战斗规则保持可组合。Stun effect 可以通过 tag 阻塞 ability。Cooldown 可以表示为一个授予 cooldown tag 的 duration effect。Damage-over-time debuff 可以表示为一个带 period 的 duration effect。Passive aura 可以表示为一个 infinite effect，用来授予 tag 或 ability。这些场景都走同一套 runtime pipeline。
+程序集依赖方向如下：
 
-CycloneGames 将这些思想适配到 Unity：
+```mermaid
+flowchart LR
+    Tags["CycloneGames.GameplayTags.Core"]
+    Math["CycloneGames.DeterministicMath.Core"]
+    Hash["CycloneGames.Hash.Core"]
+    Core["GameplayAbilities.Core<br/>noEngineReferences"]
+    Asset["CycloneGames.AssetManagement.Runtime"]
+    AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement"]
+    DataTableCore["CycloneGames.DataTable.Core"]
+    UniTask["UniTask"]
+    Logger["CycloneGames.Logger"]
+    Runtime["GameplayAbilities.Runtime"]
+    Editor["GameplayAbilities.Editor<br/>Editor only"]
+    DataTable["GameplayAbilities.Runtime.Integrations.DataTable<br/>条件 UPM Integration"]
+    Samples["GameplayAbilities.Sample"]
+    Tests["GameplayAbilities.Tests.Editor"]
+    PlayTests["GameplayAbilities.Tests.PlayMode"]
 
-- Unity authoring data 使用 `ScriptableObject` asset 表示。
-- Runtime state 存放在由 `AbilitySystemComponent` 拥有的 C# object 中。
-- Core state contract 尽可能保持不依赖 Unity。
-- 可选网络由 `CycloneGames.GameplayAbilities.Networking` 实现。
-- 项目级可选集成应放在 integration assembly 中，不反向污染 core runtime。
+    Tags --> Core
+    Math --> Core
+    Hash --> Core
+    Core --> Runtime
+    Tags --> Runtime
+    Hash --> Runtime
+    UniTask --> Runtime
+    Logger --> Runtime
+    Asset --> AssetIntegration
+    UniTask --> AssetIntegration
+    Runtime --> AssetIntegration
+    DataTableCore --> DataTable
+    Core --> DataTable
+    Runtime --> Editor
+    Runtime --> Samples
+    Asset --> Samples
+    AssetIntegration --> Samples
+    Core --> Tests
+    Runtime --> Tests
+    Runtime --> PlayTests
+    Runtime --> DataTable
+```
 
-| 关注点 | 传统 Skill Manager | GAS-style 架构 |
-| --- | --- | --- |
-| Ability 内容 | 常硬编码在 character 或 controller script 中。 | Ability asset 和 runtime definition 可授予任何兼容 ASC。 |
-| 状态管理 | Boolean flag 和手写 timer 分散在多个 script 中。 | Active gameplay effect 自己持有 duration、period、stack count、granted tag 和 removal。 |
-| Ability 阻塞 | 每种状态组合都写自定义 `if` 分支。 | Tag 表达 activation requirement 和 block rule。 |
-| Attribute 变化 | 多个系统直接写数值。 | Gameplay effect 通过统一 attribute pipeline 应用 modifier。 |
-| VFX/SFX | Gameplay code 直接生成表现对象。 | Gameplay cue 将 presentation 与 authority 解耦。 |
-| 多人网络 | 每个技能都需要自定义 replication 和 correction logic。 | Prediction key、effect spec、state delta 和 full-state recovery 共享同一模型。 |
-| 扩展规模 | 新交互会增加系统耦合。 | 新内容通过 tag、effect、attribute 和 cue 组合。 |
+`CycloneGames.GameplayAbilities.Core` 设置了 `noEngineReferences: true`，且不暴露 `UnityEngine` 类型。`CycloneGames.GameplayAbilities.Runtime` 是 Unity Adapter 与创作层。不能仅为复用实现而把 Runtime 代码移入 Core。
 
-## 适用场景
+`AbilitySpecContainer`、`PredictionManager` 与 `ReplicationStateBuilder` 都是 Runtime Assembly 的 Internal Implementation Type。Public Consumer 通过 `AbilitySystemComponent` Facade、稳定的 `GASReadOnlyListView<T>`、`GASReadOnlySetView<T>`、`GASReadOnlyTagView`、Query Method 与 Diagnostics 工作，不会取得 Mutable Container 或 Builder Access。这些 Internal Type 不是 Extension Point。把 Mutation Authority 收敛在 ASC 可以缩小 Public API 与长期兼容性表面积。
 
-当项目需要以下能力时，适合使用本包：
+包元数据声明直接 Package 需求。在 `Assets/ThirdParty` checkout 中，`package.json` 是描述性元数据；Unity 是否编译某程序集取决于实际 asmdef 图、已安装 Package、Constraint 和 Symbol。主 Runtime Assembly 不引用 AssetManagement 或 DataTable；这些依赖终止在各自的 Integration Assembly。
 
-- 大量 ability 共享 cost、cooldown、tag、target、effect 和 cue 规则。
-- Buff 和 Debuff 需要 stack、expire、periodic tick、grant tag 或 grant ability。
-- 清晰分离 gameplay authority 和 presentation。
-- 面向策划的可调数据资产，以及面向程序的扩展点。
-- 面向多人游戏的 state contract 和 deterministic-friendly raw fixed value。
-- 对 Unreal GAS 熟悉的开发者能快速理解的框架风格。
+## 运行时模型
 
-不建议为了单次脚本事件、简单 UI 动作，或完全不需要 attribute、effect、tag、prediction、replication 的系统引入完整 GAS 层。
-
-## 程序集边界
-
-| Assembly | 职责 |
-| --- | --- |
-| `CycloneGames.GameplayAbilities.Core` | 不依赖 Unity 的 deterministic state、prediction key、replication DTO、definition registry、service interface 和 fixed-value 逻辑。 |
-| `CycloneGames.GameplayAbilities.Runtime` | Unity-facing ability runtime、`AbilitySystemComponent`、ScriptableObject bridge、target data、gameplay cue、object pool、runtime diagnostics 和 runtime debug overlay。 |
-| `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` | 从 `CycloneGames.DataTable` 行数据到 GAS modifier magnitude 和 attribute initialization 的可选桥接层。由 `CYCLONEGAMES_HAS_DATA_TABLE` 启用。 |
-| `CycloneGames.GameplayAbilities.Editor` | Editor inspector、debug window、property drawer、menu item 和 authoring validation。 |
-| `CycloneGames.GameplayAbilities.Tests.Editor` | 面向 deterministic state、runtime lifecycle、pooling 和 regression behavior 的 EditMode 测试。 |
-
-Core assembly 必须保持无 `UnityEngine` 和 `UnityEditor` 引用。Unity-facing 行为应放在 Runtime、Editor、Samples 或 integration assembly。
-
-## 核心概念
+主要类型采用 GAS 风格的职责划分：
 
 | 类型 | 职责 |
 | --- | --- |
-| `AbilitySystemComponent` | 运行时 ability state 的主 facade 和 owner。它授予 ability、持有 attribute、应用 effect、追踪 tag、管理 prediction、tick effect，并暴露 replication capture API。 |
-| `GameplayAbility` | 单个动作的 runtime definition 和执行逻辑。通过重写 `ActivateAbility`、`CanActivate`、`InputPressed`、`InputReleased` 和 `CancelAbility` 实现自定义行为。 |
-| `GameplayAbilitySO` | Unity authoring asset，用于创建和初始化 runtime `GameplayAbility`。 |
-| `GameplayAbilitySpec` | 一个 ASC 上已授予的 ability。它保存 level、handle、active state、owning ASC、granted-by-effect 关系，以及需要时的 stateful ability instance。 |
-| `AttributeSet` | 一组相关 `GameplayAttribute`，并承载 clamp、meta attribute 和 post-effect 逻辑。 |
-| `GameplayAttribute` | 带 name 的数值，包含 base value 和 current value。数值也以 raw fixed value 保存，用于 deterministic-friendly 路径。 |
-| `GameplayEffect` | Instant、duration 或 infinite effect 的 runtime definition。它描述 modifier、tag、stacking、granted ability、cue、custom requirement 和 overflow behavior。 |
-| `GameplayEffectSO` | Unity authoring asset，用于创建 runtime `GameplayEffect`。 |
-| `GameplayEffectSpec` | 一次 effect application 的 runtime instance。它捕获 source、target、context、level、duration、modifier magnitude、dynamic tag 和 SetByCaller magnitude。 |
-| `ActiveGameplayEffect` | 当前已经应用在 ASC 上的 live effect。它拥有 remaining time、period、stack count、granted tag 和 runtime bookkeeping。 |
-| `AbilityTask` | 由 active ability 拥有的池化 latent operation。用于等待、targeting、delay 和其他多帧 ability 行为。 |
-| `GameplayCueManager` / `GameplayCueDispatcher` | Service-backed cue routing，用于由 gameplay state 驱动 presentation event。 |
+| `GASRuntimeContext` | 一个模拟世界或分区的 Composition Root，拥有 Authority/Replica Role、Service、Registry、Entity ID、线程策略、一次性 Runtime Lease 计数和有界 Internal Backing Storage |
+| `AbilitySystemComponent`（ASC） | 单个 Gameplay Entity 的稳定 Facade：已授予 Ability、Active Effect、Attribute、Tag、预测、复制状态和 Event |
+| `AttributeSet` | 显式注册 Attribute，并提供 Attribute 级校验或后处理 |
+| `GameplayAbility` | 一次性初始化的不可变 Definition 配置，以及在受控 Instance 上执行的 Runtime 行为 |
+| `GameplayAbilitySpec` | ASC-local 授予状态：Handle、Level、Active State、Template、Instance 和 Granting Effect |
+| `GameplayEffect` | Modifier、Duration、Tag、Stacking、Requirement、Cue 与 Granted Ability 的不可变可复用 Runtime Definition |
+| `GameplayEffectSpec` | 租用的单次应用数据：Source、Target、Level、计算后 Magnitude、Context、PredictionKey、SetByCaller 值与 Dynamic Tag |
+| `ActiveGameplayEffect` | 由目标 ASC 持有的 Duration 或 Infinite Effect |
+| `AbilityTask` | 由 Ability 持有的异步或跨帧工作 |
+| `TargetData` | 带预测元数据、仅在 Callback 范围有效或显式转移的一次性目标载荷 |
+| `IGameplayCueManager` | 表现层 Cue 边界 |
+| `GASRuntimeAuthorityMode` | 构造 Runtime Context 时选择且不可变的 `Authority` 或 `Replica` Role |
+| `GASAuthorityActivationResult` | Authority 自有 `TryExecuteAuthorityAbility` 边界返回的无分配 Terminal Decision |
 
-## 运行时架构
-
-`AbilitySystemComponent` 保持 public entry point，延续 Unreal GAS 熟悉的使用方式。内部状态所有权拆分到专用协作者中，避免所有热路径 bookkeeping 都堆在一个超大类里。
-
-| 协作者 | 职责 |
-| --- | --- |
-| `AbilitySpecContainer` | 已授予的 ability spec、spec handle index、ticking spec，以及由 active effect 授予的 ability。 |
-| `ActiveEffectContainer` | Active gameplay effect、network id lookup、stacking index、granted tag index，以及 ability-applied effect tracking。 |
-| `AttributeAggregator` | Attribute set、registered attribute，以及 dirty attribute aggregation queue。 |
-| `PredictionManager` | Prediction window、window index、pending predicted effect、local input sequence、dependent-window lookup、timeout selection，以及 closed prediction transaction history。 |
-| `ReplicationStateBuilder` | Dirty replicated state、state version、tag delta folding、delta capture lifecycle、removed effect id、removed ability definition 和 scratch array。 |
-| `GameplayCueDispatcher` | Local gameplay cue dispatch、prediction cue accounting，以及 server-side cue broadcast routing。 |
-
-```mermaid
-flowchart TB
-    ASC["AbilitySystemComponent"]
-    Specs["AbilitySpecContainer"]
-    Effects["ActiveEffectContainer"]
-    Attrs["AttributeAggregator"]
-    Prediction["PredictionManager"]
-    Replication["ReplicationStateBuilder"]
-    Cues["GameplayCueDispatcher"]
-    Tags["CycloneGames.GameplayTags"]
-    Core["GASAbilitySystemState"]
-    Network["GameplayAbilities.Networking"]
-
-    ASC --> Specs
-    ASC --> Effects
-    ASC --> Attrs
-    ASC --> Prediction
-    ASC --> Replication
-    ASC --> Cues
-    ASC --> Tags
-    ASC -. optional mirror .-> Core
-    Replication --> Network
-    Cues --> Network
-```
-
-`AbilitySystemComponent` 拥有 Unity gameplay runtime 的唯一真相源。`GASAbilitySystemState` 是可选的 Unity-free mirror，用于 deterministic diagnostics、snapshot capture、checksum validation 和纯 C# simulation tooling。不要把两套 graph 当作彼此独立的可变状态。Runtime gameplay 代码应只通过 ASC API 修改状态；Core-only simulation 应直接使用 `GASAbilitySystemState` 和 `GASAbilitySystemFacade`，不需要构造 ASC。
-
-| 模式 | 适用场景 | Runtime 行为 |
-| --- | --- | --- |
-| `GASCoreStateMode.MirrorRuntime` | 默认兼容模式、deterministic validation、tooling、checksum capture 和 migration testing。 | ASC 写入 runtime graph，并把已支持的 grant、attribute、active effect 和 prediction data mirror 到 Core state。 |
-| `GASCoreStateMode.RuntimeOnly` | 高密度 gameplay actor、低端客户端、纯表现客户端，以及不需要为每个 ASC 启用 Core diagnostics 的 server shard。 | ASC 只保留 runtime graph。`TryGetCoreState`、`TryGetCoreFacade` 和 `TryGetCoreSpecHandle` 返回 `false`；`CoreState` 和 `Core` 不可用。 |
+ASC 是普通 C# 对象，不是 `MonoBehaviour`。项目 Component 可以持有 ASC 并转发 Unity 生命周期：
 
 ```csharp
-AbilitySystemComponent mirroredAsc = new AbilitySystemComponent(
-    new GameplayEffectContextFactory());
-
-AbilitySystemComponent runtimeOnlyAsc = new AbilitySystemComponent(
-    new GameplayEffectContextFactory(),
-    GASAbilitySystemRuntimeOptions.RuntimeOnly);
-```
-
-当前 collaborator split 已经接管最容易出错的 list、dictionary、prediction 和 replication bookkeeping：ability grant/removal、ticking spec 成员关系、effect swap-back removal、network id lookup、stacking lookup、granted tag lookup、ability-applied effect cleanup、prediction window index、pending predicted effect removal、closed prediction record、replicated dirty flag、removed id tracking、tag edge folding、state version advancement 和 delta capture cleanup。
-
-`AbilitySystemComponent` 仍然负责协调 gameplay policy、activation decision、rollback side effect、event、高层 network send decision 和 attribute side effect。后续迁移应继续以小步、可验证的方式推进。
-
-## Unreal GAS 对照
-
-| Unreal GAS 概念 | CycloneGames 概念 |
-| --- | --- |
-| `UAbilitySystemComponent` | `AbilitySystemComponent` facade |
-| `FGameplayAbilitySpecContainer` | `AbilitySpecContainer` |
-| `FActiveGameplayEffectsContainer` | `ActiveEffectContainer` |
-| `FScopedPredictionWindow` | `GASPredictionScope` 和 `PredictionManager` |
-| `UGameplayAbility` | `GameplayAbility` 和 `GameplayAbilitySO` |
-| `UGameplayEffect` | `GameplayEffect` 和 `GameplayEffectSO` |
-| `FGameplayEffectSpec` | `GameplayEffectSpec` |
-| `FActiveGameplayEffect` | `ActiveGameplayEffect` |
-| `FGameplayTagContainer` | `CycloneGames.GameplayTags.Core.GameplayTagContainer` |
-| Gameplay cue notify routing | `GameplayCueManager` 和 `GameplayCueDispatcher` |
-| Fast array replication 和 RPC state | `ReplicationStateBuilder`、`GASAbilitySystemStateDeltaBuffer` 和 networking package |
-
-本包保留有助于 Unreal GAS 开发者快速迁移的词汇，但不会复制 Unreal 的 UObject 模型。Unity asset、纯 C# runtime object 和 Unity-free core contract 保持分离。
-
-## 激活与 Effect 流程
-
-```mermaid
-sequenceDiagram
-    participant Input as Input or AI
-    participant ASC as AbilitySystemComponent
-    participant Spec as GameplayAbilitySpec
-    participant Ability as GameplayAbility
-    participant Effect as GameplayEffectSpec
-    participant Attr as AttributeSet
-    participant Cue as GameplayCueDispatcher
-    participant Net as ReplicationStateBuilder
-
-    Input->>ASC: TryActivateAbility(spec)
-    ASC->>Spec: resolve primary ability instance
-    ASC->>Ability: CanActivate(actorInfo, spec)
-    Ability->>ASC: CommitAbility(cost, cooldown)
-    Ability->>Effect: create outgoing effect spec
-    Ability->>ASC: ApplyGameplayEffectSpecToSelf or target
-    ASC->>Attr: execute modifiers and hooks
-    ASC->>Cue: dispatch gameplay cues
-    ASC->>Net: mark replicated state dirty
-    Ability->>ASC: EndAbility
-```
-
-典型 activation sequence：
-
-1. 通过 `AbilitySystemComponent.GrantAbility` 授予 ability。
-2. `AbilitySpecContainer` 保存 `GameplayAbilitySpec`，并按 handle 建立索引。
-3. `TryActivateAbility` 校验 tag、cost、cooldown、prediction policy、authority policy 和 ability block rule。
-4. `GameplayAbility.ActivateAbility` commit cost 和 cooldown，创建 task，并应用 effect。
-5. `ActiveEffectContainer` 追踪 active effect、stacking、granted tag、network id 和 ability-applied effect cleanup。
-6. `AttributeAggregator` 使用 additive、multiplicative、division 和 override aggregation 重算 dirty attribute。
-7. `PredictionManager` 追踪 prediction window 和 predicted side effect。
-8. `GameplayCueDispatcher` 在本地和配置的 network bridge 上发出 cue event。
-9. `ReplicationStateBuilder` 记录 dirty state，并 capture delta 用于 replication 或 full-state recovery。
-
-## 教程：制作一个最小 Ability
-
-本教程使用 runtime C# 示例，因为它更适合在文档中阅读。生产项目通常会把同样的 runtime class 与 `GameplayAbilitySO`、`GameplayEffectSO` asset 组合起来，让策划在 Inspector 中配置数据。
-
-### 步骤 1：定义 Tag 词汇
-
-Gameplay tag 是 GAS 的规则语言。Tag 名称应稳定，并在代码、资产、网络 registry 和调试工具之间保持一致。
-
-推荐命名方式：
-
-```text
-Ability.Fire.Fireball
-Cooldown.Fireball
-Cost.Mana
-Damage.Type.Fire
-GameplayCue.Fireball.Impact
-State.Stunned
-State.Dead
-Data.DamageMultiplier
-Attribute.Health
-Attribute.Mana
-```
-
-Runtime 代码可以从 `CycloneGames.GameplayTags` 请求 tag：
-
-```csharp
-using CycloneGames.GameplayTags.Core;
-
-public static class CombatTags
+public sealed class AbilitySystemHost : MonoBehaviour
 {
-    public static readonly GameplayTag CooldownFireball =
-        GameplayTagManager.RequestTag("Cooldown.Fireball");
-
-    public static readonly GameplayTag DamageTypeFire =
-        GameplayTagManager.RequestTag("Damage.Type.Fire");
-
-    public static readonly GameplayTag DataDamageMultiplier =
-        GameplayTagManager.RequestTag("Data.DamageMultiplier");
-}
-```
-
-Tag 用来表达规则，不用来保存可变数值。Health、mana、attack power、defense 应放在 attribute 中。
-
-### 步骤 2：创建 AttributeSet
-
-`AttributeSet` 负责组织 attribute，并持有 attribute-specific rule，例如 clamp 和 meta attribute 处理。
-
-```csharp
-using CycloneGames.GameplayAbilities.Runtime;
-
-public sealed class CombatAttributeSet : AttributeSet
-{
-    public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
-    public GameplayAttribute MaxHealth { get; } = new GameplayAttribute("MaxHealth");
-    public GameplayAttribute Mana { get; } = new GameplayAttribute("Mana");
-    public GameplayAttribute MaxMana { get; } = new GameplayAttribute("MaxMana");
-    public GameplayAttribute Damage { get; } = new GameplayAttribute("Damage");
-
-    public CombatAttributeSet()
-    {
-        Health.SetBaseValue(100f);
-        Health.SetCurrentValue(100f);
-        MaxHealth.SetBaseValue(100f);
-        MaxHealth.SetCurrentValue(100f);
-        Mana.SetBaseValue(50f);
-        Mana.SetCurrentValue(50f);
-        MaxMana.SetBaseValue(50f);
-        MaxMana.SetCurrentValue(50f);
-    }
-
-    public override void PreAttributeChange(GameplayAttribute attribute, ref GASFixedValue newValue)
-    {
-        if (attribute == Health)
-        {
-            newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, MaxHealth.CurrentFixedValue);
-        }
-        else if (attribute == Mana)
-        {
-            newValue = GASFixedValue.Clamp(newValue, GASFixedValue.Zero, MaxMana.CurrentFixedValue);
-        }
-    }
-
-    protected override bool PreProcessInstantEffect(GameplayEffectModCallbackData data)
-    {
-        GameplayAttribute attribute = GetAttribute(data.Modifier.AttributeName);
-        if (attribute != Damage)
-        {
-            return false;
-        }
-
-        float currentHealth = Health.CurrentValue;
-        float newHealth = System.Math.Max(0f, currentHealth - data.EvaluatedMagnitude);
-
-        SetBaseValue(Health, newHealth);
-        SetCurrentValue(Health, newHealth);
-        return true;
-    }
-}
-```
-
-`Damage` 这类 meta attribute 适合承载中间值。目标可以在收到 damage 后结合 defense、shield、vulnerability、immunity 等规则换算成最终 health loss。
-
-### 步骤 3：创建并持有 ASC
-
-`AbilitySystemComponent` 是纯 runtime object。Unity `MonoBehaviour` 应只负责生命周期和场景引用，不承载复杂战斗规则。
-
-```csharp
-using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
-
-public sealed class CombatantAbilitySystem : MonoBehaviour
-{
-    public AbilitySystemComponent AbilitySystem { get; private set; }
-    public CombatAttributeSet Attributes { get; private set; }
+    public AbilitySystemComponent ASC { get; private set; }
 
     private void Awake()
     {
-        AbilitySystem = new AbilitySystemComponent(new GameplayEffectContextFactory());
-        AbilitySystem.InitAbilityActorInfo(owner: this, avatar: gameObject);
-
-        AbilitySystem.ReserveRuntimeCapacity(
-            abilityCapacity: 16,
-            attributeCapacity: 16,
-            activeEffectCapacity: 64,
-            predictionWindowCapacity: 8,
-            coreModifierCapacity: 128,
-            maxSetByCallerPerEffect: 8,
-            targetDataObjectCapacity: 16);
-
-        Attributes = new CombatAttributeSet();
-        AbilitySystem.AddAttributeSet(Attributes);
+        ASC = new AbilitySystemComponent();
+        ASC.InitAbilityActorInfo(this, gameObject);
     }
 
     private void Update()
     {
-        AbilitySystem.Tick(Time.deltaTime, isServer: true);
+        ASC.Tick(Time.deltaTime, isServer: true);
     }
 
     private void OnDestroy()
     {
-        AbilitySystem?.Dispose();
+        ASC?.Dispose();
     }
 }
 ```
 
-如果项目使用 `CycloneGames.GameplayFramework`，可选 integration extension 可以从 `Actor` 初始化 actor info，同时保持 GameplayFramework core assembly 不依赖 GameplayAbilities。
+无参构造函数持有一个私有且具有 Authority 的 `GASRuntimeContext`，适合隔离 Actor、离线玩法和测试。会相互作用的 Actor 通常应共享一个显式 Context，从而共享 Role、Context-local ID、Registry、Process-local Reconciliation Reference、Cue 和内存策略。跨越不同 Context 应用 Effect 会被拒绝。Remote Replica 必须显式构造使用 `GASRuntimeAuthorityMode.Replica` 的 Context。
 
-### 步骤 4：定义 Effect
+### Core 状态模式
 
-Effect 是 GAS 数据驱动能力的核心。
+`GASAbilitySystemRuntimeOptions` 用于选择 ASC 如何使用 Unity-free 状态模型：
+
+- `RuntimeOnly` 是默认模式。项目不使用 Core State 时，它会省略 Mirror，减少重复状态和同步工作。
+- `MirrorRuntime` 必须显式选择。Runtime 始终保持权威来源，同时把本地产生的 Ability、Attribute、Effect 和 Modifier Change 镜像到 `GASAbilitySystemState`，供 Core 诊断和 State Checksum 使用。
+
+State Mode 应在组合阶段确定。单次 Session 内不得切换状态所有权。当前验证集合尚未证明 Process-local `GASAbilitySystemStateDeltaBuffer` Apply 能完整同步到 Core Mirror。若没有项目专用的 Parity Test，不得把 `MirrorRuntime` 视为 Reconciled Receiver 仍具有完整 Core State 的证据。
+
+## 组合与生命周期
+
+### 不使用 DI 的显式构造
+
+为一个 Gameplay 世界创建一个 Context，把它注入所有参与交互的 ASC，并按所有权逆序释放：
+
+```csharp
+var cacheProfile = new GASRuntimeCacheProfile(
+    effectSpecBackingCapacity: 128);
+
+var limits = new GASRuntimeLimits(
+    maxAttributeSets: 32,
+    maxAttributes: 512,
+    maxGrantedAbilities: 256,
+    maxActiveEffects: 1024,
+    maxPredictionWindows: 128,
+    maxTargetsPerTargetData: 128,
+    maxPeriodicEffectExecutionsPerTick: 8,
+    maxAbilityTaskRepeatExecutionsPerTick: 8);
+
+var options = new GASAbilitySystemRuntimeOptions(
+    coreStateMode: GASCoreStateMode.RuntimeOnly,
+    limits: limits);
+
+var context = new GASRuntimeContext(
+    authorityMode: GASRuntimeAuthorityMode.Authority,
+    threadPolicy: GASRuntimeThreadPolicy.Throw,
+    cacheProfile: cacheProfile);
+
+var playerASC = new AbilitySystemComponent(context, options);
+var enemyASC = new AbilitySystemComponent(context, options);
+
+// During shutdown:
+enemyASC.Dispose();
+playerASC.Dispose();
+context.Dispose();
+```
+
+`GASRuntimeCacheProfile` 只控制 `GameplayEffectSpec` 使用的有界 Internal Backing Cache，不保留任何 Public Runtime Object。`GASRuntimeLimits` 控制 Gameplay 与载荷的硬上限。两者解决的问题不同，应分别配置。`cacheProfile` 是 `GASRuntimeContext` Constructor 的最后一个可选参数；`null` 会选择 `GASRuntimeCacheProfile.Default`，最多保留 `64` 个 Backing Record。显式容量范围为 `0..4096`。
+
+### GameplayCue 组合
+
+视觉客户端可以使用显式 GameObject Pool 策略初始化 `GameplayCueManager`，再注入 Context：
+
+```csharp
+var cuePoolConfig = new GameObjectPoolManager.PoolConfig(
+    maxAssetPools: 128,
+    maxActiveLeases: 2048,
+    maxActiveLeasesPerPool: 256,
+    maxRetainedInstancesPerPool: 128,
+    minRetainedInstancesPerPool: 0,
+    idleExpirationTime: 60f,
+    maxTotalRetainedInstances: 1024);
+
+IResourceLocator cueResources =
+    new AssetManagementResourceLocator(assetPackage);
+
+var cueManager = new GameplayCueManager(cuePoolConfig);
+cueManager.Initialize(cueResources);
+
+var context = new GASRuntimeContext(cueManager: cueManager);
+```
+
+`AssetManagementResourceLocator` 属于 `CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement`；主 Runtime Assembly 只感知 `IResourceLocator`。使用其他 Asset System 的项目应提供对应 Adapter。具体资源边界是 `GameplayCueManager.Initialize(IResourceLocator)`；Core `IGameplayCueManager` 契约不暴露 `Initialize`。调用方拥有注入的 Service。先释放所有 ASC，再释放 Context，最后释放 `GameplayCueManager`。Headless 进程应注入 `NullGameplayCueManager.Instance`，且不加载视觉资产。
+
+### DI 组合
+
+Runtime 类型不依赖任何 DI Container。可在项目 Composition Root 中注册具体实例：
+
+```csharp
+builder.Register<IResourceLocator>(
+    _ => new AssetManagementResourceLocator(assetPackage),
+    Lifetime.Singleton);
+
+builder.Register(
+        resolver =>
+        {
+            var manager = new GameplayCueManager(cuePoolConfig);
+            manager.Initialize(resolver.Resolve<IResourceLocator>());
+            return manager;
+        },
+        Lifetime.Singleton)
+    .As<GameplayCueManager>();
+
+    builder.Register(
+        resolver => new GASRuntimeContext(
+            authorityMode: GASRuntimeAuthorityMode.Authority,
+            cueManager: resolver.Resolve<GameplayCueManager>(),
+            cacheProfile: cacheProfile),
+        Lifetime.Singleton)
+    .As<GASRuntimeContext>();
+```
+
+Container 的释放顺序必须保持一致：ASC Owner、Context、注入的 Service。仍有 ASC 注册时，`GASRuntimeContext.Dispose()` 会拒绝执行。
+
+Remote replicated state 应使用独立的 `Replica` Context。Authority 与 Replica 实例不得共享同一个 Mutable Context，Role 在 Context Lifetime 内不能改变。Network session、transport、connection state 与 endpoint lifetime 属于产品 Composition，不属于 `GASRuntimeContext`。
+
+## 教程：一个完整的最小 Ability
+
+以下示例在不依赖 Scene 的情况下创建 Health Attribute、可复用 Healing Effect、Ability 和一个 ASC。
+
+### 1. 定义 AttributeSet
+
+Attribute 采用显式注册，不通过 Reflection 扫描 Property。
+
+```csharp
+using CycloneGames.GameplayAbilities.Core;
+using CycloneGames.GameplayAbilities.Runtime;
+
+public sealed class CombatAttributes : AttributeSet
+{
+    public GameplayAttribute Health { get; } =
+        new GameplayAttribute("Attribute.Vital.Health");
+
+    public GameplayAttribute MaxHealth { get; } =
+        new GameplayAttribute("Attribute.Vital.MaxHealth");
+
+    protected override void RegisterAttributes()
+    {
+        RegisterAttribute(Health);
+        RegisterAttribute(MaxHealth);
+    }
+
+    public override void PreAttributeChange(
+        GameplayAttribute attribute,
+        ref GASFixedValue newValue)
+    {
+        if (attribute == Health)
+        {
+            newValue = GASFixedValue.Clamp(
+                newValue,
+                GASFixedValue.Zero,
+                MaxHealth.CurrentFixedValue);
+        }
+    }
+}
+```
+
+每个 Attribute Name 必须非空，且在同一个 Set 内唯一。在 Effect 或 Ability 解析 Attribute 之前，应先把 Set 加入 ASC。
+
+`GameplayAttribute.ActiveModifierSourceCount` 是 Active Modifier Contributor 的诊断计数。Attribute 被 Active Effect 或 Open Prediction Snapshot 引用时，`RemoveAttributeSet` 会拒绝 Detach；排查拒绝原因时，应结合该计数、Active Effect 与 Prediction 诊断。该计数只用于可观测性，不承担 Authority 或 Synchronization 职责。
+
+### 2. 定义 Effect
+
+Runtime Definition 可被复用，构造后应视为不可变：
 
 ```csharp
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.GameplayTags.Core;
 
-public static class CombatEffects
-{
-    public static GameplayEffect CreateFireballDamage()
+var healEffect = new GameplayEffect(
+    name: "GE_Heal",
+    durationPolicy: EDurationPolicy.Instant,
+    modifiers: new List<ModifierInfo>
     {
-        return new GameplayEffect(
-            name: "GE_FireballDamage",
-            durationPolicy: EDurationPolicy.Instant,
-            modifiers: new List<ModifierInfo>
-            {
-                new ModifierInfo("Damage", EAttributeModifierOperation.Add, new ScalableFloat(35f, 5f))
-            },
-            assetTags: CreateContainer(CombatTags.DamageTypeFire),
-            gameplayCues: CreateContainer(
-                GameplayTagManager.RequestTag("GameplayCue.Fireball.Impact")));
-    }
-
-    public static GameplayEffect CreateFireballCost()
-    {
-        return new GameplayEffect(
-            name: "GE_Cost_Fireball",
-            durationPolicy: EDurationPolicy.Instant,
-            modifiers: new List<ModifierInfo>
-            {
-                new ModifierInfo("Mana", EAttributeModifierOperation.Add, new ScalableFloat(-10f))
-            });
-    }
-
-    public static GameplayEffect CreateFireballCooldown()
-    {
-        return new GameplayEffect(
-            name: "GE_Cooldown_Fireball",
-            durationPolicy: EDurationPolicy.HasDuration,
-            duration: 3f,
-            grantedTags: CreateContainer(CombatTags.CooldownFireball));
-    }
-
-    private static GameplayTagContainer CreateContainer(GameplayTag tag)
-    {
-        var container = new GameplayTagContainer();
-        container.AddTag(tag);
-        return container;
-    }
-}
+        new ModifierInfo(
+            "Attribute.Vital.Health",
+            EAttributeModifierOperation.Add,
+            new ScalableFloat(baseValue: 25f, scalingFactorPerLevel: 5f))
+    });
 ```
 
-`Instant` effect 适合 damage、healing 和 cost。`HasDuration` effect 适合 timed buff、debuff 和 cooldown。`Infinite` effect 适合 passive、equipment bonus 和 aura，直到显式移除。
+`Instant` Effect 立即执行。`HasDuration` Effect 在正数 Duration 内保持 Active。`Infinite` Effect 持续到显式移除。Instant Effect 不能设置 Period。
 
-### 步骤 5：实现 Ability
+### 3. 实现 Ability
 
-Ability 持有 activation logic。它应通过 ASC pipeline commit cost/cooldown，再通过 effect spec 应用 effect。
+`CommitAbility` 执行 Cost/Cooldown Preflight 并返回结构化结果。Commit 失败时必须停止 Gameplay 执行。
 
 ```csharp
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayTags.Core;
 
-public sealed class FireballAbility : GameplayAbility
+public sealed class HealAbility : GameplayAbility
 {
-    private readonly GameplayEffect _damageEffect;
-    private readonly System.Func<AbilitySystemComponent> _targetResolver;
+    private readonly GameplayEffect healEffect;
 
-    public FireballAbility(GameplayEffect damageEffect, System.Func<AbilitySystemComponent> targetResolver)
+    public HealAbility(GameplayEffect healEffect)
     {
-        _damageEffect = damageEffect;
-        _targetResolver = targetResolver;
+        this.healEffect = healEffect;
+
+        Initialize(
+            name: "GA_Heal",
+            instancingPolicy: EGameplayAbilityInstancingPolicy.InstancedPerExecution,
+            executionPolicy: EAbilityExecutionPolicy.LocalOnly,
+            cost: null,
+            cooldown: null,
+            abilityTags: new GameplayTagContainer(),
+            activationBlockedTags: new GameplayTagContainer(),
+            activationRequiredTags: new GameplayTagContainer(),
+            cancelAbilitiesWithTag: new GameplayTagContainer(),
+            blockAbilitiesWithTag: new GameplayTagContainer());
     }
 
     public override void ActivateAbility(
@@ -472,716 +353,648 @@ public sealed class FireballAbility : GameplayAbility
         GameplayAbilitySpec spec,
         GameplayAbilityActivationInfo activationInfo)
     {
-        CommitAbility(actorInfo, spec);
-
-        AbilitySystemComponent target = _targetResolver?.Invoke();
-        if (target != null && CanApplyToTarget(target))
+        GameplayAbilityCommitResult commit = CommitAbility(actorInfo, spec);
+        if (!commit.Succeeded)
         {
-            GameplayEffectSpec damageSpec = MakeOutgoingGameplayEffectSpec(_damageEffect, spec.Level);
-            damageSpec.SetSetByCallerMagnitude(CombatTags.DataDamageMultiplier, 1.0f);
-            ApplyGameplayEffectSpecToTarget(damageSpec, target);
+            EndAbility();
+            return;
+        }
+
+        GameplayEffectApplicationResult result =
+            ApplyGameplayEffectToOwner(healEffect, spec.Level);
+
+        if (!result.Succeeded)
+        {
+            // Project code may translate result.Code into UI or telemetry.
         }
 
         EndAbility();
     }
 
-    public override GameplayAbility CreatePoolableInstance()
+    public override GameplayAbility CreateRuntimeInstance()
     {
-        var ability = new FireballAbility(_damageEffect, _targetResolver);
-        ability.Initialize(
-            Name,
-            InstancingPolicy,
-            NetExecutionPolicy,
-            CostEffectDefinition,
-            CooldownEffectDefinition,
-            AbilityTags,
-            ActivationBlockedTags,
-            ActivationRequiredTags,
-            CancelAbilitiesWithTag,
-            BlockAbilitiesWithTag);
-        return ability;
+        return new HealAbility(healEffect);
     }
 }
 ```
 
-面向数据驱动 authoring 时，用 `GameplayAbilitySO` 包装 ability：
+### 4. 授予并激活
 
 ```csharp
-using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
+using var context = new GASRuntimeContext();
+using var asc = new AbilitySystemComponent(context);
 
-[CreateAssetMenu(
-    fileName = "GA_Fireball",
-    menuName = "CycloneGames/GameplayAbilities/Ability/Fireball")]
-public sealed class FireballAbilitySO : GameplayAbilitySO
-{
-    public GameplayEffectSO DamageEffect;
+var attributes = new CombatAttributes();
+asc.AddAttributeSet(attributes);
+attributes.MaxHealth.SetBaseValue(100f);
+attributes.MaxHealth.SetCurrentValue(100f);
+attributes.Health.SetBaseValue(50f);
+attributes.Health.SetCurrentValue(50f);
 
-    public override GameplayAbility CreateAbility()
-    {
-        GameplayEffect damage = DamageEffect != null ? DamageEffect.GetGameplayEffect() : null;
-        var ability = new FireballAbility(damage, targetResolver: null);
-        InitializeAbility(ability);
-        return ability;
-    }
-}
+asc.InitAbilityActorInfo(owner: playerModel, avatar: playerGameObject);
+
+GameplayAbilitySpec spec = asc.GrantAbility(
+    new HealAbility(healEffect),
+    level: 1);
+
+bool activationStarted = asc.TryActivateAbility(spec);
 ```
 
-项目通常通过 ability task、targeting service、combat query，或项目专用 ability subclass 提供 target resolution。
+ASC 拥有已授予的 Spec。调用 `ClearAbility(spec)` 可以撤销授予；Spec 被清除或 ASC 被释放后，不得继续持有该 Spec。
 
-### 步骤 6：授予并激活 Ability
+## Ability 工作流
+
+### 授予与实例化
+
+`GameplayAbility.Initialize` 只发布一次配置。Tag Input 使用 `IReadOnlyGameplayTagContainer`；初始化不要求也不会保留调用方 container 的 mutation authority。提交任何 Property 前，它会校验：非空且不超过 `MaxNameLength`（`256`）的 Name、已知 Instancing/Network Policy、Aggregate `MaxAggregateTagCount`（`256`）以内的有效 Tag Data，以及不超过 `MaxTriggerCount`（`64`）的有效 Trigger。Tag 与 Source 相同的 Trigger Pair 会作为 Duplicate 被拒绝。全部校验成功后，它才把 Tag Input 复制到不可变的 `GameplayDefinitionTagSet`，把 Trigger Snapshot 为 Read-only Collection，并通过 Private-set Property 暴露配置。重复初始化会抛出异常；`GrantAbility` 会拒绝从未初始化的 Definition。注册前必须完成整个 Definition；Runtime Activation State 属于 Instance，不属于共享 Definition。
+
+`GrantAbility` 分配 ASC-local Handle 并返回 `GameplayAbilitySpec`。同一个 Ability Definition 可以授予多次，应通过 Spec 或 Handle 定位某次授予，不能使用 List Index 作为稳定身份。
+
+实例化策略如下：
+
+- `NonInstanced`：仅供 Unity-free Core Model 中的无状态模拟使用。Unity Runtime 的 `GrantAbility` 会拒绝该策略，因为共享 `GameplayAbility` Object 无法安全持有 ASC、Activation 或 Task State。
+- `InstancedPerActor`：一个 Runtime Instance 在 Grant 的整个生命周期内持有执行状态，Grant 被清除时失效。
+- `InstancedPerExecution`：每次激活都取得一个独立 Runtime Instance；该次激活结束时 Instance 失效。
+
+Unity Runtime Ability 必须使用 `InstancedPerActor` 或 `InstancedPerExecution`。Pure Core Consumer 只有在全部 Mutable State 都位于共享 Definition 之外时，才能使用 `GASInstancingPolicy.NonInstanced`。Runtime Memory Owner 会为每个 Runtime Lease 调用 `CreateRuntimeInstance()`，要求返回相同 Runtime Type 的独立 Object，并从 Definition 复制已封存的 Base Configuration。Factory 不能捕获生命周期超过 ASC 的 Scene Owner。
+
+每个 Runtime Instance 都保留创建它的准确 Definition/Template Reference。同一 Derived Type 的两个 Definition 因此可以持有不同的不可变配置，而不会共享 Runtime State。Runtime Instance 是一次性 Lease Object：Release 会使 Object 失效并丢弃，不会把它交给另一个 Grant 或 Activation。
+
+持有 Mutable Reference 或敏感状态的 Derived Ability 应 Override `ResetRuntimeState()`，在 Runtime Lease Release 时关闭这些状态：
 
 ```csharp
-using CycloneGames.GameplayAbilities.Runtime;
-
-public sealed class FireballGrantExample
+protected override void ResetRuntimeState()
 {
-    private readonly AbilitySystemComponent _asc;
-    private readonly GameplayAbilitySO _fireballAsset;
-
-    public FireballGrantExample(AbilitySystemComponent asc, GameplayAbilitySO fireballAsset)
-    {
-        _asc = asc;
-        _fireballAsset = fireballAsset;
-    }
-
-    public GameplayAbilitySpec Grant()
-    {
-        GameplayAbility ability = _fireballAsset.CreateAbility();
-        return _asc.GrantAbility(ability, level: 1);
-    }
-
-    public bool Activate(GameplayAbilitySpec spec)
-    {
-        return _asc.TryActivateAbility(spec);
-    }
+    chargeSeconds = 0f;
+    cachedTargetIds.Clear();
 }
 ```
 
-不要每帧创建新的 ability definition。应在 setup 阶段创建或加载 ability asset，然后在角色初始化、装备变化、passive effect 或 gameplay reward 中授予 ability。
+Base Release Path 始终清除 `Spec`、`AbilitySystemComponent`、`ActorInfo`、Activation Data 与 Task Tracking。`ResetRuntimeState()` 不能释放共享 Definition Data。若 `InstancedPerActor` Ability 的某些 Activation-specific Field 不能跨越多次激活，还必须在正常 End Workflow 中重置；Final Release Hook 不是 Activation Reset。若 Hook 抛出异常，Lease 仍会失效且 Object 会被丢弃，同时 `ReleaseFailures` 会记录 Cleanup Failure。应把该异常视为 Lifecycle Defect。
 
-## GameplayTags 使用指南
+### 激活检查
 
-Tag 是独立系统之间通信的规则语言，可以避免硬引用。
+`TryActivateAbility` 会检查：
 
-| 用途 | 推荐 Tag 模式 |
+- ASC 释放状态、Spec 有效性和 Active State；
+- Execution Policy 与 Local Ownership；
+- Ability Required/Blocked Tag；
+- Source/Target Tag Requirement；
+- Ability Blocking 与 Cancellation 关系；
+- Cooldown Tag；
+- Cost 可支付性；
+- Ability 的 `CanActivate` Override。
+
+`CanActivate` 应保持确定性，且不产生外部可见 Side Effect。不可逆工作应在 Commit 成功后的激活阶段执行。
+
+### Commit、Cost 与 Cooldown
+
+Commit 契约分为两个阶段：
+
+1. 构造 Cost 与 Cooldown Spec。
+2. 校验 Definition、Tag、Limit、Custom Requirement、Cooldown 与可支付性。
+3. 应用 Cooldown。
+4. 应用 Instant Cost。
+5. Cost 被拒绝时移除已经应用的 Cooldown。
+6. 仅在成功后发布 `OnAbilityCommitted`。
+
+Cost Definition 必须是 `Instant`。Cooldown Definition 必须是 `HasDuration` 或 `Infinite`，并通常授予一个 Cooldown Tag。Ability 需要在校验前写入 SetByCaller 数据时，应 Override `CreateCostEffectSpec` 或 `CreateCooldownEffectSpec`。
+
+`GameplayAbilityCommitResult.Code` 可以区分 Owner 缺失、Definition 非法、Cost 不足、Cooldown Active 与 Effect 被拒绝。`EffectResult` 保留底层 Effect 拒绝码。
+
+每条终止路径都必须调用 `EndAbility()` 或 `CancelAbility()`。结束 Ability 会取消其持有的 Task、移除配置的 Ability-owned Effect、释放 Owned Tag，并使 Instanced-per-execution Runtime Instance 失效后丢弃。
+
+### 输入与 Event
+
+项目 Input Adapter 应把 Input Action 映射到已授予 Spec，并在模拟 Owner Thread 调用 `TryActivateAbility`、`InputPressed` 或 `InputReleased`。Gameplay Event 使用 `GameplayEventData` 和基于 Tag 的 Callback；Event Tag 表达 Gameplay 意图，不应携带 Transport 特定对象。
+
+### Runtime Callback 与 Observer 顺序
+
+ASC 的 Ability/Effect/Prediction/Replication Event、Tag Callback、Gameplay-event Callback 与 ASC-bound `GameplayAttribute` Value Event 使用 Owner-thread-confined Typed Callback List。订阅与移除属于 Cold-path Operation：Multicast Expansion、Dictionary Insert 与 List Growth 都可能分配。应在 Composition 或 Ability/Task Activation 阶段注册稳定 Delegate，在对应 Teardown 阶段移除；不得每个 Tick 动态订阅。
+
+Dispatch 会捕获当前 Callback Count。Dispatch 期间移除 Subscriber 会把本轮对应 Entry 标记为 Tombstone，因此它不会在本轮稍后执行；新增 Subscriber 会 Append，并从下一次 Dispatch 开始执行。最外层 Dispatch 结束时会 In-place Compact Tombstone。每个 Subscriber 都有独立 Exception Boundary：单个 Subscriber 失败会记录日志，后续 Subscriber 仍会执行。Attribute、Ability、Effect、Prediction-closure、Replication 与 Tag Observer 都只在对应权威状态提交后运行。Capacity 建立后，Steady-state Dispatch 可以避免 Managed Allocation；Exception Logging 与 Subscription Change 不属于该结果的覆盖范围。
+
+ASC 的内部 Count-container Callback 负责 Tag-trigger Activation、Ongoing-effect Inhibition、Attribute Dirty 与 Replication Tracking 的 Committed-state Reconciliation。该 Reconciliation 抛出异常时，Count Container 仍会交付后续 Subscriber，随后返回 `AggregateException`，并明确 Tag State 已提交。此情况属于完整性异常：不得重试 Tag Mutation；应停止该 Entity 的后续 Authority Change，并从经过校验的权威 Snapshot 恢复，或关闭该 Entity。
+
+`GameplayEvent` Observer 是 Intent Listener，不是 Authority。它们先于 Tag-matched Authority Trigger 执行；Observer Failure 会被隔离，不会阻止 Trigger 激活 Ability。Observer Callback 执行期间不能 Dispose ASC。在 Ability Override 或 `OnAbilityActivated` Delivery 期间不能清除当前 Spec；完整 End Window 内也不能清除 Ending Spec，该 Window 覆盖 `OnAbilityEndedEvent` Delivery 与 Per-execution Instance Cleanup。同一个 Spec Lease 的 End Reentry 也会 Fail Fast。这些 Destructive Operation 必须延后到当前 Activation 或 End Call 返回之后。
+
+## GameplayEffect 工作流
+
+### Definition、Spec 与 Active Effect
+
+`GameplayEffect` 是可复用 Definition。`GameplayEffectSpec` 是租用的单次应用请求。`ActiveGameplayEffect` 是由 Target 持有的持久状态。
+
+`GameplayEffect` Constructor 会在发布 Definition 前校验完整配置：非空 Name；已知 Duration/Stacking Policy；有限的 Duration、Period 与 Magnitude 输入；适用位置要求正数 Duration 与 Stack Limit；合法的 Modifier Operation、Capture Policy、Calculation 与 SetByCaller Key；非空 Requirement/Overflow Entry；以及兼容的 Granted Ability。Instant Definition 不能设置 Period 或授予 Ability，Runtime-granted Ability 不能使用 `NonInstanced`。Definition Collection、Modifier Record 与 Tag Container 会复制为 Runtime 数据。
+
+Runtime State 与 Reconciliation Buffer 中的 Ability/Effect Level 是 `1..65535` 闭区间内的整数，上限通过 `GASRuntimeDataContract.MaxGameplayLevel` 暴露。Ability Grant、Spec Creation、Effect Reconciliation 与 State-delta Validation 会拒绝范围外的值。接受 `-1` 的 Helper Overload 只把它用作“继承当前 Ability Level”的指令，并在创建 Spec 前解析为有效 Level。
+
+发布后的 Collection 以 `IReadOnlyList<T>` 暴露。Definition Tag 使用只实现 `IReadOnlyGameplayTagContainer` 的 `GameplayDefinitionTagSet`；Effect Requirement 使用包含相同只读 Definition Set 的 `GameplayEffectTagRequirements`。这些 Public Definition Value 不暴露 Mutation Authority。只有在需要隔离的 Authoring 或 Composition Value 时，才调用 `ToMutableContainer()` 或 `ToMutableRequirements()`，然后构造另一个 Definition。Execution、Custom Magnitude Calculation 与 Application Requirement 等引用型 Strategy Object 不会 Deep Clone，因此其实现必须在 Definition 构造后保持无状态。
+
+`GameplayEffectSpec.DynamicGrantedTags` 与 `DynamicAssetTags` 返回 `GameplayEffectSpecTagView`。它是指向当前 Spec Lease 所拥有存储的 Generation-checked `readonly struct` View。每次读取或修改都会校验来源 Lease Generation；修改还要求 Caller Ownership。Spec 被消费或 Discard 后，已捕获的 View 会抛出异常，并且不会拥有或延长 Backing Storage 的生命周期。
+
+```mermaid
+flowchart LR
+    Definition["GameplayEffect definition"] --> Spec["GameplayEffectSpec<br/>source + level + context + magnitudes"]
+    Spec --> Validate["ASC preflight<br/>requirements + immunity + limits"]
+    Validate -->|"Instant"| Execute["Execute and consume spec"]
+    Validate -->|"Duration / Infinite"| Active["ActiveGameplayEffect<br/>owned by target ASC"]
+    Active --> Tick["Periodic execution / aggregation / expiry"]
+    Active --> Remove["Removal / dispel / shutdown"]
+```
+
+`GameplayEffectSpec.Create` 返回 Caller-owned Spec。只有 Caller Ownership 仍有效时，才能配置 SetByCaller、Dynamic Tag、Context Metadata 与 Reserved Capacity。`ApplyGameplayEffectSpecToSelf` 会立即尝试转移 Ownership；转移成功后，无论最终 Result 是否拒绝应用，都会消费 Spec。Spec 传入该方法后，不能继续修改、Discard 或再次提交。Caller-owned Spec 确定不再提交时，必须恰好调用一次 Public `Discard()`；不存在 Public Memory-owner Release API。
+
+`GameplayEffectSpec` 持有可继承的具体类型 `GameplayEffectContext`。`GameplayEffectSpec.Create`、`GameplayEffectSpec.Context`、`AbilitySystemComponent.MakeEffectContext` 与 `IGameplayEffectContextFactory.Create` 都使用该类型。基础 Context 只携带 `Instigator`、`AbilityInstance` 与 `PredictionKey`；Targeting Data 保留在独立的 AbilityTask 与 TargetData Lease 工作流中。把 Context 传给 `GameplayEffectSpec.Create` 会将其 Attach 到 Spec。基础 Context 会把该 Spec 的准确实例记录为 Ownership Token；Attach 后，只有同一个 Spec 才能更新 Prediction State 或释放 Context，而 Caller Mutation、`Reset` 与 `Dispose` 都会抛出异常。Caller 只能 Dispose 从未 Attach 的独立 Context。派生 Context 可以覆盖受保护的 `ResetCustomState()`，但只能清理自己的可变字段；基础类始终负责基础元数据与 Ownership State，该 Hook 不得释放 Context。Discard 或消费 Spec 会释放其 Context；Duration/Infinite 应用会把 Spec 与 Context 转移给 Target-owned Active Effect，直到 Effect 被移除。不能让多个 Spec 共享同一个 Context，也不能从 Cue Callback 保留它。
+
+Application Result 或 ASC Query 返回的 `ActiveGameplayEffect` 是 Target ASC 独占持有的 Borrowed State。Consumer 不能直接 Release。应通过 `TryRemoveActiveEffect` 等 Owner API 请求移除，或由 Stacking、Expiry、Clear 与 ASC Dispose 完成移除。移除后，不能继续访问 Active Effect，也不能访问其 Spec/Context。
+
+`ActiveEffectContainer` 是内部实现状态。公共枚举通过 `AbilitySystemComponent.ActiveEffects` 返回的稳定 `GASReadOnlyListView<ActiveGameplayEffect>` 完成，详细检查则使用公共 Debugger 与诊断 API。View 及其中每个元素都是 Borrowed Reference；Consumer 不得依赖内部 Index、Stacking Map 或 Mutation Order。
+
+`ModifierMagnitudes`、`ModifierMagnitudeRawValues` 与 `TargetAttributes` 是指向 Spec-owned Buffer 的 Borrowed `ReadOnlySpan<T>` View。它们不会暴露 Mutable Array，并且只在当前 Spec Lease 有效期间有效。提交 Spec 或以其他方式结束其 Lease 前，应读取或复制所需值；不得保留 Span，也不得从中派生 Long-lived Reference。
+
+`GameplayEffectApplicationResult.Code` 是完整的应用结果契约：
+
+| 结果分组 | Code |
 | --- | --- |
-| Ability identity | `Ability.Mage.Fireball`、`Ability.Hunter.Dash` |
-| Cooldown ownership | `Cooldown.Fireball`、`Cooldown.Dash` |
-| State blocking | `State.Stunned`、`State.Silenced`、`State.Rooted` |
-| Damage typing | `Damage.Type.Fire`、`Damage.Type.Poison` |
-| Cue routing | `GameplayCue.Fireball.Cast`、`GameplayCue.Fireball.Impact` |
-| SetByCaller data | `Data.DamageMultiplier`、`Data.ChargeTime` |
-| Gameplay event | `Event.Hit.Critical`、`Event.Kill`、`Event.Combo.WindowOpened` |
+| 已提交成功 | `Applied`、`Executed`、`Stacked` |
+| 非法输入或 Context | `InvalidSpec`、`InvalidDefinition`、`RuntimeContextMismatch` |
+| Runtime State 或 Phase 拒绝 | `StateResyncRequired`、`ReentrantMutationRejected` |
+| 规则拒绝 | `BlockedByImmunity`、`MissingRequiredTags`、`BlockedByForbiddenTags`、`BlockedByCustomRequirement` |
+| 容量或 Prediction 拒绝 | `ActiveEffectLimitReached`、`PredictionLimitReached`、`PredictionUnsupported`、`GrantedAbilityLimitReached` |
+| Execution 或 Commit Failure | `ExecutionFailed`、`DurationCommitFailed` |
 
-推荐规则：
+`CanApplyGameplayEffectSpec` 用于 Preflight。它会检查模块持有的 Requirement 与 Budget，但不能证明项目 Callback 不会抛出异常。Preflight 中调用的 Custom Application Requirement 必须是 Pure Function，因为它可能执行多次。
 
-- Boolean 和 categorical state 放在 tag 中。
-- Numeric state 放在 attribute 或 SetByCaller magnitude 中。
-- 使用 cooldown tag，不要自造 cooldown bool。
-- 使用 `ActivationBlockedTags` 表达 stun、silence 等通用阻塞。
-- 使用 `ActivationRequiredTags` 表达 form、weapon、stance 或 phase 要求。
-- 使用 `TargetRequiredTags` 和 `TargetBlockedTags` 表达 target legality。
-- 网络游戏中保持 tag 名称在不同 peer 上稳定。
+Effect Application 对模块持有的 ASC State 遵循阶段范围内的 Failure-atomic 规则。Validation 与 Capacity Failure 在修改状态前返回。Instant Execution 会 Snapshot 每个涉及的 Attribute；Execution 或 Attribute Hook 抛出异常时恢复这些值。首次插入 Duration Effect 失败时，会先从 Index、Core State、Granted Ability、Tag 与 Modifier Link 中移除未提交 Effect，再使其一次性 Lease 失效，然后返回 `DurationCommitFailed`。Removal Tag 处理与 Cue Dispatch 只在对应 Effect 操作提交后执行。
 
-## ScriptableObject Authoring 工作流
+Definition-granted Tag 与 Spec Dynamic-granted Tag 是独立的 Ownership Edge。Effect Removal、Rollback 与 ASC Shutdown 会分别尝试从 Effect-owned 与 Combined Tag State 移除每条 Edge。某个 Tag-removal Callback 或 Cleanup Step 失败时会记录该 Failure，但不会跳过剩余的 Definition/Dynamic-tag Cleanup、Modifier/Index Cleanup 或 Effect Lease Release。权威 Removal 提交后，再按 Subscriber 分发 Effect Observer。
 
-典型 authoring workflow：
+Effect Mutation Transaction 与 Active-effect Iteration 是不可重入 Phase。在这些 Phase 内直接发起 Apply、Remove、Update、Internal Reconciliation Apply、`Tick`、ASC `Dispose` 或 Ability End，会按照对应 API 的 Result、`false` 或 `InvalidOperationException` 契约立即拒绝。重入调用 `ApplyGameplayEffectSpecToSelf` 时，若 Caller-owned Spec 成功转移 Ownership，该 Spec 会被消费并 Release，方法随后返回 `ReentrantMutationRejected`；提交后不得再对该 Spec 调用 `Discard()`、执行 Mutation 或再次提交。无关工作应排入后续 Owner-thread Phase。
 
-1. 在项目使用的 `CycloneGames.GameplayTags` workflow 中创建或注册 gameplay tag。
-2. 创建 `GameplayEffectSO` asset，用于 cost、cooldown、damage、healing、buff、debuff 和 passive。
-3. 创建 `GameplayAbilitySO` asset，并引用这些 effect。
-4. 为 presentation tag 创建 cue asset 或 cue handler。
-5. 为 character、pawn、monster、boss 或 player state runtime object 添加 `AbilitySystemComponent` owner。
-6. 添加一个或多个 `AttributeSet`。
-7. 在 spawn、possession、equipment change 或 passive effect application 中授予 ability asset。
-8. 通过 input、AI、gameplay event、tag change 或 scripted encounter 激活 ability。
+由 `ActivateAbilityOnGranted`、`OwnedTagAdded`、`OwnedTagRemoved` 或 `GameplayEvent` Trigger 请求的 Activation，在上述 Phase 活跃时使用有界 Deferred Path。请求按 Spec Identity 去重，以 `MaxGrantedAbilities` 为容量上限，并且只在外层 Mutation 或 Iteration 提交后 Flush。单次 Flush 使用相同的有界 Budget；剩余请求会记录 Error 并丢弃。该路径不会使任意 Callback 或 Effect Mutation 变为可重入。
 
-需要行为逻辑时使用 runtime C# subclass。需要策划调参的数据放在 asset 中：name、tag、cost effect、cooldown effect、duration、stack limit、magnitude、cue tag 和 application requirement。
+这不是覆盖完整 Effect Graph 的事务。Stacking 与 Overflow 会按顺序应用 Child Operation；已经提交的 Child 不会因后续 Stacking 工作失败而撤销。该原子性也不覆盖项目 Callback、Custom Calculation、Observer、Log、Network Send 或外部 Service 执行的不可逆工作。这些 Hook 在 Commit 前应保持无 Side Effect，或由项目提供 Compensation。出现 Rollback-cleanup Failure 表示完整性异常；应停止该 Entity 的后续 Authority Change，并从经过校验的权威 Snapshot 恢复。
 
-## Cost、Cooldown、Buff、Debuff 与 Passive
+### SetByCaller
 
-| 功能 | GAS 表示方式 |
-| --- | --- |
-| Mana 或 stamina cost | 带负资源 modifier 的 instant gameplay effect。 |
-| Cooldown | 授予 `Cooldown.*` tag 的 duration gameplay effect。 |
-| 临时 Buff | 带 modifier 和 granted tag 的 duration gameplay effect。 |
-| 永久 Passive | Infinite gameplay effect；如果需要逻辑运行，也可以使用 `ActivateAbilityOnGranted` 的 ability。 |
-| Damage over time | `Period > 0` 的 duration gameplay effect。 |
-| Stun | 授予 `State.Stunned` 的 duration gameplay effect，然后 ability asset 使用 `ActivationBlockedTags`。 |
-| 装备属性加成 | 装备时应用、卸下时移除的 infinite gameplay effect。 |
-| 可叠加 Poison | 带 `GameplayEffectStacking` 的 duration gameplay effect。 |
-| 临时授予技能 | 带 `GrantedAbilities` 的 duration 或 infinite effect。 |
-
-这种统一表示是 GAS 能扩展的核心原因。Cooldown、poison、aura、equipment bonus 和 temporary skill grant 本质上都是不同数据配置的 effect。
-
-## Modifier 聚合与 Channel
-
-Attribute modifier 会经过受 Unreal GAS 启发的 aggregator-style pipeline 计算。`Channel0` 是默认路径，不需要额外配置。高级项目可以把 modifier 放入 `GASModifierEvaluationChannel.Channel1` 到 `Channel9`，用于表达“后一个 modifier domain 必须在前一个 domain 之后计算”的规则。
-
-Core evaluation 顺序如下：
-
-1. 从 attribute base value 开始。
-2. 计算 `Channel0` 中所有符合条件的 modifier。
-3. 将结果传给 `Channel1`，再继续到 `Channel9`。
-4. 每个 channel 内部仍按 Core state 的 Add、Multiply、Division 和 Override 规则计算。
-
-Channel 应用于规则分层，而不是普通内容分类。典型用途包括把基础/装备 modifier、passive rule、临时 buff，或最终环境/规则集修正分到不同层。若计算顺序不重要，让 modifier 保持在 `Channel0` 即可。
+SetByCaller 为单次应用提供 Magnitude，不修改共享 Definition：
 
 ```csharp
-var modifiers = new List<ModifierInfo>
+GameplayTag damageTag =
+    GameplayTagManager.RequestTag("Data.Damage");
+
+GameplayEffectSpec spec =
+    GameplayEffectSpec.Create(damageEffect, sourceASC, level: 3);
+
+spec.SetSetByCallerMagnitude(damageTag, 85f);
+
+GameplayEffectApplicationResult result =
+    targetASC.ApplyGameplayEffectSpecToSelf(spec);
+```
+
+稳定 Gameplay 契约优先使用 Tag Key；本地场景也可以使用 Name Key。Tag 与 Name 条目的总数受 `MaxSetByCallerEntries` 限制。SetByCaller 变化会重新计算受影响的 Modifier Magnitude。
+
+Internal Magnitude Initialization 会静默读取缺失的 SetByCaller Input。提交成功转移 Ownership 时，Spec 会对已创作的 SetByCaller Modifier 执行一次有界检查，并且只发出一次配置要求的 Missing-key Warning。Ownership Transfer 失败或 Caller 调用 `Discard()` 时，不执行该 Warning Pass。显式调用 `GetSetByCallerMagnitude(..., warnIfNotFound: true)` 仍是即时诊断读取，可以独立产生 Warning。
+
+### Magnitude、聚合与 Execution
+
+Modifier Operation 包括 `Add`、`Multiply`、`Division` 和 `Override`。Magnitude 可以采用：
+
+- `ScalableFloat`：使用基于 Level 的固定输入；
+- `AttributeBased`：按 Snapshot Policy 捕获 Source 或 Target；
+- `SetByCaller`；
+- `CustomCalculation`：用于有界计算逻辑。
+
+当 Effect 需要相互独立的 Modifier 通道时，可以使用 Evaluation Channel 进行有序聚合。Execution Calculation 支持涉及多个 Attribute 的 Instant 或 Periodic 逻辑。参与预测的 Execution Calculation 应保持确定性，且不能在内部进行 Transport、Asset Loading 或无界分配。
+
+`GameplayEffectExecutionCalculation.Execute` 接收只能在栈上使用的 `GameplayEffectExecutionOutput`。每个结果通过 `Add` 写入；null 结果或超过 `GASRuntimeLimits.MaxModifiersPerEffect` 的追加会在 Attribute Mutation 开始前失败。Calculation 不能保留或替换该 Output。其 Backing Scratch 与 Instant-effect Rollback Scratch 由 Target ASC 持有，在 `finally` 中清空，并在 ASC Dispose 时释放。Scratch list 一旦增长到超过 256 个元素，操作结束后就会被丢弃，避免异常峰值容量一直保留到 ASC 生命周期结束。
+
+### Stacking 与持续状态
+
+`GameplayEffectStacking` 可以选择不堆叠、按 Source 聚合或按 Target 聚合，同时定义 Stack Limit、Duration Refresh 和 Expiration 行为。Overflow Effect 与 Deny Policy 处理达到上限后的应用。
+
+Application Requirement 在插入前执行。Ongoing Requirement 决定 Active Effect 在 Tag 变化后是否继续贡献。Removal Tag 支持 Dispel。Duration 与 Infinite Effect 可以在 Active Lifetime 内授予 Tag 和 Ability。
+
+## GameplayTags
+
+Tag 是激活、阻塞、取消、免疫、Effect Identity、Granted State、Cooldown、Event、Cue 与 SetByCaller 的共享词汇。
+
+建议的命名空间包括：
+
+```text
+Ability.Attack.Primary
+Ability.Movement.Dash
+Cooldown.Ability.Dash
+State.CrowdControl.Stunned
+State.Immune.Fire
+Effect.Damage.Fire
+GameplayCue.Fire.Impact
+Data.Damage
+Attribute.Vital.Health
+```
+
+`CombinedTags` 聚合 Loose Tag 与 Active Effect 授予的 Tag。它和 `ImmunityTags` 都是 Query-only `GASReadOnlyTagView`；Mutation 保留在 `AddLooseGameplayTag`、`RemoveLooseGameplayTag`、`AddImmunityTag` 与 `RemoveImmunityTag` 等 ASC Method。Loose Tag 由项目代码显式持有：每个 `AddLooseGameplayTag` 都必须有明确的移除路径。Effect-granted Tag 由 Active Effect 持有，并随 Effect 一起移除。
+
+Ability 与 Effect 构造阶段会为热路径使用的 Tag Query 建立 Snapshot。Runtime Definition 应视为不可变；配置变化时应重新创建或重新加载创作资产。
+
+## AbilityTask 与目标数据
+
+AbilityTask 用于 Ability-owned 的 Delay、Repeat、Tag Wait、Attribute Wait、Gameplay Event Wait、Effect Wait、Confirm/Cancel 和 Targeting 等工作。通过 Ability Factory 创建 Task，完成订阅后按 Task API 激活。Ability 持有每个 Task 的取消与最终 Release。
+
+Terminal Callback 不持有 Task Teardown。One-shot、Cancellation、Target-data、Delay、Repeat、Tag、Attribute、Gameplay-event、Effect 与 Ability-wait Task 会在调用项目代码前取得 Terminal Ownership，并通过 Guarded Cleanup 关闭。`AbilityTask_WaitTargetData` 对 TargetData Release 与 Task Teardown 使用嵌套 `finally`，因此 Consumer Callback 或 TargetData Reset 抛出异常时仍会尝试执行 `EndTask`。Callback Exception 不会被吞掉，仍可能传播给调用方，但测试覆盖的 Task Lease 会从 Active Ownership 中移除。Reentrant 的第二个 Terminal Signal 会被忽略。
+
+每个 AbilityTask 都是为一次 Lease 全新构造的 Object。Terminal `finally`、`Activate` Failure Cleanup、Tick Failure Cleanup、Prediction-cancellation Snapshot 与 Task Initialization 都会在结束或登记 Task 前比较捕获的 Internal Lease Generation。Generation Exhaustion 与 Release 后访问都会 Fail Closed。该 Generation 只用于 Internal Bookkeeping，不是 Public Handle；`EndTask`、Cancellation、Ability End 或 Owner Dispose 后，不得继续持有 Task 或其 Mutable Callback State。Release 后 Object 会被丢弃，不会用于后续 Lease，因此 Stale Task Reference 不会通过顺序 Object Reuse 指向另一个 Operation。
+
+`AbilityTask_WaitGameplayTagAdded` 与 `AbilityTask_WaitGameplayTagRemoved` 会先订阅，再检查当前 Tag State，因此 Check 与 Registration 之间不会丢失 Edge。当 `triggerOnce: false` 且当前状态已经满足时，Task 会在订阅后立即通知，并把该 Callback 作为 Activation Frame 的最后一个 Operation。若 Callback 结束 Task，先前 Stack 不会再写入 Field，Generation-checked Activation Failure Cleanup 也不会操作已释放的 Lease。
+
+`EndAbility` 会先把 Ability 标记为 Ending，因此 Cancellation Callback 无法创建另一个 Task。即使部分 Callback 抛出异常，它仍会尝试取消并释放每个 Active Task、清空 Task Index，并且只在完成 Teardown 尝试后报告第一个 Failure。ASC Shutdown 期间，每个 Granted Spec 都会在 Active Effect 移除前执行 Removal Path，Spec Release 保留在 `finally`；因此 Ability-owned Task 与 Effect Cleanup 执行期间，Effect State 仍然有效。
+
+### TargetData Lease 规则
+
+`ITargetActor.Configure(ability, onTargetDataReady, onCancelled)` 是单次 Operation 的 Request/Response Boundary。它恰好连接一个 Completion Callback 和一个 Cancellation Callback。对于每次已配置的 Operation，TargetActor 必须在两个 Terminal Callback 中恰好选择一个并调用一次；不得把它们暴露、组合或调用为 Multicast Notification。Completion 会把一个 `TargetData` Lease 恰好转移一次给 Task。TargetActor 在转移后不得继续保留、Release、复用或再次发布该 Lease；Cancellation 不转移 Lease。
+
+`AbilityTask_WaitTargetData` 是已转移 Lease 的唯一 Owner。`OnValidData` 只提供 Callback-scoped Borrowed Access，Task 会在该 Callback 返回后立即于 `finally` 中调用 `TargetData.Release()`。应赋值一个 Result Consumer，不能组合 Delegate；所有需要持久保留的信息必须在 Callback 内读取或复制：
+
+```csharp
+task.OnValidData = data =>
 {
-    new ModifierInfo("AttackPower", EAttributeModifierOperation.Add, 10f),
-    new ModifierInfo(
-        "AttackPower",
-        EAttributeModifierOperation.Multiply,
-        1.25f,
-        GASModifierEvaluationChannel.Channel1)
+    var actors = (GameplayAbilityTargetData_ActorArray)data;
+    for (int i = 0; i < actors.ActorCount; i++)
+    {
+        stableTargetIds.Add(targetIdResolver(actors.GetActor(i)));
+    }
+
+    // Do not retain data or actor references through the TargetData lease.
 };
 ```
 
-`GameplayEffectSO` 的 serialized modifier 暴露相同 channel。`DataTableModifierFactory` 也提供可选 `evaluationChannel` 参数，因此 Excel/Luban 驱动的数值可以进入同一套 deterministic pipeline。
+Release 后，受 Lease 保护的操作会抛出异常。每个 `TargetData` Object（包括 Public Standalone Construction）都是 One-shot，并在 `Release()` 成功后永久失效，因此 Stale Raw Reference 不会为后续 Operation 再次变为有效。这关闭了顺序 Raw-reference ABA，但不会延长 Callback Lifetime：Callback 或显式 `Release()` 结束后，绝不能保留或访问 `TargetData`、从中取得的 Actor Reference 或 Mutable Payload State。Target Array 受 `MaxTargetsPerTargetData` 限制。Runtime TargetActor 应使用 `AbilitySystemComponent.RentTargetData<T>()`，让 Context 持有 Lease Accounting 并应用配置后的 Target Limit；Standalone Construction 不计入 Context Memory Statistics。
 
-## Modifier Magnitude 类型
+### Local TargetData 校验
 
-`ModifierInfo` 使用一等 magnitude 模型，对应 Unreal GAS 的 `FGameplayEffectModifierMagnitude` 设计。Target attribute、operation 和 evaluation channel 描述 modifier 应用于哪里；magnitude type 描述数值从哪里来。
+`TargetData` 与 `AbilitySystemComponent.TryValidateTargetData` 保持为 Local Runtime API。Gameplay 消费 One-shot Lease 前，Validation 会检查 Owning ASC/Spec/Prediction Relationship、配置的 Target Count、Object Lifetime、有限 Coordinate，以及调用方提供的有限非负 Range。数据仍由 Context Owner Thread 上唯一 Local Workflow 持有；Owner 必须且只能执行一次最终 `Release()`，禁止 Multicast Publication，也不得在 Scope 后保留。
 
-| Magnitude 类型 | Unreal GAS 对应概念 | 适用场景 | 说明 |
-| --- | --- | --- | --- |
-| `ScalableFloat` | `ScalableFloatMagnitude` | 常量或随 level 线性增长的数值，例如基础 cooldown、固定消耗、固定 buff 数值。 | Cyclone 使用 `BaseValue + ScalingFactorPerLevel * (Level - 1)`。Unreal 还可以绑定 curve table；当策划需要大型外部表格时，使用 DataTable 集成。 |
-| `AttributeBased` | `FAttributeBasedFloat` | 由 source 或 target attribute 推导出的数值，例如 attack power 驱动伤害，max health 驱动护盾值。 | 支持 source/target capture、base/current/bonus attribute value、snapshot/live capture timing，以及 Unreal 风格 coefficient/pre-add/post-add 公式。 |
-| `CustomCalculation` | `FCustomCalculationBasedFloat` / `UGameplayModMagnitudeCalculation` | 需要自定义 runtime 逻辑的程序计算。 | Runtime C# 可以直接构造。`GameplayEffectSO` serialized modifier 不能保存任意 custom calculation instance；资产化自定义逻辑应使用 `GameplayEffectExecutionCalculationSO` 或由 C# 构造。 |
-| `SetByCaller` | `FSetByCallerFloat` | Ability 代码在 `GameplayEffectSpec` 上写入数值，例如蓄力时间、连击倍率、外部随机出的伤害。 | 网络 effect 优先使用 GameplayTag key。Name key 只作为本地或旧代码路径的便利方式。 |
-
-Attribute-based magnitude 使用与 Unreal GAS 相同的核心公式：
-
-```text
-Magnitude = Coefficient * (AttributeValue + PreMultiplyAdditiveValue) + PostMultiplyAdditiveValue
-```
-
-`AttributeValue` 可以是捕获 attribute 的 current magnitude、base value 或 bonus magnitude (`Current - Base`)。Cyclone 当前没有实现 Unreal `FAttributeBasedFloat` 中的 attribute curve lookup、source/target tag filter，以及 `AttributeMagnitudeEvaluatedUpToChannel`；这些场景可以使用 modifier channel、tag requirement 或 execution calculation 表达。
-
-示例：source attack power 驱动 target damage。
-
-```csharp
-var damageModifier = new ModifierInfo(
-    "Damage",
-    EAttributeModifierOperation.Add,
-    new AttributeBasedMagnitude(
-        "AttackPower",
-        EGameplayEffectAttributeCaptureSource.Source,
-        EAttributeBasedFloatCalculationType.AttributeMagnitude,
-        coefficient: new ScalableFloat(1.5f),
-        preMultiplyAdditiveValue: new ScalableFloat(0f),
-        postMultiplyAdditiveValue: new ScalableFloat(10f)));
-```
-
-示例：ability 代码在 application 前写入可复制的 SetByCaller magnitude。
-
-```csharp
-var damageModifier = new ModifierInfo(
-    "Damage",
-    EAttributeModifierOperation.Add,
-    new SetByCallerMagnitude(CombatTags.DataDamage));
-
-GameplayEffectSpec spec = GameplayEffectSpec.Create(damageEffect, sourceAsc, level: 1);
-spec.SetSetByCallerMagnitude(CombatTags.DataDamage, 42f);
-targetAsc.ApplyGameplayEffectSpecToSelf(spec);
-```
-
-Snapshot 行为是显式规则：
-
-- Source-captured snapshot value 在 spec 创建时计算。
-- Target-captured snapshot value 在 application 绑定 target ASC 时重新计算。
-- `NotSnapshot` attribute-based 和 custom magnitude 会在 dirty attribute evaluation 中实时重算。
-- 同一个 ASC 内的 live attribute dependency 会自动标记 dependent target attribute 为 dirty。对于生存在另一个 ASC 上、但 live 读取 source attribute 的 outgoing effect，优先使用 snapshot capture，或在 source attribute 改变时提供项目级 invalidation。
-
-网络不会复制 modifier formula。Peer 通过 stable id 解析相同 effect definition，然后复制权威 state、level、stack count、duration 和 SetByCaller GameplayTag value。外部传入的 SetByCaller value 应由服务器保持权威。
-
-## AbilityTask
-
-`AbilityTask` 是本包的 latent ability operation 模型。当 ability 不能在一个方法调用中结束时使用 task：等待 target data、等待 input release、延迟 hit frame、追踪 channel duration，或监听 gameplay event。
-
-当前 task 规则：
-
-- 从 active ability 通过 `NewAbilityTask<T>()` 或 task-specific static factory 创建 task。
-- 配置 delegate 和必需数据后调用 `Activate()`。
-- 完成时调用 `EndTask()`。
-- Owning ability 被取消时调用 `CancelTask()`。
-- 重写 `OnDestroy()` 时清理 delegate 和 transient reference，然后调用 `base.OnDestroy()`。
-- 只有确实需要每帧更新时才实现 `IAbilityTaskTick`。
-
-使用 `AbilityTask_WaitTargetData` 的示例：
-
-```csharp
-using CycloneGames.GameplayAbilities.Runtime;
-
-public sealed class TargetedStrikeAbility : GameplayAbility
-{
-    private readonly ITargetActor _targetActor;
-    private readonly GameplayEffect _damageEffect;
-
-    public TargetedStrikeAbility(ITargetActor targetActor, GameplayEffect damageEffect)
-    {
-        _targetActor = targetActor;
-        _damageEffect = damageEffect;
-    }
-
-    public override void ActivateAbility(
-        GameplayAbilityActorInfo actorInfo,
-        GameplayAbilitySpec spec,
-        GameplayAbilityActivationInfo activationInfo)
-    {
-        CommitAbility(actorInfo, spec);
-
-        AbilityTask_WaitTargetData task =
-            AbilityTask_WaitTargetData.WaitTargetData(this, _targetActor);
-
-        task.OnValidData += data =>
-        {
-            if (data is not GameplayAbilityTargetData_ActorArray actorData)
-            {
-                EndAbility();
-                return;
-            }
-
-            for (int i = 0; i < actorData.Actors.Count; i++)
-            {
-                if (actorData.Actors[i].TryGetComponent(out CombatantAbilitySystem target))
-                {
-                    ApplyGameplayEffectToTarget(_damageEffect, target.AbilitySystem, spec.Level);
-                }
-            }
-
-            EndAbility();
-        };
-
-        task.OnCancelled += CancelAbility;
-        task.Activate();
-    }
-
-    public override GameplayAbility CreatePoolableInstance()
-    {
-        var ability = new TargetedStrikeAbility(_targetActor, _damageEffect);
-        ability.Initialize(
-            Name,
-            InstancingPolicy,
-            NetExecutionPolicy,
-            CostEffectDefinition,
-            CooldownEffectDefinition,
-            AbilityTags,
-            ActivationBlockedTags,
-            ActivationRequiredTags,
-            CancelAbilitiesWithTag,
-            BlockAbilitiesWithTag);
-        return ability;
-    }
-}
-```
-
-Task 是池化对象。Task 结束后不要继续保留它的引用。
-
-## Targeting 系统
-
-Targeting 与 ability execution 明确分离。Ability 向 target actor 或 targeting service 请求 `TargetData`，不需要知道目标来自 raycast、sphere overlap、cone query、lock-on target、ground select，还是 server-side validation pass。
-
-核心 targeting 类型：
-
-| 类型 | 作用 |
-| --- | --- |
-| `ITargetActor` | Target acquisition contract。它配置 ability、开始 targeting、confirm、cancel，并清理自身。 |
-| `AbilityTask_WaitTargetData` | 等待 `ITargetActor` 产出 `TargetData` 的 ability task。 |
-| `TargetData` | Runtime target data base object，带 prediction 和 ability-spec stamp。 |
-| `TargetDataNetworkData` | Target-data replication bridge 使用的 network-safe projection。 |
-| `IGASTargetDataNetworkBridge` | Predicted target-data RPC 的可选 bridge contract。 |
-
-`Samples/Scripts/TargetActor/` 下提供 line trace、sphere overlap 和 cone trace 示例。生产项目应替换为自己的 targeting service，用于处理 team、layer、server authority、lag compensation、hit validation 和项目碰撞规则。
-
-## Execution Calculation
-
-简单 effect 使用带 `ScalableFloat` 的 `ModifierInfo`。复杂战斗公式应放在 `GameplayEffectExecutionCalculation`。
-
-以下情况适合使用 execution calculation：
-
-- 最终伤害依赖 attack power、defense、elemental resistance、level 和 critical state。
-- Boss shield damage 随 phase 缩放。
-- Healing 被 debuff 削弱。
-- Poison damage snapshot source attack，但 live 读取 target resistance。
-
-Execution asset 通过 `GameplayEffectExecutionCalculationSO` 作为 Unity authoring bridge：
-
-```csharp
-using System.Collections.Generic;
-using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
-
-[CreateAssetMenu(
-    fileName = "Exec_Damage",
-    menuName = "CycloneGames/GameplayAbilities/Execution/Damage")]
-public sealed class DamageExecutionSO : GameplayEffectExecutionCalculationSO
-{
-    public override GameplayEffectExecutionCalculation CreateExecution()
-    {
-        return new DamageExecution();
-    }
-}
-
-public sealed class DamageExecution : GameplayEffectExecutionCalculation
-{
-    public override void Execute(GameplayEffectSpec spec, ref List<ModifierInfo> executionOutput)
-    {
-        float damage = spec.GetSetByCallerMagnitude(
-            CombatTags.DataDamageMultiplier,
-            warnIfNotFound: false,
-            defaultValue: 1f) * 25f;
-
-        executionOutput.Add(
-            new ModifierInfo("Damage", EAttributeModifierOperation.Add, new ScalableFloat(damage)));
-    }
-}
-```
-
-多人游戏中，复杂 execution calculation 应在 authority path 上运行，除非每个 peer 都能获得完全相同的输入和 deterministic math。
-
-## DataTable 驱动数值调优
-
-当大量数值由策划维护时，使用 `CycloneGames.DataTable`：level curve、ability damage table、monster stat、Boss phase value、resistance table、upgrade cost、职业初始 attribute 等。`GameplayAbilitySO`、`GameplayEffectSO`、tag 和 cue 继续负责 Unity 内可发现的玩法身份、规则和表现绑定。这样可以让 Excel/Luban 管理批量平衡数据，同时保留 GAS asset 的 authoring 入口。
-
-集成程序集位于：
-
-```text
-Runtime/Integrations/DataTable/
-CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable
-```
-
-编译条件：
-
-| 导入模式 | 行为 |
-| --- | --- |
-| 只导入 `GameplayAbilities`，不导入 `DataTable` | GameplayAbilities core assembly 正常编译；DataTable integration assembly 和专项测试被跳过。 |
-| 两个包都通过 UPM 导入 | integration asmdef 通过 `com.cyclone-games.data-table` 的 `versionDefines` 自动定义 `CYCLONEGAMES_HAS_DATA_TABLE`。 |
-| 两个包都放在 `Assets/ThirdParty` 下 | Unity 不读取嵌套 `package.json` 的 dependency metadata。若本地 DataTable 包需要启用该集成，项目必须通过可见 build configuration 定义 `CYCLONEGAMES_HAS_DATA_TABLE`。 |
-
-不要把 DataTable reference 加进 core runtime。所有 DataTable 相关代码必须留在 integration assembly，或放在显式同时依赖两个模块的项目 assembly 中。
-
-核心类型：
-
-| 类型 | 作用 |
-| --- | --- |
-| `DataTableLevelValueProvider<TRow>` | 将 `IDataTable<TRow>` 或 `TryGet` delegate 转换为带 level 的 GAS 数值。 |
-| `DataTableMagnitudeCalculation` | 基于 `IGASLevelValueProvider` 的 `GameplayModMagnitudeCalculation`。 |
-| `DataTableModifierFactory` | 从表格行创建 `ModifierInfo`，避免 ability class 直接感知表格代码。 |
-| `DataTableAttributeInitializer<TRow>` | 将策划配置的初始 attribute value 应用到 `AttributeSet`。 |
-
-非生成表的示例行类型：
-
-```csharp
-using CycloneGames.DataTable;
-
-public sealed class SkillMagnitudeRow : IDataRow
-{
-    public int Id { get; set; }
-    public float BaseValue { get; set; }
-    public float ScalePerLevel { get; set; }
-}
-
-public sealed class AttributeInitRow : IDataRow
-{
-    public int Id { get; set; }
-    public string AttributeName { get; set; }
-    public float BaseValue { get; set; }
-    public float CurrentValue { get; set; }
-}
-```
-
-从表格创建 level-scaled modifier：
-
-```csharp
-using CycloneGames.DataTable;
-using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable;
-
-IDataTable<SkillMagnitudeRow> skillValues = DataTableRegistry.Get<DataTable<SkillMagnitudeRow>>();
-
-ModifierInfo damageModifier = DataTableModifierFactory.CreateLinearModifier(
-    skillValues,
-    rowId: 1001,
-    attributeName: "Damage",
-    operation: EAttributeModifierOperation.Add,
-    baseValueAccessor: row => row.BaseValue,
-    scalingFactorAccessor: row => row.ScalePerLevel);
-```
-
-从策划表初始化 attribute：
-
-```csharp
-IDataTable<AttributeInitRow> startingAttributes = DataTableRegistry.Get<DataTable<AttributeInitRow>>();
-
-var initializer = DataTableAttributeInitializer<AttributeInitRow>.FromTable(
-    startingAttributes,
-    attributeNameAccessor: row => row.AttributeName,
-    baseValueAccessor: row => row.BaseValue,
-    currentValueAccessor: row => row.CurrentValue);
-
-initializer.ApplyAll(characterAttributes);
-```
-
-如果 Luban 生成表或项目自定义表没有实现 `IDataTable<TRow>`，把生成表的查询 API 包成同形状的 delegate：
-
-```csharp
-GASDataTableTryGetRow<SkillMagnitudeRow> tryGetSkillRow = projectSkillLookup.TryGetValue;
-
-ModifierInfo bossPhaseDamage = DataTableModifierFactory.CreateEvaluatedModifier<SkillMagnitudeRow>(
-    tryGetRow: tryGetSkillRow,
-    rowId: 3007,
-    attributeName: "Damage",
-    operation: EAttributeModifierOperation.Add,
-    valueEvaluator: (row, level, spec) => row.BaseValue * level + row.ScalePerLevel);
-```
-
-生产规则：
-
-- 启动阶段加载并注册 DataTable 内容，然后缓存 table 或 provider 到 ability/effect factory。不要在每帧 ability 逻辑里调用 `DataTableRegistry.Get<T>()`。
-- 表格注册后应视为 immutable。Runtime buff、cooldown、stack、prediction window 和临时战斗值属于 GAS runtime state，不应写回表格行。
-- 多人游戏中，所有需要计算相同预测值的 peer 必须使用同一份表格构建。服务端权威路径应在进入房间时校验 table version、table hash 或 content bundle version。
-- 网络复制稳定 id、level、SetByCaller value 和 authority state delta。不要信任客户端提交的 DataTable 派生 magnitude。
-- 少量简单常量用 `ScalableFloat`；大规模策划数值矩阵用 DataTable；依赖多个 runtime attribute 或战斗规则的结果用 `GameplayEffectExecutionCalculation`。
+Local `TargetData` Lease 不会被序列化。可选 `CycloneGames.GameplayAbilities.Networking` 包提供有界 `ActorList`、`SingleHit` Wire Record，以及 Confirm/Cancel Command。Authority Handler 接收稳定 Identity 和 Portable Value，不接收 Unity Object 或 Local Lease。Gameplay 消费该 Intent 前，产品仍必须完成 Authorization，以及权威 Range、Visibility、Collision、Faction、Lifetime 与 Rate 校验。
 
 ## GameplayCue
 
-Gameplay cue 是由 gameplay state 驱动的表现事件。Gameplay effect 表示“某个 cue 发生了”，cue system 决定播放什么视觉或音频反馈。
+GameplayCue 是表现层 Event，不能决定 Damage、Cost、Cooldown、Authority 或其他 Gameplay Invariant。
 
-Cue 适合用于：
+Event 包括：
 
-- Impact VFX 和 hit sound。
-- Casting start 和 casting end presentation。
-- Persistent aura loop。
-- Buff 或 Debuff 的屏幕效果。
-- Camera shake 和 controller feedback。
+- `OnActive`：持久 Effect 进入 Active；
+- `WhileActive`：Active 期间的表现；
+- `Executed`：Instant 或 Periodic Execution；
+- `Removed`：持久表现结束。
 
-不要把 damage、healing、tag grant 或 authority decision 放入 cue code。Cue 应该可以在低端客户端上被 suppress、replay 或 skip，而不改变 gameplay result。
+`AbilitySystemComponent.OnGameplayCueCommitted` 是供非表现层 Consumer 使用的同步 Owner-thread Observation Boundary。只有对应 Effect Mutation 已提交后，它才发布 readonly、强类型的 `GameplayCueCommitted` Value。Instant `Executed` Cue 的 Active-effect Reconciliation ID 为零；`OnActive`、`Removed` 与每次实际发生的 Periodic `Executed` 都携带该 Active Effect 相同的正数 Process-local Reconciliation ID。Source Ability Policy、Source Spec Handle、Prediction Key 与 Target ASC State Version 会在长生命周期 Effect 释放 Borrowed Ability-instance Reference 前完成捕获。
 
-Cue 相关 runtime 类型：
+每个 Committed-cue Observer 都会独立调用。Observer 异常会被记录，但不能撤销已提交 Effect，也不能阻止后续 Observer；本地 `IGameplayCueManager` 失败同样不会抑制 Committed Observation。该 Callback 不是 Transport 或 Global Event Bus。其 ASC 与 Effect Reference 只在同步调用期间属于 Borrowed Reference；需要跨生命周期或线程的 Consumer 只能复制自己持有的稳定 Value。订阅、移除与 Dispatch 均使用 ASC Owner Thread；Warmed Dispatch 复用现有 Callback Buffer，不会为每条 Cue 创建 Observer Collection。
 
-| 类型 | 作用 |
-| --- | --- |
-| `GameplayCueSO` | Cue asset 的 ScriptableObject base。可重写 `OnExecutedAsync`、`OnActiveAsync` 或 `OnRemovedAsync`。 |
-| `GameplayCueParameters` | Cue handler 使用的 runtime presentation context。 |
-| `IGameplayCueHandler` | 可以按 tag 处理 cue event 的 runtime object。 |
-| `IPersistentGameplayCue` | 创建并追踪 persistent instance 的可选 cue contract。 |
-| `GameplayCueManager` | 将 cue tag 解析为 cue behavior 的 service。 |
-| `GameplayCueDispatcher` | 负责 cue dispatch 和 prediction accounting 的 ASC collaborator。 |
+`GameplayCueManager` 支持静态地址注册、Runtime Handler、Persistent Instance 追踪、预测 Accept/Reject、异步加载和有界 GameObject Pool。同一静态地址的并发请求共享一个 In-flight Load。每次 Await 后，Manager 都会重新校验 Registration、Target Lifetime、Cue Reference State、Cancellation 与 Lease Ownership；过期或非法结果不会发布。异步 Dispatch 会复制不可变 Cue Parameter，不会让 Effect Context Reference 超出其有效生命周期。
 
-One-shot cue 示例：
+`GameObjectPoolManager.PoolConfig` 显式限制 Asset Pool、全局 Active Lease、单 Pool Lease、单 Pool Retained Instance、跨全部 Pool 的 `MaxTotalRetainedInstances`、最小保留量与 Idle Expiration。不同 Asset Key 可以并发 Prewarm，但每个 Asset Pool 最多允许一个 In-flight `PrewarmPoolAsync`；同一 Key 的另一个未满足 Prewarm 会抛出异常。每次 Prewarm 都会在 Await 前预留全局 Retained Budget，因此不同 Key 的操作也无法共同超额保留。全局 `AggressiveShrink()` 会跳过 In-flight Pool；针对该 Key 的 Shrink 或 `ClearPool` 会抛出异常。归还的 Instance 超过任一 Retention Bound 时会被销毁。
+
+`GetAsync`、`PrewarmPoolAsync` 与 Shared Handle Load 都从 Unity Main Thread 进入。External Cancellation 可能使等待中的 Continuation 在 Worker 上恢复，因此这些流程会在 `finally` 中使用不携带已取消 Token 的切换回到 Main Thread，再修改 Pool Accounting。`GetAsync` 会释放 Pending Lease-request Count；Prewarm 会清除 In-flight Flag 并归还全部未使用的 Retained-instance Reservation；Shared-load Waiter 会递减自身 Count。取消一个 Waiter 不会取消仍被其他 Waiter 使用的 Load；只有最后一个 Waiter 离开时才取消 Shared Load。Shutdown Cancellation 与 Load Failure 会在 Main Thread Dispose 已取得的 Resource Handle。
+
+Persistent Cue Activation 使用同一 Ownership Closure。`CreateInstanceAsync` 成功返回 Lease 后，若 `OnActiveAsync` 或 `OnWhileActiveAsync` 在 Worker Thread Fault/Cancel，Cleanup 会切回 Main Thread，并在 Ownership 尚未转移到 Tracker 时释放 Lease。若 `CreateInstanceAsync` 自身取得 Lease 后在返回前失败，该实现必须自行释放 Lease，因为 Workflow 尚未收到 Ownership Token。Persistent Removal 持有 Release Record，并在 Success、Cancellation 或 Handler Failure 后于 `finally` 中归还 Tracked Lease。
+
+Pool 中的 Prefab 可以实现 `IGameObjectPoolLifecycle`。Manager 在 Instance 创建时发现并缓存 Handler，在激活前调用 `OnRentFromPool`，并在 Deactivate、重新挂到 Pool Root 与恢复 Local Scale 前按逆序调用 `OnReturnToPool`。Lifecycle Callback Failure 会隔离并销毁该 Instance，不会保留状态不确定的对象。Lifecycle Callback 必须重置 Component 持有的全部临时状态，并且不能递归释放自身 Lease。
+
+`GameObjectLease` 是租用 Cue Object 的 Ownership Token。签发它的 Manager 会记录 Owner Identity、Instance ID、Raw Instance Reference 与单调递增 Generation。`Release` 只接受完全匹配的 Outstanding Tuple，并拒绝 Foreign-manager、Duplicate 与 Stale-generation Return。这可以阻止已复制 Lease 在同一 Instance 归还并再次租出后释放它，从而防止 GameObject Pool 的 ABA Release Hazard。
+
+`GameObjectLease.IsValid` 只表示该值在结构上曾被签发；Lease 归还后，其副本仍可能保持结构有效。每次访问 `GameObjectLease.Instance` 都会委托给签发它的 Manager，并执行平均 `O(1)` 的 Active-lease Lookup。Manager 会先校验 Unity Main-thread Affinity、Shutdown State、Authority/Owner Identity、非零 Instance ID 与 Generation、准确的 Active `(Instance ID, Generation, Raw Reference)` Tuple，以及 Unity Object Liveness，然后才返回 Object。Release 或 Shutdown 后访问会 Fail Closed。
+
+返回的 `GameObject` 只在 Lease 仍为 Outstanding 时属于 Borrowed Reference。若 Consumer 单独缓存 Raw `GameObject`，Lease 无法撤销或拦截该引用。Consumer 必须在 Lease Boundary 丢弃它，Release 后绝不能继续修改、Deactivate、Destroy 或 Reparent。
+
+Persistent Cue Activation 与 Removal 都是 Cancellation-owned Workflow。`IPersistentGameplayCue.CreateInstanceAsync` 创建并返回 Lease；`OnActiveAsync`、`OnWhileActiveAsync` 与 `OnRemovedAsync` 在 Manager 持有的 Instance 生命周期上运行。若实现已取得 Lease，但在返回前观察到 Cancellation，则实现必须自行释放该 Lease。`CreateInstanceAsync` 返回后，Dispatch Workflow 持有 Lease；所有 Activation Check 成功后才转移给 Tracker，否则在 `finally` 中释放。`OnRemovedAsync` 只接收 Borrowed Raw Instance；Manager 会在 Completion、Cancellation 或 Failure 后释放已追踪 Lease。
+
+Persistent Occurrence 按 Target 与 Cue Tag 进行引用计数。只有第一个 Occurrence 会启动一次 Activation Workflow 并创建一个 Tracked Instance；后续 Occurrence 共享它。只有最后一个匹配 Occurrence 被移除后，Manager 才取消并释放表现。Prediction Commit 会把匹配 Occurrence 标记为 Committed，使后续 Rollback Cleanup 忽略它；Rollback 只移除携带对应 PredictionKey 且仍为 Provisional 的 Occurrence。该引用模型与共享加载路径可以避免重叠 Effect 或并发首次加载产生重复 Persistent Instance。
+
+AssetManagement Integration 会把每个已加载的 `IAssetHandle<T>` 包装为一个单 Owner 的 `IResourceHandle<T>`。Dispose 会清空并至多释放一次底层 Handle。该 Wrapper 不参与 Pool，也不表示 Shared Ownership；接收它的 Consumer 必须恰好转移或释放一次。Cue Cache 与 Asset Pool 会在 Eviction 或 Shutdown 时释放其持有的 Wrapper。
+
+在组合阶段注册静态 Cue 地址：
 
 ```csharp
-using Cysharp.Threading.Tasks;
-using CycloneGames.GameplayAbilities.Runtime;
-using UnityEngine;
+var cueTag = GameplayTagManager.RequestTag("GameplayCue.Fire.Impact");
+cueManager.RegisterStaticCue(cueTag, "GameplayCues/GC_FireImpact");
+```
 
-[CreateAssetMenu(
-    fileName = "GC_FireballImpact",
-    menuName = "CycloneGames/GameplayAbilities/Cue/Fireball Impact")]
-public sealed class FireballImpactCueSO : GameplayCueSO
+Dedicated Server 应使用 `NullGameplayCueManager.Instance`。视觉客户端必须在有序 Shutdown 中调用 `GameplayCueManager.Dispose()`。
+
+## 预测与复制
+
+### Local Prediction 生命周期
+
+Prediction Record、Key、Rollback Snapshot 与 Closure Ordering 仍是 Local Runtime Mechanism。它们使用 Simulation Frame 而不是 Unity Render-frame Identity，具有显式 Capacity Limit，并在发布 Terminal Callback 前关闭自有状态。Predicted Effect Apply 仍会在 Mutation 前拒绝 Ambiguous Stacking、重叠 Attribute Ownership、不支持的 Custom Execution 与耗尽的 Prediction Budget。
+
+Authority/Replica Role 是显式契约。`LocalOnly` 只在当前 Runtime 执行；`AuthorityOnly` 在 `Authority` Context 执行；`LocalPredicted` 在 Replica 上打开乐观工作，并在 Command 校验后通过 Authority Boundary 再次执行。Prediction Window 通过 `CommitPredictionWindow` 或 `RollbackPredictionWindow` 结束；Commit 保留已接受的本地工作并清除 Prediction Bookkeeping，Rollback 则撤销被追踪的 Effect、Attribute、Task、Cue 与 Ability Activity。
+
+### Authority Activation Boundary
+
+构造 Context 时选择不可变 Role：
+
+```csharp
+var serverContext = new GASRuntimeContext(
+    authorityMode: GASRuntimeAuthorityMode.Authority);
+
+var replicaContext = new GASRuntimeContext(
+    authorityMode: GASRuntimeAuthorityMode.Replica);
+```
+
+对于 `Activate` Command，产品 Endpoint 只有在认证 Sender、验证 Target Ownership、执行 Replay/Rate/Work Budget，并把 Authority-issued Grant ID 解析到当前 Local `GameplayAbilitySpec` 后，才可调用以下 Public Authority Boundary：
+
+```csharp
+GASAuthorityActivationResult result =
+    authorityASC.TryExecuteAuthorityAbility(resolvedLocalSpec);
+
+switch (result.Status)
 {
-    public GameObject Prefab;
+    case GASAuthorityActivationStatus.Activated:
+        // Encode one correlated terminal response.
+        break;
+    case GASAuthorityActivationStatus.MissingOrStaleGrant:
+    case GASAuthorityActivationStatus.WrongExecutionPolicy:
+    case GASAuthorityActivationStatus.AbilityRejected:
+    case GASAuthorityActivationStatus.RuntimeUnavailable:
+        // Map to a stable protocol result without retrying reentrantly.
+        break;
+}
+```
 
-    public override UniTask OnExecutedAsync(
-        GameplayCueParameters parameters,
-        IGameObjectPoolManager poolManager)
+Cancel 与 Input Edge Command 分别使用 `TryCancelAbility` 和 `TrySetAbilityInputPressed`。Target Confirm/Cancel 通过产品拥有的 `IGASNetworkTargetCommandHandler`。每条路径都保持显式，并且都不能绕过 Authentication、Ownership、Replay、Rate 或 World Validation。
+
+`TryExecuteAuthorityAbility` 要求 Authoritative Context，以及由该 ASC 持有并注册的准确 Live Spec。它接受 `AuthorityOnly` 与 `LocalPredicted`，拒绝 Active 或其他不可用 Ability，遵守 Mutation/Resync Guard，返回当前 Authoritative State Version，不持有 Transport State，不分配 Operation Object，也不发送 Packet。其 Correlation-key Overload 会把已校验 Command Sequence 传入本次权威 Activation 创建的 Effect 与 Cue。
+
+`GASRuntimeAuthorityMode.Invalid` 与默认 `GASAuthorityActivationResult` 都 Fail Closed。Context Role 不能建立 Connection Authority：Authentication 与 Permission 仍属于 Endpoint 职责。
+
+### 可选 Networking Integration
+
+`CycloneGames.GameplayAbilities.Networking` 版本 `1.0.0` 是后端无关的网络 Integration，包括：
+
+- 稳定 Entity、Grant、Effect、Content 与 Tag Identity；
+- Fail-closed Protocol/Content/Tags/Wire-schema Handshake；
+- Activation、Cancellation、Input、有界 TargetData、Terminal Result、State、Acknowledgement、Resync 与 GameplayCue Contract；
+- 显式 Little-endian `Span` Codec 与 Structural Validator；
+- 有界 Replay、Authority/Replica Identity Map、State Buffer、Delta/Chunk Planning 与 Semantic Checksum；
+- 负责 Handler Ownership、Handshake Gating、Direction Check、Dispatch 与 Failure Report 的 `GASNetworkEndpoint`；
+- Authority/Replica ASC State Adapter、精确 Command Processing、Local Prediction Control 与 Deterministic Runtime Content Resolver；
+- 带校验 Custom Inspector 的 `GASNetworkContentCatalogAsset`。
+
+该 Integration 使用 `CycloneGames.Networking.INetworkMessageEndpoint`，不依赖 Mirror、Mirage 或 Nakama。产品代码仍负责 Authentication、Connection-to-account Mapping、Entity Ownership、Permission、Rate Policy、Interest Management、依赖世界状态的 Target Check、Timeout Scheduling、Reconnect Policy 与 Owner-thread Marshaling。
+
+网络状态覆盖 Grant 及其 Granting Effect、Active/Input Flag、Attribute、Active Effect、Source Grant、Inhibition、Stack/Timer State、SetByCaller Value、Dynamic Tag 与精确 Loose-tag Count。静态 Definition 通过兼容的 Content Catalog 解析。完整组合和验证契约见 [`CycloneGames.GameplayAbilities.Networking/README.SCH.md`](../CycloneGames.GameplayAbilities.Networking/README.SCH.md)。
+
+### Process-local Reconciliation Transaction
+
+`GASAbilitySystemStateDeltaBuffer` 仍是 Process-local Reconciliation Scratch Structure。它包含 Counted Array、Local Identity 与 Runtime Object Reference；它不是 Wire DTO，无法安全跨进程，也不得作为 Async Message 保留。
+
+每个 ASC 在创建 Active Effect 时自动分配正数的 Process-local Reconciliation Identity。该值在当前 ASC 内唯一，并在 Effect Lifetime 内不可变。它只用于 Capture/Apply 关联 Local Object；不是 Wire ID，外部协议通过自己的 Identity Map 完成转换。
+
+`PreparePendingStateDeltaNonAlloc` 与 `CommitPreparedStateDelta` 对 Authority Pending-change Tracker 构成 Prepare/Copy-or-encode/Commit Transaction：
+
+```csharp
+authorityASC.PreparePendingStateDeltaNonAlloc(delta);
+
+// Product code must synchronously copy or encode every counted range into
+// its own bounded, versioned DTO and map every identity to a stable wire ID.
+bool encoded = EncodeIntoProductOwnedWireBuffer(delta);
+if (encoded)
+{
+    if (!authorityASC.CommitPreparedStateDelta(delta))
     {
-        if (Prefab != null && parameters.TargetObject != null)
-        {
-            UnityEngine.Object.Instantiate(
-                Prefab,
-                parameters.TargetObject.transform.position,
-                Quaternion.identity);
-        }
-
-        return UniTask.CompletedTask;
+        // Source state changed; pending changes remain dirty for a new capture.
     }
 }
 ```
 
-生产 cue code 应使用项目 pooling 和 asset loading service，不要在热路径直接实例化。
+Convenience Capture Path 可以在本地 Prepare 并 Commit，但不会发送任何内容。Encode 被拒绝、Exception 或 Source-version Mismatch 时，Pending Change 必须保留，以供后续重新 Capture。State 与 Attribute-registry Version 保持 Monotonic，但不保证 Contiguous，因为保留的 Version 可能在后续工作拒绝 Mutation 后仍被消耗。
 
-## 示例演练
+`ApplyStateDelta` 与 `TryApplyStateDelta` 保持为 Public Process-local Reconciliation API；Public Visibility 不会使其成为 Transport Endpoint。它们在 Apply 前校验 Schema、Mask、Sequence、Baseline、Count/Array Pair、Capacity、Process-local Definition/Source Reference、Reconciliation ID、Tag Edge、SetByCaller Slice 与 Checksum。Validation Failure 不修改 State。Application 或 Checksum Failure 会进入 Resync-required Mode，因为 Multi-section Apply 不是 Cross-system Atomic Transaction。Active-effect Apply 直接消费 `GASActiveEffectStateData` 已携带的 Reference，不会隐式分配 ID，也不会查询全局 Resolver。StateDelta 严格按 Reconciliation ID 更新或创建 Effect，绝不会按 Prediction Key 提升或确认未绑定的本地 Effect。不要在同一个参与 Reconciliation 的 ASC 中混入会改变 Replicated State 的 `LocalOnly` Mutation；由此产生的 Checksum Conflict 会 Fail Closed，并要求显式 Baseline Resync。
 
-本包在 `Samples/` 下提供可运行 sample project。该目录在当前仓库中保持可见，以支持直接 `Assets/ThirdParty` 使用；`package.json` 也通过 `samples` entry 暴露该目录，供 package workflow 使用。
+`GASAbilitySystemStateDeltaBuffer` 与 `GASAbilitySystemFullStateBuffer` 仍是 Process-local Bridge Structure。Networking Integration 会把它们映射到稳定 Wire Record，校验并准备完整 Receiver State，解析全部 Runtime Reference，随后才在 ASC Owner Thread 调用 Apply Boundary。禁止直接序列化这两个 Process-local Buffer。
 
-打开 `Samples/SampleScene.unity`，点击 Play，并按照 `Samples/README.SCH.md` 中的按键说明运行。示例场景使用 Player 和 Enemy prefab、预配置 ability/effect asset、sample tag、target actor、GameplayCue 示例和一个小型 UI logger。
 
-| Sample | 演示内容 |
+## 内存、性能与容量
+
+### Managed Runtime Memory
+
+每个 `GASRuntimeContext` 都持有七组 Public Runtime Object 的生命周期计数：`GameplayEffectSpec`、`ActiveGameplayEffect`、`GameplayEffectContext`、`GameplayAbilitySpec`、Runtime `GameplayAbility`、`AbilityTask` 与 `TargetData`。每次 Context Acquire 都会构造新的 Public Object。适用于对应 Owner 的 Terminal Operation（例如 Caller Discard 或 Spec Final Consumption、Active-effect Removal、Grant Clear、Per-execution Ability End、Task End、显式 `TargetData.Release()` 或 Owner Dispose）会使该次 Lease 失效，并永久丢弃 Object。`InstancedPerActor` Ability 在正常 Activation End 后仍然有效，直到其 Grant 被清除时才 Release。每种 Type 还会拒绝在首次 Lifetime 结束后由 Internal Path 再次 Acquire Lease。Release 后的操作会 Fail Closed；同一个 Public Object 不会再次签发，因此 Stale Raw Reference 不会指向后续顺序 Lease。Context Memory Statistics 只计算 Context-owned Acquisition。
+
+只有 `GameplayEffectSpec` 使用可复用的 Internal Storage。Public Spec 在 Active 期间 Attach 一个 Private `GameplayEffectSpecBacking` Record。Release 会先完整清理敏感数据和 Mutable Field，然后 Backing 才能进入每个 Context 独有的有界 Cache；Cleanup Failure 会丢弃该 Backing。Cache 不包含 Public Spec、Context、Active Effect、Ability Spec、Ability、Task 或 TargetData Object。
+
+通过 Context Owner Thread 配置并观察 Cache：
+
+```csharp
+var cacheProfile = new GASRuntimeCacheProfile(
+    effectSpecBackingCapacity: 128); // 0..4096; default is 64
+
+using var context = new GASRuntimeContext(
+    cacheProfile: cacheProfile);
+
+GASRuntimeCacheStatistics cache = context.GetCacheStatistics();
+// cache.Retained, Capacity, Hits, Misses, Discards
+
+context.TrimCaches(); // discards every retained backing record
+```
+
+`GASRuntimeLeaseStatistics` 为一组 Object 报告 `Active`、`PeakActive`、`Acquisitions`、`InvalidReleases` 与 `ReleaseFailures`。`context.GetMemoryStatistics()` 返回 `GASRuntimeMemoryStatistics`，其中包含 `EffectSpecs`、`ActiveEffects`、`EffectContexts`、`AbilitySpecs`、`Tasks`、`Abilities`、`TargetData` 以及它们求和后的 `OutstandingLeases`。`context.GetCacheStatistics()` 独立报告 Backing Cache 的 `Retained`、`Capacity`、`Hits`、`Misses` 与 `Discards`。`TrimCaches()` 会清除已保留的 Backing Record，但不会使 Active Spec 失效。这些 API 会校验 Context Ownership 与 Dispose State；它们是 Diagnostics 与显式 Cache Control，不负责恢复 Active Lease。
+
+使用 `Throw` 时，跨线程访问会立即抛出异常。使用 `LogWarning` 时，Runtime-memory Access 会记录日志，然后仍在修改前抛出异常。`Disabled` 只移除该诊断，不提供 Synchronization。容量应来自硬件 Composition Profile 与测量后的 Telemetry，不能根据 Platform Compiler Symbol 猜测。
+
+模块不声明全局 Zero Allocation。Cache Hit 可以复用已清理的 Spec Backing Buffer，但每次 Public Runtime Acquire 仍会创建一次性 Object。首次使用、Dictionary/Buffer 扩容、Event 订阅、项目 Callback、Warning/Error、Authoring 转换与外部 Adapter 都可能产生分配。成功的热路径 Ability/Effect/Prediction Event（包括已提交的 Effect Removal 与 Ability Cancellation）使用可选 `GASTrace` Ring，而不是逐次输出成功日志。`GASTraceEvent.AbilityDefinition` 保存稳定 Ability Definition，不保存已释放的 Runtime Instance。Trace Capacity 默认为 `4096`；`SetCapacity` 只接受 `1..65536`，并会重置 Ring。必须使用 Unity Profiler 和 Allocation Call Stack 验证代表性 Gameplay。
+
+### 稳定的公共 Collection 与 Tag View
+
+ASC 的 Collection 与 Tag Query 返回 Cached Live View，不返回 Backing `List<T>`、`HashSet<T>` 或 Mutable Tag Container：
+
+| ASC Surface | Public Type |
 | --- | --- |
-| `CharacterAttributeSet` | Primary、secondary 和 meta attribute；clamping；damage conversion；experience hook。 |
-| `GA_Fireball_SO` | 应用 instant damage 和 burn debuff 的 ability asset。 |
-| `GA_PoisonBlade_SO` | Ability-driven debuff application。 |
-| `GA_ShieldOfLight_SO` | Defensive buff pattern。 |
-| `GA_Berserk_SO` | Self-buff style ability。 |
-| `GA_Purify_SO` | 按 tag 移除 effect。 |
-| `GA_ArmorStack_SO` | Stack behavior 和 stack debugging。 |
-| `ExecCalc_Burn` 和 `ExecCalcSO_Burn` | Runtime execution calculation 和 ScriptableObject execution bridge。 |
-| `AbilityTask_WaitTargetData_SpawnedActor` | Target actor 与 target-data task 集成。 |
-| `TargetActor/*` | Line trace、sphere overlap 和 cone trace targeting 示例。 |
-| `GASPoolInitializer` | Sample scene 的 pool setup。 |
-| `GASSampleTags` | Sample tag constant 和命名风格。 |
-| `Integrate/Setup/GASManualSetup` | Manual non-DI cue manager startup pattern。 |
-| `Integrate/Setup/GASServerSetup` | 使用 `NullGameplayCueManager` 的 server/headless startup pattern。 |
-| `Integrate/DI/VContainer/GASLifetimeScope` | 可选 VContainer composition pattern，仅在 VContainer 存在时编译。 |
+| `AttributeSets`、`ActiveEffects`、`GetActivatableAbilities()` | `GASReadOnlyListView<T>` |
+| `DirtyAttributeNames`、`PendingAddedTags`、`PendingRemovedTags` | `GASReadOnlySetView<T>` |
+| `DirtyAttributeValueSnapshots` | `GASReadOnlyListView<GameplayAttribute>` |
+| `CombinedTags`、`ImmunityTags` | `GASReadOnlyTagView` |
 
-应将 sample 作为框架使用模式来阅读。进入生产前，把项目专用逻辑移动到自己的 assembly。
+这些对象具有稳定 Identity，是 Live View，不是复制后的 Snapshot。它们不暴露 Backing Collection、Implicit Conversion、Mutation Method、Tag Callback Registration 或 Raw Container。每次 Count、Index、Query 与 Enumeration Step 都会检查 ASC Owner-thread Affinity 与 Dispose 状态；这也适用于 ASC Dispose 前捕获的 View。同步修改同一 Owner 时不得同时枚举；需要 Snapshot 时，应复制 Stable ID 或 Immutable Value。
 
-## 网络
+直接对这些具体 View Type 使用 `foreach` 时会采用 Value-type Enumerator。聚焦 Allocation Guard 在 Warmup 后的具体 View Enumeration Path 观察到 Current Thread 分配为零。通过 `IEnumerable<T>` 或其他 Interface 枚举可能对 Struct Enumerator 发生 Boxing，不属于该结果的覆盖范围。
 
-本包拥有 transport-neutral state 和 runtime hook。独立的 `CycloneGames.GameplayAbilities.Networking` 包负责把这些 contract 接到 `CycloneGames.Networking`。
+### Consumed 与 Borrowed Managed Reference
 
-推荐多人模型：
+为保持 GAS 风格的使用体验，一次性 Runtime Lease Object 以 Raw Class Reference 暴露。决定其有效性的是 Ownership Contract，而不是 Garbage Collector Reachability：
 
-- Effect、attribute、tag、ability grant 和 state delta 由服务端权威。
-- 客户端 prediction 只用于本地响应。
-- Full-state sync 用于 late join、reconnect 和 drift recovery。
-- 私有 attribute 默认只发 owner，除非显式注册为 public observer attribute。
-- Ability definition、effect definition、attribute、gameplay tag 和 ASC network id 必须来自稳定 registry。
-- Interest management 放在 ASC 外部，让 room、team、owner、spectator 和 visibility system 先选择 observer，再 capture state。
+| Reference | 有效期间的 Owner | 使其失效的操作 |
+| --- | --- | --- |
+| `GameplayEffectSpec` | 提交前由 Caller 持有；提交后由 ASC 持有；Duration/Infinite 应用后由 Target Active Effect 持有 | 提交前由 Caller 调用 `Discard()`、通过 `ApplyGameplayEffectSpecToSelf` 转移，或随 Active-effect Removal 失效 |
+| `GameplayEffectContext` | Attach 前由独立 Caller 持有；之后由唯一 Owning Spec 持有 | Attach 前由 Caller `Dispose()`，或随匹配的 Owning-spec Discard、Consumption 与 Active-effect Removal 失效；Attach 后只有 Owning Spec 可以更新 Prediction State 或释放它 |
+| `ActiveGameplayEffect` | Target ASC；Consumer 只获得 Borrowed Access | Owner `TryRemoveActiveEffect`、Effect Clear/Expiry 或 ASC Dispose；不存在 Direct Consumer Release Operation |
+| `GameplayAbilitySpec` | Owning ASC | `ClearAbility`、Effect-grant Removal、Authoritative Reconciliation Replacement 或 ASC Dispose |
+| Runtime `GameplayAbility` Instance | 对应 Spec/Activation | 按 Instancing Policy 发生 Ability End、Clear、Removal 或 ASC Dispose |
+| `AbilityTask` | Active Ability | `EndTask`、Cancellation、Ability End、Clear 或 ASC Dispose |
+| `TargetData` | 显式 Renter/Receiver，或正在 Dispatch `OnValidData` 的 AbilityTask；Callback Consumer 只有 Borrowed Access | Owner `Release()` 或 Task Callback Completion |
 
-对于高压力共斗游戏，GAS 只复制 gameplay state。Movement、animation state、monster AI perception、physics、room discovery 和 matchmaking 应由独立系统负责。
+Consumed Reference 不能继续读取、比较当前 Identity、修改、再次归还或保存供后续使用。Borrowed Reference 不能超过 Owner Lifetime。`GameplayEffectApplicationResult.ActiveEffect`、Debugger Collection 与 ASC Read-only List 暴露的是 Borrowed Object，不发生 Ownership Transfer。
 
-## 性能模型
+Context-owned `GameplayEffectSpec`、`GameplayEffectContext`、`ActiveGameplayEffect`、`GameplayAbilitySpec`、Runtime `GameplayAbility` Instance、`AbilityTask` 与 `TargetData` 的每个 Object 只取得一次 Lease。Release Path 会使 Object 失效并丢弃，而不会再次签发，因此这些 Public Type 已关闭顺序 Raw-reference ABA。Released-object Guard、Ownership Check 与 Invalid-release Counter 会在 Stale Code 再次调用 API 时 Fail Closed。它们不会使 Stale Reference 可用，也不会延长 Borrowed Lifetime；数据需要跨越 `Discard`、`Clear`、`Remove`、Ability End、Task End、TargetData Release 或 Owner Dispose 时，必须复制 Stable ID 或 Immutable Value。
 
-运行时代码以预分配后的 low-GC 为目标。进入战斗前应显式 reserve capacity：
+Internal Lease Generation 仍会保护 Framework Cleanup，避免 Reentrant 或 Out-of-order Work 操作当前 Lifetime 之外的状态。它不是 Consumer Identity，也不会改变“Release 后必须丢弃 Raw Reference”的规则。
 
-```csharp
-asc.ReserveRuntimeCapacity(
-    abilityCapacity: 64,
-    attributeCapacity: 128,
-    activeEffectCapacity: 512,
-    predictionWindowCapacity: 64,
-    coreModifierCapacity: 1024,
-    maxSetByCallerPerEffect: 16,
-    targetDataObjectCapacity: 128);
+### Hard Limit
 
-asc.PrewarmRuntimePools(
-    grantedAbilitySpecLists: 32,
-    abilityAppliedEffectLists: 32);
-```
+`GASRuntimeLimits` 限制 AttributeSet、Attribute、Granted Ability、Active Effect、Prediction Window、Target、SetByCaller Entry、单 Effect Modifier、Core Modifier、Outstanding Predicted Attribute Snapshot、单 Delta Tag Change 与单 Tick Catch-up 工作量。`GASAbilitySystemLimits` 对 Unity-free State 施加对应的状态限制。
 
-共享服务器模拟、大型 Boss 战和大量怪物房间应使用更高 capacity。容量 miss 可通过 `GetRuntimeDiagnostics()` 和 `GetRuntimeListPoolStatistics()` 观察。
+`MaxPeriodicEffectExecutionsPerTick` 与 `MaxAbilityTaskRepeatExecutionsPerTick` 的默认值均为 `8`，且必须为正值。每个 Active Periodic Effect 与 Repeat Task 在一个 Tick 内最多执行对应预算次数。超出预算的已流逝 Interval 会作为确定性 Backlog 保留在 Timer 中，并在后续 Tick 继续处理；Runtime 不会静默丢弃或合并重复执行。这一策略限制了每个 catch-up 循环，同时保持 elapsed-time 顺序。项目仍需为全部 Active Effect 与 Task 的总成本制定预算。
 
-按 actor class 或 simulation role 选择 Core state mode：
+不存在 Retained Public AbilityTask Pool，也不存在限制 Concurrent Task 的 Task-cache Capacity。每个 Ability 必须通过 Workflow 与项目 Limit 限制自身可持有的 Task 数量，产品 Stress Test 必须覆盖 Authoring 允许的最大并发。
 
-- 玩家角色、authority debugging、deterministic replay validation、QA build，以及需要 Core checksum 或 Core snapshot 的系统使用 `MirrorRuntime`。
-- 大量简单怪物、projectile、临时 summon、cosmetic-only ASC，以及不需要为这些 actor 启用 Core diagnostics 的低端客户端使用 `RuntimeOnly`。
-- 非 Unity deterministic simulation、rollback lab、CLI validation 或不需要 Unity-facing ability 与 ScriptableObject authoring 的 server-side tool，直接使用纯 `GASAbilitySystemState` 加 `GASAbilitySystemFacade`。
+Limit Failure 是运行信号。日志或 Telemetry 应记录 Entity、Ability/Effect Definition ID、Current Count、Configured Limit 与 Authority Role，同时避免记录敏感 Payload。
 
-热路径规则：
+### 复杂度指引
 
-- 战斗前预分配 ability、effect、attribute、prediction、SetByCaller、target data 和 pool capacity。
-- 只有启用 Core mirroring 时，`coreModifierCapacity` 才会产生实际意义。
-- 避免在战斗峰值中临时创建 ability、effect、target actor 和 cue asset。
-- 变量幅度优先使用 `GameplayEffectSpec` SetByCaller value，而不是临时 runtime object。
-- 领域计算放在 Core 或纯 runtime class 中，不放在 `MonoBehaviour` update loop。
-- 需要确定性时，network payload 使用 id 和 raw fixed-value。
-- 大型房间中使用 central tick owner 管理大量 ASC，不要把重逻辑散落到许多 behaviour 中。
+- Attribute Lookup 与 Spec/Effect Handle Lookup 在注册后使用 Index Map。
+- Tag Operation 成本取决于 Tag Container 实现和 Query 大小。
+- Stacking Lookup 使用按 Target/Source 维护的 Index。
+- ASC 的 Ability Tick 会把当前 Ticking Spec Set 复制到可复用 Snapshot，再在每次 Dispatch 前检查 Live Membership。轮到某个 Spec 前它已被移除，则跳过；本轮中激活的 Spec 从下一 Simulation Frame 开始 Tick；初始存活的每个 Spec 最多 Dispatch 一次。Nested ASC Tick 与 Tick Callback 内 Dispose ASC 都会被拒绝。存在 `T` 个 Ticking Spec 时，Snapshot Pass 为 `O(T)`，Membership Check 平均为 `O(1)`，保留的 Snapshot Capacity 为 `O(T)`。`ReserveRuntimeCapacity(tickingAbilityCapacity: ...)` 可以把预期扩容移到 Composition 阶段；Cold Growth 仍可能分配。
+- 单个 Ability 内，Task 在 Iteration 期间移除时会写入 Tombstone，并立即从 Membership Index 删除；`finally` Pass 会 In-place Compact Tombstone。本轮创建的 Task 延后到下一次 Task Tick；已移除的 Sibling 会跳过；Ability End 通过 Activation-generation Guard 停止遍历；Nested Task Tick 会被拒绝。对于初始 `K` 个 Tickable Task，遍历为 `O(K)`；发生移除时增加一次 `O(K)` 的 In-place Compaction，不创建 Scratch Collection。Task-list Capacity 由 Ability Instance 保留，Cold Use 时可能扩容。
+- Active-effect Tick 成本随 Active Effect 与 Periodic Work 增长。预分配的 ASC Snapshot 与 Task Tombstone Path 在各自聚焦的 Steady-state Test 中观察到 Current Thread 分配为零；这不是 Package-wide Tick 或 Zero-GC 保证。
+- 宽泛 Callback、Custom Requirement、Calculation 与 Cue Handler 的成本由项目控制。
 
-## 线程策略
+面对 10000+ 简单模拟实体，应使用 Unity-free Core Data Model 或项目 DOD/Batch Simulation，仅把需要表现的实体桥接到 Runtime ASC。没有性能证据时，不要为每个纯数据实体创建包含 Per-frame Task 的 Unity-facing ASC。
 
-`AbilitySystemComponent` 由运行时线程拥有。模拟线程启动时调用 `BindRuntimeThreadToCurrent()`，并通过 `RuntimeThreadPolicy` 配置诊断：
+## 线程与安全
 
-```csharp
-asc.RuntimeThreadPolicy = GASRuntimeThreadPolicy.Throw;
-asc.BindRuntimeThreadToCurrent();
-```
+`GASRuntimeContext` 会捕获 Owner Managed Thread ID。ASC Public Surface、稳定 View、Tag/Event Registration 与 Dispatch、Capacity Reservation，以及 Runtime-list-pool Control 都会在访问前检查 Dispose 与 Thread Ownership。ASC Thread Policy 包括：
 
-Unity-facing Runtime 代码默认应运行在 Unity 主线程。若纯 C# server simulation 拥有 ASC，必须避免 Unity object，并提供 deterministic time、random 和 registry service。
+- `Throw`：跨线程访问时 Fail Fast；
+- `LogWarning`：记录 Diagnostic，然后在修改前拒绝访问；
+- `Disabled`：只跳过 ASC 自身的 Thread-ID Check，不会让状态变为 Thread-safe，也不会关闭 Owning `GASRuntimeContext` 的检查。
 
-不要从多个线程同时修改同一个 ASC。如果 input、AI、networking 和 presentation 运行在不同线程，应使用 command queue 或明确的 simulation ownership。
+Mutable Context、ASC、StateDelta Apply 与 Runtime Memory 采用 Owner-thread Confinement，不使用宽范围 Lock。Definition 与 Attribute Registry 只保护各自映射；这不会让 ASC 或 Runtime API 支持跨线程访问。仅当调用方已经证明线程封闭时才可以使用 `Disabled`；关闭检查不会增加任何同步能力。
+
+ASC 的 Effect-removal、Execution-output、Rollback 与 Prediction-task Scratch 归 Owning ASC 或 Runtime Ability Instance 所有，不使用 Process-global Pool，因此由不同 Owner Thread 持有的 Context 不会共享这些 Mutable List。`GameplayCueManager` 在已断言的 Unity Main-thread Boundary 内持有私有 Scratch-list Pool。每种闭合元素类型最多保留四个 inactive list；outstanding lease 与 retained element capacity 受对应的 `PoolConfig` limit 约束。归还会清空引用，generation 校验会拒绝 foreign、stale 或 duplicate return，过大或超过 inactive 上限的 entry 会被丢弃；Shutdown 会拒绝新 Lease，并只允许已经签发的 Lease 归还后清空和丢弃。Internal counter 会保留 outstanding、peak、discard 与 invalid-return 诊断，Shutdown 会报告尚未归还的 Lease。这是局部 Scratch Policy，不是 Thread-safety 保证，也不依赖通用 Factory 模块。
+
+Unity Runtime Object、`GameObject` Targeting、ScriptableObject Authoring、Cue Loading、Cue Handler 与 GameObject Pool 都具有 Unity Main-thread Affinity。Network/File Callback 必须先验证数据，再切换线程后调用 Runtime API。只有 Consumer 不接触 Unity-affine Object，且 Context 间不共享 Mutable Service 时，不同 Context 才可以由不同 Simulation Thread 持有。该边界需要由项目验证，不能视为模块级 Thread-safety 保证。
+
+Runtime Mutation、State Transmission、Tick 或 Typed-observer Dispatch 仍处于 Active 时，ASC Dispose 会 Fail Fast。Shutdown 被接受后，它会跨越单个 Cleanup Failure 继续关闭所有权：Active Ability 会在 Spec Release 前尝试完整取消 Task；Active Effect 会在 Lease Release 前分别移除 Core/Index/Modifier Ownership，以及 Definition-granted 与 Dynamic-granted Tag；随后清除 Callback Store 与 Retained Internal List Pool。Cleanup Failure 会聚合到 Diagnostics，不会阻止剩余 Ownership Closure。
+
+Dispose 用于关闭 Ownership、Cancellation 与 Lease Accounting；它不会让任何 Consumed 或 Borrowed Reference 继续有效：
+
+1. 停止 Input 与 Inbound Transport Delivery；
+2. 取消或结束 Ability 与 Task；
+3. Release 显式持有的 TargetData，并对每个未提交的 Caller-owned Spec 调用 `Discard()`；
+4. 释放所有 ASC；
+5. 检查 Memory Statistics 中是否存在非预期 Outstanding Lease；
+6. 释放 Context；
+7. 释放由 Composition 持有的 Cue 与 Transport Service。
+
+API 会对 Dispose 后的使用抛出异常或返回拒绝结果。开发阶段不能吞掉这些信号。
+
+## ScriptableObject 创作
+
+`GameplayAbilitySO`、`GameplayEffectSO`、Execution Calculation Asset、Cue Asset 与 `GASOverlayConfig` 是 Unity Authoring Bridge。Runtime Rule 仍由 C# 对象承载。
+
+通过以下菜单创建 Effect：
+
+`Assets > Create > CycloneGames > GameplayAbilities > Definitions > Gameplay Effect`
+
+Effect Inspector 按 Duration、Modifier、Stacking、Tag、Granted Ability、Cue 与 Advanced Policy 分组。`GameplayEffectSO` 在 Unity Main Thread 延迟创建可复用 Runtime Definition。Validation 与 Deserialization 会清除 Cache；显式 Authoring Tool 可以调用 `ClearCache()`。Gameplay 期间不得修改 Cached Definition。
+
+`GameplayAbilitySO.GetGameplayAbility()` 会按当前已加载的 Asset Revision 延迟创建并复用一份不可变 Definition。自定义 Asset 实现 `CreateGameplayAbility()`，只使用 Derived Immutable Input 构造 Derived Ability，然后恰好调用一次 `InitializeAbility(ability)`，以统一校验并转移全部 Base Tag、Trigger、Cost、Cooldown 和 Policy。Validation 与 Deserialization 会清除 Definition Cache。`CreateRuntimeInstance()` 只重建 Activation State Input；Runtime 会从缓存的 Definition 复制已封存的 Base Configuration，不能再次调用 `InitializeAbility`。
+
+Asset 配置应使用稳定 Tag 与 Attribute Name。重命名 Serialized Type、Field、Tag 或 Definition Identity 时，必须提供项目迁移方案和 Fixture Coverage。
 
 ## Editor 工具
 
-该包包含 custom inspector、property drawer、debugger window、runtime overlay 和 validation-oriented UI，用于 ability/effect authoring 与 debugging。
+Editor Assembly 仅包含在 Editor 平台。
 
-推荐校验目标：
+| 菜单 | 用途 |
+| --- | --- |
+| `Tools/CycloneGames/GameplayAbilities/Debugger` | 检查一个选中 ASC 的 Attribute、Ability、Effect、Tag、预测、一次性 Lease Accounting 与 EffectSpec Backing-cache Statistics；在 Owner Thread 显式裁剪 Retained Backing Record |
+| `Tools/CycloneGames/GameplayAbilities/Debugger (Multi-Target)` | 对比显式选择的多个 ASC |
+| `Tools/CycloneGames/GameplayAbilities/Trace` | 检查有界 GAS Trace Event |
+| `Tools/CycloneGames/GameplayAbilities/Overlay/Select Or Create Config` | 选择或创建 Overlay 配置 |
+| `Tools/CycloneGames/GameplayAbilities/Overlay/Toggle In Play Mode` | 为选中 GameObject 暴露的 Live ASC 切换 Runtime Diagnostics Overlay；支持多选 |
 
-- 缺失 effect definition 或 ability definition。
-- 一个 ASC 中重复注册 attribute。
-- 无效 stack policy、duration、period、overflow effect 或 periodic setting。
-- Gameplay cue tag 没有注册 cue handler。
-- Runtime capacity 低于目标 combat profile。
-- Network id 或 registry id 在不同 peer 上不稳定。
-- Ability asset 引用了未在 tag database 中注册的 cost、cooldown 或 target tag。
+Debugger 使用 Selection 或显式 Refresh，不进行周期性全 Scene 扫描。Trace Selection 基于 Sequence，Ring Buffer 移动不会静默改变已选择 Event。
 
-可用的 Editor 入口：
+Custom Inspector 通过 `SerializedObject`/`SerializedProperty` 修改 Serialized Field，并在适用位置支持 Unity Undo、Prefab Override 与 Multi-object Editing。诊断工具只提供可观测性，不能证明 Player、IL2CPP、平台或 Allocation 结论。
 
-```text
-Tools > CycloneGames > GameplayAbilities > Debugger
-Tools > CycloneGames > GameplayAbilities > Networking > Diagnostics
-Tools > CycloneGames > GameplayAbilities > Networking > Run Diagnostics Check
+`AbilitySystemComponent` 是纯 C# Runtime Object，而不是 `UnityEngine.Object`，因此 Unity 不会直接为它绘制 Inspector。Sample 的 `AbilitySystemComponentHolder` Inspector 为其承载的 ASC 提供仅 Play Mode 可用的控制。选择一个或多个 Holder 后，可以使用 **Add / Update Selected & Show**、**Remove Selected**、**Show Overlay** 或 **Hide Overlay**。这些命令只修改临时 Runtime Diagnostics 状态：不会序列化调试开关、产生 Prefab Override、拥有或 Dispose ASC、调用 `ClearTargets`、移除未选中的 ASC，也不会销毁 Overlay Singleton。Registry 对每个 ASC 只有一条共享记录，因此添加、更新或移除选中 ASC 时，会修改这条记录，而不区分最初由哪个调用方完成注册。
+
+项目使用其他 ASC Host 时，可以在自己的 Custom Inspector 中调用 `TryAddTarget`、`IsTargetRegistered`、`RemoveTarget` 与 `SetEnabled`，提供相同工作流。注册应位于显式 Host 或 Composition Boundary；不要在每次 Inspector Repaint 时扫描 Scene 来发现 ASC。
+
+可选 Runtime Overlay 接受一组有界、显式注册且存活的 ASC。Runtime Assembly 不执行全 Scene Discovery，也不使用 Reflection。Runtime Startup 不会自动创建它：
+
+```csharp
+GASDebugOverlay.Initialize(enableAtStart: false, dontDestroyOnLoad: false);
+
+GASDebugOverlay.TryAddTarget(
+    playerASC,
+    owner: playerGameObject,
+    trackTarget: playerGameObject.transform,
+    displayName: "Player");
+GASDebugOverlay.TryAddTarget(
+    enemyASC,
+    owner: enemyGameObject,
+    trackTarget: enemyGameObject.transform,
+    displayName: "Enemy");
+
+GASDebugOverlay.SetEnabled(true);
+
+// Each registration owner removes only its own targets.
+GASDebugOverlay.RemoveTarget(enemyASC);
+
+// Only the composition owner destroys the singleton at diagnostics shutdown.
+GASDebugOverlay.Cleanup();
 ```
 
-菜单是否可见取决于当前项目导入了哪些 assembly。
+`TryAddTarget` 按 ASC 引用身份判重。再次注册同一个 ASC 会更新 Owner、Tracking Target 与 Display Name，不会占用另一个槽位。Overlay 不拥有也不 Dispose ASC、Owner 或 Transform；调用方必须在这些 Owner 关闭前移除自己的注册。已 Dispose 的 ASC 会被防御性清理。`ClearTargets` 只应由明确要替换完整集合的 Composition Owner 调用。
 
-## 与其他 CycloneGames 模块集成
+Target Registration 与 Visibility 相互独立。`TryAddTarget`、`RemoveTarget` 与 `ClearTargets` 不切换 Overlay；`SetEnabled` 不改变注册集合。`IsTargetRegistered` 报告一个 Live ASC 当前是否已注册。`BoundTargetCount` 报告 Live Registration 数量。`TargetCapacity` 报告当前实例的固定注册预算。该预算在 Overlay 初始化时读取 `GASOverlayConfig.MaxPanels`，默认值为 8，并限制在 1 到 32。ASC 为 null、已 Dispose 或有界集合已满时，`TryAddTarget` 返回 `false`，且不会驱逐其他 Target。修改 `MaxPanels` 后，需要重建 Overlay 才会应用新值。
 
-| 模块 | 集成作用 |
-| --- | --- |
-| `CycloneGames.GameplayTags` | 为 tag container、tag requirement、cue tag、cooldown tag、state tag 和 event tag 提供基础能力。 |
-| `CycloneGames.DataTable` | 可选 integration source，用于 Excel/Luban 驱动的 magnitude、attribute initialization 和大型数值平衡表。 |
-| `CycloneGames.DeterministicMath` | 用于 deterministic-friendly fixed value 和 raw value conversion path。 |
-| `CycloneGames.Hash` | 在 networking integration 中用于 stable checksum 和 network identity path。 |
-| `CycloneGames.Factory` | 适合生成 cue presentation object、target actor、pooled projectile 和项目专用 gameplay object。 |
-| `CycloneGames.GameplayFramework` | 可选 integration 将 framework actor 映射到 ability actor info，同时保持 core framework 独立。 |
-| `CycloneGames.GameplayFramework.Networking` | 可将 actor 投影为 network id、owner、team、layer 和 interest position，用于 GAS replication planning。 |
-| `CycloneGames.Networking` | 为 networking package 提供 transport-neutral messaging、replication planning、send budget、serializer 和 network diagnostics。 |
+`Toggle` 是单目标便捷 API：它使用传入的 Live ASC 替换完整 Target Set，并切换可见性。Editor 菜单会先从准确选中的 GameObject 收集 Live ASC，再替换自己的 Target Set，不会扫描 Scene。Sample 显式注册 Player 与 Enemy。
 
-Cyclone package 可以放在 `Assets/ThirdParty` 下使用，也可以作为 UPM package 引入。必需依赖应通过 asmdef reference 表达。可选 integration 应隔离在 integration assembly 或 integration package 中；当 assembly 必须在缺依赖时自然消失时，使用正向 capability symbol。
+所有 Overlay API 都是 Unity Main Thread 上的诊断 API。注册属于有界冷路径，最多线性扫描 32 个 Target。启用后的 IMGUI 表现会格式化诊断文本，不是 Zero-allocation Gameplay Path。除非 Runtime Diagnostics 是明确的产品需求，否则 Release 与 Headless Composition 应移除或禁用它。
 
-DataTable bridge 使用 `CYCLONEGAMES_HAS_DATA_TABLE` 作为 capability symbol。UPM 导入时，如果安装了 `com.cyclone-games.data-table`，asmdef 的 `versionDefines` 会自动定义该 symbol。`Assets/ThirdParty` 本地包导入时，Unity 无法自动检测兄弟目录中的 `package.json`；希望启用本地 DataTable bridge 的项目必须在可见的项目构建配置中定义同名 symbol。若 symbol 不存在，该 bridge 和对应测试不会参与编译。
+## 平台指引
 
-## 持久化
+下表描述静态设计兼容性。只有项目在代表性硬件运行目标 Player Build 与测试后，才能认定对应平台完成验证。
 
-本包不会主动写 runtime save data。Runtime state、pool、prediction window 和 replication builder 都是创建方拥有的内存数据。
-
-Authoring data 存在 Unity asset 中：
-
-| 数据 | 位置 | 是否纳入版本控制 |
+| 平台 | 静态设计指引 | 项目必须完成的验证 |
 | --- | --- | --- |
-| Ability definition | `GameplayAbilitySO` asset | 是 |
-| Effect definition | `GameplayEffectSO` asset | 是 |
-| Cue definition | `GameplayCueSO` asset | 是 |
-| Editor diagnostics preset | 用户显式创建的 asset | 由项目决定 |
+| Windows、Linux、macOS | Core 不依赖 Unity；Runtime 使用 Managed Unity API 与 UniTask | Mono/IL2CPP 选择、Dedicated/Client Build、Profiler Capture、长时间 Soak |
+| iOS | 显式 ID 与注册不要求 Runtime Code Generation | IL2CPP、Stripping、Memory Warning、Suspend/Resume、Thermal/Device Tier |
+| Android | EffectSpec Backing-cache 与 Cue-retention Profile 由 Composition 输入，不是平台常量 | IL2CPP、Low-memory Tier、Lifecycle Pause/Resume、Thermal Throttling、厂商设备 |
+| WebGL | Runtime 不要求后台 Worker Thread；Owner-thread Confinement 符合单线程模型 | WebSocket/HTTP Transport Adapter、异步资产行为、Browser Memory Ceiling、Tab Suspend |
+| Dedicated Server | Core 为 Unity-free；Runtime 可以使用 `NullGameplayCueManager` | Headless Build、Transport Adapter、Tick Scheduling、State Checksum/Recovery、Soak |
+| 未来主机平台 | Core/Runtime asmdef 禁用 Unsafe Code；Attribute 显式注册，Runtime Path 不要求 Reflection 或 Native Plugin | SDK/Compiler 限制、AOT/Stripping、Suspend/Resume、Memory Budget、认证要求 |
 
-Runtime save game 应由单独 save service 实现，并包含 schema version、migration、integrity check、atomic write、corruption recovery 和平台存储策略。
+硬件质量档位应负责提供 `GASRuntimeCacheProfile` Backing Capacity 与 GameplayCue Pool Retention。低内存设备可以减少 Internal EffectSpec Backing Record 与 Cue Instance 的保留量，同时保持一致的 Public One-shot Lease 和 Gameplay-limit Contract。平台特定优化应位于 Adapter 或 Composition Profile，不能进入通用 Gameplay Contract。
 
-## 常见问题与故障排除
+Core/Runtime 源码与 asmdef 中，Runtime 不依赖 `UnityEditor`，且不存在 Unsafe Code、Reflection-based Registration、Native Plugin、Platform-name-based Tuning、后台 Worker Requirement 或 Runtime Code-generation Path。Core 设置了 `noEngineReferences: true`；Runtime 持有 Unity-facing Adapter。这些是静态可移植性事实，不构成执行证据。Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与主机平台 Profile 仍需分别完成目标 Player Build、适用的 IL2CPP/AOT 与 Stripping 检查、代表性设备 Profiling、Lifecycle Test、Memory-pressure Test 和 Long-session Soak。
 
-| 现象 | 常见原因 | 修复方式 |
-| --- | --- | --- |
-| Ability 无法激活 | Blocked tag、缺少 required tag、cost 不足、cooldown 生效，或其他 active ability 通过 tag 阻塞。 | 检查 `CanActivate`、ability tag、cooldown granted tag 和 debugger output。 |
-| Cost 没有扣除 | 未调用 `CommitAbility`，或 cost effect 没有有效 modifier。 | 在 ability outcome 被接受后调用一次 `CommitAbility`。确认 cost effect 修改的 attribute name 正确。 |
-| Cooldown 永不结束 | Cooldown effect duration 或 tick ownership 配置错误。 | 使用 `EDurationPolicy.HasDuration`，设置正 duration，并在 authority simulation tick ASC。 |
-| Damage 没有改变 Health | Effect 写入 meta attribute，但目标 `AttributeSet` 没有处理它。 | 为 meta attribute 实现 `PreProcessInstantEffect` 或 `PostGameplayEffectExecute`。 |
-| Gameplay cue 不播放 | Cue tag 未注册、cue manager 未初始化，或 effect suppress cues。 | 检查 cue tag、cue manager setup 和 `SuppressGameplayCues`。 |
-| Buff 没有叠加 | Stacking policy 为 `None`，或 source/target aggregation mode 与预期不符。 | 在 effect 上配置 `GameplayEffectStacking`。 |
-| Late join 缺失状态 | Observer 存在前 delta capture 已被消费，或没有发送 full-state request。 | Capture 前先解析 observer，并对 late join 或 relevance 变化使用 full-state recovery。 |
-| 战斗中产生分配 | 没有 reserve capacity、pool 未 warm，或 asset 按需创建。 | 调用 `ReserveRuntimeCapacity`、`PrewarmRuntimePools`，并在战斗前加载 asset。 |
+## Integration Assembly
 
-## 依赖项
+### AssetManagement
 
-必需依赖由当前 asmdef 和 package metadata 表达。在当前分支中，GameplayAbilities runtime 使用：
+`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` 通过直接 asmdef 引用连接。它依赖 `CycloneGames.AssetManagement.Runtime` 与 GameplayAbilities 主 Runtime Assembly，并包含 `AssetManagementResourceLocator`。
 
-| 依赖 | 作用 |
-| --- | --- |
-| `CycloneGames.GameplayTags` | Tag container、requirement、ability tag、effect tag、cue tag、cooldown tag 和 state tag。 |
-| `CycloneGames.DeterministicMath` | Fixed-value 和 deterministic-friendly numeric path。 |
-| `CycloneGames.Hash` | 相关 networking workflow 使用的 stable hash/checksum path。 |
-| `CycloneGames.Factory` | 周边 Cyclone module 和 sample 使用的 factory contract 与 object creation support。 |
-| `Cysharp UniTask` | Async cue 和 Unity-facing async operation。 |
-| Unity Editor assemblies | Editor inspector、debug window、property drawer 和 asset authoring tool。 |
+主 Runtime Assembly 只持有 `IResourceLocator` 与 `IResourceHandle<T>`，没有 AssetManagement asmdef Reference。Sample Assembly 显式引用该 Integration，并使用 `IAssetPackage` 构造 Adapter。从 Assembly 层看，不使用 AssetManagement 的项目可以保留 Core 与 Runtime 并提供其他 `IResourceLocator`，同时必须排除 AssetManagement Integration 及引用它的 Sample Composition。`package.json` 把 AssetManagement 声明为直接需求，因此省略它的 UPM Packaging Profile 必须同步调整该元数据。
 
-Optional integration 应放在 integration assembly 中。将 package 放在 `Assets/ThirdParty` 下的项目，不应只依赖 UPM `versionDefines`；通过 UPM 引入 package 的项目，可以使用 integration package 或 asmdef-level condition 表达 optional relationship。
+### DataTable
 
-可选 integration 依赖：
+DataTable Adapter 源码位于 `Runtime/Integrations/DataTable`。其 Integration asmdef 直接引用 `CycloneGames.DataTable.Core`、`CycloneGames.GameplayAbilities.Core` 与 `CycloneGames.GameplayAbilities.Runtime`。
 
-| 依赖 | Capability Symbol | Assembly |
-| --- | --- | --- |
-| `CycloneGames.DataTable` | `CYCLONEGAMES_HAS_DATA_TABLE` | `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` |
+只有当 Unity Package Manager 解析到受支持的 `com.cyclone-games.data-table` `[1.0.0,2.0.0)` 时，`CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` 才会激活。其 asmdef 通过 `versionDefines` 把 Package Version 映射为 Assembly-local `CYCLONEGAMES_HAS_DATA_TABLE` Capability，再由 `defineConstraints` 要求同一 Capability。聚焦 Editor Test asmdef 会重复该条件，因为 Version-defined Symbol 不会跨 Assembly 传播。缺少 DataTable 或版本不受支持时，两个 Integration Assembly 不参与编译，Core 和主 Runtime Assembly 仍可独立编译。
+
+该 Integration 设置为 `autoReferenced: false`。应用应在专用 Composition asmdef 中显式引用 `CycloneGames.GameplayAbilities.Runtime.Integrations.DataTable` 以及实际使用的 DataTable Assembly。如果 Consumer Assembly 也需要在 DataTable 缺失时自然消失，则必须在该 Consumer asmdef 中重复相同的 Package Version Define 与 Constraint。禁止在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_DATA_TABLE`。
+
+`Assets/ThirdParty` 兄弟目录中的 `package.json` 不代表该 Package 已由 UPM 安装，也不会激活 `versionDefines`。只有 Unity Package Manager 在受支持条件下解析两个 Package 时，Integration 才会激活。Active Path 应在同时通过 UPM 安装两个 Package 的项目中验证。
+
+Integration 提供 Attribute Initialization、Level Value Provider、Modifier Factory 与 Magnitude Calculation。Core 与 Runtime 不依赖它。
+
+### VContainer Sample
+
+VContainer Composition Sample 隔离在 `CycloneGames.GameplayAbilities.Sample.Integrations.VContainer`，其 Assembly 仅在 `VCONTAINER_PRESENT` 条件激活时参与编译。
+
+使用其他 Container 的项目应复用显式生命周期图，而不是让 Core 或 Runtime 引用 Container。

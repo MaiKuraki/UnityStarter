@@ -3,14 +3,14 @@ using System;
 namespace CycloneGames.Networking.Serialization
 {
     /// <summary>
-    /// Zero-allocation reader interface for parsing network payloads.
-    /// Implementations should operate directly on existing buffers without copying data.
+    /// Buffer-oriented reader interface for parsing network payloads.
+    /// Implementations should operate directly on existing buffers when their ownership allows it.
     /// </summary>
     /// <remarks>
     /// <para>
-    /// This interface is designed for high-performance network deserialization where
-    /// minimizing garbage collection is critical. Implementations should work with
-    /// pooled buffers (e.g., from <see cref="System.Buffers.ArrayPool{T}"/>).
+    /// Implementations can work with pooled buffers (for example,
+    /// <see cref="System.Buffers.ArrayPool{T}"/>). Interface dispatch can box a value-type
+    /// implementation, so allocation behavior must be measured for the concrete call path.
     /// </para>
     /// <para>
     /// Thread Safety: Implementations are not required to be thread-safe.
@@ -55,26 +55,6 @@ namespace CycloneGames.Networking.Serialization
 
         /// <summary>Reads a 32-bit floating-point number.</summary>
         float ReadFloat();
-
-        /// <summary>
-        /// Reads an unmanaged (blittable) struct directly from the buffer using unsafe memory copy.
-        /// </summary>
-        /// <typeparam name="T">
-        /// An unmanaged type (value type with no reference type fields).
-        /// Examples: int, float, Vector3, or any user-defined struct containing only unmanaged fields.
-        /// </typeparam>
-        /// <returns>The deserialized struct value.</returns>
-        /// <remarks>
-        /// <para>
-        /// "Blittable" refers to types that have an identical representation in managed and unmanaged memory,
-        /// allowing direct memory copy without marshalling. This provides zero-allocation deserialization.
-        /// </para>
-        /// <para>
-        /// The <c>unmanaged</c> constraint in C# ensures the type contains no reference type fields
-        /// and can be safely copied as raw bytes. This is equivalent to C/C++ POD (Plain Old Data) types.
-        /// </para>
-        /// </remarks>
-        T ReadBlittable<T>() where T : unmanaged;
 
         /// <summary>
         /// Returns a read-only span over a portion of the buffer without copying data.

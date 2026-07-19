@@ -3,8 +3,10 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
+        "UniTask.Addressables",
         "CycloneGames.AssetManagement.Runtime",
-        "CycloneGames.IO.Runtime",
+        "CycloneGames.IO.Core",
+        "CycloneGames.IO.SystemIO",
         "CycloneGames.Logger",
         "Unity.Addressables",
         "Unity.ResourceManager"
@@ -21,7 +23,7 @@
     "versionDefines": [
         {
             "name": "com.unity.addressables",
-            "expression": "",
+            "expression": "[2.11.1,2.11.2)",
             "define": "CYCLONEGAMES_HAS_ADDRESSABLES"
         }
     ],

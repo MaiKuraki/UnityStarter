@@ -1,386 +1,535 @@
 using System;
+using System.Globalization;
 using System.Runtime.CompilerServices;
+using System.Text;
 
 namespace CycloneGames.Utility.Runtime
 {
     public static class FormatUtil
     {
+        private const int MaxDecimalPlaces = 5;
+        private const double MaxDurationSecondsExclusive = 9223372036854775808d;
+
+        // These labels intentionally preserve the existing public output contract (base-1024 values
+        // with legacy KB/MB labels). A future unit-label correction requires an explicit migration.
         private static readonly string[] SizeSuffixes = { "B", "KB", "MB", "GB", "TB" };
         private static readonly string[] NumberSuffixes = { "", "K", "M", "B", "T" };
-
-        // Pre-cached format strings to avoid interpolation allocation
         private static readonly string[] DecimalFormats = { "F0", "F1", "F2", "F3", "F4", "F5" };
 
         /// <summary>
-        /// Formats byte size into human-readable string (e.g. "1.5 MB").
-        /// Note: Returns a new string allocation. Use AppendFormattedBytes for 0GC StringBuilder operations.
+        /// Formats a non-negative byte count using invariant culture. The returned string is a new allocation.
         /// </summary>
         public static string FormatBytes(long bytes, int decimalPlaces = 2)
         {
-            if (bytes <= 0) return "0 B";
+            ValidateNonNegative(bytes, nameof(bytes));
+            ValidateDecimalPlaces(decimalPlaces);
 
-            decimalPlaces = Math.Clamp(decimalPlaces, 0, 5);
-
-            int suffixIndex = 0;
-            double size = bytes;
-
-            while (size >= 1024 && suffixIndex < SizeSuffixes.Length - 1)
+            Span<char> buffer = stackalloc char[64];
+            if (!TryFormatBytes(bytes, buffer, out int charsWritten, decimalPlaces))
             {
-                size /= 1024;
-                suffixIndex++;
+                throw new InvalidOperationException("The internal byte-format buffer is too small.");
             }
-
-            Span<char> buffer = stackalloc char[32];
-            int charsWritten = 0;
-
-            if (decimalPlaces > 0)
-            {
-                size.TryFormat(buffer, out charsWritten, DecimalFormats[decimalPlaces]);
-            }
-            else
-            {
-                ((long)size).TryFormat(buffer, out charsWritten);
-            }
-
-            // Trim trailing zeros after decimal point
-            if (decimalPlaces > 0)
-            {
-                int decimalIndex = buffer.Slice(0, charsWritten).IndexOf('.');
-                if (decimalIndex >= 0)
-                {
-                    int lastNonZero = charsWritten - 1;
-                    while (lastNonZero > decimalIndex && buffer[lastNonZero] == '0')
-                        lastNonZero--;
-
-                    charsWritten = (lastNonZero == decimalIndex) ? decimalIndex : lastNonZero + 1;
-                }
-            }
-
-            buffer[charsWritten++] = ' ';
-            SizeSuffixes[suffixIndex].AsSpan().CopyTo(buffer.Slice(charsWritten));
-            charsWritten += SizeSuffixes[suffixIndex].Length;
-
             return new string(buffer.Slice(0, charsWritten));
         }
 
         /// <summary>
-        /// Appends formatted byte size to a StringBuilder with zero heap allocations.
+        /// Attempts to format a non-negative byte count into <paramref name="destination"/> using invariant culture.
+        /// Returns false for invalid arguments or insufficient destination capacity.
         /// </summary>
-        public static void AppendFormattedBytes(this System.Text.StringBuilder sb, long bytes, int decimalPlaces = 2)
+        public static bool TryFormatBytes(
+            long bytes,
+            Span<char> destination,
+            out int charsWritten,
+            int decimalPlaces = 2)
         {
-            if (sb == null) return;
-            if (bytes <= 0)
+            charsWritten = 0;
+            if (bytes < 0 || !IsValidDecimalPlaces(decimalPlaces))
             {
-                sb.Append("0 B");
-                return;
+                return false;
             }
 
-            decimalPlaces = Math.Clamp(decimalPlaces, 0, 5);
+            if (bytes == 0)
+            {
+                return TryCopy("0 B".AsSpan(), destination, out charsWritten);
+            }
+
             int suffixIndex = 0;
             double size = bytes;
-
-            while (size >= 1024 && suffixIndex < SizeSuffixes.Length - 1)
+            while (size >= 1024d && suffixIndex < SizeSuffixes.Length - 1)
             {
-                size /= 1024;
+                size /= 1024d;
                 suffixIndex++;
             }
 
-            Span<char> buffer = stackalloc char[32];
-            int charsWritten = 0;
+            PromoteRoundedValue(ref size, ref suffixIndex, 1024d, SizeSuffixes.Length, decimalPlaces);
 
-            if (decimalPlaces > 0)
+            int position = 0;
+            bool formatted = suffixIndex == 0
+                ? TryAppendInt64(bytes, destination, ref position)
+                : TryAppendFixed(size, decimalPlaces, destination, ref position, true);
+            if (!formatted ||
+                !TryAppendChar(' ', destination, ref position) ||
+                !TryAppend(SizeSuffixes[suffixIndex].AsSpan(), destination, ref position))
             {
-                size.TryFormat(buffer, out charsWritten, DecimalFormats[decimalPlaces]);
-            }
-            else
-            {
-                ((long)size).TryFormat(buffer, out charsWritten);
-            }
-
-            if (decimalPlaces > 0)
-            {
-                int decimalIndex = buffer.Slice(0, charsWritten).IndexOf('.');
-                if (decimalIndex >= 0)
-                {
-                    int lastNonZero = charsWritten - 1;
-                    while (lastNonZero > decimalIndex && buffer[lastNonZero] == '0')
-                        lastNonZero--;
-
-                    charsWritten = (lastNonZero == decimalIndex) ? decimalIndex : lastNonZero + 1;
-                }
+                return false;
             }
 
-            sb.Append(buffer.Slice(0, charsWritten));
-            sb.Append(' ');
-            sb.Append(SizeSuffixes[suffixIndex]);
+            charsWritten = position;
+            return true;
         }
 
-        // --- Number Formatting ---
+        /// <summary>
+        /// Appends a formatted byte count. The append itself can grow the StringBuilder and allocate.
+        /// Pre-size the builder when allocation behavior matters.
+        /// </summary>
+        public static void AppendFormattedBytes(this StringBuilder sb, long bytes, int decimalPlaces = 2)
+        {
+            if (sb == null)
+            {
+                return;
+            }
+            ValidateNonNegative(bytes, nameof(bytes));
+            ValidateDecimalPlaces(decimalPlaces);
+
+            Span<char> buffer = stackalloc char[64];
+            if (!TryFormatBytes(bytes, buffer, out int charsWritten, decimalPlaces))
+            {
+                throw new InvalidOperationException("The internal byte-format buffer is too small.");
+            }
+            sb.Append(buffer.Slice(0, charsWritten));
+        }
 
         /// <summary>
-        /// Formats a large number into a compact human-readable string (e.g. 1234567 → "1.23M").
-        /// Useful for scores, currency, damage numbers, etc.
+        /// Formats a number into a compact invariant representation such as "1.23M".
         /// </summary>
         public static string FormatNumber(long number, int decimalPlaces = 2)
         {
-            if (number == 0) return "0";
+            ValidateDecimalPlaces(decimalPlaces);
 
-            bool negative = number < 0;
-            double abs = negative ? -(double)number : number;
-
-            decimalPlaces = Math.Clamp(decimalPlaces, 0, 5);
-
-            int suffixIndex = 0;
-            while (abs >= 1000 && suffixIndex < NumberSuffixes.Length - 1)
+            Span<char> buffer = stackalloc char[64];
+            if (!TryFormatNumber(number, buffer, out int charsWritten, decimalPlaces))
             {
-                abs /= 1000;
-                suffixIndex++;
+                throw new InvalidOperationException("The internal number-format buffer is too small.");
             }
-
-            Span<char> buffer = stackalloc char[32];
-            int pos = 0;
-
-            if (negative)
-            {
-                buffer[pos++] = '-';
-            }
-
-            if (suffixIndex == 0)
-            {
-                // No suffix — write the absolute value directly (sign already handled)
-                ((long)abs).TryFormat(buffer.Slice(pos), out int written);
-                pos += written;
-            }
-            else
-            {
-                if (decimalPlaces > 0)
-                {
-                    abs.TryFormat(buffer.Slice(pos), out int written, DecimalFormats[decimalPlaces]);
-                    pos += written;
-
-                    // Trim trailing zeros
-                    int decimalIdx = buffer.Slice(0, pos).IndexOf('.');
-                    if (decimalIdx >= 0)
-                    {
-                        int lastNonZero = pos - 1;
-                        while (lastNonZero > decimalIdx && buffer[lastNonZero] == '0')
-                            lastNonZero--;
-                        pos = (lastNonZero == decimalIdx) ? decimalIdx : lastNonZero + 1;
-                    }
-                }
-                else
-                {
-                    ((long)abs).TryFormat(buffer.Slice(pos), out int written);
-                    pos += written;
-                }
-
-                // Append suffix
-                string suffix = NumberSuffixes[suffixIndex];
-                suffix.AsSpan().CopyTo(buffer.Slice(pos));
-                pos += suffix.Length;
-            }
-
-            return new string(buffer.Slice(0, pos));
+            return new string(buffer.Slice(0, charsWritten));
         }
 
         /// <summary>
-        /// Appends a compact number to a StringBuilder with zero heap allocations.
+        /// Attempts to format a compact number into <paramref name="destination"/> using invariant culture.
+        /// Returns false for an invalid decimal-place count or insufficient destination capacity.
         /// </summary>
-        public static void AppendFormattedNumber(this System.Text.StringBuilder sb, long number, int decimalPlaces = 2)
+        public static bool TryFormatNumber(
+            long number,
+            Span<char> destination,
+            out int charsWritten,
+            int decimalPlaces = 2)
         {
-            if (sb == null) return;
-
-            Span<char> buffer = stackalloc char[32];
-            // Reuse the formatting logic via a local span write
-            bool negative = number < 0;
-            double abs = negative ? -(double)number : number;
-            decimalPlaces = Math.Clamp(decimalPlaces, 0, 5);
-
-            int suffixIndex = 0;
-            while (abs >= 1000 && suffixIndex < NumberSuffixes.Length - 1)
+            charsWritten = 0;
+            if (!IsValidDecimalPlaces(decimalPlaces))
             {
-                abs /= 1000;
+                return false;
+            }
+
+            if (number == 0)
+            {
+                return TryCopy("0".AsSpan(), destination, out charsWritten);
+            }
+
+            bool negative = number < 0;
+            double magnitude = negative ? -(double)number : number;
+            int suffixIndex = 0;
+            while (magnitude >= 1000d && suffixIndex < NumberSuffixes.Length - 1)
+            {
+                magnitude /= 1000d;
                 suffixIndex++;
             }
 
-            int pos = 0;
-            if (negative) buffer[pos++] = '-';
+            PromoteRoundedValue(ref magnitude, ref suffixIndex, 1000d, NumberSuffixes.Length, decimalPlaces);
 
+            int position = 0;
             if (suffixIndex == 0)
             {
-                ((long)abs).TryFormat(buffer.Slice(pos), out int written);
-                pos += written;
+                if (!TryAppendInt64(number, destination, ref position))
+                {
+                    return false;
+                }
             }
             else
             {
-                if (decimalPlaces > 0)
+                if (negative && !TryAppendChar('-', destination, ref position))
                 {
-                    abs.TryFormat(buffer.Slice(pos), out int written, DecimalFormats[decimalPlaces]);
-                    pos += written;
-                    int decimalIdx = buffer.Slice(0, pos).IndexOf('.');
-                    if (decimalIdx >= 0)
-                    {
-                        int lastNonZero = pos - 1;
-                        while (lastNonZero > decimalIdx && buffer[lastNonZero] == '0') lastNonZero--;
-                        pos = (lastNonZero == decimalIdx) ? decimalIdx : lastNonZero + 1;
-                    }
+                    return false;
                 }
-                else
+                if (!TryAppendFixed(magnitude, decimalPlaces, destination, ref position, true) ||
+                    !TryAppend(NumberSuffixes[suffixIndex].AsSpan(), destination, ref position))
                 {
-                    ((long)abs).TryFormat(buffer.Slice(pos), out int written);
-                    pos += written;
+                    return false;
                 }
-
-                string suffix = NumberSuffixes[suffixIndex];
-                suffix.AsSpan().CopyTo(buffer.Slice(pos));
-                pos += suffix.Length;
             }
 
-            sb.Append(buffer.Slice(0, pos));
+            charsWritten = position;
+            return true;
         }
 
-        // --- Time Formatting ---
+        /// <summary>
+        /// Appends a compact invariant number. The StringBuilder can allocate if its capacity must grow.
+        /// </summary>
+        public static void AppendFormattedNumber(this StringBuilder sb, long number, int decimalPlaces = 2)
+        {
+            if (sb == null)
+            {
+                return;
+            }
+            ValidateDecimalPlaces(decimalPlaces);
+
+            Span<char> buffer = stackalloc char[64];
+            if (!TryFormatNumber(number, buffer, out int charsWritten, decimalPlaces))
+            {
+                throw new InvalidOperationException("The internal number-format buffer is too small.");
+            }
+            sb.Append(buffer.Slice(0, charsWritten));
+        }
 
         /// <summary>
-        /// Formats seconds into a human-readable duration string.
-        /// Examples: 65.3 → "1:05", 3661.5 → "1:01:01", 0.5 → "0.50s"
+        /// Formats finite seconds as an invariant duration. Negative values are clamped to zero for compatibility.
         /// </summary>
         public static string FormatDuration(double totalSeconds, bool showMilliseconds = false)
         {
-            if (totalSeconds < 0) totalSeconds = 0;
+            ValidateDuration(totalSeconds);
 
-            Span<char> buffer = stackalloc char[32];
-            int pos = 0;
-
-            if (totalSeconds < 1.0)
+            Span<char> buffer = stackalloc char[64];
+            if (!TryFormatDuration(totalSeconds, buffer, out int charsWritten, showMilliseconds))
             {
-                // Sub-second: show as "0.XXs"
-                totalSeconds.TryFormat(buffer, out pos, "F2");
-                buffer[pos++] = 's';
-                return new string(buffer.Slice(0, pos));
+                throw new InvalidOperationException("The internal duration-format buffer is too small.");
+            }
+            return new string(buffer.Slice(0, charsWritten));
+        }
+
+        /// <summary>
+        /// Attempts to format finite seconds into <paramref name="destination"/> using invariant culture.
+        /// Negative values are clamped to zero. Values outside the Int64-second range return false.
+        /// </summary>
+        public static bool TryFormatDuration(
+            double totalSeconds,
+            Span<char> destination,
+            out int charsWritten,
+            bool showMilliseconds = false)
+        {
+            charsWritten = 0;
+            if (!IsFinite(totalSeconds) || totalSeconds >= MaxDurationSecondsExclusive)
+            {
+                return false;
             }
 
-            int totalSec = (int)totalSeconds;
-            int hours = totalSec / 3600;
-            int minutes = (totalSec % 3600) / 60;
-            int seconds = totalSec % 60;
+            if (totalSeconds < 0d)
+            {
+                totalSeconds = 0d;
+            }
+
+            int position = 0;
+            if (totalSeconds < 1d)
+            {
+                if (!TryAppendFixed(totalSeconds, 2, destination, ref position, false) ||
+                    !TryAppendChar('s', destination, ref position))
+                {
+                    return false;
+                }
+                charsWritten = position;
+                return true;
+            }
+
+            long totalWholeSeconds = (long)Math.Floor(totalSeconds);
+            long hours = totalWholeSeconds / 3600L;
+            int minutes = (int)((totalWholeSeconds % 3600L) / 60L);
+            int seconds = (int)(totalWholeSeconds % 60L);
 
             if (hours > 0)
             {
-                hours.TryFormat(buffer.Slice(pos), out int w);
-                pos += w;
-                buffer[pos++] = ':';
-                buffer[pos++] = (char)('0' + minutes / 10);
-                buffer[pos++] = (char)('0' + minutes % 10);
-                buffer[pos++] = ':';
-                buffer[pos++] = (char)('0' + seconds / 10);
-                buffer[pos++] = (char)('0' + seconds % 10);
+                if (!TryAppendInt64(hours, destination, ref position) ||
+                    !TryAppendChar(':', destination, ref position) ||
+                    !TryAppendTwoDigits(minutes, destination, ref position) ||
+                    !TryAppendChar(':', destination, ref position) ||
+                    !TryAppendTwoDigits(seconds, destination, ref position))
+                {
+                    return false;
+                }
             }
             else
             {
-                minutes.TryFormat(buffer.Slice(pos), out int w);
-                pos += w;
-                buffer[pos++] = ':';
-                buffer[pos++] = (char)('0' + seconds / 10);
-                buffer[pos++] = (char)('0' + seconds % 10);
+                if (!TryAppendInt64(minutes, destination, ref position) ||
+                    !TryAppendChar(':', destination, ref position) ||
+                    !TryAppendTwoDigits(seconds, destination, ref position))
+                {
+                    return false;
+                }
             }
 
             if (showMilliseconds)
             {
-                int ms = (int)((totalSeconds - totalSec) * 1000);
-                buffer[pos++] = '.';
-                buffer[pos++] = (char)('0' + ms / 100);
-                buffer[pos++] = (char)('0' + (ms / 10) % 10);
-                buffer[pos++] = (char)('0' + ms % 10);
+                int milliseconds = (int)((totalSeconds - totalWholeSeconds) * 1000d);
+                milliseconds = Math.Min(Math.Max(milliseconds, 0), 999);
+                if (!TryAppendChar('.', destination, ref position) ||
+                    !TryAppendThreeDigits(milliseconds, destination, ref position))
+                {
+                    return false;
+                }
             }
 
-            return new string(buffer.Slice(0, pos));
+            charsWritten = position;
+            return true;
         }
 
         /// <summary>
-        /// Appends a formatted duration to a StringBuilder. Zero heap allocations.
+        /// Appends an invariant duration. The StringBuilder can allocate if its capacity must grow.
         /// </summary>
-        public static void AppendFormattedDuration(this System.Text.StringBuilder sb, double totalSeconds, bool showMilliseconds = false)
+        public static void AppendFormattedDuration(this StringBuilder sb, double totalSeconds, bool showMilliseconds = false)
         {
-            if (sb == null) return;
-            if (totalSeconds < 0) totalSeconds = 0;
-
-            Span<char> buffer = stackalloc char[32];
-            int pos = 0;
-
-            if (totalSeconds < 1.0)
+            if (sb == null)
             {
-                totalSeconds.TryFormat(buffer, out pos, "F2");
-                buffer[pos++] = 's';
-                sb.Append(buffer.Slice(0, pos));
                 return;
             }
+            ValidateDuration(totalSeconds);
 
-            int totalSec = (int)totalSeconds;
-            int hours = totalSec / 3600;
-            int minutes = (totalSec % 3600) / 60;
-            int seconds = totalSec % 60;
-
-            if (hours > 0)
+            Span<char> buffer = stackalloc char[64];
+            if (!TryFormatDuration(totalSeconds, buffer, out int charsWritten, showMilliseconds))
             {
-                hours.TryFormat(buffer.Slice(pos), out int w);
-                pos += w;
-                buffer[pos++] = ':';
-                buffer[pos++] = (char)('0' + minutes / 10);
-                buffer[pos++] = (char)('0' + minutes % 10);
-                buffer[pos++] = ':';
-                buffer[pos++] = (char)('0' + seconds / 10);
-                buffer[pos++] = (char)('0' + seconds % 10);
+                throw new InvalidOperationException("The internal duration-format buffer is too small.");
             }
-            else
-            {
-                minutes.TryFormat(buffer.Slice(pos), out int w);
-                pos += w;
-                buffer[pos++] = ':';
-                buffer[pos++] = (char)('0' + seconds / 10);
-                buffer[pos++] = (char)('0' + seconds % 10);
-            }
-
-            if (showMilliseconds)
-            {
-                int ms = (int)((totalSeconds - totalSec) * 1000);
-                buffer[pos++] = '.';
-                buffer[pos++] = (char)('0' + ms / 100);
-                buffer[pos++] = (char)('0' + (ms / 10) % 10);
-                buffer[pos++] = (char)('0' + ms % 10);
-            }
-
-            sb.Append(buffer.Slice(0, pos));
+            sb.Append(buffer.Slice(0, charsWritten));
         }
 
-        // --- Percentage Formatting ---
-
         /// <summary>
-        /// Formats a 0-1 float as a percentage string (e.g. 0.753 → "75.3%").
+        /// Formats a finite ratio in the inclusive range [0, 1] as an invariant percentage.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static string FormatPercent(float ratio, int decimalPlaces = 1)
         {
-            decimalPlaces = Math.Clamp(decimalPlaces, 0, 5);
-            double pct = ratio * 100.0;
-            Span<char> buffer = stackalloc char[16];
-            int pos;
-            pct.TryFormat(buffer, out pos, DecimalFormats[decimalPlaces]);
+            ValidateRatio(ratio);
+            ValidateDecimalPlaces(decimalPlaces);
 
-            // Trim trailing zeros
-            if (decimalPlaces > 0)
+            Span<char> buffer = stackalloc char[32];
+            if (!TryFormatPercent(ratio, buffer, out int charsWritten, decimalPlaces))
             {
-                int decimalIdx = buffer.Slice(0, pos).IndexOf('.');
-                if (decimalIdx >= 0)
-                {
-                    int lastNonZero = pos - 1;
-                    while (lastNonZero > decimalIdx && buffer[lastNonZero] == '0') lastNonZero--;
-                    pos = (lastNonZero == decimalIdx) ? decimalIdx : lastNonZero + 1;
-                }
+                throw new InvalidOperationException("The internal percentage-format buffer is too small.");
+            }
+            return new string(buffer.Slice(0, charsWritten));
+        }
+
+        /// <summary>
+        /// Attempts to format a finite ratio in [0, 1] into <paramref name="destination"/>.
+        /// Returns false for invalid arguments or insufficient destination capacity.
+        /// </summary>
+        public static bool TryFormatPercent(
+            float ratio,
+            Span<char> destination,
+            out int charsWritten,
+            int decimalPlaces = 1)
+        {
+            charsWritten = 0;
+            if (!IsFinite(ratio) || ratio < 0f || ratio > 1f || !IsValidDecimalPlaces(decimalPlaces))
+            {
+                return false;
             }
 
-            buffer[pos++] = '%';
-            return new string(buffer.Slice(0, pos));
+            int position = 0;
+            if (!TryAppendFixed(ratio * 100d, decimalPlaces, destination, ref position, true) ||
+                !TryAppendChar('%', destination, ref position))
+            {
+                return false;
+            }
+
+            charsWritten = position;
+            return true;
+        }
+
+        private static bool TryAppendFixed(
+            double value,
+            int decimalPlaces,
+            Span<char> destination,
+            ref int position,
+            bool trimFraction)
+        {
+            int start = position;
+            if (!value.TryFormat(
+                    destination.Slice(position),
+                    out int written,
+                    DecimalFormats[decimalPlaces].AsSpan(),
+                    CultureInfo.InvariantCulture))
+            {
+                return false;
+            }
+
+            position += written;
+            if (trimFraction && decimalPlaces > 0)
+            {
+                TrimTrailingFractionZeros(destination, start, ref position);
+            }
+            return true;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryAppendInt64(long value, Span<char> destination, ref int position)
+        {
+            if (!value.TryFormat(
+                    destination.Slice(position),
+                    out int written,
+                    default,
+                    CultureInfo.InvariantCulture))
+            {
+                return false;
+            }
+            position += written;
+            return true;
+        }
+
+        private static void TrimTrailingFractionZeros(Span<char> destination, int start, ref int end)
+        {
+            int relativeDecimalIndex = destination.Slice(start, end - start).IndexOf('.');
+            if (relativeDecimalIndex < 0)
+            {
+                return;
+            }
+
+            int decimalIndex = start + relativeDecimalIndex;
+            int last = end - 1;
+            while (last > decimalIndex && destination[last] == '0')
+            {
+                last--;
+            }
+            end = last == decimalIndex ? decimalIndex : last + 1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool TryAppendChar(char value, Span<char> destination, ref int position)
+        {
+            if ((uint)position >= (uint)destination.Length)
+            {
+                return false;
+            }
+            destination[position++] = value;
+            return true;
+        }
+
+        private static bool TryAppend(ReadOnlySpan<char> value, Span<char> destination, ref int position)
+        {
+            if (value.Length > destination.Length - position)
+            {
+                return false;
+            }
+            value.CopyTo(destination.Slice(position));
+            position += value.Length;
+            return true;
+        }
+
+        private static bool TryAppendTwoDigits(int value, Span<char> destination, ref int position)
+        {
+            if (destination.Length - position < 2)
+            {
+                return false;
+            }
+            destination[position++] = (char)('0' + value / 10);
+            destination[position++] = (char)('0' + value % 10);
+            return true;
+        }
+
+        private static bool TryAppendThreeDigits(int value, Span<char> destination, ref int position)
+        {
+            if (destination.Length - position < 3)
+            {
+                return false;
+            }
+            destination[position++] = (char)('0' + value / 100);
+            destination[position++] = (char)('0' + value / 10 % 10);
+            destination[position++] = (char)('0' + value % 10);
+            return true;
+        }
+
+        private static bool TryCopy(ReadOnlySpan<char> value, Span<char> destination, out int charsWritten)
+        {
+            if (value.Length > destination.Length)
+            {
+                charsWritten = 0;
+                return false;
+            }
+            value.CopyTo(destination);
+            charsWritten = value.Length;
+            return true;
+        }
+
+        private static void PromoteRoundedValue(
+            ref double value,
+            ref int suffixIndex,
+            double divisor,
+            int suffixCount,
+            int decimalPlaces)
+        {
+            if (suffixIndex >= suffixCount - 1)
+            {
+                return;
+            }
+
+            double rounded = Math.Round(value, decimalPlaces, MidpointRounding.AwayFromZero);
+            if (rounded >= divisor)
+            {
+                value /= divisor;
+                suffixIndex++;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsValidDecimalPlaces(int decimalPlaces)
+        {
+            return (uint)decimalPlaces <= MaxDecimalPlaces;
+        }
+
+        private static void ValidateDecimalPlaces(int decimalPlaces)
+        {
+            if (!IsValidDecimalPlaces(decimalPlaces))
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(decimalPlaces),
+                    decimalPlaces,
+                    $"Decimal places must be between 0 and {MaxDecimalPlaces}.");
+            }
+        }
+
+        private static void ValidateNonNegative(long value, string parameterName)
+        {
+            if (value < 0)
+            {
+                throw new ArgumentOutOfRangeException(parameterName, value, "Value must be non-negative.");
+            }
+        }
+
+        private static void ValidateDuration(double totalSeconds)
+        {
+            if (!IsFinite(totalSeconds) || totalSeconds >= MaxDurationSecondsExclusive)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(totalSeconds),
+                    totalSeconds,
+                    "Duration must be finite and fit in an Int64 number of whole seconds.");
+            }
+        }
+
+        private static void ValidateRatio(float ratio)
+        {
+            if (!IsFinite(ratio) || ratio < 0f || ratio > 1f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(ratio), ratio, "Ratio must be finite and between 0 and 1.");
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 }

@@ -5,8 +5,9 @@ namespace CycloneGames.GameplayAbilities.Core
     /// <summary>
     /// Trigger timing of a GameplayCue event relative to its parent effect.
     /// 
-    /// OnActive: fires once when a duration/infinite effect is first applied (buff glow, status icon).
-    /// WhileActive: fires every frame or periodic tick while the effect remains active (looping particles).
+    /// OnActive: fires when a duration/infinite cue is first witnessed as applied.
+    /// WhileActive: initializes presentation first observed as active, including join-in-progress state.
+    /// A normal OnActive dispatch invokes both presentation phases in order; WhileActive is not a per-frame tick.
     /// Removed: fires when the effect expires or is manually removed (fade-out VFX).
     /// Executed: fires for instant effects or each periodic tick (one-shot impact VFX, hit sound).
     /// </summary>
@@ -26,7 +27,6 @@ namespace CycloneGames.GameplayAbilities.Core
         public readonly object Source;
         public readonly object Target;
         public readonly object EffectDefinition;
-        public readonly object EffectContext;
         public readonly object SourceObject;
         public readonly object TargetObject;
         public readonly int EffectLevel;
@@ -38,12 +38,11 @@ namespace CycloneGames.GameplayAbilities.Core
             object source,
             object target,
             object effectDefinition,
-            object effectContext,
             object sourceObject,
             object targetObject,
             int effectLevel,
             long effectDurationRaw)
-            : this(source, target, effectDefinition, effectContext, sourceObject, targetObject, effectLevel, effectDurationRaw, default)
+            : this(source, target, effectDefinition, sourceObject, targetObject, effectLevel, effectDurationRaw, default)
         {
         }
 
@@ -51,7 +50,6 @@ namespace CycloneGames.GameplayAbilities.Core
             object source,
             object target,
             object effectDefinition,
-            object effectContext,
             object sourceObject,
             object targetObject,
             int effectLevel,
@@ -61,7 +59,6 @@ namespace CycloneGames.GameplayAbilities.Core
             Source = source;
             Target = target;
             EffectDefinition = effectDefinition;
-            EffectContext = effectContext;
             SourceObject = sourceObject;
             TargetObject = targetObject;
             EffectLevel = effectLevel;
@@ -78,6 +75,7 @@ namespace CycloneGames.GameplayAbilities.Core
         void RegisterStaticCue(GameplayTag cueTag, string assetAddress);
         void HandleCue(object asc, GameplayTag cueTag, EGameplayCueEvent eventType, GameplayCueEventParams parameters);
         void RemoveAllCuesFor(object asc);
-        void Initialize(object assetPackage);
+        void CommitPredictedCues(object asc, GASPredictionKey predictionKey);
+        void RollbackPredictedCues(object asc, GASPredictionKey predictionKey);
     }
 }

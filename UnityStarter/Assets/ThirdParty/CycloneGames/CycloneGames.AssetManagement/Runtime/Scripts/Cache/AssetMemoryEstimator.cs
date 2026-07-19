@@ -6,25 +6,19 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
     /// Estimates the approximate runtime memory footprint of a Unity asset.
     /// Used by <see cref="AssetCacheService"/> to drive memory-budget eviction in addition
     /// to entry-count limits, so a few large assets cannot silently blow the memory budget.
-    /// <para>
-    /// In Editor/Development builds the precise profiler value is used. In release builds the
-    /// profiler value is unreliable, so a cheap allocation-free heuristic per asset kind is used.
-    /// </para>
+    /// The Unity runtime size is queried whenever an entry becomes idle. If the platform cannot report a positive
+    /// value, an allocation-free type-specific heuristic is used. Neither value includes all transitive bundle,
+    /// allocator, streaming, driver, or GPU residency costs.
     /// </summary>
     internal static class AssetMemoryEstimator
     {
-        // Conservative default for unknown asset kinds (e.g. ScriptableObject configs).
-        private const long DefaultBytes = 64L * 1024;
-
         public static long Estimate(Object obj)
         {
             if (obj == null) return 0;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            // The profiler reports the real GPU+CPU footprint, but is only reliable in dev builds.
+            // This native query is kept off the acquire path and runs only when an entry becomes idle.
             long profiled = UnityEngine.Profiling.Profiler.GetRuntimeMemorySizeLong(obj);
             if (profiled > 0) return profiled;
-#endif
 
             switch (obj)
             {
@@ -40,14 +34,29 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 case AudioClip clip:
                     return (long)System.Math.Max(clip.samples, 1) * System.Math.Max(clip.channels, 1) * 2L;
                 default:
-                    return DefaultBytes;
+                    // Unknown is safer than inventing a small positive estimate that would let an
+                    // unbounded retained payload bypass the cache's byte budget.
+                    return 0L;
             }
+        }
+
+        public static bool TryAddToAggregate(Object obj, ref long total)
+        {
+            long estimate = Estimate(obj);
+            if (estimate <= 0L || total < 0L || total > long.MaxValue - estimate)
+            {
+                total = 0L;
+                return false;
+            }
+
+            total += estimate;
+            return true;
         }
 
         private static long EstimateTexture(int width, int height, int mipmapCount)
         {
             long basePixels = (long)System.Math.Max(width, 1) * System.Math.Max(height, 1);
-            // Assume 4 bytes/pixel (RGBA32-equivalent) as a platform-agnostic upper bound.
+            // RGBA32-equivalent fallback. Compressed and HDR formats may differ substantially.
             long bytes = basePixels * 4L;
             // Mipmaps add ~1/3 extra.
             if (mipmapCount > 1) bytes += bytes / 3L;

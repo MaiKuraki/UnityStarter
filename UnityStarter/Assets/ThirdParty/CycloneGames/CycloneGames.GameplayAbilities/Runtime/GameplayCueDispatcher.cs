@@ -1,15 +1,19 @@
-using Cysharp.Threading.Tasks;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
-    /// Dispatches gameplay cues locally and through the configured GAS network bridge.
+    /// Dispatches gameplay cues through the runtime context's local cue manager.
     /// </summary>
     public sealed class GameplayCueDispatcher
     {
-        public static readonly GameplayCueDispatcher Default = new GameplayCueDispatcher();
+        private readonly GASRuntimeContext runtimeContext;
+
+        public GameplayCueDispatcher(GASRuntimeContext runtimeContext)
+        {
+            this.runtimeContext = runtimeContext ?? throw new System.ArgumentNullException(nameof(runtimeContext));
+        }
 
         public void DispatchGameplayCues(GameplayEffectSpec spec, EGameplayCueEvent eventType)
         {
@@ -24,13 +28,15 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             var parameters = new GameplayCueParameters(spec);
-            foreach (var cueTag in spec.Def.GameplayCues)
+            // A GameplayTagContainer also stores implicit parent tags for matching. Only authored
+            // cue entries are dispatch events; GameplayCueManager owns hierarchical lookup.
+            foreach (var cueTag in spec.Def.GameplayCues.GetExplicitTags())
             {
                 DispatchCueTag(spec, cueTag, eventType, parameters);
             }
         }
 
-        private static void DispatchCueTag(
+        private void DispatchCueTag(
             GameplayEffectSpec spec,
             GameplayTag cueTag,
             EGameplayCueEvent eventType,
@@ -41,29 +47,17 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 return;
             }
 
-            GameplayCueManager.Default.HandleCue(cueTag, eventType, parameters).Forget();
+            var coreParameters = new GameplayCueEventParams(
+                parameters.Source,
+                parameters.Target,
+                parameters.EffectDefinition,
+                parameters.SourceObject,
+                parameters.TargetObject,
+                parameters.EffectLevel,
+                parameters.EffectDurationRaw,
+                parameters.PredictionKey);
+            runtimeContext.CueManager.HandleCue(spec.Target, cueTag, eventType, coreParameters);
             IncrementPredictionCueCount(spec);
-
-            if (eventType == EGameplayCueEvent.OnActive)
-            {
-                GameplayCueManager.Default.HandleCue(cueTag, EGameplayCueEvent.WhileActive, parameters).Forget();
-                IncrementPredictionCueCount(spec);
-            }
-
-            var bridge = GASServices.NetworkBridge;
-            if (!bridge.IsServer)
-            {
-                return;
-            }
-
-            var resolver = GASServices.ReplicationResolver;
-            var cueParams = new GASCueNetParams(
-                sourceAscNetId: spec.Source != null ? resolver.GetAbilitySystemNetworkId(spec.Source) : 0,
-                targetAscNetId: spec.Target != null ? resolver.GetAbilitySystemNetworkId(spec.Target) : 0,
-                magnitudeRaw: 0L,
-                normalizedMagnitudeRaw: 0L,
-                predictionKey: spec.Context?.PredictionKey ?? default);
-            bridge.ServerBroadcastGameplayCue(spec.Target, cueTag, eventType, cueParams);
         }
 
         private static void IncrementPredictionCueCount(GameplayEffectSpec spec)

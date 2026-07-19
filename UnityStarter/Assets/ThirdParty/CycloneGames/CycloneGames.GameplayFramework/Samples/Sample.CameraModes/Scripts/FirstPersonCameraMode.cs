@@ -1,6 +1,8 @@
 using UnityEngine;
 
-namespace CycloneGames.GameplayFramework.Runtime
+using CycloneGames.GameplayFramework.Runtime;
+
+namespace CycloneGames.GameplayFramework.Sample.CameraModes
 {
     /// <summary>
     /// First-person camera mode.

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using UnityEditor;
 using UnityEditor.IMGUI.Controls;
 using UnityEngine;
@@ -36,6 +37,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
         private string _cachedStatusStr;
         private int _previousTagCount;
         private bool _isRefreshing;
+        private int _treeChanged;
 
         [MenuItem("Tools/CycloneGames/GameplayTags/Gameplay Tag Manager")]
         public static void ShowWindow()
@@ -51,16 +53,41 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             _cachedTagCount = GameplayTagManager.GetAllTags().Length;
             _previousTagCount = _cachedTagCount;
             UpdateCachedStrings();
-            GameplayTagManager.OnGameplayTagTreeChanged += OnTreeChanged;
+            BindTreeChanged();
+            EditorApplication.update += ProcessTreeChange;
         }
 
         private void OnDisable()
         {
             GameplayTagManager.OnGameplayTagTreeChanged -= OnTreeChanged;
+            EditorApplication.update -= ProcessTreeChange;
+        }
+
+        internal static void RebindOpenWindows()
+        {
+            GameplayTagEditorWindow[] windows = Resources.FindObjectsOfTypeAll<GameplayTagEditorWindow>();
+            for (int i = 0; i < windows.Length; i++)
+            {
+                windows[i].BindTreeChanged();
+                Interlocked.Exchange(ref windows[i]._treeChanged, 1);
+            }
+        }
+
+        private void BindTreeChanged()
+        {
+            GameplayTagManager.OnGameplayTagTreeChanged -= OnTreeChanged;
+            GameplayTagManager.OnGameplayTagTreeChanged += OnTreeChanged;
         }
 
         private void OnTreeChanged()
         {
+            Interlocked.Exchange(ref _treeChanged, 1);
+        }
+
+        private void ProcessTreeChange()
+        {
+            if (Interlocked.Exchange(ref _treeChanged, 0) == 0)
+                return;
             _cachedTagCount = GameplayTagManager.GetAllTags().Length;
             RefreshSelectedTag();
             _treeView?.Reload();
@@ -200,7 +227,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             GUILayout.FlexibleSpace();
             if (_cachedTagCount != _previousTagCount)
             {
-                EditorGUILayout.LabelField($"Δ {(_cachedTagCount - _previousTagCount):+0;-#}", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(40f));
+                EditorGUILayout.LabelField($"Delta {(_cachedTagCount - _previousTagCount):+0;-#}", EditorStyles.centeredGreyMiniLabel, GUILayout.Width(70f));
                 _previousTagCount = _cachedTagCount;
             }
             EditorGUILayout.EndHorizontal();
@@ -211,15 +238,18 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             if (_isRefreshing) return;
 
             _isRefreshing = true;
-            UpdateCachedStrings();
-
-            GameplayTagManager.ReloadTags();
-            AssetDatabase.Refresh(ImportAssetOptions.ForceUpdate);
-            _treeView?.Reload();
-
-            _isRefreshing = false;
-            UpdateCachedStrings();
-            _nextStatsRefresh = EditorApplication.timeSinceStartup + 0.1d;
+            try
+            {
+                UpdateCachedStrings();
+                GameplayTagManager.ReloadTags();
+                _treeView?.Reload();
+                UpdateCachedStrings();
+                _nextStatsRefresh = EditorApplication.timeSinceStartup + 0.1d;
+            }
+            finally
+            {
+                _isRefreshing = false;
+            }
         }
 
         private void OnTagSelected(GameplayTag tag)

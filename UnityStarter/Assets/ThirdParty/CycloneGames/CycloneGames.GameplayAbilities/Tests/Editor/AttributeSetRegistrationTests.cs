@@ -21,6 +21,16 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.AreEqual(1, attributeSet.RegisterCallCount);
         }
 
+        [Test]
+        public void GetAttributes_DuplicateStableName_FailsWithoutPartialOwnership()
+        {
+            var attributeSet = new DuplicateAttributeSet();
+
+            Assert.Throws<System.InvalidOperationException>(() => attributeSet.GetAttributes());
+            Assert.IsNull(attributeSet.First.OwningSet);
+            Assert.IsNull(attributeSet.Second.OwningSet);
+        }
+
         private sealed class ExplicitAttributeSet : AttributeSet
         {
             public readonly GameplayAttribute Health = new GameplayAttribute("Health");
@@ -33,6 +43,18 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 RegisterCallCount++;
                 RegisterAttribute(Health);
                 RegisterAttribute(Mana);
+            }
+        }
+
+        private sealed class DuplicateAttributeSet : AttributeSet
+        {
+            public readonly GameplayAttribute First = new GameplayAttribute("Shared");
+            public readonly GameplayAttribute Second = new GameplayAttribute("Shared");
+
+            protected override void RegisterAttributes()
+            {
+                RegisterAttribute(First);
+                RegisterAttribute(Second);
             }
         }
     }

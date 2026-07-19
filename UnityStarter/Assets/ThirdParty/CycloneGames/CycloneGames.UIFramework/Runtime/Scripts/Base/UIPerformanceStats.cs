@@ -1,53 +1,51 @@
-using System.Collections.Generic;
-
 namespace CycloneGames.UIFramework.Runtime
 {
     public readonly struct UILayerRuntimeStats
     {
-        public readonly string LayerName;
-        public readonly int SortingOrder;
-        public readonly int WindowCount;
-
         public UILayerRuntimeStats(string layerName, int sortingOrder, int windowCount)
         {
             LayerName = layerName;
             SortingOrder = sortingOrder;
             WindowCount = windowCount;
         }
+
+        public string LayerName { get; }
+        public int SortingOrder { get; }
+        public int WindowCount { get; }
     }
 
     public readonly struct UIPerformanceStats
     {
-        public readonly int ActiveWindowCount;
-        public readonly int SceneBoundWindowCount;
-        public readonly int InFlightOpenCount;
-        public readonly int CachedConfigHandleCount;
-        public readonly int CachedPrefabHandleCount;
-        public readonly int LayerCount;
-        public readonly int TotalLayerWindowCount;
-        public readonly int IsolatedWindowCanvasCount;
-        public readonly bool HasPendingSceneSweep;
-
         public UIPerformanceStats(
-            int activeWindowCount,
+            int sessionCount,
+            int openingWindowCount,
+            int openWindowCount,
+            int closingWindowCount,
             int sceneBoundWindowCount,
-            int inFlightOpenCount,
-            int cachedConfigHandleCount,
-            int cachedPrefabHandleCount,
-            int layerCount,
-            int totalLayerWindowCount,
+            int binderCount,
             int isolatedWindowCanvasCount,
-            bool hasPendingSceneSweep)
+            int layerCount,
+            int maxWindowCapacity)
         {
-            ActiveWindowCount = activeWindowCount;
+            SessionCount = sessionCount;
+            OpeningWindowCount = openingWindowCount;
+            OpenWindowCount = openWindowCount;
+            ClosingWindowCount = closingWindowCount;
             SceneBoundWindowCount = sceneBoundWindowCount;
-            InFlightOpenCount = inFlightOpenCount;
-            CachedConfigHandleCount = cachedConfigHandleCount;
-            CachedPrefabHandleCount = cachedPrefabHandleCount;
-            LayerCount = layerCount;
-            TotalLayerWindowCount = totalLayerWindowCount;
+            BinderCount = binderCount;
             IsolatedWindowCanvasCount = isolatedWindowCanvasCount;
-            HasPendingSceneSweep = hasPendingSceneSweep;
+            LayerCount = layerCount;
+            MaxWindowCapacity = maxWindowCapacity;
         }
+
+        public int SessionCount { get; }
+        public int OpeningWindowCount { get; }
+        public int OpenWindowCount { get; }
+        public int ClosingWindowCount { get; }
+        public int SceneBoundWindowCount { get; }
+        public int BinderCount { get; }
+        public int IsolatedWindowCanvasCount { get; }
+        public int LayerCount { get; }
+        public int MaxWindowCapacity { get; }
     }
 }

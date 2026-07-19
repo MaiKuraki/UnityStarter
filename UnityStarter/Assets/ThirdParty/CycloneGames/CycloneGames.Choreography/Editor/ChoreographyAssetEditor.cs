@@ -39,7 +39,9 @@ namespace CycloneGames.Choreography.Editor
         private static readonly GUIContent ResourceBackendCueMode = new GUIContent(
             "Backend Cue", "Use a backend-owned cue such as a Wwise event or CycloneGames.Audio event.");
         private static readonly GUIContent ResourceAssetLabel = new GUIContent(
-            "Asset", "Drag an asset here. The asset key stores its GUID and location path.");
+            "Asset", "Select an asset for Editor GUID tracking. The provider runtime location remains explicit.");
+        private static readonly GUIContent ResourceAssetLocationLabel = new GUIContent(
+            "Runtime Location", "Exact Resources, Addressables, YooAsset, or custom-provider key used at runtime.");
         private static readonly GUIContent ResourceLocationLabel = new GUIContent(
             "Location", "Provider location key used when Asset Key is not active.");
         private const float PreviewTimelineHeight = 50f;
@@ -1119,28 +1121,27 @@ namespace CycloneGames.Choreography.Editor
                 }
             }
 
-            string location = GetAssetKeyLocation(asset);
-            EditorGUI.BeginDisabledGroup(string.IsNullOrEmpty(location));
+            EditorGUI.BeginDisabledGroup(currentAsset == null);
             if (GUI.Button(pingRect, "Ping", EditorStyles.miniButton))
             {
                 PingAssetKey(asset);
             }
             EditorGUI.EndDisabledGroup();
 
-            if (string.IsNullOrEmpty(location))
+            SerializedProperty location = asset.FindPropertyRelative("m_Location");
+            if (location == null)
             {
-                EditorGUILayout.HelpBox(
-                    "Drag an asset into the Asset field. The asset key stores GUID and path; a resource provider decides how to load it.",
-                    MessageType.Warning);
+                EditorGUILayout.HelpBox("Asset Key serialization layout is invalid.", MessageType.Error);
                 return;
             }
 
-            EditorGUILayout.BeginHorizontal();
-            EditorGUILayout.LabelField("Path", GUILayout.Width(72f));
-            EditorGUI.BeginDisabledGroup(true);
-            EditorGUILayout.TextField(location);
-            EditorGUI.EndDisabledGroup();
-            EditorGUILayout.EndHorizontal();
+            EditorGUILayout.PropertyField(location, ResourceAssetLocationLabel);
+            if (string.IsNullOrWhiteSpace(location.stringValue))
+            {
+                EditorGUILayout.HelpBox(
+                    "Select an asset for Editor tracking, then enter the exact provider Runtime Location.",
+                    MessageType.Warning);
+            }
         }
 
         private static void DrawLocationResourceField(SerializedProperty address)
@@ -1880,13 +1881,22 @@ namespace CycloneGames.Choreography.Editor
                 return false;
             }
 
-            Object resolved = AssetDatabase.LoadAssetAtPath<Object>(location);
-            if (resolved == null)
+            SerializedProperty guid = asset.FindPropertyRelative("m_GUID");
+            SerializedProperty assetLocation = asset.FindPropertyRelative("m_Location");
+            if (guid == null || assetLocation == null)
             {
                 return false;
             }
 
-            SetAssetKeyFromObject(asset, resolved);
+            assetLocation.stringValue = location;
+            guid.stringValue = string.Empty;
+            Object resolved = AssetDatabase.LoadAssetAtPath<Object>(location);
+            if (resolved != null)
+            {
+                string path = AssetDatabase.GetAssetPath(resolved);
+                guid.stringValue = AssetDatabase.AssetPathToGUID(path);
+            }
+
             return true;
         }
 
@@ -1911,7 +1921,9 @@ namespace CycloneGames.Choreography.Editor
             }
 
             guid.stringValue = AssetDatabase.AssetPathToGUID(path);
-            assetLocation.stringValue = path;
+            // The selected project asset identifies the Editor object, but it does not provide a
+            // provider-neutral runtime key. Clear any location associated with the previous object.
+            assetLocation.stringValue = string.Empty;
         }
 
         private static void ClearAssetKey(SerializedProperty asset)

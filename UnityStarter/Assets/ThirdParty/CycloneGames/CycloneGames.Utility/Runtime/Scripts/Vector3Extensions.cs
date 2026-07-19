@@ -1,28 +1,39 @@
+using System;
 using System.Runtime.CompilerServices;
 using UnityEngine;
-using Unity.Mathematics;
 
 namespace CycloneGames.Utility.Runtime
 {
     public static class Vector3Extensions
     {
+        private const float NormalizationEpsilon = 1e-15f;
+
         /// <summary>
-        /// Quantizes the vector components to the nearest multiple of the quantization value.
-        /// Uses math.round for optimal performance and cross-platform compatibility.
-        /// Returns the original vector if quantization is zero or near-zero to avoid division by zero.
+        /// Quantizes each component to the nearest multiple of <paramref name="quantization"/>.
+        /// A negative step is treated as its absolute value. A near-zero step returns the input unchanged.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 Quantize(this Vector3 v, float quantization)
         {
-            if (math.abs(quantization) < 1e-6f)
+            if (!IsFinite(quantization))
+            {
+                throw new ArgumentOutOfRangeException(nameof(quantization), "Quantization must be finite.");
+            }
+
+            float step = Mathf.Abs(quantization);
+            if (step < 1e-6f)
+            {
                 return v;
-            float3 q = new float3(quantization);
-            float3 result = math.round(new float3(v.x, v.y, v.z) / q) * q;
-            return new Vector3(result.x, result.y, result.z);
+            }
+
+            return new Vector3(
+                Mathf.Round(v.x / step) * step,
+                Mathf.Round(v.y / step) * step,
+                Mathf.Round(v.z / step) * step);
         }
 
         /// <summary>
-        /// Returns the squared distance between two vectors. Avoids square root for better performance.
+        /// Returns the squared distance between two vectors. The result may overflow for extreme inputs.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float DistanceSquared(this Vector3 a, Vector3 b)
@@ -34,107 +45,119 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
-        /// Checks if the vector is approximately zero within a small epsilon.
+        /// Checks if the vector magnitude is smaller than the absolute epsilon.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static bool IsZero(this Vector3 v, float epsilon = 1e-5f)
         {
-            return (v.x * v.x + v.y * v.y + v.z * v.z) < epsilon * epsilon;
+            if (float.IsNaN(epsilon))
+            {
+                return false;
+            }
+
+            epsilon = Mathf.Abs(epsilon);
+            return v.x * v.x + v.y * v.y + v.z * v.z < epsilon * epsilon;
         }
 
         /// <summary>
-        /// Clamps the magnitude of the vector to the specified maximum length.
+        /// Clamps the magnitude of the vector to a non-negative maximum length.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 ClampMagnitude(this Vector3 v, float maxLength)
         {
-            float sqrMag = v.x * v.x + v.y * v.y + v.z * v.z;
-            if (sqrMag > maxLength * maxLength)
+            if (float.IsNaN(maxLength) || maxLength < 0f)
             {
-                float invMag = maxLength * math.rsqrt(sqrMag);
-                return new Vector3(v.x * invMag, v.y * invMag, v.z * invMag);
+                throw new ArgumentOutOfRangeException(nameof(maxLength), "Maximum length must be non-negative and not NaN.");
             }
-            return v;
+            if (maxLength == 0f)
+            {
+                return Vector3.zero;
+            }
+            if (float.IsPositiveInfinity(maxLength))
+            {
+                return v;
+            }
+            if (!TryGetNormalized(v, out Vector3 normalized, out float maxComponent, out float scaledLength))
+            {
+                return v;
+            }
+
+            // Compare before multiplying to avoid overflowing the actual magnitude.
+            if (maxComponent <= maxLength / scaledLength)
+            {
+                return v;
+            }
+
+            return normalized * maxLength;
         }
 
         /// <summary>
-        /// Projects the vector onto a plane defined by its normal.
-        /// The planeNormal must be a unit vector (not normalized internally for performance).
+        /// Projects the vector onto a plane. The normal does not need to be normalized.
+        /// A zero or non-finite normal leaves the vector unchanged.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 ProjectOnPlane(this Vector3 v, Vector3 planeNormal)
         {
-            float dot = v.x * planeNormal.x + v.y * planeNormal.y + v.z * planeNormal.z;
-            return new Vector3(v.x - dot * planeNormal.x, v.y - dot * planeNormal.y, v.z - dot * planeNormal.z);
+            if (!TryGetNormalized(planeNormal, out Vector3 normalized, out _, out _))
+            {
+                return v;
+            }
+
+            return v - Vector3.Dot(v, normalized) * normalized;
         }
 
         /// <summary>
-        /// Returns the angle in degrees between two vectors.
-        /// Returns 0 if either vector is zero-length.
+        /// Returns the angle in degrees between two vectors, or zero if either vector cannot be normalized.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static float Angle(this Vector3 from, Vector3 to)
         {
-            float sqrMagFrom = from.x * from.x + from.y * from.y + from.z * from.z;
-            float sqrMagTo = to.x * to.x + to.y * to.y + to.z * to.z;
-            float denominator = math.sqrt(sqrMagFrom * sqrMagTo);
-            if (denominator < 1e-15f)
+            if (!TryGetNormalized(from, out Vector3 normalizedFrom, out _, out _) ||
+                !TryGetNormalized(to, out Vector3 normalizedTo, out _, out _))
+            {
                 return 0f;
-            float dot = (from.x * to.x + from.y * to.y + from.z * to.z) / denominator;
-            return math.degrees(math.acos(math.clamp(dot, -1f, 1f)));
+            }
+
+            float dot = Mathf.Clamp(Vector3.Dot(normalizedFrom, normalizedTo), -1f, 1f);
+            return Mathf.Acos(dot) * Mathf.Rad2Deg;
         }
 
         /// <summary>
         /// Rotates the vector around an axis by the specified angle in degrees.
-        /// The axis must be a unit vector (not normalized internally for performance).
+        /// Unity normalizes a non-zero axis internally.
         /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 RotateAround(this Vector3 v, Vector3 axis, float angleDegrees)
         {
-            float3 rotated = math.mul(quaternion.AxisAngle(new float3(axis.x, axis.y, axis.z), math.radians(angleDegrees)), new float3(v.x, v.y, v.z));
-            return new Vector3(rotated.x, rotated.y, rotated.z);
+            return Quaternion.AngleAxis(angleDegrees, axis) * v;
         }
 
-        /// <summary>
-        /// Returns a vector with the absolute values of each component.
-        /// </summary>
+        /// <summary>Returns a vector with the absolute value of each component.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 Abs(this Vector3 v)
         {
-            return new Vector3(math.abs(v.x), math.abs(v.y), math.abs(v.z));
+            return new Vector3(Mathf.Abs(v.x), Mathf.Abs(v.y), Mathf.Abs(v.z));
         }
 
-        /// <summary>
-        /// Returns a vector with the sign (-1, 0, or 1) of each component.
-        /// </summary>
+        /// <summary>Returns a vector with the sign (-1, 0, or 1) of each component.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 Sign(this Vector3 v)
         {
-            return new Vector3(math.sign(v.x), math.sign(v.y), math.sign(v.z));
+            return new Vector3(SignComponent(v.x), SignComponent(v.y), SignComponent(v.z));
         }
 
-        /// <summary>
-        /// Returns a vector with the minimum components of two vectors.
-        /// </summary>
+        /// <summary>Returns a vector with the minimum components of two vectors.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 Min(this Vector3 a, Vector3 b)
         {
-            return new Vector3(math.min(a.x, b.x), math.min(a.y, b.y), math.min(a.z, b.z));
+            return new Vector3(Mathf.Min(a.x, b.x), Mathf.Min(a.y, b.y), Mathf.Min(a.z, b.z));
         }
 
-        /// <summary>
-        /// Returns a vector with the maximum components of two vectors.
-        /// </summary>
+        /// <summary>Returns a vector with the maximum components of two vectors.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 Max(this Vector3 a, Vector3 b)
         {
-            return new Vector3(math.max(a.x, b.x), math.max(a.y, b.y), math.max(a.z, b.z));
+            return new Vector3(Mathf.Max(a.x, b.x), Mathf.Max(a.y, b.y), Mathf.Max(a.z, b.z));
         }
 
-        /// <summary>
-        /// Linearly interpolates between two vectors without clamping t.
-        /// Allows overshoot for elastic/spring animations.
-        /// </summary>
+        /// <summary>Linearly interpolates between two vectors without clamping t.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 LerpUnclamped(this Vector3 a, Vector3 b, float t)
         {
@@ -145,123 +168,176 @@ namespace CycloneGames.Utility.Runtime
         }
 
         /// <summary>
-        /// Moves the vector towards a target vector by a maximum distance.
-        /// If maxDistanceDelta is negative or zero, the current vector is returned unchanged.
+        /// Moves the vector towards a target by at most <paramref name="maxDistanceDelta"/>.
+        /// A negative or zero delta leaves the current vector unchanged.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static Vector3 MoveTowards(this Vector3 current, Vector3 target, float maxDistanceDelta)
         {
+            if (float.IsNaN(maxDistanceDelta))
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxDistanceDelta), "Maximum distance delta must not be NaN.");
+            }
             if (maxDistanceDelta <= 0f)
+            {
                 return current;
-            float dx = target.x - current.x;
-            float dy = target.y - current.y;
-            float dz = target.z - current.z;
-            float sqrDist = dx * dx + dy * dy + dz * dz;
-            if (sqrDist <= maxDistanceDelta * maxDistanceDelta)
+            }
+
+            Vector3 delta = target - current;
+            if (!TryGetNormalized(delta, out Vector3 direction, out float maxComponent, out float scaledLength))
+            {
                 return target;
-            float invDist = maxDistanceDelta * math.rsqrt(sqrDist);
-            return new Vector3(current.x + dx * invDist, current.y + dy * invDist, current.z + dz * invDist);
+            }
+            if (float.IsPositiveInfinity(maxDistanceDelta) || maxComponent <= maxDistanceDelta / scaledLength)
+            {
+                return target;
+            }
+
+            return current + direction * maxDistanceDelta;
         }
 
-        // --- Component Swizzle ---
-
-        /// <summary>
-        /// Returns a copy of the vector with the X component replaced.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Vector3 WithX(this Vector3 v, float x)
-        {
-            return new Vector3(x, v.y, v.z);
-        }
+        public static Vector3 WithX(this Vector3 v, float x) => new Vector3(x, v.y, v.z);
 
-        /// <summary>
-        /// Returns a copy of the vector with the Y component replaced.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Vector3 WithY(this Vector3 v, float y)
-        {
-            return new Vector3(v.x, y, v.z);
-        }
+        public static Vector3 WithY(this Vector3 v, float y) => new Vector3(v.x, y, v.z);
 
-        /// <summary>
-        /// Returns a copy of the vector with the Z component replaced.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Vector3 WithZ(this Vector3 v, float z)
-        {
-            return new Vector3(v.x, v.y, z);
-        }
+        public static Vector3 WithZ(this Vector3 v, float z) => new Vector3(v.x, v.y, z);
 
-        // --- Common Game Dev Utilities ---
-
-        /// <summary>
-        /// Returns the XZ flat projection (Y = 0). Common for top-down gameplay.
-        /// </summary>
+        /// <summary>Returns the XZ projection with Y set to zero.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static Vector3 Flat(this Vector3 v)
-        {
-            return new Vector3(v.x, 0f, v.z);
-        }
+        public static Vector3 Flat(this Vector3 v) => new Vector3(v.x, 0f, v.z);
 
-        /// <summary>
-        /// Returns the normalized direction from this vector to the target.
-        /// Returns Vector3.zero if the two positions are approximately equal.
-        /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        /// <summary>Returns the normalized direction from this position to the target.</summary>
         public static Vector3 DirectionTo(this Vector3 from, Vector3 to)
         {
-            float dx = to.x - from.x;
-            float dy = to.y - from.y;
-            float dz = to.z - from.z;
-            float sqrMag = dx * dx + dy * dy + dz * dz;
-            if (sqrMag < 1e-10f)
-                return Vector3.zero;
-            float invMag = math.rsqrt(sqrMag);
-            return new Vector3(dx * invMag, dy * invMag, dz * invMag);
+            return TryGetNormalized(to - from, out Vector3 direction, out _, out _)
+                ? direction
+                : Vector3.zero;
         }
 
         /// <summary>
-        /// Remaps each component of the vector from one range to another.
+        /// Remaps each component from one finite range to another.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        /// <exception cref="ArgumentException">
+        /// The vector or range is non-finite, the source range has zero length, or the result cannot be represented as finite floats.
+        /// </exception>
         public static Vector3 Remap(this Vector3 v, float fromMin, float fromMax, float toMin, float toMax)
         {
-            float invRange = 1f / (fromMax - fromMin);
-            float range = toMax - toMin;
-            return new Vector3(
-                (v.x - fromMin) * invRange * range + toMin,
-                (v.y - fromMin) * invRange * range + toMin,
-                (v.z - fromMin) * invRange * range + toMin);
+            if (!TryRemap(v, fromMin, fromMax, toMin, toMax, out Vector3 result))
+            {
+                throw new ArgumentException(
+                    "Remap inputs must be finite, the source range must have non-zero length, and the result must fit finite floats.");
+            }
+            return result;
         }
 
         /// <summary>
-        /// Clamps each component of the vector independently between min and max.
+        /// Attempts to remap each component from one finite range to another.
         /// </summary>
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static bool TryRemap(
+            this Vector3 v,
+            float fromMin,
+            float fromMax,
+            float toMin,
+            float toMax,
+            out Vector3 result)
+        {
+            if (!IsFinite(v.x) || !IsFinite(v.y) || !IsFinite(v.z) ||
+                !IsFinite(fromMin) || !IsFinite(fromMax) ||
+                !IsFinite(toMin) || !IsFinite(toMax) ||
+                fromMin == fromMax)
+            {
+                result = default;
+                return false;
+            }
+
+            double sourceRange = (double)fromMax - fromMin;
+            double targetRange = (double)toMax - toMin;
+            double scale = targetRange / sourceRange;
+            double x = ((double)v.x - fromMin) * scale + toMin;
+            double y = ((double)v.y - fromMin) * scale + toMin;
+            double z = ((double)v.z - fromMin) * scale + toMin;
+            if (!CanRepresentAsFiniteFloat(x) ||
+                !CanRepresentAsFiniteFloat(y) ||
+                !CanRepresentAsFiniteFloat(z))
+            {
+                result = default;
+                return false;
+            }
+
+            result = new Vector3((float)x, (float)y, (float)z);
+            return true;
+        }
+
+        /// <summary>Clamps each component independently between finite ordered bounds.</summary>
         public static Vector3 ClampComponents(this Vector3 v, float min, float max)
         {
+            if (!IsFinite(min) || !IsFinite(max) || min > max)
+            {
+                throw new ArgumentException("Clamp bounds must be finite and min must not exceed max.");
+            }
+
             return new Vector3(
-                math.clamp(v.x, min, max),
-                math.clamp(v.y, min, max),
-                math.clamp(v.z, min, max));
+                Mathf.Clamp(v.x, min, max),
+                Mathf.Clamp(v.y, min, max),
+                Mathf.Clamp(v.z, min, max));
         }
 
-        /// <summary>
-        /// Returns the largest component value of the vector.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static float MaxComponent(this Vector3 v)
+        public static float MaxComponent(this Vector3 v) => Mathf.Max(v.x, Mathf.Max(v.y, v.z));
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public static float MinComponent(this Vector3 v) => Mathf.Min(v.x, Mathf.Min(v.y, v.z));
+
+        private static bool TryGetNormalized(
+            Vector3 value,
+            out Vector3 normalized,
+            out float maxComponent,
+            out float scaledLength)
         {
-            return math.max(v.x, math.max(v.y, v.z));
+            maxComponent = Mathf.Max(Mathf.Abs(value.x), Mathf.Max(Mathf.Abs(value.y), Mathf.Abs(value.z)));
+            if (!IsFinite(maxComponent) || maxComponent <= NormalizationEpsilon)
+            {
+                normalized = Vector3.zero;
+                scaledLength = 0f;
+                return false;
+            }
+
+            float x = value.x / maxComponent;
+            float y = value.y / maxComponent;
+            float z = value.z / maxComponent;
+            scaledLength = Mathf.Sqrt(x * x + y * y + z * z);
+            if (!IsFinite(scaledLength) || scaledLength <= NormalizationEpsilon)
+            {
+                normalized = Vector3.zero;
+                return false;
+            }
+
+            float inverseLength = 1f / scaledLength;
+            normalized = new Vector3(x * inverseLength, y * inverseLength, z * inverseLength);
+            return true;
         }
 
-        /// <summary>
-        /// Returns the smallest component value of the vector.
-        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public static float MinComponent(this Vector3 v)
+        private static float SignComponent(float value)
         {
-            return math.min(v.x, math.min(v.y, v.z));
+            return value > 0f ? 1f : value < 0f ? -1f : 0f;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private static bool CanRepresentAsFiniteFloat(double value)
+        {
+            return !double.IsNaN(value) &&
+                   !double.IsInfinity(value) &&
+                   value >= -float.MaxValue &&
+                   value <= float.MaxValue;
         }
     }
 }

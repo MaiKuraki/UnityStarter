@@ -1,4 +1,3 @@
-using CycloneGames.Logger;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -8,8 +7,6 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class KillZVolume : Actor
     {
-        private const string DEBUG_FLAG = "<color=#FF4B4B>[KillZ]</color>";
-
         protected override void Awake()
         {
             base.Awake();
@@ -24,8 +21,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         protected virtual void OnTriggerEnter(Collider other)
         {
             if (other == null) return;
-            CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} entered KillZ");
-            Actor otherActor = other.GetComponent<Actor>();
+            Actor otherActor = other.attachedRigidbody != null
+                ? other.attachedRigidbody.GetComponent<Actor>()
+                : other.GetComponentInParent<Actor>();
             if (otherActor != null)
             {
                 otherActor.FellOutOfWorld();
@@ -35,8 +33,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         protected virtual void OnTriggerEnter2D(Collider2D other)
         {
             if (other == null) return;
-            CLogger.LogInfo($"{DEBUG_FLAG} {other.gameObject.name} entered KillZ");
-            Actor otherActor = other.GetComponent<Actor>();
+            Actor otherActor = other.attachedRigidbody != null
+                ? other.attachedRigidbody.GetComponent<Actor>()
+                : other.GetComponentInParent<Actor>();
             if (otherActor != null)
             {
                 otherActor.FellOutOfWorld();

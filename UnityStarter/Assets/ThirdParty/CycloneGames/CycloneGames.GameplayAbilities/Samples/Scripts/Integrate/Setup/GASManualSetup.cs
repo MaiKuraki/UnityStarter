@@ -1,6 +1,7 @@
 using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement;
 
 namespace CycloneGames.GameplayAbilities.Integrate.Setup
 {
@@ -10,32 +11,36 @@ namespace CycloneGames.GameplayAbilities.Integrate.Setup
     public static class GASManualSetup
     {
         /// <summary>
-        /// Initializes GAS cue loading without DI. Call once from the project's composition root.
+        /// Creates an explicitly owned runtime context and cue manager without a DI container.
+        /// Dispose every ASC first, then dispose the returned context and cue manager.
         /// </summary>
-        public static void Initialize(IAssetPackage assetPackage)
+        public static GASRuntimeContext CreateContext(
+            IAssetPackage assetPackage,
+            GameObjectPoolManager.PoolConfig cuePoolConfig,
+            out GameplayCueManager cueManager,
+            GASRuntimeThreadPolicy threadPolicy = GASRuntimeThreadPolicy.Throw,
+            GASRuntimeCacheProfile cacheProfile = null)
         {
             if (assetPackage == null)
             {
-                return;
+                throw new System.ArgumentNullException(nameof(assetPackage));
             }
 
-            var cueManager = GameplayCueManager.Instance;
-            if (cueManager is GameplayCueManager unityManager)
+            cueManager = new GameplayCueManager(cuePoolConfig);
+            try
             {
-                unityManager.Initialize(assetPackage);
+                cueManager.Initialize(new AssetManagementResourceLocator(assetPackage));
+                return new GASRuntimeContext(
+                    cueManager: cueManager,
+                    threadPolicy: threadPolicy,
+                    cacheProfile: cacheProfile);
             }
-        }
-        
-        /// <summary>
-        /// Shuts down sample GAS services. Call from the same owner that initialized the sample.
-        /// </summary>
-        public static void Shutdown()
-        {
-            if (GameplayCueManager.Instance is GameplayCueManager unityManager)
+            catch
             {
-                unityManager.Shutdown();
+                cueManager.Dispose();
+                cueManager = null;
+                throw;
             }
-            GameplayCueManager.ResetInstance();
         }
     }
 }

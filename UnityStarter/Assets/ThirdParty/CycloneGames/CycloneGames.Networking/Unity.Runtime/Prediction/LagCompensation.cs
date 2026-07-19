@@ -1,5 +1,4 @@
 using System.Runtime.CompilerServices;
-using CycloneGames.Networking.Simulation;
 using UnityEngine;
 
 namespace CycloneGames.Networking.Prediction
@@ -16,7 +15,7 @@ namespace CycloneGames.Networking.Prediction
         private readonly Vector3[] _positions;
         private readonly Quaternion[] _rotations;
         private readonly Bounds[] _bounds;
-        private readonly uint[] _ticks;
+        private readonly long[] _ticks;
         private readonly int _capacity;
         private readonly int _mask;
         private int _writeIndex;
@@ -24,6 +23,9 @@ namespace CycloneGames.Networking.Prediction
 
         public LagCompensationBuffer(int capacity = 128)
         {
+            if (capacity <= 0 || capacity > 1 << 30)
+                throw new System.ArgumentOutOfRangeException(nameof(capacity));
+
             // Power of 2 for fast masking
             int pow2 = 1;
             while (pow2 < capacity) pow2 <<= 1;
@@ -32,29 +34,34 @@ namespace CycloneGames.Networking.Prediction
             _positions = new Vector3[_capacity];
             _rotations = new Quaternion[_capacity];
             _bounds = new Bounds[_capacity];
-            _ticks = new uint[_capacity];
+            _ticks = new long[_capacity];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Record(NetworkTick tick, Vector3 position, Quaternion rotation, Bounds bounds)
+        public void Record(NetworkTickId tick, Vector3 position, Quaternion rotation, Bounds bounds)
         {
-            int index = _writeIndex & _mask;
+            if (!tick.IsValid)
+                throw new System.ArgumentOutOfRangeException(nameof(tick));
+
+            int index = _writeIndex;
             _positions[index] = position;
             _rotations[index] = rotation;
             _bounds[index] = bounds;
             _ticks[index] = tick.Value;
-            _writeIndex++;
+            _writeIndex = (_writeIndex + 1) & _mask;
             if (_count < _capacity) _count++;
         }
 
         /// <summary>
         /// Sample position/rotation at a specific tick, with interpolation between stored frames.
         /// </summary>
-        public bool Sample(NetworkTick targetTick, out Vector3 position, out Quaternion rotation, out Bounds bounds)
+        public bool Sample(NetworkTickId targetTick, out Vector3 position, out Quaternion rotation, out Bounds bounds)
         {
-            uint target = targetTick.Value;
+            if (!targetTick.IsValid)
+                throw new System.ArgumentOutOfRangeException(nameof(targetTick));
 
-            // Use count-based iteration to avoid signed overflow of _writeIndex
+            long target = targetTick.Value;
+
             int oldest = (_writeIndex - _count) & _mask;
 
             for (int i = 0; i < _count - 1; i++)
@@ -72,7 +79,7 @@ namespace CycloneGames.Networking.Prediction
                         return true;
                     }
 
-                    float t = (float)(target - _ticks[cur]) / (_ticks[next] - _ticks[cur]);
+                    float t = (float)((double)(target - _ticks[cur]) / (_ticks[next] - _ticks[cur]));
                     position = Vector3.Lerp(_positions[cur], _positions[next], t);
                     rotation = Quaternion.Slerp(_rotations[cur], _rotations[next], t);
                     bounds = new Bounds(
@@ -104,7 +111,7 @@ namespace CycloneGames.Networking.Prediction
         /// <summary>
         /// Perform a hit test against the entity's historical position at the given tick.
         /// </summary>
-        public bool HitTest(NetworkTick tick, Ray ray, float maxDistance, out float hitDistance)
+        public bool HitTest(NetworkTickId tick, Ray ray, float maxDistance, out float hitDistance)
         {
             hitDistance = 0f;
             if (!Sample(tick, out _, out _, out var historicalBounds))

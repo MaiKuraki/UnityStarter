@@ -9,30 +9,24 @@ namespace CycloneGames.GameplayAbilities.Core
     public sealed class GASAbilitySystemFacade
     {
         private readonly GASAbilitySystemState state;
-        private readonly IGASCoreNetworkDriver network;
 
         public GASAbilitySystemState State => state;
         public GASEntityId Entity => state.Entity;
 
-        public GASAbilitySystemFacade(GASAbilitySystemState state, IGASCoreNetworkDriver network = null)
+        public GASAbilitySystemFacade(GASAbilitySystemState state)
         {
             this.state = state ?? throw new ArgumentNullException(nameof(state));
-            this.network = network;
         }
 
         public GASSpecHandle GiveAbility(
             GASDefinitionId abilityDefinitionId,
             ushort level,
-            GASInstancingPolicy instancingPolicy = GASInstancingPolicy.InstancedPerActor,
-            GASNetExecutionPolicy netExecutionPolicy = GASNetExecutionPolicy.LocalPredicted,
-            GASReplicationPolicy replicationPolicy = GASReplicationPolicy.OwnerOnly)
+            GASInstancingPolicy instancingPolicy = GASInstancingPolicy.InstancedPerActor)
         {
             return state.GrantAbility(
                 abilityDefinitionId,
                 level,
-                instancingPolicy,
-                netExecutionPolicy,
-                replicationPolicy);
+                instancingPolicy);
         }
 
         public bool GiveAbility(in GASAbilityGrantRequest request, out GASSpecHandle handle)
@@ -45,152 +39,64 @@ namespace CycloneGames.GameplayAbilities.Core
             return state.RemoveAbility(handle);
         }
 
-        /// <summary>
-        /// Attempts to activate an ability, respecting network execution policies.
-        /// 
-        /// Dispatch logic:
-        /// - LocalPredicted + non-server + locally owned → sends activation RPC, returns Predicted.
-        /// - ServerOnly + non-server → sends activation RPC, returns Predicted.
-        /// - All other cases → local authority accepts immediately, returns Accepted.
-        /// 
-        /// Prediction keys must be valid for LocalPredicted; the caller generates one
-        /// via <see cref="GASPredictionKey.NewKey()"/> before calling this method.
-        /// </summary>
-        public GASAbilityActivationResult TryActivateAbility(GASSpecHandle handle, GASPredictionKey predictionKey)
-        {
-            if (!state.TryGetAbilitySpec(handle, out var spec))
-            {
-                return new GASAbilityActivationResult(GASAbilityActivationResultCode.MissingSpec, handle, predictionKey);
-            }
-
-            if (spec.NetExecutionPolicy == GASNetExecutionPolicy.LocalPredicted)
-            {
-                if (!predictionKey.IsValid)
-                {
-                    return new GASAbilityActivationResult(GASAbilityActivationResultCode.InvalidPredictionKey, handle, predictionKey);
-                }
-
-                if (network != null && !network.IsServer && network.IsOwner(Entity))
-                {
-                    network.SendAbilityActivationRequest(Entity, handle, predictionKey);
-                    return new GASAbilityActivationResult(GASAbilityActivationResultCode.Predicted, handle, predictionKey);
-                }
-            }
-
-            if (spec.NetExecutionPolicy == GASNetExecutionPolicy.ServerOnly && network != null && !network.IsServer)
-            {
-                network.SendAbilityActivationRequest(Entity, handle, predictionKey);
-                return new GASAbilityActivationResult(GASAbilityActivationResultCode.Predicted, handle, predictionKey);
-            }
-
-            return new GASAbilityActivationResult(GASAbilityActivationResultCode.Accepted, handle, predictionKey);
-        }
-
-        public GASAbilityActivationResult ServerReceiveTryActivateAbility(GASSpecHandle handle, GASPredictionKey predictionKey)
-        {
-            var result = state.TryGetAbilitySpec(handle, out _)
-                ? new GASAbilityActivationResult(GASAbilityActivationResultCode.Accepted, handle, predictionKey)
-                : new GASAbilityActivationResult(GASAbilityActivationResultCode.MissingSpec, handle, predictionKey);
-
-            network?.SendAbilityActivationResult(Entity, handle, predictionKey, result.Succeeded);
-            return result;
-        }
-
         public GASActiveEffectHandle ApplyGameplayEffectSpecToSelf(in GASGameplayEffectSpecData spec)
         {
-            var handle = state.ApplyGameplayEffectSpecToSelf(in spec);
-            if (network != null)
-            {
-                var checksum = state.ComputeChecksum();
-                network.SendStateDelta(Entity, in checksum);
-            }
-            return handle;
+            return state.ApplyGameplayEffectSpecToSelf(in spec);
         }
 
         public bool RemoveActiveGameplayEffect(GASActiveEffectHandle handle)
         {
-            bool removed = state.RemoveActiveEffect(handle);
-            if (removed)
-            {
-                if (network != null)
-                {
-                    var checksum = state.ComputeChecksum();
-                    network.SendStateDelta(Entity, in checksum);
-                }
-            }
-
-            return removed;
+            return state.RemoveActiveEffect(handle);
         }
 
-        public void AcceptPrediction(GASPredictionKey predictionKey)
+        public void CommitPrediction(GASPredictionKey predictionKey)
         {
-            state.AcceptPrediction(predictionKey);
+            state.CommitPrediction(predictionKey);
         }
 
-        public void RejectPrediction(GASPredictionKey predictionKey)
+        public void RollbackPrediction(GASPredictionKey predictionKey)
         {
-            state.RejectPrediction(predictionKey);
-            if (network != null)
-            {
-                var checksum = state.ComputeChecksum();
-                network.SendStateDelta(Entity, in checksum);
-            }
+            state.RollbackPrediction(predictionKey);
         }
 
-        public void SetNumericAttributeBaseRaw(GASAttributeId attributeId, long valueRaw)
+        public bool SetNumericAttributeBaseRaw(GASAttributeId attributeId, long valueRaw)
         {
-            state.SetAttributeBaseRaw(attributeId, valueRaw);
-            SendStateDelta();
+            return state.SetAttributeBaseRaw(attributeId, valueRaw);
         }
 
-        public void SetNumericAttributeBase(GASAttributeId attributeId, GASFixedValue value)
+        public bool RemoveNumericAttribute(GASAttributeId attributeId)
         {
-            state.SetAttributeBase(attributeId, value);
-            SendStateDelta();
+            return state.RemoveAttribute(attributeId);
+        }
+
+        public bool CanRemoveNumericAttribute(GASAttributeId attributeId)
+        {
+            return state.CanRemoveAttribute(attributeId);
+        }
+
+        public bool SetNumericAttributeBase(GASAttributeId attributeId, GASFixedValue value)
+        {
+            return state.SetAttributeBase(attributeId, value);
         }
 
         public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude)
         {
-            bool applied = state.ApplyInstantModifier(attributeId, op, magnitude);
-            if (applied)
-            {
-                SendStateDelta();
-            }
-
-            return applied;
+            return state.ApplyInstantModifier(attributeId, op, magnitude);
         }
 
         public bool ApplyInstantModifierRaw(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw)
         {
-            bool applied = state.ApplyInstantModifierRaw(attributeId, op, magnitudeRaw);
-            if (applied)
-            {
-                SendStateDelta();
-            }
-
-            return applied;
+            return state.ApplyInstantModifierRaw(attributeId, op, magnitudeRaw);
         }
 
         public bool ApplyInstantModifierRaw(GASAttributeId attributeId, GASModifierOp op, long magnitudeRaw, GASPredictionKey predictionKey)
         {
-            bool applied = state.ApplyInstantModifierRaw(attributeId, op, magnitudeRaw, predictionKey);
-            if (applied)
-            {
-                SendStateDelta();
-            }
-
-            return applied;
+            return state.ApplyInstantModifierRaw(attributeId, op, magnitudeRaw, predictionKey);
         }
 
         public bool ApplyInstantModifier(GASAttributeId attributeId, GASModifierOp op, GASFixedValue magnitude, GASPredictionKey predictionKey)
         {
-            bool applied = state.ApplyInstantModifier(attributeId, op, magnitude, predictionKey);
-            if (applied)
-            {
-                SendStateDelta();
-            }
-
-            return applied;
+            return state.ApplyInstantModifier(attributeId, op, magnitude, predictionKey);
         }
 
         public bool GetGameplayAttributeRawValue(GASAttributeId attributeId, out long currentValueRaw)
@@ -243,15 +149,6 @@ namespace CycloneGames.GameplayAbilities.Core
             baseValueRaw = default;
             currentValueRaw = default;
             return false;
-        }
-
-        private void SendStateDelta()
-        {
-            if (network != null)
-            {
-                var checksum = state.ComputeChecksum();
-                network.SendStateDelta(Entity, in checksum);
-            }
         }
 
     }

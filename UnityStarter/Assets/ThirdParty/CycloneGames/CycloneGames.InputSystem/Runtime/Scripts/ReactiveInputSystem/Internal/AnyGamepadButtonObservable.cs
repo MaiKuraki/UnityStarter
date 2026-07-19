@@ -63,7 +63,27 @@ namespace CycloneGames.InputSystem.Runtime
 
         sealed class FrameRunnerWorkItem : CancellableFrameRunnerWorkItemBase<GamepadButton>
         {
-            static readonly GamepadButton[] AllGamepadButtons = (GamepadButton[])Enum.GetValues(typeof(GamepadButton));
+            // Canonical physical controls only. Platform aliases (A/Cross/South, etc.) share enum values
+            // and must not produce duplicate emissions for one control.
+            static readonly GamepadButton[] AllGamepadButtons =
+            {
+                GamepadButton.DpadUp,
+                GamepadButton.DpadDown,
+                GamepadButton.DpadLeft,
+                GamepadButton.DpadRight,
+                GamepadButton.North,
+                GamepadButton.East,
+                GamepadButton.South,
+                GamepadButton.West,
+                GamepadButton.LeftStick,
+                GamepadButton.RightStick,
+                GamepadButton.LeftShoulder,
+                GamepadButton.RightShoulder,
+                GamepadButton.Start,
+                GamepadButton.Select,
+                GamepadButton.LeftTrigger,
+                GamepadButton.RightTrigger
+            };
 
             readonly AnyGamepadButtonObservableBase source;
             readonly Gamepad gamepad;

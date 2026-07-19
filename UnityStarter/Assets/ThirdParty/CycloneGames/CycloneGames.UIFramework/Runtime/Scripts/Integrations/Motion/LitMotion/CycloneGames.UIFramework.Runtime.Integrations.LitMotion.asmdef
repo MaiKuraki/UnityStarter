@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.UIFramework.Runtime",
         "LitMotion",
+        "LitMotion.Extensions",
         "UniTask"
     ],
     "includePlatforms": [],

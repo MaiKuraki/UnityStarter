@@ -12,8 +12,6 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [TearDown]
         public void TearDown()
         {
-            PoolManager.ClearAllPools();
-            GASServices.Reset();
             TrackingAbility.ResetCounters();
             TrackingTask.ResetCounters();
         }
@@ -129,8 +127,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void AttributeBasedMagnitude_UsesUnrealStyleFormula()
         {
-            var source = CreateMagnitudeTestAsc(out var sourceAttributes);
-            var target = CreateMagnitudeTestAsc(out _);
+            var context = new GASRuntimeContext();
+            var source = CreateMagnitudeTestAsc(context, out var sourceAttributes);
+            var target = CreateMagnitudeTestAsc(context, out _);
             sourceAttributes.SetBaseValue(sourceAttributes.Power, GASFixedValue.FromInt(10));
             sourceAttributes.SetCurrentValue(sourceAttributes.Power, GASFixedValue.FromInt(15));
 
@@ -154,16 +153,18 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
             Assert.That(spec.GetCalculatedMagnitudeRaw(0), Is.EqualTo(GASFixedValue.FromInt(35).RawValue));
 
-            spec.ReturnToPool();
+            spec.Discard();
             source.Dispose();
             target.Dispose();
+            context.Dispose();
         }
 
         [Test]
         public void AttributeBasedMagnitude_TargetCapture_RecalculatesWhenTargetAssigned()
         {
-            var source = CreateMagnitudeTestAsc(out _);
-            var target = CreateMagnitudeTestAsc(out var targetAttributes);
+            var context = new GASRuntimeContext();
+            var source = CreateMagnitudeTestAsc(context, out _);
+            var target = CreateMagnitudeTestAsc(context, out var targetAttributes);
             targetAttributes.SetBaseValue(targetAttributes.Armor, GASFixedValue.FromInt(4));
             targetAttributes.SetCurrentValue(targetAttributes.Armor, GASFixedValue.FromInt(8));
 
@@ -186,9 +187,10 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
             Assert.That(spec.GetCalculatedMagnitudeRaw(0), Is.EqualTo(GASFixedValue.FromInt(8).RawValue));
 
-            spec.ReturnToPool();
+            spec.Discard();
             source.Dispose();
             target.Dispose();
+            context.Dispose();
         }
 
         [Test]
@@ -197,8 +199,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             GameplayTagManager.RegisterDynamicTag("Test.GAS.Magnitude.SetByCaller", "SetByCaller magnitude test tag");
             GameplayTagManager.InitializeIfNeeded();
             var dataTag = GameplayTagManager.RequestTag("Test.GAS.Magnitude.SetByCaller");
-            var source = CreateMagnitudeTestAsc(out _);
-            var target = CreateMagnitudeTestAsc(out _);
+            var context = new GASRuntimeContext();
+            var source = CreateMagnitudeTestAsc(context, out _);
+            var target = CreateMagnitudeTestAsc(context, out _);
             var modifiers = new List<ModifierInfo>
             {
                 new ModifierInfo(
@@ -214,9 +217,10 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
             Assert.That(spec.GetCalculatedMagnitudeRaw(0), Is.EqualTo(GASFixedValue.FromFloat(12.5f).RawValue));
 
-            spec.ReturnToPool();
+            spec.Discard();
             source.Dispose();
             target.Dispose();
+            context.Dispose();
         }
 
         [Test]
@@ -299,42 +303,11 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
-        public void EffectReplicationData_StoresRawTimeAndSetByCallerValues()
-        {
-            long durationRaw = GASFixedValue.FromFloat(12.5f).RawValue;
-            long remainingRaw = GASFixedValue.FromFloat(4.25f).RawValue;
-            long setByCallerRaw = GASFixedValue.FromFloat(1.75f).RawValue;
-            var setByCallerValuesRaw = new[] { setByCallerRaw };
-
-            var data = new GASEffectReplicationData
-            {
-                NetworkId = 1,
-                EffectDefId = 2,
-                SourceAscNetId = 3,
-                TargetAscNetId = 4,
-                Level = 5,
-                StackCount = 2,
-                DurationRaw = durationRaw,
-                TimeRemainingRaw = remainingRaw,
-                PeriodTimeRemainingRaw = 0L,
-                SetByCallerValuesRaw = setByCallerValuesRaw,
-                SetByCallerCount = setByCallerValuesRaw.Length
-            };
-
-            Assert.That(data.DurationRaw, Is.EqualTo(durationRaw));
-            Assert.That(data.TimeRemainingRaw, Is.EqualTo(remainingRaw));
-            Assert.That(data.Duration.RawValue, Is.EqualTo(durationRaw));
-            Assert.That(data.TimeRemaining.RawValue, Is.EqualTo(remainingRaw));
-            Assert.That(data.SetByCallerValuesRaw[0], Is.EqualTo(setByCallerRaw));
-        }
-
-        [Test]
         public void GameplayCueEventParams_StoresRawDuration()
         {
             long durationRaw = GASFixedValue.FromFloat(2.5f).RawValue;
 
             var parameters = new GameplayCueEventParams(
-                null,
                 null,
                 null,
                 null,
@@ -348,32 +321,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
-        public void DeterministicTimeProvider_AdvancesWithRawTicks()
-        {
-            var time = new DeterministicTimeProvider();
-            long deltaRaw = GASFixedValue.FromFloat(0.125f).RawValue;
-
-            time.TickRaw(deltaRaw);
-            time.Tick(GASFixedValue.FromFloat(0.25f));
-
-            Assert.That(time.DeltaTimeRaw, Is.EqualTo(GASFixedValue.FromFloat(0.25f).RawValue));
-            Assert.That(time.TotalTimeRaw, Is.EqualTo(deltaRaw + GASFixedValue.FromFloat(0.25f).RawValue));
-            Assert.That(time.FrameCount, Is.EqualTo(2));
-        }
-
-        [Test]
-        public void DeterministicRandomProvider_UsesStableFixedSequence()
-        {
-            var a = new DeterministicRandomProvider(12345);
-            var b = new DeterministicRandomProvider(12345);
-
-            Assert.That(a.NextRaw(), Is.EqualTo(b.NextRaw()));
-            Assert.That(a.NextFixed().RawValue, Is.EqualTo(b.NextFixed().RawValue));
-            Assert.That(a.NextInt(1, 100), Is.EqualTo(b.NextInt(1, 100)));
-        }
-
-        [Test]
-        public void PredictionReject_RestoresRawBaseValue()
+        public void PredictionRollback_RestoresRawBaseValue()
         {
             var state = new GASAbilitySystemState(new GASEntityId(1));
             var health = new GASAttributeId(100);
@@ -381,7 +329,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
             state.SetAttributeBase(health, GASFixedValue.FromInt(100));
             state.ApplyInstantModifier(new GASModifierData(health, GASModifierOp.Add, GASFixedValue.FromInt(-20)), prediction);
-            state.RejectPrediction(prediction);
+            state.RollbackPrediction(prediction);
 
             Assert.That(state.TryGetAttribute(health, out var attribute), Is.True);
             Assert.That(attribute.BaseValueRaw, Is.EqualTo(GASFixedValue.FromFloat(100f).RawValue));
@@ -397,9 +345,9 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
-        public void AbilitySystemComponent_DefaultMirrorMode_SynchronizesCoreState()
+        public void AbilitySystemComponent_ExplicitMirrorMode_SynchronizesCoreState()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.MirrorRuntime);
             var ability = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
             var spec = asc.GrantAbility(ability);
 
@@ -427,7 +375,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         public void AbilitySystemComponent_RuntimeOnlyMode_SkipsCoreMirror()
         {
             var asc = new AbilitySystemComponent(
-                new GameplayEffectContextFactory(),
+                null,
                 GASAbilitySystemRuntimeOptions.RuntimeOnly);
             var ability = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
             var spec = asc.GrantAbility(ability);
@@ -459,7 +407,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void ClearAbility_CallsInstancedAbilityRemoveHook()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var template = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
 
             var spec = asc.GrantAbility(template);
@@ -476,7 +424,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void EndAbility_ReturnsInactiveTasksToPool()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var template = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
             var spec = asc.GrantAbility(template);
             var instance = (TrackingAbility)spec.GetPrimaryInstance();
@@ -495,7 +443,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void AbilitySpecContainer_RemoveMiddleSpec_PreservesLookupIndexes()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var first = asc.GrantAbility(new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor));
             var middle = asc.GrantAbility(new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor));
             var last = asc.GrantAbility(new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor));
@@ -521,7 +469,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void ActiveEffectContainer_RemoveMiddleEffect_PreservesSwapBackIndexes()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var firstSpec = GameplayEffectSpec.Create(CreateDurationEffect("First"), asc);
             var middleSpec = GameplayEffectSpec.Create(CreateDurationEffect("Middle"), asc);
             var lastSpec = GameplayEffectSpec.Create(CreateDurationEffect("Last"), asc);
@@ -546,38 +494,40 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         }
 
         [Test]
-        public void ActiveEffectContainer_NetworkIdIndex_RebuildsAfterIdChanges()
+        public void ActiveEffectContainer_ReconciliationIdIndex_RebuildsAfterIdChanges()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var spec = GameplayEffectSpec.Create(CreateDurationEffect("Networked"), asc);
+            spec.SetTarget(asc);
             var activeEffect = ActiveGameplayEffect.Create(spec);
             var container = new ActiveEffectContainer();
 
             container.AddEffect(activeEffect);
-            container.SetNetworkId(activeEffect, 42);
+            container.SetReconciliationId(activeEffect, 42);
 
-            Assert.That(container.FindByNetworkId(42), Is.SameAs(activeEffect));
+            Assert.That(container.FindByReconciliationId(42), Is.SameAs(activeEffect));
 
-            container.SetNetworkId(activeEffect, 84);
+            container.SetReconciliationId(activeEffect, 84);
 
-            Assert.That(container.FindByNetworkId(42), Is.Null);
-            Assert.That(container.FindByNetworkId(84), Is.SameAs(activeEffect));
+            Assert.That(container.FindByReconciliationId(42), Is.Null);
+            Assert.That(container.FindByReconciliationId(84), Is.SameAs(activeEffect));
 
-            container.RemoveAtSwapBack(0);
+            container.RemoveAtStable(0);
 
-            Assert.That(container.FindByNetworkId(84), Is.Null);
+            Assert.That(container.FindByReconciliationId(84), Is.Null);
             Assert.That(container.ValidateIndexes(), Is.True);
 
-            activeEffect.ReturnToPool();
+            activeEffect.ReleaseRuntimeLease();
             asc.Dispose();
         }
 
         [Test]
-        public void ActiveEffectContainer_UntracksAbilityAppliedEffectBeforePoolReuse()
+        public void ActiveEffectContainer_UntracksAbilityAppliedEffectBeforeLeaseRelease()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var ability = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
             var spec = GameplayEffectSpec.Create(CreateDurationEffect("TrackedByAbility"), asc);
+            spec.SetTarget(asc);
             var activeEffect = ActiveGameplayEffect.Create(spec);
             var container = new ActiveEffectContainer();
             int returnedLists = 0;
@@ -590,7 +540,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
             Assert.That(container.AbilityEffectIndexCount, Is.EqualTo(1));
 
-            container.RemoveAtSwapBack(0);
+            container.RemoveAtStable(0);
             container.UntrackAppliedEffectFromAbilities(
                 activeEffect,
                 effects =>
@@ -603,14 +553,14 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(returnedLists, Is.EqualTo(1));
             Assert.That(container.ValidateIndexes(), Is.True);
 
-            activeEffect.ReturnToPool();
+            activeEffect.ReleaseRuntimeLease();
             asc.Dispose();
         }
 
         [Test]
         public void ActiveEffectContainer_StackingIndex_AggregatesByTarget()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var effect = CreateDurationEffect(
                 "Stacking",
                 new GameplayEffectStacking(
@@ -924,8 +874,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             var second = new GASPredictionKey(202, new GASEntityId(2), 2);
             var third = new GASPredictionKey(203, new GASEntityId(2), 3);
 
-            manager.RecordTransaction(CreatePredictionWindow(first), GASPredictionWindowStatus.Confirmed, GASPredictionRollbackFlags.None, 10);
-            manager.RecordTransaction(CreatePredictionWindow(second), GASPredictionWindowStatus.Rejected, GASPredictionRollbackFlags.ActiveEffects, 20);
+            manager.RecordTransaction(CreatePredictionWindow(first), GASPredictionWindowStatus.Committed, GASPredictionRollbackFlags.None, 10);
+            manager.RecordTransaction(CreatePredictionWindow(second), GASPredictionWindowStatus.RolledBack, GASPredictionRollbackFlags.ActiveEffects, 20);
             manager.RecordTransaction(CreatePredictionWindow(third), GASPredictionWindowStatus.TimedOut, GASPredictionRollbackFlags.DependentWindows, 30);
 
             Assert.That(manager.TryGetClosedTransactionRecord(0, out var newest), Is.True);
@@ -945,7 +895,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         [Test]
         public void PredictionManager_PendingPredictedEffects_TakeOnlyMatchingKey()
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var manager = new PredictionManager();
             var firstKey = new GASPredictionKey(301, new GASEntityId(3), 1);
             var secondKey = new GASPredictionKey(302, new GASEntityId(3), 2);
@@ -965,8 +915,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(taken, Is.SameAs(secondEffect));
             Assert.That(manager.PendingPredictedEffects.Count, Is.EqualTo(0));
 
-            firstEffect.ReturnToPool();
-            secondEffect.ReturnToPool();
+            firstEffect.ReleaseRuntimeLease();
+            secondEffect.ReleaseRuntimeLease();
             asc.Dispose();
         }
 
@@ -975,7 +925,6 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         {
             var builder = new ReplicationStateBuilder();
             var health = new GameplayAttribute("Health");
-            var ability = new TrackingAbility(EGameplayAbilityInstancingPolicy.InstancedPerActor);
             var buffer = new GASAbilitySystemStateDeltaBuffer();
 
             builder.MarkGrantedAbilitiesDirty();
@@ -983,8 +932,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             builder.MarkAttributeValueDirty(health);
             builder.MarkAttributeValueDirty(health);
             builder.MarkAttributeStructureDirty();
-            builder.TrackRemovedEffectNetworkId(42);
-            builder.TrackRemovedAbilityDefinition(ability);
+            builder.TrackRemovedEffectReconciliationId(42);
+            builder.TrackRemovedAbilitySpecHandle(73);
 
             builder.BeginCapture(buffer);
 
@@ -992,8 +941,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(builder.StateVersion, Is.EqualTo(5UL));
             Assert.That(builder.AttributeRegistryVersion, Is.EqualTo(1U));
             Assert.That(builder.DirtyAttributeValueSnapshots.Count, Is.EqualTo(1));
-            Assert.That(builder.PendingRemovedEffectNetIds, Is.EqualTo(new[] { 42 }));
-            Assert.That(builder.PendingRemovedAbilityDefs.Count, Is.EqualTo(1));
+            Assert.That(builder.PendingRemovedEffectReconciliationIds, Is.EqualTo(new[] { 42 }));
+            Assert.That(builder.PendingRemovedAbilitySpecHandles, Is.EqualTo(new[] { 73 }));
             Assert.That(builder.PendingMask.HasFlag(AbilitySystemStateChangeMask.GrantedAbilities), Is.True);
             Assert.That(builder.PendingMask.HasFlag(AbilitySystemStateChangeMask.ActiveEffects), Is.True);
             Assert.That(builder.PendingMask.HasFlag(AbilitySystemStateChangeMask.Attributes), Is.True);
@@ -1006,8 +955,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(builder.LastReplicatedStateVersion, Is.EqualTo(5UL));
             Assert.That(builder.PendingMask, Is.EqualTo(AbilitySystemStateChangeMask.None));
             Assert.That(builder.DirtyAttributeValueSnapshots.Count, Is.EqualTo(0));
-            Assert.That(builder.PendingRemovedEffectNetIds.Count, Is.EqualTo(0));
-            Assert.That(builder.PendingRemovedAbilityDefs.Count, Is.EqualTo(0));
+            Assert.That(builder.PendingRemovedEffectReconciliationIds.Count, Is.EqualTo(0));
+            Assert.That(builder.PendingRemovedAbilitySpecHandles.Count, Is.EqualTo(0));
         }
 
         [Test]
@@ -1027,19 +976,6 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             Assert.That(builder.PendingAddedTagSnapshots.Count, Is.EqualTo(0));
             Assert.That(builder.PendingRemovedTagSnapshots.Count, Is.EqualTo(0));
             Assert.That(builder.PendingMask.HasFlag(AbilitySystemStateChangeMask.Tags), Is.True);
-        }
-
-        [Test]
-        public void PoolManagerClearAllPools_ClearsSharedGasPools()
-        {
-            var context = GASPool<GameplayEffectContext>.Shared.Get();
-            GASPool<GameplayEffectContext>.Shared.Return(context);
-
-            Assert.That(GASPool<GameplayEffectContext>.Shared.GetStatistics().PoolSize, Is.EqualTo(1));
-
-            PoolManager.ClearAllPools();
-
-            Assert.That(GASPool<GameplayEffectContext>.Shared.GetStatistics().PoolSize, Is.EqualTo(0));
         }
 
         private static GameplayEffect CreateDurationEffect(string name, GameplayEffectStacking stacking = default)
@@ -1085,14 +1021,24 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
         private static ActiveGameplayEffect CreatePredictedActiveEffect(string name, AbilitySystemComponent asc, GASPredictionKey predictionKey)
         {
-            var spec = GameplayEffectSpec.Create(CreateDurationEffect(name), asc);
-            spec.Context.PredictionKey = predictionKey;
+            var context = asc.MakeEffectContext();
+            context.PredictionKey = predictionKey;
+            var spec = GameplayEffectSpec.Create(CreateDurationEffect(name), asc, context);
+            spec.SetTarget(asc);
             return ActiveGameplayEffect.Create(spec);
         }
 
         private static AbilitySystemComponent CreateMagnitudeTestAsc(out MagnitudeTestAttributeSet attributes)
         {
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory(), GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            var asc = new AbilitySystemComponent(null, GASAbilitySystemRuntimeOptions.RuntimeOnly);
+            attributes = new MagnitudeTestAttributeSet();
+            asc.AddAttributeSet(attributes);
+            return asc;
+        }
+
+        private static AbilitySystemComponent CreateMagnitudeTestAsc(GASRuntimeContext context, out MagnitudeTestAttributeSet attributes)
+        {
+            var asc = new AbilitySystemComponent(context, GASAbilitySystemRuntimeOptions.RuntimeOnly);
             attributes = new MagnitudeTestAttributeSet();
             asc.AddAttributeSet(attributes);
             return asc;
@@ -1138,6 +1084,13 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
             public GameplayAttribute Power { get; } = new GameplayAttribute("Power");
             public GameplayAttribute Armor { get; } = new GameplayAttribute("Armor");
+
+            protected override void RegisterAttributes()
+            {
+                RegisterAttribute(Health);
+                RegisterAttribute(Power);
+                RegisterAttribute(Armor);
+            }
         }
 
         private sealed class TrackingAbility : GameplayAbility
@@ -1160,7 +1113,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 Initialize(
                     "TrackingAbility",
                     policy,
-                    ENetExecutionPolicy.LocalOnly,
+                    EAbilityExecutionPolicy.LocalOnly,
                     null,
                     null,
                     null,
@@ -1170,7 +1123,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                     null);
             }
 
-            public override GameplayAbility CreatePoolableInstance()
+            public override GameplayAbility CreateRuntimeInstance()
             {
                 return new TrackingAbility(policy, false);
             }

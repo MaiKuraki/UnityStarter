@@ -4,10 +4,11 @@ using System.Threading;
 using System.Threading.Tasks;
 using NUnit.Framework;
 using CycloneGames.Networking.Buffers;
-using CycloneGames.Networking.Rpc;
+using CycloneGames.Networking.Compression;
 using CycloneGames.Networking.Serialization;
 using CycloneGames.Networking.Transports;
 using CycloneGames.Networking.Unity.Runtime.Serialization;
+using UnityEngine;
 
 namespace CycloneGames.Networking.Tests.Editor
 {
@@ -17,34 +18,80 @@ namespace CycloneGames.Networking.Tests.Editor
         public void SetUp()
         {
             NetworkBufferPool.Clear();
-            NetworkBufferPool.ResetConfiguration();
-            SerializerFactory.Reset();
+            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [TearDown]
         public void TearDown()
         {
             NetworkBufferPool.Clear();
-            NetworkBufferPool.ResetConfiguration();
-            SerializerFactory.Reset();
+            NetworkBufferPool.Configure(maxPoolSize: 32, clearBuffersOnReturn: false);
         }
 
         [Test]
-        public void Return_Ignores_Double_Dispose()
+        public void Return_RejectsDoubleDisposeAndStaleLease()
         {
+            int invalidReturnsBefore = NetworkBufferPool.InvalidReturnCount;
             NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer staleCopy = buffer;
             buffer.WriteInt(123);
 
-            Assert.DoesNotThrow(() =>
-            {
-                buffer.Dispose();
-                buffer.Dispose();
-            });
+            Assert.AreEqual(1, NetworkBufferPool.OutstandingCount);
+            buffer.Dispose();
+
+            Assert.AreEqual(0, NetworkBufferPool.OutstandingCount);
+            Assert.Throws<ObjectDisposedException>(() => staleCopy.WriteInt(456));
+            Assert.Throws<ObjectDisposedException>(() => staleCopy.Dispose());
+            Assert.AreEqual(invalidReturnsBefore + 1, NetworkBufferPool.InvalidReturnCount);
 
             using NetworkBuffer next = NetworkBufferPool.Get();
             next.WriteInt(456);
 
             Assert.AreEqual(4, next.Position);
+            Assert.Throws<ObjectDisposedException>(() => staleCopy.WriteByte(1));
+        }
+
+        [Test]
+        public void Return_ConcurrentCopiesAcceptsExactlyOneReturn()
+        {
+            int invalidReturnsBefore = NetworkBufferPool.InvalidReturnCount;
+            NetworkBuffer buffer = NetworkBufferPool.Get();
+            NetworkBuffer firstCopy = buffer;
+            NetworkBuffer secondCopy = buffer;
+            int successfulReturns = 0;
+            int rejectedReturns = 0;
+
+            Parallel.Invoke(
+                () =>
+                {
+                    try
+                    {
+                        firstCopy.Dispose();
+                        Interlocked.Increment(ref successfulReturns);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        Interlocked.Increment(ref rejectedReturns);
+                    }
+                },
+                () =>
+                {
+                    try
+                    {
+                        secondCopy.Dispose();
+                        Interlocked.Increment(ref successfulReturns);
+                    }
+                    catch (ObjectDisposedException)
+                    {
+                        Interlocked.Increment(ref rejectedReturns);
+                    }
+                });
+
+            Assert.AreEqual(1, successfulReturns);
+            Assert.AreEqual(1, rejectedReturns);
+            Assert.AreEqual(0, NetworkBufferPool.OutstandingCount);
+            Assert.AreEqual(1, NetworkBufferPool.Count);
+            Assert.AreEqual(invalidReturnsBefore + 1, NetworkBufferPool.InvalidReturnCount);
         }
 
         [Test]
@@ -86,51 +133,46 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void SerializerFactory_Freeze_BlocksRuntimeMutation()
+        public void ForwardSeek_Initializes_Bytes_Exposed_By_A_Reused_Lease()
         {
-            SerializerFactory.RegisterCreator(SerializerType.Json, () => DummySerializer.Instance);
-            SerializerFactory.Freeze();
+            NetworkBufferPool.Configure(maxPoolSize: 1, clearBuffersOnReturn: false);
+
+            NetworkBuffer first = NetworkBufferPool.Get();
+            first.WriteBytes(new byte[] { 91, 92, 93, 94, 95, 96, 97, 98 });
+            first.Dispose();
+
+            using NetworkBuffer second = NetworkBufferPool.Get();
+            second.Position = 8;
+            ArraySegment<byte> segment = second.ToArraySegment();
+
+            for (int i = 0; i < segment.Count; i++)
+                Assert.AreEqual(0, segment.Array[segment.Offset + i]);
+        }
+
+        [Test]
+        public void ReadMode_Position_Cannot_Move_Beyond_Payload()
+        {
+            using NetworkBuffer buffer = NetworkBufferPool.GetWithData(new byte[] { 7 });
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => buffer.Position = 2);
+            Assert.AreEqual(1, buffer.Remaining);
+
+            buffer.Position = 1;
+            Assert.AreEqual(0, buffer.Remaining);
+            Assert.Throws<InvalidOperationException>(() => buffer.WriteByte(8));
+        }
+
+        [Test]
+        public void GetWithData_FailureReturnsOutstandingLease()
+        {
+            int outstandingBefore = NetworkBufferPool.OutstandingCount;
+            byte[] oversizedPayload = new byte[ushort.MaxValue + 1];
 
             Assert.Throws<InvalidOperationException>(() =>
-                SerializerFactory.RegisterCreator(SerializerType.MessagePack, () => DummySerializer.Instance));
+                NetworkBufferPool.GetWithData(new ReadOnlySpan<byte>(oversizedPayload)));
 
-            Assert.AreSame(DummySerializer.Instance, SerializerFactory.GetDefault());
-        }
-
-        [Test]
-        public void SerializerFactory_Reset_ClearsFrozenRegistry()
-        {
-            SerializerFactory.RegisterCreator(SerializerType.Json, () => DummySerializer.Instance);
-            SerializerFactory.Freeze();
-
-            SerializerFactory.Reset();
-
-            Assert.IsFalse(SerializerFactory.IsFrozen);
-            Assert.IsFalse(SerializerFactory.IsAvailable(SerializerType.Json));
-        }
-
-        [Test]
-        public void SerializerFactory_Freeze_IsStableUnderConcurrentMutationAttempts()
-        {
-            SerializerFactory.RegisterCreator(SerializerType.Json, () => DummySerializer.Instance);
-            SerializerFactory.Freeze();
-
-            int failures = 0;
-            Parallel.For(0, 64, _ =>
-            {
-                try
-                {
-                    SerializerFactory.RegisterCreator(SerializerType.MessagePack, () => DummySerializer.Instance);
-                }
-                catch (InvalidOperationException)
-                {
-                    Interlocked.Increment(ref failures);
-                }
-            });
-
-            Assert.AreEqual(64, failures);
-            Assert.IsTrue(SerializerFactory.IsFrozen);
-            Assert.IsFalse(SerializerFactory.IsAvailable(SerializerType.MessagePack));
+            Assert.AreEqual(outstandingBefore, NetworkBufferPool.OutstandingCount);
+            Assert.AreEqual(1, NetworkBufferPool.Count);
         }
 
         [Test]
@@ -154,277 +196,75 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void RpcPayload_FromBlittable_UsesInlineStorageForSmallStructs()
+        public void PrimitiveWireFields_AreLittleEndian()
         {
-            var value = new SmallRpcData
-            {
-                A = 10,
-                B = 20
-            };
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
+            buffer.WriteInt(0x01020304);
+            buffer.WriteFloat(1f);
 
-            RpcPayload payload = RpcPayload.FromBlittable(123, value);
-
-            Assert.IsTrue(payload.IsInline);
-            Assert.IsNull(payload.Data);
-            Assert.AreEqual(8, payload.Length);
+            ArraySegment<byte> payload = buffer.ToArraySegment();
+            CollectionAssert.AreEqual(
+                new byte[] { 0x04, 0x03, 0x02, 0x01, 0x00, 0x00, 0x80, 0x3F },
+                payload);
         }
 
         [Test]
-        public void RpcPayload_FromBlittable_UsesHeapStorageForLargeStructs()
+        public void DeltaCompressor_FullBaselineUsesExplicitLittleEndianFields()
         {
-            var value = new LargeRpcData
-            {
-                A = 1,
-                B = 2,
-                C = 3,
-                D = 4,
-                E = 5
-            };
+            var sender = new DeltaCompressor();
+            var receiver = new DeltaCompressor();
+            var position = new Vector3(1f, 2f, 3f);
+            var rotation = new Quaternion(0f, 0f, 0f, 1f);
+            using NetworkBuffer buffer = NetworkBufferPool.Get();
 
-            RpcPayload payload = RpcPayload.FromBlittable(124, value);
+            DeltaFlags flags = sender.WriteDelta(buffer, position, rotation);
+            ArraySegment<byte> payload = buffer.ToArraySegment();
 
-            Assert.IsFalse(payload.IsInline);
-            Assert.IsNotNull(payload.Data);
-            Assert.AreEqual(40, payload.Length);
+            Assert.AreEqual(DeltaFlags.FullPosition | DeltaFlags.FullRotation, flags);
+            Assert.AreEqual(29, payload.Count);
+            Assert.AreEqual((byte)flags, payload.Array[payload.Offset]);
+            CollectionAssert.AreEqual(
+                new byte[] { 0x00, 0x00, 0x80, 0x3F },
+                new ArraySegment<byte>(payload.Array, payload.Offset + 1, 4));
+
+            buffer.FlipForRead();
+            receiver.ReadDelta(buffer, out Vector3 decodedPosition, out Quaternion decodedRotation);
+
+            Assert.AreEqual(position, decodedPosition);
+            Assert.AreEqual(rotation, decodedRotation);
+            Assert.AreEqual(0, buffer.Remaining);
         }
 
         [Test]
-        public void RpcProcessor_Register_AssignsFirstAutoIdFromRpcRange()
+        public void DeltaCompressor_ReadDeltaRejectsMalformedFlags()
         {
-            var network = new CapturingNetworkManager();
-            var processor = new RpcProcessor(network);
+            var receiver = new DeltaCompressor();
+            using NetworkBuffer unsupported = NetworkBufferPool.Get();
+            unsupported.WriteByte((byte)DeltaFlags.DeltaRotation);
+            unsupported.FlipForRead();
 
-            ushort rpcId = processor.Register<SmallRpcData>((_, _) => { });
+            Assert.Throws<FormatException>(() => receiver.ReadDelta(unsupported, out _, out _));
 
-            Assert.AreEqual(NetworkConstants.RpcMsgIdMin, rpcId);
+            using NetworkBuffer conflicting = NetworkBufferPool.Get();
+            conflicting.WriteByte((byte)(DeltaFlags.FullPosition | DeltaFlags.DeltaPosition | DeltaFlags.FullRotation));
+            conflicting.FlipForRead();
+
+            Assert.Throws<FormatException>(() => receiver.ReadDelta(conflicting, out _, out _));
         }
 
         [Test]
-        public void MessageRanges_ModuleRanges_DoNotOverlapRpcRange()
+        public void QuantizedVector3_ReadFromRejectsOverflowingVarInt()
         {
-            Assert.Greater(NetworkConstants.ModuleMsgIdMin, NetworkConstants.RpcMsgIdMax);
-            Assert.Greater(NetworkConstants.UserMsgIdMin, NetworkConstants.ModuleMsgIdMax);
+            using NetworkBuffer buffer = NetworkBufferPool.GetWithData(
+                new byte[] { 0x80, 0x80, 0x80, 0x80, 0x10 });
 
-            Assert.IsTrue(NetworkMessageRanges.TryGetKnownRange(
-                NetworkConstants.ModuleMsgIdMin,
-                out NetworkMessageIdRange range));
-            Assert.AreEqual(NetworkMessageKind.Module, range.Kind);
-        }
-
-        [Test]
-        public void NetworkMessageCatalog_Fingerprint_IsIndependentOfRegistrationOrder()
-        {
-            NetworkMessageDescriptor first = NetworkMessageDescriptor.Create<SmallRpcData>(
-                NetworkConstants.UserMsgIdMin,
-                "test",
-                NetworkMessageKind.User);
-            NetworkMessageDescriptor second = NetworkMessageDescriptor.Create<LargeRpcData>(
-                NetworkConstants.UserMsgIdMin + 1,
-                "test",
-                NetworkMessageKind.User,
-                NetworkChannel.Unreliable);
-            var userRange = new NetworkMessageIdRange(
-                "test",
-                NetworkConstants.UserMsgIdMin,
-                NetworkConstants.UserMsgIdMin + 9,
-                NetworkMessageKind.User);
-            var moduleA = new NetworkMessageIdRange(
-                "test.a",
-                NetworkConstants.ModuleMsgIdMin,
-                NetworkConstants.ModuleMsgIdMin + 9,
-                NetworkMessageKind.Module);
-            var moduleB = new NetworkMessageIdRange(
-                "test.b",
-                NetworkConstants.ModuleMsgIdMin + 10,
-                NetworkConstants.ModuleMsgIdMin + 19,
-                NetworkMessageKind.Module);
-
-            var catalogA = new NetworkMessageCatalog();
-            var catalogB = new NetworkMessageCatalog();
-
-            catalogA.RegisterModuleRange(moduleA);
-            catalogA.RegisterModuleRange(moduleB);
-            catalogA.RegisterRange(userRange);
-            catalogA.Register(first);
-            catalogA.Register(second);
-            catalogB.RegisterModuleRange(moduleB);
-            catalogB.RegisterModuleRange(moduleA);
-            catalogB.RegisterRange(userRange);
-            catalogB.Register(second);
-            catalogB.Register(first);
-
-            Assert.AreEqual(catalogA.ProtocolFingerprint, catalogB.ProtocolFingerprint);
-        }
-
-        [Test]
-        public void NetworkMessageCatalog_ModuleRangeRegistration_RejectsOverlaps()
-        {
-            var catalog = new NetworkMessageCatalog();
-            var first = new NetworkMessageIdRange(
-                "package.first",
-                NetworkConstants.ModuleMsgIdMin,
-                NetworkConstants.ModuleMsgIdMin + 99,
-                NetworkMessageKind.Module);
-            var overlap = new NetworkMessageIdRange(
-                "package.overlap",
-                NetworkConstants.ModuleMsgIdMin + 50,
-                NetworkConstants.ModuleMsgIdMin + 150,
-                NetworkMessageKind.Module);
-            var sameOwnerNonOverlapping = new NetworkMessageIdRange(
-                "package.first",
-                NetworkConstants.ModuleMsgIdMin + 100,
-                NetworkConstants.ModuleMsgIdMin + 199,
-                NetworkMessageKind.Module);
-
-            Assert.IsTrue(catalog.TryRegisterModuleRange(first));
-            Assert.IsTrue(catalog.TryRegisterModuleRange(first));
-            Assert.AreEqual(1, catalog.ModuleRangeCount);
-            Assert.IsFalse(catalog.TryRegisterModuleRange(overlap));
-            Assert.IsTrue(catalog.TryRegisterModuleRange(sameOwnerNonOverlapping));
-            Assert.AreEqual(2, catalog.ModuleRangeCount);
-            Assert.IsTrue(catalog.TryGetRegisteredModuleRange(
-                NetworkConstants.ModuleMsgIdMin + 1,
-                out NetworkMessageIdRange range));
-            Assert.AreEqual(first.Name, range.Name);
-        }
-
-        [Test]
-        public void NetworkMessageCatalog_UserRangeRegistration_RejectsOverlaps()
-        {
-            var catalog = new NetworkMessageCatalog();
-            var first = new NetworkMessageIdRange(
-                "project.first",
-                NetworkConstants.UserMsgIdMin,
-                NetworkConstants.UserMsgIdMin + 99,
-                NetworkMessageKind.User);
-            var overlap = new NetworkMessageIdRange(
-                "project.second",
-                NetworkConstants.UserMsgIdMin + 50,
-                NetworkConstants.UserMsgIdMin + 150,
-                NetworkMessageKind.User);
-            var nonOverlapping = new NetworkMessageIdRange(
-                "project.second",
-                NetworkConstants.UserMsgIdMin + 100,
-                NetworkConstants.UserMsgIdMin + 199,
-                NetworkMessageKind.User);
-
-            Assert.IsTrue(catalog.TryRegisterRange(first));
-            Assert.IsTrue(catalog.TryRegisterRange(first));
-            Assert.AreEqual(1, catalog.RangeCount);
-            Assert.IsFalse(catalog.TryRegisterRange(overlap));
-            Assert.IsTrue(catalog.TryRegisterRange(nonOverlapping));
-            Assert.AreEqual(2, catalog.RangeCount);
-            Assert.IsTrue(catalog.TryGetRegisteredRange(
-                NetworkConstants.UserMsgIdMin + 1,
-                out NetworkMessageIdRange range));
-            Assert.AreEqual(first.Name, range.Name);
-        }
-
-        [Test]
-        public void NetworkMessageCatalog_ModuleDescriptors_RequireRegisteredOwnerRange()
-        {
-            var catalog = new NetworkMessageCatalog();
-            var first = new NetworkMessageIdRange(
-                "package.first",
-                NetworkConstants.ModuleMsgIdMin,
-                NetworkConstants.ModuleMsgIdMin + 99,
-                NetworkMessageKind.Module);
-            NetworkMessageDescriptor missingRangeDescriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
-                NetworkConstants.ModuleMsgIdMin,
-                first.Name,
-                NetworkMessageKind.Module);
-
-            Assert.Throws<ArgumentException>(() => catalog.TryRegister(missingRangeDescriptor));
-
-            catalog.RegisterModuleRange(first);
-
-            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
-                NetworkConstants.ModuleMsgIdMin,
-                first.Name,
-                NetworkMessageKind.Module);
-            NetworkMessageDescriptor wrongOwner = NetworkMessageDescriptor.Create<LargeRpcData>(
-                NetworkConstants.ModuleMsgIdMin + 1,
-                "package.other",
-                NetworkMessageKind.Module);
-
-            Assert.IsTrue(catalog.TryRegister(descriptor));
-            Assert.Throws<ArgumentException>(() => catalog.TryRegister(wrongOwner));
-        }
-
-        [Test]
-        public void NetworkMessageCatalog_UserDescriptors_RequireRegisteredOwnerRange()
-        {
-            var catalog = new NetworkMessageCatalog();
-            var first = new NetworkMessageIdRange(
-                "project.first",
-                NetworkConstants.UserMsgIdMin,
-                NetworkConstants.UserMsgIdMin + 99,
-                NetworkMessageKind.User);
-            NetworkMessageDescriptor missingRangeDescriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
-                NetworkConstants.UserMsgIdMin,
-                first.Name,
-                NetworkMessageKind.User);
-
-            Assert.Throws<ArgumentException>(() => catalog.TryRegister(missingRangeDescriptor));
-
-            catalog.RegisterRange(first);
-
-            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
-                NetworkConstants.UserMsgIdMin,
-                first.Name,
-                NetworkMessageKind.User);
-            NetworkMessageDescriptor wrongOwner = NetworkMessageDescriptor.Create<LargeRpcData>(
-                NetworkConstants.UserMsgIdMin + 1,
-                "project.other",
-                NetworkMessageKind.User);
-
-            Assert.IsTrue(catalog.TryRegister(descriptor));
-            Assert.Throws<ArgumentException>(() => catalog.TryRegister(wrongOwner));
-        }
-
-        [Test]
-        public void NetworkMessageCatalog_RejectsDuplicateMessageIds()
-        {
-            var catalog = new NetworkMessageCatalog();
-            var userRange = new NetworkMessageIdRange(
-                "test",
-                NetworkConstants.UserMsgIdMin,
-                NetworkConstants.UserMsgIdMin,
-                NetworkMessageKind.User);
-            NetworkMessageDescriptor descriptor = NetworkMessageDescriptor.Create<SmallRpcData>(
-                NetworkConstants.UserMsgIdMin,
-                "test",
-                NetworkMessageKind.User);
-
-            catalog.RegisterRange(userRange);
-            Assert.IsTrue(catalog.TryRegister(descriptor));
-            Assert.IsFalse(catalog.TryRegister(descriptor));
-        }
-
-        [Test]
-        public void RpcProcessor_DispatchesInlinePayloadWithoutDataArray()
-        {
-            var network = new CapturingNetworkManager();
-            var processor = new RpcProcessor(network);
-            SmallRpcData received = default;
-            var connection = new TestConnection(7);
-
-            processor.RegisterWithId<SmallRpcData>(150, (_, data) => received = data);
-            processor.Send(150, new SmallRpcData { A = 11, B = 22 });
-
-            Assert.IsTrue(network.LastRpcPayload.IsInline);
-            Assert.IsNull(network.LastRpcPayload.Data);
-
-            network.Deliver(connection, 150, network.LastRpcPayload);
-
-            Assert.AreEqual(11, received.A);
-            Assert.AreEqual(22, received.B);
+            Assert.Throws<FormatException>(() => QuantizedVector3.ReadFrom(buffer));
         }
 
         [Test]
         public void NetworkRuntimeContext_RegistersBackendServicesWithoutConcreteSdkDependency()
         {
-            var network = new CapturingNetworkManager();
+            var network = new CapturingMessageEndpoint();
             var sessionService = new TestSessionService();
             var matchService = new TestMatchStateService();
 
@@ -436,7 +276,6 @@ namespace CycloneGames.Networking.Tests.Editor
                 .AddService<INetworkMatchStateService>(matchService)
                 .AddFeature(NetworkBackendFeatures.AuthSession)
                 .AddFeature(NetworkBackendFeatures.MatchState)
-                .AddFeature(NetworkBackendFeatures.BackendRpc)
                 .Build();
 
             Assert.IsTrue(context.IsFrozen);
@@ -468,7 +307,7 @@ namespace CycloneGames.Networking.Tests.Editor
             var context = new NetworkRuntimeContext(
                     new NetworkRuntimeId(1002UL),
                     "test-backend",
-                    new CapturingNetworkManager())
+                    new CapturingMessageEndpoint())
                 .AddService<INetworkSessionService>(new TestSessionService())
                 .Build();
 
@@ -528,35 +367,6 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.AreEqual(1, errorCount);
         }
 
-        private sealed class DummySerializer : INetSerializer
-        {
-            public static readonly DummySerializer Instance = new DummySerializer();
-
-            public void Serialize<T>(in T value, byte[] buffer, int offset, out int writtenBytes) where T : struct
-            {
-                writtenBytes = 0;
-            }
-
-            public void Serialize<T>(in T value, INetWriter writer) where T : struct { }
-            public T Deserialize<T>(ReadOnlySpan<byte> data) where T : struct => default;
-            public T Deserialize<T>(INetReader reader) where T : struct => default;
-        }
-
-        private struct SmallRpcData
-        {
-            public int A;
-            public int B;
-        }
-
-        private struct LargeRpcData
-        {
-            public long A;
-            public long B;
-            public long C;
-            public long D;
-            public long E;
-        }
-
         [Serializable]
         private struct JsonRoundTripData
         {
@@ -564,49 +374,49 @@ namespace CycloneGames.Networking.Tests.Editor
             public float B;
         }
 
-        private sealed class CapturingNetworkManager : INetworkManager
+        private sealed class CapturingMessageEndpoint : INetworkMessageEndpoint
         {
-            private Action<INetConnection, RpcPayload> _handler;
+            private readonly NetworkMessageHandlerRegistry _handlers = new NetworkMessageHandlerRegistry();
 
-            public RpcPayload LastRpcPayload;
             public INetTransport Transport => null;
-            public INetSerializer Serializer => DummySerializer.Instance;
+            public bool IsAcceptingMessages => true;
 
-            public void RegisterHandler<T>(ushort msgId, Action<INetConnection, T> handler) where T : struct
-            {
-                if (typeof(T) == typeof(RpcPayload))
-                    _handler = (conn, payload) => handler(conn, (T)(object)payload);
-            }
+            public int GetMaxPayloadSize(ushort messageId, NetworkChannel channel) =>
+                NetworkConstants.DefaultMaxPayloadSize;
 
-            public void UnregisterHandler(ushort msgId) { }
-            public NetworkSendResult SendToServer<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
-            {
-                if (message is RpcPayload payload)
-                    LastRpcPayload = payload;
+            public NetworkMessageHandlerLease RegisterHandler(
+                ushort messageId,
+                NetworkMessageHandler handler) => _handlers.Register(messageId, handler);
 
-                return NetworkSendResult.Accepted(0, 0);
-            }
+            public NetworkSendResult SendToServer(
+                ushort messageId,
+                ReadOnlySpan<byte> payload,
+                NetworkChannel channel = NetworkChannel.Reliable) => NetworkSendResult.Accepted(payload.Length, 0);
 
-            public NetworkSendResult SendToClient<T>(INetConnection connection, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
-            {
-                return NetworkSendResult.Accepted(0, 0, connection);
-            }
+            public NetworkSendResult SendToClient(
+                INetConnection connection,
+                ushort messageId,
+                ReadOnlySpan<byte> payload,
+                NetworkChannel channel = NetworkChannel.Reliable) => NetworkSendResult.Accepted(payload.Length, 0, connection);
 
-            public NetworkSendResult BroadcastToClients<T>(ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
-            {
-                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, 0, 0);
-            }
+            public NetworkSendResult BroadcastToClients(
+                ushort messageId,
+                ReadOnlySpan<byte> payload,
+                NetworkChannel channel = NetworkChannel.Reliable) =>
+                NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, payload.Length, 0, 0);
 
-            public NetworkSendResult Broadcast<T>(IReadOnlyList<INetConnection> connections, ushort msgId, T message, NetworkChannel channel = NetworkChannel.Reliable) where T : struct
-            {
-                return NetworkSendResult.Broadcast(NetworkSendStatus.Accepted, 0, connections?.Count ?? 0, 0);
-            }
-            public void DisconnectClient(INetConnection connection) { }
+            public NetworkSendResult Broadcast(
+                IReadOnlyList<INetConnection> connections,
+                ushort messageId,
+                ReadOnlySpan<byte> payload,
+                NetworkChannel channel = NetworkChannel.Reliable) =>
+                NetworkSendResult.Broadcast(
+                    NetworkSendStatus.Accepted,
+                    payload.Length * (connections?.Count ?? 0),
+                    connections?.Count ?? 0,
+                    0);
 
-            public void Deliver(INetConnection connection, ushort msgId, RpcPayload payload)
-            {
-                _handler?.Invoke(connection, payload);
-            }
+            public void Disconnect(INetConnection connection) { }
         }
 
         private sealed class TestConnection : INetConnection

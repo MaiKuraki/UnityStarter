@@ -1,12 +1,28 @@
-﻿using System.Collections.Generic;
+using System.Collections.Generic;
+
+using System;
 
 namespace CycloneGames.GameplayTags.Core
 {
    public static class GameplayTagContainerUtility
    {
-      public static bool HasAll<T, U, V>(this T containerA, in U containerB, in V other)
-         where T : IGameplayTagContainer where U : IGameplayTagContainer where V : IGameplayTagContainer
+      private const int BitsetActivationTagCount = 64;
+      private const int MaxBitsetWordsPerTag = 2;
+
+      internal static bool ShouldUseBitset(int tagCount, int maxRuntimeIndex, out int wordCount)
       {
+         wordCount = maxRuntimeIndex > 0 ? (maxRuntimeIndex >> 5) + 1 : 0;
+         return tagCount >= BitsetActivationTagCount &&
+                wordCount > 0 &&
+                wordCount <= tagCount * MaxBitsetWordsPerTag;
+      }
+
+      public static bool HasAll<T, U, V>(this T containerA, in U containerB, in V other)
+         where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer where V : IReadOnlyGameplayTagContainer
+      {
+         EnsureCurrentRuntimeIndexEpoch(containerA);
+         EnsureCurrentRuntimeIndexEpoch(containerB);
+         EnsureCurrentRuntimeIndexEpoch(other);
          if (other is null || other.IsEmpty)
             return true;
 
@@ -20,8 +36,11 @@ namespace CycloneGames.GameplayTags.Core
       }
 
       public static bool HasAllExact<T, U, V>(this T containerA, in U containerB, in V other)
-         where T : IGameplayTagContainer where U : IGameplayTagContainer where V : IGameplayTagContainer
+         where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer where V : IReadOnlyGameplayTagContainer
       {
+         EnsureCurrentRuntimeIndexEpoch(containerA);
+         EnsureCurrentRuntimeIndexEpoch(containerB);
+         EnsureCurrentRuntimeIndexEpoch(other);
          if (other is null || other.IsEmpty)
             return true;
 
@@ -90,38 +109,40 @@ namespace CycloneGames.GameplayTags.Core
 
       internal static void GetParentTags(List<int> tagIndices, GameplayTag tag, List<GameplayTag> parentTags)
       {
-         int index = tagIndices.BinarySearch(tag.RuntimeIndex);
-         if (index < 0)
-         {
-            index = ~index;
-         }
+         if (tagIndices == null || tagIndices.Count == 0)
+            return;
 
-         for (int i = index - 1; i >= 0; i--)
+         ReadOnlySpan<int> ancestorIndices = GameplayTagManager.GetParentRuntimeIndicesSpan(tag.RuntimeIndex);
+         for (int i = ancestorIndices.Length - 1; i >= 0; i--)
          {
-            int otherRuntimeIndex = tagIndices[i];
-            if (!GameplayTagManager.IsParentOf(otherRuntimeIndex, tag.RuntimeIndex))
-            {
-               break;
-            }
-
-            parentTags.Add(GameplayTagManager.GetTagFromRuntimeIndex(otherRuntimeIndex));
+            int ancestorRuntimeIndex = ancestorIndices[i];
+            if (BinarySearchUtility.Search(tagIndices, ancestorRuntimeIndex) >= 0)
+               parentTags.Add(GameplayTagManager.GetTagFromRuntimeIndex(ancestorRuntimeIndex));
          }
       }
 
       internal static void GetChildTags(List<int> tagIndices, GameplayTag tag, List<GameplayTag> childTags)
       {
-         int index = tagIndices.BinarySearch(tag.RuntimeIndex);
-         index = index < 0 ? ~index : index + 1;
+         if (tagIndices == null || tagIndices.Count == 0)
+            return;
 
-         for (int i = index; i < tagIndices.Count; i++)
+         ReadOnlySpan<int> descendantIndices = GameplayTagManager.GetChildRuntimeIndicesSpan(tag.RuntimeIndex);
+         for (int i = 0; i < descendantIndices.Length; i++)
          {
-            int otherRuntimeIndex = tagIndices[i];
-            if (!GameplayTagManager.IsChildOf(otherRuntimeIndex, tag.RuntimeIndex))
-            {
-               break;
-            }
+            int descendantRuntimeIndex = descendantIndices[i];
+            if (BinarySearchUtility.Search(tagIndices, descendantRuntimeIndex) >= 0)
+               childTags.Add(GameplayTagManager.GetTagFromRuntimeIndex(descendantRuntimeIndex));
+         }
+      }
 
-            childTags.Add(GameplayTagManager.GetTagFromRuntimeIndex(otherRuntimeIndex));
+      internal static void EnsureCurrentRuntimeIndexEpoch<T>(in T container)
+         where T : IReadOnlyGameplayTagContainer
+      {
+         if (container is IGameplayTagRuntimeIndexView runtimeIndexView &&
+             runtimeIndexView.RuntimeIndexEpoch != GameplayTagManager.CurrentRuntimeIndexEpoch)
+         {
+            throw new InvalidOperationException(
+               "Gameplay tag containers from different runtime-index epochs cannot be compared by runtime index.");
          }
       }
    }

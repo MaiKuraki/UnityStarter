@@ -1,198 +1,101 @@
+using System;
 using UnityEngine;
-using CycloneGames.AssetManagement.Runtime;
-using CycloneGames.Logger;
 
 namespace CycloneGames.UIFramework.Runtime
 {
-    [CreateAssetMenu(fileName = "UIWindow_", menuName = "CycloneGames/UIFramework/UIWindow Configuration")]
-    [System.Serializable]
-    public class UIWindowConfiguration : ScriptableObject
+    [CreateAssetMenu(fileName = "UIWindow_", menuName = "CycloneGames/UIFramework/Window Configuration")]
+    public sealed class UIWindowConfiguration : ScriptableObject
     {
-        /// <summary>
-        /// Defines how the window prefab is referenced and loaded.
-        /// Modes are mutually exclusive — switching away from <see cref="PrefabReference"/> automatically
-        /// clears the <c>windowPrefab</c> object reference to eliminate phantom asset retention.
-        /// </summary>
         public enum PrefabSource
         {
-            /// <summary>
-            /// Direct Unity Object reference. Prefab is bundled into the build or loaded via Resources/built-in scenes.
-            /// Use for always-present windows (splash, persistent HUD). Zero-latency; no asset-system dependency.
-            /// </summary>
             PrefabReference = 0,
-
-            /// <summary>
-            /// <see cref="AssetRef{T}"/> key loaded through <c>CycloneGames.AssetManagement</c> (Addressables / YooAsset).
-            /// Stored as a pure value-type struct — zero heap allocation at runtime.
-            /// Requires an <see cref="IAssetPackage"/> to be initialized before loading.
-            /// </summary>
-            AssetReference = 2,
-
-            /// <summary>
-            /// Raw string path consumed by xAsset or any custom loader that accepts a plain address string.
-            /// Use when your asset pipeline does not integrate with <c>CycloneGames.AssetManagement</c>.
-            /// </summary>
             PathLocation = 1,
+            AssetReference = 2,
         }
 
-        /// <summary>
-        /// Controls whether the framework should add a nested Canvas to isolate
-        /// UGUI rebuild cost for this window.
-        /// </summary>
         public enum SubCanvasPolicy
         {
-            /// <summary>
-            /// Use the layer canvas directly. Best for static windows and maximum batching.
-            /// </summary>
             InheritLayerCanvas = 0,
-
-            /// <summary>
-            /// Ensure the window root has its own nested Canvas to isolate rebuild cost.
-            /// Best for high-churn or frequently animated windows.
-            /// </summary>
-            ForceOwnSubCanvas = 1,
-
-            /// <summary>
-            /// Inspect the instantiated window and isolate automatically when high-churn
-            /// UI markers are detected.
-            /// </summary>
-            AutoDetect = 2,
+            IsolatedCanvas = 1,
         }
 
-        // ── Serialized fields ──────────────────────────────────────────────────────────────
-
-        /// <summary>Active loading strategy. Serialized as an integer for forward compatibility.</summary>
+        [SerializeField] private string windowId;
         [SerializeField] private PrefabSource source = PrefabSource.PrefabReference;
-
-        // PrefabReference mode — Unity Object ref; MUST be null in all other modes to prevent phantom retention.
         [SerializeField] private UIWindow windowPrefab;
-
-        // AssetReference mode — value-type struct (two strings); zero heap impact.
-        [SerializeField] private AssetRef<GameObject> prefabAssetRef;
-
-        // PathLocation mode — plain address string for external / custom loaders.
+        [SerializeField] private UIAssetReference prefabAssetRef;
         [SerializeField] private string prefabLocation;
-
-        // Common configuration
         [SerializeField] private UILayerConfiguration layer;
-        [SerializeField, Range(-100, 400)] private int priority = 0;
-        [SerializeField] private bool isSceneBound = false;
+        [SerializeField, Range(-100, 400)] private int priority;
+        [SerializeField] private bool isSceneBound;
         [SerializeField] private SubCanvasPolicy subCanvasPolicy = SubCanvasPolicy.InheritLayerCanvas;
 
-        // ── Public API ─────────────────────────────────────────────────────────────────────
-
-        /// <summary>The active prefab source mode.</summary>
+        public string WindowId => windowId ?? string.Empty;
         public PrefabSource Source => source;
+        public UIWindow WindowPrefab => source == PrefabSource.PrefabReference ? windowPrefab : null;
+        public UIAssetReference PrefabAssetReference =>
+            source == PrefabSource.AssetReference ? prefabAssetRef : default;
+        public string PrefabLocation => source == PrefabSource.PathLocation
+            ? prefabLocation ?? string.Empty
+            : string.Empty;
+        public UILayerConfiguration Layer => layer;
+        public int Priority => priority;
+        public bool IsSceneBound => isSceneBound;
+        public SubCanvasPolicy CanvasIsolationPolicy => subCanvasPolicy;
 
-        /// <summary>[<see cref="PrefabSource.PrefabReference"/>] Direct prefab reference.
-        /// Always <c>null</c> when any other mode is active.</summary>
-        public UIWindow WindowPrefab => windowPrefab;
-
-        /// <summary>[<see cref="PrefabSource.AssetReference"/>] Typed asset key for
-        /// <c>CycloneGames.AssetManagement</c>. Returns <c>default</c> when other modes are active.</summary>
-        public AssetRef<GameObject> PrefabAssetRef => prefabAssetRef;
-
-        /// <summary>[<see cref="PrefabSource.PathLocation"/>] Raw address string for custom loaders.
-        /// Empty when other modes are active.</summary>
-        public string PrefabLocation => prefabLocation;
-
-        /// <summary>
-        /// The effective address string for the active non-direct source mode.
-        /// Returns <see cref="AssetRef{T}.Location"/> for <see cref="PrefabSource.AssetReference"/>,
-        /// <see cref="PrefabLocation"/> for <see cref="PrefabSource.PathLocation"/>,
-        /// and <see cref="string.Empty"/> for <see cref="PrefabSource.PrefabReference"/>.
-        /// No heap allocation — returns an existing string reference.
-        /// </summary>
-        public string EffectiveLocation
+        public UIAssetReference EffectiveAssetReference
         {
             get
             {
                 switch (source)
                 {
-                    case PrefabSource.AssetReference: return prefabAssetRef.Location ?? string.Empty;
-                    case PrefabSource.PathLocation:   return prefabLocation ?? string.Empty;
-                    default:                          return string.Empty;
+                    case PrefabSource.AssetReference:
+                        return prefabAssetRef;
+                    case PrefabSource.PathLocation:
+                        return new UIAssetReference(prefabLocation);
+                    default:
+                        return default;
                 }
             }
         }
 
-        /// <summary>Returns <c>true</c> when the active source mode is fully configured.</summary>
         public bool IsConfigured
         {
             get
             {
+                if (string.IsNullOrWhiteSpace(windowId) || layer == null || !layer.IsValid)
+                {
+                    return false;
+                }
+
                 switch (source)
                 {
-                    case PrefabSource.PrefabReference: return windowPrefab != null;
-                    case PrefabSource.AssetReference:  return prefabAssetRef.IsValid;
-                    case PrefabSource.PathLocation:    return !string.IsNullOrEmpty(prefabLocation);
-                    default:                           return false;
+                    case PrefabSource.PrefabReference:
+                        return windowPrefab != null;
+                    case PrefabSource.AssetReference:
+                        return prefabAssetRef.IsValid;
+                    case PrefabSource.PathLocation:
+                        return !string.IsNullOrWhiteSpace(prefabLocation);
+                    default:
+                        return false;
                 }
             }
         }
 
-        /// <summary>The layer this window belongs to.</summary>
-        public UILayerConfiguration Layer => layer;
-
-        /// <summary>Render order within the same layer. Higher = closer to camera.</summary>
-        public int Priority => priority;
-
-        /// <summary>
-        /// When true, the window is automatically closed after the active scene changes
-        /// unless an explicit open-time override is provided.
-        /// </summary>
-        public bool IsSceneBound => isSceneBound;
-
-        /// <summary>
-        /// Determines whether this window should isolate UGUI rebuild work with a nested Canvas.
-        /// </summary>
-        public SubCanvasPolicy CanvasIsolationPolicy => subCanvasPolicy;
-
 #if UNITY_EDITOR
         private void OnValidate()
         {
-            // ── Guard: clear the Unity Object reference in all non-direct modes ─────────────
-            // Object references held by ScriptableObjects are included in the asset bundle/build
-            // even when never accessed at runtime. Clearing prevents phantom memory retention.
-            if (source != PrefabSource.PrefabReference && windowPrefab != null)
+            windowId = windowId?.Trim();
+            prefabLocation = prefabLocation?.Trim();
+
+            if (!Enum.IsDefined(typeof(PrefabSource), source))
             {
-                CLogger.LogWarning(
-                    $"[UIWindowConfiguration] '{name}': Source is not PrefabReference — " +
-                    $"clearing WindowPrefab to prevent phantom memory retention.");
-                windowPrefab = null;
+                source = PrefabSource.PrefabReference;
             }
 
-            // ── Validate active source mode ───────────────────────────────────────────────
-            switch (source)
+            if (!Enum.IsDefined(typeof(SubCanvasPolicy), subCanvasPolicy))
             {
-                case PrefabSource.PrefabReference:
-                    if (windowPrefab == null)
-                    {
-                        CLogger.LogWarning(
-                            $"[UIWindowConfiguration] '{name}': Source is PrefabReference but WindowPrefab is not assigned.");
-                    }
-                    else if (windowPrefab.GetComponent<UIWindow>() == null)
-                    {
-                        CLogger.LogError(
-                            $"[UIWindowConfiguration] '{name}': Prefab '{windowPrefab.name}' does not have a UIWindow component.");
-                    }
-                    break;
-
-                case PrefabSource.AssetReference:
-                    if (!prefabAssetRef.IsValid)
-                        CLogger.LogWarning(
-                            $"[UIWindowConfiguration] '{name}': Source is AssetReference but PrefabAssetRef has no Location.");
-                    break;
-
-                case PrefabSource.PathLocation:
-                    if (string.IsNullOrEmpty(prefabLocation))
-                        CLogger.LogWarning(
-                            $"[UIWindowConfiguration] '{name}': Source is PathLocation but PrefabLocation is empty.");
-                    break;
+                subCanvasPolicy = SubCanvasPolicy.InheritLayerCanvas;
             }
-
-            if (layer == null)
-                CLogger.LogWarning($"[UIWindowConfiguration] '{name}': Layer is not assigned. This window won't be placed on any layer.");
         }
 #endif
     }

@@ -1,213 +1,297 @@
 #if CYCLONEGAMES_HAS_ADDRESSABLES
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.Threading;
-using UnityEngine.ResourceManagement.AsyncOperations;
-using Cysharp.Threading.Tasks;
+
+using UnityEngine;
 using UnityEngine.AddressableAssets;
-using CycloneGames.Logger;
+using UnityEngine.ResourceManagement.AsyncOperations;
+
+using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
     public sealed class AddressablesModule : IAssetModule
     {
         private const string DEBUG_FLAG = "[AddressablesAssetModule]";
-        private readonly Dictionary<string, IAssetPackage> _packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
-        private readonly object _packagesLock = new object();
-        private volatile bool _initialized;
-        private volatile List<string> _packageNamesCache;
-        private readonly SemaphoreSlim _initSemaphore = new SemaphoreSlim(1, 1);
-        private long _defaultIdleMemoryBudgetBytes;
 
-        public bool Initialized => _initialized;
+        private static int _globalOwner;
 
-        public async UniTask InitializeAsync(AssetManagementOptions options = default)
+        private readonly Dictionary<string, IAssetPackage> _packages =
+            new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
+
+        private bool _initialized;
+        private bool _ownsGlobalRuntime;
+        private bool _ownsAssetBundleRuntime;
+        private bool _initializationStarted;
+        private UniTask _initializationTask;
+        private bool _shutdownRequested;
+        private bool _destroying;
+        private UniTask _destroyTask;
+        private ReadOnlyCollection<string> _packageNamesCache;
+        private AssetCacheTuning _defaultCacheTuning;
+
+        public bool Initialized => _initialized && !_shutdownRequested;
+
+        public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
-            _defaultIdleMemoryBudgetBytes = options.DefaultIdleMemoryBudgetBytes;
-            if (_initialized) return;
+            AssetRuntimeGuard.EnsureMainThread();
+            if (_shutdownRequested)
+            {
+                throw new ObjectDisposedException(
+                    nameof(AddressablesModule),
+                    $"{DEBUG_FLAG} Shutdown was requested and this module instance cannot be reused.");
+            }
 
-            await _initSemaphore.WaitAsync();
+            if (_initialized)
+            {
+                return UniTask.CompletedTask;
+            }
+
+            if (_initializationStarted)
+            {
+                return _initializationTask;
+            }
+
+            options = options.Normalized();
+            if (Interlocked.CompareExchange(ref _globalOwner, 1, 0) != 0)
+            {
+                throw new InvalidOperationException(
+                    $"{DEBUG_FLAG} Addressables is process-global and already has an AssetManagement owner.");
+            }
+
+            _ownsGlobalRuntime = true;
             try
             {
-                if (_initialized) return;
-
-                try
-                {
-                    var resourceLocators = Addressables.ResourceLocators;
-                    if (resourceLocators != null)
-                    {
-                        _initialized = true;
-                        CLogger.LogInfo($"{DEBUG_FLAG} Addressables already initialized, skipping initialization.");
-                        return;
-                    }
-                }
-                catch
-                {
-                    // ResourceLocators access failed, need to initialize
-                }
-
-                try
-                {
-                    var initializationHandle = Addressables.InitializeAsync(autoReleaseHandle: false);
-
-                    try
-                    {
-                        if (!initializationHandle.IsValid())
-                        {
-                            _initialized = true;
-                            CLogger.LogInfo($"{DEBUG_FLAG} Addressables initialization handle invalid, assuming already initialized.");
-                            return;
-                        }
-
-                        await initializationHandle;
-
-                        if (initializationHandle.IsValid())
-                        {
-                            if (initializationHandle.Status == AsyncOperationStatus.Succeeded)
-                            {
-                                _initialized = true;
-                            }
-                            else
-                            {
-                                CLogger.LogError($"{DEBUG_FLAG} Initialization failed. Status: {initializationHandle.Status}, Exception: {initializationHandle.OperationException}");
-                            }
-                        }
-                        else
-                        {
-                            _initialized = true;
-                            CLogger.LogInfo($"{DEBUG_FLAG} Initialization handle became invalid after await, assuming initialization succeeded.");
-                        }
-                    }
-                    finally
-                    {
-                        if (initializationHandle.IsValid())
-                        {
-                            Addressables.Release(initializationHandle);
-                        }
-                    }
-                }
-                catch (Exception ex)
-                {
-                    try
-                    {
-                        var resourceLocators = Addressables.ResourceLocators;
-                        if (resourceLocators != null)
-                        {
-                            _initialized = true;
-                            CLogger.LogInfo($"{DEBUG_FLAG} Initialization exception caught but Addressables appears initialized: {ex.Message}");
-                        }
-                        else
-                        {
-                            CLogger.LogError($"{DEBUG_FLAG} Initialization exception: {ex.Message}");
-                        }
-                    }
-                    catch
-                    {
-                        CLogger.LogError($"{DEBUG_FLAG} Initialization exception and cannot verify status: {ex.Message}");
-                    }
-                }
+                AssetBundleRuntimeOwnership.Acquire(this, "Addressables");
+                _ownsAssetBundleRuntime = true;
+                _defaultCacheTuning = options.DefaultCacheTuning;
+                _initializationStarted = true;
+                _initializationTask = AssetOperationBroadcast.Create(InitializeCoreAsync());
+                return _initializationTask;
             }
-            finally
+            catch
             {
-                _initSemaphore.Release();
+                ReleaseGlobalOwner();
+                throw;
             }
         }
 
-        public async UniTask DestroyAsync(CancellationToken cancellationToken = default)
+        private async UniTask InitializeCoreAsync()
         {
-            if (!_initialized) return;
-            _initialized = false;
-
-            List<IAssetPackage> packages;
-            lock (_packagesLock)
+            AsyncOperationHandle initializationHandle = default;
+            bool initializationSucceeded = false;
+            try
             {
-                packages = new List<IAssetPackage>(_packages.Values);
-                _packages.Clear();
-                _packageNamesCache = null;
+                initializationHandle = Addressables.InitializeAsync(autoReleaseHandle: false);
+                if (!initializationHandle.IsValid())
+                {
+                    throw new InvalidOperationException($"{DEBUG_FLAG} Addressables returned an invalid initialization handle.");
+                }
+
+                await initializationHandle.ToUniTask();
+                if (initializationHandle.Status != AsyncOperationStatus.Succeeded)
+                {
+                    throw new InvalidOperationException(
+                        $"{DEBUG_FLAG} Initialization failed: {initializationHandle.OperationException?.Message ?? initializationHandle.Status.ToString()}.",
+                        initializationHandle.OperationException);
+                }
+
+                initializationSucceeded = true;
+            }
+            finally
+            {
+                if (initializationHandle.IsValid())
+                {
+                    Addressables.Release(initializationHandle);
+                }
+
+                // ToUniTask resumes from Addressables' completion callback. Let that callback unwind after our
+                // external handle is released so the provider can drop its internal running reference. The module
+                // does not publish successful initialization or release failed initialization ownership earlier.
+                await UniTask.Yield();
+                if (!initializationSucceeded)
+                {
+                    ReleaseGlobalOwner();
+                }
+
+                _initializationStarted = false;
             }
 
-            for (int i = 0; i < packages.Count; i++)
+            _initialized = true;
+        }
+
+        public UniTask DestroyAsync()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            _shutdownRequested = true;
+            if (_destroying)
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                await packages[i].DestroyAsync();
+                return _destroyTask;
+            }
+
+            _destroying = true;
+            _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
+            return _destroyTask;
+        }
+
+        private async UniTask DestroyCoreAsync()
+        {
+            try
+            {
+                if (_initializationStarted)
+                {
+                    await _initializationTask;
+                }
+
+                if (!_initialized)
+                {
+                    return;
+                }
+
+                List<Exception> failures = null;
+                var packageNames = new List<string>(_packages.Keys);
+                for (int i = 0; i < packageNames.Count; i++)
+                {
+                    string packageName = packageNames[i];
+                    IAssetPackage package = _packages[packageName];
+                    try
+                    {
+                        await package.DestroyAsync();
+                        _packages.Remove(packageName);
+                    }
+                    catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+                    {
+                        failures ??= new List<Exception>();
+                        failures.Add(ex);
+                    }
+                }
+
+                _packageNamesCache = null;
+                if (failures != null)
+                {
+                    throw new AggregateException(
+                        $"{DEBUG_FLAG} One or more packages failed to shut down.",
+                        failures);
+                }
+
+                _initialized = false;
+                ReleaseGlobalOwner();
+            }
+            finally
+            {
+                _destroying = false;
             }
         }
 
         public IAssetPackage CreatePackage(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) throw new ArgumentException($"{DEBUG_FLAG} Package name is null or empty", nameof(packageName));
-            if (!_initialized) throw new InvalidOperationException($"{DEBUG_FLAG} Asset module not initialized");
-
-            lock (_packagesLock)
+            AssetRuntimeGuard.EnsureMainThread();
+            EnsureOperational();
+            if (string.IsNullOrWhiteSpace(packageName))
             {
-                if (_packages.ContainsKey(packageName))
-                {
-                    throw new InvalidOperationException($"{DEBUG_FLAG} Package already exists: {packageName}");
-                }
-
-                var package = new AddressablesAssetPackage(packageName);
-                if (_defaultIdleMemoryBudgetBytes > 0) package.SetCacheIdleMemoryBudget(_defaultIdleMemoryBudgetBytes);
-                _packages.Add(packageName, package);
-                _packageNamesCache = null;
-                return package;
+                throw new ArgumentException($"{DEBUG_FLAG} Package name is null or empty.", nameof(packageName));
             }
+
+            EnsureInitialized();
+            if (_packages.ContainsKey(packageName))
+            {
+                throw new InvalidOperationException($"{DEBUG_FLAG} Package already exists: {packageName}");
+            }
+
+            if (_packages.Count != 0)
+            {
+                throw new InvalidOperationException(
+                    $"{DEBUG_FLAG} Addressables owns one global catalog/cache runtime. Create only one logical package per module instance.");
+            }
+
+            var package = new AddressablesAssetPackage(packageName);
+            package.ConfigureCache(_defaultCacheTuning);
+            _packages.Add(packageName, package);
+            _packageNamesCache = null;
+            return package;
         }
 
         public IAssetPackage GetPackage(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) return null;
-            lock (_packagesLock)
+            AssetRuntimeGuard.EnsureMainThread();
+            EnsureOperational();
+            if (string.IsNullOrEmpty(packageName))
             {
-                _packages.TryGetValue(packageName, out var pkg);
-                return pkg;
+                return null;
             }
+
+            _packages.TryGetValue(packageName, out IAssetPackage package);
+            return package;
         }
 
         public async UniTask<bool> RemovePackageAsync(string packageName)
         {
-            if (string.IsNullOrEmpty(packageName)) return false;
-
-            IAssetPackage package;
-            lock (_packagesLock)
+            AssetRuntimeGuard.EnsureMainThread();
+            EnsureOperational();
+            if (string.IsNullOrEmpty(packageName) || !_packages.TryGetValue(packageName, out IAssetPackage package))
             {
-                if (!_packages.TryGetValue(packageName, out package))
-                {
-                    return false;
-                }
-
-                _packages.Remove(packageName);
-                _packageNamesCache = null;
+                return false;
             }
 
             await package.DestroyAsync();
+            _packages.Remove(packageName);
+            _packageNamesCache = null;
             return true;
         }
 
         public IReadOnlyList<string> GetAllPackageNames()
         {
-            var cache = _packageNamesCache;
-            if (cache == null)
+            AssetRuntimeGuard.EnsureMainThread();
+            EnsureOperational();
+            if (_packageNamesCache == null)
             {
-                lock (_packagesLock)
-                {
-                    cache = _packageNamesCache;
-                    if (cache == null)
-                    {
-                        cache = new List<string>(_packages.Count);
-                        foreach (var key in _packages.Keys)
-                        {
-                            cache.Add(key);
-                        }
-                        _packageNamesCache = cache;
-                    }
-                }
+                _packageNamesCache = new List<string>(_packages.Keys).AsReadOnly();
             }
-            return cache;
+
+            return _packageNamesCache;
         }
 
-        public IPatchService CreatePatchService(string packageName)
+        private void EnsureInitialized()
         {
-            throw new NotSupportedException($"{DEBUG_FLAG} Addressables does not support the patch workflow provided by this module.");
+            if (!_initialized)
+            {
+                throw new InvalidOperationException($"{DEBUG_FLAG} Asset module is not initialized.");
+            }
+        }
+
+        private void EnsureOperational()
+        {
+            if (_shutdownRequested)
+            {
+                throw new ObjectDisposedException(
+                    nameof(AddressablesModule),
+                    $"{DEBUG_FLAG} Shutdown was requested and the module no longer accepts business operations.");
+            }
+        }
+
+        private void ReleaseGlobalOwner()
+        {
+            if (!_ownsGlobalRuntime)
+            {
+                return;
+            }
+
+            if (_ownsAssetBundleRuntime)
+            {
+                AssetBundleRuntimeOwnership.Release(this);
+                _ownsAssetBundleRuntime = false;
+            }
+
+            _ownsGlobalRuntime = false;
+            Interlocked.Exchange(ref _globalOwner, 0);
+        }
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetGlobalOwner()
+        {
+            Interlocked.Exchange(ref _globalOwner, 0);
         }
     }
 }

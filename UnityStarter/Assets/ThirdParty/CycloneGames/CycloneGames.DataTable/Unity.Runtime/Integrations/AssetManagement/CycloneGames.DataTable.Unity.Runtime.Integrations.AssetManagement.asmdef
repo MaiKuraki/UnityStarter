@@ -3,7 +3,6 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.DataTable.Core",
-        "CycloneGames.DataTable.Unity.Runtime",
         "CycloneGames.AssetManagement.Runtime",
         "UniTask"
     ],
@@ -12,7 +11,7 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [
         "CYCLONE_ASSET_MANAGEMENT"
     ],

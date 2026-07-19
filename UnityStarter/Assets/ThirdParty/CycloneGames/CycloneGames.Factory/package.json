@@ -2,12 +2,10 @@
   "name": "com.cyclone-games.factory",
   "version": "1.0.0",
   "displayName": "CycloneGames.Factory",
-  "description": "This package implements a factory module with built-in object pooling capabilities, designed for seamless integration with popular Dependency Injection (DI) frameworks.",
+  "description": "Explicit factory contracts, bounded managed object pools, Unity object adapters, and optional Native Collections dense pools.",
   "unity": "2022.3",
   "unityRelease": "0f1",
-  "dependencies": {
-    "com.cyclone-games.io": "1.0.0"
-  },
+  "dependencies": {},
   "keywords": [
     "CycloneGames",
     "Factory",
@@ -20,16 +18,6 @@
     "url": ""
   },
   "samples": [
-    {
-      "displayName": "Pure C# Benchmarks",
-      "description": "Performance benchmarks for pure C# factory and object pooling scenarios",
-      "path": "Samples/Benchmarks/PureCSharp"
-    },
-    {
-      "displayName": "Unity GameObject Benchmarks",
-      "description": "Performance benchmarks for Unity-specific GameObject pooling and factory patterns",
-      "path": "Samples/Benchmarks/Unity"
-    },
     {
       "displayName": "Basic Pure C# Example",
       "description": "Simple data-only particle system using ObjectPool",

@@ -58,6 +58,12 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>Looks up an entry by exact key match. O(1) after first call. Returns false when not found.</summary>
         public bool TryGetEntry(string key, out Entry entry)
         {
+            if (string.IsNullOrEmpty(key))
+            {
+                entry = default;
+                return false;
+            }
+
             if (runtimeLookup == null) BuildLookupTable();
 
             if (!runtimeLookup.TryGetValue(key, out int index))

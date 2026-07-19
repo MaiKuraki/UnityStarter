@@ -1,6 +1,8 @@
+using CycloneGames.Logger;
 using R3;
 using System;
 using System.Collections.Generic;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.InputSystem.Runtime
@@ -11,14 +13,19 @@ namespace CycloneGames.InputSystem.Runtime
     /// Runtime container for input bindings.
     /// <para>
     /// Memory Management: Implements <see cref="IDisposable"/> for automatic lifecycle management.
-    /// Use ".AddTo(this)" (R3 extension) to bind this context to a GameObject/Component, ensuring it is 
+    /// Use ".AddTo(this)" (R3 extension) to bind this context to a GameObject/Component, ensuring it is
     /// automatically removed from the input stack when the object is destroyed.
     /// </para>
     /// </summary>
     public class InputContext : IDisposable
     {
+        private const string DEBUG_FLAG = "[InputContext]";
         public string Name { get; }
         public string ActionMapName { get; }
+        public int Priority { get; }
+        public bool BlocksLowerPriority { get; }
+        internal bool HasExplicitPolicy { get; }
+        internal bool IsDisposed => _isDisposed;
 
         // Dictionary lookups are O(1).
         internal readonly Dictionary<Observable<Unit>, IActionCommand> ActionBindings = new();
@@ -29,6 +36,7 @@ namespace CycloneGames.InputSystem.Runtime
         // Tracks which players currently have this context in their stack.
         // Used to auto-remove this context from those players upon disposal.
         private readonly HashSet<IInputPlayer> _owners = new();
+        private bool _isDisposed;
 
         /// <summary>
         /// Creates a new input context.
@@ -36,13 +44,30 @@ namespace CycloneGames.InputSystem.Runtime
         /// <param name="actionMapName">The Unity Input System ActionMap name (required for functionality).</param>
         /// <param name="name">Optional display name for debugging. If null, uses actionMapName.</param>
         public InputContext(string actionMapName, string name = null)
+            : this(actionMapName, name, 0, true, false)
+        {
+        }
+
+        /// <summary>
+        /// Creates a prioritized input context. Input contexts and their owners are confined to the Unity main thread.
+        /// </summary>
+        public InputContext(string actionMapName, string name, int priority, bool blocksLowerPriority)
+            : this(actionMapName, name, priority, blocksLowerPriority, true)
+        {
+        }
+
+        private InputContext(string actionMapName, string name, int priority, bool blocksLowerPriority, bool hasExplicitPolicy)
         {
             ActionMapName = actionMapName ?? throw new ArgumentNullException(nameof(actionMapName));
-            Name = name ?? actionMapName; // Default to actionMapName if name not provided
+            Name = name ?? actionMapName;
+            Priority = priority;
+            BlocksLowerPriority = blocksLowerPriority;
+            HasExplicitPolicy = hasExplicitPolicy;
         }
 
         public InputContext AddBinding(Observable<Unit> source, IActionCommand command)
         {
+            EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             ActionBindings[source] = command ?? NullCommand.Instance;
             return this;
@@ -50,6 +75,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         public InputContext AddBinding(Observable<Vector2> source, IMoveCommand command)
         {
+            EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             MoveBindings[source] = command ?? NullCommand.Instance;
             return this;
@@ -57,6 +83,7 @@ namespace CycloneGames.InputSystem.Runtime
 
         public InputContext AddBinding(Observable<float> source, IScalarCommand command)
         {
+            EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             ScalarBindings[source] = command ?? NullCommand.Instance;
             return this;
@@ -64,48 +91,93 @@ namespace CycloneGames.InputSystem.Runtime
 
         public InputContext AddBinding(Observable<bool> source, IBoolCommand command)
         {
+            EnsureMutable();
             if (source == null) throw new ArgumentNullException(nameof(source));
             BoolBindings[source] = command ?? NullCommand.Instance;
             return this;
         }
 
-        public bool RemoveBinding(Observable<Unit> source) => ActionBindings.Remove(source);
-        public bool RemoveBinding(Observable<Vector2> source) => MoveBindings.Remove(source);
-        public bool RemoveBinding(Observable<float> source) => ScalarBindings.Remove(source);
-        public bool RemoveBinding(Observable<bool> source) => BoolBindings.Remove(source);
+        public bool RemoveBinding(Observable<Unit> source)
+        {
+            EnsureMutable();
+            return ActionBindings.Remove(source);
+        }
+
+        public bool RemoveBinding(Observable<Vector2> source)
+        {
+            EnsureMutable();
+            return MoveBindings.Remove(source);
+        }
+
+        public bool RemoveBinding(Observable<float> source)
+        {
+            EnsureMutable();
+            return ScalarBindings.Remove(source);
+        }
+
+        public bool RemoveBinding(Observable<bool> source)
+        {
+            EnsureMutable();
+            return BoolBindings.Remove(source);
+        }
 
         internal void AddOwner(IInputPlayer player)
         {
-            lock (_owners) _owners.Add(player);
+            EnsureMutable();
+            if (player != null) _owners.Add(player);
         }
 
         internal void RemoveOwner(IInputPlayer player)
         {
-            lock (_owners) _owners.Remove(player);
+            EnsureMainThread();
+            if (player != null) _owners.Remove(player);
         }
 
         /// <summary>
         /// Disposes the context and removes it from all active InputPlayers.
-        /// <para>
-        /// This is thread-safe and designed to be called automatically via <c>.AddTo(this)</c>.
-        /// </para>
+        /// This method must be called on the Unity main thread.
         /// </summary>
         public void Dispose()
         {
-            IInputPlayer[] ownersCopy;
-            lock (_owners)
-            {
-                int count = _owners.Count;
-                if (count == 0) return;
-                ownersCopy = new IInputPlayer[count];
-                _owners.CopyTo(ownersCopy);
-                _owners.Clear();
-            }
+            EnsureMainThread();
+            if (_isDisposed) return;
+            _isDisposed = true;
+
+            int count = _owners.Count;
+            if (count == 0) return;
+            var ownersCopy = new IInputPlayer[count];
+            _owners.CopyTo(ownersCopy);
+            _owners.Clear();
 
             // Iterate copy to avoid "Collection modified" exception during callbacks
             for (int i = 0; i < ownersCopy.Length; i++)
             {
-                ownersCopy[i].RemoveContext(this);
+                try
+                {
+                    ownersCopy[i].RemoveContext(this);
+                }
+                catch (Exception exception) when (
+                    exception is not OutOfMemoryException &&
+                    exception is not AccessViolationException &&
+                    exception is not StackOverflowException)
+                {
+                    CLogger.LogError(
+                        $"{DEBUG_FLAG} Failed to detach a disposed context owner ({exception.GetType().Name}).");
+                }
+            }
+        }
+
+        private void EnsureMutable()
+        {
+            EnsureMainThread();
+            if (_isDisposed) throw new ObjectDisposedException(nameof(InputContext));
+        }
+
+        private static void EnsureMainThread()
+        {
+            if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
+            {
+                throw new InvalidOperationException("InputContext operations must run on the Unity main thread.");
             }
         }
     }

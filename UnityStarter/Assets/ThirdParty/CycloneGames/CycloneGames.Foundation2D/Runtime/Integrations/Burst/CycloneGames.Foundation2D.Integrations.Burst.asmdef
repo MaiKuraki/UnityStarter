@@ -1,0 +1,32 @@
+{
+    "name": "CycloneGames.Foundation2D.Integrations.Burst",
+    "rootNamespace": "CycloneGames.Foundation2D.Runtime",
+    "references": [
+        "CycloneGames.Foundation2D.Runtime",
+        "Unity.Burst",
+        "Unity.Collections"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_FOUNDATION2D_HAS_BURST",
+        "CYCLONEGAMES_FOUNDATION2D_HAS_COLLECTIONS"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.burst",
+            "expression": "",
+            "define": "CYCLONEGAMES_FOUNDATION2D_HAS_BURST"
+        },
+        {
+            "name": "com.unity.collections",
+            "expression": "",
+            "define": "CYCLONEGAMES_FOUNDATION2D_HAS_COLLECTIONS"
+        }
+    ],
+    "noEngineReferences": false
+}

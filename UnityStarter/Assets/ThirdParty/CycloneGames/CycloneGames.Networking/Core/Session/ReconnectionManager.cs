@@ -4,6 +4,14 @@ using System.Security.Cryptography;
 
 namespace CycloneGames.Networking.Session
 {
+    /// <summary>
+    /// Coordinates reconnect reservations on one authoritative owner thread or scheduler.
+    /// </summary>
+    /// <remarks>
+    /// Implementations are not required to support concurrent calls. Any asynchronous
+    /// catch-up implementation must marshal its callbacks back to the same owner before
+    /// invoking them.
+    /// </remarks>
     public interface IReconnectionManager
     {
         double ReconnectWindow { get; set; }
@@ -13,7 +21,7 @@ namespace CycloneGames.Networking.Session
 
         void OnClientDisconnected(int connectionId, double disconnectTime, ulong playerId, int protocolVersion,
             out ReconnectToken token);
-        bool TryReconnect(INetConnection newConnection, int originalConnectionId, in ReconnectToken token);
+        bool TryReconnect(INetConnection newConnection, int originalConnectionId, in ReconnectToken token, double currentTime);
         void CancelReservation(int connectionId);
         void Update(double currentTime);
 
@@ -27,14 +35,30 @@ namespace CycloneGames.Networking.Session
 
     public sealed class ReconnectionManager : IReconnectionManager
     {
+        private const int DefaultMaxReservations = 4096;
+
         private readonly Dictionary<int, ReconnectSlot> _reservedSlots =
             new Dictionary<int, ReconnectSlot>(16);
 
         private readonly IStateCatchUp _catchUp;
+        private readonly int _maxReservations;
         private int[] _expiredBuffer = new int[16];
 
-        public double ReconnectWindow { get; set; } = 300.0;
+        private double _reconnectWindow = 300d;
+
+        public double ReconnectWindow
+        {
+            get => _reconnectWindow;
+            set
+            {
+                if (value <= 0d || double.IsNaN(value) || double.IsInfinity(value))
+                    throw new ArgumentOutOfRangeException(nameof(value));
+                _reconnectWindow = value;
+            }
+        }
         public bool RequireAuthenticatedConnection { get; set; }
+        public int MaxReservations => _maxReservations;
+        public int ReservationCount => _reservedSlots.Count;
 
         public event Action<int, INetConnection> OnClientReconnected;
         public event Action<int, ReconnectRejectReason> OnReconnectRejected;
@@ -43,19 +67,61 @@ namespace CycloneGames.Networking.Session
         public event Action<int> OnCatchUpComplete;
         public event Action<int, string> OnCatchUpFailed;
 
-        public ReconnectionManager(IStateCatchUp catchUp = null, bool requireAuthenticatedConnection = false)
+        public ReconnectionManager(
+            IStateCatchUp catchUp = null,
+            bool requireAuthenticatedConnection = false,
+            int maxReservations = DefaultMaxReservations)
         {
+            if (maxReservations <= 0)
+                throw new ArgumentOutOfRangeException(nameof(maxReservations));
+
             _catchUp = catchUp;
             RequireAuthenticatedConnection = requireAuthenticatedConnection;
+            _maxReservations = maxReservations;
         }
 
         public void OnClientDisconnected(int connectionId, double disconnectTime, ulong playerId, int protocolVersion,
             out ReconnectToken token)
         {
+            if (connectionId <= 0)
+                throw new ArgumentOutOfRangeException(nameof(connectionId));
+            if (disconnectTime < 0d || double.IsNaN(disconnectTime) || double.IsInfinity(disconnectTime))
+                throw new ArgumentOutOfRangeException(nameof(disconnectTime));
+
             if (_reservedSlots.TryGetValue(connectionId, out var existingSlot))
             {
-                token = existingSlot.Token;
-                return;
+                if (disconnectTime < existingSlot.DisconnectTime)
+                {
+                    token = default;
+                    throw new InvalidOperationException(
+                        "Reconnect disconnect time cannot move backwards for an existing reservation.");
+                }
+
+                if (disconnectTime - existingSlot.DisconnectTime < ReconnectWindow)
+                {
+                    if (existingSlot.State != ReconnectState.WaitingForReconnect
+                        || existingSlot.PlayerId != playerId
+                        || existingSlot.ProtocolVersion != protocolVersion)
+                    {
+                        token = default;
+                        throw new InvalidOperationException(
+                            "An active reconnect reservation already exists with different ownership, protocol, or state.");
+                    }
+
+                    token = existingSlot.Token;
+                    return;
+                }
+
+                _reservedSlots.Remove(connectionId);
+            }
+
+            if (_reservedSlots.Count >= _maxReservations)
+                Update(disconnectTime);
+
+            if (_reservedSlots.Count >= _maxReservations)
+            {
+                token = default;
+                throw new InvalidOperationException("Reconnect reservation capacity is exhausted.");
             }
 
             token = ReconnectToken.Create(connectionId, playerId, protocolVersion, GenerateNonce());
@@ -72,8 +138,15 @@ namespace CycloneGames.Networking.Session
 
         public bool HasReservation(int connectionId) => _reservedSlots.ContainsKey(connectionId);
 
-        public bool TryReconnect(INetConnection newConnection, int originalConnectionId, in ReconnectToken token)
+        public bool TryReconnect(
+            INetConnection newConnection,
+            int originalConnectionId,
+            in ReconnectToken token,
+            double currentTime)
         {
+            if (currentTime < 0d || double.IsNaN(currentTime) || double.IsInfinity(currentTime))
+                throw new ArgumentOutOfRangeException(nameof(currentTime));
+
             if (!_reservedSlots.TryGetValue(originalConnectionId, out var slot))
             {
                 OnReconnectRejected?.Invoke(originalConnectionId, ReconnectRejectReason.NoReservation);
@@ -83,6 +156,14 @@ namespace CycloneGames.Networking.Session
             if (slot.State != ReconnectState.WaitingForReconnect)
             {
                 OnReconnectRejected?.Invoke(originalConnectionId, ReconnectRejectReason.InvalidState);
+                return false;
+            }
+
+            if (currentTime < slot.DisconnectTime || currentTime - slot.DisconnectTime >= ReconnectWindow)
+            {
+                _reservedSlots.Remove(originalConnectionId);
+                OnReconnectRejected?.Invoke(originalConnectionId, ReconnectRejectReason.WindowExpired);
+                OnReconnectWindowExpired?.Invoke(originalConnectionId);
                 return false;
             }
 
@@ -106,7 +187,31 @@ namespace CycloneGames.Networking.Session
 
             if (_catchUp != null)
             {
-                BeginCatchUp(newConnection, originalConnectionId);
+                try
+                {
+                    BeginCatchUp(newConnection, originalConnectionId, slot.Token.Nonce);
+                }
+                catch (Exception exception)
+                {
+                    // A synchronous terminal callback may already have committed and
+                    // removed this attempt. Do not rewrite that outcome as an
+                    // initialization failure or swallow a subscriber exception.
+                    if (!_reservedSlots.TryGetValue(originalConnectionId, out ReconnectSlot activeSlot)
+                        || activeSlot.State != ReconnectState.CatchingUp
+                        || activeSlot.Token.Nonce != slot.Token.Nonce
+                        || !ReferenceEquals(activeSlot.NewConnection, newConnection))
+                    {
+                        throw;
+                    }
+
+                    FailCatchUp(
+                        originalConnectionId,
+                        slot.Token.Nonce,
+                        string.IsNullOrEmpty(exception.Message)
+                            ? "Catch-up initialization failed."
+                            : exception.Message);
+                    return false;
+                }
             }
             else
             {
@@ -122,37 +227,68 @@ namespace CycloneGames.Networking.Session
 
         public void Update(double currentTime)
         {
+            if (currentTime < 0d || double.IsNaN(currentTime) || double.IsInfinity(currentTime))
+                throw new ArgumentOutOfRangeException(nameof(currentTime));
+
             int expiredCount = CollectExpiredReservations(currentTime);
             for (int i = 0; i < expiredCount; i++)
             {
-                int connectionId = _expiredBuffer[i];
-                _reservedSlots.Remove(connectionId);
-                OnReconnectWindowExpired?.Invoke(connectionId);
+                _reservedSlots.Remove(_expiredBuffer[i]);
+            }
+
+            // Commit every expiry before invoking external observers. A throwing or
+            // re-entrant subscriber must not leave later expired reservations alive.
+            for (int i = 0; i < expiredCount; i++)
+            {
+                OnReconnectWindowExpired?.Invoke(_expiredBuffer[i]);
             }
         }
 
-        private void BeginCatchUp(INetConnection newConnection, int originalConnectionId)
+        private void BeginCatchUp(INetConnection newConnection, int originalConnectionId, ulong attemptNonce)
         {
             _catchUp.BeginCatchUp(newConnection, originalConnectionId,
-                progress => OnCatchUpProgress?.Invoke(originalConnectionId, progress),
-                () => CompleteCatchUp(originalConnectionId, newConnection),
-                reason => FailCatchUp(originalConnectionId, reason));
+                progress => ReportCatchUpProgress(originalConnectionId, attemptNonce, progress),
+                () => CompleteCatchUp(originalConnectionId, newConnection, attemptNonce),
+                reason => FailCatchUp(originalConnectionId, attemptNonce, reason));
         }
 
-        private void CompleteCatchUp(int originalConnectionId, INetConnection newConnection)
+        private void ReportCatchUpProgress(int originalConnectionId, ulong attemptNonce, float progress)
+        {
+            if (_reservedSlots.TryGetValue(originalConnectionId, out ReconnectSlot slot)
+                && slot.State == ReconnectState.CatchingUp
+                && slot.Token.Nonce == attemptNonce)
+            {
+                OnCatchUpProgress?.Invoke(originalConnectionId, progress);
+            }
+        }
+
+        private void CompleteCatchUp(int originalConnectionId, INetConnection newConnection, ulong attemptNonce)
         {
             if (!_reservedSlots.TryGetValue(originalConnectionId, out var slot))
                 return;
+            if (slot.State != ReconnectState.CatchingUp
+                || slot.Token.Nonce != attemptNonce
+                || !ReferenceEquals(slot.NewConnection, newConnection))
+            {
+                return;
+            }
 
-            slot.State = ReconnectState.Reconnected;
-            _reservedSlots[originalConnectionId] = slot;
+            // Commit ownership before publishing callbacks. A subscriber may throw or
+            // re-enter the manager, but it must never observe a completed reservation.
+            _reservedSlots.Remove(originalConnectionId);
             OnCatchUpComplete?.Invoke(originalConnectionId);
             OnClientReconnected?.Invoke(originalConnectionId, newConnection);
-            _reservedSlots.Remove(originalConnectionId);
         }
 
-        private void FailCatchUp(int originalConnectionId, string reason)
+        private void FailCatchUp(int originalConnectionId, ulong attemptNonce, string reason)
         {
+            if (!_reservedSlots.TryGetValue(originalConnectionId, out ReconnectSlot slot)
+                || slot.State != ReconnectState.CatchingUp
+                || slot.Token.Nonce != attemptNonce)
+            {
+                return;
+            }
+
             _reservedSlots.Remove(originalConnectionId);
             OnCatchUpFailed?.Invoke(originalConnectionId, reason);
         }
@@ -197,8 +333,7 @@ namespace CycloneGames.Networking.Session
                 return ReconnectRejectReason.ProtocolMismatch;
             if (token.Nonce != slot.Token.Nonce)
                 return ReconnectRejectReason.InvalidToken;
-            if (slot.PlayerId != 0UL && newConnection != null && newConnection.PlayerId != 0UL &&
-                newConnection.PlayerId != slot.PlayerId)
+            if (slot.PlayerId != 0UL && newConnection.PlayerId != slot.PlayerId)
                 return ReconnectRejectReason.PlayerMismatch;
 
             return ReconnectRejectReason.None;
@@ -209,9 +344,16 @@ namespace CycloneGames.Networking.Session
             byte[] bytes = new byte[8];
             using (RandomNumberGenerator rng = RandomNumberGenerator.Create())
             {
-                rng.GetBytes(bytes);
+                ulong nonce;
+                do
+                {
+                    rng.GetBytes(bytes);
+                    nonce = BitConverter.ToUInt64(bytes, 0);
+                }
+                while (nonce == 0UL);
+
+                return nonce;
             }
-            return BitConverter.ToUInt64(bytes, 0);
         }
 
         private struct ReconnectSlot
@@ -233,6 +375,22 @@ namespace CycloneGames.Networking.Session
         }
     }
 
+    /// <summary>
+    /// Starts restoration of authoritative state for a reconnecting client.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="BeginCatchUp"/> is called on the owning
+    /// <see cref="ReconnectionManager"/> thread or scheduler. Implementations may complete
+    /// synchronously or asynchronously, but every callback must be serialized back onto
+    /// that same owner. Never invoke callbacks concurrently.
+    /// </para>
+    /// <para>
+    /// Invoke at most one terminal callback (<c>onComplete</c> or <c>onFailed</c>) and do
+    /// not report progress after a terminal callback. A synchronous exception is treated
+    /// as a failed attempt and the reservation is removed.
+    /// </para>
+    /// </remarks>
     public interface IStateCatchUp
     {
         void BeginCatchUp(INetConnection connection, int originalConnectionId,
@@ -293,6 +451,7 @@ namespace CycloneGames.Networking.Session
         Unauthenticated,
         InvalidToken,
         PlayerMismatch,
-        ProtocolMismatch
+        ProtocolMismatch,
+        WindowExpired
     }
 }

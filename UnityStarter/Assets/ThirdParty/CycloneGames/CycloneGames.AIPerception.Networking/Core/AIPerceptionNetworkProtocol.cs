@@ -21,6 +21,13 @@ namespace CycloneGames.AIPerception.Networking
         public const int DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE = NetworkConstants.DefaultMaxPayloadSize * 4;
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
 
+        // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
+        private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0xE24FD3DF9C74AB1CUL;
+        private const ulong DETECTION_EVENT_SCHEMA_V1 = 0x7FB1540691D2B0BFUL;
+        private const ulong DETECTION_SNAPSHOT_SCHEMA_V1 = 0xA9F15D28F3BC339DUL;
+        private const ulong AUTHORITY_TRANSFER_SCHEMA_V1 = 0xDD0A7C2010BB2D4CUL;
+        private const ulong FULL_STATE_REQUEST_SCHEMA_V1 = 0xF715DC535205849DUL;
+
         public static readonly NetworkModuleProtocol Module = new NetworkModuleProtocol(CreateProtocolManifest());
 
         public static readonly NetworkProtocolManifest DefaultManifest = Module.Manifest;
@@ -42,9 +49,9 @@ namespace CycloneGames.AIPerception.Networking
             return Module.IsSupportedProtocolVersion(protocolVersion);
         }
 
-        public static bool TryRegisterMessageCatalog(INetworkManager networkManager)
+        public static bool TryRegisterMessageCatalog(INetworkMessageEndpoint messageEndpoint)
         {
-            return Module.TryRegister(networkManager);
+            return Module.TryRegister(messageEndpoint);
         }
 
         public static void RegisterMessageCatalog(INetworkMessageCatalog catalog)
@@ -57,8 +64,7 @@ namespace CycloneGames.AIPerception.Networking
             var builder = new NetworkProtocolManifestBuilder(
                 MessageOwner,
                 MESSAGE_ID_BASE,
-                MESSAGE_ID_MAX,
-                NetworkMessageKind.Module)
+                MESSAGE_ID_MAX)
             {
                 ProtocolId = "CycloneGames.AIPerception.Networking",
                 CurrentVersion = PROTOCOL_VERSION,
@@ -68,41 +74,44 @@ namespace CycloneGames.AIPerception.Networking
             builder
                 .SetMetadata("module", "AIPerception")
                 .SetMetadata("snapshot", "Detection and stimulus memory payloads")
-                .AddMessage<AIPerceptionManifestHandshakeMessage>(
+                .AddMessage(
+                    "AIPerceptionManifestHandshakeMessage:v1",
                     MSG_MANIFEST_HANDSHAKE,
+                    MANIFEST_HANDSHAKE_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<AIPerceptionDetectionEventMessage>(
+                .AddMessage(
+                    "AIPerceptionDetectionEventMessage:v1",
                     MSG_DETECTION_EVENT,
+                    DETECTION_EVENT_SCHEMA_V1,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_EVENT_PAYLOAD_SIZE)
-                .AddMessage<AIPerceptionDetectionSnapshotMessage>(
+                .AddMessage(
+                    "AIPerceptionDetectionSnapshotMessage:v1",
                     MSG_DETECTION_SNAPSHOT,
+                    DETECTION_SNAPSHOT_SCHEMA_V1,
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
-                .AddMessage<AIPerceptionDetectionSnapshotMessage>(
+                .AddMessage(
+                    "AIPerceptionDetectionSnapshotMessage:v1",
                     MSG_MEMORY_SNAPSHOT,
+                    DETECTION_SNAPSHOT_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
-                .AddMessage<AIPerceptionAuthorityTransferMessage>(
+                .AddMessage(
+                    "AIPerceptionAuthorityTransferMessage:v1",
                     MSG_AUTHORITY_TRANSFER,
+                    AUTHORITY_TRANSFER_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
-                .AddMessage<AIPerceptionFullStateRequestMessage>(
+                .AddMessage(
+                    "AIPerceptionFullStateRequestMessage:v1",
                     MSG_FULL_STATE_REQUEST,
+                    FULL_STATE_REQUEST_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_CONTROL_PAYLOAD_SIZE);
 
             return builder.Build();
-        }
-
-        public static void RegisterMessage<T>(
-            INetworkMessageCatalog catalog,
-            ushort messageId,
-            NetworkChannel channel = NetworkChannel.Reliable,
-            int maxPayloadSize = NetworkConstants.DefaultMaxPayloadSize) where T : struct
-        {
-            Module.RegisterMessage<T>(catalog, messageId, channel, maxPayloadSize);
         }
     }
 }

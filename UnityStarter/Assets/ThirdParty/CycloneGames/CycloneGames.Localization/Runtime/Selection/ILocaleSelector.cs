@@ -2,7 +2,7 @@ namespace CycloneGames.Localization.Runtime
 {
     /// <summary>
     /// Determines a preferred locale from a specific source.
-    /// Implementations must be pure lookups: no side effects, no allocation on miss.
+    /// Implementations must be side-effect-free lookups. Selection runs only during initialization.
     /// <para>
     /// The <see cref="LocalizationService"/> evaluates selectors in priority order.
     /// The first selector that returns a non-null, available locale wins.

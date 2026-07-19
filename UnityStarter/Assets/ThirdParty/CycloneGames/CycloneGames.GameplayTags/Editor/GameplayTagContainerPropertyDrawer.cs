@@ -28,6 +28,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private const int k_MaxVisibleTags = 6;
 
       private static GUIContent s_TempContent = new();
+      private static readonly GUIContent s_ViewAllContent = new("View All", "Open the full tag list.");
 
       private static GUIStyle s_TagBoxStyle;
       private static readonly StringBuilder s_LabelBuilder = new(128);
@@ -253,7 +254,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          GUI.color = Color.white;
 
          Rect viewAllRect = new(rowRect.xMax - k_ViewAllButtonWidth, rowRect.y, k_ViewAllButtonWidth, rowRect.height);
-         if (GUI.Button(viewAllRect, new GUIContent("View All", "Open the full tag list."), EditorStyles.miniButton))
+         if (GUI.Button(viewAllRect, s_ViewAllContent, EditorStyles.miniButton))
          {
             ShowTagsPopup(popupAnchorRect, fullWidth, explicitTagsProperty);
          }

@@ -1,77 +1,68 @@
-using UnityEngine;
+using System.IO;
 using CycloneGames.Logger;
+using UnityEngine;
 
-public class LoggerPerformanceTest : MonoBehaviour
+/// <summary>
+/// Generates a finite mixed-severity load for manual observation. Use the package test
+/// benchmarks, not this MonoBehaviour, for reproducible performance evidence.
+/// </summary>
+public sealed class LoggerPerformanceTest : MonoBehaviour
 {
-    private int logCount = 0;
     private const int MaxLogCount = 10000;
-    private float startTime;
 
-    void Start()
+    private FileLogger _fileLogger;
+    private int _logCount;
+    private float _startTime;
+
+    private void Start()
     {
-#if UNITY_WEBGL && !UNITY_EDITOR
-        CLogger.ConfigureSingleThreadedProcessing();
-#else
-        CLogger.ConfigureThreadedProcessing();
+#if !UNITY_WEBGL || UNITY_EDITOR
+        string path = Path.Combine(Application.temporaryCachePath, "CycloneGames.Logger", "LoadExample.log");
+        _fileLogger = new FileLogger(path);
+        CLogger.Instance.AddLoggerUnique(_fileLogger);
 #endif
-
-#if !UNITY_EDITOR
-        CLogger.Instance.AddLoggerUnique(new ConsoleLogger());
-#endif
-        CLogger.Instance.AddLoggerUnique(new FileLogger(Application.dataPath + "/Logs/PerformanceTest.log"));
-        CLogger.Instance.AddLoggerUnique(new UnityLogger());
-
         CLogger.Instance.SetLogLevel(LogLevel.Trace);
-        CLogger.Instance.SetLogFilter(LogFilter.LogAll);
-
-        startTime = Time.time;
+        _startTime = Time.time;
     }
 
-    void OnDestroy()
+    private void Update()
     {
-        CLogger.Instance.Dispose();
-    }
-
-    void Update()
-    {
-        CLogger.Instance.Pump(8192);
-
-        if (logCount < MaxLogCount)
+        if (_logCount >= MaxLogCount)
         {
-            CLogger.LogTrace(sb => { sb.Append("Trace log message "); sb.Append(logCount); }, "PerformanceTest");
-            CLogger.LogDebug(sb => { sb.Append("Debug log message "); sb.Append(logCount); }, "PerformanceTest");
-            CLogger.LogInfo(sb => { sb.Append("Info log message "); sb.Append(logCount); }, "PerformanceTest");
-            CLogger.LogWarning(sb => { sb.Append("Warning log message "); sb.Append(logCount); }, "PerformanceTest");
-            CLogger.LogError(sb => { sb.Append("Error log message "); sb.Append(logCount); }, "PerformanceTest");
-            CLogger.LogFatal(sb => { sb.Append("Fatal log message "); sb.Append(logCount); }, "PerformanceTest");
-
-            logCount += 6;
+            Debug.Log($"Submitted {MaxLogCount} sample messages in {Time.time - _startTime:F2} seconds.");
+            enabled = false;
+            return;
         }
-        else
-        {
-            float elapsedTime = Time.time - startTime;
-            Debug.Log($"Logged {MaxLogCount} messages in {elapsedTime:F2} seconds.");
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            ShowPoolStatistics();
-#endif
-
-            CLogger.Instance.Dispose();
-            this.enabled = false;
-        }
+        int value = _logCount;
+        CLogger.LogTrace(value, AppendTrace, "LoadSample");
+        CLogger.LogDebug(value, AppendDebug, "LoadSample");
+        CLogger.LogInfo(value, AppendInfo, "LoadSample");
+        CLogger.LogWarning(value, AppendWarning, "LoadSample");
+        CLogger.LogError(value, AppendError, "LoadSample");
+        CLogger.LogFatal(value, AppendFatal, "LoadSample");
+        _logCount += 6;
     }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-    void ShowPoolStatistics()
+    private void OnDestroy()
     {
-        var sbStats = CycloneGames.Logger.Util.StringBuilderPool.GetStatistics();
-        var msgStats = LogMessagePool.GetStatistics();
+        if (_fileLogger == null)
+        {
+            return;
+        }
 
-        Debug.Log($@"
-=== Performance Test Results ===
-StringBuilder Pool: Peak={sbStats.PeakSize}, Misses={sbStats.TotalMisses}, Discards={sbStats.TotalDiscards}, HitRate={sbStats.HitRate:P1}
-LogMessage Pool: Peak={msgStats.PeakSize}, Misses={msgStats.TotalMisses}, Discards={msgStats.TotalDiscards}, HitRate={msgStats.HitRate:P1}
-");
+        if (CLogger.Instance.RemoveLogger(_fileLogger, 2000))
+        {
+            _fileLogger.Dispose();
+        }
+
+        _fileLogger = null;
     }
-#endif
+
+    private static void AppendTrace(int value, System.Text.StringBuilder builder) => builder.Append("Trace message ").Append(value);
+    private static void AppendDebug(int value, System.Text.StringBuilder builder) => builder.Append("Debug message ").Append(value);
+    private static void AppendInfo(int value, System.Text.StringBuilder builder) => builder.Append("Info message ").Append(value);
+    private static void AppendWarning(int value, System.Text.StringBuilder builder) => builder.Append("Warning message ").Append(value);
+    private static void AppendError(int value, System.Text.StringBuilder builder) => builder.Append("Error message ").Append(value);
+    private static void AppendFatal(int value, System.Text.StringBuilder builder) => builder.Append("Fatal message ").Append(value);
 }

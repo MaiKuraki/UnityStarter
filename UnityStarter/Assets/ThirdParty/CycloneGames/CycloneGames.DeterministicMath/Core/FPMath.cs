@@ -5,10 +5,8 @@ namespace CycloneGames.DeterministicMath
 {
     /// <summary>
     /// Deterministic trigonometric and mathematical functions using the CORDIC algorithm.
-    /// All operations produce bit-identical results across all platforms.
     /// <para>
-    /// CORDIC uses only shifts and additions - no floating-point, no table-size-dependent
-    /// precision variance. 32 iterations give ~2e-10 precision, matching Q32.32 resolution.
+    /// The CORDIC implementation uses integer shifts and additions rather than floating-point arithmetic.
     /// </para>
     /// </summary>
     public static class FPMath
@@ -17,17 +15,17 @@ namespace CycloneGames.DeterministicMath
 
         private static readonly long[] AtanTable =
         {
-            3373404705L, // atan(2^0)  approx 0.785398 rad (45 degrees)
-            1991439726L, // atan(2^-1) approx 0.463648 rad
-            1052154645L, // atan(2^-2) approx 0.244979 rad
-            534153212L,  // atan(2^-3) approx 0.124355 rad
-            268107690L,  // atan(2^-4)
-            134178680L,  // atan(2^-5)
-            67102367L,   // atan(2^-6)
-            33552339L,   // atan(2^-7)
-            16776807L,   // atan(2^-8)
-            8388600L,    // atan(2^-9)
-            4194304L,    // atan(2^-10)
+            3373259426L, // atan(2^0)  approx 0.785398 rad (45 degrees)
+            1991351318L, // atan(2^-1) approx 0.463648 rad
+            1052175346L, // atan(2^-2) approx 0.244979 rad
+            534100635L,  // atan(2^-3) approx 0.124355 rad
+            268086748L,  // atan(2^-4)
+            134174063L,  // atan(2^-5)
+            67103403L,   // atan(2^-6)
+            33553749L,   // atan(2^-7)
+            16777131L,   // atan(2^-8)
+            8388597L,    // atan(2^-9)
+            4194303L,    // atan(2^-10)
             2097152L,    // atan(2^-11)
             1048576L,    // atan(2^-12)
             524288L,     // atan(2^-13)
@@ -52,11 +50,11 @@ namespace CycloneGames.DeterministicMath
         };
 
         // CORDIC rotation starts pre-scaled by K to cancel the iterative gain.
-        private const long CordicK_Raw = 2608131496L;
+        private const long CORDIC_K_RAW = 2608131496L;
 
         // ---- Public Trig API ----
 
-        /// <summary>Sine. Precision ~2e-10.</summary>
+        /// <summary>Sine.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FPInt64 Sin(FPInt64 radians)
         {
@@ -64,7 +62,7 @@ namespace CycloneGames.DeterministicMath
             return sin;
         }
 
-        /// <summary>Cosine. Precision ~2e-10.</summary>
+        /// <summary>Cosine.</summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static FPInt64 Cos(FPInt64 radians)
         {
@@ -74,25 +72,35 @@ namespace CycloneGames.DeterministicMath
 
         /// <summary>
         /// Computes both Sin and Cos in a single CORDIC pass.
-        /// Call this instead of two separate calls for half the cost.
+        /// Use this when both outputs are required so the CORDIC pass is shared.
         /// </summary>
         public static void SinCos(FPInt64 radians, out FPInt64 sin, out FPInt64 cos)
         {
             CordicSinCos(radians, out cos, out sin);
         }
 
-        /// <summary>Tangent. Computed as Sin/Cos.</summary>
+        /// <summary>Tangent computed as Sin/Cos.</summary>
+        /// <exception cref="InvalidOperationException">
+        /// The angle is an exact asymptote or the result is outside the Q32.32 range.
+        /// </exception>
         public static FPInt64 Tan(FPInt64 radians)
         {
-            CordicSinCos(radians, out var cos, out var sin);
-            if (cos.RawValue == 0)
+            if (!TryTan(radians, out FPInt64 result))
             {
-                // asymptote - return large value with correct sign
-                return sin.RawValue >= 0
-                    ? FPInt64.FromRaw(long.MaxValue)
-                    : FPInt64.FromRaw(long.MinValue);
+                throw new InvalidOperationException("Tangent is undefined or outside the Q32.32 range.");
             }
-            return sin / cos;
+
+            return result;
+        }
+
+        /// <summary>
+        /// Attempts to compute tangent. Returns false at an exact asymptote or when the quotient is outside the
+        /// Q32.32 range.
+        /// </summary>
+        public static bool TryTan(FPInt64 radians, out FPInt64 result)
+        {
+            CordicSinCos(radians, out FPInt64 cos, out FPInt64 sin);
+            return FPInt64.TryDivide(sin, cos, out result);
         }
 
         /// <summary>Arc tangent of y/x with quadrant awareness. Returns radians in [-Pi, Pi].</summary>
@@ -104,8 +112,15 @@ namespace CycloneGames.DeterministicMath
             }
             if (x.RawValue == 0)
             {
-                if (y.RawValue > 0) return FPInt64.HalfPi;
-                if (y.RawValue < 0) return -FPInt64.HalfPi;
+                if (y.RawValue > 0)
+                {
+                    return FPInt64.HalfPi;
+                }
+
+                if (y.RawValue < 0)
+                {
+                    return -FPInt64.HalfPi;
+                }
             }
             // CORDIC vectoring mode
             var result = CordicVec(y, x);
@@ -115,27 +130,62 @@ namespace CycloneGames.DeterministicMath
         /// <summary>Arc tangent. Returns radians in [-HalfPi, HalfPi].</summary>
         public static FPInt64 Atan(FPInt64 v)
         {
-            return Atan2(v, FPInt64.OneValue);
+            return Atan2(v, FPInt64.One);
         }
 
-        /// <summary>Arc sine. Domain: [-1, 1].</summary>
+        /// <summary>Arc sine. Throws when the input is outside [-1, 1].</summary>
         public static FPInt64 Asin(FPInt64 x)
         {
-            if (x.RawValue > FPInt64.OneValue.RawValue || x.RawValue < -FPInt64.OneValue.RawValue)
+            if (!TryAsin(x, out FPInt64 result))
             {
-                x = FPInt64.Clamp(x, -FPInt64.OneValue, FPInt64.OneValue);
+                throw new ArgumentOutOfRangeException(nameof(x), "Arc sine requires a value in [-1, 1].");
             }
-            return Atan2(x, FPInt64.Sqrt(FPInt64.OneValue - x * x));
+
+            return result;
         }
 
-        /// <summary>Arc cosine. Domain: [-1, 1].</summary>
+        /// <summary>Attempts to compute arc sine for an input in [-1, 1].</summary>
+        public static bool TryAsin(FPInt64 x, out FPInt64 result)
+        {
+            if (x.RawValue > FPInt64.One.RawValue || x.RawValue < -FPInt64.One.RawValue)
+            {
+                result = default;
+                return false;
+            }
+
+            FPInt64 radicand = FPInt64.One - x * x;
+            if (!FPInt64.TrySqrt(radicand, out FPInt64 root))
+            {
+                result = default;
+                return false;
+            }
+
+            result = Atan2(x, root);
+            return true;
+        }
+
+        /// <summary>Arc cosine. Throws when the input is outside [-1, 1].</summary>
         public static FPInt64 Acos(FPInt64 x)
         {
-            if (x.RawValue > FPInt64.OneValue.RawValue || x.RawValue < -FPInt64.OneValue.RawValue)
+            if (!TryAcos(x, out FPInt64 result))
             {
-                x = FPInt64.Clamp(x, -FPInt64.OneValue, FPInt64.OneValue);
+                throw new ArgumentOutOfRangeException(nameof(x), "Arc cosine requires a value in [-1, 1].");
             }
-            return FPInt64.HalfPi - Atan2(x, FPInt64.Sqrt(FPInt64.OneValue - x * x));
+
+            return result;
+        }
+
+        /// <summary>Attempts to compute arc cosine for an input in [-1, 1].</summary>
+        public static bool TryAcos(FPInt64 x, out FPInt64 result)
+        {
+            if (!TryAsin(x, out FPInt64 asin))
+            {
+                result = default;
+                return false;
+            }
+
+            result = FPInt64.HalfPi - asin;
+            return true;
         }
 
         /// <summary>Wrap angle to [-Pi, Pi].</summary>
@@ -144,8 +194,15 @@ namespace CycloneGames.DeterministicMath
             // Use integer modulo on raw values for deterministic normalization
             long twoPiRaw = FPInt64.TwoPi.RawValue;
             long raw = radians.RawValue % twoPiRaw;
-            if (raw > FPInt64.Pi.RawValue) raw -= twoPiRaw;
-            else if (raw < -FPInt64.Pi.RawValue) raw += twoPiRaw;
+            if (raw > FPInt64.Pi.RawValue)
+            {
+                raw -= twoPiRaw;
+            }
+            else if (raw < -FPInt64.Pi.RawValue)
+            {
+                raw += twoPiRaw;
+            }
+
             return FPInt64.FromRaw(raw);
         }
 
@@ -154,7 +211,11 @@ namespace CycloneGames.DeterministicMath
         {
             long twoPiRaw = FPInt64.TwoPi.RawValue;
             long raw = radians.RawValue % twoPiRaw;
-            if (raw < 0) raw += twoPiRaw;
+            if (raw < 0)
+            {
+                raw += twoPiRaw;
+            }
+
             return FPInt64.FromRaw(raw);
         }
 
@@ -168,7 +229,7 @@ namespace CycloneGames.DeterministicMath
         private static void CordicRotation(long angleRaw, out long cosRaw, out long sinRaw)
         {
             // Start at (1/K, 0); 32 iterations converge to (cos, sin)
-            long x = CordicK_Raw;
+            long x = CORDIC_K_RAW;
             long y = 0;
             long z = angleRaw;
 
@@ -208,6 +269,16 @@ namespace CycloneGames.DeterministicMath
             long originalYRaw = yRaw;
             long z = 0;
 
+            // CORDIC vectoring increases magnitude by approximately 1.647. A common scale preserves the ratio while
+            // reserving enough signed headroom for all intermediate additions, including long.MinValue inputs.
+            const long COMPONENT_LIMIT = long.MaxValue >> 2;
+            while (xRaw > COMPONENT_LIMIT || xRaw < -COMPONENT_LIMIT ||
+                   yRaw > COMPONENT_LIMIT || yRaw < -COMPONENT_LIMIT)
+            {
+                xRaw >>= 1;
+                yRaw >>= 1;
+            }
+
             // Handle sign and quadrant mapping.
             // CORDIC vectoring mode converges for x > 0.
             // If x < 0, we rotate into the right half-plane and adjust at the end.
@@ -219,9 +290,13 @@ namespace CycloneGames.DeterministicMath
                 xRaw = -xRaw;
                 yRaw = -yRaw;
                 if (originalYRaw >= 0)
+                {
                     resultOffset = FPInt64.Pi;
+                }
                 else
+                {
                     resultOffset = -FPInt64.Pi;
+                }
             }
 
             // CORDIC iterations: drive y toward zero, accumulate angle in z
@@ -254,46 +329,55 @@ namespace CycloneGames.DeterministicMath
         /// <summary>
         /// Full Sin/Cos with quadrant mapping.
         /// </summary>
-        private static FPInt64 CordicSinCos(FPInt64 radians, out FPInt64 cos, out FPInt64 sin)
+        private static void CordicSinCos(FPInt64 radians, out FPInt64 cos, out FPInt64 sin)
         {
             // Normalize to [-Pi, Pi]
             long raw = radians.RawValue;
             long twoPiRaw = FPInt64.TwoPi.RawValue;
             raw = raw % twoPiRaw;
-            if (raw > FPInt64.Pi.RawValue) raw -= twoPiRaw;
-            else if (raw < -FPInt64.Pi.RawValue) raw += twoPiRaw;
+            if (raw > FPInt64.Pi.RawValue)
+            {
+                raw -= twoPiRaw;
+            }
+            else if (raw < -FPInt64.Pi.RawValue)
+            {
+                raw += twoPiRaw;
+            }
 
             if (raw == 0)
             {
-                cos = FPInt64.OneValue;
+                cos = FPInt64.One;
                 sin = FPInt64.Zero;
-                return FPInt64.Zero;
+                return;
             }
 
             if (raw == FPInt64.HalfPi.RawValue)
             {
                 cos = FPInt64.Zero;
-                sin = FPInt64.OneValue;
-                return FPInt64.Zero;
+                sin = FPInt64.One;
+                return;
             }
 
             if (raw == -FPInt64.HalfPi.RawValue)
             {
                 cos = FPInt64.Zero;
                 sin = FPInt64.MinusOne;
-                return FPInt64.Zero;
+                return;
             }
 
             if (raw == FPInt64.Pi.RawValue || raw == -FPInt64.Pi.RawValue)
             {
                 cos = FPInt64.MinusOne;
                 sin = FPInt64.Zero;
-                return FPInt64.Zero;
+                return;
             }
 
             // Map to [0, TwoPi) for quadrant detection
             bool neg = raw < 0;
-            if (neg) raw = -raw;
+            if (neg)
+            {
+                raw = -raw;
+            }
 
             long halfPi = FPInt64.HalfPi.RawValue;
             long pi = FPInt64.Pi.RawValue;
@@ -363,7 +447,6 @@ namespace CycloneGames.DeterministicMath
                 sin = FPInt64.FromRaw(sinVal);
             }
 
-            return FPInt64.Zero; // dummy return, caller uses out params
         }
     }
 }

@@ -1,129 +1,242 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
+using System.Threading;
 using MessagePack;
 
 namespace CycloneGames.DataTable.Unity.Integrations.MessagePack
 {
     /// <summary>
-    /// Builds DataTable<TRow> from MessagePack-serialized bytes and registers
-    /// it into DataTableRegistry.
-    /// <para>
-    /// This class does NOT load anything. You are responsible for loading
-    /// .bytes files via your own asset pipeline (YooAsset, Addressables, etc.).
-    /// Once you have the raw bytes, call Build to create and register the table.
-    /// </para>
-    /// <para>
-    /// Usage:
-    /// <code>
-    /// var bytes = await YourAssetPipeline.LoadAsync("monster.bytes");
-    /// MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
-    /// var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
-    /// </code>
-    /// </para>
+    /// Decodes bounded MessagePack row arrays into catalog candidates. Loading, catalog publication,
+    /// resolver selection, and the trust policy remain explicit caller responsibilities.
     /// </summary>
     public static class MessagePackConfigProvider
     {
         /// <summary>
-        /// Deserialize MessagePack bytes containing a TRow[] payload into a DataTable<TRow> and register it.
-        /// Returns the registered table instance.
+        /// Deserializes a MessagePack array payload without modifying the active registry.
+        /// Pass source-generated resolver options for IL2CPP/AOT and an explicit security policy.
         /// </summary>
-        /// <typeparam name="TRow">Row type implementing IDataRow, annotated for the project's MessagePack resolver.</typeparam>
-        /// <param name="bytes">Raw MessagePack bytes containing a serialized TRow[].</param>
-        /// <param name="options">Explicit MessagePack options. Pass the generated resolver options for IL2CPP/AOT builds.</param>
-        /// <returns>The registered DataTable<TRow> instance.</returns>
         public static DataTable<TRow> Build<TRow>(
-            byte[] bytes,
-            MessagePackSerializerOptions options = null)
+            ReadOnlyMemory<byte> bytes,
+            MessagePackSerializerOptions options,
+            MessagePackSecurity security,
+            DataTableLoadLimits limits,
+            CancellationToken cancellationToken = default)
             where TRow : IDataRow
         {
-            ValidateBytes<TRow>(bytes);
-
-            TRow[] rows;
-            try
-            {
-                rows = MessagePackSerializer.Deserialize<TRow[]>(
-                    bytes,
-                    ResolveOptions(options));
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException(
-                    $"Failed to deserialize MessagePack data for {typeof(TRow).Name}. " +
-                    "Ensure the payload is TRow[] and the MessagePack options include the generated resolver.", ex);
-            }
-
-            return RegisterRows(rows ?? Array.Empty<TRow>());
+            TRow[] rows = DeserializeArray<TRow>(
+                bytes,
+                options,
+                security,
+                limits,
+                cancellationToken);
+            return BuildRows(rows, limits);
         }
 
         /// <summary>
-        /// Deserialize legacy MessagePack bytes containing a List<TRow> payload.
-        /// Prefer Build for new generated data because TRow[] can be registered without an extra copy.
+        /// Deserializes rows that cannot or should not implement a framework interface. The key
+        /// selector runs once per row while the immutable lookup index is built.
         /// </summary>
-        public static DataTable<TRow> BuildList<TRow>(
-            byte[] bytes,
-            MessagePackSerializerOptions options = null)
-            where TRow : IDataRow
+        public static DataTable<TKey, TRow> Build<TKey, TRow>(
+            ReadOnlyMemory<byte> bytes,
+            Func<TRow, TKey> keySelector,
+            MessagePackSerializerOptions options,
+            MessagePackSecurity security,
+            DataTableLoadLimits limits,
+            IEqualityComparer<TKey> comparer = null,
+            CancellationToken cancellationToken = default)
         {
-            ValidateBytes<TRow>(bytes);
-
-            List<TRow> rows;
-            try
-            {
-                rows = MessagePackSerializer.Deserialize<List<TRow>>(
-                    bytes,
-                    ResolveOptions(options));
-            }
-            catch (Exception ex)
-            {
-                throw new InvalidOperationException(
-                    $"Failed to deserialize legacy MessagePack list data for {typeof(TRow).Name}. " +
-                    "Ensure the payload is List<TRow> and the MessagePack options include the generated resolver.", ex);
-            }
-
-            if (rows == null || rows.Count == 0)
-            {
-                return RegisterRows(Array.Empty<TRow>());
-            }
-
-            return RegisterRows(rows.ToArray());
+            ValidateKeySelector(keySelector);
+            TRow[] rows = DeserializeArray<TRow>(bytes, options, security, limits, cancellationToken);
+            return BuildRows(rows, keySelector, limits, comparer);
         }
 
         /// <summary>
-        /// Register already materialized rows. This is the lowest-allocation path after an external loader has decoded data.
+        /// Wraps an already materialized, caller-transferred row array as a table candidate.
+        /// The array must not be mutated after this call.
         /// </summary>
-        public static DataTable<TRow> RegisterRows<TRow>(TRow[] rows)
+        public static DataTable<TRow> BuildRows<TRow>(
+            TRow[] ownedRows,
+            DataTableLoadLimits limits)
             where TRow : IDataRow
         {
-            if (rows == null) throw new ArgumentNullException(nameof(rows));
-
-            if (rows.Length == 0)
+            ValidateOwnedRows(ownedRows, limits);
+            if (ownedRows.Length == 0)
             {
                 DataTableLogger.LogWarning(
-                    $"Deserialized DataTable<{typeof(TRow).Name}> is empty.");
+                    $"Decoded DataTable<{typeof(TRow).Name}> is empty.");
             }
 
-            var table = new DataTable<TRow>(rows);
-            DataTableRegistry.Register(table);
+            DataTable<TRow> table = DataTable<TRow>.FromOwnedArray(ownedRows, limits);
             DataTableLogger.LogInfo(
-                $"Registered DataTable<{typeof(TRow).Name}> ({table.Count} rows).");
-
+                $"Built DataTable<{typeof(TRow).Name}> candidate ({table.Count} rows).");
             return table;
         }
 
-        private static void ValidateBytes<TRow>(byte[] bytes)
-            where TRow : IDataRow
+        /// <summary>
+        /// Wraps arbitrary generated rows, including value-type rows, using an explicit stable key.
+        /// </summary>
+        public static DataTable<TKey, TRow> BuildRows<TKey, TRow>(
+            TRow[] ownedRows,
+            Func<TRow, TKey> keySelector,
+            DataTableLoadLimits limits,
+            IEqualityComparer<TKey> comparer = null)
         {
-            if (bytes == null || bytes.Length == 0)
+            ValidateKeySelector(keySelector);
+            ValidateOwnedRows(ownedRows, limits);
+
+            if (ownedRows.Length == 0)
+            {
+                DataTableLogger.LogWarning(
+                    $"Decoded DataTable<{typeof(TRow).Name}> is empty.");
+            }
+
+            DataTable<TKey, TRow> table = DataTable<TKey, TRow>.FromOwnedArray(
+                ownedRows,
+                keySelector,
+                limits,
+                comparer);
+            DataTableLogger.LogInfo(
+                $"Built DataTable<{typeof(TKey).Name}, {typeof(TRow).Name}> candidate ({table.Count} rows).");
+            return table;
+        }
+
+        private static void ValidateArguments<TRow>(
+            ReadOnlyMemory<byte> bytes,
+            MessagePackSerializerOptions options,
+            MessagePackSecurity security,
+            DataTableLoadLimits limits)
+        {
+            if (bytes.IsEmpty)
             {
                 throw new ArgumentException(
-                    $"Bytes for DataTable<{typeof(TRow).Name}> is null or empty.",
+                    $"Bytes for DataTable<{typeof(TRow).Name}> are empty.",
                     nameof(bytes));
+            }
+
+            if (options == null)
+            {
+                throw new ArgumentNullException(
+                    nameof(options),
+                    "MessagePack options must explicitly select the project's generated resolver.");
+            }
+
+            if (security == null)
+            {
+                throw new ArgumentNullException(nameof(security));
+            }
+
+            limits.EnsureValid(nameof(limits));
+            if (!security.HashCollisionResistant ||
+                security.MaximumObjectGraphDepth <= 0 ||
+                security.MaximumDecompressedSize <= 0 ||
+                security.MaximumDecompressedSize > limits.MaxBytesPerTable)
+            {
+                throw new ArgumentException(
+                    "MessagePack security must be based on MessagePackSecurity.UntrustedData, " +
+                    "use collision-resistant hashing, and bound decompressed bytes to the DataTable per-table limit.",
+                    nameof(security));
+            }
+
+            limits.ValidatePayloadLength(typeof(TRow).FullName, bytes.Length);
+            limits.ValidateTotalBytes(bytes.Length);
+        }
+
+        private static TRow[] DeserializeArray<TRow>(
+            ReadOnlyMemory<byte> bytes,
+            MessagePackSerializerOptions options,
+            MessagePackSecurity security,
+            DataTableLoadLimits limits,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            ValidateArguments<TRow>(bytes, options, security, limits);
+            ValidateArrayHeader(bytes, limits.MaxRowsPerTable);
+
+            try
+            {
+                TRow[] rows = MessagePackSerializer.Deserialize<TRow[]>(
+                                  bytes,
+                                  options.WithSecurity(security),
+                                  out int bytesRead,
+                                  cancellationToken) ??
+                              Array.Empty<TRow>();
+                if (bytesRead != bytes.Length)
+                {
+                    throw new InvalidDataException(
+                        $"MessagePack DataTable payload contains {bytes.Length - bytesRead} trailing bytes.");
+                }
+
+                return rows;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (InvalidDataException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                throw new InvalidDataException(
+                    $"Failed to deserialize MessagePack data for {typeof(TRow).Name}. " +
+                    "The payload must be a TRow[] and options must include an AOT-safe project resolver.",
+                    exception);
             }
         }
 
-        private static MessagePackSerializerOptions ResolveOptions(MessagePackSerializerOptions options)
+        private static void ValidateOwnedRows<TRow>(TRow[] ownedRows, DataTableLoadLimits limits)
         {
-            return options ?? MessagePackSerializer.DefaultOptions ?? MessagePackSerializerOptions.Standard;
+            if (ownedRows == null)
+            {
+                throw new ArgumentNullException(nameof(ownedRows));
+            }
+
+            limits.EnsureValid(nameof(limits));
+            limits.ValidateRowCount(typeof(TRow).FullName, ownedRows.Length);
+        }
+
+        private static void ValidateKeySelector<TKey, TRow>(Func<TRow, TKey> keySelector)
+        {
+            if (keySelector == null)
+            {
+                throw new ArgumentNullException(nameof(keySelector));
+            }
+        }
+
+        private static void ValidateArrayHeader(
+            ReadOnlyMemory<byte> bytes,
+            int maxRowCount)
+        {
+            try
+            {
+                var reader = new MessagePackReader(bytes);
+                int rowCount = reader.ReadArrayHeader();
+                if (rowCount > maxRowCount)
+                {
+                    throw new InvalidDataException(
+                        $"MessagePack payload declares {rowCount} rows; the configured limit is {maxRowCount}.");
+                }
+            }
+            catch (InvalidDataException)
+            {
+                throw;
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                throw new InvalidDataException(
+                    "MessagePack DataTable payload must start with a bounded array header.",
+                    exception);
+            }
+        }
+
+        private static bool IsRecoverableException(Exception exception)
+        {
+            return exception is not OutOfMemoryException &&
+                   exception is not StackOverflowException &&
+                   exception is not AccessViolationException &&
+                   exception is not ThreadAbortException;
         }
     }
 }

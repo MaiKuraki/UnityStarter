@@ -12,6 +12,11 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
     [CustomEditor(typeof(CameraManager), true)]
     public class CameraManagerEditor : UnityEditor.Editor
     {
+        private static readonly string[] paddedProperties = { "tags" };
+        private static readonly string[] actorTickProperties = { "PrimaryTickPhase", "StartWithTickEnabled" };
+        private const double RuntimeTelemetryPollInterval = 1d / 30d;
+        private const double DerivedEditorFallbackRepaintInterval = 0.1d;
+
         private static readonly Color editableHeaderColor = new Color(0.50f, 0.58f, 0.38f);
         private static readonly Color readOnlyHeaderColor = new Color(0.30f, 0.50f, 0.70f);
         private static readonly Color runtimeHeaderColor = new Color(0.36f, 0.36f, 0.58f);
@@ -25,6 +30,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
         private bool showPose = true;
         private bool showBlend = true;
         private bool showStack = true;
+        private bool wasPlaying;
+        private bool hasRuntimeTelemetryFingerprint;
+        private bool usesDerivedEditorFallbackRepaint;
+        private int runtimeTelemetryFingerprint;
+        private double nextRuntimeTelemetryPollTime;
+        private double nextDerivedEditorFallbackRepaintTime;
 
         private static readonly GUIContent editableConfigurationLabel = new GUIContent("Editable Configuration");
         private static readonly GUIContent readOnlyTelemetryLabel = new GUIContent("Read-Only Runtime Telemetry");
@@ -35,19 +46,145 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
         private void OnEnable()
         {
-            EditorApplication.update += RepaintWhilePlaying;
+            wasPlaying = Application.isPlaying;
+            hasRuntimeTelemetryFingerprint = false;
+            usesDerivedEditorFallbackRepaint = GetType() != typeof(CameraManagerEditor);
+            nextRuntimeTelemetryPollTime = 0d;
+            nextDerivedEditorFallbackRepaintTime = 0d;
+            EditorApplication.update += RepaintRuntimeTelemetryWhenChanged;
         }
 
         private void OnDisable()
         {
-            EditorApplication.update -= RepaintWhilePlaying;
+            EditorApplication.update -= RepaintRuntimeTelemetryWhenChanged;
         }
 
-        private void RepaintWhilePlaying()
+        private void RepaintRuntimeTelemetryWhenChanged()
         {
-            if (!Application.isPlaying) return;
-            if (target == null) return;
+            bool isPlaying = Application.isPlaying;
+            if (isPlaying != wasPlaying)
+            {
+                wasPlaying = isPlaying;
+                hasRuntimeTelemetryFingerprint = false;
+                nextRuntimeTelemetryPollTime = 0d;
+                nextDerivedEditorFallbackRepaintTime = 0d;
+                Repaint();
+            }
+
+            if (!isPlaying || target == null) return;
+
+            double currentTime = EditorApplication.timeSinceStartup;
+            if (currentTime < nextRuntimeTelemetryPollTime) return;
+            nextRuntimeTelemetryPollTime = currentTime + RuntimeTelemetryPollInterval;
+
+            CameraManager cameraManager = target as CameraManager;
+            if (cameraManager == null) return;
+
+            int fingerprint = CalculateRuntimeTelemetryFingerprint(cameraManager);
+            bool telemetryChanged = !hasRuntimeTelemetryFingerprint || fingerprint != runtimeTelemetryFingerprint;
+            bool derivedEditorFallbackDue = usesDerivedEditorFallbackRepaint
+                && currentTime >= nextDerivedEditorFallbackRepaintTime;
+
+            if (!telemetryChanged && !derivedEditorFallbackDue) return;
+
+            runtimeTelemetryFingerprint = fingerprint;
+            hasRuntimeTelemetryFingerprint = true;
+            if (derivedEditorFallbackDue)
+            {
+                nextDerivedEditorFallbackRepaintTime = currentTime + DerivedEditorFallbackRepaintInterval;
+            }
             Repaint();
+        }
+
+        private int CalculateRuntimeTelemetryFingerprint(CameraManager cameraManager)
+        {
+            unchecked
+            {
+                int hash = 17;
+                hash = CombineHash(hash, GetObjectInstanceId(cameraManager.ActiveVirtualCamera));
+
+                if (!showReadOnlyTelemetry || !showRuntimeTelemetry)
+                {
+                    return hash;
+                }
+
+                hash = CombineHash(hash, cameraManager.IsInitialized ? 1 : 0);
+                hash = CombineHash(hash, cameraManager.CameraStateDirty ? 1 : 0);
+                hash = CombineHash(hash, cameraManager.HasExplicitFovOverride ? 1 : 0);
+                hash = CombineHash(hash, cameraManager.GetLockedFOV().GetHashCode());
+                hash = CombineHash(hash, cameraManager.DefaultBlendDuration.GetHashCode());
+                hash = CombineHash(hash, cameraManager.HasPendingBlendDurationOverride ? 1 : 0);
+                hash = CombineHash(hash, cameraManager.PendingBlendDurationOverride.GetHashCode());
+
+                if (showPose)
+                {
+                    bool hasCurrentPose = cameraManager.HasCurrentPose;
+                    hash = CombineHash(hash, hasCurrentPose ? 1 : 0);
+                    if (hasCurrentPose)
+                    {
+                        CameraPose pose = cameraManager.CurrentPose;
+                        hash = CombineHash(hash, pose.Position.GetHashCode());
+                        hash = CombineHash(hash, pose.Rotation.GetHashCode());
+                        hash = CombineHash(hash, pose.Fov.GetHashCode());
+                    }
+                }
+
+                if (showBlend)
+                {
+                    CameraBlendState blendState = cameraManager.BlendState;
+                    hash = CombineHash(hash, blendState.IsActive ? 1 : 0);
+                    hash = CombineHash(hash, blendState.HasCustomCurve ? 1 : 0);
+                    hash = CombineHash(hash, (int)blendState.CurveType);
+                    hash = CombineHash(hash, blendState.Duration.GetHashCode());
+                    hash = CombineHash(hash, blendState.Elapsed.GetHashCode());
+                }
+
+                if (!showStack)
+                {
+                    return hash;
+                }
+
+                PlayerController ownerController = cameraManager.OwnerController;
+                hash = CombineHash(hash, GetObjectInstanceId(ownerController));
+                hash = CombineHash(hash, GetObjectInstanceId(cameraManager.PendingViewTargetTransform));
+
+                CameraContext context = ownerController != null ? ownerController.GetCameraContext() : null;
+                if (context == null)
+                {
+                    return hash;
+                }
+
+                hash = CombineHash(hash, GetObjectInstanceId(context.CurrentViewTarget));
+                hash = CombineHash(hash, GetCameraModeTypeHash(context.BaseCameraMode));
+                hash = CombineHash(hash, GetCameraModeTypeHash(context.GetPrimaryCameraMode()));
+
+                int modeCount = context.CameraModeCount;
+                hash = CombineHash(hash, modeCount);
+                for (int i = 0; i < modeCount; i++)
+                {
+                    hash = CombineHash(hash, GetCameraModeTypeHash(context.GetCameraModeAt(i)));
+                }
+
+                return hash;
+            }
+        }
+
+        private static int CombineHash(int hash, int value)
+        {
+            unchecked
+            {
+                return (hash * 31) + value;
+            }
+        }
+
+        private static int GetObjectInstanceId(Object value)
+        {
+            return value != null ? value.GetInstanceID() : 0;
+        }
+
+        private static int GetCameraModeTypeHash(CameraMode cameraMode)
+        {
+            return cameraMode != null ? cameraMode.GetType().GetHashCode() : 0;
         }
 
         public override void OnInspectorGUI()
@@ -120,7 +257,12 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             EditorGUILayout.BeginVertical(GUI.skin.box);
             InspectorUiUtility.DrawSectionHeader("Editable Fields", "These fields are writable and persist on the component.", new Color(1f, 0.76f, 0.38f, 1f));
-            InspectorUiUtility.DrawSerializedProperties(serializedObject, "tags");
+            InspectorUiUtility.DrawSerializedPropertiesExcluding(
+                serializedObject,
+                paddedProperties,
+                actorTickProperties);
+            EditorGUILayout.Space(4f);
+            InspectorUiUtility.DrawActorTickConfiguration(serializedObject, ActorTickPhase.LateUpdate);
             DrawEditableConfigurationExtensions(cameraManager);
             EditorGUILayout.EndVertical();
         }
@@ -170,6 +312,8 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             using (new EditorGUI.DisabledScope(true))
             {
                 EditorGUILayout.LabelField("Initialized", cameraManager.IsInitialized ? "Yes" : "No");
+                EditorGUILayout.LabelField("Tick Phase", cameraManager.TickPhase.ToString());
+                EditorGUILayout.LabelField("Tick Enabled", cameraManager.IsActorTickEnabled() ? "Yes" : "No");
                 EditorGUILayout.LabelField("State Dirty", cameraManager.CameraStateDirty ? "Yes" : "No");
                 EditorGUILayout.LabelField("FOV Override", cameraManager.HasExplicitFovOverride ? "Yes" : "No");
                 EditorGUILayout.LabelField("Locked FOV", cameraManager.GetLockedFOV().ToString("F2"));

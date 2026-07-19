@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// Usage patterns:
     /// 1. Simple: Use the DamageType ScriptableObject directly (Create → CycloneGames → GameplayFramework → DamageType).
     /// 2. GameplayTags: Implement IDamageType with a tag-based adapter carrying GameplayTagContainer.
-    /// 3. GameplayAbilities: Wrap GameplayEffectSpec context in an IDamageType adapter to bridge GAS damage.
+    /// 3. GameplayAbilities: Use an integration adapter that captures stable definition IDs and immutable damage metadata.
     /// 4. Custom: Implement IDamageType with any project-specific damage metadata.
     /// </summary>
     public interface IDamageType
@@ -51,8 +51,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// Lightweight damage event data. Zero-allocation value type carrying all damage context.
     /// Combines generic, point, and radial damage info in a single struct.
     ///
-    /// For GameplayAbilities integration, set EffectContext to the GameplayEffectSpec or
-    /// IGameplayEffectContext instance so downstream handlers can access GAS instigator data.
+    /// GameplayAbilities integrations must copy stable IDs or an immutable snapshot while a GAS
+    /// callback is valid. Do not store a GameplayEffectSpec or GameplayEffectContext reference here.
     /// </summary>
     public struct DamageEvent
     {
@@ -63,9 +63,9 @@ namespace CycloneGames.GameplayFramework.Runtime
         public IDamageType DamageType;
 
         /// <summary>
-        /// Optional opaque context for external systems (GameplayAbilities, custom damage systems).
-        /// When used with GAS, this should be the GameplayEffectSpec or IGameplayEffectContext
-        /// so receivers can access the source AbilitySystemComponent instigator.
+        /// Optional independently owned context for external systems and custom damage systems.
+        /// GAS adapters should supply stable IDs or immutable copied metadata, never a borrowed
+        /// GameplayEffectSpec or GameplayEffectContext reference.
         /// </summary>
         public object EffectContext;
 
@@ -96,6 +96,11 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>Creates a point damage event with hit information.</summary>
         public static DamageEvent MakePointDamage(Vector3 hitLocation, Vector3 hitNormal, Vector3 shotDirection, IDamageType damageType = null)
         {
+            if (!IsFinite(hitLocation) || !IsFinite(hitNormal) || !IsFinite(shotDirection))
+            {
+                throw new System.ArgumentException("Point damage vectors must contain finite values.");
+            }
+
             return new DamageEvent
             {
                 EventType = EDamageEventType.Point,
@@ -109,6 +114,15 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// <summary>Creates a radial damage event with explosion parameters.</summary>
         public static DamageEvent MakeRadialDamage(Vector3 origin, float innerRadius, float outerRadius, IDamageType damageType = null)
         {
+            if (!IsFinite(origin) ||
+                float.IsNaN(innerRadius) || float.IsInfinity(innerRadius) ||
+                float.IsNaN(outerRadius) || float.IsInfinity(outerRadius) ||
+                innerRadius < 0f || outerRadius < innerRadius)
+            {
+                throw new System.ArgumentException(
+                    "Radial damage requires a finite origin and 0 <= innerRadius <= outerRadius.");
+            }
+
             return new DamageEvent
             {
                 EventType = EDamageEventType.Radial,
@@ -118,12 +132,19 @@ namespace CycloneGames.GameplayFramework.Runtime
                 OuterRadius = outerRadius
             };
         }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
+                   !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
+                   !float.IsNaN(value.z) && !float.IsInfinity(value.z);
+        }
     }
 
     /// <summary>
     /// Default implementation of IDamageType as a ScriptableObject.
     /// For GameplayAbilities/GameplayTags integration, implement IDamageType in an adapter class
-    /// that carries GameplayTagContainer or GameplayEffectSpec context.
+    /// that carries immutable tag data, stable definition IDs, or another independently owned snapshot.
     /// </summary>
     [CreateAssetMenu(
         fileName = "NewDamageType",

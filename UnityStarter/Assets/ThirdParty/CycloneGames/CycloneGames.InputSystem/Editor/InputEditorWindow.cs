@@ -1,91 +1,71 @@
-using UnityEngine;
-using UnityEditor;
-using System.IO;
-using VYaml.Serialization;
-using VYaml.Emitter;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+using System;
 using System.Buffers;
-using CycloneGames.IO.Runtime;
+using System.IO;
+using System.Text;
+using CycloneGames.IO;
 using CycloneGames.InputSystem.Runtime;
+using UnityEditor;
+using UnityEngine;
+using VYaml.Emitter;
+using VYaml.Serialization;
 
 namespace CycloneGames.InputSystem.Editor
 {
     public partial class InputEditorWindow : EditorWindow
     {
+        private const int MaxConfigBytes = FileInputConfigurationStore.DefaultMaximumBytes;
+        private const string DefaultConfigFileName = "input_config.yaml";
+        private const string UserConfigFileName = "user_input_settings.yaml";
+        private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
+        private static readonly Color SourceColor = new Color(0.20f, 0.48f, 0.78f);
+        private static readonly Color OutputColor = new Color(0.10f, 0.58f, 0.68f);
+        private static readonly Color EditableColor = new Color(0.18f, 0.62f, 0.38f);
+        private static readonly Color WarningColor = new Color(0.82f, 0.51f, 0.12f);
+        private static readonly Color InvalidColor = new Color(0.76f, 0.25f, 0.22f);
+        private static readonly Color NeutralColor = new Color(0.38f, 0.42f, 0.47f);
+
+        private static readonly GUIContent RootJoinActionLabel =
+            new GUIContent("Root Join Action", "Optional join action shared by every player slot.");
+        private static readonly GUIContent PlayerSlotsLabel = new GUIContent("Player Slots");
+        private static readonly GUIContent AddPlayerLabel = new GUIContent("Add Player");
+        private static readonly GUIContent DefaultConfigFolderLabel = new GUIContent("Default Config Folder");
+        private static readonly GUIContent UserConfigSubdirectoryLabel = new GUIContent(
+            "User Config Subdirectory",
+            "A relative directory under Application.persistentDataPath.");
+        private static readonly GUIContent CodegenFolderLabel = new GUIContent("Codegen Output Folder");
+        private static readonly GUIContent NamespaceLabel = new GUIContent("Namespace");
+
         private InputConfigurationSO _configSO;
         private SerializedObject _serializedConfig;
         private Vector2 _scrollPosition;
-        private GUIStyle _overflowLabelStyle;
-        private GUIStyle _toolbarSectionLabelStyle;
-        private bool _isProSkin;
-        private Dictionary<string, Color> _sectionColors;
-        private Dictionary<string, GUIStyle> _sectionButtonStyles;
-        private Dictionary<string, Texture2D> _sectionButtonTextures;
-        private string _defaultConfigPath;
-        private string _userConfigPath;
+        private Vector2 _settingsScrollPosition;
+        private GUIStyle _headerTitleStyle;
+        private GUIStyle _headerSubtitleStyle;
+        private GUIStyle _sectionTitleStyle;
+        private GUIStyle _cardTitleStyle;
+        private GUIStyle _badgeStyle;
+        private GUIStyle _pathLabelStyle;
+        private GUIStyle _statusBodyStyle;
+        private bool _validationCacheDirty = true;
+        private string _validationMessage;
+        private MessageType _validationMessageType = MessageType.None;
+
         private string _statusMessage;
         private MessageType _statusMessageType = MessageType.Info;
+
+        private DefaultAsset _defaultConfigFolder;
+        private string _defaultConfigFolderPath;
+        private string _defaultConfigAssetPath;
+        private string _defaultConfigPath;
+        private string _defaultConfigFullPathDisplay;
+
+        private string _userConfigSubPath;
+        private string _userConfigPath;
+        private string _userConfigFullPathDisplay;
+
+        private DefaultAsset _codegenFolder;
         private string _codegenPath;
         private string _codegenNamespace;
-        private DefaultAsset _codegenFolder;
-        private string _defaultConfigFolderPath;
-        private DefaultAsset _defaultConfigFolder;
-        private string _previousDefaultConfigFolderPath;
-        private string _userConfigSubPath;
-        private string _userConfigFullPathDisplay;
-        private string _defaultConfigFullPathDisplay;
-        private string _lastValidationHash;
-        
-        private HashSet<string> _cachedContextNames = new HashSet<string>();
-        private HashSet<string> _cachedActionMapNames = new HashSet<string>();
-        private Dictionary<string, string> _contextNameToLocation = new Dictionary<string, string>();
-        private Dictionary<string, string> _actionMapNameToLocation = new Dictionary<string, string>();
-        private bool _validationCacheDirty = true;
-        private Dictionary<int, int> _previousContextCounts = new Dictionary<int, int>();
-
-        // Reusable collections for ValidateCurrentValues to avoid per-frame allocation in OnGUI
-        private readonly HashSet<string> _tempValidationContextNames = new HashSet<string>();
-        private readonly HashSet<string> _tempValidationActionMapNames = new HashSet<string>();
-        private readonly Dictionary<string, string> _tempValidationContextLocations = new Dictionary<string, string>();
-        private readonly Dictionary<string, string> _tempValidationActionMapLocations = new Dictionary<string, string>();
-
-        private const string DefaultConfigFileName = "input_config.yaml";
-        private const string UserConfigFileName = "user_input_settings.yaml";
-
-        private List<(string label, System.Action drawButtons, float estimatedWidth)> _toolbarSections;
-
-        private static readonly GUIContent _playerSlotsLabel = new GUIContent("Player Slots");
-        private static readonly GUIContent _addPlayerLabel = new GUIContent("+ Add Player");
-        private static readonly GUIContent _removeLabel = new GUIContent("Remove");
-        private static readonly GUIContent _joinActionLabel = new GUIContent("Join Action");
-        private static readonly GUIContent _longPressLabel = new GUIContent("Long Press (ms)");
-        private static readonly GUIContent _longPressThresholdLabel = new GUIContent("Long Press Threshold (0-1)");
-        private static readonly GUIContent _contextsLabel = new GUIContent("Contexts");
-        private static readonly GUIContent _configSettingsLabel = new GUIContent("Configuration Settings");
-        private static readonly GUIContent _userConfigSettingsLabel = new GUIContent("User Config Settings");
-        private static readonly GUIContent _codegenSettingsLabel = new GUIContent("Code Generation Settings");
-        private static readonly GUIContent _defaultConfigFolderLabel = new GUIContent("Default Config Folder");
-        private static readonly GUIContent _fullPathLabel = new GUIContent("Full Path", "Complete path where default config is located (updates in real-time). If file doesn't exist, please Load or Generate first.");
-        private static readonly GUIContent _subdirPathLabel = new GUIContent("Subdirectory Path", "Subdirectory path relative to PersistentData (e.g., \"/Config\" or \"Config\"). Leave empty to save directly in PersistentData.");
-        private static readonly GUIContent _codegenFolderLabel = new GUIContent("Codegen Output Folder");
-        private static readonly GUIContent _namespaceLabel = new GUIContent("Namespace");
-        private static readonly GUIContent _generateConstantsLabel = new GUIContent("Generate Constants");
-        private static readonly GUIContent _noConfigMessage = new GUIContent("No configuration loaded. Generate or load a configuration file using the toolbar.");
-        private static readonly GUIContent _noPlayersMessage = new GUIContent("No players configured. Click 'Add Player' to create the first player.");
-
-        private static readonly GUILayoutOption _width100 = GUILayout.Width(100);
-        private static readonly GUILayoutOption _width60 = GUILayout.Width(60);
-        private static readonly GUILayoutOption _width220 = GUILayout.Width(220);
-        private static readonly GUILayoutOption _width130 = GUILayout.Width(130);
-
-        private static readonly Color _proSkinSeparatorColor = new Color(0.3f, 0.3f, 0.3f, 0.8f);
-        private static readonly Color _lightSkinSeparatorColor = new Color(0.6f, 0.6f, 0.6f, 0.8f);
-        private static readonly Color _proSkinLabelColor = new Color(0.9f, 0.9f, 0.95f, 1f);
-        private static readonly Color _lightSkinLabelColor = new Color(0.15f, 0.15f, 0.2f, 1f);
-
-        private readonly GUIContent[] _playerLabels = new GUIContent[16]; // Support up to 16 players
 
         [MenuItem("Tools/CycloneGames/Input System Editor")]
         public static void ShowWindow()
@@ -95,1034 +75,1029 @@ namespace CycloneGames.InputSystem.Editor
 
         private void OnEnable()
         {
-            _userConfigSubPath = EditorPrefs.GetString("CycloneGames.InputSystem.UserConfigSubPath", "");
-            UpdateUserConfigPath();
-
-            _codegenPath = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenPath", "Assets");
-            _codegenNamespace = EditorPrefs.GetString("CycloneGames.InputSystem.CodegenNamespace", "YourGame.Input.Generated");
-            if (!string.IsNullOrEmpty(_codegenPath))
-            {
-                _codegenFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_codegenPath);
-            }
-
-            _defaultConfigFolderPath = EditorPrefs.GetString("CycloneGames.InputSystem.DefaultConfigFolder", "Assets/StreamingAssets");
-            _previousDefaultConfigFolderPath = EditorPrefs.GetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", "");
-            if (!string.IsNullOrEmpty(_defaultConfigFolderPath))
-            {
-                _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
-            }
-            if (_defaultConfigFolder == null)
-            {
-                _defaultConfigFolderPath = "Assets/StreamingAssets";
-                _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
-            }
-
-            UpdateDefaultConfigPath();
-
-            InitializeToolbarSections();
-
+            minSize = new Vector2(900f, 620f);
+            LoadEditorSettings();
+            Undo.undoRedoPerformed += HandleUndoRedo;
+            Undo.postprocessModifications += HandlePostprocessModifications;
+            AssemblyReloadEvents.beforeAssemblyReload += DestroyWorkingCopy;
             LoadUserConfig();
-            
-            if (_configSO != null && _serializedConfig != null)
-            {
-                _validationCacheDirty = true;
-                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
-                if (slotsProp != null && slotsProp.isArray)
-                {
-                    for (int i = 0; i < slotsProp.arraySize; i++)
-                    {
-                        var slotProp = slotsProp.GetArrayElementAtIndex(i);
-                        var contextsProp = slotProp.FindPropertyRelative("Contexts");
-                        if (contextsProp != null)
-                        {
-                            _previousContextCounts[i] = contextsProp.arraySize;
-                        }
-                    }
-                }
-            }
-        }
-
-        private void UpdateUserConfigPath()
-        {
-            // Build the full path: PersistentData + SubPath + FileName
-            string fullPath = UserConfigFileName;
-            if (!string.IsNullOrEmpty(_userConfigSubPath))
-            {
-                string normalizedSubPath = _userConfigSubPath.Trim('/', '\\');
-                if (!string.IsNullOrEmpty(normalizedSubPath))
-                {
-                    fullPath = normalizedSubPath + "/" + UserConfigFileName;
-                }
-            }
-
-            _userConfigPath = FilePathUtility.GetUnityWebRequestUri(fullPath, UnityPathSource.PersistentData);
-
-            string localPath = new System.Uri(_userConfigPath).LocalPath;
-            _userConfigFullPathDisplay = localPath.Replace('\\', '/');
-        }
-
-        private void UpdateDefaultConfigPath()
-        {
-            if (string.IsNullOrEmpty(_defaultConfigFolderPath) || _defaultConfigFolder == null)
-            {
-                _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(DefaultConfigFileName, UnityPathSource.StreamingAssets);
-                string localPath = new System.Uri(_defaultConfigPath).LocalPath;
-                _defaultConfigFullPathDisplay = localPath.Replace('\\', '/');
-                return;
-            }
-
-            string folderPath = _defaultConfigFolderPath.TrimEnd('/', '\\');
-            if (folderPath.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase) ||
-                folderPath.StartsWith("Assets\\", System.StringComparison.OrdinalIgnoreCase))
-            {
-                folderPath = folderPath.Substring(7);
-            }
-            else if (folderPath.Equals("Assets", System.StringComparison.OrdinalIgnoreCase))
-            {
-                folderPath = "";
-            }
-
-            string fullSystemPath = Path.Combine(Application.dataPath, folderPath, DefaultConfigFileName);
-            _defaultConfigPath = FilePathUtility.GetUnityWebRequestUri(fullSystemPath, UnityPathSource.AbsoluteOrFullUri);
-
-            _defaultConfigFullPathDisplay = fullSystemPath.Replace('\\', '/');
-        }
-
-        private void HandleConfigFolderChange(string oldFolderPath, string newFolderPath)
-        {
-            if (string.IsNullOrEmpty(oldFolderPath) || oldFolderPath.Equals(newFolderPath, System.StringComparison.OrdinalIgnoreCase))
-            {
-                EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
-                return;
-            }
-
-            string oldAssetPath = GetConfigAssetPath(oldFolderPath);
-            string newAssetPath = GetConfigAssetPath(newFolderPath);
-
-            if (!AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(oldAssetPath))
-            {
-                EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
-                return;
-            }
-
-            if (AssetDatabase.LoadAssetAtPath<UnityEngine.Object>(newAssetPath))
-            {
-                int choice = EditorUtility.DisplayDialogComplex(
-                    "Default Config File Exists",
-                    $"A default config file already exists in the new location:\n{newAssetPath}\n\n" +
-                    $"The old file is at:\n{oldAssetPath}\n\n" +
-                    "How would you like to proceed?",
-                    "Move (Replace)", "Delete Old", "Cancel");
-
-                if (choice == 0)
-                {
-                    if (!AssetDatabase.DeleteAsset(newAssetPath))
-                    {
-                        EditorUtility.DisplayDialog("Error", "Failed to delete existing file.", "OK");
-                        return;
-                    }
-                    AssetDatabase.Refresh();
-
-                    string moveError = AssetDatabase.MoveAsset(oldAssetPath, newAssetPath);
-                    if (!string.IsNullOrEmpty(moveError))
-                    {
-                        EditorUtility.DisplayDialog("Error", $"Failed to move file: {moveError}", "OK");
-                        return;
-                    }
-                    AssetDatabase.Refresh();
-                    SetStatus($"Moved default config from {oldFolderPath} to {newFolderPath}", MessageType.Info);
-                }
-                else if (choice == 1)
-                {
-                    if (!AssetDatabase.DeleteAsset(oldAssetPath))
-                    {
-                        EditorUtility.DisplayDialog("Error", "Failed to delete old file.", "OK");
-                        return;
-                    }
-                    AssetDatabase.Refresh();
-                    SetStatus($"Deleted old default config from {oldFolderPath}", MessageType.Info);
-                }
-                else
-                {
-                    _defaultConfigFolderPath = oldFolderPath;
-                    _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(oldFolderPath);
-                    UpdateDefaultConfigPath();
-                    return;
-                }
-            }
-            else
-            {
-                int choice = EditorUtility.DisplayDialogComplex(
-                    "Move Default Config File?",
-                    $"The default config file will be moved from:\n{oldAssetPath}\n\n" +
-                    $"To:\n{newAssetPath}\n\n" +
-                    "How would you like to proceed?",
-                    "Move", "Delete Old", "Cancel");
-
-                if (choice == 0)
-                {
-                    string moveError = AssetDatabase.MoveAsset(oldAssetPath, newAssetPath);
-                    if (!string.IsNullOrEmpty(moveError))
-                    {
-                        EditorUtility.DisplayDialog("Error", $"Failed to move file: {moveError}", "OK");
-                        return;
-                    }
-                    AssetDatabase.Refresh();
-                    SetStatus($"Moved default config from {oldFolderPath} to {newFolderPath}", MessageType.Info);
-                }
-                else if (choice == 1)
-                {
-                    if (!AssetDatabase.DeleteAsset(oldAssetPath))
-                    {
-                        EditorUtility.DisplayDialog("Error", "Failed to delete old file.", "OK");
-                        return;
-                    }
-                    AssetDatabase.Refresh();
-                    SetStatus($"Deleted old default config from {oldFolderPath}", MessageType.Info);
-                }
-                else
-                {
-                    _defaultConfigFolderPath = oldFolderPath;
-                    _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(oldFolderPath);
-                    UpdateDefaultConfigPath();
-                    return;
-                }
-            }
-
-            EditorPrefs.SetString("CycloneGames.InputSystem.PreviousDefaultConfigFolder", newFolderPath);
-        }
-
-        private string GetConfigAssetPath(string folderPath)
-        {
-            if (string.IsNullOrEmpty(folderPath))
-            {
-                return Path.Combine("Assets", "StreamingAssets", DefaultConfigFileName).Replace('\\', '/');
-            }
-
-            string cleanPath = folderPath.TrimEnd('/', '\\');
-            if (!cleanPath.StartsWith("Assets/", System.StringComparison.OrdinalIgnoreCase) &&
-                !cleanPath.StartsWith("Assets\\", System.StringComparison.OrdinalIgnoreCase) &&
-                !cleanPath.Equals("Assets", System.StringComparison.OrdinalIgnoreCase))
-            {
-                cleanPath = "Assets/" + cleanPath;
-            }
-
-            return Path.Combine(cleanPath, DefaultConfigFileName).Replace('\\', '/');
-        }
-
-        private byte[] SerializeConfigWithoutNullJoinAction(InputConfiguration config)
-        {
-            var bufferWriter = new ArrayBufferWriter<byte>();
-            var emitter = new Utf8YamlEmitter(bufferWriter);
-
-            if (config.JoinAction == null)
-            {
-                var configWithoutJoinAction = new InputConfiguration
-                {
-                    PlayerSlots = config.PlayerSlots
-                };
-                YamlSerializer.Serialize(ref emitter, configWithoutJoinAction);
-            }
-            else
-            {
-                YamlSerializer.Serialize(ref emitter, config);
-            }
-
-            return bufferWriter.WrittenSpan.ToArray();
         }
 
         private void OnDisable()
         {
-            if (_sectionButtonTextures != null)
-            {
-                foreach (var texture in _sectionButtonTextures.Values)
-                {
-                    if (texture != null) DestroyImmediate(texture);
-                }
-                _sectionButtonTextures.Clear();
-            }
+            Undo.undoRedoPerformed -= HandleUndoRedo;
+            Undo.postprocessModifications -= HandlePostprocessModifications;
+            AssemblyReloadEvents.beforeAssemblyReload -= DestroyWorkingCopy;
+            DestroyWorkingCopy();
         }
 
-        private void InitializeToolbarSections()
+        private void LoadEditorSettings()
         {
-            _toolbarSections = new List<(string label, System.Action drawButtons, float estimatedWidth)>
+            InputEditorSettings settings = InputEditorSettings.instance;
+            _userConfigSubPath = settings.UserConfigSubdirectory.Trim();
+            _codegenPath = settings.CodegenFolder;
+            _codegenNamespace = settings.GeneratedNamespace;
+            _defaultConfigFolderPath = settings.DefaultConfigFolder;
+
+            _codegenFolder = LoadValidFolder(_codegenPath, "Assets");
+            _codegenPath = AssetDatabase.GetAssetPath(_codegenFolder);
+            _defaultConfigFolder = LoadValidFolder(_defaultConfigFolderPath, "Assets/StreamingAssets");
+            _defaultConfigFolderPath = AssetDatabase.GetAssetPath(_defaultConfigFolder);
+
+            UpdateUserConfigPath();
+            UpdateDefaultConfigPath();
+        }
+
+        private static DefaultAsset LoadValidFolder(string requestedPath, string fallbackPath)
+        {
+            if (!string.IsNullOrWhiteSpace(requestedPath) && AssetDatabase.IsValidFolder(requestedPath))
             {
-                ("Load", () =>
+                return AssetDatabase.LoadAssetAtPath<DefaultAsset>(requestedPath);
+            }
+
+            string resolvedFallback = AssetDatabase.IsValidFolder(fallbackPath) ? fallbackPath : "Assets";
+            return AssetDatabase.LoadAssetAtPath<DefaultAsset>(resolvedFallback);
+        }
+
+        private bool UpdateUserConfigPath()
+        {
+            if (!InputEditorFileUtility.TryResolveUserConfigPath(
+                    Application.persistentDataPath,
+                    _userConfigSubPath,
+                    UserConfigFileName,
+                    out _userConfigPath,
+                    out string error))
+            {
+                _userConfigPath = null;
+                _userConfigFullPathDisplay = error;
+                SetStatus(error, MessageType.Error);
+                return false;
+            }
+
+            _userConfigFullPathDisplay = _userConfigPath.Replace('\\', '/');
+            return true;
+        }
+
+        private bool UpdateDefaultConfigPath()
+        {
+            if (!InputEditorFileUtility.TryResolveAssetFile(
+                    _defaultConfigFolder,
+                    DefaultConfigFileName,
+                    out _defaultConfigAssetPath,
+                    out _defaultConfigPath,
+                    out string error))
+            {
+                _defaultConfigAssetPath = null;
+                _defaultConfigPath = null;
+                _defaultConfigFullPathDisplay = error;
+                SetStatus(error, MessageType.Error);
+                return false;
+            }
+
+            _defaultConfigFullPathDisplay = _defaultConfigPath.Replace('\\', '/');
+            return true;
+        }
+
+        private void HandleUndoRedo()
+        {
+            _serializedConfig?.UpdateIfRequiredOrScript();
+            MarkValidationDirty();
+        }
+
+        private UndoPropertyModification[] HandlePostprocessModifications(
+            UndoPropertyModification[] modifications)
+        {
+            if (_configSO == null || modifications == null) return modifications;
+
+            for (int index = 0; index < modifications.Length; index++)
+            {
+                PropertyModification current = modifications[index].currentValue;
+                PropertyModification previous = modifications[index].previousValue;
+                if ((current != null && current.target == _configSO) ||
+                    (previous != null && previous.target == _configSO))
                 {
-                    if (GUILayout.Button("User Config", _sectionButtonStyles["Load"])) LoadUserConfig();
-                    if (GUILayout.Button("Default Config", _sectionButtonStyles["Load"])) LoadDefaultConfig();
-                }, 250f),
-                ("Generate", () =>
-                {
-                    if (GUILayout.Button("Default Config", _sectionButtonStyles["Generate"])) GenerateDefaultConfigFile();
-                    GUI.enabled = _configSO != null;
-                    if (GUILayout.Button("Override Default", _sectionButtonStyles["Generate"])) OverrideDefaultConfig();
-                    GUI.enabled = true;
-                }, 280f),
-                ("Save", () =>
-                {
-                    GUI.enabled = _configSO != null;
-                    if (GUILayout.Button("User Config", _sectionButtonStyles["Save"])) SaveChangesToUserConfig();
-                    if (GUILayout.Button("User + Generate", _sectionButtonStyles["Save"]))
-                    {
-                        SaveChangesToUserConfig(true);
-                    }
-                    GUI.enabled = true;
-                }, 270f),
-                ("Reset", () =>
-                {
-                    if (GUILayout.Button("User to Default", _sectionButtonStyles["Reset"]))
-                    {
-                        if (EditorUtility.DisplayDialog("Reset User Configuration?", "This will overwrite your user settings with the default configuration. This cannot be undone.", "Reset", "Cancel"))
-                        {
-                            ResetToDefault();
-                        }
-                    }
-                }, 200f)
-            };
+                    MarkValidationDirty();
+                    break;
+                }
+            }
+            return modifications;
         }
 
         private void OnGUI()
         {
-            bool isProSkin = EditorGUIUtility.isProSkin;
-            bool themeChanged = _isProSkin != isProSkin;
-
-            if (_sectionColors == null || _sectionColors.Count == 0 || themeChanged)
-            {
-                InitializeSectionColors(isProSkin);
-            }
-
-            if (_overflowLabelStyle == null)
-            {
-                _overflowLabelStyle = new GUIStyle(EditorStyles.label)
-                {
-                    clipping = TextClipping.Overflow,
-                    wordWrap = false,
-                    alignment = TextAnchor.MiddleLeft
-                };
-            }
-            if (_toolbarSectionLabelStyle == null)
-            {
-                _toolbarSectionLabelStyle = new GUIStyle(EditorStyles.label)
-                {
-                    fontStyle = FontStyle.Bold,
-                    alignment = TextAnchor.MiddleCenter,
-                    padding = new RectOffset(0, 0, 0, 0),
-                    margin = new RectOffset(0, 0, 0, 0),
-                    border = new RectOffset(0, 0, 0, 0)
-                };
-                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? _proSkinLabelColor : _lightSkinLabelColor;
-            }
-
-            if (themeChanged)
-            {
-                _toolbarSectionLabelStyle.normal.textColor = isProSkin ? _proSkinLabelColor : _lightSkinLabelColor;
-            }
-
-            UpdateSectionButtonStyles(isProSkin);
-
+            EnsureStyles();
+            DrawHeader();
             DrawToolbar();
             DrawStatusBar();
-            DrawCodegenSettings();
 
-            _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
+            EditorGUILayout.BeginHorizontal();
+            DrawSettings();
+            DrawWorkspace();
+            EditorGUILayout.EndHorizontal();
 
-            if (_serializedConfig != null && _configSO != null)
+            if (_validationCacheDirty && Event.current.type == EventType.Repaint)
             {
-                _serializedConfig.Update();
-
-                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
-                EditorGUILayout.BeginHorizontal();
-                EditorGUILayout.LabelField(_playerSlotsLabel, EditorStyles.boldLabel);
-                if (GUILayout.Button(_addPlayerLabel, _width100))
-                {
-                    AddNewPlayer(slotsProp);
-                }
-                EditorGUILayout.EndHorizontal();
-
-                if (slotsProp.arraySize > 0)
-                {
-                    for (int i = 0; i < slotsProp.arraySize; i++)
-                    {
-                        var slotProp = slotsProp.GetArrayElementAtIndex(i);
-                        EditorGUILayout.BeginHorizontal();
-                        // Use cached player label
-                        if (i < _playerLabels.Length)
-                        {
-                            if (_playerLabels[i] == null)
-                                _playerLabels[i] = new GUIContent($"Player {i}");
-                            EditorGUILayout.LabelField(_playerLabels[i], EditorStyles.boldLabel);
-                        }
-                        else
-                        {
-                            EditorGUILayout.LabelField($"Player {i}", EditorStyles.boldLabel);
-                        }
-                        if (GUILayout.Button(_removeLabel, _width60))
-                        {
-                            slotsProp.DeleteArrayElementAtIndex(i);
-                            break;
-                        }
-                        EditorGUILayout.EndHorizontal();
-
-                        EditorGUI.indentLevel++;
-                        EditorGUILayout.PropertyField(slotProp.FindPropertyRelative("PlayerId"));
-                        EditorGUILayout.LabelField(_joinActionLabel, EditorStyles.boldLabel);
-                        EditorGUI.indentLevel++;
-                        var joinTypeProp = slotProp.FindPropertyRelative("JoinAction.Type");
-                        var joinActionProp = slotProp.FindPropertyRelative("JoinAction.ActionName");
-                        var joinBindingsProp = slotProp.FindPropertyRelative("JoinAction.DeviceBindings");
-                        var joinLongPressProp = slotProp.FindPropertyRelative("JoinAction.LongPressMs");
-
-                        EditorGUILayout.PropertyField(joinTypeProp);
-                        
-                        EditorGUI.BeginChangeCheck();
-                        EditorGUILayout.PropertyField(joinActionProp);
-                        if (EditorGUI.EndChangeCheck())
-                        {
-                            _validationCacheDirty = true;
-                        }
-                        
-                        EditorGUILayout.PropertyField(joinBindingsProp, true);
-
-                        var joinType = (CycloneGames.InputSystem.Runtime.ActionValueType)joinTypeProp.enumValueIndex;
-                        if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Button)
-                        {
-                            EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField(_longPressLabel, _overflowLabelStyle, _width220);
-                            EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
-                            EditorGUILayout.EndHorizontal();
-                        }
-                        else if (joinType == CycloneGames.InputSystem.Runtime.ActionValueType.Float)
-                        {
-                            var joinThresholdProp = slotProp.FindPropertyRelative("JoinAction.LongPressValueThreshold");
-                            EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField(_longPressLabel, _overflowLabelStyle, _width220);
-                            EditorGUILayout.PropertyField(joinLongPressProp, GUIContent.none, true);
-                            EditorGUILayout.EndHorizontal();
-                            EditorGUILayout.BeginHorizontal();
-                            EditorGUILayout.LabelField(_longPressThresholdLabel, _overflowLabelStyle, _width220);
-                            EditorGUILayout.PropertyField(joinThresholdProp, GUIContent.none, true);
-                            EditorGUILayout.EndHorizontal();
-                        }
-                        EditorGUI.indentLevel--;
-
-                        var contextsProp = slotProp.FindPropertyRelative("Contexts");
-                        
-                        int previousCount = _previousContextCounts.TryGetValue(i, out var count) ? count : contextsProp.arraySize;
-                        
-                        EditorGUI.BeginChangeCheck();
-                        EditorGUILayout.PropertyField(contextsProp, _contextsLabel, true);
-                        bool contextsChanged = EditorGUI.EndChangeCheck();
-                        
-                        int currentCount = contextsProp.arraySize;
-                        
-                        if (currentCount > previousCount)
-                        {
-                            _serializedConfig.ApplyModifiedProperties();
-                            _serializedConfig.Update();
-                            
-                            RebuildValidationCache();
-                            
-                            contextsProp = slotProp.FindPropertyRelative("Contexts");
-                            
-                            bool nameChanged = false;
-                            for (int newIdx = previousCount; newIdx < currentCount; newIdx++)
-                            {
-                                var newCtxProp = contextsProp.GetArrayElementAtIndex(newIdx);
-                                var newCtxNameProp = newCtxProp.FindPropertyRelative("Name");
-                                var newCtxActionMapProp = newCtxProp.FindPropertyRelative("ActionMap");
-                                
-                                string currentName = newCtxNameProp != null ? newCtxNameProp.stringValue : "";
-                                string currentActionMap = newCtxActionMapProp != null ? newCtxActionMapProp.stringValue : "";
-                                
-                                if (newCtxNameProp != null)
-                                {
-                                    if (string.IsNullOrEmpty(currentName) || _cachedContextNames.Contains(currentName))
-                                    {
-                                        newCtxNameProp.stringValue = GenerateUniqueContextName(i, string.IsNullOrEmpty(currentName) ? null : currentName);
-                                        nameChanged = true;
-                                    }
-                                }
-                                
-                                if (newCtxActionMapProp != null)
-                                {
-                                    if (string.IsNullOrEmpty(currentActionMap) || _cachedActionMapNames.Contains(currentActionMap) || currentActionMap == "GlobalActions")
-                                    {
-                                        newCtxActionMapProp.stringValue = GenerateUniqueActionMapName(i, string.IsNullOrEmpty(currentActionMap) ? null : currentActionMap);
-                                        nameChanged = true;
-                                    }
-                                }
-                            }
-                            
-                            if (nameChanged)
-                            {
-                                _serializedConfig.ApplyModifiedProperties();
-                                _serializedConfig.Update();
-                                RebuildValidationCache();
-                            }
-                            
-                            _previousContextCounts[i] = currentCount;
-                            _validationCacheDirty = false;
-                        }
-                        else if (contextsChanged)
-                        {
-                            _validationCacheDirty = true;
-                            _previousContextCounts[i] = currentCount;
-                        }
-                        else
-                        {
-                            _previousContextCounts[i] = currentCount;
-                        }
-                        
-                        EditorGUI.indentLevel--;
-
-                        if (i < slotsProp.arraySize - 1)
-                        {
-                            EditorGUILayout.Space();
-                            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
-                            EditorGUILayout.Space();
-                        }
-                    }
-                }
-                else
-                {
-                    EditorGUILayout.HelpBox("No players configured. Click 'Add Player' to create the first player.", MessageType.Info);
-                }
-
-                _serializedConfig.ApplyModifiedProperties();
-                
-                if (_validationCacheDirty)
-                {
-                    RebuildValidationCache();
-                    _validationCacheDirty = false;
-                }
-                
-                ValidateCurrentValues();
+                RebuildValidationCache();
+                _validationCacheDirty = false;
             }
-            else
+        }
+
+        private void EnsureStyles()
+        {
+            if (_headerTitleStyle != null) return;
+
+            _headerTitleStyle = new GUIStyle(EditorStyles.boldLabel)
             {
-                EditorGUILayout.HelpBox("No configuration loaded. Generate or load a configuration file using the toolbar.", MessageType.Warning);
-            }
+                fontSize = 18,
+                normal = { textColor = Color.white }
+            };
+            _headerSubtitleStyle = new GUIStyle(EditorStyles.miniLabel)
+            {
+                fontSize = 11,
+                normal = { textColor = new Color(0.82f, 0.88f, 0.96f) }
+            };
+            _sectionTitleStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 12,
+                margin = new RectOffset(0, 0, 8, 4),
+                alignment = TextAnchor.MiddleLeft,
+                normal = { textColor = Color.white }
+            };
+            _cardTitleStyle = new GUIStyle(EditorStyles.boldLabel)
+            {
+                fontSize = 13
+            };
+            _badgeStyle = new GUIStyle(EditorStyles.miniBoldLabel)
+            {
+                alignment = TextAnchor.MiddleCenter,
+                clipping = TextClipping.Clip,
+                normal = { textColor = Color.white }
+            };
+            _pathLabelStyle = new GUIStyle(EditorStyles.miniBoldLabel)
+            {
+                margin = new RectOffset(2, 0, 4, 1)
+            };
+            _statusBodyStyle = new GUIStyle(EditorStyles.wordWrappedMiniLabel)
+            {
+                alignment = TextAnchor.MiddleLeft
+            };
+        }
 
-            EditorGUILayout.EndScrollView();
+        private void DrawHeader()
+        {
+            Rect header = GUILayoutUtility.GetRect(0f, 62f, GUILayout.ExpandWidth(true));
+            EditorGUI.DrawRect(header, EditorGUIUtility.isProSkin
+                ? new Color(0.10f, 0.18f, 0.29f)
+                : new Color(0.16f, 0.34f, 0.55f));
+            GUI.Label(new Rect(header.x + 16f, header.y + 9f, header.width - 32f, 24f),
+                "Input System Editor", _headerTitleStyle);
+            GUI.Label(new Rect(header.x + 17f, header.y + 34f, header.width - 34f, 18f),
+                "Author validated runtime YAML and deterministic action constants.", _headerSubtitleStyle);
         }
 
         private void DrawToolbar()
         {
-            if (_toolbarSections == null)
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar, GUILayout.Height(22f));
+            DrawToolbarGroupLabel("SOURCE", SourceColor);
+            if (GUILayout.Button("Load User", EditorStyles.toolbarButton, GUILayout.Height(20f)))
             {
-                InitializeToolbarSections();
+                LoadUserConfig();
             }
-
-            float availableWidth = position.width;
-
-            float currentRowWidth = 0f;
-            bool isFirstInRow = true;
-
-            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-
-            foreach (var section in _toolbarSections)
+            if (GUILayout.Button("Load Default", EditorStyles.toolbarButton, GUILayout.Height(20f)))
             {
-                if (!isFirstInRow && currentRowWidth + section.estimatedWidth > availableWidth - 30f)
+                LoadDefaultConfig();
+            }
+            if (GUILayout.Button("Generate Default", EditorStyles.toolbarButton, GUILayout.Height(20f)))
+            {
+                GenerateDefaultConfigFile();
+            }
+            GUILayout.FlexibleSpace();
+            EditorGUILayout.EndHorizontal();
+
+            EditorGUILayout.BeginHorizontal(EditorStyles.toolbar, GUILayout.Height(22f));
+            DrawToolbarGroupLabel("OUTPUT", OutputColor);
+            using (new EditorGUI.DisabledScope(_configSO == null))
+            {
+                if (GUILayout.Button("Save User Config", EditorStyles.toolbarButton, GUILayout.Height(20f)))
                 {
-                    EditorGUILayout.EndHorizontal();
-                    EditorGUILayout.BeginHorizontal(EditorStyles.toolbar);
-                    currentRowWidth = 0f;
-                    isFirstInRow = true;
+                    SaveChangesToUserConfig();
                 }
-
-                DrawToolbarSection(section.label, section.drawButtons, _sectionColors[section.label]);
-
-                currentRowWidth += section.estimatedWidth;
-                isFirstInRow = false;
+                if (GUILayout.Button("Save User + Generate Code", EditorStyles.toolbarButton, GUILayout.Height(20f)))
+                {
+                    SaveChangesToUserConfig(true);
+                }
+                if (GUILayout.Button("Save Project Default", EditorStyles.toolbarButton, GUILayout.Height(20f)))
+                {
+                    OverrideDefaultConfig();
+                }
+                if (GUILayout.Button("Restore User from Default", EditorStyles.toolbarButton, GUILayout.Height(20f)))
+                {
+                    ResetToDefault();
+                }
+                if (GUILayout.Button("Clear", EditorStyles.toolbarButton, GUILayout.Height(20f)))
+                {
+                    ClearEditor();
+                    SetStatus("Cleared the in-memory editor configuration.", MessageType.Info);
+                }
             }
 
             GUILayout.FlexibleSpace();
             EditorGUILayout.EndHorizontal();
         }
 
-        private void InitializeSectionColors(bool isProSkin)
+        private void DrawToolbarGroupLabel(string label, Color color)
         {
-            if (_sectionColors == null)
-            {
-                _sectionColors = new Dictionary<string, Color>();
-            }
-
-            _sectionColors["Load"] = isProSkin ? new Color(0.4f, 0.6f, 0.9f, 1f) : new Color(0.2f, 0.4f, 0.8f, 1f);
-            _sectionColors["Generate"] = isProSkin ? new Color(0.4f, 0.8f, 0.5f, 1f) : new Color(0.2f, 0.6f, 0.3f, 1f);
-            _sectionColors["Save"] = isProSkin ? new Color(0.9f, 0.7f, 0.3f, 1f) : new Color(0.8f, 0.5f, 0.1f, 1f);
-            _sectionColors["Reset"] = isProSkin ? new Color(0.9f, 0.4f, 0.4f, 1f) : new Color(0.8f, 0.2f, 0.2f, 1f);
-        }
-
-        private void UpdateSectionButtonStyles(bool isProSkin)
-        {
-            if (_sectionButtonStyles == null)
-            {
-                _sectionButtonStyles = new Dictionary<string, GUIStyle>();
-            }
-            if (_sectionButtonTextures == null)
-            {
-                _sectionButtonTextures = new Dictionary<string, Texture2D>();
-            }
-
-            bool needRecreateTextures = (_isProSkin != isProSkin || _sectionButtonTextures.Count == 0);
-
-            if (needRecreateTextures)
-            {
-                foreach (var texture in _sectionButtonTextures.Values)
-                {
-                    if (texture != null) UnityEngine.Object.DestroyImmediate(texture);
-                }
-                _sectionButtonTextures.Clear();
-                _isProSkin = isProSkin;
-            }
-            else
-            {
-                if (_sectionButtonStyles.Count == _sectionColors.Count) return;
-            }
-
-            foreach (var kvp in _sectionColors)
-            {
-                string sectionName = kvp.Key;
-                Color sectionColor = kvp.Value;
-
-                if (!_sectionButtonStyles.ContainsKey(sectionName))
-                {
-                    _sectionButtonStyles[sectionName] = new GUIStyle(EditorStyles.toolbarButton);
-                }
-
-                GUIStyle style = _sectionButtonStyles[sectionName];
-
-                // Update text colors to match section color
-                style.normal.textColor = sectionColor;
-                style.hover.textColor = Color.Lerp(sectionColor, Color.white, 0.3f);
-                style.active.textColor = Color.Lerp(sectionColor, Color.black, 0.2f);
-                style.focused.textColor = sectionColor;
-                style.onNormal.textColor = sectionColor;
-                style.onHover.textColor = Color.Lerp(sectionColor, Color.white, 0.3f);
-                style.onActive.textColor = Color.Lerp(sectionColor, Color.black, 0.2f);
-                style.onFocused.textColor = sectionColor;
-
-                // Create or reuse background textures with section color
-                string normalKey = sectionName + "_normal";
-                string hoverKey = sectionName + "_hover";
-                string activeKey = sectionName + "_active";
-
-                if (needRecreateTextures || !_sectionButtonTextures.ContainsKey(normalKey))
-                {
-                    _sectionButtonTextures[normalKey] = CreateColorTexture(sectionColor * (isProSkin ? 0.3f : 0.15f));
-                    _sectionButtonTextures[hoverKey] = CreateColorTexture(sectionColor * (isProSkin ? 0.5f : 0.3f));
-                    _sectionButtonTextures[activeKey] = CreateColorTexture(sectionColor * (isProSkin ? 0.4f : 0.25f));
-                }
-
-                // Set background textures
-                style.normal.background = _sectionButtonTextures[normalKey];
-                style.hover.background = _sectionButtonTextures[hoverKey];
-                style.active.background = _sectionButtonTextures[activeKey];
-                style.focused.background = _sectionButtonTextures[normalKey];
-                style.onNormal.background = _sectionButtonTextures[normalKey];
-                style.onHover.background = _sectionButtonTextures[hoverKey];
-                style.onActive.background = _sectionButtonTextures[activeKey];
-                style.onFocused.background = _sectionButtonTextures[normalKey];
-            }
-        }
-
-        private Texture2D CreateColorTexture(Color color)
-        {
-            Texture2D texture = new Texture2D(1, 1, TextureFormat.RGBA32, false);
-            texture.SetPixel(0, 0, color);
-            texture.Apply();
-            texture.hideFlags = HideFlags.HideAndDontSave;
-            return texture;
-        }
-
-        private void DrawToolbarSection(string label, System.Action drawButtons, Color sectionColor)
-        {
-            float toolbarHeight = EditorStyles.toolbar.fixedHeight > 0 ? EditorStyles.toolbar.fixedHeight : EditorGUIUtility.singleLineHeight;
-
-            Rect labelRect = GUILayoutUtility.GetRect(75, toolbarHeight, GUILayout.Width(75));
-
-            GUI.Label(labelRect, label, _toolbarSectionLabelStyle);
-
-            EditorGUI.DrawRect(new Rect(labelRect.x, labelRect.yMax - 2, labelRect.width, 2), sectionColor);
-
-            GUILayout.Space(8);
-
-            drawButtons();
-
-            GUILayout.Space(12);
-
-            DrawToolbarSeparator();
-            GUILayout.Space(4);
-        }
-
-        private void DrawToolbarSeparator()
-        {
-            Rect rect = GUILayoutUtility.GetRect(1, EditorGUIUtility.singleLineHeight, GUILayout.Width(1));
-            EditorGUI.DrawRect(rect, EditorGUIUtility.isProSkin ? _proSkinSeparatorColor : _lightSkinSeparatorColor);
+            Rect rect = GUILayoutUtility.GetRect(64f, 20f, GUILayout.Width(64f), GUILayout.Height(20f));
+            rect.y += 1f;
+            rect.height -= 2f;
+            DrawBadge(rect, label, color);
         }
 
         private void DrawStatusBar()
         {
             if (!string.IsNullOrEmpty(_statusMessage))
             {
-                EditorGUILayout.HelpBox(_statusMessage, _statusMessageType);
+                DrawFeedbackCard("LAST ACTION", _statusMessage, _statusMessageType);
+            }
+            if (!string.IsNullOrEmpty(_validationMessage))
+            {
+                DrawFeedbackCard(
+                    _validationMessageType == MessageType.Error ? "VALIDATION BLOCKED" : "VALIDATION REVIEW",
+                    _validationMessage +
+                    (_validationMessageType == MessageType.Error
+                        ? " Editing remains enabled; fix the field below before saving."
+                        : string.Empty),
+                    _validationMessageType);
             }
         }
 
-        private void DrawCodegenSettings()
+        private void DrawFeedbackCard(string title, string message, MessageType type)
         {
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField(_configSettingsLabel, EditorStyles.boldLabel);
-            EditorGUI.indentLevel++;
+            Color accent = GetMessageColor(type);
+            Rect rect = EditorGUILayout.GetControlRect(
+                false,
+                Mathf.Max(38f, _statusBodyStyle.CalcHeight(new GUIContent(message), position.width - 170f) + 14f));
+            Color panel = EditorGUIUtility.isProSkin
+                ? new Color(0.17f, 0.18f, 0.20f)
+                : new Color(0.84f, 0.86f, 0.89f);
+            EditorGUI.DrawRect(rect, panel);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, 5f, rect.height), accent);
+            DrawStatusTag(new Rect(rect.x + 15f, rect.y + 8f, 126f, 19f), title, accent);
+            EditorGUI.LabelField(
+                new Rect(rect.x + 150f, rect.y + 5f, rect.width - 160f, rect.height - 10f),
+                new GUIContent(message, message),
+                _statusBodyStyle);
+            EditorGUILayout.Space(3f);
+        }
 
-            EditorGUI.BeginChangeCheck();
-            var newDefaultConfigFolder = (DefaultAsset)EditorGUILayout.ObjectField(_defaultConfigFolderLabel, _defaultConfigFolder, typeof(DefaultAsset), false);
-            if (EditorGUI.EndChangeCheck())
+        private void DrawSettings()
+        {
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox, GUILayout.Width(310f), GUILayout.ExpandHeight(true));
+            _settingsScrollPosition = EditorGUILayout.BeginScrollView(_settingsScrollPosition);
+            EditorGUILayout.LabelField("Project Settings", _cardTitleStyle);
+            EditorGUILayout.LabelField(
+                "Paths are explicit, reviewable, and stored per project user.",
+                EditorStyles.wordWrappedMiniLabel);
+
+            DrawSectionHeader("Runtime Files", SourceColor);
+
+            DefaultAsset selectedDefaultFolder = (DefaultAsset)EditorGUILayout.ObjectField(
+                DefaultConfigFolderLabel,
+                _defaultConfigFolder,
+                typeof(DefaultAsset),
+                false);
+            if (selectedDefaultFolder != _defaultConfigFolder)
             {
-                if (newDefaultConfigFolder != _defaultConfigFolder)
+                TrySetDefaultConfigFolder(selectedDefaultFolder);
+            }
+
+            if (!AssetDatabase.IsValidFolder("Assets/StreamingAssets"))
+            {
+                EditorGUILayout.HelpBox(
+                    "The optional StreamingAssets export target does not exist. Create it only when the product selects that runtime adapter.",
+                    MessageType.Info);
+                if (GUILayout.Button("Create StreamingAssets Folder"))
                 {
-                    string oldFolderPath = _defaultConfigFolderPath;
-                    _defaultConfigFolder = newDefaultConfigFolder;
-                    if (_defaultConfigFolder != null)
+                    AssetDatabase.CreateFolder("Assets", "StreamingAssets");
+                    TrySetDefaultConfigFolder(
+                        AssetDatabase.LoadAssetAtPath<DefaultAsset>("Assets/StreamingAssets"));
+                }
+            }
+
+            DrawReadOnlyPathField("Default Config Path", _defaultConfigFullPathDisplay);
+            DrawPathActions(_defaultConfigPath, _defaultConfigAssetPath, "Reveal Default", "Ping Asset");
+
+            string requestedSubdirectory = EditorGUILayout.DelayedTextField(
+                UserConfigSubdirectoryLabel,
+                _userConfigSubPath ?? string.Empty);
+            if (!string.Equals(requestedSubdirectory, _userConfigSubPath, StringComparison.Ordinal))
+            {
+                TrySetUserConfigSubdirectory(requestedSubdirectory);
+            }
+
+            DrawReadOnlyPathField("User Config Path", _userConfigFullPathDisplay);
+            DrawReadOnlyPathField("PersistentData Root", Application.persistentDataPath);
+            DrawPathActions(_userConfigPath, null, "Reveal User", null);
+
+            DrawSectionHeader("Code Generation", OutputColor);
+
+            DefaultAsset selectedCodegenFolder = (DefaultAsset)EditorGUILayout.ObjectField(
+                CodegenFolderLabel,
+                _codegenFolder,
+                typeof(DefaultAsset),
+                false);
+            if (selectedCodegenFolder != _codegenFolder)
+            {
+                TrySetCodegenFolder(selectedCodegenFolder);
+            }
+
+            string requestedNamespace = EditorGUILayout.DelayedTextField(
+                NamespaceLabel,
+                _codegenNamespace ?? string.Empty);
+            if (!string.Equals(requestedNamespace, _codegenNamespace, StringComparison.Ordinal))
+            {
+                _codegenNamespace = requestedNamespace;
+                InputEditorSettings.instance.GeneratedNamespace = requestedNamespace;
+                InputEditorSettings.instance.SaveSettings();
+            }
+
+            EditorGUILayout.Space(8f);
+            EditorGUILayout.HelpBox(
+                "Generated action IDs are signed FNV-1a 32-bit hashes of context/map/action. " +
+                "Regenerate after changing any of those names.",
+                MessageType.Info);
+            EditorGUILayout.EndScrollView();
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawWorkspace()
+        {
+            EditorGUILayout.BeginVertical(GUILayout.ExpandWidth(true), GUILayout.ExpandHeight(true));
+            EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+            Rect header = EditorGUILayout.GetControlRect(false, 24f);
+            EditorGUI.LabelField(
+                new Rect(header.x, header.y, Mathf.Max(80f, header.width - 230f), header.height),
+                "Configuration",
+                _cardTitleStyle);
+            string validationLabel;
+            Color validationColor;
+            GetValidationBadge(out validationLabel, out validationColor);
+            DrawStatusTag(
+                new Rect(header.xMax - 218f, header.y + 2f, 100f, 19f),
+                _configSO == null ? "NO CONFIG" : "EDITABLE",
+                _configSO == null ? NeutralColor : EditableColor);
+            DrawStatusTag(
+                new Rect(header.xMax - 110f, header.y + 2f, 108f, 19f),
+                validationLabel,
+                validationColor);
+            EditorGUILayout.LabelField(
+                _configSO == null
+                    ? "Load the project default, load a user override, or create a validated template."
+                    : "Fields remain editable while validation is blocked. Save actions require a valid configuration.",
+                EditorStyles.wordWrappedMiniLabel);
+            EditorGUILayout.EndVertical();
+
+            if (_configSO == null || _serializedConfig == null)
+            {
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                GUILayout.Label("No configuration loaded", _cardTitleStyle);
+                GUILayout.Label(
+                    "No project default is required. Export to StreamingAssets only when the product selects that adapter.",
+                    EditorStyles.wordWrappedLabel);
+                EditorGUILayout.BeginHorizontal();
+                if (GUILayout.Button("Load Default", GUILayout.Height(30f))) LoadDefaultConfig();
+                if (GUILayout.Button("Generate Default", GUILayout.Height(30f))) GenerateDefaultConfigFile();
+                EditorGUILayout.EndHorizontal();
+                EditorGUILayout.EndVertical();
+                GUILayout.FlexibleSpace();
+                EditorGUILayout.EndVertical();
+                return;
+            }
+
+            _serializedConfig.UpdateIfRequiredOrScript();
+            _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
+            EditorGUI.BeginChangeCheck();
+            DrawConfiguration();
+            bool controlsChanged = EditorGUI.EndChangeCheck();
+            EditorGUILayout.EndScrollView();
+            bool propertiesApplied = _serializedConfig.ApplyModifiedProperties();
+            if (controlsChanged || propertiesApplied) MarkValidationDirty();
+            EditorGUILayout.EndVertical();
+        }
+
+        private void DrawSectionHeader(string title, Color color)
+        {
+            EditorGUILayout.Space(5f);
+            Rect rect = EditorGUILayout.GetControlRect(false, 24f);
+            Color fill = EditorGUIUtility.isProSkin
+                ? new Color(color.r * 0.66f, color.g * 0.66f, color.b * 0.66f, 0.96f)
+                : color;
+            EditorGUI.DrawRect(rect, fill);
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), new Color(0f, 0f, 0f, 0.22f));
+            EditorGUI.LabelField(
+                new Rect(rect.x + 9f, rect.y + 2f, rect.width - 18f, 20f),
+                title,
+                _sectionTitleStyle);
+        }
+
+        private void DrawReadOnlyPathField(string label, string path)
+        {
+            string value = path ?? string.Empty;
+            GUIContent content = new GUIContent(label, string.IsNullOrEmpty(value) ? "No path resolved." : value);
+            EditorGUILayout.LabelField(content, _pathLabelStyle);
+            Rect rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUI.TextField(rect, GUIContent.none, value);
+            }
+            GUI.Label(rect, new GUIContent(string.Empty, content.tooltip), GUIStyle.none);
+        }
+
+        private void GetValidationBadge(out string label, out Color color)
+        {
+            if (_configSO == null)
+            {
+                label = "WAITING";
+                color = NeutralColor;
+            }
+            else if (_validationMessageType == MessageType.Error)
+            {
+                label = "INVALID";
+                color = InvalidColor;
+            }
+            else if (_validationMessageType == MessageType.Warning)
+            {
+                label = "REVIEW";
+                color = WarningColor;
+            }
+            else
+            {
+                label = "VALID";
+                color = EditableColor;
+            }
+        }
+
+        private void DrawBadge(Rect rect, string label, Color color)
+        {
+            EditorGUI.DrawRect(rect, new Color(color.r, color.g, color.b, 0.94f));
+            EditorGUI.DrawRect(new Rect(rect.x, rect.y, rect.width, 1f), new Color(1f, 1f, 1f, 0.12f));
+            EditorGUI.DrawRect(new Rect(rect.x, rect.yMax - 1f, rect.width, 1f), new Color(0f, 0f, 0f, 0.22f));
+            EditorGUI.LabelField(rect, label, _badgeStyle);
+        }
+
+        private void DrawStatusTag(Rect rect, string label, Color color)
+        {
+            Rect marker = new Rect(rect.x + 4f, rect.y + (rect.height - 8f) * 0.5f, 8f, 8f);
+            EditorGUI.DrawRect(marker, color);
+            Color previous = GUI.color;
+            GUI.color = color;
+            EditorGUI.LabelField(
+                new Rect(marker.xMax + 7f, rect.y, rect.width - 19f, rect.height),
+                label,
+                EditorStyles.miniBoldLabel);
+            GUI.color = previous;
+        }
+
+        private static Color GetMessageColor(MessageType type)
+        {
+            switch (type)
+            {
+                case MessageType.Error:
+                    return InvalidColor;
+                case MessageType.Warning:
+                    return WarningColor;
+                case MessageType.Info:
+                    return SourceColor;
+                default:
+                    return NeutralColor;
+            }
+        }
+
+        private static void DrawPathActions(
+            string fullPath,
+            string assetPath,
+            string revealLabel,
+            string pingLabel)
+        {
+            EditorGUILayout.BeginHorizontal();
+            using (new EditorGUI.DisabledScope(string.IsNullOrEmpty(fullPath)))
+            {
+                if (GUILayout.Button(revealLabel, EditorStyles.miniButton))
+                {
+                    string target = File.Exists(fullPath) || Directory.Exists(fullPath)
+                        ? fullPath
+                        : Path.GetDirectoryName(fullPath);
+                    if (!string.IsNullOrEmpty(target)) EditorUtility.RevealInFinder(target);
+                }
+            }
+            if (!string.IsNullOrEmpty(pingLabel))
+            {
+                UnityEngine.Object asset = string.IsNullOrEmpty(assetPath)
+                    ? null
+                    : AssetDatabase.LoadMainAssetAtPath(assetPath);
+                using (new EditorGUI.DisabledScope(asset == null))
+                {
+                    if (GUILayout.Button(pingLabel, EditorStyles.miniButton))
                     {
-                        _defaultConfigFolderPath = AssetDatabase.GetAssetPath(_defaultConfigFolder);
-                        HandleConfigFolderChange(oldFolderPath, _defaultConfigFolderPath);
-                        EditorPrefs.SetString("CycloneGames.InputSystem.DefaultConfigFolder", _defaultConfigFolderPath);
-                        UpdateDefaultConfigPath();
-                    }
-                    else
-                    {
-                        _defaultConfigFolderPath = "Assets/StreamingAssets";
-                        HandleConfigFolderChange(oldFolderPath, _defaultConfigFolderPath);
-                        EditorPrefs.SetString("CycloneGames.InputSystem.DefaultConfigFolder", _defaultConfigFolderPath);
-                        _defaultConfigFolder = AssetDatabase.LoadAssetAtPath<DefaultAsset>(_defaultConfigFolderPath);
-                        UpdateDefaultConfigPath();
+                        EditorGUIUtility.PingObject(asset);
                     }
                 }
             }
+            EditorGUILayout.EndHorizontal();
+        }
 
-            // Display full path for Default Config (or prompt if not loaded)
-            EditorGUI.BeginDisabledGroup(true);
-            string defaultConfigDisplayText;
-            string localPath = new System.Uri(_defaultConfigPath).LocalPath;
-            bool fileExists = File.Exists(localPath);
-            bool configLoaded = _configSO != null;
-
-            if (fileExists || configLoaded)
+        private void TrySetDefaultConfigFolder(DefaultAsset selectedFolder)
+        {
+            DefaultAsset candidate = selectedFolder ?? LoadValidFolder("Assets/StreamingAssets", "Assets");
+            string assetPath = AssetDatabase.GetAssetPath(candidate);
+            if (!AssetDatabase.IsValidFolder(assetPath))
             {
-                // File exists or config is loaded, show full path
-                defaultConfigDisplayText = _defaultConfigFullPathDisplay;
-            }
-            else
-            {
-                // File doesn't exist and config not loaded, show prompt
-                defaultConfigDisplayText = "Please Load or Generate Default Config first";
+                SetStatus("Select a project folder under Assets for the default configuration.", MessageType.Error);
+                return;
             }
 
-            EditorGUILayout.TextField(
-                new GUIContent("Full Path", "Complete path where default config is located (updates in real-time). If file doesn't exist, please Load or Generate first."),
-                defaultConfigDisplayText
-            );
-            EditorGUI.EndDisabledGroup();
+            _defaultConfigFolder = candidate;
+            _defaultConfigFolderPath = assetPath;
+            if (UpdateDefaultConfigPath())
+            {
+                InputEditorSettings.instance.DefaultConfigFolder = assetPath;
+                InputEditorSettings.instance.SaveSettings();
+                SetStatus("Updated the future default-config output location. Existing files were not moved.", MessageType.Info);
+            }
+        }
+
+        private void TrySetUserConfigSubdirectory(string requestedSubdirectory)
+        {
+            string normalizedSubdirectory = (requestedSubdirectory ?? string.Empty).Trim();
+            if (!InputEditorFileUtility.TryResolveUserConfigPath(
+                    Application.persistentDataPath,
+                    normalizedSubdirectory,
+                    UserConfigFileName,
+                    out string resolvedPath,
+                    out string error))
+            {
+                SetStatus(error, MessageType.Error);
+                return;
+            }
+
+            _userConfigSubPath = normalizedSubdirectory;
+            _userConfigPath = resolvedPath;
+            _userConfigFullPathDisplay = resolvedPath.Replace('\\', '/');
+            InputEditorSettings.instance.UserConfigSubdirectory = _userConfigSubPath;
+            InputEditorSettings.instance.SaveSettings();
+        }
+
+        private void TrySetCodegenFolder(DefaultAsset selectedFolder)
+        {
+            DefaultAsset candidate = selectedFolder ?? LoadValidFolder("Assets", "Assets");
+            string assetPath = AssetDatabase.GetAssetPath(candidate);
+            if (!AssetDatabase.IsValidFolder(assetPath))
+            {
+                SetStatus("Select a project folder under Assets for generated code.", MessageType.Error);
+                return;
+            }
+
+            _codegenFolder = candidate;
+            _codegenPath = assetPath;
+            InputEditorSettings.instance.CodegenFolder = assetPath;
+            InputEditorSettings.instance.SaveSettings();
+        }
+
+        private void DrawConfiguration()
+        {
+            SerializedProperty hasRootJoinAction = _serializedConfig.FindProperty("_hasJoinAction");
+            SerializedProperty rootJoinAction = _serializedConfig.FindProperty("_joinAction");
+            if (hasRootJoinAction != null)
+            {
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                Rect sharedAccent = GUILayoutUtility.GetRect(1f, 3f, GUILayout.ExpandWidth(true));
+                EditorGUI.DrawRect(sharedAccent, SourceColor);
+                EditorGUILayout.LabelField("Shared Join", _sectionTitleStyle);
+                EditorGUILayout.PropertyField(hasRootJoinAction, RootJoinActionLabel);
+                if (hasRootJoinAction.boolValue && rootJoinAction != null)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.PropertyField(rootJoinAction, true);
+                    EditorGUI.indentLevel--;
+                }
+                EditorGUILayout.EndVertical();
+            }
+
+            SerializedProperty slots = _serializedConfig.FindProperty("_playerSlots");
+            if (slots == null || !slots.isArray)
+            {
+                EditorGUILayout.HelpBox("The working copy has no serializable player-slots field.", MessageType.Error);
+                return;
+            }
 
             EditorGUILayout.Space();
-            EditorGUILayout.LabelField("User Config Settings", EditorStyles.boldLabel);
-            EditorGUI.indentLevel++;
+            EditorGUILayout.LabelField(PlayerSlotsLabel, EditorStyles.boldLabel);
 
-            // User Config Subdirectory Path Input
-            EditorGUI.BeginChangeCheck();
-            string newUserConfigSubPath = EditorGUILayout.TextField(
-                new GUIContent("Subdirectory Path", "Subdirectory path relative to PersistentData (e.g., \"/Config\" or \"Config\"). Leave empty to save directly in PersistentData."),
-                _userConfigSubPath
-            );
-            if (EditorGUI.EndChangeCheck())
+            for (int slotIndex = 0; slotIndex < slots.arraySize; slotIndex++)
             {
-                _userConfigSubPath = newUserConfigSubPath;
-                UpdateUserConfigPath();
-                EditorPrefs.SetString("CycloneGames.InputSystem.UserConfigSubPath", _userConfigSubPath);
-            }
-
-            // Display full path (real-time update when subdirectory changes)
-            EditorGUI.BeginDisabledGroup(true);
-            EditorGUILayout.TextField(
-                new GUIContent("Full Path", "Complete path where user config will be saved (updates in real-time)"),
-                _userConfigFullPathDisplay
-            );
-            EditorGUI.EndDisabledGroup();
-
-            // Show PersistentData base path for reference
-            EditorGUI.BeginDisabledGroup(true);
-            EditorGUILayout.TextField(
-                new GUIContent("PersistentData Base", "Base PersistentData directory"),
-                Application.persistentDataPath
-            );
-            EditorGUI.EndDisabledGroup();
-
-            EditorGUI.indentLevel--;
-
-            EditorGUILayout.Space();
-            EditorGUILayout.LabelField("Code Generation Settings", EditorStyles.boldLabel);
-            EditorGUI.indentLevel++;
-
-            EditorGUI.BeginChangeCheck();
-            var newFolder = (DefaultAsset)EditorGUILayout.ObjectField("Output Directory", _codegenFolder, typeof(DefaultAsset), false);
-            var newNamespace = EditorGUILayout.TextField("Namespace", _codegenNamespace);
-
-            if (EditorGUI.EndChangeCheck())
-            {
-                if (newFolder != _codegenFolder)
+                SerializedProperty slot = slots.GetArrayElementAtIndex(slotIndex);
+                EditorGUILayout.BeginVertical(EditorStyles.helpBox);
+                Rect playerAccent = GUILayoutUtility.GetRect(1f, 3f, GUILayout.ExpandWidth(true));
+                EditorGUI.DrawRect(playerAccent, OutputColor);
+                EditorGUILayout.BeginHorizontal();
+                SerializedProperty playerId = slot.FindPropertyRelative("PlayerId");
+                string slotTitle = playerId == null ? $"Player Slot {slotIndex}" : $"Player {playerId.intValue}";
+                slot.isExpanded = EditorGUILayout.Foldout(
+                    slot.isExpanded,
+                    slotTitle,
+                    true);
+                if (GUILayout.Button("Remove", GUILayout.Width(70f)))
                 {
-                    _codegenFolder = newFolder;
-                    _codegenPath = AssetDatabase.GetAssetPath(_codegenFolder);
-                    EditorPrefs.SetString("CycloneGames.InputSystem.CodegenPath", _codegenPath);
+                    slots.DeleteArrayElementAtIndex(slotIndex);
+                    EditorGUILayout.EndHorizontal();
+                    EditorGUILayout.EndVertical();
+                    break;
                 }
-                if (newNamespace != _codegenNamespace)
+                EditorGUILayout.EndHorizontal();
+
+                if (slot.isExpanded)
                 {
-                    _codegenNamespace = newNamespace;
-                    EditorPrefs.SetString("CycloneGames.InputSystem.CodegenNamespace", _codegenNamespace);
+                    EditorGUI.indentLevel++;
+                    DrawPlayerSlot(slot);
+                    EditorGUI.indentLevel--;
+                }
+                EditorGUILayout.EndVertical();
+            }
+
+            if (GUILayout.Button(AddPlayerLabel, GUILayout.Height(28f)))
+            {
+                AddNewPlayer(slots);
+            }
+        }
+
+        private static void DrawPlayerSlot(SerializedProperty slot)
+        {
+            DrawPropertyIfPresent(slot, "PlayerId");
+
+            SerializedProperty hasJoinAction = slot.FindPropertyRelative("HasJoinAction");
+            SerializedProperty joinAction = slot.FindPropertyRelative("JoinAction");
+            if (hasJoinAction != null)
+            {
+                EditorGUILayout.PropertyField(hasJoinAction, new GUIContent("Has Join Action"));
+                if (hasJoinAction.boolValue && joinAction != null)
+                {
+                    EditorGUI.indentLevel++;
+                    EditorGUILayout.PropertyField(joinAction, true);
+                    EditorGUI.indentLevel--;
                 }
             }
+            else if (joinAction != null)
+            {
+                EditorGUILayout.PropertyField(joinAction, true);
+            }
 
-            EditorGUI.indentLevel--;
-            EditorGUI.indentLevel--;
-            EditorGUILayout.LabelField("", GUI.skin.horizontalSlider);
+            DrawPropertyIfPresent(slot, "DefaultControlScheme");
+            DrawPropertyIfPresent(slot, "ControlSchemes", true);
+            DrawPropertyIfPresent(slot, "Contexts", true);
         }
 
-        private void LoadUserConfig()
+        private static void DrawPropertyIfPresent(
+            SerializedProperty parent,
+            string relativeName,
+            bool includeChildren = false)
         {
-            string localPath = new System.Uri(_userConfigPath).LocalPath;
-            if (File.Exists(localPath))
+            SerializedProperty property = parent.FindPropertyRelative(relativeName);
+            if (property != null)
             {
-                LoadConfigFromPath(localPath, $"Loaded user config from: {localPath}");
-            }
-            else
-            {
-                SetStatus($"User config not found. Load default and save to create one, or generate a new default.", MessageType.Info);
-                ClearEditor();
+                EditorGUILayout.PropertyField(property, includeChildren);
             }
         }
 
-        private void LoadDefaultConfig()
+        private bool LoadUserConfig()
         {
-            string localPath = new System.Uri(_defaultConfigPath).LocalPath;
-            if (File.Exists(localPath))
+            if (!UpdateUserConfigPath())
             {
-                LoadConfigFromPath(localPath, $"Loaded default config from: {localPath} (Read-Only)");
+                return false;
             }
-            else
+            if (!File.Exists(_userConfigPath))
             {
-                SetStatus($"Default config '{DefaultConfigFileName}' not found in StreamingAssets! You can generate one.", MessageType.Warning);
-                ClearEditor();
+                SetStatus(
+                    "The user configuration does not exist. Load or generate a default configuration first.",
+                    MessageType.Info);
+                return false;
             }
+
+            return LoadConfigFromPath(_userConfigPath, "Loaded the user configuration.");
         }
 
-        private void LoadConfigFromPath(string path, string status)
+        private bool LoadDefaultConfig()
+        {
+            if (!UpdateDefaultConfigPath())
+            {
+                return false;
+            }
+            if (!File.Exists(_defaultConfigPath))
+            {
+                SetStatus($"Default config not found at: {_defaultConfigAssetPath}", MessageType.Warning);
+                return false;
+            }
+
+            return LoadConfigFromPath(_defaultConfigPath, "Loaded the default configuration.");
+        }
+
+        private bool LoadConfigFromPath(string path, string successStatus)
         {
             try
             {
-                string yamlContent = FileUtility.ReadAllText(path);
-                var configModel = YamlSerializer.Deserialize<InputConfiguration>(System.Text.Encoding.UTF8.GetBytes(yamlContent));
-
-                // Schema fingerprint mismatch detection: warn developer if loaded config is outdated
-                if (configModel.SchemaFingerprint != InputSchemaFingerprint.Current)
+                string yaml = SystemFileStore.Default.ReadText(
+                    path,
+                    MaxConfigBytes,
+                    StrictUtf8,
+                    detectByteOrderMark: false);
+                if (!InputConfigurationYamlPreflight.TryValidate(yaml, out string yamlError))
                 {
-                    bool upgrade = EditorUtility.DisplayDialog(
-                        "Schema Fingerprint Mismatch",
-                        $"Loaded config fingerprint [{configModel.SchemaFingerprint ?? "none"}] does not match current schema [{InputSchemaFingerprint.Current}].\n\n" +
-                        "New fields will use default values. Removed or renamed fields may have been lost.\n\n" +
-                        "Save the config to stamp the current fingerprint.",
-                        "OK (Continue)", "Cancel");
-                    if (!upgrade)
-                    {
-                        ClearEditor();
-                        return;
-                    }
-                    status = $"⚠ Schema mismatch — save to update fingerprint.";
+                    SetStatus($"Cannot load configuration: {yamlError}", MessageType.Error);
+                    return false;
+                }
+                InputConfiguration model = YamlSerializer.Deserialize<InputConfiguration>(
+                    Encoding.UTF8.GetBytes(yaml));
+                InputEditorValidationResult validation = InputEditorConfigurationValidator.Validate(model);
+                if (!validation.IsValid)
+                {
+                    SetStatus($"Cannot load configuration: {validation.Error}", MessageType.Error);
+                    return false;
                 }
 
-                _configSO = CreateInstance<InputConfigurationSO>();
-                _configSO.FromData(configModel);
+                var nextWorkingCopy = CreateInstance<InputConfigurationSO>();
+                nextWorkingCopy.hideFlags = HideFlags.HideInHierarchy | HideFlags.DontSave;
+                try
+                {
+                    nextWorkingCopy.FromData(validation.PreparedConfiguration ?? model);
+                }
+                catch (Exception)
+                {
+                    DestroyImmediate(nextWorkingCopy);
+                    throw;
+                }
 
+                DestroyWorkingCopy();
+                _configSO = nextWorkingCopy;
                 _serializedConfig = new SerializedObject(_configSO);
                 _validationCacheDirty = true;
-                _previousContextCounts.Clear();
-                
-                var slotsProp = _serializedConfig.FindProperty("_playerSlots");
-                if (slotsProp != null && slotsProp.isArray)
-                {
-                    for (int i = 0; i < slotsProp.arraySize; i++)
-                    {
-                        var slotProp = slotsProp.GetArrayElementAtIndex(i);
-                        var contextsProp = slotProp.FindPropertyRelative("Contexts");
-                        if (contextsProp != null)
-                        {
-                            _previousContextCounts[i] = contextsProp.arraySize;
-                        }
-                    }
-                }
-                
                 RebuildValidationCache();
                 _validationCacheDirty = false;
-                SetStatus(status, MessageType.Info);
+
+                if (!string.IsNullOrEmpty(model.SchemaFingerprint) &&
+                    !string.Equals(
+                        model.SchemaFingerprint,
+                        InputSchemaFingerprint.EditorDiagnosticCurrent,
+                        StringComparison.Ordinal))
+                {
+                    SetStatus(
+                        "The optional Editor schema diagnostic differs from the current model. Validation passed; saving will refresh it.",
+                        MessageType.Warning);
+                }
+                else
+                {
+                    SetStatus(successStatus, MessageType.Info);
+                }
+
+                return true;
             }
-            catch (System.Exception e)
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException &&
+                exception is not AccessViolationException &&
+                exception is not StackOverflowException)
             {
-                SetStatus($"Failed to load or parse config: {e.Message}", MessageType.Error);
-                ClearEditor();
+                SetStatus(
+                    $"Failed to load or parse config ({exception.GetType().Name}).",
+                    MessageType.Error);
+                return false;
             }
         }
 
         private void SaveChangesToUserConfig(bool generateConstants = false)
         {
-            if (_configSO == null)
+            if (!UpdateUserConfigPath() || !TryPrepareConfigurationForSave(out InputConfiguration model))
             {
-                SetStatus("No configuration loaded to save.", MessageType.Error);
                 return;
             }
 
-            try
+            if (!TryWriteConfiguration(_userConfigPath, model, out string backupPath))
             {
-                InputConfiguration configModel = _configSO.ToData();
-                configModel.SchemaFingerprint = InputSchemaFingerprint.Current;
-                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
-
-                string localPath = new System.Uri(_userConfigPath).LocalPath;
-                string directory = Path.GetDirectoryName(localPath);
-                if (directory != null && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                FileUtility.WriteAllBytes(localPath, yamlBytes);
-                SetStatus($"Successfully saved user configuration to: {localPath}", MessageType.Info);
-
-                if (generateConstants)
-                {
-                    GenerateConstantsFile(configModel);
-                }
-                else
-                {
-                    EditorUtility.DisplayDialog("Save Successful", "User input configuration has been saved.", "OK");
-                }
+                return;
             }
-            catch (System.Exception e)
+
+            SetStatus(
+                BuildWriteSuccessMessage("Saved user configuration", UserConfigFileName, backupPath),
+                GetWriteSuccessMessageType(backupPath));
+            if (generateConstants)
             {
-                SetStatus($"Failed to save config: {e.Message}", MessageType.Error);
+                GenerateConstantsFile(model);
             }
         }
 
         private void ResetToDefault()
         {
-            LoadDefaultConfig();
-            if (_configSO != null)
+            if (!LoadDefaultConfig())
             {
-                SaveChangesToUserConfig();
+                SetStatus("Cannot reset because the default configuration could not be loaded.", MessageType.Error);
+                return;
             }
-            else
-            {
-                SetStatus("Cannot reset because the default config file does not exist. Please generate one first.", MessageType.Error);
-            }
+
+            SaveChangesToUserConfig();
         }
 
         private void GenerateDefaultConfigFile()
         {
-            string localPath = new System.Uri(_defaultConfigPath).LocalPath;
-
-            if (File.Exists(localPath))
+            if (!UpdateDefaultConfigPath())
             {
-                if (!EditorUtility.DisplayDialog("Overwrite Default Config?", "A default configuration file already exists. Overwriting it will discard its current content.", "Overwrite", "Cancel"))
-                {
-                    return;
-                }
+                return;
+            }
+            if (File.Exists(_defaultConfigPath) &&
+                !EditorUtility.DisplayDialog(
+                    "Overwrite Default Config?",
+                    "A backup will be created before the default configuration is replaced.",
+                    "Overwrite",
+                    "Cancel"))
+            {
+                return;
             }
 
-            InputConfiguration defaultConfig = CreateDefaultConfigTemplate();
-
-            try
+            InputConfiguration model = CreateDefaultConfigTemplate();
+            InputEditorValidationResult validation = InputEditorConfigurationValidator.Validate(model);
+            if (!validation.IsValid)
             {
-                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(defaultConfig);
-
-                string directory = Path.GetDirectoryName(localPath);
-                if (directory != null && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                FileUtility.WriteAllBytes(localPath, yamlBytes);
-                SetStatus($"Generated new default config at: {localPath}", MessageType.Info);
-                AssetDatabase.Refresh();
-
-                LoadDefaultConfig();
+                SetStatus($"The default template is invalid: {validation.Error}", MessageType.Error);
+                return;
             }
-            catch (System.Exception e)
+            if (!TryPreflightConfiguration(model, "The default template")) return;
+
+            if (!TryWriteConfiguration(_defaultConfigPath, model, out string backupPath))
             {
-                SetStatus($"Error generating default config: {e.Message}", MessageType.Error);
+                return;
             }
+
+            InputEditorFileUtility.ImportAssetAtPath(_defaultConfigAssetPath);
+            SetStatus(
+                BuildWriteSuccessMessage("Generated default configuration", _defaultConfigAssetPath, backupPath),
+                GetWriteSuccessMessageType(backupPath));
+            LoadDefaultConfig();
         }
 
         private void OverrideDefaultConfig()
         {
-            if (_configSO == null)
+            if (!UpdateDefaultConfigPath() || !TryPrepareConfigurationForSave(out InputConfiguration model))
             {
-                SetStatus("No configuration loaded to override with.", MessageType.Error);
                 return;
             }
-
-            string localPath = new System.Uri(_defaultConfigPath).LocalPath;
-
-            string folderName = !string.IsNullOrEmpty(_defaultConfigFolderPath) ? _defaultConfigFolderPath : "StreamingAssets";
-            if (!EditorUtility.DisplayDialog("Override Default Config?",
-                $"This will overwrite the default configuration file in {folderName} with your current editor state.\n\n" +
-                $"Path: {localPath}\n\n" +
-                $"This action cannot be undone. Continue?",
-                "Override", "Cancel"))
+            if (!EditorUtility.DisplayDialog(
+                    "Save Project Default?",
+                    $"Save the working configuration to {_defaultConfigAssetPath}? A backup will be created when the file exists.",
+                    "Save",
+                    "Cancel"))
             {
                 return;
             }
 
+            if (!TryWriteConfiguration(_defaultConfigPath, model, out string backupPath))
+            {
+                return;
+            }
+
+            InputEditorFileUtility.ImportAssetAtPath(_defaultConfigAssetPath);
+            SetStatus(
+                BuildWriteSuccessMessage("Overrode default configuration", _defaultConfigAssetPath, backupPath),
+                GetWriteSuccessMessageType(backupPath));
+        }
+
+        private bool TryPrepareConfigurationForSave(out InputConfiguration model)
+        {
+            model = null;
+            if (_configSO == null || _serializedConfig == null)
+            {
+                SetStatus("No configuration is loaded.", MessageType.Error);
+                return false;
+            }
+
+            _serializedConfig.ApplyModifiedProperties();
+            model = _configSO.ToData();
+            model.SchemaVersion = InputConfiguration.CurrentSchemaVersion;
+            model.SchemaFingerprint = InputSchemaFingerprint.EditorDiagnosticCurrent;
+
+            InputEditorValidationResult validation = InputEditorConfigurationValidator.Validate(model);
+            if (!validation.IsValid)
+            {
+                SetStatus($"Cannot save configuration: {validation.Error}", MessageType.Error);
+                return false;
+            }
+
+            if (!TryPreflightConfiguration(model, "Cannot save configuration")) return false;
+
+            return true;
+        }
+
+        private bool TryPreflightConfiguration(InputConfiguration model, string label)
+        {
+            InputConfigurationPreflightResult preflight =
+                InputSystemConfigurationPreflight.Validate(model);
+            if (preflight.IsSuccess) return true;
+            string detail = preflight.Issues.Count == 0
+                ? preflight.Status.ToString()
+                : preflight.Issues[0].ToString();
+            SetStatus($"{label}: Input System preflight failed. {detail}", MessageType.Error);
+            return false;
+        }
+
+        private bool TryWriteConfiguration(
+            string path,
+            InputConfiguration model,
+            out string backupPath)
+        {
+            backupPath = null;
             try
             {
-                InputConfiguration configModel = _configSO.ToData();
-                configModel.SchemaFingerprint = InputSchemaFingerprint.Current;
-                byte[] yamlBytes = SerializeConfigWithoutNullJoinAction(configModel);
-
-                string directory = Path.GetDirectoryName(localPath);
-                if (directory != null && !Directory.Exists(directory))
+                byte[] bytes = SerializeConfiguration(model);
+                if (bytes.Length > MaxConfigBytes)
                 {
-                    Directory.CreateDirectory(directory);
+                    SetStatus(
+                        $"Serialized configuration exceeds the {MaxConfigBytes}-byte runtime limit.",
+                        MessageType.Error);
+                    return false;
                 }
 
-                FileUtility.WriteAllBytes(localPath, yamlBytes);
-                SetStatus($"Successfully overridden default config at: {localPath}", MessageType.Info);
-                AssetDatabase.Refresh();
+                if (!InputEditorFileUtility.TryWriteBytesTransactional(
+                        path,
+                        bytes,
+                        out backupPath,
+                        out string error))
+                {
+                    SetStatus(error, MessageType.Error);
+                    return false;
+                }
 
-                // Reload to show the updated default config
-                LoadDefaultConfig();
+                return true;
             }
-            catch (System.Exception e)
+            catch (Exception exception)
             {
-                SetStatus($"Failed to override default config: {e.Message}", MessageType.Error);
+                SetStatus(
+                    $"Failed to serialize configuration ({exception.GetType().Name}).",
+                    MessageType.Error);
+                return false;
             }
+        }
+
+        private static byte[] SerializeConfiguration(InputConfiguration model)
+        {
+            var writer = new ArrayBufferWriter<byte>();
+            var emitter = new Utf8YamlEmitter(writer);
+            YamlSerializer.Serialize(ref emitter, model);
+            return writer.WrittenSpan.ToArray();
+        }
+
+        private static string BuildWriteSuccessMessage(string operation, string path, string backupPath)
+        {
+            if (IsRecoveryBackupPath(backupPath))
+            {
+                return $"{operation}: {path}. The prior file remains in recovery backup " +
+                       $"{Path.GetFileName(backupPath)} because fixed-backup promotion did not complete.";
+            }
+
+            return string.IsNullOrEmpty(backupPath)
+                ? $"{operation}: {path}"
+                : $"{operation}: {path}. Backup: {Path.GetFileName(backupPath)}";
+        }
+
+        private static MessageType GetWriteSuccessMessageType(string backupPath)
+        {
+            return IsRecoveryBackupPath(backupPath) ? MessageType.Warning : MessageType.Info;
+        }
+
+        private static bool IsRecoveryBackupPath(string backupPath)
+        {
+            return !string.IsNullOrEmpty(backupPath) &&
+                   backupPath.IndexOf(".bak.tmp.", StringComparison.Ordinal) >= 0;
         }
 
         private void ClearEditor()
         {
-            _configSO = null;
-            _serializedConfig = null;
+            DestroyWorkingCopy();
             _validationCacheDirty = true;
-            _cachedContextNames.Clear();
-            _cachedActionMapNames.Clear();
-            _contextNameToLocation.Clear();
-            _actionMapNameToLocation.Clear();
-            _previousContextCounts.Clear();
+            _validationMessage = null;
+            _validationMessageType = MessageType.None;
+        }
+
+        private void DestroyWorkingCopy()
+        {
+            _serializedConfig = null;
+            if (_configSO != null)
+            {
+                DestroyImmediate(_configSO);
+                _configSO = null;
+            }
         }
 
         private void SetStatus(string message, MessageType type)
         {
-            _statusMessage = message;
+            _statusMessage = InputEditorFileUtility.ToSafeDisplayText(message);
             _statusMessageType = type;
+            Repaint();
         }
-
     }
 }

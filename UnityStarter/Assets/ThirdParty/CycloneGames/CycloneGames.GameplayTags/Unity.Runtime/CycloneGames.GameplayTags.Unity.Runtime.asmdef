@@ -2,9 +2,7 @@
     "name": "CycloneGames.GameplayTags.Unity.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.GameplayTags.Core",
-        "Unity.Collections",
-        "Unity.Burst"
+        "CycloneGames.GameplayTags.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -13,17 +11,6 @@
     "precompiledReferences": [],
     "autoReferenced": true,
     "defineConstraints": [],
-    "versionDefines": [
-        {
-            "name": "com.unity.collections",
-            "expression": "1.0.0",
-            "define": "CYCLONE_HAS_COLLECTIONS"
-        },
-        {
-            "name": "com.unity.burst",
-            "expression": "1.0.0",
-            "define": "CYCLONE_HAS_BURST"
-        }
-    ],
+    "versionDefines": [],
     "noEngineReferences": false
 }

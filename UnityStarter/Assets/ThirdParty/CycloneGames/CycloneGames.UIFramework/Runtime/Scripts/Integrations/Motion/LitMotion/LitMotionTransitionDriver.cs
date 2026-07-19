@@ -3,6 +3,7 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using LitMotion;
+using LitMotion.Extensions;
 
 namespace CycloneGames.UIFramework.Runtime
 {
@@ -141,40 +142,43 @@ namespace CycloneGames.UIFramework.Runtime
             float to = isOpen ? 1f : 0f;
             var handle = LMotion.Create(from, to, duration)
                 .WithEase(ease)
-                .Bind(v => ctx.CanvasGroup.alpha = v);
-            try { await handle.ToUniTask(cancellationToken: ct); }
-            catch (System.OperationCanceledException) { handle.Cancel(); }
+                .BindToAlpha(ctx.CanvasGroup)
+                .AddTo(ctx.GameObject);
+            await handle.ToUniTask(cancellationToken: ct);
         }
 
         /// <summary>Override to customize scale animation.</summary>
         protected virtual async UniTask AnimateScale(TransitionContext ctx, ScaleConfig config, bool isOpen, Ease ease, CancellationToken ct)
         {
-            // Read current scale factor relative to OriginalScale for seamless mid-interrupt
-            float currentScaleFactor = ctx.OriginalScale.x != 0f
-                ? ctx.Transform.localScale.x / ctx.OriginalScale.x
-                : 1f;
-            float from = isOpen ? config.ScaleFrom : currentScaleFactor;
-            float to = isOpen ? 1f : config.ScaleFrom;
+            Vector3 from = isOpen
+                ? ctx.OriginalScale * config.ScaleFrom
+                : ctx.Transform.localScale;
+            Vector3 to = isOpen
+                ? ctx.OriginalScale
+                : ctx.OriginalScale * config.ScaleFrom;
             var handle = LMotion.Create(from, to, config.Duration)
                 .WithEase(ease)
-                .Bind(v => ctx.Transform.localScale = ctx.OriginalScale * v);
-            try { await handle.ToUniTask(cancellationToken: ct); }
-            catch (System.OperationCanceledException) { handle.Cancel(); }
+                .BindToLocalScale(ctx.Transform)
+                .AddTo(ctx.GameObject);
+            await handle.ToUniTask(cancellationToken: ct);
         }
 
         /// <summary>Override to customize slide animation.</summary>
         protected virtual async UniTask AnimateSlide(TransitionContext ctx, SlideConfig config, bool isOpen, Ease ease, CancellationToken ct)
         {
             if (ctx.RectTransform == null) return;
-            Vector2 offset = GetSlideOffset(ctx.RectTransform, config);
+            Vector2 offset = GetSlideOffset(
+                ctx.RectTransform,
+                config,
+                ctx.OriginalPosition);
             // Use current position as 'from' for close to handle mid-open interruption
             Vector2 from = isOpen ? offset : ctx.RectTransform.anchoredPosition;
             Vector2 to = isOpen ? ctx.OriginalPosition : offset;
             var handle = LMotion.Create(from, to, config.Duration)
                 .WithEase(ease)
-                .Bind(v => ctx.RectTransform.anchoredPosition = v);
-            try { await handle.ToUniTask(cancellationToken: ct); }
-            catch (System.OperationCanceledException) { handle.Cancel(); }
+                .BindToAnchoredPosition(ctx.RectTransform)
+                .AddTo(ctx.GameObject);
+            await handle.ToUniTask(cancellationToken: ct);
         }
 
         /// <summary>Override to customize composite animation.</summary>
@@ -232,16 +236,20 @@ namespace CycloneGames.UIFramework.Runtime
                 ctx.RectTransform.anchoredPosition = ctx.OriginalPosition;
         }
 
-        protected Vector2 GetSlideOffset(RectTransform rt, SlideConfig config)
+        protected Vector2 GetSlideOffset(
+            RectTransform rt,
+            SlideConfig config,
+            Vector2? origin = null)
         {
             var rect = rt.rect;
+            Vector2 start = origin ?? rt.anchoredPosition;
             return config.Direction switch
             {
-                SlideDirection.Left => rt.anchoredPosition + new Vector2(-rect.width * config.Offset, 0),
-                SlideDirection.Right => rt.anchoredPosition + new Vector2(rect.width * config.Offset, 0),
-                SlideDirection.Top => rt.anchoredPosition + new Vector2(0, rect.height * config.Offset),
-                SlideDirection.Bottom => rt.anchoredPosition + new Vector2(0, -rect.height * config.Offset),
-                _ => rt.anchoredPosition
+                SlideDirection.Left => start + new Vector2(-rect.width * config.Offset, 0),
+                SlideDirection.Right => start + new Vector2(rect.width * config.Offset, 0),
+                SlideDirection.Top => start + new Vector2(0, rect.height * config.Offset),
+                SlideDirection.Bottom => start + new Vector2(0, -rect.height * config.Offset),
+                _ => start
             };
         }
 

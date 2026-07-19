@@ -13,7 +13,6 @@ namespace CycloneGames.AssetManagement.Runtime
     /// </summary>
     public static class AssetRefExtensions
     {
-        // ── AssetRef<T> ──────────────────────────────────────────────────────────
 
         public static IAssetHandle<T> LoadAsync<T>(
             this IAssetPackage package,
@@ -27,7 +26,7 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         public static IAssetHandle<T> LoadSync<T>(
-            this IAssetPackage package,
+            this IAssetSyncOperations package,
             AssetRef<T> assetRef,
             string bucket = null,
             string tag = null,
@@ -55,7 +54,6 @@ namespace CycloneGames.AssetManagement.Runtime
             return scope.LoadAssetSync<T>(assetRef.Location, tag, owner);
         }
 
-        // ── AssetRef (non-generic) ──────────────────────────────────────────────
 
         public static IAssetHandle<T> LoadAsync<T>(
             this IAssetPackage package,
@@ -69,7 +67,7 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         public static IAssetHandle<T> LoadSync<T>(
-            this IAssetPackage package,
+            this IAssetSyncOperations package,
             AssetRef assetRef,
             string bucket = null,
             string tag = null,
@@ -97,21 +95,20 @@ namespace CycloneGames.AssetManagement.Runtime
             return scope.LoadAssetSync<T>(assetRef.Location, tag, owner);
         }
 
-        // ── SceneRef ────────────────────────────────────────────────────────────
 
         public static ISceneHandle LoadSceneAsync(
-            this IAssetPackage package,
+            this IAssetSceneLoader package,
             SceneRef sceneRef,
-            LoadSceneMode loadMode,
+            LoadSceneParameters loadParameters,
             SceneActivationMode activationMode,
             int priority = 100,
             string bucket = null)
         {
-            return package.LoadSceneAsync(sceneRef.Location, loadMode, activationMode, priority, bucket);
+            return package.LoadSceneAsync(sceneRef.Location, loadParameters, activationMode, priority, bucket);
         }
 
         public static ISceneHandle LoadSceneAsync(
-            this IAssetPackage package,
+            this IAssetSceneLoader package,
             SceneRef sceneRef,
             LoadSceneMode loadMode = LoadSceneMode.Single,
             bool activateOnLoad = true,
@@ -121,23 +118,14 @@ namespace CycloneGames.AssetManagement.Runtime
             return package.LoadSceneAsync(sceneRef.Location, loadMode, activateOnLoad, priority, bucket);
         }
 
-        public static ISceneHandle LoadSceneSync(
-            this IAssetPackage package,
-            SceneRef sceneRef,
-            LoadSceneMode loadMode = LoadSceneMode.Single,
-            string bucket = null)
-        {
-            return package.LoadSceneSync(sceneRef.Location, loadMode, bucket);
-        }
-
         public static ISceneHandle LoadSceneAsync(
             this AssetBucketScope scope,
             SceneRef sceneRef,
-            LoadSceneMode loadMode,
+            LoadSceneParameters loadParameters,
             SceneActivationMode activationMode,
             int priority = 100)
         {
-            return scope.LoadSceneAsync(sceneRef.Location, loadMode, activationMode, priority);
+            return scope.LoadSceneAsync(sceneRef.Location, loadParameters, activationMode, priority);
         }
 
         public static ISceneHandle LoadSceneAsync(
@@ -150,12 +138,5 @@ namespace CycloneGames.AssetManagement.Runtime
             return scope.LoadSceneAsync(sceneRef.Location, loadMode, activateOnLoad, priority);
         }
 
-        public static ISceneHandle LoadSceneSync(
-            this AssetBucketScope scope,
-            SceneRef sceneRef,
-            LoadSceneMode loadMode = LoadSceneMode.Single)
-        {
-            return scope.LoadSceneSync(sceneRef.Location, loadMode);
-        }
     }
 }

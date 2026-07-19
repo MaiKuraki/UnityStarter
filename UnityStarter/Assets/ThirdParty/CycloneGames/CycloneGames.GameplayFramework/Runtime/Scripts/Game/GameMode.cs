@@ -1,328 +1,524 @@
+using System;
+using System.Collections.Generic;
 using System.Threading;
-using CycloneGames.Logger;
-using CycloneGames.Factory.Runtime;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
-    public interface IGameMode
+    public enum GameModeLifecycleState : byte
     {
-        UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default);
+        Uninitialized = 0,
+        Initialized = 1,
+        Starting = 2,
+        Running = 3,
+        Stopping = 4,
+        Stopped = 5,
     }
 
-    public class GameMode : Actor, IGameMode
+    /// <summary>
+    /// Authoritative world rules and participant orchestration. Client worlds do not create a
+    /// GameMode. GameMode does not own global services and all spawned objects are World-owned.
+    /// </summary>
+    public class GameMode : Actor
     {
-        private const string DEBUG_FLAG = "<color=cyan>[GameMode]</color>";
-        private IUnityObjectSpawner objectSpawner;
-        private IWorldSettings worldSettings;
-        private IGameSession gameSession;
-        private ISceneTransitionHandler sceneTransitionHandler;
-
         [SerializeField] private bool bStartPlayersAsSpectators;
         [SerializeField] private GameModeConfig gameModeConfig;
-        
-        public bool StartPlayersAsSpectators { get => bStartPlayersAsSpectators; set => bStartPlayersAsSpectators = value; }
+        [SerializeField] private GameState gameStateClass;
+        [SerializeField, Min(0)] private int maxPlayers = 16;
+        [SerializeField, Min(0)] private int maxSpectators = 4;
 
-        public IGameSession GetGameSession() => gameSession;
-        public void SetGameSession(IGameSession session) => gameSession = session;
+        private IGameSession gameSession;
+        private GameModeLifecycleState modeState;
+        private bool ownsDefaultSession;
+        private bool matchStartNotified;
 
-        public ISceneTransitionHandler GetSceneTransitionHandler() => sceneTransitionHandler;
-        public void SetSceneTransitionHandler(ISceneTransitionHandler handler) => sceneTransitionHandler = handler;
-
-        public virtual void Initialize(IUnityObjectSpawner objectSpawner, IWorldSettings worldSettings)
+        public bool StartPlayersAsSpectators
         {
-            this.objectSpawner = objectSpawner;
-            this.worldSettings = worldSettings;
+            get => bStartPlayersAsSpectators;
+            set => bStartPlayersAsSpectators = value;
         }
 
-        /// <summary>
-        /// Set game mode configuration from a ScriptableObject asset.
-        /// Can be called during initialization to configure game rules.
-        /// </summary>
+        public GameModeLifecycleState ModeState => modeState;
+        public IGameSession GetGameSession() => gameSession;
+        public GameModeConfig GetGameModeConfig() => gameModeConfig;
+        public GameState GetGameState() => World?.GameState;
+
+        public virtual void Initialize(World targetWorld, IGameSession session = null)
+        {
+            if (targetWorld == null)
+            {
+                throw new ArgumentNullException(nameof(targetWorld));
+            }
+
+            targetWorld.AssertOwnerThread();
+
+            if (!ReferenceEquals(World, targetWorld))
+            {
+                throw new InvalidOperationException("GameMode must be registered with its World before initialization.");
+            }
+
+            if (!targetWorld.IsAuthority)
+            {
+                throw new InvalidOperationException("GameMode can only exist in an authoritative World.");
+            }
+
+            if (modeState != GameModeLifecycleState.Uninitialized)
+            {
+                throw new InvalidOperationException("GameMode is already initialized.");
+            }
+
+            if (maxPlayers < 0 || maxSpectators < 0)
+            {
+                throw new InvalidOperationException("GameMode capacity cannot be negative.");
+            }
+
+            gameSession = session ?? new GameSession(maxPlayers, maxSpectators);
+            ownsDefaultSession = session == null;
+            gameModeConfig?.ApplyTo(this);
+            modeState = GameModeLifecycleState.Initialized;
+        }
+
         public virtual void SetGameModeConfig(GameModeConfig config)
         {
-            if (config != null)
-            {
-                gameModeConfig = config;
-                config.ApplyTo(this);
-            }
+            World?.AssertOwnerThread();
+            gameModeConfig = config;
+            config?.ApplyTo(this);
         }
 
-        public GameModeConfig GetGameModeConfig() => gameModeConfig;
-
-        #region Player Start Management
-        protected virtual void InitNewPlayer(PlayerController NewPlayerController, string Portal = "")
+        internal async UniTask StartPlayAsync(
+            IReadOnlyList<LocalPlayer> localPlayers,
+            CancellationToken cancellationToken)
         {
-            if (NewPlayerController == null)
+            if (modeState != GameModeLifecycleState.Initialized)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid PlayerController");
-                return;
+                throw new InvalidOperationException($"Cannot start GameMode from state '{modeState}'.");
             }
 
-            if (NewPlayerController.GetPlayerState() == null)
+            modeState = GameModeLifecycleState.Starting;
+            InitializeGameState();
+            SetRequiredMatchState(GameState.EMatchState.WaitingToStart);
+
+            if (!World.IsDedicatedServer && localPlayers != null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid PlayerState");
-                return;
-            }
-
-            UpdatePlayerStartSpot(NewPlayerController, Portal);
-        }
-
-        protected virtual bool UpdatePlayerStartSpot(PlayerController Player, string Portal = "")
-        {
-            Actor StartSpot = FindPlayerStart(Player, Portal);
-            if (StartSpot != null)
-            {
-                Quaternion StartRotation = Quaternion.Euler(0, StartSpot.GetYaw(), 0);
-                Player.SetInitialLocationAndRotation(StartSpot.transform.position, StartRotation);
-                Player.SetStartSpot(StartSpot);
-                return true;
-            }
-            return false;
-        }
-
-        protected virtual Actor FindPlayerStart(Controller Player, string IncomingName = "")
-        {
-            var playerStarts = PlayerStart.GetAllPlayerStarts();
-
-            if (playerStarts == null || playerStarts.Count == 0)
-            {
-                CLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found in the scene");
-                return null;
-            }
-
-            if (!string.IsNullOrEmpty(IncomingName))
-            {
-                for (int i = 0; i < playerStarts.Count; i++)
+                for (int i = 0; i < localPlayers.Count; i++)
                 {
-                    if (string.Equals(playerStarts[i].GetName(), IncomingName, System.StringComparison.Ordinal))
+                    cancellationToken.ThrowIfCancellationRequested();
+                    LocalPlayer localPlayer = localPlayers[i];
+                    PlayerLoginRequest request = CreateLocalPlayerLoginRequest(localPlayer);
+                    PlayerLoginResult result = await LoginAsync(request, localPlayer, cancellationToken);
+                    await UniTask.SwitchToMainThread();
+                    World?.AssertOwnerThread();
+                    cancellationToken.ThrowIfCancellationRequested();
+                    if (!result.Succeeded)
                     {
-                        Player.SetStartSpot(playerStarts[i]);
-                        return playerStarts[i];
+                        if (result.Status == PlayerLoginStatus.Cancelled)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                        }
+
+                        throw new InvalidOperationException(
+                            $"LocalPlayer {localPlayer.Index} login failed ({result.Status}): {result.Error}");
                     }
                 }
             }
 
-            Actor chosen = ChoosePlayerStart(Player);
-            if (chosen != null)
+            SetRequiredMatchState(GameState.EMatchState.InProgress);
+            modeState = GameModeLifecycleState.Running;
+        }
+
+        protected virtual PlayerLoginRequest CreateLocalPlayerLoginRequest(LocalPlayer localPlayer)
+        {
+            if (localPlayer == null)
             {
-                Player.SetStartSpot(chosen);
+                throw new ArgumentNullException(nameof(localPlayer));
             }
+
+            return new PlayerLoginRequest(
+                playerId: localPlayer.Index + 1,
+                playerName: $"LocalPlayer{localPlayer.Index + 1}",
+                isSpectator: bStartPlayersAsSpectators,
+                isLocal: true);
+        }
+
+        public virtual UniTask<PlayerLoginResult> LoginAsync(
+            PlayerLoginRequest request,
+            LocalPlayer localPlayer = null,
+            CancellationToken cancellationToken = default)
+        {
+            World?.AssertOwnerThread();
+            if (modeState != GameModeLifecycleState.Starting &&
+                modeState != GameModeLifecycleState.Running)
+            {
+                return UniTask.FromResult(PlayerLoginResult.Failure(
+                    PlayerLoginStatus.WorldNotAcceptingPlayers,
+                    $"GameMode is in state '{modeState}'."));
+            }
+
+            if (World == null || !World.IsAuthority)
+            {
+                return UniTask.FromResult(PlayerLoginResult.Failure(
+                    PlayerLoginStatus.NotAuthoritative,
+                    "Only an authoritative World can accept players."));
+            }
+
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return UniTask.FromResult(PlayerLoginResult.Failure(
+                    PlayerLoginStatus.Cancelled,
+                    "Login was cancelled."));
+            }
+
+            if (!request.TryValidate(out string validationError))
+            {
+                return UniTask.FromResult(PlayerLoginResult.Failure(
+                    PlayerLoginStatus.InvalidRequest,
+                    validationError));
+            }
+
+            bool hasLocalPlayer = localPlayer != null;
+            if (request.IsLocal != hasLocalPlayer ||
+                hasLocalPlayer && !IsOwnedLocalPlayer(localPlayer))
+            {
+                return UniTask.FromResult(PlayerLoginResult.Failure(
+                    PlayerLoginStatus.InvalidRequest,
+                    "Local login identity does not match the GameInstance LocalPlayer slot."));
+            }
+
+            if (!PreLogin(in request, out string admissionError))
+            {
+                PlayerLoginStatus status = request.IsSpectator
+                    ? gameSession.SpectatorCount >= gameSession.MaxSpectators
+                        ? PlayerLoginStatus.AtCapacity
+                        : PlayerLoginStatus.Rejected
+                    : gameSession.PlayerCount >= gameSession.MaxPlayers
+                        ? PlayerLoginStatus.AtCapacity
+                        : PlayerLoginStatus.Rejected;
+
+                return UniTask.FromResult(PlayerLoginResult.Failure(status, admissionError));
+            }
+
+            PlayerController playerController = null;
+            PlayerState playerState = null;
+            CameraManager cameraManager = null;
+            SpectatorPawn spectatorPawn = null;
+            Pawn spawnedPawn = null;
+            bool sessionRegistered = false;
+            bool worldCommitted = false;
+            bool gameStateCommitted = false;
+            bool transactionCommitted = false;
+
+            try
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                playerController = World.SpawnActorDeferred(World.Definition.PlayerControllerClass);
+                playerState = World.SpawnActorDeferred(World.Definition.PlayerStateClass);
+                playerState.SetPlayerId(request.PlayerId);
+                playerState.SetPlayerName(request.PlayerName);
+                playerState.SetIsSpectator(request.IsSpectator);
+
+                if (localPlayer != null && World.Definition.CameraManagerClass != null)
+                {
+                    cameraManager = World.SpawnActorDeferred(World.Definition.CameraManagerClass);
+                }
+
+                if (request.IsSpectator && World.Definition.SpectatorPawnClass != null)
+                {
+                    spectatorPawn = World.SpawnActorDeferred(World.Definition.SpectatorPawnClass);
+                }
+
+                playerController.InitializePlayer(
+                    World,
+                    playerState,
+                    localPlayer,
+                    cameraManager,
+                    spectatorPawn);
+
+                if (!gameSession.TryRegisterPlayer(playerController, request.IsSpectator, out string rosterError))
+                {
+                    return UniTask.FromResult(PlayerLoginResult.Failure(PlayerLoginStatus.AtCapacity, rosterError));
+                }
+
+                sessionRegistered = true;
+                World.CommitPlayerController(playerController, localPlayer);
+                worldCommitted = true;
+
+                if (request.IsSpectator)
+                {
+                    if (spectatorPawn != null)
+                    {
+                        playerController.Possess(spectatorPawn);
+                    }
+                }
+                else if (!TryRestartPlayer(playerController, string.Empty, out spawnedPawn, out string spawnError))
+                {
+                    return UniTask.FromResult(PlayerLoginResult.Failure(PlayerLoginStatus.SpawnFailed, spawnError));
+                }
+
+                GameState currentGameState = GetGameState();
+                if (currentGameState != null)
+                {
+                    if (!currentGameState.AddPlayerState(playerState))
+                    {
+                        throw new InvalidOperationException("PlayerState could not be committed to GameState.");
+                    }
+
+                    gameStateCommitted = true;
+                }
+
+                World.FinishSpawningActor(playerState);
+                if (cameraManager != null) World.FinishSpawningActor(cameraManager);
+                if (spectatorPawn != null) World.FinishSpawningActor(spectatorPawn);
+                if (spawnedPawn != null) World.FinishSpawningActor(spawnedPawn);
+                World.FinishSpawningActor(playerController);
+                PostLogin(playerController);
+                if (!World.ContainsPlayerController(playerController) ||
+                    !World.IsActorRegistered(playerController) ||
+                    !gameSession.ContainsPlayer(playerController))
+                {
+                    return UniTask.FromResult(PlayerLoginResult.Failure(
+                        PlayerLoginStatus.Rejected,
+                        "PostLogin ended the participant before login completion."));
+                }
+
+                transactionCommitted = true;
+                return UniTask.FromResult(PlayerLoginResult.Success(playerController));
+            }
+            catch (OperationCanceledException)
+            {
+                return UniTask.FromResult(PlayerLoginResult.Failure(
+                    PlayerLoginStatus.Cancelled,
+                    "Login was cancelled."));
+            }
+            catch (Exception exception)
+            {
+                return UniTask.FromResult(PlayerLoginResult.Failure(
+                    PlayerLoginStatus.SpawnFailed,
+                    exception.Message));
+            }
+            finally
+            {
+                if (!transactionCommitted)
+                {
+                    RollbackLogin(
+                        playerController,
+                        playerState,
+                        cameraManager,
+                        spectatorPawn,
+                        spawnedPawn,
+                        sessionRegistered,
+                        worldCommitted,
+                        gameStateCommitted);
+                }
+            }
+        }
+
+        protected virtual bool PreLogin(in PlayerLoginRequest request, out string errorMessage)
+        {
+            return gameSession.ApproveLogin(in request, out errorMessage);
+        }
+
+        private bool IsOwnedLocalPlayer(LocalPlayer localPlayer)
+        {
+            IReadOnlyList<LocalPlayer> localPlayers = World.GameInstance.LocalPlayers;
+            int index = localPlayer.Index;
+            return index >= 0 &&
+                   index < localPlayers.Count &&
+                   ReferenceEquals(localPlayers[index], localPlayer);
+        }
+
+        public virtual void PostLogin(PlayerController newPlayer)
+        {
+            HandleStartingNewPlayer(newPlayer);
+        }
+
+        protected virtual void HandleStartingNewPlayer(PlayerController newPlayer) { }
+
+        public bool Logout(PlayerController exiting)
+        {
+            World?.AssertOwnerThread();
+            return LogoutInternal(exiting, destroyController: true);
+        }
+
+        internal bool HandleDestroyingPlayerController(PlayerController exiting)
+        {
+            return LogoutInternal(exiting, destroyController: false);
+        }
+
+        private bool LogoutInternal(PlayerController exiting, bool destroyController)
+        {
+            if (ReferenceEquals(exiting, null) || World == null || !World.ContainsPlayerController(exiting))
+            {
+                return false;
+            }
+
+            Pawn pawn = exiting.GetPawn();
+            PlayerState playerState = exiting.GetPlayerState();
+            CameraManager cameraManager = exiting.GetCameraManager();
+            SpectatorPawn spectatorPawn = exiting.GetSpectatorPawn();
+
+            try
+            {
+                exiting.UnPossess();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, exiting);
+            }
+
+            RemoveParticipantState(exiting, playerState);
+
+            try
+            {
+                HandleLogout(exiting);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, exiting);
+            }
+
+            DestroyIfRegistered(pawn);
+            if (destroyController)
+            {
+                DestroyIfRegistered(exiting);
+            }
+            DestroyIfRegistered(playerState);
+            DestroyIfRegistered(cameraManager);
+            if (!ReferenceEquals(spectatorPawn, pawn))
+            {
+                DestroyIfRegistered(spectatorPawn);
+            }
+
+            return true;
+        }
+
+        protected virtual void HandleLogout(PlayerController exiting) { }
+
+        internal void HandleExternallyDestroyedPlayerController(PlayerController exiting)
+        {
+            if (ReferenceEquals(exiting, null))
+            {
+                return;
+            }
+
+            RemoveParticipantState(exiting, exiting.GetPlayerState());
+        }
+
+        public virtual bool RestartPlayer(PlayerController player, string portal = "")
+        {
+            World?.AssertOwnerThread();
+            Pawn spawnedPawn = null;
+            bool committed = false;
+            try
+            {
+                bool restarted = TryRestartPlayer(player, portal, out spawnedPawn, out _);
+                if (!restarted)
+                {
+                    return false;
+                }
+
+                if (spawnedPawn != null)
+                {
+                    World.FinishSpawningActor(spawnedPawn);
+                }
+
+                committed = true;
+                return true;
+            }
+            finally
+            {
+                if (!committed && spawnedPawn != null)
+                {
+                    if (player != null && ReferenceEquals(player.GetPawn(), spawnedPawn))
+                    {
+                        try
+                        {
+                            player.UnPossess();
+                        }
+                        catch (Exception exception)
+                        {
+                            Debug.LogException(exception, player);
+                        }
+                    }
+
+                    DestroyIfRegistered(spawnedPawn);
+                }
+            }
+        }
+
+        protected virtual PlayerStart FindPlayerStart(Controller player, string incomingName = "")
+        {
+            IReadOnlyList<PlayerStart> starts = World.PlayerStarts;
+            if (!string.IsNullOrEmpty(incomingName))
+            {
+                for (int i = 0; i < starts.Count; i++)
+                {
+                    PlayerStart start = starts[i];
+                    if (start != null && string.Equals(start.GetName(), incomingName, StringComparison.Ordinal))
+                    {
+                        player.SetStartSpot(start);
+                        return start;
+                    }
+                }
+            }
+
+            PlayerStart chosen = ChoosePlayerStart(player, starts);
+            player.SetStartSpot(chosen);
             return chosen;
         }
 
-        /// <summary>
-        /// Override to implement custom player start selection logic (random, round-robin, team-based, etc.)
-        /// </summary>
-        protected virtual Actor ChoosePlayerStart(Controller Player)
+        protected virtual PlayerStart ChoosePlayerStart(
+            Controller player,
+            IReadOnlyList<PlayerStart> availableStarts)
         {
-            var playerStarts = PlayerStart.GetAllPlayerStarts();
-            return playerStarts.Count > 0 ? playerStarts[0] : null;
+            return availableStarts != null && availableStarts.Count > 0 ? availableStarts[0] : null;
         }
 
-        protected virtual bool ShouldSpawnAtStartSpot(PlayerController Player)
+        protected virtual Pawn GetDefaultPawnPrefabForController(Controller controller)
         {
-            return Player.GetStartSpot() != null;
-        }
-        #endregion
-
-        #region Restart Player
-        public virtual void RestartPlayer(PlayerController NewPlayer, string Portal = "")
-        {
-            if (NewPlayer == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
-                return;
-            }
-
-            Actor StartSpot = FindPlayerStart(NewPlayer, Portal);
-            if (StartSpot == null)
-            {
-                CLogger.LogWarning($"{DEBUG_FLAG} No PlayerStart found, spawning at origin");
-                RestartPlayerAtLocation(NewPlayer, Vector3.zero);
-                return;
-            }
-
-            RestartPlayerAtPlayerStart(NewPlayer, StartSpot);
+            return controller.GetDefaultPawnPrefab();
         }
 
-        protected virtual void RestartPlayerAtPlayerStart(PlayerController NewPlayer, Actor StartSpot)
+        protected virtual Pawn SpawnDefaultPawnAtTransform(Controller controller, Transform spawnTransform)
         {
-            if (NewPlayer == null)
+            Pawn prefab = GetDefaultPawnPrefabForController(controller);
+            if (prefab == null)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
-                return;
-            }
-            if (StartSpot == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Start");
-                return;
-            }
-
-            Quaternion SpawnRotation = StartSpot.transform.rotation;
-            Pawn pawnToPossess = NewPlayer.GetPawn();
-            if (NewPlayer.GetPawn() != null)
-            {
-                SpawnRotation = NewPlayer.GetPawn().transform.rotation;
-            }
-            else if (GetDefaultPawnPrefabForController(NewPlayer) != null)
-            {
-                Pawn NewPawn = SpawnDefaultPawnAtPlayerStart(NewPlayer, StartSpot);
-                if (NewPawn != null)
-                {
-                    pawnToPossess = NewPawn;
-                }
-            }
-
-            if (pawnToPossess == null)
-            {
-                NewPlayer.FailedToSpawnPawn();
-                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at PlayerStart");
-            }
-            else
-            {
-                FinishRestartPlayer(NewPlayer, pawnToPossess, SpawnRotation);
-            }
-        }
-
-        protected virtual void RestartPlayerAtTransform(PlayerController NewPlayer, Transform SpawnTransform)
-        {
-            if (NewPlayer == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
-                return;
-            }
-
-            Quaternion SpawnRotation = SpawnTransform != null ? SpawnTransform.rotation : Quaternion.identity;
-            Pawn pawnToPossess = NewPlayer.GetPawn();
-            if (NewPlayer.GetPawn() != null)
-            {
-                SpawnRotation = NewPlayer.GetPawn().transform.rotation;
-            }
-            else if (GetDefaultPawnPrefabForController(NewPlayer) != null)
-            {
-                Pawn NewPawn = SpawnDefaultPawnAtTransform(NewPlayer, SpawnTransform);
-                if (NewPawn != null)
-                {
-                    pawnToPossess = NewPawn;
-                }
-            }
-
-            if (pawnToPossess == null)
-            {
-                NewPlayer.FailedToSpawnPawn();
-                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Transform");
-            }
-            else
-            {
-                FinishRestartPlayer(NewPlayer, pawnToPossess, SpawnRotation);
-            }
-        }
-
-        protected virtual void RestartPlayerAtLocation(PlayerController NewPlayer, Vector3 NewLocation)
-        {
-            if (NewPlayer == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Controller");
-                return;
-            }
-
-            Quaternion SpawnRotation = Quaternion.identity;
-            Pawn pawnToPossess = NewPlayer.GetPawn();
-            if (NewPlayer.GetPawn() != null)
-            {
-                SpawnRotation = NewPlayer.GetPawn().transform.rotation;
-            }
-            else if (GetDefaultPawnPrefabForController(NewPlayer) != null)
-            {
-                Pawn NewPawn = SpawnDefaultPawnAtLocation(NewPlayer, NewLocation);
-                if (NewPawn != null)
-                {
-                    pawnToPossess = NewPawn;
-                }
-            }
-
-            if (pawnToPossess == null)
-            {
-                NewPlayer.FailedToSpawnPawn();
-                CLogger.LogError($"{DEBUG_FLAG} Failed to restart player at Location");
-            }
-            else
-            {
-                FinishRestartPlayer(NewPlayer, pawnToPossess, SpawnRotation);
-            }
-        }
-
-        protected virtual void FinishRestartPlayer(Controller NewPlayer, Pawn PawnToPossess, Quaternion StartRotation)
-        {
-            NewPlayer.Possess(PawnToPossess);
-
-            if (NewPlayer.GetPawn() == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid Player Pawn after possess");
-            }
-            else
-            {
-                NewPlayer.SetControlRotation(StartRotation);
-            }
-        }
-        #endregion
-
-        #region Spawn Pawn
-        protected virtual Pawn SpawnDefaultPawnAtPlayerStart(Controller NewPlayer, Actor StartSpot)
-        {
-            return SpawnDefaultPawnAtTransform(NewPlayer, StartSpot.transform);
-        }
-
-        protected virtual Pawn SpawnDefaultPawnAtTransform(Controller NewPlayer, Transform SpawnTransform)
-        {
-            if (SpawnTransform == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Invalid target transform");
                 return null;
             }
 
-            Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
-            if (p == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn, check spawn pipeline");
-                return null;
-            }
-
-            TeleportPawn(p, SpawnTransform.position, SpawnTransform.rotation);
-            p.NotifyInitialRotation(SpawnTransform.rotation);
-            return p;
+            Pawn pawn = World.SpawnActorDeferred(prefab);
+            Vector3 position = spawnTransform != null ? spawnTransform.position : Vector3.zero;
+            Quaternion rotation = spawnTransform != null ? spawnTransform.rotation : Quaternion.identity;
+            TeleportPawn(pawn, position, rotation);
+            pawn.NotifyInitialRotation(rotation);
+            return pawn;
         }
 
-        /// <summary>
-        /// Teleports a pawn to the specified position and rotation.
-        /// Handles CharacterController, Rigidbody, or pure Transform movement systems.
-        /// </summary>
         protected virtual void TeleportPawn(Pawn pawn, Vector3 position, Quaternion rotation)
         {
-            if (pawn == null) return;
+            if (pawn == null)
+            {
+                throw new ArgumentNullException(nameof(pawn));
+            }
 
-            var characterController = pawn.GetComponent<CharacterController>();
+            CharacterController characterController = pawn.GetComponent<CharacterController>();
             if (characterController != null)
             {
-                // CharacterController requires disable/enable cycle to sync internal state
-                characterController.enabled = false;
+                bool wasEnabled = characterController.enabled;
+                if (wasEnabled) characterController.enabled = false;
                 pawn.transform.SetPositionAndRotation(position, rotation);
-                pawn.transform.localScale = Vector3.one;
-                characterController.enabled = true;
+                if (wasEnabled) characterController.enabled = true;
                 return;
             }
 
-            var rigidbody = pawn.GetComponent<Rigidbody>();
+            Rigidbody rigidbody = pawn.GetComponent<Rigidbody>();
             if (rigidbody != null)
             {
                 if (rigidbody.isKinematic)
                 {
-                    pawn.transform.SetPositionAndRotation(position, rotation);
-                    pawn.transform.localScale = Vector3.one;
-                    rigidbody.MovePosition(position);
-                    rigidbody.MoveRotation(rotation);
+                    rigidbody.position = position;
+                    rigidbody.rotation = rotation;
                 }
                 else
                 {
@@ -332,67 +528,34 @@ namespace CycloneGames.GameplayFramework.Runtime
                     rigidbody.velocity = Vector3.zero;
 #endif
                     rigidbody.angularVelocity = Vector3.zero;
-                    pawn.transform.SetPositionAndRotation(position, rotation);
-                    pawn.transform.localScale = Vector3.one;
+                    rigidbody.position = position;
+                    rigidbody.rotation = rotation;
                 }
-                Physics.SyncTransforms();
+
                 return;
             }
 
             pawn.transform.SetPositionAndRotation(position, rotation);
-            pawn.transform.localScale = Vector3.one;
         }
 
-        protected virtual Pawn SpawnDefaultPawnAtLocation(Controller NewPlayer, Vector3 NewLocation)
+        public PlayerController GetPlayerController(int index = 0)
         {
-            Pawn p = objectSpawner?.Create(GetDefaultPawnPrefabForController(NewPlayer)) as Pawn;
-            if (p == null)
+            IReadOnlyList<PlayerController> controllers = World?.PlayerControllers;
+            return controllers != null && index >= 0 && index < controllers.Count
+                ? controllers[index]
+                : null;
+        }
+
+        internal void NotifyWorldStarted()
+        {
+            if (modeState != GameModeLifecycleState.Running || matchStartNotified)
             {
-                CLogger.LogError($"{DEBUG_FLAG} Failed to spawn Pawn");
-                return null;
+                return;
             }
-            p.transform.SetParent(null);
-            p.transform.SetPositionAndRotation(NewLocation, Quaternion.identity);
-            p.transform.localScale = Vector3.one;
-            p.NotifyInitialRotation(Quaternion.identity);
-            return p;
+
+            HandleMatchHasStarted();
+            matchStartNotified = true;
         }
-        #endregion
-
-        #region Pawn Class
-        /// <summary>
-        /// Override to return a different pawn prefab per controller (e.g., team-based or class-based selection).
-        /// </summary>
-        protected virtual Pawn GetDefaultPawnPrefabForController(Controller InController)
-        {
-            return InController.GetDefaultPawnPrefab();
-        }
-        #endregion
-
-        #region Player Controller
-        private PlayerController cachedPlayerController;
-
-        protected virtual PlayerController SpawnPlayerController()
-        {
-            cachedPlayerController = objectSpawner?.Create(worldSettings?.PlayerControllerClass) as PlayerController;
-            if (cachedPlayerController == null)
-            {
-                CLogger.LogError($"{DEBUG_FLAG} Spawn PlayerController Failed, check spawn pipeline");
-                return null;
-            }
-            cachedPlayerController.Initialize(objectSpawner, worldSettings);
-            cachedPlayerController.InitializeRuntimeComponents();
-            return cachedPlayerController;
-        }
-
-        public PlayerController GetPlayerController() => cachedPlayerController;
-        #endregion
-
-        #region Match Lifecycle
-        /// <summary>
-        /// Called when a new player is being set up. Override for custom player initialization.
-        /// </summary>
-        protected virtual void HandleStartingNewPlayer(PlayerController NewPlayer) { }
 
         protected virtual void HandleMatchHasStarted()
         {
@@ -403,103 +566,283 @@ namespace CycloneGames.GameplayFramework.Runtime
         {
             gameSession?.HandleMatchHasEnded();
         }
-        #endregion
 
-        #region Login / Logout
-        /// <summary>
-        /// Validates whether a player should be allowed to join before creating their PlayerController.
-        /// Delegates to IGameSession.ApproveLogin if a session is set.
-        /// Override for custom validation (whitelist, matchmaking tickets, etc.)
-        /// </summary>
-        protected virtual bool PreLogin(string options, string address, out string errorMessage)
+        public virtual async UniTask TravelToLevel(
+            string levelName,
+            CancellationToken cancellationToken = default)
         {
-            if (gameSession != null && !gameSession.ApproveLogin(options, address, out errorMessage))
+            World?.AssertOwnerThread();
+            if (string.IsNullOrWhiteSpace(levelName))
             {
-                return false;
+                throw new ArgumentException("Level name is required.", nameof(levelName));
             }
-            errorMessage = null;
-            return true;
-        }
 
-        /// <summary>
-        /// Called after a PlayerController is fully initialized and ready for gameplay.
-        /// Registers the player with the session and invokes HandleStartingNewPlayer.
-        /// </summary>
-        public virtual void PostLogin(PlayerController NewPlayer)
-        {
-            HandleStartingNewPlayer(NewPlayer);
-            gameSession?.RegisterPlayer(NewPlayer);
-        }
-
-        /// <summary>
-        /// Called when a player leaves the game (disconnect, quit, kicked).
-        /// Unregisters the player from the session.
-        /// </summary>
-        public virtual void Logout(Controller Exiting)
-        {
-            if (Exiting is PlayerController pc)
+            ISceneTransitionHandler handler = World?.SceneTransitionHandler;
+            GameInstance instance = World?.GameInstance;
+            if (handler == null || instance == null)
             {
-                gameSession?.UnregisterPlayer(pc);
+                throw new InvalidOperationException("No scene transition handler is configured.");
+            }
+
+            await instance.StopWorldAsync(EndPlayReason.Travel, cancellationToken);
+            try
+            {
+                await handler.ChangeScene(levelName, cancellationToken);
+            }
+            finally
+            {
+                await UniTask.SwitchToMainThread();
             }
         }
-        #endregion
 
-        #region Level Transition
-        /// <summary>
-        /// Travel to a new level by replacing the current navigation history entry.
-        /// Performs game-side cleanup then delegates scene navigation to ISceneTransitionHandler.
-        /// 
-        /// NOTE: Do NOT call LaunchGameModeAsync after this returns —
-        /// the new scene's ISceneEntryPoint is responsible for bootstrapping its own GameMode.
-        /// </summary>
-        public virtual async UniTask TravelToLevel(string levelName, CancellationToken cancellationToken = default)
+        internal UniTask ShutdownAsync(EndPlayReason reason)
         {
-            CLogger.LogInfo($"{DEBUG_FLAG} Traveling to level: {levelName}");
-
-            if (sceneTransitionHandler == null)
+            if (modeState == GameModeLifecycleState.Stopped ||
+                modeState == GameModeLifecycleState.Uninitialized)
             {
-                CLogger.LogError($"{DEBUG_FLAG} SceneTransitionHandler not set. Cannot travel to level.");
+                return UniTask.CompletedTask;
+            }
+
+            modeState = GameModeLifecycleState.Stopping;
+            while (World != null && World.PlayerControllers.Count > 0)
+            {
+                PlayerController controller = World.PlayerControllers[World.PlayerControllers.Count - 1];
+                Logout(controller);
+            }
+
+            FinishShutdown();
+            return UniTask.CompletedTask;
+        }
+
+        internal void ShutdownImmediate(EndPlayReason reason)
+        {
+            if (modeState == GameModeLifecycleState.Stopped ||
+                modeState == GameModeLifecycleState.Uninitialized)
+            {
                 return;
             }
 
-            // Game-side cleanup before navigation
-            await EndGameAsync(cancellationToken);
+            modeState = GameModeLifecycleState.Stopping;
+            while (World != null && World.PlayerControllers.Count > 0)
+            {
+                Logout(World.PlayerControllers[World.PlayerControllers.Count - 1]);
+            }
 
-            // Delegate to scene navigation system (e.g. Navigathena)
-            // Change resets navigation history — typical for level-to-level travel
-            await sceneTransitionHandler.ChangeScene(levelName, cancellationToken);
+            FinishShutdown();
         }
 
-        /// <summary>
-        /// Override to customize game-side cleanup before a scene transition.
-        /// Default implementation is a no-op yield.
-        /// </summary>
-        protected virtual async UniTask EndGameAsync(CancellationToken cancellationToken = default)
+        private void InitializeGameState()
         {
-            CLogger.LogInfo($"{DEBUG_FLAG} Ending game");
-            await UniTask.Yield(cancellationToken);
-        }
-        #endregion
+            GameState state = null;
+            if (gameStateClass != null)
+            {
+                state = World.SpawnActor(gameStateClass);
+            }
+            else
+            {
+                World.TryGetActor(out state);
+            }
 
-        #region Launch
-        public virtual UniTask LaunchGameModeAsync(CancellationToken cancellationToken = default)
+            if (state != null)
+            {
+                World.SetGameState(state);
+            }
+        }
+
+        private void SetRequiredMatchState(GameState.EMatchState matchState)
         {
-            CLogger.LogInfo($"{DEBUG_FLAG} Launch GameMode");
-
-            if (cancellationToken.IsCancellationRequested) return UniTask.CompletedTask;
-
-            PlayerController PC = SpawnPlayerController();
-            if (PC == null) return UniTask.CompletedTask;
-
-            if (cancellationToken.IsCancellationRequested) return UniTask.CompletedTask;
-
-            PostLogin(PC);
-
-            HandleMatchHasStarted();
-
-            RestartPlayer(PC);
-            return UniTask.CompletedTask;
+            GameState state = GetGameState();
+            if (state != null && !state.TrySetMatchState(matchState, out string error))
+            {
+                throw new InvalidOperationException(error);
+            }
         }
-        #endregion
+
+        private bool TryRestartPlayer(
+            PlayerController player,
+            string portal,
+            out Pawn spawnedPawn,
+            out string error)
+        {
+            spawnedPawn = null;
+            if (player == null || !ReferenceEquals(player.World, World))
+            {
+                error = "PlayerController must belong to this World.";
+                return false;
+            }
+
+            if (player.GetPlayerState()?.IsSpectator() == true)
+            {
+                error = "Spectators do not spawn the default Pawn.";
+                return false;
+            }
+
+            PlayerStart start = FindPlayerStart(player, portal);
+            Pawn pawn = player.GetPawn();
+            if (pawn == null)
+            {
+                pawn = SpawnDefaultPawnAtTransform(player, start != null ? start.transform : null);
+                spawnedPawn = pawn;
+            }
+
+            if (pawn == null)
+            {
+                player.FailedToSpawnPawn();
+                error = "Default Pawn could not be spawned.";
+                return false;
+            }
+
+            if (start != null && spawnedPawn == null)
+            {
+                TeleportPawn(pawn, start.transform.position, start.transform.rotation);
+            }
+
+            player.Possess(pawn);
+            player.SetControlRotation(start != null ? start.transform.rotation : pawn.GetActorRotation());
+            error = null;
+            return true;
+        }
+
+        private void RollbackLogin(
+            PlayerController playerController,
+            PlayerState playerState,
+            CameraManager cameraManager,
+            SpectatorPawn spectatorPawn,
+            Pawn spawnedPawn,
+            bool sessionRegistered,
+            bool worldCommitted,
+            bool gameStateCommitted)
+        {
+            if (playerController != null && playerController.GetPawn() != null)
+            {
+                try
+                {
+                    playerController.UnPossess();
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, playerController);
+                }
+            }
+
+            if (sessionRegistered)
+            {
+                try
+                {
+                    gameSession?.UnregisterPlayer(playerController);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, playerController);
+                }
+            }
+
+            if (worldCommitted)
+            {
+                try
+                {
+                    World.RemovePlayerController(playerController);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, playerController);
+                }
+            }
+
+            if (gameStateCommitted)
+            {
+                try
+                {
+                    GetGameState()?.RemovePlayerState(playerState);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, playerState);
+                }
+            }
+
+            DestroyIfRegistered(spawnedPawn);
+            DestroyIfRegistered(playerController);
+            DestroyIfRegistered(playerState);
+            DestroyIfRegistered(cameraManager);
+            DestroyIfRegistered(spectatorPawn);
+        }
+
+        private void DestroyIfRegistered(Actor actor)
+        {
+            if (actor != null && World != null && World.IsActorRegistered(actor))
+            {
+                try
+                {
+                    World.DestroyActor(actor);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, actor);
+                }
+            }
+        }
+
+        private void RemoveParticipantState(PlayerController playerController, PlayerState playerState)
+        {
+            try
+            {
+                gameSession?.UnregisterPlayer(playerController);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, playerController);
+            }
+
+            try
+            {
+                GetGameState()?.RemovePlayerState(playerState);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception, playerState);
+            }
+
+            World?.RemovePlayerController(playerController);
+        }
+
+        private void FinishShutdown()
+        {
+            try
+            {
+                if (matchStartNotified)
+                {
+                    matchStartNotified = false;
+                    GetGameState()?.TrySetMatchState(GameState.EMatchState.WaitingPostMatch, out _);
+                    HandleMatchHasEnded();
+                }
+            }
+            finally
+            {
+                modeState = GameModeLifecycleState.Stopped;
+                if (ownsDefaultSession)
+                {
+                    gameSession = null;
+                }
+            }
+        }
+
+        protected override void OnDestroy()
+        {
+            if (modeState != GameModeLifecycleState.Stopped &&
+                modeState != GameModeLifecycleState.Uninitialized)
+            {
+                try
+                {
+                    ShutdownImmediate(EndPlayReason.Destroyed);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception, this);
+                }
+            }
+
+            base.OnDestroy();
+        }
     }
 }

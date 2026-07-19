@@ -1,73 +1,83 @@
 # CycloneGames.Audio
 
-<div align="left">English | <a href="./README.SCH.md">简体中文</a></div>
+[English | 简体中文](README.SCH.md)
 
-An enhanced audio management system for Unity. The core logic is sourced from Microsoft's `Audio-Manager-for-Unity`, extended by CycloneGames with a strong focus on performance, memory efficiency, and production-grade robustness.
+CycloneGames.Audio is a Unity audio authoring and runtime package built around `AudioBank` / `AudioEvent` graphs, a bounded `AudioSource` pool, category-aware voice stealing, and a bounded worker-thread command queue. It exposes both a static `AudioManager` facade and an `IAudioService` interface for DI composition, with an explicit `OnBankUnloaded` lifecycle that integrates with external asset systems. Portions are derived from Microsoft's [Audio-Manager-for-Unity](https://github.com/microsoft/Audio-Manager-for-Unity) under the MIT License.
 
-If you do not plan to use mature middleware such as **Wwise**, **CriWare**, or **FMOD**, this plugin is highly recommended. Its logic for managing and editing audio is similar to **Wwise**, including common Wwise-like features such as **Bank, RTPC, Parameter, and Multi-Bus**, making it more suitable for developers and designers familiar with **Wwise**.
+## Table of Contents
 
-**Upstream Source**: https://github.com/microsoft/Audio-Manager-for-Unity
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Quick Start](#quick-start)
+- [Core Concepts](#core-concepts)
+- [Usage Guide](#usage-guide)
+- [Advanced Topics](#advanced-topics)
+- [Common Scenarios](#common-scenarios)
+- [Performance and Memory](#performance-and-memory)
+- [Troubleshooting](#troubleshooting)
 
-This version introduces critical optimizations for production environments, including performance monitoring, asynchronous resource loading, reduced GC overhead, DI-compatible architecture, safe asset lifecycle management, and cross-platform support including consoles.
+## Overview
 
-## Features
+A game audio system answers two questions: which sound should play, and which `AudioSource` should play it. CycloneGames.Audio separates authoring (the `AudioBank` / `AudioEvent` graph edited in the Editor) from runtime dispatch (`AudioManager` / `IAudioService`), and from physical playback (a pooled set of `AudioSource` components). The owner authors event graphs and calls play/stop APIs; the manager resolves clip references, picks a voice from the pool, applies category-aware stealing, and tracks the active event until it stops.
 
-- **AudioGraph Redrawing**: A more intuitive and visually appealing AudioGraph editing interface, featuring Unreal Engine-like shortcuts (e.g., Alt + mouse click on connections).
-- **Selector Workflow Upgrades**: Sequence/Switch/Random selectors now include clearer branch mapping, auto-sort by node Y, and improved per-branch UI readability for large graphs.
-- **Centralized Audio Control**: Manage sound effects and music from a unified API.
-- **DI & Non-DI Compatible**: Full `IAudioService` interface for DI containers (VContainer, Zenject, etc.), plus static `AudioManager` methods for direct access.
-- **Smart Audio Pool**: Intelligent AudioSource pool with device-adaptive sizing, auto-expansion, voice stealing, and intelligent shrinking.
-- **Safe Asset Lifecycle**: `UnloadBank` guarantees zero dangling `AudioSource.clip` references, with an `OnBankUnloaded` event hook for external asset management integration.
-- **Cross-Platform**: Windows, macOS, Linux, Android, iOS, WebGL, and consoles (Switch, PS4/PS5, Xbox) with platform-adaptive pool sizing.
-- **Performance Monitoring**: In-built hooks and utilities to monitor audio system performance in real-time.
-- **Asynchronous Loading**: Integrates `UniTask` for non-blocking, asynchronous loading of audio assets, ensuring smooth gameplay without hitches.
-- **GC Optimization**: Zero-allocation hot paths using fixed-size arrays, struct-based data, and object pooling. No `List<>` or LINQ in update loops.
-- **Thread Safety**: Lock-free `ConcurrentQueue` command dispatch; off-thread calls are automatically deferred to the main thread.
-- **Mobile Optimized**: Automatic audio pause/resume on application focus loss, battery-friendly update throttling on mobile platforms.
+The module targets Unity projects that need centralised SFX and music control without adopting a full middleware stack. It supports direct clip references, external clip loaders (Addressables, YooAsset, custom loaders), `UniTask`-based preload, platform-aware pool sizing, and worker-thread submission for a small set of command-style entry points. Unity audio objects and manager state remain main-thread-owned; only the queued commands listed in [Command Submission](#command-submission-and-main-thread-ownership) accept worker-thread submission.
 
-## Installation & Dependencies
+Use this module when the project needs a single audio service that combines bank authoring, pooling, voice policy, and external asset integration. Do not use it as a cryptographic or timing-precise audio synthesis layer — Unity's DSP clock and `AudioSettings.dspTime` drive scheduling, and the manager does not guarantee sample-accurate timing beyond what `PlayEventScheduled` provides.
 
-- Unity: `2022.3`+
-- Dependencies:
-  - `com.cysharp.unitask` ≥ `2.0.0`
+### Key Features
 
-Install via UPM or place the package under `Packages`/`Assets`. See `package.json` in this folder for details.
+- **AudioGraph authoring**: Node-connection editing with `Alt + Left Mouse Button` to remove one or all connections on a node.
+- **Selector authoring**: `SequenceSelector`, `SwitchSelector`, `RandomSelector` with explicit branch mapping, node-Y sorting, weights, and repeat control.
+- **Dual access model**: `IAudioService` for explicit DI composition, plus static `AudioManager` entry points for direct access.
+- **Bounded `AudioSource` pool**: Configurable initial/maximum sizes, runtime expansion, category-aware voice stealing, idle shrinking.
+- **External clip loading**: `UniTask` APIs for external clip resolution and bank preloading; playback and control APIs remain synchronous.
+- **Platform profiles**: Source-defined pool and update profiles for WebGL, Android/iOS, desktop, and selected console compiler symbols.
+- **Bank unload ordering**: `OnBankUnloaded` is raised after the main-thread unload path stops matching events, clears their pooled source clips, and removes registry entries.
+- **Bounded worker submission**: Selected commands use a `lock`-protected, fixed-capacity ring buffer and execute on the main thread.
+- **Runtime statistics**: Pool, registry, queue, and external clip-cache counters for diagnostics.
 
-## Documentation Map
+## Architecture
 
-- [Runtime system and API (this document)](./README.md)
-- Production audio import and optimization guide (Unity built-in audio workflow):
-  - [English](../../../../../Docs/AudioBestPractices/AudioBestPractices.md)
-  - [简体中文](../../../../../Docs/AudioBestPractices/AudioBestPractices.SCH.md)
+The module is split into Runtime, Editor, and Tests assemblies:
 
-## Editor Preview
+| Assembly | Path | Purpose |
+| --- | --- | --- |
+| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`, `IAudioService`, `AudioBank`, `AudioEvent`, pool, voice policy, external clip resolution. Depends on `UniTask`. |
+| `CycloneGames.Audio.Editor` | `Editor/` | `AudioGraph` window, inspectors for `AudioBank`, `AudioPlatformProfile`, `AudioPoolConfig`, `AudioVoicePolicyProfile`, runtime dashboard, profiler. |
+| `CycloneGames.Audio.Tests.Editor` | `Tests/Editor/` | `AudioClipReferencePathTests`, `AudioRandomSelectionTests`. |
 
-- <img src="./Documents~/Preview_01.png" alt="Preview 1" style="width: 100%; height: auto; max-width: 800px;" />
-- <img src="./Documents~/Preview_02.png" alt="Preview 2" style="width: 100%; height: auto; max-width: 800px;" />
-- <img src="./Documents~/Preview_03.png" alt="Preview 3" style="width: 100%; height: auto; max-width: 800px;" />
+```mermaid
+flowchart LR
+    Bank["AudioBank asset (authored graph)"] --> Event["AudioEvent nodes"]
+    Event --> Manager["AudioManager / IAudioService"]
+    Manager --> Registry["Name registry"]
+    Bank --> Registry
+    Manager --> Pool["AudioSource pool"]
+    Pool --> Source["Pooled AudioSource"]
+    External["External clip loader (Addressables / YooAsset / custom)"] --> Clip["AudioClip handle"]
+    Clip --> Source
+    Manager --> Unload["UnloadBank (main thread)"]
+    Unload --> Callback["OnBankUnloaded"]
+    Callback --> Owner["External asset owner releases handle"]
+```
 
-### Runtime Monitoring & Policy Inspectors
-
-- AudioManager runtime dashboard (pool usage, category budgets, bank overview)
-    - <img src="./Documents~/Preview_04.png" alt="AudioManager Runtime Dashboard" style="width: 100%; height: auto; max-width: 460px;" />
-- AudioPlatformProfile inspector (focus, throttling, culling, LOD, occlusion)
-    - <img src="./Documents~/Preview_05.png" alt="Audio Platform Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
-- AudioPoolConfig inspector (device tiers, expansion/shrinking, runtime stats)
-    - <img src="./Documents~/Preview_06.png" alt="Audio Pool Config Inspector" style="width: 100%; height: auto; max-width: 460px;" />
-- AudioVoicePolicyProfile inspector (category-level steal/budget defaults)
-    - <img src="./Documents~/Preview_07.png" alt="Audio Voice Policy Profile Inspector" style="width: 100%; height: auto; max-width: 460px;" />
+The owner authors event graphs in `AudioBank` assets and calls play/stop APIs. `AudioManager` resolves clip references (direct or via registered external loaders), acquires a voice from the pool, applies category-aware stealing when the pool is exhausted, and tracks the `ActiveEvent` until it stops or is stolen. `UnloadBank` runs on the main thread and raises `OnBankUnloaded` after all clip references are cleared, giving external asset owners a safe release boundary.
 
 ## Quick Start
 
-### 0) Creating AudioEvent Assets
+Add an asmdef reference to `CycloneGames.Audio.Runtime`, then import the namespace:
 
-Before you can play audio, you need to create AudioEvent assets in Unity:
+```csharp
+using CycloneGames.Audio.Runtime;
+```
 
-1. Right-click in your Project window
-2. Select **Create > CycloneGames > Audio > Audio Bank**
-3. Configure the internal logic of your AudioEvent using AudioFile nodes and other audio components
+### Create an AudioEvent asset
 
-### 1) Playing a Sound Effect (SFX)
+1. In the Project window, right-click and select **Create > CycloneGames > Audio > Audio Bank**.
+2. Open the bank, add an `AudioFile` node, and assign an `AudioClip`.
+3. The bank's root `AudioEvent` is now ready to play.
+
+### Play a sound effect
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -80,25 +90,23 @@ public class AudioExample : MonoBehaviour
 
     void Start()
     {
-        // Play a one-shot sound effect
+        // One-shot
         AudioManager.PlayEvent(jumpEvent, gameObject);
 
-        // Play a sound and get a handle to control it later
-        var audioHandle = AudioManager.PlayEvent(machineGunEvent, gameObject);
-
-        // Stop the looping sound after 5 seconds
-        StartCoroutine(StopAfterDelay(audioHandle, 5f));
+        // Play and keep a handle for later control
+        ActiveEvent handle = AudioManager.PlayEvent(machineGunEvent, gameObject);
+        StartCoroutine(StopAfterDelay(handle, 5f));
     }
 
-    private System.Collections.IEnumerator StopAfterDelay(ActiveEvent audioHandle, float delay)
+    private System.Collections.IEnumerator StopAfterDelay(ActiveEvent handle, float delay)
     {
         yield return new WaitForSeconds(delay);
-        audioHandle?.Stop();
+        handle?.Stop();
     }
 }
 ```
 
-### 2) Playing Music
+### Play music
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -108,19 +116,12 @@ public class MusicController : MonoBehaviour
 {
     [SerializeField] private AudioEvent backgroundMusic;
 
-    void Start()
-    {
-        AudioManager.PlayEvent(backgroundMusic, gameObject);
-    }
-
-    public void StopMusic()
-    {
-        AudioManager.StopAll(backgroundMusic);
-    }
+    void Start() => AudioManager.PlayEvent(backgroundMusic, gameObject);
+    public void StopMusic() => AudioManager.StopAll(backgroundMusic);
 }
 ```
 
-### 3) Using with Dependency Injection (DI)
+### Use with dependency injection
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -130,35 +131,26 @@ public class AudioConsumer
 {
     private readonly IAudioService _audio;
 
-    // Inject via constructor (VContainer, Zenject, etc.)
-    public AudioConsumer(IAudioService audio)
-    {
-        _audio = audio;
-    }
+    public AudioConsumer(IAudioService audio) => _audio = audio;
 
     public void PlayJump(GameObject emitter, AudioEvent jumpEvent)
-    {
-        _audio.PlayEvent(jumpEvent, emitter);
-    }
+        => _audio.PlayEvent(jumpEvent, emitter);
 
     public void SetMusicVolume(float volumeDb)
-    {
-        _audio.SetMixerVolume("MusicVolume", volumeDb);
-    }
+        => _audio.SetMixerVolume("MusicVolume", volumeDb);
 }
 ```
 
-For DI containers, register `AudioManager` as `IAudioService`:
+Register `AudioManager` as `IAudioService` (VContainer example):
 
 ```csharp
-// VContainer example
 builder.RegisterComponentInHierarchy<AudioManager>().As<IAudioService>();
 
-// Or register an externally created instance
+// Or register an externally-created instance
 AudioManager.SetInstance(myAudioManagerInstance);
 ```
 
-### 4) Bank Loading & Unloading
+### Load and play by name
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -170,115 +162,240 @@ public class BankExample : MonoBehaviour
 
     void Start()
     {
-        // Load bank — registers events for string-based lookup
-        AudioManager.LoadBank(sfxBank);
-
-        // Play by name
-        AudioManager.PlayEvent("Jump_SFX", gameObject);
+        AudioManager.LoadBank(sfxBank);                 // registers events for name lookup
+        AudioManager.PlayEvent("Jump_SFX", gameObject); // play by registered name
     }
 
-    void OnDestroy()
-    {
-        // Unload bank — stops all playing events, clears all clip references,
-        // then fires OnBankUnloaded for external asset managers
-        AudioManager.UnloadBank(sfxBank);
-    }
+    void OnDestroy() => AudioManager.UnloadBank(sfxBank);
 }
 ```
 
-### 5) Selector Workflow (Sequence / Switch / Random)
+## Core Concepts
 
-The selector nodes are optimized for large production graphs where branch readability and maintenance matter.
+### AudioBank and AudioEvent
 
-| Node | Best Use Case | Authoring Guidance |
-| --- | --- | --- |
-| `SequenceSelector` | Ordered playback patterns (combo steps, staged VO, deterministic rotations) | Enable `Auto Sort by Node Y` and arrange source nodes top-to-bottom to define playback order visually. |
-| `SwitchSelector` | State-driven routing (`Surface`, `WeaponMode`, `Language`, etc.) | Prefer named states in `AudioSwitch`; assign each branch explicitly to a state. Avoid relying on connection order semantics. |
-| `RandomSelector` | Variation pools (footsteps, impacts, repetitive SFX) | Use per-branch `weights` for probability control; combine with `Avoid Repeat` for less perceived repetition. |
+An `AudioBank` is a ScriptableObject that owns a graph of audio nodes. The root node is an `AudioEvent`; child nodes (`AudioFile`, `AudioSequenceSelector`, `AudioSwitchSelector`, `AudioRandomSelector`, `AudioBlendContainer`, etc.) define the event's playback logic. The same `AudioEvent` asset can be referenced directly or registered by name via `LoadBank`.
 
-Recommended workflow:
+### AudioManager and IAudioService
 
-1. Name source nodes explicitly (for example `Footstep_Concrete`, `Footstep_Wood`) before connecting.
-2. Keep `Auto Sort by Node Y` enabled so graph layout reflects actual branch order.
-3. Use warnings (`unassigned` or `duplicate`) as blockers before shipping a bank.
-4. For random pools, start with equal weights and tune using playtest telemetry rather than intuition.
+`AudioManager` is a `MonoBehaviour` singleton that owns the `AudioSource` pool, the name registry, the parameter and state stores, and the worker-thread command queue. It implements `IAudioService`, so DI consumers depend on the interface and the composition root decides the instance. Static methods on `AudioManager` (for example `PlayEvent`, `StopAll`, `LoadBank`) forward to the singleton and cover direct-access workflows.
 
-## API Reference
+### ActiveEvent and AudioHandle
 
-### IAudioService Interface
+`PlayEvent` returns an `ActiveEvent` — a pooled runtime object that owns the `AudioSource` assigned to the playback and exposes `Stop()`, `StopImmediate()`, `Pause()`, `Resume()`, `SetMute(bool)`, `SetSolo(bool)`, `IsPaused`, and `EstimatedRemainingTime`. A `null` return means playback failed (pool exhausted with no stealeable voice, missing clip, or invalid emitter).
 
-The `IAudioService` interface provides full audio system access for DI environments:
+`AudioHandle` is a lightweight struct that references an `ActiveEvent` without a strong reference. Use it when the holder may outlive the playback: `IsValid`, `Stop()`, `StopImmediate()`, `IsPlaying`, `EstimatedRemainingTime`.
 
-| Method                                                     | Description                                                            |
-| ---------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `PlayEvent(AudioEvent, GameObject)`                        | Play an event attached to a GameObject for 3D spatial tracking         |
-| `PlayEvent(AudioEvent, Vector3)`                           | Play an event at a fixed world position                                |
-| `PlayEvent(string, GameObject)`                            | Play a named event (registered via `LoadBank`) on a GameObject         |
-| `PlayEvent(string, Vector3)`                               | Play a named event at a fixed world position                           |
-| `PlayEventScheduled(AudioEvent, GameObject, double)`       | Schedule playback at a precise DSP time (sample-accurate sync)         |
-| `StopAll(AudioEvent)`                                      | Stop all instances of an event with configured fade-out                |
-| `StopAll(string)`                                          | Stop all instances matching a registered event name                    |
-| `StopAll(int)`                                             | Stop all events in a group (mutually exclusive playback)               |
-| `PauseAll()` / `ResumeAll()`                               | Pause / resume all playing events                                      |
-| `PauseEvent(ActiveEvent)` / `ResumeEvent(ActiveEvent)`     | Pause / resume a single event                                          |
-| `IsEventPlaying(string)`                                   | Check if any instance of a named event is playing                      |
-| `SetGlobalVolume(float)` / `GetGlobalVolume()`             | Master volume via `AudioListener.volume` (0–1, post-mixer)             |
-| `SetMixerVolume(string, float)` / `GetMixerVolume(string)` | Per-bus volume via AudioMixer exposed parameters (dB)                  |
-| `LoadBank(AudioBank, bool)`                                | Load a bank and register its events for name-based lookup              |
-| `UnloadBank(AudioBank)`                                    | Unload bank, stop events, clear clip references, fire `OnBankUnloaded` |
+### AudioSource Pool
 
-#### Events
+`AudioManager` creates an initial set of `AudioSource` components, reuses returned sources, expands up to the configured maximum, applies category-aware voice-steal scoring when exhausted, and can destroy idle sources back toward the initial size. Sizing is selected from platform compiler symbols and RAM thresholds.
 
-| Event            | Description                                                                                                                                                                   |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `OnBankUnloaded` | Invoked after a bank is fully unloaded and all `AudioSource.clip` references are cleared. External asset management systems should subscribe to safely release asset handles. |
+| Platform | Condition | Initial | Max |
+| --- | --- | ---: | ---: |
+| WebGL | Always | 16 | 32 |
+| Mobile | RAM < 3GB | 32 | 48 |
+| Mobile | RAM 3-6GB | 32 | 64 |
+| Mobile | RAM > 6GB | 32 | 96 |
+| Desktop | RAM < 8GB | 80 | 128 |
+| Desktop | RAM 8-16GB | 80 | 192 |
+| Desktop | RAM > 16GB | 80 | 256 |
+| Switch | Always | 32 | 64 |
+| Console (PS/Xbox) | Always | 64 | 192 |
 
-### AudioManager Static Methods
+These are source defaults and tuning seeds, not measured platform budgets. Profile representative content and override via `AudioPoolConfig` when the target hardware, Unity audio backend, or voice mix requires different limits.
 
-All `IAudioService` methods are also available as static methods on `AudioManager`:
+### Category and Voice Policy
 
-- `PlayEvent(AudioEvent, GameObject)` / `PlayEvent(AudioEvent, Vector3)` — Play events
-- `PlayEvent(string, GameObject)` / `PlayEvent(string, Vector3)` — Play by name
-- `StopAll(AudioEvent)` / `StopAll(string)` / `StopAll(int)` — Stop events
-- `PauseAll()` / `ResumeAll()` — Global pause/resume
-- `SetGlobalVolume(float)` / `GetGlobalVolume()` — Master volume
-- `LoadBank(AudioBank, bool)` / `UnloadBank(AudioBank)` — Bank management
-- `IsEventPlaying(string)` — Query playback state
-- `SetInstance(AudioManager)` — Register an externally-created instance for DI
-- `ValidateManager()` — Ensure the AudioManager singleton exists
+`AudioEvent` uses a two-layer voice policy model:
 
-### ActiveEvent Methods
+- `Category` selects a high-level runtime intent (`CriticalUI`, `GameplaySFX`, `Voice`, `Ambient`, `Music`).
+- `Use Category Defaults` applies a built-in voice policy template for that category.
+- Per-event overrides are only needed for special cases.
 
-- `Stop()` — Stop the event with fade-out
-- `StopImmediate()` — Stop the event immediately
-- `Pause()` / `Resume()` — Pause/resume individual event
-- `SetMute(bool)` — Mute/unmute the event
-- `SetSolo(bool)` — Solo/unsolo the event
-- `IsPaused` — Check if the event is currently paused
-- `EstimatedRemainingTime` — Approximate time until playback completes
+Built-in category defaults:
 
-### AudioHandle (Struct)
+| Category | Steal Resistance | Budget Weight | Allow Voice Steal | Allow Distance Steal | Protect Scheduled |
+| --- | ---: | ---: | :---: | :---: | :---: |
+| `CriticalUI` | 2.2 | 1.5 | false | false | true |
+| `GameplaySFX` | 1.0 | 1.0 | true | true | true |
+| `Voice` | 1.5 | 1.35 | true | false | true |
+| `Ambient` | 0.7 | 0.7 | true | true | false |
+| `Music` | 2.6 | 1.8 | false | false | true |
 
-A lightweight, safe handle for referencing an `ActiveEvent` without holding a strong reference:
+When the pool is exhausted, eligible voices are compared using category, policy, priority, age, distance, and budget data; the lowest-scoring voice is stolen. Disable `Use Category Defaults` only when an event needs custom behavior beyond its category template.
 
-- `IsValid` — Check if the referenced event is still alive and playing
-- `Stop()` / `StopImmediate()` — Control playback through the handle
-- `EstimatedRemainingTime` / `IsPlaying` — Query state
+### Command Submission and Main-Thread Ownership
 
-## External Asset Management Integration
+`AudioManager`, `ActiveEvent`, Unity objects, configuration reloads, parameter state, mixer access, runtime statistics, and event subscription are main-thread-owned. Worker-thread submission is implemented only for these command-style static entry points:
 
-`UnloadBank` is designed for safe integration with external asset management systems such as **CycloneGames.AssetManagement**, **Addressables**, or **Resources**.
+- `PlayEvent` and `PlayEventScheduled`
+- `StopAll`
+- `SetState`
+- `ExecuteActionEvent`
+- `LoadBank`, `UnloadBank`, and `ClearEventNameMap`
 
-When `UnloadBank` is called:
+The submission queue is a preallocated `AudioCommand[4096]` ring protected by `lock`. `AudioManager.Update` consumes at most 16, 64, or 128 commands per frame according to queue depth. When the queue is full, the new command is dropped; the first five drops are logged only in Editor or Development builds.
 
-1. All active events from the bank are **stopped immediately**
-2. All `AudioSource.clip` references are **set to null** (releasing the clip reference)
-3. Bank events are **removed from the name registry**
-4. `OnBankUnloaded` event is **fired** — external systems can subscribe to release asset handles
+Worker-thread submission does not provide completion, backpressure, or a result. Worker-thread `PlayEvent` / `PlayEventScheduled` returns `null`; the Boolean return from `SetState(string, string)` only reports that its initial string checks passed — the command can still be dropped. Queued Unity object references must remain valid until execution. Callers that require a result, handle, cancellation, or guaranteed delivery must marshal that workflow to the main thread explicitly.
 
-This guarantees that after `UnloadBank` returns, the audio system holds **zero references** to the bank's `AudioClip` assets.
+### AudioClipReference and External Loaders
 
-### Integration with CycloneGames.AssetManagement
+`AudioClipReference` supports multiple source styles:
+
+- `FilePath`
+- `StreamingAssetsPath`
+- `PersistentDataPath`
+- `Url`
+- `AssetAddress`
+
+Path/URL modes are loaded directly by the audio system. `AssetAddress` is a logical key, not a local file path; for `AssetAddress`, register a runtime loader (see [External Clip Loaders](#external-clip-loaders)).
+
+## Usage Guide
+
+### Playing events
+
+```csharp
+// By AudioEvent asset, attached to a GameObject for 3D tracking
+ActiveEvent handle = AudioManager.PlayEvent(jumpEvent, gameObject);
+
+// By AudioEvent asset, at a fixed world position
+ActiveEvent handle2 = AudioManager.PlayEvent(jumpEvent, new Vector3(0, 5, 0));
+
+// By registered name
+AudioManager.PlayEvent("Jump_SFX", gameObject);
+
+// Scheduled against Unity's DSP clock (sample-accurate sync)
+AudioManager.PlayEventScheduled(musicEvent, gameObject, AudioSettings.dspTime + 0.5);
+```
+
+### Stopping, pausing, and resuming
+
+```csharp
+// Stop one event (with configured fade-out)
+handle.Stop();
+handle.StopImmediate();
+
+// Stop all instances of an event / name / group
+AudioManager.StopAll(jumpEvent);
+AudioManager.StopAll("Jump_SFX");
+AudioManager.StopAll(groupNum: 1); // mutually exclusive playback groups
+
+// Global pause/resume
+AudioManager.PauseAll();
+AudioManager.ResumeAll();
+
+// Per-event pause/resume
+AudioManager.PauseEvent(handle);
+AudioManager.ResumeEvent(handle);
+
+bool playing = AudioManager.IsEventPlaying("Jump_SFX");
+```
+
+### Parameters, states, and mixer volumes
+
+```csharp
+// Global game parameter (RTPC equivalent)
+AudioManager.SetParameterValue("Distance", 12.5f);
+AudioManager.SetParameterValue("Distance", emitterObject, 8f); // emitter-scoped override
+bool found = AudioManager.TryGetParameterValue("Distance", out float current);
+
+// Global audio state (switch equivalent)
+AudioManager.SetState("Surface", "Wood");
+
+// AudioMixer exposed parameters, in decibels
+AudioManager.SetMixerParameter("MusicVolume", -6f);   // static helper
+_audio.SetMixerVolume("MusicVolume", -6f);            // via IAudioService
+
+// Master volume via AudioListener.volume (0–1, post-mixer)
+AudioManager.SetGlobalVolume(0.8f);
+```
+
+### Bank load and unload
+
+```csharp
+AudioManager.LoadBank(sfxBank);                       // register events by name
+AudioManager.LoadBank(sfxBank, overwriteExisting: true);
+AudioManager.UnloadBank(sfxBank);                     // stops events, clears clips, raises OnBankUnloaded
+```
+
+`UnloadBank` on the main thread: stops active events whose root belongs to the bank, resets their pooled `AudioSource` instances and clears `clip` references, removes the bank's events from the name registry, then raises `OnBankUnloaded`. A worker-thread call only submits an unload command and returns before cleanup; use the event, not the method return, as the external release boundary.
+
+### Pool configuration
+
+Override built-in pool sizing with a config asset:
+
+1. Create via **Create → CycloneGames → Audio → Audio Pool Config**.
+2. Place it in `Assets` (Editor auto-discovers) or in a `Resources` folder for builds.
+3. Only one `AudioPoolConfig` should exist in the project.
+
+For projects using YooAsset or Addressables, supply the config at runtime:
+
+```csharp
+// Before AudioManager initializes
+var handle = YooAssets.LoadAssetAsync<AudioPoolConfig>("AudioPoolConfig");
+await handle.Task;
+AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
+
+// After AudioManager initializes, apply the new limits
+AudioManager.ReloadPoolConfig();
+```
+
+`ReloadPoolConfig()` updates pool size limits but preserves existing `AudioSource` instances.
+
+### Runtime monitoring
+
+```csharp
+Debug.Log($"Pool: {AudioManager.PoolStats.InUse}/{AudioManager.PoolStats.CurrentSize}");
+Debug.Log($"Max: {AudioManager.PoolStats.MaxSize}, Tier: {AudioManager.PoolStats.DeviceTier}");
+Debug.Log($"Peak: {AudioManager.PoolStats.PeakUsage}, Steals: {AudioManager.PoolStats.TotalSteals}");
+
+var stats = AudioManager.GetRuntimeStats(); // pool, registry, queue, external cache counters
+```
+
+The AudioManager Inspector also displays real-time pool statistics during Play Mode.
+
+## Advanced Topics
+
+### External Clip Loaders
+
+When `AudioClipReference` uses `AssetAddress` (or another logical key), register a loader that resolves the key to an `AudioClip` and returns a release callback. The audio system calls `Release()` when the clip is no longer used (event stop, event recycle, bank unload, async cancellation cleanup).
+
+**Per-reference loader:**
+
+```csharp
+AudioClipResolver.RegisterManagedReferenceLoader(audioClipReference, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null) return default;
+
+    return new ManagedAudioClipLoadResult(handle.Asset, () => handle.Release());
+});
+```
+
+**Per-location-kind loader** (one loader covers `AssetAddress`, YooAsset, Addressables, etc.):
+
+```csharp
+AudioClipResolver.RegisterManagedLocationKindLoader(AudioLocationKind.AssetAddress, async (clipRef, ct) =>
+{
+    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
+    if (handle == null || handle.Asset == null) return default;
+
+    return new ManagedAudioClipLoadResult(handle.Asset, () => handle.Release());
+});
+```
+
+The audio system decides **when** its acquired clip handle is no longer in use; the external asset system decides **how** the underlying resource handle is released. Validate these scenarios when integrating:
+
+- Start playback, then unload the owning bank and confirm the external release callback runs exactly once.
+- Start async loading, stop the event before completion, and confirm no dangling handle remains.
+- Play the same `AudioClipReference` from multiple instances and confirm the underlying resource is released only after the last instance finishes.
+- Force the external loader to fail and confirm cache stats record the failure without leaking a partially initialised handle.
+
+### External Asset Management Integration
+
+`UnloadBank` provides the ordering point for external asset owners such as CycloneGames.AssetManagement, Addressables, or a custom loader. External owners should release the bank handle from `OnBankUnloaded`.
+
+**CycloneGames.AssetManagement:**
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -294,29 +411,20 @@ public class AudioAssetBridge
     {
         _assets = assets;
         _audio = audio;
-
-        // Subscribe once — when the audio system finishes unloading a bank,
-        // release the underlying asset handle
         _audio.OnBankUnloaded += OnBankUnloaded;
     }
 
     public async UniTask LoadBankAsync(string bankAddress)
     {
         var handle = await _assets.LoadAssetAsync<AudioBank>(bankAddress);
-        var bank = handle.Asset;
-        _bankHandles[bank] = handle;
-        _audio.LoadBank(bank);
+        _bankHandles[handle.Asset] = handle;
+        _audio.LoadBank(handle.Asset);
     }
 
-    public void UnloadBank(AudioBank bank)
-    {
-        // This stops all events, clears all clip references, then fires OnBankUnloaded
-        _audio.UnloadBank(bank);
-    }
+    public void UnloadBank(AudioBank bank) => _audio.UnloadBank(bank);
 
     private void OnBankUnloaded(AudioBank bank)
     {
-        // Safe to release — audio system holds zero clip references
         if (_bankHandles.TryGetValue(bank, out var handle))
         {
             handle.Release();
@@ -326,7 +434,7 @@ public class AudioAssetBridge
 }
 ```
 
-### Integration with Addressables (Direct)
+**Addressables (direct):**
 
 ```csharp
 using CycloneGames.Audio.Runtime;
@@ -356,248 +464,132 @@ public class AddressablesAudioBridge
         AudioManager.LoadBank(bank);
     }
 
-    public void UnloadBank(AudioBank bank)
-    {
-        AudioManager.UnloadBank(bank); // OnBankUnloaded fires automatically
-    }
+    public void UnloadBank(AudioBank bank) => AudioManager.UnloadBank(bank);
 }
 ```
 
-## CycloneGames Extensions
+### Selector Authoring
 
-This implementation significantly builds upon the original Microsoft audio manager. The key enhancements are:
+Selector nodes keep branch semantics visible in larger graphs.
 
-### AudioGraph Redrawing with Unreal Engine-like Shortcuts
+| Node | Best Use Case | Authoring Guidance |
+| --- | --- | --- |
+| `SequenceSelector` | Ordered playback (combo steps, staged VO, deterministic rotations) | Enable `Auto Sort by Node Y` and arrange source nodes top-to-bottom to define playback order visually. |
+| `SwitchSelector` | State-driven routing (`Surface`, `WeaponMode`, `Language`) | Prefer named states in `AudioSwitch`; assign each branch explicitly to a state. Do not rely on connection order. |
+| `RandomSelector` | Variation pools (footsteps, impacts, repetitive SFX) | Use per-branch `weights` for probability; combine with `Avoid Repeat` for less perceived repetition. |
 
-The AudioGraph has been redrawn to enhance the rendering of node connection curves. It now includes shortcuts similar to those in Unreal Engine, such as using `Alt + Left Mouse Button` to delete a single curve or all curves connected to the selected node.
+Authoring checklist: name source nodes explicitly before connecting; keep `Auto Sort by Node Y` enabled so graph layout reflects actual branch order; treat `unassigned` and `duplicate` warnings as shipping blockers; start random pools with equal weights and tune from playtest telemetry.
 
-### DI-Compatible Architecture
+### Platform Profiles
 
-The system exposes a clean `IAudioService` interface, enabling seamless integration with any DI container. For non-DI projects, all functionality remains accessible via static methods on `AudioManager`. The `SetInstance()` method allows external code to register a pre-existing `AudioManager` as the singleton.
+`AudioPlatformProfile` exposes focus/pause handling, mobile update throttling, culling, LOD, and occlusion tuning per platform. The runtime asmdef has no platform exclusions; source branches provide policies for WebGL, Android/iOS, desktop fallback, and `UNITY_SWITCH`, `UNITY_PS4`, `UNITY_PS5`, `UNITY_XBOXONE`, `UNITY_GAMECORE`. Source presence is not platform validation — validate compilation, audio output, focus/pause behavior, voice limits, memory, and latency on each shipping target.
 
-### AudioClipReference and External Loaders
+### Domain Reload
 
-`AudioClipReference` supports multiple source styles:
+Static reset hooks use `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]`. Projects that disable domain reload should still verify repeated Play Mode entry, shutdown, loader registration, and cache clearing in their Unity version.
 
-- `FilePath`
-- `StreamingAssetsPath`
-- `PersistentDataPath`
-- `Url`
-- `AssetAddress`
+## Common Scenarios
 
-The important distinction is:
+### Footstep variation pool
 
-- Path / URL modes can be loaded directly by the audio system
-- `AssetAddress` is treated as a logical key, not as a local file path
-- For `AssetAddress`, you should register a runtime loader
-
-#### Register a Loader for One Reference
+A character needs varied footstep sounds per surface. Author a single `AudioEvent` with a `RandomSelector` that branches to surface-specific `AudioFile` nodes, and drive surface selection with a global state:
 
 ```csharp
-AudioClipResolver.RegisterManagedReferenceLoader(audioClipReference, async (clipRef, ct) =>
-{
-    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
-    if (handle == null || handle.Asset == null)
-        return default;
-
-    return new ManagedAudioClipLoadResult(
-        handle.Asset,
-        () => handle.Release());
-});
+// On surface change
+AudioManager.SetState("Surface", "Wood");
+AudioManager.PlayEvent("Footstep", emitter);
 ```
 
-#### Register a Loader for an Entire Location Kind
+Use `Avoid Repeat` on the `RandomSelector` to prevent the same clip playing twice in a row.
 
-This is the recommended setup for `AssetAddress`, YooAsset, Addressables, or a custom runtime package system.
+### Music layers with switch
+
+A boss fight has intro, loop, and sting layers. Author the `AudioEvent` with a `SwitchSelector` bound to a `MusicPhase` switch, and transition layers by setting the state:
 
 ```csharp
-AudioClipResolver.RegisterManagedLocationKindLoader(AudioLocationKind.AssetAddress, async (clipRef, ct) =>
-{
-    var handle = await myAssetSystem.LoadAudioClipAsync(clipRef.Location, ct);
-    if (handle == null || handle.Asset == null)
-        return default;
+AudioManager.SetState("MusicPhase", "Intro");
+AudioManager.PlayEvent("BossTheme", emitter);
 
-    return new ManagedAudioClipLoadResult(
-        handle.Asset,
-        () => handle.Release());
-});
+// Transition to loop
+AudioManager.SetState("MusicPhase", "Loop");
 ```
 
-#### Lifecycle Guarantee
+### Asset-management-driven bank lifecycle
 
-When an external loader returns an `IAudioClipHandle`, the audio system will call `Release()` automatically when the clip is no longer used:
+A scene loads its audio banks via Addressables and must release them on scene unload. The bridge holds the bank handle, lets `AudioManager.UnloadBank` clear the audio system's references first, then releases the underlying asset handle from `OnBankUnloaded` (see [External Asset Management Integration](#external-asset-management-integration)).
 
-- event stop
-- event recycle
-- bank unload
-- async cancellation cleanup
+### DSP-scheduled music transition
 
-This means:
-
-- the audio system decides **when** a clip is no longer referenced
-- your asset system decides **how** the underlying resource handle is actually released
-
-This split is what keeps external resource lifetimes safe without forcing `CycloneGames.Audio` to own every loading backend directly.
-
-#### External Clip Lifecycle Validation Checklist
-
-Recommended verification scenarios for projects that integrate `AudioClipReference` with Addressables, YooAsset, or a custom asset system:
-
-- Start playback, then unload the owning bank and confirm the external release callback runs exactly once
-- Start async loading, stop the event before completion, and confirm no dangling handle remains after cleanup
-- Play the same `AudioClipReference` from multiple instances and confirm the underlying resource is released only after the last instance finishes
-- Force the external loader to fail and confirm cache stats record the failure without leaking a partially initialized handle
-- Clear or reload the audio system in Play Mode and confirm registered loaders and cached external clips are released safely
-
-### Category Defaults and Voice Policy Overrides
-
-`AudioEvent` now supports a lightweight two-layer voice policy model:
-
-- `Category` selects a high-level runtime intent
-- `Use Category Defaults` applies a built-in voice policy template for that category
-- Per-event overrides are only needed for special cases
-
-This keeps the common workflow simple. In most projects, designers only need to set the category:
-
-- `CriticalUI`
-- `GameplaySFX`
-- `Voice`
-- `Ambient`
-- `Music`
-
-When `Use Category Defaults` is enabled, the event resolves its voice policy automatically. The current built-in defaults are:
-
-| Category | Steal Resistance | Budget Weight | Allow Voice Steal | Allow Distance Steal | Protect Scheduled |
-| --- | ---: | ---: | :---: | :---: | :---: |
-| `CriticalUI` | `2.2` | `1.5` | `false` | `false` | `true` |
-| `GameplaySFX` | `1.0` | `1.0` | `true` | `true` | `true` |
-| `Voice` | `1.5` | `1.35` | `true` | `false` | `true` |
-| `Ambient` | `0.7` | `0.7` | `true` | `true` | `false` |
-| `Music` | `2.6` | `1.8` | `false` | `false` | `true` |
-
-Recommended usage:
-
-- Set BGM and long-lived music layers to `Music`
-- Set dialog, narration, and subtitle-driven speech to `Voice`
-- Set far-field loops and background environmental beds to `Ambient`
-- Keep most one-shot gameplay sounds on `GameplaySFX`
-- Reserve `CriticalUI` for menu confirms, warnings, timing cues, or other must-hear feedback
-
-Disable `Use Category Defaults` only when a specific event needs custom behavior beyond its category template.
-
-### Thread-Safe Command Dispatch
-
-All public API methods are thread-safe. Calls from worker threads are dispatched to the main thread through a structured command queue backed by a fixed-capacity ring buffer, reducing hot-path GC pressure and keeping command handoff predictable under load.
-
-### Safe Asset Lifecycle Management
-
-`UnloadBank` performs immediate cleanup: stops all active events, clears every `AudioSource.clip` reference, and fires the `OnBankUnloaded` event. This guarantees that external asset management systems can safely release underlying assets without risking dangling references or use-after-free.
-
-### Asynchronous Operations
-
-All resource-intensive operations, such as loading `AudioClip`s, are performed asynchronously using `UniTask`. This prevents the main thread from blocking, which is essential for eliminating frame rate drops when new sounds are introduced during gameplay.
-
-### GC Optimizations
-
-The audio system uses fixed-size arrays (`EventSource[8]`, `ActiveParameter[8]`) instead of `List<>`, struct-based `EventSource` and `AudioHandle` for stack allocation, object pooling for `ActiveEvent` instances, and O(1) swap-remove for the active events list. Hot-path `Debug.Log` calls are wrapped in `#if UNITY_EDITOR || DEVELOPMENT_BUILD`.
-
-### Cross-Platform Support
-
-Platform-adaptive pool sizing for WebGL, Android/iOS, Desktop, and consoles (Nintendo Switch, PS4/PS5, Xbox One/Series). Mobile platforms feature automatic audio pause/resume on application focus loss and battery-friendly update throttling.
-
-### Performance Monitoring
-
-The system is instrumented to provide memory monitoring data for the **AudioManager**, allowing developers to quickly diagnose audio-related performance issues.
-
-### Domain Reload Safety
-
-Static state is properly reset via `[RuntimeInitializeOnLoadMethod(SubsystemRegistration)]`, ensuring correct behavior when Unity's "Enter Play Mode Options" (domain reload skip) is enabled.
-
-### Smart Audio Pool Management
-
-The audio system features an intelligent AudioSource pool that automatically adapts to different devices and manages resources efficiently.
-
-#### Key Features
-
-| Feature                    | Description                                                                                     |
-| -------------------------- | ----------------------------------------------------------------------------------------------- |
-| **Device-Adaptive Sizing** | Pool size automatically adjusts based on platform (WebGL/Mobile/Desktop/Console) and device RAM |
-| **Auto-Expansion**         | Pool grows dynamically when more sources are needed                                             |
-| **Voice Stealing**         | When pool is full, oldest non-looping sound is stopped to free resources                        |
-| **Intelligent Shrinking**  | Unused sources are gradually released during idle periods                                       |
-| **Zero GC Allocations**    | AudioSources are never created outside the pool, preventing memory leaks                        |
-
-#### Default Pool Sizes
-
-| Platform          | Condition  | Initial | Max |
-| ----------------- | ---------- | ------- | --- |
-| WebGL             | Always     | 16      | 32  |
-| Mobile            | RAM < 3GB  | 32      | 48  |
-| Mobile            | RAM 3-6GB  | 32      | 64  |
-| Mobile            | RAM > 6GB  | 32      | 96  |
-| Desktop           | RAM < 8GB  | 80      | 128 |
-| Desktop           | RAM 8-16GB | 80      | 192 |
-| Desktop           | RAM > 16GB | 80      | 256 |
-| Switch            | Always     | 32      | 64  |
-| Console (PS/Xbox) | Always     | 64      | 192 |
-
-#### Custom Configuration (Optional)
-
-By default, the system uses optimal values for your device. To customize:
-
-1. Create a config asset: **Create → CycloneGames → Audio → Audio Pool Config**
-2. Place it anywhere in your `Assets` folder
-3. Adjust values in the Inspector
-
-> [!NOTE]
->
-> - In the **Editor**, the config is auto-discovered from anywhere in the project.
-> - For **builds**, place the config in a `Resources` folder for auto-discovery, or it will use default values.
-> - Only one `AudioPoolConfig` should exist in the project.
-
-#### Hot-Update Support
-
-For projects using asset management systems like YooAsset or Addressables:
-
-**Option 1: Before AudioManager Initializes** (Recommended)
+Two music events must crossfade at a precise bar boundary. Schedule the incoming event against the DSP clock so it begins exactly on the target sample:
 
 ```csharp
-// In bootstrap scene, before AudioManager initializes
-var handle = YooAssets.LoadAssetAsync<AudioPoolConfig>("AudioPoolConfig");
-await handle.Task;
-AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
-// AudioManager will automatically use this config when it initializes
+double nextBar = AudioSettings.dspTime + ComputeSecondsToNextBar();
+AudioManager.PlayEventScheduled(incomingMusic, emitter, nextBar);
+AudioManager.StopAll(outgoingMusic); // configured fade-out overlaps with incoming start
 ```
 
-**Option 2: After AudioManager Initializes**
+### Per-emitter parameter override
+
+A vehicle engine's pitch should reflect each vehicle's speed independently. Use an emitter-scoped parameter override so multiple instances of the same `AudioEvent` read different values:
 
 ```csharp
-// Load and apply config at runtime
-var handle = YooAssets.LoadAssetAsync<AudioPoolConfig>("AudioPoolConfig");
-await handle.Task;
-AudioPoolConfig.SetConfig(handle.AssetObject as AudioPoolConfig);
-
-// Apply the new config to the running AudioManager
-AudioManager.ReloadPoolConfig();
+AudioManager.SetParameterValue("EngineRPM", vehicleObject, rpm);
+AudioManager.PlayEvent("Engine", vehicleObject);
 ```
 
-> [!NOTE]
-> `ReloadPoolConfig()` updates pool size limits but preserves existing AudioSources.
+## Performance and Memory
 
-#### Runtime Monitoring
+| Path | Module-owned allocation | Notes |
+| --- | --- | --- |
+| Per-event playback | 0 bytes steady-state | Reuses fixed `EventSource[8]`, `ActiveParameter[8]`, pooled `ActiveEvent`, pooled `AudioSource`. |
+| Pool expansion / shrinking | Native `AudioSource` creation/destruction | Only at growth or idle-shrink boundaries. |
+| Worker-thread command submission | 0 bytes steady-state | Preallocated `AudioCommand[4096]` ring; overflow drops. |
+| External clip loading | Caller-owned | Async state machines and external loader allocations belong to the caller. |
+| Mixer / parameter / state access | 0 bytes steady-state | Reusable collections, O(1) swap-remove bookkeeping. |
 
-Access pool statistics at runtime:
+The runtime reuses fixed per-event arrays, pooled `ActiveEvent` objects, pooled `AudioSource` instances, prepared event data, and reusable collections. These choices reduce steady-state managed churn; they do not establish a package-wide zero-allocation guarantee. Initialization, pool expansion and shrinking, collection capacity growth, async state machines, delegate callbacks, diagnostics, and Unity object creation/destruction can allocate or incur native work. Measure representative voice counts, graph shapes, clip sources, and queue contention in Player builds on each target backend before setting a GC or frame-time budget.
 
-```csharp
-// Check pool status
-Debug.Log($"Pool: {AudioManager.PoolStats.InUse}/{AudioManager.PoolStats.CurrentSize}");
-Debug.Log($"Max: {AudioManager.PoolStats.MaxSize}");
-Debug.Log($"Device Tier: {AudioManager.PoolStats.DeviceTier}");
+### Threading
 
-// Performance metrics
-Debug.Log($"Peak Usage: {AudioManager.PoolStats.PeakUsage}");
-Debug.Log($"Expansions: {AudioManager.PoolStats.TotalExpansions}");
-Debug.Log($"Voice Steals: {AudioManager.PoolStats.TotalSteals}");
+- `AudioManager`, `ActiveEvent`, Unity objects, configuration reloads, parameter state, mixer access, runtime statistics, and event subscription are main-thread-owned.
+- The command-style entry points listed in [Command Submission](#command-submission-and-main-thread-ownership) accept worker-thread submission via a `lock`-protected ring buffer.
+- Independent worker submissions do not block each other, but the queue is single-consumer (main-thread `Update`).
+- The module does not create threads or choose schedulers.
+
+### Platform Behavior
+
+The Runtime assembly has no platform exclusions and no `UnityEngine`-independent core; it relies on `AudioSource`, `AudioMixer`, and `AudioListener`. Source branches provide policies for WebGL, Android/iOS, desktop fallback, and `UNITY_SWITCH`, `UNITY_PS4`, `UNITY_PS5`, `UNITY_XBOXONE`, `UNITY_GAMECORE`. Validate compilation, audio output, focus/pause behavior, voice limits, memory, and latency on each shipping target. Unlisted future console platforms require an explicit profile and build verification.
+
+### Runtime Diagnostics
+
+`AudioManager.GetRuntimeStats()` and `AudioManager.PoolStats` expose pool, voice, registry, queue, and external cache counters. Some memory and playback counters are compiled only for Editor or Development builds. Use Unity Profiler and platform tooling for allocation, DSP, and native-memory analysis.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Resolution |
+| --- | --- | --- |
+| `PlayEvent` returns `null` | Pool exhausted and no stealeable voice, missing clip, or invalid emitter | Check `PoolStats`, raise pool max, adjust category steal resistance, or preload clips |
+| Worker-thread play has no effect | Queue overflow dropped the command, or the Unity object reference became invalid before execution | Check Editor/Development drop logs, reduce submission rate, or marshal to main thread |
+| Bank clips leak after unload | External asset owner released the handle before `OnBankUnloaded` | Release external handles only from `OnBankUnloaded`, not from `UnloadBank` return |
+| Same `AudioClipReference` released too early | Multiple instances shared one handle; owner released on first stop | Confirm the external loader's ref-counting covers all instances; the audio system releases only after the last instance finishes |
+| `SetParameterValue` has no effect | Parameter name not registered, or wrong scope | Load the bank that registers the parameter; check whether an emitter-scoped override is needed |
+| `SetMixerVolume` returns 0 | Mixer not assigned, or parameter not exposed in the AudioMixer | Expose the parameter in the AudioMixer asset and assign the mixer to `AudioManager` |
+| Music transition is not sample-accurate | Used `PlayEvent` instead of `PlayEventScheduled` | Use `PlayEventScheduled` against `AudioSettings.dspTime` |
+| Voice stealing cuts important sounds | Category too low, or `Protect Scheduled` disabled | Move the event to a higher-resistance category (`CriticalUI`, `Music`) or enable protection |
+| Pool keeps growing under load | Max too high, or idle-shrink thresholds too loose | Tune `AudioPoolConfig` for the target platform and profile representative content |
+
+## Validation
+
+Run focused tests from Unity Test Runner:
+
+```text
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.Audio.Tests.Editor -testResults <result-path> -quit
 ```
 
-The AudioManager Inspector also displays real-time pool statistics during Play Mode.
+Run `AudioRandomSelectionTests` to verify selector distribution and `AudioClipReferencePathTests` to verify path resolution. Validate external clip loaders, pool sizing, and voice stealing on each shipping Player and scripting backend with representative content.
+
+## References
+
+- [Microsoft Audio-Manager-for-Unity](https://github.com/microsoft/Audio-Manager-for-Unity) — original derivation source, MIT License
+- [Unity AudioMixer](https://docs.unity3d.com/Manual/class-AudioMixer.html) — exposed parameters and snapshot transitions
+- [Unity AudioSettings.dspTime](https://docs.unity3d.com/ScriptReference/AudioSettings-dspTime.html) — DSP-clock scheduling

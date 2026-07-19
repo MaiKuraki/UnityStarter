@@ -8,7 +8,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// Abstract base class for a Gameplay Effect definition, designed to be created as a ScriptableObject asset.
     /// This class holds all the design-time data that defines what an effect does, from modifying attributes to applying tags and granting abilities.
     /// </summary>
-    public abstract class GameplayEffectSO : ScriptableObject
+    public abstract class GameplayEffectSO : ScriptableObject, ISerializationCallbackReceiver
     {
         [Tooltip("The unique name for this effect, used primarily for debugging and logging purposes.")]
         public string EffectName;
@@ -73,10 +73,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private GameplayEffect _runtimeCache;
         public GameplayEffect GetGameplayEffect()
         {
-            //  Thread-safe lazy initialization prevents concurrent calls from creating
-            // two different GameplayEffect instances, which would break the stacking index
-            // (Dictionary keyed on GameplayEffect reference identity).
-            return System.Threading.LazyInitializer.EnsureInitialized(ref _runtimeCache, CreateGameplayEffect);
+            // ScriptableObject authoring data and Unity asset access are main-thread-affine.
+            // The immutable runtime definition is created once per loaded asset revision.
+            return _runtimeCache ??= CreateGameplayEffect();
         }
 
         /// <summary>
@@ -91,6 +90,20 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void ClearCache()
         {
             _runtimeCache = null;
+        }
+
+        private void OnValidate()
+        {
+            ClearCache();
+        }
+
+        void ISerializationCallbackReceiver.OnBeforeSerialize()
+        {
+        }
+
+        void ISerializationCallbackReceiver.OnAfterDeserialize()
+        {
+            ClearCache();
         }
     }
 }

@@ -16,6 +16,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private bool onlyTriggerOnce;
         private ActiveEffectDelegate effectCallback;
+        private AbilitySystemComponent subscriptionOwner;
+        private bool terminalCallbackStarted;
+
+        public override void InitTask(GameplayAbility ability)
+        {
+            base.InitTask(ability);
+            terminalCallbackStarted = false;
+        }
 
         /// <summary>
         /// Creates a WaitGameplayEffectApplied task that fires when any effect is applied to the owner.
@@ -29,7 +37,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         protected override void OnActivate()
         {
-            if (Ability?.AbilitySystemComponent == null)
+            subscriptionOwner = Ability?.AbilitySystemComponent;
+            if (subscriptionOwner == null)
             {
                 GASLog.Warning("WaitGameplayEffectApplied: Invalid ability or ASC.");
                 EndTask();
@@ -37,37 +46,63 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             effectCallback = HandleEffectApplied;
-            Ability.AbilitySystemComponent.OnGameplayEffectAppliedToSelf += effectCallback;
+            subscriptionOwner.OnGameplayEffectAppliedToSelf += effectCallback;
         }
 
         private void HandleEffectApplied(ActiveGameplayEffect effect)
         {
             if (!IsActive || IsCancelled) return;
 
-            OnEffectApplied?.Invoke(effect);
-
             if (onlyTriggerOnce)
             {
-                EndTask();
+                if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                        this,
+                        ref terminalCallbackStarted,
+                        out ulong leaseGeneration)) return;
+                try
+                {
+                    OnEffectApplied?.Invoke(effect);
+                }
+                finally
+                {
+                    EndTaskIfCurrentLease(leaseGeneration);
+                }
+                return;
             }
+
+            OnEffectApplied?.Invoke(effect);
         }
 
         public override void CancelTask()
         {
-            OnCancelled?.Invoke();
-            base.CancelTask();
+            if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            try
+            {
+                OnCancelled?.Invoke();
+            }
+            finally
+            {
+                if (IsCurrentLease(leaseGeneration))
+                {
+                    base.CancelTask();
+                }
+            }
         }
 
         protected override void OnDestroy()
         {
-            if (Ability?.AbilitySystemComponent != null && effectCallback != null)
+            if (subscriptionOwner != null && effectCallback != null)
             {
-                Ability.AbilitySystemComponent.OnGameplayEffectAppliedToSelf -= effectCallback;
+                subscriptionOwner.OnGameplayEffectAppliedToSelf -= effectCallback;
             }
 
             OnEffectApplied = null;
             OnCancelled = null;
             effectCallback = null;
+            subscriptionOwner = null;
             base.OnDestroy();
         }
     }
@@ -86,6 +121,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         private bool onlyTriggerOnce;
         private ActiveEffectDelegate effectCallback;
+        private AbilitySystemComponent subscriptionOwner;
+        private bool terminalCallbackStarted;
+
+        public override void InitTask(GameplayAbility ability)
+        {
+            base.InitTask(ability);
+            terminalCallbackStarted = false;
+        }
 
         /// <summary>
         /// Creates a WaitGameplayEffectRemoved task that fires when any effect is removed from the owner.
@@ -99,7 +142,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
         protected override void OnActivate()
         {
-            if (Ability?.AbilitySystemComponent == null)
+            subscriptionOwner = Ability?.AbilitySystemComponent;
+            if (subscriptionOwner == null)
             {
                 GASLog.Warning("WaitGameplayEffectRemoved: Invalid ability or ASC.");
                 EndTask();
@@ -107,37 +151,63 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             effectCallback = HandleEffectRemoved;
-            Ability.AbilitySystemComponent.OnGameplayEffectRemovedFromSelf += effectCallback;
+            subscriptionOwner.OnGameplayEffectRemovedFromSelf += effectCallback;
         }
 
         private void HandleEffectRemoved(ActiveGameplayEffect effect)
         {
             if (!IsActive || IsCancelled) return;
 
-            OnEffectRemoved?.Invoke(effect);
-
             if (onlyTriggerOnce)
             {
-                EndTask();
+                if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                        this,
+                        ref terminalCallbackStarted,
+                        out ulong leaseGeneration)) return;
+                try
+                {
+                    OnEffectRemoved?.Invoke(effect);
+                }
+                finally
+                {
+                    EndTaskIfCurrentLease(leaseGeneration);
+                }
+                return;
             }
+
+            OnEffectRemoved?.Invoke(effect);
         }
 
         public override void CancelTask()
         {
-            OnCancelled?.Invoke();
-            base.CancelTask();
+            if (!AbilityTaskTerminalCallbackGuard.TryBegin(
+                    this,
+                    ref terminalCallbackStarted,
+                    out ulong leaseGeneration)) return;
+            try
+            {
+                OnCancelled?.Invoke();
+            }
+            finally
+            {
+                if (IsCurrentLease(leaseGeneration))
+                {
+                    base.CancelTask();
+                }
+            }
         }
 
         protected override void OnDestroy()
         {
-            if (Ability?.AbilitySystemComponent != null && effectCallback != null)
+            if (subscriptionOwner != null && effectCallback != null)
             {
-                Ability.AbilitySystemComponent.OnGameplayEffectRemovedFromSelf -= effectCallback;
+                subscriptionOwner.OnGameplayEffectRemovedFromSelf -= effectCallback;
             }
 
             OnEffectRemoved = null;
             OnCancelled = null;
             effectCallback = null;
+            subscriptionOwner = null;
             base.OnDestroy();
         }
     }

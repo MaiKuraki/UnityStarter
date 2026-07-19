@@ -1,18 +1,18 @@
 using System;
 using System.Runtime.CompilerServices;
-using CycloneGames.Networking.Simulation;
 
 namespace CycloneGames.Networking.Prediction
 {
     /// <summary>
     /// Fixed-size ring buffer for storing input/state history per tick.
     /// Used by client prediction and server reconciliation.
-    /// Zero allocation after initial construction.
+    /// Storage is preallocated at construction; benchmark the concrete generic type and caller
+    /// before making a zero-allocation claim for a product hot path.
     /// </summary>
     public sealed class PredictionBuffer<T> where T : struct
     {
         private readonly T[] _buffer;
-        private readonly uint[] _ticks;
+        private readonly long[] _ticks;
         private readonly bool[] _valid;
         private readonly int _capacity;
         private readonly int _mask;
@@ -21,27 +21,30 @@ namespace CycloneGames.Networking.Prediction
 
         public PredictionBuffer(int capacity = NetworkConstants.MaxSnapshotBufferSize)
         {
+            if (capacity <= 0 || capacity > 1 << 30)
+                throw new ArgumentOutOfRangeException(nameof(capacity));
+
             // Round up to power of 2 for fast modulo via bitwise AND
             _capacity = NextPowerOfTwo(capacity);
             _mask = _capacity - 1;
             _buffer = new T[_capacity];
-            _ticks = new uint[_capacity];
+            _ticks = new long[_capacity];
             _valid = new bool[_capacity];
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Set(NetworkTick tick, in T value)
+        public void Set(NetworkTickId tick, in T value)
         {
-            int index = (int)(tick.Value & _mask);
+            int index = GetIndex(tick);
             _buffer[index] = value;
             _ticks[index] = tick.Value;
             _valid[index] = true;
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGet(NetworkTick tick, out T value)
+        public bool TryGet(NetworkTickId tick, out T value)
         {
-            int index = (int)(tick.Value & _mask);
+            int index = GetIndex(tick);
             if (_valid[index] && _ticks[index] == tick.Value)
             {
                 value = _buffer[index];
@@ -52,9 +55,15 @@ namespace CycloneGames.Networking.Prediction
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public ref T GetRef(NetworkTick tick)
+        public ref T GetRef(NetworkTickId tick)
         {
-            return ref _buffer[(int)(tick.Value & _mask)];
+            int index = GetIndex(tick);
+            if (!_valid[index] || _ticks[index] != tick.Value)
+            {
+                throw new InvalidOperationException("The requested prediction tick is not retained in this buffer slot.");
+            }
+
+            return ref _buffer[index];
         }
 
         public void Clear()
@@ -62,10 +71,21 @@ namespace CycloneGames.Networking.Prediction
             Array.Clear(_valid, 0, _capacity);
         }
 
-        public void Invalidate(NetworkTick tick)
+        public void Invalidate(NetworkTickId tick)
         {
-            int index = (int)(tick.Value & _mask);
+            int index = GetIndex(tick);
             _valid[index] = false;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private int GetIndex(NetworkTickId tick)
+        {
+            if (!tick.IsValid)
+            {
+                throw new ArgumentOutOfRangeException(nameof(tick));
+            }
+
+            return (int)(tick.Value & _mask);
         }
 
         private static int NextPowerOfTwo(int v)

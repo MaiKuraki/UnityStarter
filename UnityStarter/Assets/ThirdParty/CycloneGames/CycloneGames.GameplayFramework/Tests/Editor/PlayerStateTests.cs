@@ -12,59 +12,69 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         [TearDown]
         public void TearDown()
         {
-            for (int i = 0; i < objects.Count; i++)
+            for (int i = objects.Count - 1; i >= 0; i--)
             {
-                if (objects[i] != null)
-                {
-                    Object.DestroyImmediate(objects[i]);
-                }
+                if (objects[i] != null) Object.DestroyImmediate(objects[i]);
             }
-
             objects.Clear();
         }
 
         [Test]
-        public void ToDataObjectAndFromDataObject_RoundTripFrameworkIdentity()
+        public void Snapshot_RoundTripsFrameworkIdentity()
         {
             PlayerState source = CreatePlayerState("Source");
             source.SetPlayerName("PlayerOne");
             source.SetPlayerId(42);
-            source.SetIsSpectator(true);
+            Assert.IsTrue(source.TryRestoreSnapshot(new PlayerStateSnapshot
+            {
+                PlayerName = "PlayerOne",
+                PlayerId = 42,
+                IsSpectator = true,
+                SchemaVersion = PlayerStateSnapshot.CurrentSchemaVersion,
+            }, out _));
 
-            PlayerStateData data = source.ToDataObject();
+            PlayerStateSnapshot snapshot = source.CaptureSnapshot();
             PlayerState target = CreatePlayerState("Target");
-            target.FromDataObject(data);
 
+            Assert.IsTrue(target.TryRestoreSnapshot(snapshot, out string error), error);
             Assert.AreEqual("PlayerOne", target.GetPlayerName());
             Assert.AreEqual(42, target.GetPlayerId());
             Assert.IsTrue(target.IsSpectator());
+            Assert.AreEqual(PlayerStateSnapshot.CurrentSchemaVersion, snapshot.SchemaVersion);
         }
 
         [Test]
-        public void SerializeAndDeserialize_RoundTripFrameworkIdentity()
+        public void Snapshot_RejectsEveryNonCurrentSchema()
         {
-            PlayerState source = CreatePlayerState("Source");
-            source.SetPlayerName("SerializedPlayer");
-            source.SetPlayerId(77);
-            source.SetIsSpectator(true);
-            MemoryDataStore store = new MemoryDataStore();
+            PlayerState state = CreatePlayerState("State");
+            Assert.IsFalse(state.TryRestoreSnapshot(new PlayerStateSnapshot
+            {
+                SchemaVersion = 0,
+                PlayerName = "Invalid",
+                PlayerId = 7,
+            }, out string missingVersionError));
+            StringAssert.Contains("Unsupported", missingVersionError);
 
-            source.Serialize(store);
-            PlayerState target = CreatePlayerState("Target");
-            target.Deserialize(store);
-
-            Assert.AreEqual("SerializedPlayer", target.GetPlayerName());
-            Assert.AreEqual(77, target.GetPlayerId());
-            Assert.IsTrue(target.IsSpectator());
+            Assert.IsFalse(state.TryRestoreSnapshot(new PlayerStateSnapshot
+            {
+                SchemaVersion = PlayerStateSnapshot.CurrentSchemaVersion + 1,
+                PlayerName = "Future",
+                PlayerId = 8,
+            }, out string error));
+            StringAssert.Contains("Unsupported", error);
+            Assert.IsNull(state.GetPlayerName());
         }
 
         [Test]
-        public void CopyProperties_CopiesIdentityWithoutRequiringPawn()
+        public void CopyProperties_CopiesIdentityWithoutPawn()
         {
             PlayerState source = CreatePlayerState("Source");
-            source.SetPlayerName("CopiedPlayer");
-            source.SetPlayerId(11);
-            source.SetIsSpectator(true);
+            source.TryRestoreSnapshot(new PlayerStateSnapshot
+            {
+                PlayerName = "CopiedPlayer",
+                PlayerId = 11,
+                IsSpectator = true,
+            }, out _);
             PlayerState target = CreatePlayerState("Target");
 
             target.CopyProperties(source);
@@ -75,57 +85,46 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         }
 
         [Test]
-        public void SetPawnPrivate_FiresOnlyWhenPawnChanges()
+        public void Possession_PublishesPlayerStatePawnAfterCommit()
         {
-            PlayerState playerState = CreatePlayerState("PlayerState");
-            Pawn pawn = CreateObject("Pawn").AddComponent<Pawn>();
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            Controller controllerPrefab = testWorld.CreateAuthoringActor<Controller>("ControllerPrefab");
+            Controller controller = testWorld.World.SpawnActor(controllerPrefab);
+            PlayerState playerState = testWorld.World.SpawnActor(testWorld.World.Definition.PlayerStateClass);
+            Pawn pawn = testWorld.World.SpawnActor(testWorld.World.Definition.PawnClass);
+            controller.Initialize(testWorld.World, playerState);
             int eventCount = 0;
-            Pawn lastNewPawn = null;
-            Pawn lastOldPawn = null;
 
-            playerState.OnPawnSetEvent += (_, newPawn, oldPawn) =>
+            playerState.OnPawnSetEvent += (state, newPawn, oldPawn) =>
             {
                 eventCount++;
-                lastNewPawn = newPawn;
-                lastOldPawn = oldPawn;
+                Assert.AreSame(newPawn, state.GetPawn());
+                Assert.AreSame(newPawn, controller.GetPawn());
+                if (newPawn != null)
+                {
+                    Assert.AreSame(controller, newPawn.Controller);
+                }
             };
 
-            playerState.SetPawnPrivate(pawn);
-            playerState.SetPawnPrivate(pawn);
-            playerState.SetPawnPrivate(null);
+            controller.Possess(pawn);
 
-            Assert.AreEqual(2, eventCount);
-            Assert.IsNull(lastNewPawn);
-            Assert.AreSame(pawn, lastOldPawn);
-            Assert.IsNull(playerState.GetPawn());
+            Assert.AreEqual(1, eventCount);
+            Assert.AreSame(pawn, playerState.GetPawn());
+        }
+
+        [Test]
+        public void PlayerName_IsBounded()
+        {
+            PlayerState state = CreatePlayerState("State");
+            Assert.Throws<System.ArgumentException>(() =>
+                state.SetPlayerName(new string('x', PlayerLoginRequest.MaxPlayerNameLength + 1)));
         }
 
         private PlayerState CreatePlayerState(string name)
         {
-            return CreateObject(name).AddComponent<PlayerState>();
-        }
-
-        private GameObject CreateObject(string name)
-        {
-            GameObject gameObject = new GameObject(name);
+            var gameObject = new GameObject(name);
             objects.Add(gameObject);
-            return gameObject;
-        }
-
-        private sealed class MemoryDataStore : IDataWriter, IDataReader
-        {
-            private readonly Dictionary<string, object> values = new Dictionary<string, object>(8);
-
-            public void WriteString(string key, string value) => values[key] = value;
-            public void WriteInt(string key, int value) => values[key] = value;
-            public void WriteFloat(string key, float value) => values[key] = value;
-            public void WriteBool(string key, bool value) => values[key] = value;
-            public void WriteDouble(string key, double value) => values[key] = value;
-            public string ReadString(string key) => values.TryGetValue(key, out object value) ? (string)value : null;
-            public int ReadInt(string key) => values.TryGetValue(key, out object value) ? (int)value : 0;
-            public float ReadFloat(string key) => values.TryGetValue(key, out object value) ? (float)value : 0f;
-            public bool ReadBool(string key) => values.TryGetValue(key, out object value) && (bool)value;
-            public double ReadDouble(string key) => values.TryGetValue(key, out object value) ? (double)value : 0d;
+            return gameObject.AddComponent<PlayerState>();
         }
     }
 }

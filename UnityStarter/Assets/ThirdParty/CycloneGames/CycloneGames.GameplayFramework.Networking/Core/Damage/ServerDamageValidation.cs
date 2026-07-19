@@ -282,7 +282,7 @@ namespace CycloneGames.GameplayFramework.Networking
                 InstigatorActorId = request.InstigatorActorId,
                 TargetActorId = request.TargetActorId,
                 AppliedDamage = result.ApprovedDamage,
-                ResultCode = (byte)result.Reason,
+                ResultCode = result.Reason,
                 DamageEventType = damageEventType,
                 HitLocation = hitLocation
             };

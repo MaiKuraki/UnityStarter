@@ -1,0 +1,32 @@
+{
+    "name": "CycloneGames.Networking.Serializer.NewtonsoftJson.Tests.Editor",
+    "rootNamespace": "CycloneGames.Networking.Serializer.NewtonsoftJson.Tests.Editor",
+    "references": [
+        "CycloneGames.Networking.Serializer.NewtonsoftJson",
+        "CycloneGames.Networking.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Newtonsoft.Json.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "NEWTONSOFT_JSON"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.nuget.newtonsoft-json",
+            "expression": "",
+            "define": "NEWTONSOFT_JSON"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

@@ -4,7 +4,7 @@ namespace CycloneGames.Localization.Core
 {
     /// <summary>
     /// Resolves CLDR cardinal plural categories for common languages.
-    /// Pure static utility with zero allocation and zero state.
+    /// Pure static utility with no shared mutable state.
     /// <para>
     /// StringTable convention: append the suffix to a base key.
     /// For key "item_count", create entries: "item_count.one", "item_count.other", etc.
@@ -13,6 +13,12 @@ namespace CycloneGames.Localization.Core
     /// </summary>
     public static class PluralRules
     {
+        /// <summary>
+        /// Auditable data baseline. This implementation is an integer-cardinal subset and does not
+        /// provide decimal operands, ordinal rules, or the complete CLDR locale inventory.
+        /// </summary>
+        public const string RuleSetVersion = "CLDR-48-integer-cardinal-subset";
+
         private static readonly string[] s_Suffixes = { ".zero", ".one", ".two", ".few", ".many", ".other" };
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -34,9 +40,9 @@ namespace CycloneGames.Localization.Core
             return ResolveByLanguage(lang, count);
         }
 
-        private static PluralCategory ResolveByLanguage(string lang, int n)
+        private static PluralCategory ResolveByLanguage(string lang, int count)
         {
-            if (n < 0) n = -n;
+            uint n = count < 0 ? (uint)(-(long)count) : (uint)count;
 
             return lang switch
             {
@@ -44,13 +50,15 @@ namespace CycloneGames.Localization.Core
                 "zh" or "ja" or "ko" or "vi" or "th" or "id" or "ms" or "my" or "km" or "lo"
                     => PluralCategory.Other,
 
-                // Simple singular (n=1).
-                "en" or "de" or "nl" or "sv" or "da" or "no" or "nb" or "nn" or "fy" or "af" or "lb"
-                or "it" or "es" or "ca" or "gl" or "eu" or "ast"
-                or "el" or "hu" or "fi" or "et" or "he" or "hi" or "bn" or "ta" or "te" or "mr"
-                or "gu" or "kn" or "ml" or "pa" or "si" or "ne" or "ur" or "sw" or "zu"
-                or "tr" or "az" or "ka" or "hy" or "bg" or "sq" or "mk" or "is" or "fo"
-                    => n == 1 ? PluralCategory.One : PluralCategory.Other,
+                // Audited integer rules where both 0 and 1 select one.
+                "hi" or "bn" or "gu" or "kn" or "si" or "hy" or "zu"
+                    => n <= 1 ? PluralCategory.One : PluralCategory.Other,
+
+                // Hebrew integer cardinal forms.
+                "he" => ResolveHebrew(n),
+
+                // Modulo-one languages.
+                "is" or "mk" => ResolveModuloOne(n),
 
                 // French-family languages treat 0 and 1 as singular.
                 "fr" or "pt" => n <= 1 ? PluralCategory.One : PluralCategory.Other,
@@ -88,75 +96,91 @@ namespace CycloneGames.Localization.Core
                 // Maltese.
                 "mt" => ResolveMaltese(n),
 
-                // Default: simple singular.
+                // Generic fallback for languages without an audited specialized rule.
                 _ => n == 1 ? PluralCategory.One : PluralCategory.Other,
             };
         }
 
-        // Resolver methods use pure integer math and allocate no managed objects.
+        // Resolver methods use pure integer math.
 
-        private static PluralCategory ResolveEastSlavic(int n)
+        private static PluralCategory ResolveEastSlavic(uint n)
         {
-            int mod10 = n % 10;
-            int mod100 = n % 100;
+            uint mod10 = n % 10;
+            uint mod100 = n % 100;
             if (mod10 == 1 && mod100 != 11) return PluralCategory.One;
             if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return PluralCategory.Few;
             return PluralCategory.Many;
         }
 
-        private static PluralCategory ResolvePolish(int n)
+        private static PluralCategory ResolvePolish(uint n)
         {
             if (n == 1) return PluralCategory.One;
-            int mod10 = n % 10;
-            int mod100 = n % 100;
+            uint mod10 = n % 10;
+            uint mod100 = n % 100;
             if (mod10 >= 2 && mod10 <= 4 && (mod100 < 12 || mod100 > 14)) return PluralCategory.Few;
             return PluralCategory.Many;
         }
 
-        private static PluralCategory ResolveCzechSlovak(int n)
+        private static PluralCategory ResolveCzechSlovak(uint n)
         {
             if (n == 1) return PluralCategory.One;
             if (n >= 2 && n <= 4) return PluralCategory.Few;
             return PluralCategory.Other;
         }
 
-        private static PluralCategory ResolveArabic(int n)
+        private static PluralCategory ResolveArabic(uint n)
         {
             if (n == 0) return PluralCategory.Zero;
             if (n == 1) return PluralCategory.One;
             if (n == 2) return PluralCategory.Two;
-            int mod100 = n % 100;
+            uint mod100 = n % 100;
             if (mod100 >= 3 && mod100 <= 10) return PluralCategory.Few;
             if (mod100 >= 11 && mod100 <= 99) return PluralCategory.Many;
             return PluralCategory.Other;
         }
 
-        private static PluralCategory ResolveRomanian(int n)
+        private static PluralCategory ResolveRomanian(uint n)
         {
             if (n == 1) return PluralCategory.One;
-            int mod100 = n % 100;
+            uint mod100 = n % 100;
             if (n == 0 || (mod100 >= 2 && mod100 <= 19)) return PluralCategory.Few;
             return PluralCategory.Other;
         }
 
-        private static PluralCategory ResolveLithuanian(int n)
+        private static PluralCategory ResolveLithuanian(uint n)
         {
-            int mod10 = n % 10;
-            int mod100 = n % 100;
+            uint mod10 = n % 10;
+            uint mod100 = n % 100;
             bool teens = mod100 >= 11 && mod100 <= 19;
             if (mod10 == 1 && !teens) return PluralCategory.One;
             if (mod10 >= 2 && mod10 <= 9 && !teens) return PluralCategory.Few;
             return PluralCategory.Other;
         }
 
-        private static PluralCategory ResolveLatvian(int n)
+        private static PluralCategory ResolveLatvian(uint n)
         {
-            if (n == 0) return PluralCategory.Zero;
-            if (n % 10 == 1 && n % 100 != 11) return PluralCategory.One;
+            uint mod10 = n % 10;
+            uint mod100 = n % 100;
+            if (mod10 == 0 || (mod100 >= 11 && mod100 <= 19)) return PluralCategory.Zero;
+            if (mod10 == 1 && mod100 != 11) return PluralCategory.One;
             return PluralCategory.Other;
         }
 
-        private static PluralCategory ResolveIrish(int n)
+        private static PluralCategory ResolveHebrew(uint n)
+        {
+            if (n == 1) return PluralCategory.One;
+            if (n == 2) return PluralCategory.Two;
+            return PluralCategory.Other;
+        }
+
+        private static PluralCategory ResolveModuloOne(uint n)
+        {
+            return n % 10 == 1 && n % 100 != 11
+                ? PluralCategory.One
+                : PluralCategory.Other;
+        }
+
+        private static PluralCategory ResolveIrish(uint n)
         {
             if (n == 1) return PluralCategory.One;
             if (n == 2) return PluralCategory.Two;
@@ -165,16 +189,16 @@ namespace CycloneGames.Localization.Core
             return PluralCategory.Other;
         }
 
-        private static PluralCategory ResolveSlovenian(int n)
+        private static PluralCategory ResolveSlovenian(uint n)
         {
-            int mod100 = n % 100;
+            uint mod100 = n % 100;
             if (mod100 == 1) return PluralCategory.One;
             if (mod100 == 2) return PluralCategory.Two;
             if (mod100 == 3 || mod100 == 4) return PluralCategory.Few;
             return PluralCategory.Other;
         }
 
-        private static PluralCategory ResolveWelsh(int n)
+        private static PluralCategory ResolveWelsh(uint n)
         {
             return n switch
             {
@@ -187,11 +211,11 @@ namespace CycloneGames.Localization.Core
             };
         }
 
-        private static PluralCategory ResolveMaltese(int n)
+        private static PluralCategory ResolveMaltese(uint n)
         {
             if (n == 1) return PluralCategory.One;
             if (n == 2) return PluralCategory.Two;
-            int mod100 = n % 100;
+            uint mod100 = n % 100;
             if (n == 0 || (mod100 >= 3 && mod100 <= 10)) return PluralCategory.Few;
             if (mod100 >= 11 && mod100 <= 19) return PluralCategory.Many;
             return PluralCategory.Other;

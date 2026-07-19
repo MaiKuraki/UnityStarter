@@ -1,4 +1,4 @@
-using System.Diagnostics;
+using System;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -19,31 +19,28 @@ namespace CycloneGames.Utility.Editor
 
         private static void OpenDirectory(string path)
         {
-            if (string.IsNullOrEmpty(path)) return;
-
-            if (!Directory.Exists(path))
+            if (string.IsNullOrEmpty(path))
             {
-                Directory.CreateDirectory(path);
+                EditorUtility.DisplayDialog(
+                    "Open Persistent Data Path",
+                    "Application.persistentDataPath is unavailable.",
+                    "OK");
+                return;
             }
 
-#if UNITY_EDITOR_WIN
-            path = path.Replace('/', '\\');
-            Process.Start("explorer.exe", path);
-#elif UNITY_EDITOR_OSX
-            Process.Start(new ProcessStartInfo
+            try
             {
-                FileName = "open",
-                Arguments = $"\"{path}\"",
-                UseShellExecute = false
-            });
-#else // Linux
-            Process.Start(new ProcessStartInfo
+                Directory.CreateDirectory(path);
+                EditorUtility.RevealInFinder(path);
+            }
+            catch (Exception exception)
             {
-                FileName = "xdg-open",
-                Arguments = $"\"{path}\"",
-                UseShellExecute = false
-            });
-#endif
+                Debug.LogException(exception);
+                EditorUtility.DisplayDialog(
+                    "Open Persistent Data Path",
+                    "The persistent data directory could not be opened. See the Console for details.",
+                    "OK");
+            }
         }
     }
 }

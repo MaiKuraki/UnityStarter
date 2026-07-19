@@ -5,7 +5,19 @@ namespace CycloneGames.Networking.Tests.Editor
 {
     public sealed class NetworkSecurityAuditTests
     {
-        private static byte[] SampleKey => new byte[] { 1, 7, 9, 11, 13, 17, 19, 23, 29, 31, 37, 41, 43, 47, 53, 59 };
+        private static byte[] SampleKey
+        {
+            get
+            {
+                var key = new byte[HmacSha256NetworkMessageSigner.MINIMUM_KEY_LENGTH];
+                for (int i = 0; i < key.Length; i++)
+                {
+                    key[i] = (byte)(i * 5 + 1);
+                }
+
+                return key;
+            }
+        }
 
         [Test]
         public void Audit_Flags_Unencrypted_Release_Server_As_Critical()
@@ -43,7 +55,7 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             using var signer = new HmacSha256NetworkMessageSigner(SampleKey);
             var rateLimiter = new RateLimiter(maxMessagesPerSecond: 120, maxBytesPerSecond: 65536, burstLimit: 8);
-            var sink = new RecordingNetworkAntiCheatSignalSink();
+            var sink = new TestSignalSink();
             NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateServerSecurityBaseline(
                 messageSigner: signer,
                 antiCheatSink: sink,
@@ -62,7 +74,7 @@ namespace CycloneGames.Networking.Tests.Editor
         public void ProductionServerSecurityBaseline_Rejects_Disabled_Signer()
         {
             var rateLimiter = new RateLimiter(maxMessagesPerSecond: 120, maxBytesPerSecond: 65536, burstLimit: 8);
-            var sink = new RecordingNetworkAntiCheatSignalSink();
+            var sink = new TestSignalSink();
 
             Assert.Throws<System.ArgumentException>(() =>
                 NetworkSecurityPresets.CreateProductionServerSecurityBaseline(
@@ -89,7 +101,7 @@ namespace CycloneGames.Networking.Tests.Editor
         {
             using var signer = new HmacSha256NetworkMessageSigner(SampleKey);
             var rateLimiter = new RateLimiter(maxMessagesPerSecond: 120, maxBytesPerSecond: 65536, burstLimit: 8);
-            var sink = new RecordingNetworkAntiCheatSignalSink();
+            var sink = new TestSignalSink();
 
             NetworkSecurityPipelineOptions options = NetworkSecurityPresets.CreateProductionServerSecurityBaseline(
                 signer,
@@ -101,7 +113,6 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.IsTrue(policy.RequireEncryptedTransport);
             Assert.IsTrue(policy.EnableReplayProtection);
             Assert.IsTrue(policy.RequireSignature);
-            Assert.IsTrue(options.EnableRateLimiting);
             Assert.AreSame(rateLimiter, options.RateLimiter);
             Assert.AreSame(signer, options.MessageSigner);
             Assert.AreSame(sink, options.AntiCheatSignalSink);
@@ -203,6 +214,13 @@ namespace CycloneGames.Networking.Tests.Editor
 
             Assert.Fail("Audit issue not found: " + id);
             return NetworkSecurityAuditSeverity.Info;
+        }
+
+        private sealed class TestSignalSink : INetworkAntiCheatSignalSink
+        {
+            public void Report(in NetworkAntiCheatSignal signal)
+            {
+            }
         }
     }
 }

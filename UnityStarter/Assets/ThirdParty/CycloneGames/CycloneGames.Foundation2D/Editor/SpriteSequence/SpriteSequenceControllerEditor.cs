@@ -1,4 +1,5 @@
 #if UNITY_EDITOR
+using System;
 using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
@@ -7,6 +8,7 @@ using CycloneGames.Foundation2D.Runtime;
 namespace CycloneGames.Foundation2D.Editor
 {
     [CustomEditor(typeof(SpriteSequenceController))]
+    [CanEditMultipleObjects]
     public sealed class SpriteSequenceControllerEditor : UnityEditor.Editor
     {
         private enum PreviewSourceMode
@@ -27,12 +29,25 @@ namespace CycloneGames.Foundation2D.Editor
             }
         }
 
-        private static readonly NaturalSpriteNameComparer SpriteNameComparer = new();
-        private static readonly List<Sprite> DragSpriteBuffer = new(128);
-        private static readonly List<Sprite> SortSpriteBuffer = new(256);
-        private static readonly HashSet<Texture> TextureSetBuffer = new();
-        private static readonly List<GUIContent> ElementLabelCache = new(128);
+        private const int DefaultDragBufferCapacity = 128;
+        private const int DefaultSortBufferCapacity = 256;
+        private const int MaximumRetainedSpriteBufferCapacity = 1024;
 
+        private static readonly NaturalSpriteNameComparer SpriteNameComparer = new();
+        private static readonly List<Sprite> DragSpriteBuffer = new(DefaultDragBufferCapacity);
+        private static readonly List<Sprite> SortSpriteBuffer = new(DefaultSortBufferCapacity);
+
+        private static readonly GUIContent ModuleTitle = new("Sprite Sequence Controller");
+        private static readonly GUIContent ModuleSubtitle = new("Frame authoring, deterministic playback settings, renderer binding, and preview.");
+        private static readonly GUIContent SectionFrames = new("Frames");
+        private static readonly GUIContent SectionPlayback = new("Playback");
+        private static readonly GUIContent SectionLoop = new("Loop Controls");
+        private static readonly GUIContent SectionRenderer = new("Renderer Binding");
+        private static readonly GUIContent SectionPreview = new("Animation Preview");
+        private static readonly GUIContent BadgeAuthoring = new("AUTHORING");
+        private static readonly GUIContent BadgeRuntime = new("RUNTIME");
+        private static readonly GUIContent BadgeBinding = new("BINDING");
+        private static readonly GUIContent BadgePreview = new("EDITOR ONLY");
         private static readonly GUIContent LabelSprites = new("Sprites");
         private static readonly GUIContent LabelFrameRate = new("Frame Rate (fps)");
         private static readonly GUIContent LabelSpeedMultiplier = new("Speed Multiplier");
@@ -45,6 +60,8 @@ namespace CycloneGames.Foundation2D.Editor
         private static readonly GUIContent LabelUpdateDriver = new("Update Driver");
         private static readonly GUIContent LabelPlayOnEnable = new("Play On Enable");
         private static readonly GUIContent LabelIgnoreTimeScale = new("Ignore TimeScale");
+        private static readonly GUIContent LabelFallbackToMonoUpdate = new("Fallback To Mono Update");
+        private static readonly GUIContent LabelMaxFrameAdvancesPerUpdate = new("Max Frame Advances Per Update");
         private static readonly GUIContent LabelLoopInterval = new("Loop Interval (sec)");
         private static readonly GUIContent LabelIntervalHoldFrame = new("Interval Hold Frame");
         private static readonly GUIContent LabelUseFiniteLoopCount = new("Use Finite Loop Count");
@@ -57,16 +74,39 @@ namespace CycloneGames.Foundation2D.Editor
         private static readonly GUIContent LabelSharedMaterialOverride = new("Shared Material Override");
         private static readonly GUIContent LabelSpritesFoldout = new("Sprites List");
         private static readonly GUIContent LabelPreviewSource = new("Preview Source");
+        private static readonly GUIContent LabelPreviousPage = new("Previous");
+        private static readonly GUIContent LabelNextPage = new("Next");
 
-        private const string PreviewSourcePrefsKey = "SpriteSequenceControllerEditor.PreviewSource";
-        private static bool _previewSourceLoaded;
-        private static PreviewSourceMode _previewSourceMode = PreviewSourceMode.Auto;
+        private static readonly string[] ExplicitlyDrawnProperties =
+        {
+            "frames",
+            "frameRate",
+            "playMode",
+            "playDirection",
+            "updateDriver",
+            "fallbackToMonoUpdateWhenBurstUnavailable",
+            "maxFrameAdvancesPerUpdate",
+            "playOnEnable",
+            "ignoreTimeScale",
+            "speedMultiplier",
+            "useDiscreteSpeedMultiplier",
+            "discreteSpeedStepCount",
+            "discreteSpeedMultiplierRange",
+            "warnWhenSpeedOutOfRange",
+            "loopInterval",
+            "intervalHoldFrame",
+            "useFiniteLoopCount",
+            "maxLoopCount",
+            "rendererComponent",
+        };
 
         private SerializedProperty _frames;
         private SerializedProperty _frameRate;
         private SerializedProperty _playMode;
         private SerializedProperty _playDirection;
         private SerializedProperty _updateDriver;
+        private SerializedProperty _fallbackToMonoUpdateWhenBurstUnavailable;
+        private SerializedProperty _maxFrameAdvancesPerUpdate;
         private SerializedProperty _playOnEnable;
         private SerializedProperty _ignoreTimeScale;
         private SerializedProperty _speedMultiplier;
@@ -84,53 +124,30 @@ namespace CycloneGames.Foundation2D.Editor
 
         private bool _foldFrames = true;
         private bool _foldPlayback = true;
-        private bool _foldLoop = true;
+        private bool _foldLoop;
         private bool _foldRenderer = true;
-        private bool _foldPreview = true;
+        private bool _foldPreview;
         private bool _foldSpritesList = true;
 
+        private bool _serializedPropertiesValid;
+        private string _serializedPropertiesError;
+
         private Vector2 _thumbScrollPos;
-        private readonly List<string> _frameIndexLabelCache = new();
+        private int _framePage;
+        private int _cachedFrameLabelStart = -1;
+        private readonly GUIContent[] _frameElementLabels = new GUIContent[FramesPerPage];
+        private readonly GUIContent[] _frameIndexLabels = new GUIContent[FramesPerPage];
 
         private bool _previewPlaying;
-        private int _previewFrame;
+        private PreviewSourceMode _previewSourceMode = PreviewSourceMode.Auto;
+        private SpriteSequencePlaybackState _previewState;
         private double _previewLastTime;
-        private double _previewAccumulator;
-        private bool _previewInInterval;
-        private bool _previewBlankDuringInterval;
-        private double _previewIntervalTimer;
-        private int _previewDirection = 1;
-        private int _previewLoopCompleteCount;
 
         private const float ThumbSize = 48f;
         private const float ThumbSpacing = 2f;
         private const float DropZoneHeight = 38f;
-
-        private static GUIStyle _sectionStyle;
-        private static GUIStyle SectionStyle => _sectionStyle ??= new GUIStyle(EditorStyles.helpBox)
-        {
-            padding = new RectOffset(10, 10, 8, 8)
-        };
-
-        private static PreviewSourceMode PreviewSource
-        {
-            get
-            {
-                if (!_previewSourceLoaded)
-                {
-                    _previewSourceMode = (PreviewSourceMode)EditorPrefs.GetInt(PreviewSourcePrefsKey, (int)PreviewSourceMode.Auto);
-                    _previewSourceLoaded = true;
-                }
-
-                return _previewSourceMode;
-            }
-            set
-            {
-                _previewSourceMode = value;
-                _previewSourceLoaded = true;
-                EditorPrefs.SetInt(PreviewSourcePrefsKey, (int)value);
-            }
-        }
+        private const int FramesPerPage = 24;
+        private const int DefaultPreviewCatchUpFrameBudget = 64;
 
         private void OnEnable()
         {
@@ -139,6 +156,8 @@ namespace CycloneGames.Foundation2D.Editor
             _playMode = serializedObject.FindProperty("playMode");
             _playDirection = serializedObject.FindProperty("playDirection");
             _updateDriver = serializedObject.FindProperty("updateDriver");
+            _fallbackToMonoUpdateWhenBurstUnavailable = serializedObject.FindProperty("fallbackToMonoUpdateWhenBurstUnavailable");
+            _maxFrameAdvancesPerUpdate = serializedObject.FindProperty("maxFrameAdvancesPerUpdate");
             _playOnEnable = serializedObject.FindProperty("playOnEnable");
             _ignoreTimeScale = serializedObject.FindProperty("ignoreTimeScale");
             _speedMultiplier = serializedObject.FindProperty("speedMultiplier");
@@ -153,16 +172,23 @@ namespace CycloneGames.Foundation2D.Editor
             _maxLoopCount = serializedObject.FindProperty("maxLoopCount");
 
             _rendererComponent = serializedObject.FindProperty("rendererComponent");
+            _serializedPropertiesValid = Foundation2DInspectorUi.ValidateRequiredProperties(
+                serializedObject,
+                nameof(SpriteSequenceControllerEditor),
+                ExplicitlyDrawnProperties,
+                out _serializedPropertiesError);
+
+            for (int i = 0; i < FramesPerPage; i++)
+            {
+                _frameElementLabels[i] ??= new GUIContent();
+                _frameIndexLabels[i] ??= new GUIContent();
+            }
 
             EditorApplication.update -= OnEditorPreviewTick;
             _previewPlaying = false;
-            _previewFrame = 0;
-            _previewAccumulator = 0d;
-            _previewInInterval = false;
-            _previewBlankDuringInterval = false;
-            _previewIntervalTimer = 0d;
-            _previewDirection = 1;
-            _previewLoopCompleteCount = 0;
+            _previewState = default;
+            _framePage = 0;
+            _cachedFrameLabelStart = -1;
         }
 
         private void OnDisable()
@@ -174,324 +200,414 @@ namespace CycloneGames.Foundation2D.Editor
         {
             serializedObject.Update();
 
+            if (!_serializedPropertiesValid)
+            {
+                Foundation2DInspectorUi.DrawInvalidSerializedPropertyState(
+                    serializedObject,
+                    ModuleTitle,
+                    ModuleSubtitle,
+                    _serializedPropertiesError);
+                serializedObject.ApplyModifiedProperties();
+                return;
+            }
+
+            Foundation2DInspectorUi.DrawModuleHeader(ModuleTitle, ModuleSubtitle);
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                Foundation2DInspectorUi.DrawMultiObjectActionNotice();
+            }
+
             DrawFramesSection();
             DrawPlaybackSection();
             DrawLoopSection();
             DrawRendererSection();
             DrawPreviewSection();
             DrawRuntimeControls();
+            Foundation2DInspectorUi.DrawRemainingProperties(serializedObject, ExplicitlyDrawnProperties);
 
-            serializedObject.ApplyModifiedProperties();
+            bool changed = serializedObject.ApplyModifiedProperties();
+            if (changed && (_previewPlaying || _previewState.IsPaused))
+            {
+                bool remainPaused = _previewState.IsPaused;
+                ResetPreviewState(true);
+                if (remainPaused)
+                {
+                    _previewState.Pause();
+                }
+            }
         }
 
         private void DrawFramesSection()
         {
-            _foldFrames = EditorGUILayout.Foldout(_foldFrames, "Frames", true);
-            if (!_foldFrames)
+            if (!Foundation2DInspectorUi.DrawSectionHeader(
+                    ref _foldFrames,
+                    SectionFrames,
+                    BadgeAuthoring,
+                    Foundation2DInspectorUi.BadgeTone.Neutral))
             {
                 return;
             }
 
-            EditorGUILayout.BeginVertical(SectionStyle);
-            DrawDropZone();
-
-            Rect spritesFoldoutRect = EditorGUILayout.GetControlRect();
-            spritesFoldoutRect.xMin += 8f;
-            _foldSpritesList = EditorGUI.Foldout(spritesFoldoutRect, _foldSpritesList, LabelSpritesFoldout, true);
-            if (_foldSpritesList)
+            using (Foundation2DInspectorUi.BeginCard())
             {
-                DrawFramesArrayWithoutFoldoutArrow();
-            }
-            else
-            {
-                DrawCollapsedSpritesSummary();
-            }
-
-            int count = _frames.arraySize;
-            if (count > 0)
-            {
-                EditorGUILayout.BeginHorizontal();
-                if (GUILayout.Button("Sort by Name", EditorStyles.miniButtonLeft))
+                using (new EditorGUI.DisabledScope(serializedObject.isEditingMultipleObjects))
                 {
-                    SortFramesByName();
-                }
+                    DrawDropZone();
 
-                if (GUILayout.Button("Reverse", EditorStyles.miniButtonMid))
-                {
-                    ReverseFrames();
-                }
-
-                if (GUILayout.Button("Clear", EditorStyles.miniButtonRight))
-                {
-                    if (EditorUtility.DisplayDialog("Clear Frame Sequence", $"Clear all {count} frames?", "Clear", "Cancel"))
+                    Rect spritesFoldoutRect = EditorGUILayout.GetControlRect();
+                    spritesFoldoutRect.xMin += 8f;
+                    _foldSpritesList = EditorGUI.Foldout(spritesFoldoutRect, _foldSpritesList, LabelSpritesFoldout, true);
+                    if (_foldSpritesList)
                     {
-                        _frames.ClearArray();
+                        DrawFramesArrayWithoutFoldoutArrow();
+                    }
+                    else
+                    {
+                        DrawCollapsedSpritesSummary();
+                    }
+
+                    int actionFrameCount = _frames.arraySize;
+                    if (actionFrameCount > 0)
+                    {
+                        using (Foundation2DInspectorUi.BeginActionLayout(3, 88f))
+                        {
+                            if (GUILayout.Button("Sort by Name"))
+                            {
+                                SortFramesByName();
+                            }
+
+                            if (GUILayout.Button("Reverse"))
+                            {
+                                ReverseFrames();
+                            }
+
+                            if (GUILayout.Button("Clear") &&
+                                EditorUtility.DisplayDialog("Clear Frame Sequence", $"Clear all {actionFrameCount} frames?", "Clear", "Cancel"))
+                            {
+                                _frames.ClearArray();
+                                _framePage = 0;
+                                OnFrameStructureChanged();
+                            }
+                        }
+
+                        DrawFrameStrip(_frames.arraySize);
                     }
                 }
-                EditorGUILayout.EndHorizontal();
 
-                int drawCount = _frames.arraySize;
-                if (drawCount > 0)
+                int count = _frames.arraySize;
+                if (count > 0)
                 {
-                    DrawFrameStrip(drawCount);
+                    EditorGUILayout.LabelField($"Frame Count: {count}", EditorStyles.miniLabel);
+
+                    float fps = Mathf.Max(0.01f, _frameRate.floatValue);
+                    float duration = count / fps;
+                    EditorGUILayout.LabelField($"Cycle Duration: {duration:F2}s", EditorStyles.miniLabel);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox("Assign sprite frames to start playback.", MessageType.Info);
                 }
             }
-
-            count = _frames.arraySize;
-            if (count > 0)
-            {
-                EditorGUILayout.LabelField($"Frame Count: {count}", EditorStyles.miniLabel);
-
-                float fps = Mathf.Max(0.01f, _frameRate.floatValue);
-                float duration = count / fps;
-                EditorGUILayout.LabelField($"Cycle Duration: {duration:F2}s", EditorStyles.miniLabel);
-            }
-            else
-            {
-                EditorGUILayout.HelpBox("Assign sprite frames to start playback.", MessageType.Info);
-            }
-
-            EditorGUILayout.EndVertical();
         }
 
         private void DrawPlaybackSection()
         {
-            _foldPlayback = EditorGUILayout.Foldout(_foldPlayback, "Playback", true);
-            if (!_foldPlayback)
+            if (!Foundation2DInspectorUi.DrawSectionHeader(
+                    ref _foldPlayback,
+                    SectionPlayback,
+                    BadgeRuntime,
+                    Foundation2DInspectorUi.BadgeTone.Good))
             {
                 return;
             }
 
-            EditorGUILayout.BeginVertical(SectionStyle);
-            EditorGUILayout.PropertyField(_frameRate, LabelFrameRate);
-            EditorGUILayout.PropertyField(_speedMultiplier, LabelSpeedMultiplier);
-            EditorGUILayout.PropertyField(_useDiscreteSpeedMultiplier, LabelUseDiscreteSpeedMultiplier);
-            if (_useDiscreteSpeedMultiplier.boolValue)
+            using (Foundation2DInspectorUi.BeginCard())
             {
-                EditorGUI.indentLevel++;
-                EditorGUILayout.PropertyField(_discreteSpeedStepCount, LabelDiscreteStepCount);
-                EditorGUILayout.PropertyField(_discreteSpeedMultiplierRange, LabelDiscreteRange);
-                EditorGUILayout.PropertyField(_warnWhenSpeedOutOfRange, LabelWarnWhenSpeedOutOfRange);
-                EditorGUILayout.HelpBox("This maps speedMultiplier to the nearest evenly-spaced step in the configured range. Start with 5-7 steps, then tune by visual feel and batching results.", MessageType.Info);
-
-                Vector2 range = _discreteSpeedMultiplierRange.vector2Value;
-                float min = Mathf.Min(range.x, range.y);
-                float max = Mathf.Max(range.x, range.y);
-                float raw = _speedMultiplier.floatValue;
-                if (raw < min || raw > max)
+                EditorGUILayout.PropertyField(_frameRate, LabelFrameRate, false);
+                EditorGUILayout.PropertyField(_speedMultiplier, LabelSpeedMultiplier, false);
+                EditorGUILayout.PropertyField(_useDiscreteSpeedMultiplier, LabelUseDiscreteSpeedMultiplier, false);
+                if (!_useDiscreteSpeedMultiplier.hasMultipleDifferentValues && _useDiscreteSpeedMultiplier.boolValue)
                 {
-                    EditorGUILayout.HelpBox($"Current Speed Multiplier ({raw:F3}) is outside configured range [{min:F3}, {max:F3}] and will be clamped before quantization.", MessageType.Warning);
+                    using (new EditorGUI.IndentLevelScope())
+                    {
+                        EditorGUILayout.PropertyField(_discreteSpeedStepCount, LabelDiscreteStepCount, false);
+                        EditorGUILayout.PropertyField(_discreteSpeedMultiplierRange, LabelDiscreteRange, false);
+                        EditorGUILayout.PropertyField(_warnWhenSpeedOutOfRange, LabelWarnWhenSpeedOutOfRange, false);
+                        EditorGUILayout.HelpBox("This maps speedMultiplier to the nearest evenly-spaced step in the configured range. Start with 5-7 steps, then tune by visual feel and batching results.", MessageType.Info);
+
+                        Vector2 range = _discreteSpeedMultiplierRange.vector2Value;
+                        float min = Mathf.Min(range.x, range.y);
+                        float max = Mathf.Max(range.x, range.y);
+                        float raw = _speedMultiplier.floatValue;
+                        if (raw < min || raw > max)
+                        {
+                            EditorGUILayout.HelpBox($"Current Speed Multiplier ({raw:F3}) is outside configured range [{min:F3}, {max:F3}] and will be clamped before quantization.", MessageType.Warning);
+                        }
+                    }
                 }
 
-                EditorGUI.indentLevel--;
+                EditorGUILayout.PropertyField(_playMode, LabelPlayMode, false);
+                EditorGUILayout.PropertyField(_playDirection, LabelDirection, false);
+                EditorGUILayout.PropertyField(_updateDriver, LabelUpdateDriver, false);
+                EditorGUILayout.PropertyField(_playOnEnable, LabelPlayOnEnable, false);
+                EditorGUILayout.PropertyField(_ignoreTimeScale, LabelIgnoreTimeScale, false);
+
+                if (_maxFrameAdvancesPerUpdate != null)
+                {
+                    EditorGUILayout.PropertyField(_maxFrameAdvancesPerUpdate, LabelMaxFrameAdvancesPerUpdate, false);
+                    EditorGUILayout.HelpBox("This budget bounds catch-up work after a stall. Excess accumulated animation time is discarded deterministically after the configured number of frame advances.", MessageType.None);
+                }
+
+                bool driverIsMixed = _updateDriver.hasMultipleDifferentValues;
+                bool usesBurstDriver = !driverIsMixed &&
+                                       _updateDriver.enumValueIndex == (int)SpriteSequenceController.UpdateDriver.BurstManaged;
+                if ((driverIsMixed || usesBurstDriver) && _fallbackToMonoUpdateWhenBurstUnavailable != null)
+                {
+                    EditorGUILayout.PropertyField(_fallbackToMonoUpdateWhenBurstUnavailable, LabelFallbackToMonoUpdate, false);
+                }
+
+                if (usesBurstDriver)
+                {
+                    EditorGUILayout.HelpBox("BurstManaged requires the optional Foundation2D Burst integration and an active SpriteSequenceBurstManager. The fallback setting controls behavior when that integration is unavailable.", MessageType.Info);
+                }
             }
 
-            EditorGUILayout.PropertyField(_playMode, LabelPlayMode);
-            EditorGUILayout.PropertyField(_playDirection, LabelDirection);
-            EditorGUILayout.PropertyField(_updateDriver, LabelUpdateDriver);
-            EditorGUILayout.PropertyField(_playOnEnable, LabelPlayOnEnable);
-            EditorGUILayout.PropertyField(_ignoreTimeScale, LabelIgnoreTimeScale);
-
-            if (_updateDriver.enumValueIndex == (int)SpriteSequenceController.UpdateDriver.BurstManaged)
-            {
-                EditorGUILayout.HelpBox("BurstManaged requires SpriteSequenceBurstManager in scene and compile define BURST_JOBS. If unavailable, controller can fallback to MonoUpdate.", MessageType.Info);
-            }
-
-            EditorGUILayout.EndVertical();
         }
 
         private void DrawLoopSection()
         {
-            _foldLoop = EditorGUILayout.Foldout(_foldLoop, "Loop Controls", true);
-            if (!_foldLoop)
+            if (!Foundation2DInspectorUi.DrawSectionHeader(
+                    ref _foldLoop,
+                    SectionLoop,
+                    BadgeRuntime,
+                    Foundation2DInspectorUi.BadgeTone.Neutral))
             {
                 return;
             }
 
-            EditorGUILayout.BeginVertical(SectionStyle);
-            EditorGUILayout.PropertyField(_loopInterval, LabelLoopInterval);
-            EditorGUILayout.PropertyField(_intervalHoldFrame, LabelIntervalHoldFrame);
-            EditorGUILayout.PropertyField(_useFiniteLoopCount, LabelUseFiniteLoopCount);
-
-            if (_useFiniteLoopCount.boolValue)
+            using (Foundation2DInspectorUi.BeginCard())
             {
-                EditorGUILayout.PropertyField(_maxLoopCount, LabelMaxLoopCount);
-            }
+                EditorGUILayout.PropertyField(_loopInterval, LabelLoopInterval, false);
+                EditorGUILayout.PropertyField(_intervalHoldFrame, LabelIntervalHoldFrame, false);
+                EditorGUILayout.PropertyField(_useFiniteLoopCount, LabelUseFiniteLoopCount, false);
 
-            EditorGUILayout.EndVertical();
+                if (!_useFiniteLoopCount.hasMultipleDifferentValues && _useFiniteLoopCount.boolValue)
+                {
+                    EditorGUILayout.PropertyField(_maxLoopCount, LabelMaxLoopCount, false);
+                }
+            }
         }
 
         private void DrawRendererSection()
         {
-            _foldRenderer = EditorGUILayout.Foldout(_foldRenderer, "Renderer Binding", true);
-            if (!_foldRenderer)
+            if (!Foundation2DInspectorUi.DrawSectionHeader(
+                    ref _foldRenderer,
+                    SectionRenderer,
+                    BadgeBinding,
+                    Foundation2DInspectorUi.BadgeTone.Neutral))
             {
                 return;
             }
 
-            EditorGUILayout.BeginVertical(SectionStyle);
-            EditorGUILayout.PropertyField(_rendererComponent, LabelRendererComponent);
-            if (_rendererComponent.objectReferenceValue == null)
+            using (Foundation2DInspectorUi.BeginCard())
             {
-                EditorGUILayout.HelpBox("Assign a component implementing ISpriteSequenceRenderer, such as UGUISequenceRenderer or SpriteRendererSequenceRenderer.", MessageType.None);
-            }
-            else
-            {
-                Component rendererComponent = _rendererComponent.objectReferenceValue as Component;
-                string rendererTypeName = rendererComponent != null ? rendererComponent.GetType().Name : _rendererComponent.objectReferenceValue.GetType().Name;
-                EditorGUILayout.HelpBox($"Renderer-specific settings are edited in the {rendererTypeName} component inspector below. Controller preview and playback settings stay here.", MessageType.None);
-
-                EditorGUILayout.BeginHorizontal();
-                using (new EditorGUI.DisabledScope(rendererComponent == null))
+                EditorGUILayout.PropertyField(_rendererComponent, LabelRendererComponent, false);
+                if (_rendererComponent.hasMultipleDifferentValues)
                 {
-                    if (GUILayout.Button("Ping Renderer"))
-                    {
-                        EditorGUIUtility.PingObject(rendererComponent);
-                    }
+                    EditorGUILayout.HelpBox("Selected controllers use different renderer bindings. Set a common binding or inspect one controller at a time to navigate to its renderer.", MessageType.Info);
+                    return;
+                }
 
-                    if (GUILayout.Button("Select Renderer"))
+                Component rendererComponent = _rendererComponent.objectReferenceValue as Component;
+                if (rendererComponent == null && target is SpriteSequenceController controller)
+                {
+                    rendererComponent = controller.GetComponent<ISpriteSequenceRenderer>() as Component;
+                }
+
+                if (_rendererComponent.objectReferenceValue != null &&
+                    _rendererComponent.objectReferenceValue is not ISpriteSequenceRenderer)
+                {
+                    EditorGUILayout.HelpBox("The assigned component does not implement ISpriteSequenceRenderer. Runtime playback cannot use this binding.", MessageType.Error);
+                }
+                else if (_rendererComponent.objectReferenceValue == null && rendererComponent != null)
+                {
+                    EditorGUILayout.HelpBox($"Runtime will automatically resolve {rendererComponent.GetType().Name} on this GameObject. Assign it explicitly when more than one renderer adapter is present.", MessageType.Info);
+                }
+                else if (rendererComponent == null)
+                {
+                    EditorGUILayout.HelpBox("No ISpriteSequenceRenderer is assigned or available on this GameObject. Add UGUISequenceRenderer or SpriteRendererSequenceRenderer.", MessageType.Warning);
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox($"Renderer-specific settings are edited in the {rendererComponent.GetType().Name} component Inspector. Controller preview and playback settings stay here.", MessageType.None);
+                }
+
+                if (rendererComponent != null)
+                {
+                    using (Foundation2DInspectorUi.BeginActionLayout(2, 110f))
                     {
-                        Selection.activeObject = rendererComponent;
+                        if (GUILayout.Button("Ping Renderer"))
+                        {
+                            EditorGUIUtility.PingObject(rendererComponent);
+                        }
+
+                        if (GUILayout.Button("Select Renderer"))
+                        {
+                            Selection.activeObject = rendererComponent;
+                        }
                     }
                 }
-                EditorGUILayout.EndHorizontal();
             }
-
-            EditorGUILayout.EndVertical();
         }
 
         private void DrawPreviewSection()
         {
-            _foldPreview = EditorGUILayout.Foldout(_foldPreview, "Animation Preview", true);
-            if (!_foldPreview)
+            if (!Foundation2DInspectorUi.DrawSectionHeader(
+                    ref _foldPreview,
+                    SectionPreview,
+                    BadgePreview,
+                    Foundation2DInspectorUi.BadgeTone.Neutral))
             {
                 return;
             }
 
-            EditorGUILayout.BeginVertical(SectionStyle);
-
-            int count = _frames.arraySize;
-            if (count <= 0)
+            using (Foundation2DInspectorUi.BeginCard())
             {
-                EditorGUILayout.HelpBox("No frames available for preview.", MessageType.Info);
-                EditorGUILayout.EndVertical();
-                return;
-            }
-
-            _previewFrame = Mathf.Clamp(_previewFrame, 0, count - 1);
-
-            EditorGUILayout.BeginHorizontal();
-            if (GUILayout.Button(_previewPlaying ? "Pause" : "Play", GUILayout.Width(60f)))
-            {
-                if (_previewPlaying)
+                if (serializedObject.isEditingMultipleObjects)
                 {
                     StopPreview();
+                    EditorGUILayout.HelpBox("Animation preview is available when exactly one controller is selected.", MessageType.Info);
+                    return;
+                }
+
+                int count = _frames.arraySize;
+                if (count <= 0)
+                {
+                    EditorGUILayout.HelpBox("No frames available for preview.", MessageType.Info);
+                    return;
+                }
+
+                _previewState.TotalFrameCount = count;
+                _previewState.CurrentFrameIndex = Mathf.Clamp(_previewState.CurrentFrameIndex, 0, count - 1);
+
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    if (GUILayout.Button(_previewPlaying ? "Pause" : "Play", GUILayout.Width(60f)))
+                    {
+                        if (_previewPlaying)
+                        {
+                            PausePreview();
+                        }
+                        else
+                        {
+                            StartPreview();
+                        }
+                    }
+
+                    if (GUILayout.Button("Stop", GUILayout.Width(60f)))
+                    {
+                        StopPreview();
+                        _previewState.Stop(0);
+                        Repaint();
+                    }
+
+                    EditorGUILayout.LabelField($"Frame {_previewState.CurrentFrameIndex + 1}/{count}", EditorStyles.miniLabel);
+                }
+
+                using (EditorGUI.ChangeCheckScope change = new())
+                {
+                    PreviewSourceMode selectedMode = (PreviewSourceMode)EditorGUILayout.EnumPopup(LabelPreviewSource, _previewSourceMode);
+                    if (change.changed)
+                    {
+                        _previewSourceMode = selectedMode;
+                        Repaint();
+                    }
+                }
+
+                PreviewSourceMode mode = _previewSourceMode;
+
+                if (mode == PreviewSourceMode.AssetPreview)
+                {
+                    EditorGUILayout.HelpBox("AssetPreview prioritizes visual parity with Unity-rendered sprites. Preview thumbnails are generated asynchronously and may update after a short delay.", MessageType.None);
+                }
+                else if (mode == PreviewSourceMode.RawUV)
+                {
+                    EditorGUILayout.HelpBox("RawUV previews textureRect extraction directly. Useful for low-overhead or UV-level debugging when atlas packing behavior is under review.", MessageType.None);
+                }
+
+                int newFrame = EditorGUILayout.IntSlider("Timeline", _previewState.CurrentFrameIndex, 0, count - 1);
+                if (newFrame != _previewState.CurrentFrameIndex)
+                {
+                    _previewState.Seek(newFrame);
+                    Repaint();
+                }
+
+                float previewHeight = Mathf.Clamp(EditorGUIUtility.currentViewWidth * 0.42f, 120f, 180f);
+                Rect previewRect = GUILayoutUtility.GetRect(0f, previewHeight, GUILayout.ExpandWidth(true));
+                EditorGUI.DrawRect(previewRect, new Color(0.12f, 0.12f, 0.12f));
+
+                bool previewIsBlank = _previewState.IsInInterval &&
+                                      _previewState.IntervalHoldMode == SpriteSequenceIntervalHoldMode.Blank;
+                if (previewIsBlank)
+                {
+                    EditorGUI.LabelField(previewRect, "Interval Blank Frame", EditorStyles.centeredGreyMiniLabel);
                 }
                 else
                 {
-                    StartPreview();
+                    var sprite = _frames.GetArrayElementAtIndex(_previewState.CurrentFrameIndex).objectReferenceValue as Sprite;
+                    if (sprite != null)
+                    {
+                        DrawSprite(previewRect, sprite);
+                    }
                 }
-            }
 
-            if (GUILayout.Button("Stop", GUILayout.Width(60f)))
-            {
-                StopPreview();
-                _previewFrame = 0;
-                Repaint();
-            }
+                float fps = Mathf.Max(0.01f, _frameRate.floatValue);
+                float speed = GetEffectivePreviewSpeed();
+                float effectiveFps = fps * speed;
+                float total = count / Mathf.Max(0.01f, effectiveFps);
+                float current = _previewState.CurrentFrameIndex / Mathf.Max(0.01f, effectiveFps);
+                EditorGUILayout.LabelField($"{current:F2}s / {total:F2}s @ {effectiveFps:F1} fps", EditorStyles.miniLabel);
 
-            EditorGUILayout.LabelField($"Frame {_previewFrame + 1}/{count}", EditorStyles.miniLabel);
-            EditorGUILayout.EndHorizontal();
-
-            PreviewSourceMode mode = PreviewSource;
-            EditorGUI.BeginChangeCheck();
-            mode = (PreviewSourceMode)EditorGUILayout.EnumPopup(LabelPreviewSource, mode);
-            if (EditorGUI.EndChangeCheck())
-            {
-                PreviewSource = mode;
-                Repaint();
-            }
-
-            if (mode == PreviewSourceMode.AssetPreview)
-            {
-                EditorGUILayout.HelpBox("AssetPreview prioritizes visual parity with Unity-rendered sprites. Preview thumbnails are generated asynchronously and may update after a short delay.", MessageType.None);
-            }
-            else if (mode == PreviewSourceMode.RawUV)
-            {
-                EditorGUILayout.HelpBox("RawUV previews textureRect extraction directly. Useful for low-overhead or UV-level debugging when atlas packing behavior is under review.", MessageType.None);
-            }
-
-            int newFrame = EditorGUILayout.IntSlider("Timeline", _previewFrame, 0, count - 1);
-            if (newFrame != _previewFrame)
-            {
-                _previewFrame = newFrame;
-                _previewAccumulator = 0d;
-                Repaint();
-            }
-
-            Rect previewRect = GUILayoutUtility.GetRect(0f, 180f, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(previewRect, new Color(0.12f, 0.12f, 0.12f));
-
-            if (_previewBlankDuringInterval)
-            {
-                EditorGUI.LabelField(previewRect, "Interval Blank Frame", EditorStyles.centeredGreyMiniLabel);
-            }
-            else
-            {
-                var sprite = _frames.GetArrayElementAtIndex(_previewFrame).objectReferenceValue as Sprite;
-                if (sprite != null)
+                if (_previewState.IsInInterval)
                 {
-                    DrawSprite(previewRect, sprite);
+                    float interval = Mathf.Max(0f, _loopInterval.floatValue);
+                    EditorGUILayout.LabelField($"In interval: {_previewState.LoopIntervalElapsed:F2}s / {interval:F2}s", EditorStyles.miniLabel);
+                }
+
+                if (_useFiniteLoopCount.boolValue)
+                {
+                    EditorGUILayout.LabelField($"Loop count: {_previewState.CurrentLoopCount}/{Mathf.Max(1, _maxLoopCount.intValue)}", EditorStyles.miniLabel);
                 }
             }
-
-            float fps = Mathf.Max(0.01f, _frameRate.floatValue);
-            float speed = GetEffectivePreviewSpeed();
-            float effectiveFps = fps * speed;
-            float total = count / Mathf.Max(0.01f, effectiveFps);
-            float current = _previewFrame / Mathf.Max(0.01f, effectiveFps);
-            EditorGUILayout.LabelField($"{current:F2}s / {total:F2}s @ {effectiveFps:F1} fps", EditorStyles.miniLabel);
-
-            if (_previewInInterval)
-            {
-                float interval = Mathf.Max(0f, _loopInterval.floatValue);
-                EditorGUILayout.LabelField($"In interval: {_previewIntervalTimer:F2}s / {interval:F2}s", EditorStyles.miniLabel);
-            }
-
-            if (_useFiniteLoopCount.boolValue)
-            {
-                EditorGUILayout.LabelField($"Loop count: {_previewLoopCompleteCount}/{Mathf.Max(1, _maxLoopCount.intValue)}", EditorStyles.miniLabel);
-            }
-
-            EditorGUILayout.EndVertical();
         }
 
         private void DrawRuntimeControls()
         {
             EditorGUILayout.Space(4f);
-            using (new EditorGUI.DisabledScope(!Application.isPlaying))
+            using (new EditorGUI.DisabledScope(!Application.isPlaying || serializedObject.isEditingMultipleObjects))
             {
-                EditorGUILayout.BeginHorizontal();
-                if (GUILayout.Button("Play"))
+                using (Foundation2DInspectorUi.BeginActionLayout(4, 60f))
                 {
-                    ((SpriteSequenceController)target).Play();
-                }
+                    if (GUILayout.Button("Play"))
+                    {
+                        ((SpriteSequenceController)target).Play();
+                    }
 
-                if (GUILayout.Button("Pause"))
-                {
-                    ((SpriteSequenceController)target).Pause();
-                }
+                    if (GUILayout.Button("Pause"))
+                    {
+                        ((SpriteSequenceController)target).Pause();
+                    }
 
-                if (GUILayout.Button("Resume"))
-                {
-                    ((SpriteSequenceController)target).Resume();
-                }
+                    if (GUILayout.Button("Resume"))
+                    {
+                        ((SpriteSequenceController)target).Resume();
+                    }
 
-                if (GUILayout.Button("Stop"))
-                {
-                    ((SpriteSequenceController)target).Stop();
+                    if (GUILayout.Button("Stop"))
+                    {
+                        ((SpriteSequenceController)target).Stop();
+                    }
                 }
-                EditorGUILayout.EndHorizontal();
             }
         }
 
@@ -510,6 +626,11 @@ namespace CycloneGames.Foundation2D.Editor
                 : "Drag Sprites here to build sequence";
             EditorGUI.LabelField(dropArea, hint, EditorStyles.centeredGreyMiniLabel);
 
+            if (serializedObject.isEditingMultipleObjects)
+            {
+                return;
+            }
+
             if (!dropArea.Contains(Event.current.mousePosition))
             {
                 return;
@@ -527,11 +648,17 @@ namespace CycloneGames.Foundation2D.Editor
                 case EventType.DragPerform:
                     {
                         DragAndDrop.AcceptDrag();
-                        int addedCount = CollectSpritesFromDrag(DragSpriteBuffer);
-                        if (addedCount > 0)
+                        try
                         {
-                            Undo.RecordObject(target, "Add Sprites To Sequence");
-                            AppendSprites(DragSpriteBuffer);
+                            int addedCount = CollectSpritesFromDrag(DragSpriteBuffer);
+                            if (addedCount > 0)
+                            {
+                                AppendSprites(DragSpriteBuffer);
+                            }
+                        }
+                        finally
+                        {
+                            ReleaseSpriteBuffer(DragSpriteBuffer, DefaultDragBufferCapacity);
                         }
                         Event.current.Use();
                         break;
@@ -547,12 +674,22 @@ namespace CycloneGames.Foundation2D.Editor
             if (size != _frames.arraySize)
             {
                 _frames.arraySize = size;
+                _cachedFrameLabelStart = -1;
             }
 
-            for (int i = 0; i < _frames.arraySize; i++)
+            int count = _frames.arraySize;
+            if (count <= 0)
             {
-                SerializedProperty p = _frames.GetArrayElementAtIndex(i);
-                EditorGUILayout.PropertyField(p, GetElementLabel(i));
+                return;
+            }
+
+            DrawFramePageControls(count);
+            GetFramePageRange(count, out int start, out int end);
+            EnsureFrameLabels(start, end);
+            for (int i = start; i < end; i++)
+            {
+                SerializedProperty property = _frames.GetArrayElementAtIndex(i);
+                EditorGUILayout.PropertyField(property, _frameElementLabels[i - start], false);
             }
         }
 
@@ -573,7 +710,7 @@ namespace CycloneGames.Foundation2D.Editor
 
         private static bool HasSpriteInDrag()
         {
-            foreach (Object obj in DragAndDrop.objectReferences)
+            foreach (UnityEngine.Object obj in DragAndDrop.objectReferences)
             {
                 if (obj is Sprite)
                 {
@@ -602,7 +739,7 @@ namespace CycloneGames.Foundation2D.Editor
         private static int CollectSpritesFromDrag(List<Sprite> result)
         {
             result.Clear();
-            foreach (Object obj in DragAndDrop.objectReferences)
+            foreach (UnityEngine.Object obj in DragAndDrop.objectReferences)
             {
                 if (obj is Sprite s)
                 {
@@ -618,9 +755,9 @@ namespace CycloneGames.Foundation2D.Editor
                         continue;
                     }
 
-                    Object[] subAssets = AssetDatabase.LoadAllAssetsAtPath(path);
+                    UnityEngine.Object[] subAssets = AssetDatabase.LoadAllAssetsAtPath(path);
                     bool foundSprite = false;
-                    foreach (Object sub in subAssets)
+                    foreach (UnityEngine.Object sub in subAssets)
                     {
                         if (sub is Sprite sprite)
                         {
@@ -655,6 +792,30 @@ namespace CycloneGames.Foundation2D.Editor
             }
 
             serializedObject.ApplyModifiedProperties();
+            OnFrameStructureChanged();
+        }
+
+        private void OnFrameStructureChanged()
+        {
+            _cachedFrameLabelStart = -1;
+            if (!_previewPlaying && !_previewState.IsPaused)
+            {
+                return;
+            }
+
+            if (_frames.arraySize <= 0)
+            {
+                StopPreview();
+                _previewState = default;
+                return;
+            }
+
+            bool remainPaused = _previewState.IsPaused;
+            ResetPreviewState(true);
+            if (remainPaused)
+            {
+                _previewState.Pause();
+            }
         }
 
         private void SortFramesByName()
@@ -665,22 +826,29 @@ namespace CycloneGames.Foundation2D.Editor
                 return;
             }
 
-            SortSpriteBuffer.Clear();
-            if (SortSpriteBuffer.Capacity < count)
+            try
             {
-                SortSpriteBuffer.Capacity = count;
+                SortSpriteBuffer.Clear();
+                if (SortSpriteBuffer.Capacity < count)
+                {
+                    SortSpriteBuffer.Capacity = count;
+                }
+
+                for (int i = 0; i < count; i++)
+                {
+                    SortSpriteBuffer.Add(_frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite);
+                }
+
+                SortSpriteBuffer.Sort(SpriteNameComparer);
+
+                for (int i = 0; i < count; i++)
+                {
+                    _frames.GetArrayElementAtIndex(i).objectReferenceValue = SortSpriteBuffer[i];
+                }
             }
-
-            for (int i = 0; i < count; i++)
+            finally
             {
-                SortSpriteBuffer.Add(_frames.GetArrayElementAtIndex(i).objectReferenceValue as Sprite);
-            }
-
-            SortSpriteBuffer.Sort(SpriteNameComparer);
-
-            for (int i = 0; i < count; i++)
-            {
-                _frames.GetArrayElementAtIndex(i).objectReferenceValue = SortSpriteBuffer[i];
+                ReleaseSpriteBuffer(SortSpriteBuffer, DefaultSortBufferCapacity);
             }
         }
 
@@ -709,75 +877,155 @@ namespace CycloneGames.Foundation2D.Editor
                 return;
             }
 
-            float stripWidth = count * (ThumbSize + ThumbSpacing) - ThumbSpacing;
-            float viewWidth = EditorGUIUtility.currentViewWidth - 40f;
+            if (!_foldSpritesList)
+            {
+                DrawFramePageControls(count);
+            }
+
+            GetFramePageRange(count, out int start, out int end);
+            EnsureFrameLabels(start, end);
+            int visibleCount = end - start;
+            float stripWidth = visibleCount * (ThumbSize + ThumbSpacing) - ThumbSpacing;
+            float viewWidth = Mathf.Max(ThumbSize, EditorGUIUtility.currentViewWidth - 70f);
             bool needsScroll = stripWidth > viewWidth;
 
-            if (needsScroll)
+            bool scrollViewOpened = false;
+            try
             {
-                _thumbScrollPos = EditorGUILayout.BeginScrollView(_thumbScrollPos, GUILayout.Height(ThumbSize + 24f));
-            }
-
-            Rect strip = GUILayoutUtility.GetRect(needsScroll ? stripWidth : viewWidth, ThumbSize + 14f);
-            float startX = needsScroll ? strip.x : strip.x + (viewWidth - stripWidth) * 0.5f;
-
-            for (int i = 0; i < count; i++)
-            {
-                float x = startX + i * (ThumbSize + ThumbSpacing);
-                var thumbRect = new Rect(x, strip.y, ThumbSize, ThumbSize);
-
-                EditorGUI.DrawRect(thumbRect, new Color(0.18f, 0.18f, 0.18f));
-
-                var spriteProp = _frames.GetArrayElementAtIndex(i);
-                if (spriteProp == null)
+                if (needsScroll)
                 {
-                    continue;
+                    _thumbScrollPos = EditorGUILayout.BeginScrollView(_thumbScrollPos, GUILayout.Height(ThumbSize + 24f));
+                    scrollViewOpened = true;
                 }
 
-                var sprite = spriteProp.objectReferenceValue as Sprite;
-                if (sprite != null)
+                Rect strip = GUILayoutUtility.GetRect(needsScroll ? stripWidth : viewWidth, ThumbSize + 14f);
+                float startX = needsScroll ? strip.x : strip.x + (viewWidth - stripWidth) * 0.5f;
+
+                for (int i = start; i < end; i++)
                 {
-                    DrawSprite(thumbRect, sprite);
+                    int localIndex = i - start;
+                    float x = startX + localIndex * (ThumbSize + ThumbSpacing);
+                    var thumbRect = new Rect(x, strip.y, ThumbSize, ThumbSize);
+
+                    EditorGUI.DrawRect(thumbRect, new Color(0.18f, 0.18f, 0.18f));
+
+                    var spriteProp = _frames.GetArrayElementAtIndex(i);
+                    if (spriteProp == null)
+                    {
+                        continue;
+                    }
+
+                    var sprite = spriteProp.objectReferenceValue as Sprite;
+                    if (sprite != null)
+                    {
+                        DrawSprite(thumbRect, sprite);
+                    }
+
+                    var labelRect = new Rect(x, strip.y + ThumbSize, ThumbSize, 14f);
+                    EditorGUI.LabelField(labelRect, _frameIndexLabels[localIndex], EditorStyles.centeredGreyMiniLabel);
                 }
-
-                var labelRect = new Rect(x, strip.y + ThumbSize, ThumbSize, 14f);
-                EditorGUI.LabelField(labelRect, GetFrameIndexLabel(i), EditorStyles.centeredGreyMiniLabel);
             }
-
-            if (needsScroll)
+            finally
             {
-                EditorGUILayout.EndScrollView();
+                if (scrollViewOpened)
+                {
+                    EditorGUILayout.EndScrollView();
+                }
             }
         }
 
-        private string GetFrameIndexLabel(int index)
+        private void DrawFramePageControls(int count)
         {
-            while (_frameIndexLabelCache.Count <= index)
+            int pageCount = Mathf.Max(1, (count + FramesPerPage - 1) / FramesPerPage);
+            _framePage = Mathf.Clamp(_framePage, 0, pageCount - 1);
+
+            bool narrow = EditorGUIUtility.currentViewWidth < 360f;
+            if (!narrow)
             {
-                _frameIndexLabelCache.Add(_frameIndexLabelCache.Count.ToString());
+                using (new EditorGUILayout.HorizontalScope())
+                {
+                    DrawPreviousPageButton();
+                    DrawPageSummary(count, pageCount);
+                    DrawNextPageButton(pageCount);
+                }
+                return;
             }
 
-            return _frameIndexLabelCache[index];
+            using (Foundation2DInspectorUi.BeginActionLayout(2, 90f))
+            {
+                DrawPreviousPageButton();
+                DrawNextPageButton(pageCount);
+            }
+            DrawPageSummary(count, pageCount);
         }
 
-        private static GUIContent GetElementLabel(int index)
+        private void DrawPreviousPageButton()
         {
-            while (ElementLabelCache.Count <= index)
+            using (new EditorGUI.DisabledScope(_framePage <= 0))
             {
-                ElementLabelCache.Add(new GUIContent("Element " + ElementLabelCache.Count));
+                if (GUILayout.Button(LabelPreviousPage))
+                {
+                    _framePage--;
+                    _thumbScrollPos = Vector2.zero;
+                    _cachedFrameLabelStart = -1;
+                }
             }
-
-            return ElementLabelCache[index];
         }
 
-        private static void DrawSprite(Rect position, Sprite sprite)
+        private void DrawNextPageButton(int pageCount)
+        {
+            using (new EditorGUI.DisabledScope(_framePage >= pageCount - 1))
+            {
+                if (GUILayout.Button(LabelNextPage))
+                {
+                    _framePage++;
+                    _thumbScrollPos = Vector2.zero;
+                    _cachedFrameLabelStart = -1;
+                }
+            }
+        }
+
+        private void DrawPageSummary(int count, int pageCount)
+        {
+            int firstFrame = _framePage * FramesPerPage + 1;
+            int lastFrame = Mathf.Min(count, firstFrame + FramesPerPage - 1);
+            EditorGUILayout.LabelField($"Page {_framePage + 1}/{pageCount}  |  Frames {firstFrame}-{lastFrame}", EditorStyles.centeredGreyMiniLabel);
+        }
+
+        private void GetFramePageRange(int count, out int start, out int end)
+        {
+            int pageCount = Mathf.Max(1, (count + FramesPerPage - 1) / FramesPerPage);
+            _framePage = Mathf.Clamp(_framePage, 0, pageCount - 1);
+            start = _framePage * FramesPerPage;
+            end = Mathf.Min(count, start + FramesPerPage);
+        }
+
+        private void EnsureFrameLabels(int start, int end)
+        {
+            if (_cachedFrameLabelStart == start)
+            {
+                return;
+            }
+
+            int visibleCount = end - start;
+            for (int i = 0; i < visibleCount; i++)
+            {
+                int frameIndex = start + i;
+                _frameElementLabels[i].text = $"Element {frameIndex}";
+                _frameIndexLabels[i].text = frameIndex.ToString();
+            }
+
+            _cachedFrameLabelStart = start;
+        }
+
+        private void DrawSprite(Rect position, Sprite sprite)
         {
             if (sprite == null)
             {
                 return;
             }
 
-            PreviewSourceMode mode = PreviewSource;
+            PreviewSourceMode mode = _previewSourceMode;
             if (mode != PreviewSourceMode.RawUV)
             {
                 if (TryDrawSpriteUsingAssetPreview(position, sprite))
@@ -820,6 +1068,13 @@ namespace CycloneGames.Foundation2D.Editor
                 return;
             }
 
+            if (sprite.packed &&
+                (sprite.packingMode != SpritePackingMode.Rectangle || sprite.packingRotation != SpritePackingRotation.None))
+            {
+                TryDrawSpriteUsingAssetPreview(position, sprite);
+                return;
+            }
+
             Rect spriteRect;
             try
             {
@@ -827,7 +1082,8 @@ namespace CycloneGames.Foundation2D.Editor
             }
             catch
             {
-                spriteRect = sprite.rect;
+                TryDrawSpriteUsingAssetPreview(position, sprite);
+                return;
             }
 
             Texture tex = sprite.texture;
@@ -857,18 +1113,7 @@ namespace CycloneGames.Foundation2D.Editor
                 height *= Mathf.Abs(uvRect.height);
             }
 
-            float aspect = width / Mathf.Max(height, 0.001f);
-            Rect drawRect;
-            if (aspect > 1f)
-            {
-                float h = position.height / aspect;
-                drawRect = new Rect(position.x, position.y + (position.height - h) * 0.5f, position.width, h);
-            }
-            else
-            {
-                float w = position.width * aspect;
-                drawRect = new Rect(position.x + (position.width - w) * 0.5f, position.y, w, position.height);
-            }
+            Rect drawRect = CalculateAspectFitRect(position, width, height);
 
             if (uv.HasValue)
             {
@@ -878,6 +1123,22 @@ namespace CycloneGames.Foundation2D.Editor
             {
                 GUI.DrawTexture(drawRect, texture, ScaleMode.ScaleToFit, true);
             }
+        }
+
+        private static Rect CalculateAspectFitRect(Rect position, float contentWidth, float contentHeight)
+        {
+            float safeWidth = Mathf.Max(contentWidth, 0.001f);
+            float safeHeight = Mathf.Max(contentHeight, 0.001f);
+            float contentAspect = safeWidth / safeHeight;
+            float containerAspect = position.width / Mathf.Max(position.height, 0.001f);
+            if (contentAspect >= containerAspect)
+            {
+                float height = position.width / contentAspect;
+                return new Rect(position.x, position.y + (position.height - height) * 0.5f, position.width, height);
+            }
+
+            float width = position.height * contentAspect;
+            return new Rect(position.x + (position.width - width) * 0.5f, position.y, width, position.height);
         }
 
         private static void DrawDashedBorder(Rect rect, Color color)
@@ -893,20 +1154,34 @@ namespace CycloneGames.Foundation2D.Editor
 
         private void StartPreview()
         {
-            if (_previewPlaying)
+            if (_previewPlaying || serializedObject.isEditingMultipleObjects || _frames.arraySize <= 0)
             {
                 return;
             }
 
+            if (_previewState.IsPaused && _previewState.TotalFrameCount == _frames.arraySize)
+            {
+                _previewState.Resume();
+                _previewLastTime = EditorApplication.timeSinceStartup;
+            }
+            else
+            {
+                ResetPreviewState(false);
+            }
+
             _previewPlaying = true;
-            _previewLastTime = EditorApplication.timeSinceStartup;
-            _previewAccumulator = 0d;
-            _previewInInterval = false;
-            _previewBlankDuringInterval = false;
-            _previewIntervalTimer = 0d;
-            _previewLoopCompleteCount = 0;
-            _previewDirection = _playDirection.enumValueIndex == (int)SpriteSequenceController.PlayDirection.Forward ? 1 : -1;
             EditorApplication.update += OnEditorPreviewTick;
+        }
+
+        private void PausePreview()
+        {
+            if (!_previewPlaying)
+            {
+                return;
+            }
+
+            _previewState.Pause();
+            StopPreview();
         }
 
         private void StopPreview()
@@ -922,61 +1197,68 @@ namespace CycloneGames.Foundation2D.Editor
 
         private void OnEditorPreviewTick()
         {
-            if (!_previewPlaying)
+            if (!_previewPlaying || target == null)
             {
+                StopPreview();
                 return;
             }
 
+            serializedObject.UpdateIfRequiredOrScript();
             int count = _frames.arraySize;
-            if (count <= 1)
+            if (count <= 0)
             {
+                StopPreview();
                 return;
             }
 
             double now = EditorApplication.timeSinceStartup;
-            double dt = now - _previewLastTime;
+            double deltaTime = Math.Max(0d, now - _previewLastTime);
             _previewLastTime = now;
 
-            float interval = Mathf.Max(0f, _loopInterval.floatValue);
-            if (_previewInInterval)
+            int catchUpBudget = _maxFrameAdvancesPerUpdate != null
+                ? Mathf.Max(1, _maxFrameAdvancesPerUpdate.intValue)
+                : DefaultPreviewCatchUpFrameBudget;
+            SpriteSequenceAdvanceResult result = _previewState.Advance(deltaTime, catchUpBudget);
+            if (!_previewState.IsPlaying)
             {
-                _previewIntervalTimer += dt;
-                if (_previewIntervalTimer < interval)
-                {
-                    Repaint();
-                    return;
-                }
-
-                _previewInInterval = false;
-                _previewBlankDuringInterval = false;
-                _previewIntervalTimer = 0d;
-                if (_playMode.enumValueIndex != (int)SpriteSequenceController.PlayMode.PingPong)
-                {
-                    _previewDirection = _playDirection.enumValueIndex == (int)SpriteSequenceController.PlayDirection.Forward ? 1 : -1;
-                }
-                _previewFrame = _previewDirection == 1 ? 0 : count - 1;
+                _previewPlaying = false;
+                EditorApplication.update -= OnEditorPreviewTick;
             }
 
-            float fps = Mathf.Max(0.01f, _frameRate.floatValue);
-            float speed = GetEffectivePreviewSpeed();
-            float effectiveFps = fps * speed;
-            _previewAccumulator += dt * effectiveFps;
-            int step = Mathf.FloorToInt((float)_previewAccumulator);
-            if (step <= 0)
+            if (result.VisualCommitRequired || _previewState.IsInInterval || !_previewPlaying)
             {
+                Repaint();
+            }
+        }
+
+        private void ResetPreviewState(bool preserveCurrentFrame)
+        {
+            int frameCount = _frames != null ? _frames.arraySize : 0;
+            int previousFrame = preserveCurrentFrame ? _previewState.CurrentFrameIndex : -1;
+            if (frameCount <= 0)
+            {
+                _previewState = default;
                 return;
             }
 
-            _previewAccumulator -= step;
-            for (int i = 0; i < step; i++)
+            double now = EditorApplication.timeSinceStartup;
+            SpriteSequencePlaybackDirection direction = _playDirection.enumValueIndex == (int)SpriteSequenceController.PlayDirection.Forward
+                ? SpriteSequencePlaybackDirection.Forward
+                : SpriteSequencePlaybackDirection.Reverse;
+            _previewState.Initialize(
+                direction,
+                Mathf.Max(0.01f, _frameRate.floatValue),
+                (SpriteSequencePlaybackMode)_playMode.enumValueIndex,
+                frameCount,
+                GetEffectivePreviewSpeed(),
+                _useFiniteLoopCount.boolValue ? Mathf.Max(1, _maxLoopCount.intValue) : 0,
+                Mathf.Max(0f, _loopInterval.floatValue),
+                (SpriteSequenceIntervalHoldMode)_intervalHoldFrame.enumValueIndex);
+            if (previousFrame >= 0)
             {
-                if (!AdvancePreviewFrame(count))
-                {
-                    break;
-                }
+                _previewState.Seek(Mathf.Clamp(previousFrame, 0, frameCount - 1));
             }
-
-            Repaint();
+            _previewLastTime = now;
         }
 
         private float GetEffectivePreviewSpeed()
@@ -1005,114 +1287,13 @@ namespace CycloneGames.Foundation2D.Editor
             return min + t * span;
         }
 
-        private bool AdvancePreviewFrame(int frameCount)
+        private static void ReleaseSpriteBuffer(List<Sprite> buffer, int retainedCapacity)
         {
-            int nextFrame = _previewFrame + _previewDirection;
-            int mode = _playMode.enumValueIndex;
-
-            switch (mode)
+            buffer.Clear();
+            if (buffer.Capacity > MaximumRetainedSpriteBufferCapacity)
             {
-                case (int)SpriteSequenceController.PlayMode.Once:
-                    if (nextFrame < 0 || nextFrame >= frameCount)
-                    {
-                        _previewPlaying = false;
-                        EditorApplication.update -= OnEditorPreviewTick;
-                        return false;
-                    }
-                    break;
-                case (int)SpriteSequenceController.PlayMode.Loop:
-                    if (nextFrame >= frameCount || nextFrame < 0)
-                    {
-                        if (!OnPreviewLoopBoundary())
-                        {
-                            return false;
-                        }
-
-                        if (_previewInInterval)
-                        {
-                            return false;
-                        }
-
-                        nextFrame = nextFrame >= frameCount ? 0 : frameCount - 1;
-                    }
-                    break;
-                case (int)SpriteSequenceController.PlayMode.PingPong:
-                    if (nextFrame >= frameCount)
-                    {
-                        _previewDirection = -1;
-                        nextFrame = frameCount - 2;
-                        if (nextFrame < 0) nextFrame = 0;
-
-                        if (!OnPreviewLoopBoundary())
-                        {
-                            return false;
-                        }
-
-                        if (_previewInInterval)
-                        {
-                            _previewFrame = nextFrame;
-                            return false;
-                        }
-                    }
-                    else if (nextFrame < 0)
-                    {
-                        _previewDirection = 1;
-                        nextFrame = 1;
-                        if (nextFrame >= frameCount) nextFrame = 0;
-
-                        if (!OnPreviewLoopBoundary())
-                        {
-                            return false;
-                        }
-
-                        if (_previewInInterval)
-                        {
-                            _previewFrame = nextFrame;
-                            return false;
-                        }
-                    }
-                    break;
+                buffer.Capacity = retainedCapacity;
             }
-
-            _previewFrame = Mathf.Clamp(nextFrame, 0, frameCount - 1);
-            return true;
-        }
-
-        private bool OnPreviewLoopBoundary()
-        {
-            if (_useFiniteLoopCount.boolValue)
-            {
-                _previewLoopCompleteCount++;
-                if (_previewLoopCompleteCount >= Mathf.Max(1, _maxLoopCount.intValue))
-                {
-                    _previewPlaying = false;
-                    EditorApplication.update -= OnEditorPreviewTick;
-                    return false;
-                }
-            }
-
-            float interval = Mathf.Max(0f, _loopInterval.floatValue);
-            if (interval <= 0f)
-            {
-                return true;
-            }
-
-            _previewInInterval = true;
-            _previewBlankDuringInterval = false;
-            _previewIntervalTimer = 0d;
-            _previewAccumulator = 0d;
-
-            switch (_intervalHoldFrame.enumValueIndex)
-            {
-                case (int)SpriteSequenceController.IntervalHoldFrame.First:
-                    _previewFrame = _previewDirection == 1 ? 0 : Mathf.Max(0, _frames.arraySize - 1);
-                    break;
-                case (int)SpriteSequenceController.IntervalHoldFrame.Blank:
-                    _previewBlankDuringInterval = true;
-                    break;
-            }
-
-            return true;
         }
 
     }

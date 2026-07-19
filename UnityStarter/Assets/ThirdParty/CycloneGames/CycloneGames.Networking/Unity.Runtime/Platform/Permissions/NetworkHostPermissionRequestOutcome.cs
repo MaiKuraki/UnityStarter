@@ -10,9 +10,10 @@ namespace CycloneGames.Networking.Platform
     /// </remarks>
     public enum NetworkHostPermissionRequestOutcome
     {
-        Launched = 0,
-        NotApplicable = 1,
-        InvalidInput = 2,
-        Failed = 3
+        Unknown = 0,
+        Launched = 1,
+        NotApplicable = 2,
+        InvalidInput = 3,
+        Failed = 4
     }
 }

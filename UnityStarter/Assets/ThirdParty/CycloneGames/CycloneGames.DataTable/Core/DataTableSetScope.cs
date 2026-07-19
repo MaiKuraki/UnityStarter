@@ -1,57 +1,58 @@
 using System;
-using System.Collections.Generic;
 
 namespace CycloneGames.DataTable
 {
+    /// <summary>
+    /// Explicit lifetime owner for a generated table-set root, an immutable catalog, and an
+    /// optional backing resource owner. Disposing the scope disposes only the supplied owner;
+    /// table instances and catalogs do not have implicit ownership semantics.
+    /// </summary>
     public sealed class DataTableSetScope : IDisposable
     {
-        private readonly Dictionary<Type, object> _tables;
         private readonly IDisposable _resourceOwner;
+        private DataTableCatalog _catalog;
         private bool _disposed;
 
-        public DataTableSetScope(
-            object root,
-            Dictionary<Type, object> tables)
-            : this(root, tables, null)
+        public DataTableSetScope(object root, DataTableCatalog catalog)
+            : this(root, catalog, resourceOwner: null)
         {
         }
 
         public DataTableSetScope(
             object root,
-            Dictionary<Type, object> tables,
+            DataTableCatalog catalog,
             IDisposable resourceOwner)
         {
             Root = root ?? throw new ArgumentNullException(nameof(root));
-            _tables = tables ?? throw new ArgumentNullException(nameof(tables));
+            _catalog = catalog ?? throw new ArgumentNullException(nameof(catalog));
             _resourceOwner = resourceOwner;
         }
 
         public object Root { get; private set; }
 
+        public DataTableCatalog Catalog
+        {
+            get
+            {
+                ThrowIfDisposed();
+                return _catalog;
+            }
+        }
+
+        public bool OwnsResources => _resourceOwner != null;
+
+        public bool IsDisposed => _disposed;
+
         public TTable Get<TTable>() where TTable : class
         {
             ThrowIfDisposed();
-
-            if (_tables.TryGetValue(typeof(TTable), out object table))
-            {
-                return (TTable)table;
-            }
-
-            throw new KeyNotFoundException($"Data table scope does not contain table: {typeof(TTable).FullName}");
+            return _catalog.Get<TTable>();
         }
 
         public bool TryGet<TTable>(out TTable table) where TTable : class
         {
             ThrowIfDisposed();
-
-            if (_tables.TryGetValue(typeof(TTable), out object value))
-            {
-                table = (TTable)value;
-                return true;
-            }
-
-            table = null;
-            return false;
+            return _catalog.TryGet(out table);
         }
 
         public void Dispose()
@@ -63,7 +64,7 @@ namespace CycloneGames.DataTable
 
             _disposed = true;
             Root = null;
-            _tables.Clear();
+            _catalog = DataTableCatalog.Empty;
             _resourceOwner?.Dispose();
         }
 

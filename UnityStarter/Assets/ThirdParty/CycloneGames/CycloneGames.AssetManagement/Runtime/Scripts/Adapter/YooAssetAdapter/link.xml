@@ -1,0 +1,9 @@
+<linker>
+  <assembly fullname="YooAsset" ignoreIfMissing="1" ignoreIfUnreferenced="1">
+    <type fullname="YooAsset.EditorFileSystem" preserve="all" />
+    <type fullname="YooAsset.BuiltinFileSystem" preserve="all" />
+    <type fullname="YooAsset.SandboxFileSystem" preserve="all" />
+    <type fullname="YooAsset.WebServerFileSystem" preserve="all" />
+    <type fullname="YooAsset.WebNetworkFileSystem" preserve="all" />
+  </assembly>
+</linker>

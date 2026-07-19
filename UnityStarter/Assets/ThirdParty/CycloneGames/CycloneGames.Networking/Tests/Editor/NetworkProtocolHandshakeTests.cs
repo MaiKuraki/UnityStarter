@@ -33,15 +33,14 @@ namespace CycloneGames.Networking.Tests.Editor
             var builder = new NetworkProtocolManifestBuilder(
                 "CycloneGames.Tests.HandshakeModule",
                 RangeMin,
-                RangeMax,
-                NetworkMessageKind.Module)
+                RangeMax)
             {
                 ProtocolId = "CycloneGames.Tests.Handshake",
                 CurrentVersion = current,
                 MinimumSupportedVersion = min
             };
 
-            builder.AddMessage<ProtocolTestMessage>(RangeMin);
+            builder.AddMessage("ProtocolTestMessage:v1", RangeMin, 0x6EB11280CBB2205FUL);
 
             return new NetworkModuleProtocol(builder.Build());
         }
@@ -52,6 +51,21 @@ namespace CycloneGames.Networking.Tests.Editor
             NetworkModuleProtocol local = CreateLocal();
             var remote = new TestHandshake(local.Fingerprint, 3, 2, 0UL);
 
+            Assert.AreEqual(NetworkHandshakeResult.Compatible, NetworkProtocolHandshake.Negotiate(remote, local));
+        }
+
+        [Test]
+        public void Fingerprint_Represents_Schema_Not_Version_Window()
+        {
+            NetworkModuleProtocol local = CreateLocal(current: 3, min: 2);
+            NetworkModuleProtocol olderCompatible = CreateLocal(current: 2, min: 1);
+            var remote = new TestHandshake(
+                olderCompatible.Fingerprint,
+                olderCompatible.Version.Current,
+                olderCompatible.Version.MinimumSupported,
+                0UL);
+
+            Assert.AreEqual(local.Fingerprint, olderCompatible.Fingerprint);
             Assert.AreEqual(NetworkHandshakeResult.Compatible, NetworkProtocolHandshake.Negotiate(remote, local));
         }
 

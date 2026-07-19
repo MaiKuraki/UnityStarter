@@ -3,43 +3,38 @@ using System;
 namespace CycloneGames.UIFramework.Runtime
 {
     /// <summary>
-    /// Lifecycle interface for UI presenters. Presenters handle business logic
-    /// and communicate with views through defined interfaces.
-    /// All lifecycle methods correspond to UIWindow lifecycle hooks.
+    /// Lifecycle contract for a presenter owned by an IUIWindowBinding.
+    /// All methods are invoked on the Unity main thread.
     /// </summary>
     public interface IUIPresenter : IDisposable
     {
         /// <summary>
-        /// Sets the view reference. Called automatically by the IUIWindowBinder.
+        /// Assigns the view. A binding failure must throw so the binder can roll back.
         /// </summary>
         void SetView(UIWindow view);
 
         /// <summary>
-        /// Injects the IUIService reference for navigation helpers. Called by the IUIWindowBinder.
+        /// Assigns the UI service before the view is bound.
         /// </summary>
         void SetUIService(IUIService uiService);
 
         /// <summary>
-        /// Called when the window starts opening (before transition animation).
-        /// Corresponds to UIWindow.OnStartOpen().
+        /// Called when the window starts opening, before its transition.
         /// </summary>
         void OnViewOpening();
 
         /// <summary>
-        /// Called when the window finishes opening and is fully interactive.
-        /// Corresponds to UIWindow.OnFinishedOpen().
+        /// Called when the window finishes opening and becomes interactive.
         /// </summary>
         void OnViewOpened();
 
         /// <summary>
-        /// Called when the window starts closing (before transition animation).
-        /// Corresponds to UIWindow.OnStartClose().
+        /// Called when the window starts closing, before its transition.
         /// </summary>
         void OnViewClosing();
 
         /// <summary>
-        /// Called when the window finishes closing (after transition animation, before destruction).
-        /// Corresponds to UIWindow.OnFinishedClose().
+        /// Called after the close transition and before the binding is released.
         /// </summary>
         void OnViewClosed();
     }

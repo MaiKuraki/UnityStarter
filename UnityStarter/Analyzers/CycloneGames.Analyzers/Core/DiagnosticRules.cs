@@ -76,22 +76,6 @@ namespace CycloneGames.Analyzers
             DiagnosticSeverity.Warning,
             isEnabledByDefault: true);
 
-        public static readonly DiagnosticDescriptor NetworkVariableBlittability = new(
-            DiagnosticIds.NetworkVariableBlittability,
-            "NetworkVariable<T> must be blittable",
-            "Type '{0}' used in NetworkVariable<T> contains reference-type fields. Only unmanaged, blittable types are safe for direct memory copy.",
-            DiagnosticCategories.ApiContract,
-            DiagnosticSeverity.Error,
-            isEnabledByDefault: true);
-
-        public static readonly DiagnosticDescriptor RpcMethodSignature = new(
-            DiagnosticIds.RpcMethodSignature,
-            "RPC method signature violation",
-            "{0}",
-            DiagnosticCategories.ApiContract,
-            DiagnosticSeverity.Error,
-            isEnabledByDefault: true);
-
         public static readonly DiagnosticDescriptor ActorStartBaseCall = new(
             DiagnosticIds.ActorStartBaseCall,
             "Actor.Start override must call base.Start()",

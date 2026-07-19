@@ -12,7 +12,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
             }
 
             string signature = signer.SignCanonicalManifest(in manifest);
-            if (string.IsNullOrEmpty(signature))
+            if (string.IsNullOrWhiteSpace(signature))
             {
                 throw new InvalidOperationException("Content trust manifest signer returned an empty signature.");
             }
@@ -29,7 +29,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
             byte[] canonicalPayload = ContentTrustManifestCodec.ToCanonicalPayloadBytes(in manifest);
             string signature = signer.Sign(canonicalPayload);
-            if (string.IsNullOrEmpty(signature))
+            if (string.IsNullOrWhiteSpace(signature))
             {
                 throw new InvalidOperationException("Content trust manifest signer returned an empty signature.");
             }
@@ -39,13 +39,7 @@ namespace CycloneGames.AssetManagement.Runtime.Trust
 
         public static ContentTrustManifest WithSignature(in ContentTrustManifest manifest, string signature)
         {
-            return new ContentTrustManifest(
-                manifest.Version,
-                manifest.Entries,
-                manifest.MinimumClientVersion,
-                manifest.RollbackVersion,
-                manifest.ContentRoot,
-                signature);
+            return manifest.WithSignature(signature);
         }
     }
 }

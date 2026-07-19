@@ -1,50 +1,42 @@
-
 using System;
+
 using UnityEngine;
 
 namespace CycloneGames.Utility.Runtime
 {
     /// <summary>
-    /// Displays a string property as a popup dropdown, populated with the values of public constant strings from a specified type.
-    /// This is highly performant and produces no garbage during UI rendering after the initial cache is built.
-    /// Note: If you want to use in List<string>, its dangerous, you may change the string variable name or variable value, but it will give the list a wrong value.
+    /// Draws a serialized string from the public <c>const string</c> fields declared by a type.
     /// </summary>
-    /// <example>
-    /// <code>
-    /// public static class GameConstants
-    /// {
-    ///     public const string PlayerTag = "Player";
-    ///     public const string EnemyTag = "Enemy";
-    /// }
-    ///
-    /// public class MyComponent : MonoBehaviour
-    /// {
-    ///     [StringAsConstSelector(typeof(GameConstants))]
-    ///     public string TargetTag;
-    /// }
-    /// </code>
-    /// </example>
-    public class StringAsConstSelectorAttribute : PropertyAttribute
+    /// <remarks>
+    /// The attribute changes Editor authoring only. The serialized value remains a plain string and
+    /// therefore requires the owning contract to define its own validation and migration rules.
+    /// </remarks>
+    [AttributeUsage(AttributeTargets.Field)]
+    public sealed class StringAsConstSelectorAttribute : PropertyAttribute
     {
+        /// <summary>
+        /// Gets the type whose public static constant string fields provide the known values.
+        /// </summary>
         public Type ConstantsType { get; }
 
         /// <summary>
-        /// When true, displays the options in a hierarchical GenericMenu instead of a flat popup.
+        /// Gets or sets whether known values are displayed in a hierarchical menu.
         /// </summary>
-        public bool UseMenu { get; set; } = false;
+        public bool UseMenu { get; set; }
 
         /// <summary>
-        /// The character used to separate path segments in the constant's field name for the hierarchical menu.
+        /// Gets or sets whether values outside the known constants remain editable.
+        /// </summary>
+        public bool AllowCustom { get; set; }
+
+        /// <summary>
+        /// Gets or sets the field-name separator used to construct hierarchical menu paths.
         /// </summary>
         public char Separator { get; set; } = '_';
 
-        /// <summary>
-        /// Initializes a new instance of the StringAsConstSelectorAttribute.
-        /// </summary>
-        /// <param name="constantsType">The type containing the public const string fields to display.</param>
         public StringAsConstSelectorAttribute(Type constantsType)
         {
-            ConstantsType = constantsType;
+            ConstantsType = constantsType ?? throw new ArgumentNullException(nameof(constantsType));
         }
     }
 }

@@ -109,7 +109,7 @@ namespace CycloneGames.Factory.DOD.Runtime
         bool TryWrite(NativePoolHandle handle, in T0 value0, in T1 value1, in T2 value2, in T3 value3);
     }
 
-    internal struct NativeDenseIndexMap : IDisposable
+    internal sealed class NativeDenseIndexMap : IDisposable
     {
         private NativeArray<int> _denseToSlot;
         private NativeArray<int> _slotToDense;
@@ -133,7 +133,7 @@ namespace CycloneGames.Factory.DOD.Runtime
             }
         }
 
-        public readonly int Capacity => _denseToSlot.Length;
+        public int Capacity => _denseToSlot.Length;
 
         public bool TryAllocate(ref int activeCount, ref int freeCount, out NativePoolHandle handle, out int denseIndex)
         {
@@ -188,7 +188,7 @@ namespace CycloneGames.Factory.DOD.Runtime
             return true;
         }
 
-        public readonly bool Contains(NativePoolHandle handle, int activeCount)
+        public bool Contains(NativePoolHandle handle, int activeCount)
         {
             if (!handle.IsValid || (uint)handle.Slot >= (uint)_slotToDense.Length)
             {
@@ -201,7 +201,7 @@ namespace CycloneGames.Factory.DOD.Runtime
                 && _slotGenerations[handle.Slot] == handle.Generation;
         }
 
-        public readonly bool TryGetDenseIndex(NativePoolHandle handle, int activeCount, out int denseIndex)
+        public bool TryGetDenseIndex(NativePoolHandle handle, int activeCount, out int denseIndex)
         {
             if (!Contains(handle, activeCount))
             {
@@ -213,7 +213,7 @@ namespace CycloneGames.Factory.DOD.Runtime
             return true;
         }
 
-        public readonly NativePoolHandle GetHandleAtDenseIndex(int denseIndex, int activeCount)
+        public NativePoolHandle GetHandleAtDenseIndex(int denseIndex, int activeCount)
         {
             if ((uint)denseIndex >= (uint)activeCount)
             {
@@ -304,7 +304,10 @@ namespace CycloneGames.Factory.DOD.Runtime
             {
                 _denseToSlot[i] = -1;
                 _slotToDense[i] = -1;
-                _slotGenerations[i] = _slotGenerations[i] <= 0 ? 1 : _slotGenerations[i] + 1;
+                int generation = _slotGenerations[i];
+                _slotGenerations[i] = generation <= 0 || generation == int.MaxValue
+                    ? 1
+                    : generation + 1;
                 _freeSlots[i] = capacity - 1 - i;
             }
         }
@@ -367,7 +370,7 @@ namespace CycloneGames.Factory.DOD.Runtime
     /// On WebGL, Jobs execute synchronously with no parallelism benefit.
     /// </para>
     /// </summary>
-    public struct NativePool<T> : IDisposable where T : unmanaged
+    public sealed class NativePool<T> : IDisposable where T : unmanaged
     {
         private NativeArray<T> _data;
         private Allocator _allocator;
@@ -375,25 +378,30 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public NativePool(int capacity, Allocator allocator)
         {
+            if (capacity <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(capacity));
+            }
+
             _data = new NativeArray<T>(capacity, allocator);
             _allocator = allocator;
             _activeCount = 0;
         }
 
-        public readonly int ActiveCount => _activeCount;
-        public readonly int Capacity => _data.Length;
-        public readonly bool IsCreated => _data.IsCreated;
+        public int ActiveCount => _activeCount;
+        public int Capacity => _data.Length;
+        public bool IsCreated => _data.IsCreated;
 
         /// <summary>
         /// The underlying NativeArray. Pass to Jobs with [ReadOnly]/[WriteOnly].
         /// Only indices [0..ActiveCount) contain valid active items.
         /// </summary>
-        public readonly NativeArray<T> RawArray => _data;
+        public NativeArray<T> RawArray => _data;
 
         /// <summary>
         /// Sub-array alias of active items only. Usable in IJobParallelFor.
         /// </summary>
-        public readonly NativeArray<T> ActiveItems => _data.GetSubArray(0, _activeCount);
+        public NativeArray<T> ActiveItems => _data.GetSubArray(0, _activeCount);
 
         /// <summary>
         /// Activates a new item at the end of the compact region.
@@ -401,9 +409,7 @@ namespace CycloneGames.Factory.DOD.Runtime
         /// </summary>
         public int Spawn(in T item)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_data.IsCreated) throw new ObjectDisposedException(nameof(NativePool<T>));
-#endif
             if (_activeCount >= _data.Length) return -1;
             int index = _activeCount++;
             _data[index] = item;
@@ -416,9 +422,12 @@ namespace CycloneGames.Factory.DOD.Runtime
         /// </summary>
         public int SpawnBatch(NativeArray<T> items, int count, bool allowPartial = false)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_data.IsCreated) throw new ObjectDisposedException(nameof(NativePool<T>));
-#endif
+            if (count < 0 || count > items.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count));
+            }
+
             int available = _data.Length - _activeCount;
             if (!allowPartial && count > available) return -1;
             int toSpawn = Math.Min(count, available);
@@ -438,9 +447,7 @@ namespace CycloneGames.Factory.DOD.Runtime
         /// </summary>
         public int Despawn(int index)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_data.IsCreated) throw new ObjectDisposedException(nameof(NativePool<T>));
-#endif
             if ((uint)index >= (uint)_activeCount) return -1;
             _activeCount--;
             if (index < _activeCount)
@@ -458,9 +465,7 @@ namespace CycloneGames.Factory.DOD.Runtime
         /// </summary>
         public int DespawnBatch(NativeArray<bool> despawnMask)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_data.IsCreated) throw new ObjectDisposedException(nameof(NativePool<T>));
-#endif
             if (despawnMask.Length < _activeCount)
                 throw new ArgumentException($"Despawn mask length ({despawnMask.Length}) is less than active count ({_activeCount}).", nameof(despawnMask));
 
@@ -482,7 +487,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public T this[int index]
         {
-            readonly get => _data[index];
+            get => _data[index];
             set => _data[index] = value;
         }
 
@@ -491,9 +496,7 @@ namespace CycloneGames.Factory.DOD.Runtime
         /// </summary>
         public void Resize(int newCapacity)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_data.IsCreated) throw new ObjectDisposedException(nameof(NativePool<T>));
-#endif
             if (newCapacity <= _data.Length)
                 throw new ArgumentOutOfRangeException(nameof(newCapacity), "New capacity must be larger than current.");
 
@@ -504,7 +507,15 @@ namespace CycloneGames.Factory.DOD.Runtime
             _data = newData;
         }
 
-        public void Clear() => _activeCount = 0;
+        public void Clear()
+        {
+            if (!_data.IsCreated)
+            {
+                throw new ObjectDisposedException(nameof(NativePool<T>));
+            }
+
+            _activeCount = 0;
+        }
 
         public void Dispose()
         {
@@ -523,7 +534,7 @@ namespace CycloneGames.Factory.DOD.Runtime
     /// On WebGL (single-threaded), Jobs execute synchronously with no parallelism benefit.
     /// </para>
     /// </summary>
-    public struct NativeDensePool<T> : IDisposable where T : unmanaged
+    public sealed class NativeDensePool<T> : IDisposable where T : unmanaged
     {
         private NativeArray<T> _denseItems;
         private NativeDenseIndexMap _indexMap;
@@ -555,25 +566,23 @@ namespace CycloneGames.Factory.DOD.Runtime
             _invalidDespawns = 0;
         }
 
-        public readonly bool IsCreated => _denseItems.IsCreated;
-        public readonly int Capacity => _denseItems.Length;
-        public readonly int CountAll => Capacity;
-        public readonly int CountActive => _activeCount;
-        public readonly int CountInactive => _freeCount;
-        public readonly NativeDenseDiagnostics Diagnostics => new(
+        public bool IsCreated => _denseItems.IsCreated;
+        public int Capacity => _denseItems.Length;
+        public int CountAll => Capacity;
+        public int CountActive => _activeCount;
+        public int CountInactive => _freeCount;
+        public NativeDenseDiagnostics Diagnostics => new(
             _peakCountActive,
             _totalSpawned,
             _totalDespawned,
             _rejectedSpawns,
             _invalidDespawns);
-        public readonly NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
-        public readonly NativeArray<T> ActiveItems => _denseItems.GetSubArray(0, _activeCount);
+        public NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
+        public NativeArray<T> ActiveItems => _denseItems.GetSubArray(0, _activeCount);
 
         public bool TrySpawn(in T value, out NativePoolHandle handle, out int denseIndex)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_denseItems.IsCreated) throw new ObjectDisposedException(nameof(NativeDensePool<T>));
-#endif
             if (!_indexMap.TryAllocate(ref _activeCount, ref _freeCount, out handle, out denseIndex))
             {
                 _rejectedSpawns++;
@@ -591,9 +600,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int SpawnBatch(NativeArray<T> values, int count, NativeArray<NativePoolHandle> handles, bool allowPartial = false)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_denseItems.IsCreated) throw new ObjectDisposedException(nameof(NativeDensePool<T>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > values.Length) throw new ArgumentOutOfRangeException(nameof(count));
             if (handles.Length < count && !allowPartial) throw new ArgumentException("Handle output array is too small.", nameof(handles));
@@ -622,9 +629,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public bool Despawn(NativePoolHandle handle)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_denseItems.IsCreated) throw new ObjectDisposedException(nameof(NativeDensePool<T>));
-#endif
             if (!_indexMap.TryRelease(handle, ref _activeCount, ref _freeCount, out int denseIndex, out int lastDenseIndex))
             {
                 _invalidDespawns++;
@@ -640,9 +645,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int DespawnBatch(NativeArray<NativePoolHandle> handles, int count)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_denseItems.IsCreated) throw new ObjectDisposedException(nameof(NativeDensePool<T>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > handles.Length) throw new ArgumentOutOfRangeException(nameof(count));
 
@@ -658,12 +661,12 @@ namespace CycloneGames.Factory.DOD.Runtime
             return despawned;
         }
 
-        public readonly bool Contains(NativePoolHandle handle)
+        public bool Contains(NativePoolHandle handle)
         {
             return _denseItems.IsCreated && _indexMap.Contains(handle, _activeCount);
         }
 
-        public readonly bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
+        public bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
         {
             if (!_denseItems.IsCreated)
             {
@@ -674,7 +677,7 @@ namespace CycloneGames.Factory.DOD.Runtime
             return _indexMap.TryGetDenseIndex(handle, _activeCount, out denseIndex);
         }
 
-        public readonly bool TryRead(NativePoolHandle handle, out T value)
+        public bool TryRead(NativePoolHandle handle, out T value)
         {
             if (TryGetDenseIndex(handle, out int denseIndex))
             {
@@ -697,7 +700,7 @@ namespace CycloneGames.Factory.DOD.Runtime
             return true;
         }
 
-        public readonly NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
+        public NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
         {
             return _indexMap.GetHandleAtDenseIndex(denseIndex, _activeCount);
         }
@@ -707,9 +710,7 @@ namespace CycloneGames.Factory.DOD.Runtime
         /// </summary>
         public void Resize(int newCapacity)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_denseItems.IsCreated) throw new ObjectDisposedException(nameof(NativeDensePool<T>));
-#endif
             if (newCapacity <= Capacity)
                 throw new ArgumentOutOfRangeException(nameof(newCapacity), "New capacity must be larger than current.");
 
@@ -740,7 +741,7 @@ namespace CycloneGames.Factory.DOD.Runtime
     /// Two-stream SoA dense pool with stable handles.
     /// Keeps tightly packed parallel arrays for cache-friendly iteration across separate data columns.
     /// </summary>
-    public struct NativeDenseColumnPool2<T0, T1> : INativeDenseColumnPool2<T0, T1>, IDisposable
+    public sealed class NativeDenseColumnPool2<T0, T1> : INativeDenseColumnPool2<T0, T1>, IDisposable
         where T0 : unmanaged
         where T1 : unmanaged
     {
@@ -776,25 +777,23 @@ namespace CycloneGames.Factory.DOD.Runtime
             _invalidDespawns = 0;
         }
 
-        public readonly int Capacity => _stream0.Length;
-        public readonly int CountAll => Capacity;
-        public readonly int CountActive => _activeCount;
-        public readonly int CountInactive => _freeCount;
-        public readonly NativeDenseDiagnostics Diagnostics => new(
+        public int Capacity => _stream0.Length;
+        public int CountAll => Capacity;
+        public int CountActive => _activeCount;
+        public int CountInactive => _freeCount;
+        public NativeDenseDiagnostics Diagnostics => new(
             _peakCountActive,
             _totalSpawned,
             _totalDespawned,
             _rejectedSpawns,
             _invalidDespawns);
-        public readonly NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
-        public readonly NativeArray<T0> Stream0 => _stream0.GetSubArray(0, _activeCount);
-        public readonly NativeArray<T1> Stream1 => _stream1.GetSubArray(0, _activeCount);
+        public NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
+        public NativeArray<T0> Stream0 => _stream0.GetSubArray(0, _activeCount);
+        public NativeArray<T1> Stream1 => _stream1.GetSubArray(0, _activeCount);
 
         public bool TrySpawn(in T0 value0, in T1 value1, out NativePoolHandle handle, out int denseIndex)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             if (!_indexMap.TryAllocate(ref _activeCount, ref _freeCount, out handle, out denseIndex))
             {
                 _rejectedSpawns++;
@@ -812,9 +811,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int SpawnBatch(NativeArray<T0> stream0Values, NativeArray<T1> stream1Values, int count, NativeArray<NativePoolHandle> handles, bool allowPartial = false)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > stream0Values.Length || count > stream1Values.Length) throw new ArgumentOutOfRangeException(nameof(count));
             if (handles.Length < count && !allowPartial) throw new ArgumentException("Handle output array is too small.", nameof(handles));
@@ -841,9 +838,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public bool Despawn(NativePoolHandle handle)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             if (!_indexMap.TryRelease(handle, ref _activeCount, ref _freeCount, out int denseIndex, out int lastDenseIndex))
             {
                 _invalidDespawns++;
@@ -860,9 +855,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int DespawnBatch(NativeArray<NativePoolHandle> handles, int count)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > handles.Length) throw new ArgumentOutOfRangeException(nameof(count));
 
@@ -878,27 +871,21 @@ namespace CycloneGames.Factory.DOD.Runtime
             return despawned;
         }
 
-        public readonly bool Contains(NativePoolHandle handle)
+        public bool Contains(NativePoolHandle handle)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             return _indexMap.Contains(handle, _activeCount);
         }
 
-        public readonly bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
+        public bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             return _indexMap.TryGetDenseIndex(handle, _activeCount, out denseIndex);
         }
 
         public bool TryRead(NativePoolHandle handle, out T0 value0, out T1 value1)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             if (TryGetDenseIndex(handle, out int denseIndex))
             {
                 value0 = _stream0[denseIndex];
@@ -913,9 +900,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public bool TryWrite(NativePoolHandle handle, in T0 value0, in T1 value1)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             if (!TryGetDenseIndex(handle, out int denseIndex))
             {
                 return false;
@@ -926,16 +911,14 @@ namespace CycloneGames.Factory.DOD.Runtime
             return true;
         }
 
-        public readonly NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
+        public NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
         {
             return _indexMap.GetHandleAtDenseIndex(denseIndex, _activeCount);
         }
 
         public void Resize(int newCapacity)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool2<T0, T1>));
-#endif
             if (newCapacity <= Capacity)
                 throw new ArgumentOutOfRangeException(nameof(newCapacity), "New capacity must be larger than current.");
 
@@ -970,7 +953,7 @@ namespace CycloneGames.Factory.DOD.Runtime
     /// Three-stream SoA dense pool with stable handles.
     /// Useful when high-frequency simulation data naturally splits into three hot columns.
     /// </summary>
-    public struct NativeDenseColumnPool3<T0, T1, T2> : INativeDenseColumnPool3<T0, T1, T2>, IDisposable
+    public sealed class NativeDenseColumnPool3<T0, T1, T2> : INativeDenseColumnPool3<T0, T1, T2>, IDisposable
         where T0 : unmanaged
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1006,26 +989,24 @@ namespace CycloneGames.Factory.DOD.Runtime
             _invalidDespawns = 0;
         }
 
-        public readonly int Capacity => _stream0.Length;
-        public readonly int CountAll => Capacity;
-        public readonly int CountActive => _activeCount;
-        public readonly int CountInactive => _freeCount;
-        public readonly NativeDenseDiagnostics Diagnostics => new(
+        public int Capacity => _stream0.Length;
+        public int CountAll => Capacity;
+        public int CountActive => _activeCount;
+        public int CountInactive => _freeCount;
+        public NativeDenseDiagnostics Diagnostics => new(
             _peakCountActive,
             _totalSpawned,
             _totalDespawned,
             _rejectedSpawns,
             _invalidDespawns);
-        public readonly NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
-        public readonly NativeArray<T0> Stream0 => _stream0.GetSubArray(0, _activeCount);
-        public readonly NativeArray<T1> Stream1 => _stream1.GetSubArray(0, _activeCount);
-        public readonly NativeArray<T2> Stream2 => _stream2.GetSubArray(0, _activeCount);
+        public NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
+        public NativeArray<T0> Stream0 => _stream0.GetSubArray(0, _activeCount);
+        public NativeArray<T1> Stream1 => _stream1.GetSubArray(0, _activeCount);
+        public NativeArray<T2> Stream2 => _stream2.GetSubArray(0, _activeCount);
 
         public bool TrySpawn(in T0 value0, in T1 value1, in T2 value2, out NativePoolHandle handle, out int denseIndex)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             if (!_indexMap.TryAllocate(ref _activeCount, ref _freeCount, out handle, out denseIndex))
             {
                 _rejectedSpawns++;
@@ -1044,9 +1025,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int SpawnBatch(NativeArray<T0> stream0Values, NativeArray<T1> stream1Values, NativeArray<T2> stream2Values, int count, NativeArray<NativePoolHandle> handles, bool allowPartial = false)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > stream0Values.Length || count > stream1Values.Length || count > stream2Values.Length) throw new ArgumentOutOfRangeException(nameof(count));
             if (handles.Length < count && !allowPartial) throw new ArgumentException("Handle output array is too small.", nameof(handles));
@@ -1074,9 +1053,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public bool Despawn(NativePoolHandle handle)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             if (!_indexMap.TryRelease(handle, ref _activeCount, ref _freeCount, out int denseIndex, out int lastDenseIndex))
             {
                 _invalidDespawns++;
@@ -1094,9 +1071,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int DespawnBatch(NativeArray<NativePoolHandle> handles, int count)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > handles.Length) throw new ArgumentOutOfRangeException(nameof(count));
 
@@ -1112,27 +1087,21 @@ namespace CycloneGames.Factory.DOD.Runtime
             return despawned;
         }
 
-        public readonly bool Contains(NativePoolHandle handle)
+        public bool Contains(NativePoolHandle handle)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             return _indexMap.Contains(handle, _activeCount);
         }
 
-        public readonly bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
+        public bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             return _indexMap.TryGetDenseIndex(handle, _activeCount, out denseIndex);
         }
 
         public bool TryRead(NativePoolHandle handle, out T0 value0, out T1 value1, out T2 value2)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             if (TryGetDenseIndex(handle, out int denseIndex))
             {
                 value0 = _stream0[denseIndex];
@@ -1149,9 +1118,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public bool TryWrite(NativePoolHandle handle, in T0 value0, in T1 value1, in T2 value2)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             if (!TryGetDenseIndex(handle, out int denseIndex))
             {
                 return false;
@@ -1163,16 +1130,14 @@ namespace CycloneGames.Factory.DOD.Runtime
             return true;
         }
 
-        public readonly NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
+        public NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
         {
             return _indexMap.GetHandleAtDenseIndex(denseIndex, _activeCount);
         }
 
         public void Resize(int newCapacity)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool3<T0, T1, T2>));
-#endif
             if (newCapacity <= Capacity)
                 throw new ArgumentOutOfRangeException(nameof(newCapacity), "New capacity must be larger than current.");
 
@@ -1210,7 +1175,7 @@ namespace CycloneGames.Factory.DOD.Runtime
     /// Four-stream SoA dense pool with stable handles.
     /// Useful when simulation hot data needs one more tightly packed stream without introducing wrapper structs.
     /// </summary>
-    public struct NativeDenseColumnPool4<T0, T1, T2, T3> : INativeDenseColumnPool4<T0, T1, T2, T3>, IDisposable
+    public sealed class NativeDenseColumnPool4<T0, T1, T2, T3> : INativeDenseColumnPool4<T0, T1, T2, T3>, IDisposable
         where T0 : unmanaged
         where T1 : unmanaged
         where T2 : unmanaged
@@ -1249,27 +1214,25 @@ namespace CycloneGames.Factory.DOD.Runtime
             _invalidDespawns = 0;
         }
 
-        public readonly int Capacity => _stream0.Length;
-        public readonly int CountAll => Capacity;
-        public readonly int CountActive => _activeCount;
-        public readonly int CountInactive => _freeCount;
-        public readonly NativeDenseDiagnostics Diagnostics => new(
+        public int Capacity => _stream0.Length;
+        public int CountAll => Capacity;
+        public int CountActive => _activeCount;
+        public int CountInactive => _freeCount;
+        public NativeDenseDiagnostics Diagnostics => new(
             _peakCountActive,
             _totalSpawned,
             _totalDespawned,
             _rejectedSpawns,
             _invalidDespawns);
-        public readonly NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
-        public readonly NativeArray<T0> Stream0 => _stream0.GetSubArray(0, _activeCount);
-        public readonly NativeArray<T1> Stream1 => _stream1.GetSubArray(0, _activeCount);
-        public readonly NativeArray<T2> Stream2 => _stream2.GetSubArray(0, _activeCount);
-        public readonly NativeArray<T3> Stream3 => _stream3.GetSubArray(0, _activeCount);
+        public NativeDenseProfile Profile => new(CountAll, CountActive, CountInactive, Diagnostics);
+        public NativeArray<T0> Stream0 => _stream0.GetSubArray(0, _activeCount);
+        public NativeArray<T1> Stream1 => _stream1.GetSubArray(0, _activeCount);
+        public NativeArray<T2> Stream2 => _stream2.GetSubArray(0, _activeCount);
+        public NativeArray<T3> Stream3 => _stream3.GetSubArray(0, _activeCount);
 
         public bool TrySpawn(in T0 value0, in T1 value1, in T2 value2, in T3 value3, out NativePoolHandle handle, out int denseIndex)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             if (!_indexMap.TryAllocate(ref _activeCount, ref _freeCount, out handle, out denseIndex))
             {
                 _rejectedSpawns++;
@@ -1289,9 +1252,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int SpawnBatch(NativeArray<T0> stream0Values, NativeArray<T1> stream1Values, NativeArray<T2> stream2Values, NativeArray<T3> stream3Values, int count, NativeArray<NativePoolHandle> handles, bool allowPartial = false)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > stream0Values.Length || count > stream1Values.Length || count > stream2Values.Length || count > stream3Values.Length) throw new ArgumentOutOfRangeException(nameof(count));
             if (handles.Length < count && !allowPartial) throw new ArgumentException("Handle output array is too small.", nameof(handles));
@@ -1320,9 +1281,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public bool Despawn(NativePoolHandle handle)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             if (!_indexMap.TryRelease(handle, ref _activeCount, ref _freeCount, out int denseIndex, out int lastDenseIndex))
             {
                 _invalidDespawns++;
@@ -1341,9 +1300,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public int DespawnBatch(NativeArray<NativePoolHandle> handles, int count)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             if (count < 0) throw new ArgumentOutOfRangeException(nameof(count));
             if (count > handles.Length) throw new ArgumentOutOfRangeException(nameof(count));
 
@@ -1359,27 +1316,21 @@ namespace CycloneGames.Factory.DOD.Runtime
             return despawned;
         }
 
-        public readonly bool Contains(NativePoolHandle handle)
+        public bool Contains(NativePoolHandle handle)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             return _indexMap.Contains(handle, _activeCount);
         }
 
-        public readonly bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
+        public bool TryGetDenseIndex(NativePoolHandle handle, out int denseIndex)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             return _indexMap.TryGetDenseIndex(handle, _activeCount, out denseIndex);
         }
 
         public bool TryRead(NativePoolHandle handle, out T0 value0, out T1 value1, out T2 value2, out T3 value3)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             if (TryGetDenseIndex(handle, out int denseIndex))
             {
                 value0 = _stream0[denseIndex];
@@ -1398,9 +1349,7 @@ namespace CycloneGames.Factory.DOD.Runtime
 
         public bool TryWrite(NativePoolHandle handle, in T0 value0, in T1 value1, in T2 value2, in T3 value3)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             if (!TryGetDenseIndex(handle, out int denseIndex))
             {
                 return false;
@@ -1413,16 +1362,14 @@ namespace CycloneGames.Factory.DOD.Runtime
             return true;
         }
 
-        public readonly NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
+        public NativePoolHandle GetHandleAtDenseIndex(int denseIndex)
         {
             return _indexMap.GetHandleAtDenseIndex(denseIndex, _activeCount);
         }
 
         public void Resize(int newCapacity)
         {
-#if ENABLE_UNITY_COLLECTIONS_CHECKS
             if (!_stream0.IsCreated) throw new ObjectDisposedException(nameof(NativeDenseColumnPool4<T0, T1, T2, T3>));
-#endif
             if (newCapacity <= Capacity)
                 throw new ArgumentOutOfRangeException(nameof(newCapacity), "New capacity must be larger than current.");
 

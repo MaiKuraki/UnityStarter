@@ -3,8 +3,18 @@
     "rootNamespace": "CycloneGames.GameplayFramework.Tests.Editor",
     "references": [
         "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Editor",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags",
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Unity.Runtime",
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.Factory.Runtime",
+        "CycloneGames.Factory.Unity.Runtime",
         "UniTask",
-        "Unity.Mathematics"
+        "Unity.Mathematics",
+        "Unity.Cinemachine",
+        "Unity.PerformanceTesting"
     ],
     "includePlatforms": [
         "Editor"

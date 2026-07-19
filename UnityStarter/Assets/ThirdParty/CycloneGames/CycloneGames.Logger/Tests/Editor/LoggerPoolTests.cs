@@ -31,7 +31,7 @@ namespace CycloneGames.Logger.Tests.Editor
             StringBuilderPool.Return(new StringBuilder(4097));
             var stats = StringBuilderPool.GetStatistics();
 
-            Assert.AreEqual(0, stats.TotalReturns);
+            Assert.AreEqual(1, stats.TotalReturns);
             Assert.AreEqual(1, stats.TotalDiscards);
         }
 

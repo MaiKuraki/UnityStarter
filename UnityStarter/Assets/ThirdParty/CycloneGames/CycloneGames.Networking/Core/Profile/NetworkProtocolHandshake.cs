@@ -11,11 +11,12 @@ namespace CycloneGames.Networking
     /// </remarks>
     public enum NetworkHandshakeResult : byte
     {
-        Compatible = 0,
-        Malformed = 1,
-        FingerprintMismatch = 2,
-        VersionIncompatible = 3,
-        DomainStateMismatch = 4
+        Invalid = 0,
+        Compatible = 1,
+        Malformed = 2,
+        FingerprintMismatch = 3,
+        VersionIncompatible = 4,
+        DomainStateMismatch = 5
     }
 
     /// <summary>
@@ -38,11 +39,11 @@ namespace CycloneGames.Networking
     }
 
     /// <summary>
-    /// Shared, allocation-free negotiation for <see cref="INetworkProtocolHandshakeMessage"/> payloads.
+    /// Shared negotiation for <see cref="INetworkProtocolHandshakeMessage"/> payloads.
     /// </summary>
     /// <remarks>
-    /// The generic <c>in</c> constraint keeps value-type handshakes unboxed (zero-GC) while still
-    /// reusing a single negotiation implementation across every domain module.
+    /// The generic <c>in</c> constraint permits constrained calls for value-type handshakes while
+    /// reusing one implementation. Allocation behavior still requires a target-runtime benchmark.
     /// </remarks>
     public static class NetworkProtocolHandshake
     {

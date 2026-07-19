@@ -1,78 +1,104 @@
-# Device Feedback — 触觉反馈与灯光控制
+# CycloneGames.DeviceFeedback
 
-<p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
+[English | 简体中文](README.md)
 
-Unity 多平台硬件反馈库。  
-为 **Android / iOS / WebGL** 提供生产级手机触觉振动实现，并为 **手柄马达震动** 和 **设备灯光控制** 提供可接入后端的稳定接口。运行时 API 同时兼容依赖注入（DI）和静态调用两种模式。
+CycloneGames.DeviceFeedback 为 Unity 提供硬件反馈抽象与手机振动实现。模块打包了 Android、iOS、WebGL 的触觉路径、用于曲线和事件创作的 `HapticClip` 资产，以及可注入的游戏手柄震动与设备灯光控制接口，默认提供安全的 no-op backend。
 
-无论你需要简单的一行振动调用，还是精确到采样级别的 Core Haptics 编排加实时参数调制，手机触觉栈都会通过统一接口提供平台特定回退。手柄震动和设备灯光默认使用明确的 no-op 后端；真实硬件输出需要接入对应平台 backend 或 integration assembly。
+## 目录
 
----
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
-## 特性
+## 概述
 
-- **iOS Core Haptics（iOS 13+）** — 完整 CHHapticEngine 集成：瞬态/持续事件、双参数曲线（强度 + 锐度）原生 OS 级插值、复合模式、实时参数调制
-- **锐度维度** — 所有触觉 API 均接受 sharpness 参数（0.0 = 深沉/宽广 → 1.0 = 锋利/清脆）；iOS 13+ 原生支持，其他平台近似处理
-- **HapticClip ScriptableObject** — 设计师友好的触觉模式资产：通过 Inspector 编辑双 AnimationCurve 或离散 `HapticEvent` 数组
-- **跨平台手机振动** — Android（API 1+）、iOS（Taptic Engine / AudioToolbox / Core Haptics）、WebGL（`navigator.vibrate`）
-- **Android API 30+ 硬件触觉基元** — 通过 `VibrationEffect.startComposition()` 使用设备调校的触觉基元（CLICK、TICK、LOW_TICK、THUD），由 OEM 针对每台设备精确校准，在任意强度下均能提供最优手感
-- **Android 振幅控制** — API 26+ 支持 0–255 精确振幅（`VibrationEffect`）；旧设备自动降级
-- **双 AnimationCurve 曲线振动** — 强度和锐度均可沿时间轴变化；iOS 13+ 使用原生 `CHHapticParameterCurve` 实现 OS 级平滑插值
-- **iOS 原生触觉** — Impact（Light / Medium / Heavy / Rigid / Soft）、Notification（Success / Warning / Error）、Selection — 当 Core Haptics 可用时自动升级
-- **通用触觉预设** — `HapticPreset` 枚举，按设备映射到原生 API 并附带合适的锐度值
-- **零 GC 热路径** — 所有波形采样使用预分配静态缓冲区；缓存 JNI 数组；预缓存枚举名称字符串用于原生交互 — 无逐次调用堆分配
-- **低延迟优化 iOS** — 预分配并预热的 `UIFeedbackGenerator` 实例；即发即忘的瞬态事件播放器，不阻塞持续触觉
-- **手柄震动接口** — 双马达控制 API，支持注入 `IGamepadRumbleBackend`；默认运行时行为是明确 no-op，直到安装平台后端
-- **设备灯光控制** — 灯条颜色、渐变、亮度曲线 API，支持注入 `IDeviceLightBackend`；默认运行时行为是明确 no-op，直到安装平台后端
-- **DI 友好架构** — 面向接口编程（`IHapticFeedbackService`、`IMobileVibrationService` 等）
+设备反馈调用回答一个问题：哪个硬件输出应该触发、强度多少、持续多久？CycloneGames.DeviceFeedback 用一组小型接口回答它——`IHapticFeedbackService`、`IMobileVibrationService`、`IGamepadRumbleService`、`IDeviceLightService`，由平台相关实现按运行时选择最强可用的原生路径。
 
----
+手机触觉开箱即用：Android 使用 `VibrationEffect`（API 26+）并支持 API 30+ composition primitives，iOS 使用 Core Haptics（iOS 13+）并回退到 `UIFeedbackGenerator` 和 `AudioToolbox`，WebGL 使用 `navigator.vibrate`。游戏手柄震动和设备灯光控制使用可注入 backend 与显式 no-op 默认，因此不支持的硬件平台或未安装 backend 的项目保持确定性。
 
-## 系统要求
+适用场景：项目需要用统一 API 跨平台触觉、需要设计师友好的 `HapticClip` 资产工作流，或需要干净边界接入平台专用的手柄和灯光 backend。游戏手柄震动和设备灯光的真实硬件输出需要单独的平台 integration assembly，模块只提供契约和 no-op 回退。
 
-- Unity **2019.3** 或更高版本
-- **Android**：API 1+（振幅功能需要 API 26+）
-- **iOS**：Taptic Engine（iPhone 7+）；Core Haptics（iPhone 8+ 且 iOS 13+）
-- **WebGL**：支持 Vibration API 的浏览器
+### 主要特性
 
----
+- **`IHapticFeedbackService`**：通用接口，含 `IsAvailable`、`IsActive`、`Initialize`、`PlayPreset`、`Play`、`PlayCurve`、`PlayClip` 与 `Cancel`。
+- **`IMobileVibrationService`**：手机扩展，含 pattern 振动、iOS 专用 impact/notification/selection 和实时持续参数调制。
+- **`MobileVibration` 静态门面**：与 service 相同的 API，作为非 DI 项目的 singleton 入口。
+- **`HapticClip` ScriptableObject**：设计师资产，支持曲线或离散事件两种模式。
+- **`IGamepadRumbleService` / `IDeviceLightService`**：可注入 backend 的契约，含显式 `NoopGamepadRumbleBackend` / `NoopDeviceLightBackend` 默认。
+- **iOS Core Haptics（iOS 13+）**：瞬态与持续事件、参数曲线、复合模式与实时调制。
+- **Android API 30+ primitives**：CLICK、TICK、LOW_TICK 与 THUD 的 composition 路径，回退到振幅。
+
+## 架构
+
+| 程序集 | 路径 | 用途 |
+| --- | --- | --- |
+| `CycloneGames.DeviceFeedback.Runtime` | `Runtime/` | 所有公开契约、`MobileVibrationService`、`GamepadRumbleService`、`GamepadLightService`、no-op backend 与 `HapticClip`。引用 `UnityEngine`。 |
+| `CycloneGames.DeviceFeedback.Tests.Editor` | `Tests/Editor/` | `GamepadRumbleService` 与 `GamepadLightService` 的 guard 和 no-op 行为测试。 |
+
+Runtime assembly 在 Android、iOS、WebGL、tvOS、VisionOS、Editor 和桌面 standalone 平台启用。手机原生插件（iOS 的 `HapticFeedback.mm`、`CoreHaptics.mm`；Android 的 JNI 调用）与 C# 源码并列，由 `#if UNITY_IOS` / `#if UNITY_ANDROID` 块选择。
+
+```mermaid
+flowchart LR
+    Caller["Caller\nplay code, GM console"] --> Service["IHapticFeedbackService\n/ IMobileVibrationService\n/ IGamepadRumbleService\n/ IDeviceLightService"]
+    Service --> Mobile["MobileVibrationService"]
+    Service --> Rumble["GamepadRumbleService"]
+    Service --> Light["GamepadLightService"]
+    Mobile --> IOSRoute{"iOS route"}
+    Mobile --> AndroidRoute{"Android route"}
+    Mobile --> WebGLRoute{"WebGL route"}
+    IOSRoute -->|13+| CoreHaptics["Core Haptics\nCHHapticEngine"]
+    IOSRoute -->|10+| UIFeedback["UIFeedbackGenerator"]
+    IOSRoute -->|fallback| AudioToolbox["AudioToolbox"]
+    AndroidRoute -->|30+| Composition["VibrationEffect\n.startComposition"]
+    AndroidRoute -->|26+| Waveform["VibrationEffect\ncreateWaveform"]
+    AndroidRoute -->|1+| Vibrate["vibrate()"]
+    WebGLRoute --> NavVibrate["navigator.vibrate"]
+    Rumble --> RumbleBackend["IGamepadRumbleBackend\n(no-op default)"]
+    Light --> LightBackend["IDeviceLightBackend\n(no-op default)"]
+
+    classDef core fill:#dbeafe,stroke:#1d4ed8,color:#111827;
+    classDef adapter fill:#fef3c7,stroke:#b45309,color:#111827;
+    classDef external fill:#dcfce7,stroke:#15803d,color:#111827;
+    class Service,Mobile,Rumble,Light core;
+    class RumbleBackend,LightBackend adapter;
+    class CoreHaptics,UIFeedback,AudioToolbox,Composition,Waveform,Vibrate,NavVibrate external;
+```
+
+调用方调用 service；service 在手机上路由到最强可用的原生路径，或在游戏手柄震动和设备灯光上转发到注入的 backend。手机回退是自动的，控制器和灯光 backend 是显式注入的。
 
 ## 快速上手
 
-### 静态门面（无 DI）
+在你的 asmdef 中引用 `CycloneGames.DeviceFeedback.Runtime`，然后导入命名空间：
 
 ```csharp
 using CycloneGames.DeviceFeedback.Runtime;
-
-MobileVibration.Init();
-
-// 预设触觉
-MobileVibration.PlayPreset(HapticPreset.Success);
-
-// 自定义振动：80% 强度，0.3 秒，锋利手感
-MobileVibration.Play(0.8f, 0.3f, sharpness: 0.9f);
-
-// 双曲线振动（强度 + 锐度随时间变化）
-MobileVibration.PlayCurve(intensityCurve, 2.0f, sharpnessCurve);
-
-// 播放 HapticClip 资产
-MobileVibration.PlayClip(myHapticClip);
-
-// 实时调制（iOS 13+ Core Haptics）
-MobileVibration.Play(0.5f, 5.0f, 0.5f); // 开始持续触觉
-// 在 Update() 中：
-MobileVibration.UpdateContinuousParameters(newIntensity, newSharpness);
-
-// 取消振动
-MobileVibration.Cancel();
+using UnityEngine;
 ```
 
-### 依赖注入
+### 使用静态门面
 
 ```csharp
-using CycloneGames.DeviceFeedback.Runtime;
+void Awake() => MobileVibration.Init();
 
-public class GameManager
+void OnPlayerHit() => MobileVibration.PlayPreset(HapticPreset.Heavy);
+void OnCollect()   => MobileVibration.Play(0.3f, 0.1f, sharpness: 0.8f);
+void OnCancel()    => MobileVibration.Cancel();
+
+void OnApplicationQuit() => MobileVibration.Shutdown();
+```
+
+`Init()` 懒构造并初始化单例 `MobileVibrationService`。`Shutdown()` 释放原生资源（JNI、Core Haptics engine），可安全用于 `OnApplicationQuit` 或测试 teardown。
+
+### 使用依赖注入
+
+```csharp
+public sealed class GameManager
 {
     private readonly IHapticFeedbackService _haptics;
 
@@ -82,199 +108,385 @@ public class GameManager
         _haptics.Initialize();
     }
 
-    public void OnPlayerHit()  => _haptics.PlayPreset(HapticPreset.Heavy);
-    public void OnCollect()    => _haptics.Play(0.3f, 0.1f, sharpness: 0.8f);
-    public void OnExplosion()  => _haptics.PlayClip(explosionClip);
+    public void OnPlayerHit() => _haptics.PlayPreset(HapticPreset.Heavy);
+    public void OnCollect()   => _haptics.Play(0.3f, 0.1f, sharpness: 0.8f);
+    public void OnExplosion() => _haptics.PlayClip(explosionClip);
 }
-
-// 注册示例（VContainer / Zenject）：
-// container.Register<IMobileVibrationService, MobileVibrationService>(Lifetime.Singleton);
 ```
 
----
+在你的 container 中把 `MobileVibrationService` 注册为 `IMobileVibrationService` 或 `IHapticFeedbackService`。
 
-## HapticClip — 设计师触觉模式资产
+## 核心概念
 
-通过 **Assets > Create > CycloneGames > Device Feedback > Haptic Clip** 创建。
+### 强度、时长与锐度
 
-`HapticClip` 是一个 `ScriptableObject`，支持两种模式：
+三个参数描述每个平台的触觉：
 
-### 曲线模式（默认）
+- **`intensity`**：`0.0` 到 `1.0`，归一化。在 Android 26+ 上映射到振幅，在 iOS 13+ 上映射到 `CHHapticEventParameterIntensity`，在 WebGL 上映射到 `navigator.vibrate` 总时长。
+- **`durationSeconds`**：秒。在 Android 上映射到 `VibrationEffect` 波形长度，在 iOS 13+ 上映射到持续 `CHHapticEvent`，在 WebGL 上映射到毫秒调用。
+- **`sharpness`**：`0.0`（深沉/宽广）到 `1.0`（锋利/清脆）。在 iOS 13+ 通过 `CHHapticEventParameterSharpness` 原生消费。其他平台近似或忽略。
 
-定义 `intensityCurve` 和 `sharpnessCurve`（X 轴：归一化时间 0–1，Y 轴：值 0–1）以及 `duration`。
+```csharp
+MobileVibration.Play(intensity: 0.8f, durationSeconds: 0.3f, sharpness: 0.9f);
+```
 
-### 事件模式
+### 预设
 
-在 `events` 数组中填入离散的 `HapticEvent` 条目：
+`HapticPreset` 是所有反馈设备共享的枚举：
 
-| 字段        | 说明                                           |
-| ----------- | ---------------------------------------------- |
-| `type`      | `Transient`（瞬态敲击）或 `Continuous`（持续） |
-| `time`      | 相对于片段起始的时间（秒）                     |
-| `duration`  | 持续时长（秒），仅 Continuous 使用             |
-| `intensity` | 0.0–1.0                                        |
-| `sharpness` | 0.0–1.0                                        |
+| 预设 | 典型用途 |
+| --- | --- |
+| `Light` | 轻触、选择确认。 |
+| `Medium` | UI 按钮按下。 |
+| `Heavy` | 撞击、玩家受击。 |
+| `Success` | 操作成功完成。 |
+| `Warning` | 可恢复错误或警告。 |
+| `Error` | 失败、拒绝。 |
+| `Selection` | 滚动或旋转时的 tick。 |
 
-当 `events` 非空时，曲线被忽略。事件在 iOS 13+ 上直接映射为 `CHHapticEvent`，实现采样精确的触觉播放。
+```csharp
+MobileVibration.PlayPreset(HapticPreset.Success);
+```
 
----
+### HapticClip
 
-## API 参考
+`HapticClip` 是 `ScriptableObject`，通过 **Assets > Create > CycloneGames > Device Feedback > Haptic Clip** 创建。两种模式：
 
-### `IHapticFeedbackService` — 通用接口
+**曲线模式（默认）** —— 定义 `intensityCurve` 与 `sharpnessCurve`（X 轴：归一化时间 `0–1`，Y 轴：值 `0–1`）以及 `duration`：
 
-| 成员                                                                                            | 说明                                                                              |
-| ----------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- |
-| `bool IsAvailable`                                                                              | 硬件是否存在且已初始化                                                            |
-| `bool IsActive { get; set; }`                                                                   | 主开关。设为 `false` 时所有调用变为空操作                                         |
-| `Initialize()`                                                                                  | 检测硬件并获取原生引用                                                            |
-| `PlayPreset(HapticPreset)`                                                                      | 播放标准预设（Light / Medium / Heavy / Success / Warning / Error / Selection）    |
-| `Play(float intensity, float duration, float sharpness)`                                        | 自定义触觉：强度 0–1，时长（秒），锐度 0–1（默认 0.5）                            |
-| `PlayCurve(AnimationCurve intensity, float duration, AnimationCurve sharpness, int intervalMs)` | 双曲线触觉。iOS 13+：原生 `CHHapticParameterCurve`；Android 26+：`createWaveform` |
-| `PlayClip(HapticClip)`                                                                          | 播放 `HapticClip` ScriptableObject（事件或曲线）                                  |
-| `Cancel()`                                                                                      | 立即停止当前振动                                                                  |
+```csharp
+[CreateAssetMenu] public HapticClip explosionClip;
+MobileVibration.PlayClip(explosionClip);
+```
 
-### `IMobileVibrationService` — 手机扩展
+**事件模式** —— 在 `events` 数组中填入离散 `HapticEvent` 条目：
 
-继承 `IHapticFeedbackService` + `IDisposable`。
+| 字段 | 说明 |
+| --- | --- |
+| `type` | `Transient`（瞬态敲击）或 `Continuous`（持续）。 |
+| `time` | 相对片段起始的时间（秒）。 |
+| `duration` | 持续时长（秒），仅 Continuous 使用。 |
+| `intensity` | `0.0`–`1.0`。 |
+| `sharpness` | `0.0`–`1.0`。 |
 
-| 成员                                                           | 说明                                                    |
-| -------------------------------------------------------------- | ------------------------------------------------------- |
-| `bool HasVibrator`                                             | 设备是否有振动马达                                      |
-| `Vibrate()`                                                    | 默认振动                                                |
-| `Vibrate(long ms)`                                             | 振动指定毫秒                                            |
-| `Vibrate(long[] pattern, int repeat)`                          | 振动序列。`repeat = -1` 表示只播放一次                  |
-| `VibratePop()`                                                 | 短促弹性反馈（iOS 13+ 使用 Core Haptics 瞬态事件）      |
-| `VibratePeek()`                                                | 中等窥视反馈                                            |
-| `VibrateNope()`                                                | 错误/拒绝反馈序列（Core Haptics 上为 3 个快速瞬态事件） |
-| `VibrateIOS(IOSImpactStyle)`                                   | iOS Impact — Core Haptics 可用时映射为精确瞬态事件      |
-| `VibrateIOS(IOSNotificationStyle)`                             | iOS Notification                                        |
-| `VibrateIOSSelection()`                                        | iOS Selection 点击感                                    |
-| `UpdateContinuousParameters(float intensity, float sharpness)` | 实时调制当前活跃的持续触觉（仅 iOS 13+ Core Haptics）   |
+`events` 非空时忽略曲线。事件在 iOS 13+ 直接映射为 `CHHapticEvent`，实现采样精确播放。
 
-### `MobileVibration` — 静态门面
+### 主开关与可用性
 
-将 `IMobileVibrationService` 的所有方法以 `static` 形式暴露。
+```csharp
+if (!MobileVibration.IsAvailable) return;
 
-### `IGamepadRumbleService` — 手柄震动
+MobileVibration.SetActive(false);  // 主开关；后续调用变 no-op
+MobileVibration.SetActive(true);   // 重新启用
+```
 
-| 成员                                            | 说明                          |
-| ----------------------------------------------- | ----------------------------- |
-| `SetMotorSpeeds(float low, float high)`         | 直接设置双马达转速（0.0–1.0） |
-| `Rumble(float low, float high, float duration)` | 定时震动，到期自动停止        |
+`IsActive = false` 短路每个调用，不触碰原生代码。每个 service 还暴露 `IsAvailable` 查询硬件是否存在并已初始化。
 
-`GamepadRumbleService` 是 `IGamepadRumbleBackend` 之上的高层包装。默认构造函数使用 `NoopGamepadRumbleBackend`，因此不支持的硬件平台或未安装硬件 backend 的项目会保持确定性的空操作，而不是执行半实现逻辑。真实手柄支持应由独立平台 integration assembly 提供，并由该 assembly 负责设备发现、计时、player loop hook 和原生/Input System 调用。
+## 使用指南
 
-### `IDeviceLightService` — 设备灯光
+### Pattern 振动（仅手机）
 
-| 成员                                                    | 说明             |
-| ------------------------------------------------------- | ---------------- |
-| `SetColor(Color)`                                       | 设置灯光为纯色   |
-| `Flash(Color, Color, float, float)`                     | 在两种颜色间闪烁 |
-| `PlayGradient(Gradient, float, int)`                    | 平滑颜色过渡     |
-| `PlayIntensityCurve(Color, AnimationCurve, float, int)` | 脉动亮度         |
-| `CancelAnimation()`                                     | 停止灯光动画     |
-| `Reset()`                                               | 恢复默认         |
+```csharp
+MobileVibration.Vibrate(200);                       // 200 ms
+MobileVibration.Vibrate(new long[] { 0, 100, 50, 100 }, repeat: -1);  // 一次性 pattern
+MobileVibration.Vibrate(new long[] { 0, 100, 50, 100 }, repeat: 0);   // 从 index 0 循环
+```
 
-`GamepadLightService` 是 `IDeviceLightBackend` 之上的高层包装。默认构造函数使用 `NoopDeviceLightBackend`；真实 DualSense、DualShock、键盘 RGB 或平台专用灯光支持应位于专用 backend/integration assembly。
+`repeat = -1` 播放一次。其他 index 从该位置循环。调用 `Cancel()` 停止循环 pattern。
 
----
+### iOS 专用反馈
 
-## 平台支持一览
+```csharp
+MobileVibration.VibrateIOS(IOSImpactStyle.Heavy);
+MobileVibration.VibrateIOS(IOSNotificationStyle.Success);
+MobileVibration.VibrateIOSSelection();
+```
 
-| 功能                | Android              | iOS (< 13)   | iOS (13+)           | WebGL        | Editor |
-| ------------------- | -------------------- | ------------ | ------------------- | ------------ | ------ |
-| 基础振动            | ✅                   | ✅           | ✅                  | ✅           | ⬜     |
-| 时长控制            | ✅                   | ⬜           | ✅（持续事件）      | ✅           | ⬜     |
-| 振幅/强度           | ✅（API 26+）        | ⬜           | ✅（原生）          | ⬜           | ⬜     |
-| 锐度                | ⬜                   | ⬜           | ✅（原生）          | ⬜           | ⬜     |
-| 振动序列            | ✅                   | ⬜           | ✅（复合模式）      | ⬜           | ⬜     |
-| AnimationCurve 波形 | ✅（API 26+）        | ⚠️（仅峰值） | ✅（原生曲线）      | ⚠️（总时长） | ⬜     |
-| HapticClip 事件     | ✅（波形）           | ⬜           | ✅（CHHapticEvent） | ⚠️（总时长） | ⬜     |
-| 触觉预设            | ✅                   | ✅（原生）   | ✅（Core Haptics）  | ⚠️（降级）   | ⬜     |
-| API 30+ 触觉基元    | ✅ (CLICK/TICK/THUD) | —            | —                   | —            | ⬜     |
-| 实时调制            | ⬜                   | ⬜           | ✅                  | ⬜           | ⬜     |
-| 取消振动            | ✅                   | ⬜           | ✅                  | ✅           | ⬜     |
-| 手柄震动            | 需要 backend         | 需要 backend | 需要 backend        | 需要 backend | 默认 no-op |
-| 设备灯光            | 需要 backend         | 需要 backend | 需要 backend        | 需要 backend | 默认 no-op |
+iOS 13+ 上路由到 Core Haptics 瞬态事件。iOS 10+ 回退到 `UIFeedbackGenerator`。非 iOS 平台为 no-op。
 
----
+### 实时调制（iOS 13+）
 
-## iOS Core Haptics 架构
+```csharp
+MobileVibration.Play(intensity: 0.5f, durationSeconds: 5.0f, sharpness: 0.5f);
 
-在 iOS 13+ 设备上，库自动检测 Core Haptics 支持并升级所有触觉调用：
+void Update()
+{
+    float intensity = Mathf.PingPong(Time.time, 1f);
+    MobileVibration.UpdateContinuousParameters(intensity, sharpness: 0.7f);
+}
+```
 
-- **瞬态事件** — `VibratePop`、`VibratePeek`、`VibrateIOS(Impact)`、`PlayPreset` 均使用 `CHHapticEventTypeHapticTransient` 配合精确的强度/锐度值
-- **持续事件** — `Play(intensity, duration, sharpness)` 使用 `CHHapticEventTypeHapticContinuous` 实现精确控制的持续触觉
-- **复合模式** — `VibrateNope`、`PlayClip(events)` 构建多事件 `CHHapticPattern` 一次性发送给引擎
-- **参数曲线** — `PlayCurve(intensity, duration, sharpness)` 将采样点转换为 `CHHapticParameterCurve`，由 OS 处理控制点间的平滑插值
-- **实时调制** — `UpdateContinuousParameters` 每帧向活跃的模式播放器发送 `CHHapticDynamicParameter` 更新
+`UpdateContinuousParameters` 向活跃的持续 player 发送 `CHHapticDynamicParameter` 更新。在没有 Core Haptics 的平台上是 no-op。
 
-当 Core Haptics 不可用时，自动回退至 `UIFeedbackGenerator`（iOS 10+）。
+### 手柄震动
 
----
+```csharp
+var rumble = new GamepadRumbleService();  // 默认 no-op
+rumble.Rumble(lowFrequency: 0.6f, highFrequency: 0.4f, durationSeconds: 0.2f);
+rumble.SetMotorSpeeds(0.5f, 0.5f);
+rumble.Cancel();
+rumble.Dispose();
+```
 
-## 低延迟与精确度架构
+`GamepadRumbleService` 默认使用 `NoopGamepadRumbleBackend`。通过构造函数安装真实 backend：
 
-触觉反馈对延迟极其敏感 — 用户可感知低至 20ms 的延迟。本库采用了多种策略将延迟降到最低：
+```csharp
+var rumble = new GamepadRumbleService(new MyDualSenseBackend(), ownsBackend: true);
+```
 
-### iOS：预热 UIFeedbackGenerator
+Backend 拥有设备发现、player loop hook 和原生/Input System 调用。`Play` 与 `PlayPreset` 通过 `CalculateMotorSpeeds` 把 intensity 与 sharpness 映射到双马达转速；`PlayCurve` 采样曲线并播放峰值。
 
-原生插件（`HapticFeedback.mm`）在初始化时预分配 **7 个静态生成器实例**（Light、Medium、Heavy、Rigid、Soft 冲击 + Notification + Selection）。每个生成器在触发前调用 `[prepare]` 以提前启动 Taptic Engine 硬件。每次触发后立即重新 prepare，确保下次调用同样低延迟。
+### 设备灯光
 
-这消除了原来“创建 + 准备 + 触发”在同一次调用中完成时产生的 **~30–50ms 冷启动延迟**。
+```csharp
+var light = new GamepadLightService();  // 默认 no-op
+light.SetColor(Color.red);
+light.Flash(Color.red, Color.black, onDurationSeconds: 0.1f, offDurationSeconds: 0.1f);
+light.PlayGradient(myGradient, durationSeconds: 2.0f, sampleIntervalMs: 50);
+light.PlayIntensityCurve(Color.blue, pulseCurve, durationSeconds: 1.5f);
+light.CancelAnimation();
+light.Reset();
+```
 
-### iOS：即发即忘瞬态播放器
+通过构造函数安装真实的 `IDeviceLightBackend`（DualSense、DualShock、键盘 RGB）。Service 在 guard 检查后 clamp 颜色、清理采样间隔并转发。
 
-Core Haptics 插件（`CoreHaptics.mm`）采用两种不同的播放器策略：
+## 进阶主题
 
-- **瞬态触觉**（`PlayTransient`）— 为每次点击创建**临时的即发即忘播放器**。播放器通过 `CHHapticTimeImmediate` 立即启动，完成后由引擎自动释放。关键是，它**不会停止**正在运行的持续播放器，避免了 **~10–30ms 阻塞延迟**。
-- **持续/模式/曲线效果** — 使用**持久化的 `s_continuousPlayer`**，支持 `UpdateParameters` 实时调制。新的持续效果启动前会停止上一个。
+### iOS Core Haptics 架构
 
-这意味着快速连续点击和持续触觉可以共存，互不干扰。
+iOS 13+ 上，runtime 把每个触觉调用升级到 Core Haptics：
 
-### Android：API 30+ Composition 触觉基元
+- **瞬态事件** —— `VibratePop`、`VibratePeek`、`VibrateIOS(Impact)`、`PlayPreset` 使用 `CHHapticEventTypeHapticTransient` 配合精确的 intensity/sharpness 对。
+- **持续事件** —— `Play(intensity, duration, sharpness)` 使用 `CHHapticEventTypeHapticContinuous` 实现精确控制的持续触觉。
+- **复合模式** —— `VibrateNope`、`PlayClip(events)` 构建多事件 `CHHapticPattern` 一次性发送给 engine。
+- **参数曲线** —— `PlayCurve` 把采样点转换为 `CHHapticParameterCurve`，由 OS 处理控制点之间的平滑插值。
+- **实时调制** —— `UpdateContinuousParameters` 每帧发送 `CHHapticDynamicParameter` 更新。
 
-在 Android API 30+ 上，`PlayPreset()` 自动使用 `VibrationEffect.startComposition()` 配合**硬件调校触觉基元**（CLICK=1, TICK=7, LOW_TICK=8, THUD=3）。这些基元由 **OEM 针对每台设备校准**，提供比原始振幅波形明显更好的手感。如果设备不支持特定基元，会透明地回退到传统振幅路径。
+Core Haptics 不可用时自动回退到 `UIFeedbackGenerator`（iOS 10+）。
+
+### 原生播放器生命周期策略
+
+原生实现把初始化、瞬态播放和持续播放分开，让调用方可以控制初始化工作发生的时机。
+
+**iOS：预热 UIFeedbackGenerator** —— `HapticFeedback.mm` 在初始化期间创建 7 个静态生成器实例（Light、Medium、Heavy、Rigid、Soft impact + Notification + Selection）。每个生成器在首次使用前调用 `[prepare]`，触发后再次 prepare，把生成器创建移出触发调用。OS 调度、engine 状态、硬件、温度和电源策略仍决定实际延迟。
+
+**iOS：即发即忘瞬态播放器** —— `CoreHaptics.mm` 使用两种 player 策略：
+
+- **瞬态触觉**（`PlayTransient`）为每次点击创建临时 player，通过 `CHHapticTimeImmediate` 启动，完成后由 engine 释放，不会停止持续 player。
+- **持续、模式、曲线效果** 使用持久化的 `s_continuousPlayer`，支持 `UpdateParameters` 实时调制。新持续效果启动前会停止上一个。
+
+分离的 player slot 允许瞬态调用不替换被追踪的持续 player；设备层混合行为仍由平台控制。
+
+### Android API 30+ Composition Primitives
+
+Android API 30+ 上，`PlayPreset` 使用 `VibrationEffect.startComposition()` 配合平台 primitives（CLICK=1、TICK=7、LOW_TICK=8、THUD=3）。Android 把这些 primitives 定义为由设备实现；请求的 primitive 不支持时，service 回退到振幅路径。
 
 ### 平台回退链
 
-```
+```text
 iOS:     Core Haptics (13+) → UIFeedbackGenerator (10+) → AudioToolbox
-Android: Composition API (30+) → VibrationEffect (26+) → legacy vibrate()
+Android: Composition API (30+) → VibrationEffect (26+) → vibrate()（1–25）
 WebGL:   navigator.vibrate()
 ```
 
----
+### 平台实现矩阵
 
-## 零 GC 设计
+此表描述源码中存在的路由，不代表硬件验证结果。浏览器策略、OS 版本、设备能力、Player backend 和原生插件导入设置都会改变实际行为。
 
-所有波形采样和事件编组使用**预分配静态缓冲区**，按需增长但不收缩：
+| 功能 | Android | iOS (< 13) | iOS (13+) | WebGL | Editor |
+| --- | --- | --- | --- | --- | --- |
+| 基础振动 | 是 | 是 | 是 | 是 | No-op |
+| 时长控制 | 是 | 否 | 是（持续事件） | 是 | No-op |
+| 振幅/强度 | 是（API 26+） | 否 | 是（原生） | 否 | No-op |
+| 锐度 | 否 | 否 | 是（原生） | 否 | No-op |
+| 振动序列 | 是 | 否 | 是（复合模式） | 否 | No-op |
+| AnimationCurve 波形 | 是（API 26+） | 仅峰值 | 是（原生曲线） | 总时长 | No-op |
+| HapticClip 事件 | 是（波形） | 否 | 是（CHHapticEvent） | 总时长 | No-op |
+| 触觉预设 | 是 | 是（原生） | 是（Core Haptics） | 回退 | No-op |
+| API 30+ primitives | 是（CLICK/TICK/THUD） | — | — | — | No-op |
+| 实时调制 | 否 | 否 | 是 | 否 | No-op |
+| 取消振动 | 是 | 否 | 是 | 是 | No-op |
+| 手柄震动 | 需要 backend | 需要 backend | 需要 backend | 需要 backend | 默认 no-op |
+| 设备灯光 | 需要 backend | 需要 backend | 需要 backend | 需要 backend | 默认 no-op |
 
+## 常见场景
+
+### 通过 DI 触发 gameplay 触觉
+
+```csharp
+public sealed class CombatController
+{
+    private readonly IHapticFeedbackService _haptics;
+    [SerializeField] private HapticClip _explosionClip;
+
+    public CombatController(IHapticFeedbackService haptics) => _haptics = haptics;
+
+    public void OnLightHit()  => _haptics.Play(0.3f, 0.05f, sharpness: 0.9f);
+    public void OnHeavyHit()  => _haptics.Play(0.9f, 0.15f, sharpness: 0.2f);
+    public void OnExplosion() => _haptics.PlayClip(_explosionClip);
+    public void OnDeath()     => _haptics.PlayPreset(HapticPreset.Error);
+}
 ```
+
+单个 `IHapticFeedbackService` 覆盖手机、手柄（安装 backend）和任何未来触觉设备——gameplay 层不按平台分支。
+
+### 设计师创作的触觉 pattern
+
+设计师创建一个心跳节奏的 `HapticClip` 资产：
+
+```text
+events:
+  - Transient  t=0.00  intensity=0.6  sharpness=0.4
+  - Transient  t=0.15  intensity=0.6  sharpness=0.4
+  - Transient  t=0.30  intensity=0.6  sharpness=0.4
+duration: 0.45
+```
+
+Gameplay 在 boss 攻击预备时触发：
+
+```csharp
+MobileVibration.PlayClip(heartbeatClip);
+```
+
+iOS 13+ 上事件直接映射到 `CHHapticEvent`，采样精确。Android 26+ 上 runtime 把事件采样为 `VibrationEffect` 波形。
+
+### 实时参数调制
+
+充能机制在玩家按住扳机时增加强度：
+
+```csharp
+public sealed class ChargeAttack : MonoBehaviour
+{
+    [SerializeField] private float _maxChargeSeconds = 2f;
+    private float _chargeTime;
+
+    void Update()
+    {
+        if (Input.GetButton("Fire1"))
+        {
+            if (_chargeTime == 0f)
+            {
+                MobileVibration.Play(intensity: 0.2f, durationSeconds: _maxChargeSeconds, sharpness: 0.3f);
+            }
+
+            _chargeTime = Mathf.Min(_chargeTime + Time.deltaTime, _maxChargeSeconds);
+            float intensity = _chargeTime / _maxChargeSeconds;
+            MobileVibration.UpdateContinuousParameters(intensity, sharpness: 0.3f + intensity * 0.4f);
+        }
+        else if (_chargeTime > 0f)
+        {
+            _chargeTime = 0f;
+            MobileVibration.Cancel();
+        }
+    }
+}
+```
+
+此 pattern 只在 iOS 13+ 上调制；其他平台上 `Play` 触发初始触觉，`UpdateContinuousParameters` 为 no-op。
+
+### 带平台 backend 的手柄震动
+
+```csharp
+public sealed class DualSenseRumbleBackend : IGamepadRumbleBackend
+{
+    private readonly DualSenseGamepad _gamepad;
+
+    public DualSenseRumbleBackend(DualSenseGamepad gamepad) => _gamepad = gamepad;
+
+    public bool IsAvailable => _gamepad != null;
+
+    public void Rumble(float low, float high, float duration)
+    {
+        _gamepad.SetMotorSpeeds(low, high);
+        // 在 player loop 或 coroutine 中调度自动停止。
+    }
+
+    public void SetMotorSpeeds(float low, float high) => _gamepad.SetMotorSpeeds(low, high);
+    public void Stop() => _gamepad.SetMotorSpeeds(0f, 0f);
+    public void Initialize() { }
+    public void Dispose() { }
+}
+
+// 在 composition root：
+var rumble = new GamepadRumbleService(new DualSenseRumbleBackend(dualSense), ownsBackend: true);
+rumble.Rumble(0.6f, 0.4f, 0.2f);
+```
+
+高层 service clamp 输入、应用主开关，并通过 `CalculateMotorSpeeds` 把 `HapticPreset` 与 `Play` 调用翻译为双马达转速。
+
+### 无障碍开关
+
+设置面板允许玩家禁用所有触觉：
+
+```csharp
+public void SetHapticsEnabled(bool enabled)
+{
+    MobileVibration.SetActive(enabled);
+    _gamepadRumble.IsActive = enabled;
+    _deviceLight.IsActive = enabled;
+}
+```
+
+`IsActive` 为 `false` 时，每个 service 在到达原生代码前短路，玩家可以禁用反馈而无需修改 gameplay 代码。
+
+## 性能与内存
+
+| 路径 | 分配 |
+| --- | --- |
+| `MobileVibration.Play` / `PlayPreset` | 一次 JNI/Core Haptics 调用；托管 buffer 复用 |
+| `MobileVibration.PlayCurve` | 采样复用 `s_intensityBuf` / `s_sharpnessBuf` |
+| `MobileVibration.PlayClip(events)` | 事件编组复用 `s_typeBuf` / `s_timeBuf` / `s_durationBuf` |
+| `MobileVibration.Vibrate(pattern)` | 一次 JNI 调用；pattern 数组按引用传递 |
+| `GamepadRumbleService` / `GamepadLightService` 调用 | 零分配；转发到 backend |
+| `MobileVibration.Shutdown` | 释放原生 engine 和 JNI handle |
+
+波形采样和事件编组使用共享托管 buffer，按需扩容且不收缩：
+
+```text
 s_timingBuf, s_amplitudeBuf, s_floatTimeBuf,
 s_intensityBuf, s_sharpnessBuf, s_typeBuf, s_durationBuf
 ```
 
-`EnsureBuffers(count)` 每次调用仅检查一次；后续等量或更小量的调用不产生任何分配。JNI 对象（`AndroidJavaClass`、`AndroidJavaObject`）在服务生命周期内缓存，通过 `IDisposable` 释放。原生交互所用的枚举名称字符串预缓存在静态 readonly 数组中，避免 `ToString()` 堆分配。
+`EnsureBuffers(count)` 为后续等量或更小量的调用复用托管数组。长生命周期的 Android vibrator 与 `VibrationEffect` class handle 在 service 生命周期内缓存。单次 effect、composition 和部分平台查询会创建并释放 `AndroidJavaObject` 或 `AndroidJavaClass` wrapper。原生编组使用的枚举名称保存在静态 readonly 数组中，而不是每次调用 `ToString()` 生成。
 
-手柄震动和设备灯光服务包装层在稳定状态的 guarded path 上不产生分配。真实 backend 的分配行为取决于所选 integration，必须针对目标硬件和平台 API 单独验证。
+手柄震动和设备灯光 service 在 guard 检查后转发到注入的 backend，分配行为取决于该 backend。原生手机插件、JNI、IL2CPP 编组、浏览器交互和 buffer 扩容必须分别在目标平台上分析。
 
----
+### 线程
 
-## 示例
+- `MobileVibration` 静态门面在 lock 下懒构造单例 service。
+- `MobileVibrationService` 原生调用面向 Unity 主线程；JNI 和 Core Haptics engine 调用有各自的线程亲和性要求。
+- `GamepadRumbleService` 与 `GamepadLightService` 非线程安全；假设 Unity 主线程或单一 owner。
 
-通过 **Package Manager > Device Feedback > Samples > Mobile Vibration Example** 导入。
+### 平台与 AOT
 
-示例场景演示了：
+Runtime assembly 目标 Unity 2019.3+，iOS 原生插件用 Objective-C（`HapticFeedback.mm`、`CoreHaptics.mm`），Android JNI 调用通过 `AndroidJavaClass` / `AndroidJavaObject`。IL2CPP 和 AOT 目标需要独立 Player 证据；Editor 测试不证明手机硬件输出、延迟、GC 行为、WebGL 浏览器策略或主机 backend。
 
-- 所有 `HapticPreset` 预设值
-- 自定义时长和振动序列
-- **强度 + 锐度滑块** 配合 `Play()` 实时调节手感
-- **双 AnimationCurve 曲线振动**（强度 + 锐度）
-- **HapticClip 播放** — 从 ScriptableObject 资产播放
-- **实时调制** — 启动持续触觉后通过滑块调节参数
-- iOS 专用 Impact / Notification / Selection 反馈
-- 启用/禁用开关
+## 故障排查
 
----
+| 现象 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| iOS 设备无触觉 | `IsAvailable` 为 false 或 Core Haptics engine 启动失败 | 在 play 前调用 `Initialize()`；检查 `IsAvailable` 与设备日志中的 engine 错误 |
+| `Play` 有效但 `UpdateContinuousParameters` 无反应 | 目标平台没有 Core Haptics（iOS < 13、Android、WebGL） | 用 `Play` 指定有限时长；调制仅 iOS 13+ 支持 |
+| Android 旧设备忽略振幅 | 设备 API level < 26 | `VibrationEffect.CreateWaveform` 要求 API 26+；旧设备回退到 `vibrate()` |
+| Sharpness 无效 | 平台不暴露 sharpness | 仅 iOS 13+ Core Haptics 原生消费 sharpness |
+| 手柄震动无声 | 未安装 backend 或 backend `IsAvailable` 为 false | 通过构造函数安装真实 `IGamepadRumbleBackend` |
+| 设备灯光不变化 | 未安装 backend | 安装真实 `IDeviceLightBackend` |
+| `Vibrate(pattern, repeat)` 永远循环 | `repeat` 不是 `-1` 且未调用 `Cancel` | 在应停止时调用 `MobileVibration.Cancel()` |
+| WebGL 触觉静默失败 | 浏览器阻止 `navigator.vibrate` | 调用前需要用户手势，或将 WebGL 视为无触觉 |
+| 触觉触发一次后停止 | `IsActive` 被设为 `false` 或 service 被 dispose | 检查 `IsActive`，确保 `Shutdown` 仅在 teardown 调用 |
+
+## 验证
+
+通过 Unity Test Runner 运行聚焦测试：
+
+```text
+<UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.DeviceFeedback.Tests.Editor -testResults <result-path> -quit
+```
+
+Editor 测试套件覆盖 `GamepadRumbleService` 与 `GamepadLightService` 的 guard 与 no-op 行为。手机硬件输出、延迟、GC 行为、WebGL 浏览器策略与主机 backend 必须在目标设备上单独验证。
+
+## 参考
+
+- [Core Haptics](https://developer.apple.com/documentation/corehaptics) —— iOS 触觉引擎。
+- [Android VibrationEffect](https://developer.android.com/reference/android/os/VibrationEffect) —— Android 振动 API。
+- [Web Vibration API](https://developer.mozilla.org/en-US/docs/Web/API/Vibration_API) —— 浏览器振动标准。

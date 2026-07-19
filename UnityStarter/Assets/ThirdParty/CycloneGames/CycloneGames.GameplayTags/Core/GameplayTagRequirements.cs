@@ -23,12 +23,12 @@ namespace CycloneGames.GameplayTags.Core
          m_RequiredTags = requiredTags;
       }
 
-      public readonly bool Matches<T>(in T container) where T : IGameplayTagContainer
+      public readonly bool Matches<T>(in T container) where T : IReadOnlyGameplayTagContainer
       {
          return !container.HasAny(m_ForbiddenTags) && container.HasAll(m_RequiredTags);
       }
 
-      public readonly bool Matches<T, U>(in T staticContainer, in U dynamicContainer) where T : IGameplayTagContainer where U : IGameplayTagContainer
+      public readonly bool Matches<T, U>(in T staticContainer, in U dynamicContainer) where T : IReadOnlyGameplayTagContainer where U : IReadOnlyGameplayTagContainer
       {
          bool hasAnyForbiddenTag = staticContainer.HasAny(m_ForbiddenTags) || dynamicContainer.HasAny(m_ForbiddenTags);
          if (hasAnyForbiddenTag)

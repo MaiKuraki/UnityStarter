@@ -33,6 +33,11 @@ namespace CycloneGames.UIFramework.Runtime
 
         protected TransitionConfigBase(float duration = 0.25f)
         {
+            if (float.IsNaN(duration) || float.IsInfinity(duration) || duration < 0f)
+            {
+                throw new System.ArgumentOutOfRangeException(nameof(duration));
+            }
+
             Duration = duration;
         }
     }
@@ -58,6 +63,11 @@ namespace CycloneGames.UIFramework.Runtime
 
         public ScaleConfig(float scaleFrom = 0.8f, float duration = 0.25f) : base(duration)
         {
+            if (float.IsNaN(scaleFrom) || float.IsInfinity(scaleFrom) || scaleFrom < 0f)
+            {
+                throw new System.ArgumentOutOfRangeException(nameof(scaleFrom));
+            }
+
             ScaleFrom = scaleFrom;
         }
     }
@@ -80,6 +90,11 @@ namespace CycloneGames.UIFramework.Runtime
             float offset = 1f, 
             float duration = 0.3f) : base(duration)
         {
+            if (float.IsNaN(offset) || float.IsInfinity(offset) || offset < 0f)
+            {
+                throw new System.ArgumentOutOfRangeException(nameof(offset));
+            }
+
             Direction = direction;
             Offset = offset;
         }

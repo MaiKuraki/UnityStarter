@@ -1,0 +1,30 @@
+{
+    "name": "CycloneGames.Utility.Tests.Performance",
+    "rootNamespace": "CycloneGames.Utility.Tests.Performance",
+    "references": [
+        "CycloneGames.Utility.Runtime",
+        "Unity.PerformanceTesting"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_UTILITY_HAS_PERFORMANCE_TESTING"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.unity.test-framework.performance",
+            "expression": "3.0.0",
+            "define": "CYCLONEGAMES_UTILITY_HAS_PERFORMANCE_TESTING"
+        }
+    ],
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ],
+    "noEngineReferences": false
+}

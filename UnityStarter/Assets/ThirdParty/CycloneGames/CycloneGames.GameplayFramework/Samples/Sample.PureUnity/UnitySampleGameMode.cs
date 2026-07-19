@@ -1,16 +1,15 @@
-using CycloneGames.Factory.Runtime;
-using CycloneGames.Logger;
+using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime.Sample.PureUnity
 {
-    public class UnitySampleGameMode : GameMode
+    public sealed class UnitySampleGameMode : GameMode
     {
-        private const string DEBUG_FLAG = "<color=cyan>[UnitySampleGameMode]</color>";
+        private const string DebugFlag = "<color=cyan>[UnitySampleGameMode]</color>";
 
-        public override void Initialize(IUnityObjectSpawner objectSpawner, IWorldSettings worldSettings)
+        public override void Initialize(World targetWorld, IGameSession session = null)
         {
-            base.Initialize(objectSpawner, worldSettings);
-            CLogger.LogInfo($"{DEBUG_FLAG} Initialize completed. Override this method to plug custom match rules.");
+            base.Initialize(targetWorld, session);
+            Debug.Log($"{DebugFlag} Authoritative rules initialized.", this);
         }
     }
 }

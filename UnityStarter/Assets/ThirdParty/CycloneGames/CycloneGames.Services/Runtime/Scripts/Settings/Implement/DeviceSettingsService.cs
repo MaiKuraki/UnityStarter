@@ -6,7 +6,7 @@ using VYaml.Emitter;
 using VYaml.Parser;
 using VYaml.Serialization;
 using CycloneGames.Hash.Core;
-using CycloneGames.IO.Runtime;
+using CycloneGames.IO;
 using CycloneGames.Logger;
 
 namespace CycloneGames.Service.Runtime
@@ -25,10 +25,11 @@ namespace CycloneGames.Service.Runtime
     public class DeviceSettingsService<T> : ISettingsService<T> where T : struct
     {
         private const string DEBUG_FLAG = "[DeviceSettings]";
+        private const int MAX_SETTINGS_BYTES = 16 * 1024 * 1024;
+        private const int MAX_CHECKSUM_BYTES = 256;
 
         private T _settings;
         private string _filePath;
-        private string _tempFilePath;
         private string _checksumFilePath;
         private YamlSerializerOptions _serializerOptions;
         private IDefaultProvider<T> _defaultProvider;
@@ -71,7 +72,6 @@ namespace CycloneGames.Service.Runtime
                 : Path.Combine(Application.persistentDataPath, subDirectory);
 
             _filePath = Path.Combine(directory, fileName);
-            _tempFilePath = _filePath + ".tmp";
             _checksumFilePath = _filePath + ".checksum";
             _defaultProvider = defaultProvider;
             _settings = _defaultProvider.GetDefault();
@@ -124,7 +124,8 @@ namespace CycloneGames.Service.Runtime
 
             try
             {
-                byte[] fileBytes = NormalizeLineEndings(FileUtility.ReadAllBytes(_filePath));
+                byte[] fileBytes = NormalizeLineEndings(
+                    SystemFileStore.Default.ReadBytes(_filePath, MAX_SETTINGS_BYTES));
 
                 LastLoadIntegrity = VerifyChecksum(fileBytes);
                 if (LastLoadIntegrity == SettingsIntegrity.Modified)
@@ -170,8 +171,6 @@ namespace CycloneGames.Service.Runtime
                     Directory.CreateDirectory(directory);
                 }
 
-                CleanupTempFile();
-
                 var bufferWriter = new ArrayBufferWriter<byte>();
                 var emitter = new Utf8YamlEmitter(bufferWriter);
 
@@ -179,18 +178,13 @@ namespace CycloneGames.Service.Runtime
 
                 byte[] yamlBytes = NormalizeLineEndings(bufferWriter.WrittenSpan.ToArray());
 
-                FileUtility.WriteAllBytes(_tempFilePath, yamlBytes);
-
-                // Atomic replace: Copy+Delete because Move lacks overwrite in older .NET
-                File.Copy(_tempFilePath, _filePath, overwrite: true);
-                File.Delete(_tempFilePath);
+                SystemFileStore.Default.WriteBytesAtomically(_filePath, yamlBytes);
 
                 WriteChecksum(yamlBytes);
             }
             catch (Exception ex)
             {
                 CLogger.LogError($"{DEBUG_FLAG} Failed to save '{_cachedTypeName}': {ex.Message}");
-                CleanupTempFile();
             }
         }
 
@@ -237,7 +231,9 @@ namespace CycloneGames.Service.Runtime
 
             try
             {
-                string storedHash = File.ReadAllText(_checksumFilePath).Trim();
+                string storedHash = SystemFileStore.Default.ReadText(
+                    _checksumFilePath,
+                    MAX_CHECKSUM_BYTES).Trim();
                 string computedHash = ComputeHash(data);
                 return storedHash == computedHash ? SettingsIntegrity.Valid : SettingsIntegrity.Modified;
             }
@@ -251,7 +247,9 @@ namespace CycloneGames.Service.Runtime
         {
             try
             {
-                File.WriteAllText(_checksumFilePath, ComputeHash(data));
+                SystemFileStore.Default.WriteTextAtomically(
+                    _checksumFilePath,
+                    ComputeHash(data));
             }
             catch (Exception ex)
             {
@@ -267,13 +265,5 @@ namespace CycloneGames.Service.Runtime
 
         #endregion
 
-        private void CleanupTempFile()
-        {
-            if (File.Exists(_tempFilePath))
-            {
-                try { File.Delete(_tempFilePath); }
-                catch { /* Ignore cleanup errors */ }
-            }
-        }
     }
 }

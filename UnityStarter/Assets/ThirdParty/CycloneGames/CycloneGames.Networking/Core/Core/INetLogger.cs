@@ -1,5 +1,3 @@
-using System;
-
 namespace CycloneGames.Networking
 {
     /// <summary>
@@ -31,37 +29,4 @@ namespace CycloneGames.Networking
         public void Log(LogLevel level, string message, string category = null) { }
     }
 
-    /// <summary>
-    /// Default implementation that logs to console.
-    /// Use UnityNetLogger in production for integration with CycloneGames.Logger.
-    /// </summary>
-    public sealed class DefaultNetLogger : INetLogger
-    {
-        private LogLevel _minLevel = LogLevel.Warning;
-
-        public LogLevel MinLevel
-        {
-            get => _minLevel;
-            set => _minLevel = value;
-        }
-
-        public bool IsLogLevelEnabled(LogLevel level) => level >= _minLevel;
-
-        public void Log(LogLevel level, string message, string category = null)
-        {
-            if (!IsLogLevelEnabled(level)) return;
-
-            string prefix = category != null ? $"[{category}] " : "";
-            switch (level)
-            {
-                case LogLevel.Warning:
-                case LogLevel.Error:
-                    Console.Error.WriteLine($"{prefix}{level}: {message}");
-                    break;
-                default:
-                    Console.Out.WriteLine($"{prefix}{message}");
-                    break;
-            }
-        }
-    }
 }

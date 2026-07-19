@@ -1,5 +1,6 @@
 #if UNITY_EDITOR
 using System;
+using System.Globalization;
 using System.IO;
 using UnityEditor;
 using UnityEngine;
@@ -22,59 +23,48 @@ namespace CycloneGames.Logger.Editor
         {
             args.hyperLinkData.TryGetValue("path", out var assetPath);
             args.hyperLinkData.TryGetValue("href", out var hrefPath);
-            args.hyperLinkData.TryGetValue("fullPath", out var fullPath);
             args.hyperLinkData.TryGetValue("line", out var lineStr);
-
-            string loggerHrefAssetPath = null;
-            string loggerHrefFullPath = null;
-            string loggerHrefLine = null;
-            if (TryParseLoggerHref(hrefPath, out loggerHrefAssetPath, out loggerHrefFullPath, out loggerHrefLine))
-            {
-                if (string.IsNullOrEmpty(assetPath)) assetPath = loggerHrefAssetPath;
-                if (string.IsNullOrEmpty(fullPath)) fullPath = loggerHrefFullPath;
-                if (string.IsNullOrEmpty(lineStr)) lineStr = loggerHrefLine;
-            }
-
-            if (string.IsNullOrEmpty(assetPath) && string.IsNullOrEmpty(hrefPath) && string.IsNullOrEmpty(fullPath))
+            string displayPath = NormalizePath(string.IsNullOrEmpty(assetPath) ? hrefPath : assetPath);
+            int lineNumber = ParseLineNumber(displayPath, hrefPath, null, lineStr);
+            StripLineSuffix(ref displayPath);
+            if (!LoggerEditorLinkRegistry.TryGetFullPath(displayPath, lineNumber, out string registeredFullPath))
             {
                 return;
             }
 
-            int lineNumber = ParseLineNumber(assetPath, hrefPath, fullPath, lineStr);
-
-            assetPath = NormalizePath(assetPath);
-            hrefPath = NormalizePath(hrefPath);
-            fullPath = NormalizePath(fullPath);
-
-            StripLineSuffix(ref assetPath);
-            StripLineSuffix(ref hrefPath);
-            StripLineSuffix(ref fullPath);
-
-            if (string.IsNullOrEmpty(assetPath) && IsAssetPath(hrefPath))
-            {
-                assetPath = hrefPath;
-            }
-
-            if (string.IsNullOrEmpty(fullPath)
-                && LoggerEditorLinkRegistry.TryGetFullPath(assetPath, lineNumber, out var registeredFullPath))
-            {
-                fullPath = NormalizePath(registeredFullPath);
-            }
-
-            if (TryOpenAssetPath(assetPath, lineNumber)) return;
-            if (TryOpenAssetPath(hrefPath, lineNumber)) return;
-
-            if (TryResolvePackageAssetPath(assetPath, fullPath, out var packageAssetPath)
-                && TryOpenAssetPath(packageAssetPath, lineNumber))
+            string fullPath = NormalizePath(registeredFullPath);
+            if (!IsAllowedLoggerSourcePath(fullPath) || !File.Exists(fullPath))
             {
                 return;
             }
 
-            if (TryOpenAbsolutePath(fullPath, lineNumber)) return;
-            if (TryOpenAbsolutePath(hrefPath, lineNumber)) return;
-            if (TryOpenAbsolutePath(assetPath, lineNumber)) return;
+            UnityEditorInternal.InternalEditorUtility.OpenFileAtLineExternal(fullPath, lineNumber);
+        }
 
-            TryOpenProjectRelativePath(assetPath, lineNumber);
+        internal static bool IsAllowedLoggerSourcePath(string fullPath)
+        {
+            if (!IsAbsolutePath(fullPath))
+            {
+                return false;
+            }
+
+            string projectRoot = NormalizePath(Path.GetFullPath(Path.Combine(Application.dataPath, "..")));
+            if (IsSameOrChildPath(fullPath, projectRoot))
+            {
+                return true;
+            }
+
+            var packages = UnityEditor.PackageManager.PackageInfo.GetAllRegisteredPackages();
+            for (int i = 0; i < packages.Length; i++)
+            {
+                string resolvedPath = NormalizePath(packages[i].resolvedPath);
+                if (IsSameOrChildPath(fullPath, resolvedPath))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private static bool TryParseLoggerHref(string hrefPath, out string assetPath, out string fullPath, out string line)
@@ -247,7 +237,7 @@ namespace CycloneGames.Logger.Editor
 
         private static int ParseLineNumber(string assetPath, string hrefPath, string fullPath, string lineStr)
         {
-            if (int.TryParse(lineStr, out int lineNumber))
+            if (int.TryParse(lineStr, NumberStyles.Integer, CultureInfo.InvariantCulture, out int lineNumber))
             {
                 return lineNumber;
             }
@@ -267,7 +257,11 @@ namespace CycloneGames.Logger.Editor
             int colonIndex = filePath.LastIndexOf(':');
             if (colonIndex < 0 || colonIndex + 1 >= filePath.Length) return false;
 
-            return int.TryParse(filePath.Substring(colonIndex + 1), out lineNumber);
+            return int.TryParse(
+                filePath.Substring(colonIndex + 1),
+                NumberStyles.Integer,
+                CultureInfo.InvariantCulture,
+                out lineNumber);
         }
 
         private static void StripLineSuffix(ref string filePath)
@@ -281,7 +275,10 @@ namespace CycloneGames.Logger.Editor
         private static bool IsSameOrChildPath(string filePath, string rootPath)
         {
             if (string.IsNullOrEmpty(filePath) || string.IsNullOrEmpty(rootPath)) return false;
-            if (!filePath.StartsWith(rootPath, StringComparison.OrdinalIgnoreCase)) return false;
+            StringComparison comparison = Application.platform == RuntimePlatform.WindowsEditor
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal;
+            if (!filePath.StartsWith(rootPath, comparison)) return false;
             return filePath.Length == rootPath.Length || filePath[rootPath.Length] == '/';
         }
 
@@ -290,7 +287,7 @@ namespace CycloneGames.Logger.Editor
             return !string.IsNullOrEmpty(path) && Path.IsPathRooted(path);
         }
 
-        private static string NormalizePath(string path)
+        internal static string NormalizePath(string path)
         {
             if (string.IsNullOrEmpty(path)) return path;
             path = path.Replace('\\', '/');

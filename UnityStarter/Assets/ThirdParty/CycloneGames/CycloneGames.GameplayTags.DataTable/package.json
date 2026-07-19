@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.gameplay-tags.data-table",
   "version": "1.0.0",
   "displayName": "CycloneGames.GameplayTags.DataTable",
-  "description": "Optional DataTable and Luban integration package for CycloneGames.GameplayTags.",
+  "description": "Backend-neutral typed DataTable integration for CycloneGames.GameplayTags definitions and references.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {

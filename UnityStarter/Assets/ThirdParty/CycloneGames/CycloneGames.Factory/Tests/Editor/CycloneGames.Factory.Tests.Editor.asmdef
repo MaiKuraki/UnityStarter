@@ -3,13 +3,7 @@
     "rootNamespace": "CycloneGames.Factory.Tests.Editor",
     "references": [
         "CycloneGames.Factory.Runtime",
-        "CycloneGames.Factory.DOD.Runtime",
-        "CycloneGames.Factory.ECS.Runtime",
-        "Unity.Entities",
-        "Unity.Collections",
-        "Unity.Mathematics",
-        "Unity.Transforms",
-        "Unity.Burst"
+        "CycloneGames.Factory.Unity.Runtime"
     ],
     "includePlatforms": [
         "Editor"
@@ -20,23 +14,7 @@
     "precompiledReferences": [],
     "autoReferenced": false,
     "defineConstraints": [],
-    "versionDefines": [
-        {
-            "name": "com.unity.collections",
-            "expression": "",
-            "define": "PRESENT_COLLECTIONS"
-        },
-        {
-            "name": "com.unity.burst",
-            "expression": "",
-            "define": "PRESENT_BURST"
-        },
-        {
-            "name": "com.unity.entities",
-            "expression": "",
-            "define": "PRESENT_ECS"
-        }
-    ],
+    "versionDefines": [],
     "noEngineReferences": false,
     "optionalUnityReferences": [
         "TestAssemblies"

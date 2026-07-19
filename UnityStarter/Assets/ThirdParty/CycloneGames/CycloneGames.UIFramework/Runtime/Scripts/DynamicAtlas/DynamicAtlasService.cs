@@ -1,1060 +1,1561 @@
 using System;
 using System.Collections.Generic;
-using System.Threading;
-using CycloneGames.Logger;
+using System.ComponentModel;
 using UnityEngine;
-
-#if !UNITY_WEBGL || UNITY_EDITOR
-using System.Collections.Concurrent;
-using Unity.Collections;
-using Unity.Collections.LowLevel.Unsafe;
-#endif
+using UnityEngine.Experimental.Rendering;
+using UnityEngine.Rendering;
 
 namespace CycloneGames.UIFramework.DynamicAtlas
 {
-    /// <summary>
-    /// Production-grade Dynamic Atlas System with multi-page support, reference counting, and automatic page cleanup.
-    /// Thread-safe for concurrent access with platform-specific optimizations.
-    /// </summary>
-    public class DynamicAtlasService : IDynamicAtlas
+    public sealed class DynamicAtlasService : IDynamicAtlas
     {
-        public readonly struct AtlasMetrics
-        {
-            public readonly int PageCount;
-            public readonly int CachedItemCount;
-            public readonly int ActiveSpriteCount;
-            public readonly long UsedPixelArea;
-            public readonly long AllocatedPixelArea;
-            public readonly long TotalPixelArea;
-            public readonly float UsedAreaRatio;
-            public readonly float AllocatedAreaRatio;
+        private const TextureFormat AtlasTextureFormat = TextureFormat.RGBA32;
 
-            public AtlasMetrics(
-                int pageCount,
-                int cachedItemCount,
-                int activeSpriteCount,
-                long usedPixelArea,
-                long allocatedPixelArea,
-                long totalPixelArea)
+        private sealed class AtlasEntry
+        {
+            internal string Key;
+            internal Sprite Sprite;
+            internal DynamicAtlasPage Page;
+            internal DynamicAtlasPlacement Placement;
+            internal DynamicAtlasCopyPath CopyPath;
+            internal int ReferenceCount;
+            internal long Generation;
+            internal long LastUseSequence;
+            internal AtlasEntry RetainedPrevious;
+            internal AtlasEntry RetainedNext;
+            internal bool IsRetainedLinked;
+
+            internal void Reset()
             {
-                PageCount = pageCount;
-                CachedItemCount = cachedItemCount;
-                ActiveSpriteCount = activeSpriteCount;
-                UsedPixelArea = usedPixelArea;
-                AllocatedPixelArea = allocatedPixelArea;
-                TotalPixelArea = totalPixelArea;
-                UsedAreaRatio = totalPixelArea > 0 ? (float)usedPixelArea / totalPixelArea : 0f;
-                AllocatedAreaRatio = totalPixelArea > 0 ? (float)allocatedPixelArea / totalPixelArea : 0f;
+                Key = null;
+                Sprite = null;
+                Page = null;
+                Placement = default;
+                CopyPath = DynamicAtlasCopyPath.None;
+                ReferenceCount = 0;
+                Generation = 0;
+                LastUseSequence = 0;
+                RetainedPrevious = null;
+                RetainedNext = null;
+                IsRetainedLinked = false;
             }
         }
 
-        private class AtlasItem
-        {
-            public Sprite Sprite;
-            public DynamicAtlasPage Page;
-            public int RefCount;
-            public string Path;
-            public Vector2 Pivot;
-            public Vector4 Border;
-        }
+        private const int MaximumPooledEntries = 256;
 
-        private readonly List<DynamicAtlasPage> _pages = new List<DynamicAtlasPage>();
-        private readonly Dictionary<string, AtlasItem> _itemCache = new Dictionary<string, AtlasItem>();
-        private readonly ReaderWriterLockSlim _lock = new ReaderWriterLockSlim(LockRecursionPolicy.NoRecursion);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private static int _spriteIdCounter = 0;
-#endif
-
-#if UNITY_EDITOR
-        public class EditorAtlasItem
-        {
-            public Sprite Sprite { get; }
-            public DynamicAtlasPage Page { get; }
-            public int RefCount { get; }
-            public string Path { get; }
-
-            public EditorAtlasItem(Sprite sprite, DynamicAtlasPage page, int refCount, string path)
-            {
-                Sprite = sprite;
-                Page = page;
-                RefCount = refCount;
-                Path = path;
-            }
-        }
-
-        public IReadOnlyList<DynamicAtlasPage> EditorGetPages()
-        {
-            _lock.EnterReadLock();
-            try
-            {
-                return new List<DynamicAtlasPage>(_pages);
-            }
-            finally
-            {
-                _lock.ExitReadLock();
-            }
-        }
-
-        public IReadOnlyList<EditorAtlasItem> EditorGetCachedItems()
-        {
-            _lock.EnterReadLock();
-            try
-            {
-                var list = new List<EditorAtlasItem>(_itemCache.Count);
-                foreach (var kvp in _itemCache)
-                {
-                    list.Add(new EditorAtlasItem(kvp.Value.Sprite, kvp.Value.Page, kvp.Value.RefCount, kvp.Value.Path));
-                }
-                return list;
-            }
-            finally
-            {
-                _lock.ExitReadLock();
-            }
-        }
-#endif
-
-        // Platform-specific object pool
-#if !UNITY_WEBGL || UNITY_EDITOR
-        private readonly ConcurrentQueue<AtlasItem> _itemPoolConcurrent = new ConcurrentQueue<AtlasItem>();
-#else
-        private readonly Stack<AtlasItem> _itemPoolStack = new Stack<AtlasItem>(64);
-#endif
-        private const int MaxPoolSize = 128;
-        private int _poolCount = 0;
-
-        public event Action<string, Sprite> OnSpriteRepacked;
-
-        // Configuration
+        private readonly DynamicAtlasConfig _config;
+        private readonly DynamicAtlasThreadGuard _threadGuard;
+        private readonly Dictionary<string, AtlasEntry> _entries;
+        private readonly List<DynamicAtlasPage> _pages;
+        private readonly Stack<AtlasEntry> _entryPool;
         private readonly Func<string, Texture2D> _loadFunc;
         private readonly Action<string, Texture2D> _unloadFunc;
-        private readonly int _pageSize;
-        private readonly int _padding;
-        private readonly TextureFormat _targetFormat;
-        private readonly bool _autoScaleLargeTextures;
-        private readonly bool _enableBlockAlignment;
-        private readonly bool _enablePlatformOptimizations;
-        private readonly bool _enableBleed;
-        private readonly bool _enableMipmap;
-        private readonly bool _allowCpuReadPixelsFallback;
-        private readonly bool _allowCpuBleedFallback;
-        private readonly int _blockSize;
-        private readonly int _maxPages;
 
-        public DynamicAtlasService(
-            int forceSize = 0,
-            Func<string, Texture2D> loadFunc = null,
-            Action<string, Texture2D> unloadFunc = null,
-            bool autoScaleLargeTextures = true)
-            : this(new DynamicAtlasConfig
-            {
-                pageSize = forceSize,
-                loadFunc = loadFunc,
-                unloadFunc = unloadFunc,
-                autoScaleLargeTextures = autoScaleLargeTextures
-            })
-        {
-        }
+        private bool _disposed;
+        private int _batchDepth;
+        private long _batchEpoch = 1;
+        private long _nextEntryGeneration;
+        private AtlasEntry _oldestRetainedEntry;
+        private AtlasEntry _newestRetainedEntry;
+        private long _useSequence;
+        private long _estimatedTextureBytes;
+        private long _pendingDestructionBytes;
+        private int _pendingDestructionPageCount;
+        private int _pendingDestructionFrame = -1;
+        private long _cacheHitCount;
+        private long _cacheMissCount;
+        private long _insertCount;
+        private long _evictionCount;
+        private long _rejectionCount;
+        private long _gpuCopyCount;
+        private long _cpuRawCopyCount;
+        private long _synchronousReadbackCount;
 
-        public DynamicAtlasService(DynamicAtlasConfig config)
-        {
-            config = config ?? new DynamicAtlasConfig();
-
-            _loadFunc = config.loadFunc ?? Resources.Load<Texture2D>;
-            _unloadFunc = config.unloadFunc ?? ((path, tex) => Resources.UnloadAsset(tex));
-            _autoScaleLargeTextures = config.autoScaleLargeTextures;
-            _targetFormat = config.targetFormat;
-            _enableBlockAlignment = config.enableBlockAlignment;
-            _enablePlatformOptimizations = config.enablePlatformOptimizations;
-            _enableBleed = config.enableBleed;
-            _enableMipmap = config.enableMipmap;
-            _allowCpuReadPixelsFallback = config.allowCpuReadPixelsFallback;
-            _allowCpuBleedFallback = config.allowCpuBleedFallback;
-            _padding = config.padding;
-            _blockSize = TextureFormatHelper.GetBlockSize(_targetFormat);
-            _maxPages = config.maxPages;
-
-            if (config.pageSize > 0)
-            {
-                _pageSize = config.pageSize;
-            }
-            else
-            {
-                int maxTextureSize = SystemInfo.maxTextureSize;
-                long systemMemory = SystemInfo.systemMemorySize;
-#if UNITY_WEBGL
-                _pageSize = 1024;
-#else
-                if (systemMemory < 2000 || maxTextureSize < 2048) _pageSize = 1024;
-                else if (systemMemory < 4000) _pageSize = 2048;
-                else _pageSize = Mathf.Min(4096, maxTextureSize);
+#if UNITY_EDITOR
+        private static readonly List<WeakReference<DynamicAtlasService>> ActiveEditorServices =
+            new List<WeakReference<DynamicAtlasService>>(8);
 #endif
-            }
 
-            // Align page size to block size if needed
-            if (_blockSize > 1)
-            {
-                _pageSize = TextureFormatHelper.AlignToBlockSize(_pageSize, _blockSize);
-            }
-        }
+        public DynamicAtlasConfig Configuration => _config.Copy();
+        public bool IsDisposed => _disposed;
+        internal bool IsOwnerThread => _threadGuard.IsOwnerThread;
 
-        public AtlasMetrics GetMetrics()
+        public DynamicAtlasService(DynamicAtlasConfig config = null)
         {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetMetrics))) return default;
+            _threadGuard = new DynamicAtlasThreadGuard();
+            _config = (config ?? new DynamicAtlasConfig()).Copy();
 
-            _lock.EnterReadLock();
-            try
+            if (!_config.Validate(out string validationError))
             {
-                int activeSpriteCount = 0;
-                long usedPixelArea = 0;
-                long allocatedPixelArea = 0;
-                long totalPixelArea = 0;
-
-                for (int i = 0; i < _pages.Count; i++)
-                {
-                    DynamicAtlasPage page = _pages[i];
-                    activeSpriteCount += page.ActiveSpriteCount;
-                    usedPixelArea += page.UsedPixelArea;
-                    allocatedPixelArea += page.AllocatedPixelArea;
-                    totalPixelArea += (long)page.Width * page.Height;
-                }
-
-                return new AtlasMetrics(_pages.Count, _itemCache.Count, activeSpriteCount, usedPixelArea, allocatedPixelArea, totalPixelArea);
-            }
-            finally
-            {
-                _lock.ExitReadLock();
-            }
-        }
-
-        public Sprite GetSprite(string path)
-        {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSprite))) return null;
-            if (string.IsNullOrEmpty(path)) return null;
-
-            _lock.EnterReadLock();
-            AtlasItem cachedItem = null;
-            bool foundValid = false;
-            try
-            {
-                if (_itemCache.TryGetValue(path, out cachedItem))
-                {
-                    if (cachedItem.Sprite != null)
-                    {
-                        try
-                        {
-                            if (cachedItem.Sprite.texture != null)
-                            {
-                                foundValid = true;
-                            }
-                        }
-                        catch (UnityException)
-                        {
-                            foundValid = true;
-                        }
-                    }
-
-                    if (!foundValid)
-                    {
-                        cachedItem = null;
-                    }
-                }
-            }
-            finally
-            {
-                _lock.ExitReadLock();
+                throw new ArgumentException(validationError, nameof(config));
             }
 
-            if (foundValid && cachedItem != null)
+            if (_config.pageSize > SystemInfo.maxTextureSize)
             {
-                Interlocked.Increment(ref cachedItem.RefCount);
-                return cachedItem.Sprite;
+                throw new ArgumentException(
+                    $"Page size {_config.pageSize} exceeds this device's maximum texture size {SystemInfo.maxTextureSize}.",
+                    nameof(config));
             }
 
-            if (cachedItem != null)
+            if (!SystemInfo.SupportsTextureFormat(AtlasTextureFormat))
             {
-                _lock.EnterWriteLock();
-                try
-                {
-                    if (_itemCache.TryGetValue(path, out var item))
-                    {
-                        bool shouldRemove = false;
-                        if (item.Sprite == null)
-                        {
-                            shouldRemove = true;
-                        }
-                        else
-                        {
-                            try
-                            {
-                                if (item.Sprite.texture == null)
-                                {
-                                    shouldRemove = true;
-                                }
-                            }
-                            catch (UnityException)
-                            {
-                            }
-                        }
-
-                        if (shouldRemove)
-                        {
-                            _itemCache.Remove(path);
-                            ReleaseItemToPool(item);
-                        }
-                    }
-                }
-                finally
-                {
-                    _lock.ExitWriteLock();
-                }
+                throw new NotSupportedException(
+                    $"Texture format {AtlasTextureFormat} is not supported by the active graphics device.");
             }
 
-            Texture2D source = _loadFunc(path);
-            if (source == null)
-            {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogError($"[DynamicAtlas] Failed to load: {path}");
+            _entries = new Dictionary<string, AtlasEntry>(
+                Mathf.Min(_config.maxEntries, 256),
+                StringComparer.Ordinal);
+            _pages = new List<DynamicAtlasPage>(_config.maxPages);
+            _entryPool = new Stack<AtlasEntry>(Mathf.Min(MaximumPooledEntries, _config.maxEntries));
+            _loadFunc = _config.loadFunc;
+            _unloadFunc = _config.unloadFunc;
+
+#if UNITY_EDITOR
+            RegisterEditorService(this);
 #endif
-                return null;
-            }
-
-            int availableSize = _pageSize - _padding;
-            Texture2D processedTexture = source;
-            bool needsDispose = false;
-
-            if (_autoScaleLargeTextures && (source.width > availableSize || source.height > availableSize))
-            {
-                processedTexture = ScaleTextureToFit(source, _pageSize);
-                if (processedTexture != null && processedTexture != source)
-                {
-                    needsDispose = true;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    CLogger.LogWarning($"[DynamicAtlas] Texture {path} ({source.width}x{source.height}) is too large. " +
-                        $"Auto-scaled to {processedTexture.width}x{processedTexture.height} to fit page size ({_pageSize}x{_pageSize}, available: {availableSize}x{availableSize} with padding).");
-#endif
-                }
-            }
-
-            _lock.EnterWriteLock();
-            try
-            {
-                if (_itemCache.TryGetValue(path, out var existingItem))
-                {
-                    if (existingItem.Sprite != null && existingItem.Sprite.texture != null)
-                    {
-                        Interlocked.Increment(ref existingItem.RefCount);
-                        _unloadFunc(path, source);
-                        if (needsDispose && processedTexture != source)
-                        {
-                            UnityEngine.Object.DestroyImmediate(processedTexture);
-                        }
-                        return existingItem.Sprite;
-                    }
-                }
-
-                if (!TryInsertIntoAnyPage(processedTexture, path, out var item))
-                {
-                    if (!CreateNewPage() || !TryInsertIntoAnyPage(processedTexture, path, out item))
-                    {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                        string errorDetails = $"Texture size: {processedTexture.width}x{processedTexture.height}, " +
-                            $"Page size: {_pageSize}x{_pageSize}, " +
-                            $"Format: {processedTexture.format}, " +
-                            $"Readable: {processedTexture.isReadable}, " +
-                            $"Max texture size: {SystemInfo.maxTextureSize}";
-
-                        if (processedTexture.width > _pageSize || processedTexture.height > _pageSize)
-                        {
-                            string autoScaleStatus = _autoScaleLargeTextures ? "enabled" : "disabled";
-                            CLogger.LogError($"[DynamicAtlas] Critical Failure: Cannot insert {path}. Texture ({processedTexture.width}x{processedTexture.height}) is larger than page size ({_pageSize}x{_pageSize}). " +
-                                $"Auto-scaling is {autoScaleStatus}. {errorDetails}");
-                        }
-                        else if (!processedTexture.isReadable)
-                        {
-                            CLogger.LogError($"[DynamicAtlas] Critical Failure: Cannot insert {path}. Texture is not readable. {errorDetails}");
-                        }
-                        else
-                        {
-                            CLogger.LogError($"[DynamicAtlas] Critical Failure: Cannot insert {path} even after creating new page. {errorDetails}");
-                        }
-#endif
-                        _unloadFunc(path, source);
-                        if (needsDispose && processedTexture != source)
-                        {
-                            UnityEngine.Object.DestroyImmediate(processedTexture);
-                        }
-                        return null;
-                    }
-                }
-
-                if (item.Page != null)
-                {
-                    item.Page.ApplyIfNeeded();
-                }
-
-                _unloadFunc(path, source);
-
-                if (needsDispose && processedTexture != source)
-                {
-                    UnityEngine.Object.DestroyImmediate(processedTexture);
-                }
-
-                item.RefCount = 1;
-                _itemCache[path] = item;
-
-                return item.Sprite;
-            }
-            finally
-            {
-                _lock.ExitWriteLock();
-            }
         }
 
-        /// <summary>
-        /// Scales texture to fit within the specified maximum size while maintaining aspect ratio.
-        /// Uses zero-GC GPU path (Graphics.Blit). CPU native/managed paths have been removed.
-        /// </summary>
-        private Texture2D ScaleTextureToFit(Texture2D source, int maxSize)
+        public DynamicAtlasInsertStatus TryAcquire(
+            string key,
+            Texture2D source,
+            out DynamicAtlasSpriteLease lease)
         {
-            if (source == null) return null;
-
-            int sourceWidth = source.width;
-            int sourceHeight = source.height;
-
-            int availableSize = maxSize - _padding;
-
-            float scale = Mathf.Min((float)availableSize / sourceWidth, (float)availableSize / sourceHeight);
-
-            if (scale >= 1.0f)
-            {
-                return source;
-            }
-
-            int targetWidth = Mathf.Max(1, Mathf.RoundToInt(sourceWidth * scale));
-            int targetHeight = Mathf.Max(1, Mathf.RoundToInt(sourceHeight * scale));
-
-            // Align to block size if needed
-            if (_blockSize > 1)
-            {
-                targetWidth = TextureFormatHelper.AlignToBlockSize(targetWidth, _blockSize);
-                targetHeight = TextureFormatHelper.AlignToBlockSize(targetHeight, _blockSize);
-            }
-            else
-            {
-                // Ensure even dimensions for better compression and alignment
-                if (targetWidth > 2 && targetWidth % 2 != 0) targetWidth--;
-                if (targetHeight > 2 && targetHeight % 2 != 0) targetHeight--;
-            }
-
-            if (targetWidth < 1) targetWidth = 1;
-            if (targetHeight < 1) targetHeight = 1;
-
-            if (targetWidth > availableSize || targetHeight > availableSize)
-            {
-                float sizeScale = Mathf.Min((float)availableSize / targetWidth, (float)availableSize / targetHeight);
-                targetWidth = Mathf.RoundToInt(targetWidth * sizeScale);
-                targetHeight = Mathf.RoundToInt(targetHeight * sizeScale);
-
-                if (_blockSize > 1)
-                {
-                    targetWidth = TextureFormatHelper.AlignToBlockSize(Mathf.Max(1, targetWidth), _blockSize);
-                    targetHeight = TextureFormatHelper.AlignToBlockSize(Mathf.Max(1, targetHeight), _blockSize);
-                }
-
-                if (targetWidth < 1) targetWidth = 1;
-                if (targetHeight < 1) targetHeight = 1;
-            }
-
-            // Strictly use GPU scaling path
-            return ScaleTextureGPU(source, targetWidth, targetHeight);
+            _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquire));
+            RectInt sourceRect = source != null
+                ? new RectInt(0, 0, source.width, source.height)
+                : default;
+            DynamicAtlasInsertStatus status = TryAcquireEntry(
+                key,
+                source,
+                sourceRect,
+                new Vector2(0.5f, 0.5f),
+                Vector4.zero,
+                _config.defaultPixelsPerUnit,
+                out AtlasEntry entry);
+            lease = CreateLease(entry);
+            return status;
         }
 
-        private Texture2D ScaleTextureGPU(Texture2D source, int targetWidth, int targetHeight)
+        public DynamicAtlasInsertStatus TryAcquireRegion(
+            string key,
+            Texture2D source,
+            RectInt sourceRect,
+            out DynamicAtlasSpriteLease lease)
         {
-            RenderTexture rt = RenderTexture.GetTemporary(targetWidth, targetHeight, 0, RenderTextureFormat.ARGB32);
-            RenderTexture previous = RenderTexture.active;
-
-            try
-            {
-                Graphics.Blit(source, rt);
-                RenderTexture.active = rt;
-
-                var scaled = new Texture2D(targetWidth, targetHeight, TextureFormat.RGBA32, false);
-                scaled.ReadPixels(new Rect(0, 0, targetWidth, targetHeight), 0, 0);
-                scaled.Apply(false);
-
-                return scaled;
-            }
-            finally
-            {
-                RenderTexture.active = previous;
-                RenderTexture.ReleaseTemporary(rt);
-            }
+            DynamicAtlasInsertStatus status = TryAcquireEntry(
+                key,
+                source,
+                sourceRect,
+                new Vector2(0.5f, 0.5f),
+                Vector4.zero,
+                _config.defaultPixelsPerUnit,
+                out AtlasEntry entry);
+            lease = CreateLease(entry);
+            return status;
         }
 
-        public void ReleaseSprite(string path)
+        public DynamicAtlasInsertStatus TryAcquireSprite(
+            string key,
+            Sprite source,
+            out DynamicAtlasSpriteLease lease)
         {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(ReleaseSprite))) return;
-            if (string.IsNullOrEmpty(path)) return;
+            _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquireSprite));
+            lease = null;
 
-            _lock.EnterReadLock();
-            AtlasItem item = null;
+            DynamicAtlasInsertStatus state = ValidateOperationAndKey(key);
+            if (state != DynamicAtlasInsertStatus.Success)
+            {
+                RecordRejection(state);
+                return state;
+            }
+
+            if (TryRetainCachedEntry(key, out AtlasEntry cachedEntry))
+            {
+                lease = CreateLease(cachedEntry);
+                return DynamicAtlasInsertStatus.CacheHit;
+            }
+
+            if (!TryPrepareCacheMiss(out state))
+            {
+                RecordRejection(state);
+                return state;
+            }
+
+            if (source == null || source.texture == null)
+            {
+                RecordRejection(DynamicAtlasInsertStatus.InvalidSource);
+                return DynamicAtlasInsertStatus.InvalidSource;
+            }
+
+            if (source.packed &&
+                (source.packingMode == SpritePackingMode.Tight ||
+                 source.packingRotation != SpritePackingRotation.None))
+            {
+                RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+                return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
+            }
+
+            Rect textureRect;
             try
             {
-                _itemCache.TryGetValue(path, out item);
+                textureRect = source.textureRect;
             }
-            finally
+            catch (UnityException)
             {
-                _lock.ExitReadLock();
+                RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+                return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
             }
 
-            if (item == null) return;
-
-            int newRefCount = Interlocked.Decrement(ref item.RefCount);
-
-            if (newRefCount <= 0)
+            Rect sourceSpriteRect = source.rect;
+            if (sourceSpriteRect.width <= 0f || sourceSpriteRect.height <= 0f)
             {
-                _lock.EnterWriteLock();
-                try
-                {
-                    if (_itemCache.TryGetValue(path, out var verifyItem) && verifyItem == item)
-                    {
-                        if (item.RefCount <= 0)
-                        {
-                            _itemCache.Remove(path);
-
-                            if (item.Page != null && item.Sprite != null)
-                            {
-                                DynamicAtlasPage page = item.Page;
-                                int sw = Mathf.RoundToInt(item.Sprite.rect.width);
-                                int sh = Mathf.RoundToInt(item.Sprite.rect.height);
-                                page.DecrementActiveCount(sw, sh);
-
-                                DestroyUnityObject(item.Sprite);
-                                item.Sprite = null;
-
-                                TryReleasePage(page);
-                            }
-
-                            ReleaseItemToPool(item);
-                        }
-                    }
-                }
-                finally
-                {
-                    _lock.ExitWriteLock();
-                }
+                RecordRejection(DynamicAtlasInsertStatus.InvalidRegion);
+                return DynamicAtlasInsertStatus.InvalidRegion;
             }
-        }
 
-        /// <summary>
-        /// Gets or creates a sprite from an existing Sprite (e.g., from a SpriteAtlas).
-        /// Copies the sprite's pixels into the dynamic atlas using zero-copy GPU path when available.
-        /// </summary>
-        /// <param name="sourceSprite">The source sprite to copy from (can be from SpriteAtlas)</param>
-        /// <param name="cacheKey">Optional cache key. If null, uses sourceSprite.name</param>
-        /// <returns>A new sprite referencing the dynamic atlas</returns>
-        public Sprite GetSpriteFromSprite(Sprite sourceSprite, string cacheKey = null)
-        {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSpriteFromSprite))) return null;
-            if (sourceSprite == null) return null;
-
-            string key = cacheKey ?? sourceSprite.name;
-            if (string.IsNullOrEmpty(key)) key = sourceSprite.GetHashCode().ToString();
-
-            // Check cache first
-            _lock.EnterReadLock();
-            try
+            if (!Mathf.Approximately(textureRect.width, sourceSpriteRect.width) ||
+                !Mathf.Approximately(textureRect.height, sourceSpriteRect.height))
             {
-                if (_itemCache.TryGetValue(key, out var cachedItem))
-                {
-                    if (cachedItem.Sprite != null && cachedItem.Sprite.texture != null)
-                    {
-                        Interlocked.Increment(ref cachedItem.RefCount);
-                        return cachedItem.Sprite;
-                    }
-                }
+                RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+                return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
             }
-            finally
+
+            if (!HasFullRectGeometry(source, sourceSpriteRect))
             {
-                _lock.ExitReadLock();
+                RecordRejection(DynamicAtlasInsertStatus.UnsupportedSpritePacking);
+                return DynamicAtlasInsertStatus.UnsupportedSpritePacking;
             }
 
-            // Extract region from source sprite's texture
-            Texture2D sourceTexture = sourceSprite.texture;
-            Rect sourceRect = sourceSprite.rect;
-
-            // Preserve original pivot (normalized) and 9-slice border
             Vector2 pivot = new Vector2(
-                sourceSprite.pivot.x / sourceRect.width,
-                sourceSprite.pivot.y / sourceRect.height);
-            Vector4 border = sourceSprite.border;
-
-            return InsertFromRegionInternal(sourceTexture, sourceRect, key, pivot, border);
+                source.pivot.x / sourceSpriteRect.width,
+                source.pivot.y / sourceSpriteRect.height);
+            RectInt integerTextureRect = ToPixelRect(textureRect);
+            DynamicAtlasInsertStatus status = TryAcquireEntry(
+                key,
+                source.texture,
+                integerTextureRect,
+                pivot,
+                source.border,
+                source.pixelsPerUnit,
+                out AtlasEntry entry,
+                skipCacheLookup: true,
+                cacheMissPrepared: true);
+            lease = CreateLease(entry);
+            return status;
         }
 
-        /// <summary>
-        /// Gets or creates a sprite from a Texture2D region.
-        /// Useful for extracting specific regions from larger textures or SpriteAtlas.
-        /// Uses GPU CopyTexture when available for zero-GC operation.
-        /// </summary>
-        /// <param name="sourceTexture">The source texture (e.g., SpriteAtlas texture)</param>
-        /// <param name="sourceRect">The region to extract (in pixels, bottom-left origin)</param>
-        /// <param name="cacheKey">Cache key for this region</param>
-        /// <returns>A new sprite referencing the dynamic atlas</returns>
-        public Sprite GetSpriteFromRegion(Texture2D sourceTexture, Rect sourceRect, string cacheKey)
+        public DynamicAtlasInsertStatus TryAcquireLocation(
+            string location,
+            out DynamicAtlasSpriteLease lease)
         {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(GetSpriteFromRegion))) return null;
-            if (sourceTexture == null || string.IsNullOrEmpty(cacheKey)) return null;
+            _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquireLocation));
+            lease = null;
 
-            // Check cache first
-            _lock.EnterReadLock();
+            DynamicAtlasInsertStatus state = ValidateOperationAndKey(location);
+            if (state != DynamicAtlasInsertStatus.Success)
+            {
+                RecordRejection(state);
+                return state;
+            }
+
+            if (TryRetainCachedEntry(location, out AtlasEntry cachedEntry))
+            {
+                lease = CreateLease(cachedEntry);
+                return DynamicAtlasInsertStatus.CacheHit;
+            }
+
+            if (!TryPrepareCacheMiss(out state))
+            {
+                RecordRejection(state);
+                return state;
+            }
+
+            if (_loadFunc == null || _unloadFunc == null)
+            {
+                RecordRejection(DynamicAtlasInsertStatus.LoaderUnavailable);
+                return DynamicAtlasInsertStatus.LoaderUnavailable;
+            }
+
+            Texture2D source = null;
             try
             {
-                if (_itemCache.TryGetValue(cacheKey, out var cachedItem))
+                source = _loadFunc(location);
+                if (source == null)
                 {
-                    if (cachedItem.Sprite != null && cachedItem.Sprite.texture != null)
-                    {
-                        Interlocked.Increment(ref cachedItem.RefCount);
-                        return cachedItem.Sprite;
-                    }
+                    RecordRejection(DynamicAtlasInsertStatus.InvalidSource);
+                    return DynamicAtlasInsertStatus.InvalidSource;
                 }
+
+                RectInt sourceRect = new RectInt(0, 0, source.width, source.height);
+                DynamicAtlasInsertStatus status = TryAcquireEntry(
+                    location,
+                    source,
+                    sourceRect,
+                    new Vector2(0.5f, 0.5f),
+                    Vector4.zero,
+                    _config.defaultPixelsPerUnit,
+                    out AtlasEntry entry,
+                    skipCacheLookup: true,
+                    cacheMissPrepared: true);
+                lease = CreateLease(entry);
+                return status;
             }
             finally
             {
-                _lock.ExitReadLock();
-            }
-
-            return InsertFromRegionInternal(sourceTexture, sourceRect, cacheKey);
-        }
-
-        private Sprite InsertFromRegionInternal(Texture2D sourceTexture, Rect sourceRect, string cacheKey,
-            Vector2? customPivot = null, Vector4? customBorder = null)
-        {
-            int regionWidth = Mathf.RoundToInt(sourceRect.width);
-            int regionHeight = Mathf.RoundToInt(sourceRect.height);
-            int availableSize = _pageSize - _padding;
-
-            // Check if region needs scaling
-            if (regionWidth > availableSize || regionHeight > availableSize)
-            {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogWarning($"[DynamicAtlas] Region {cacheKey} ({regionWidth}x{regionHeight}) exceeds available size ({availableSize}). " +
-                    "Consider using smaller source sprites or increasing page size.");
-#endif
-                return null;
-            }
-
-            _lock.EnterWriteLock();
-            try
-            {
-                // Double-check cache
-                if (_itemCache.TryGetValue(cacheKey, out var existingItem))
+                if (source != null)
                 {
-                    if (existingItem.Sprite != null && existingItem.Sprite.texture != null)
-                    {
-                        Interlocked.Increment(ref existingItem.RefCount);
-                        return existingItem.Sprite;
-                    }
+                    SafeUnload(location, source);
                 }
-
-                // Try to insert into existing pages
-                if (!TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out var item, customPivot, customBorder))
-                {
-                    if (!CreateNewPage() || !TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out item, customPivot, customBorder))
-                    {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                        CLogger.LogError($"[DynamicAtlas] Failed to insert region {cacheKey}. " +
-                            $"Region size: {regionWidth}x{regionHeight}, Page size: {_pageSize}x{_pageSize}");
-#endif
-                        return null;
-                    }
-                }
-
-                if (item.Page != null)
-                {
-                    item.Page.ApplyIfNeeded();
-                }
-
-                item.RefCount = 1;
-                _itemCache[cacheKey] = item;
-
-                return item.Sprite;
-            }
-            finally
-            {
-                _lock.ExitWriteLock();
             }
         }
 
-        private bool TryInsertRegionIntoAnyPage(Texture2D sourceTexture, Rect sourceRect, string cacheKey, out AtlasItem item,
-            Vector2? customPivot = null, Vector4? customBorder = null)
+        public bool TryAcquireCached(string key, out DynamicAtlasSpriteLease lease)
         {
-            item = null;
+            _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquireCached));
+            lease = null;
 
-            int pageCount = _pages.Count;
-            for (int i = pageCount - 1; i >= 0; i--)
+            if (_disposed || !IsValidKey(key))
             {
-                var page = _pages[i];
-                if (page.TryInsertFromRegion(sourceTexture, sourceRect, out Rect uvRect))
-                {
-                    item = CreateItemFromRegion(page, sourceRect, uvRect, cacheKey, customPivot, customBorder);
-                    return true;
-                }
-            }
-
-            if (_pages.Count == 0)
-            {
-                if (!CreateNewPage()) return false;
-                return TryInsertRegionIntoAnyPage(sourceTexture, sourceRect, cacheKey, out item, customPivot, customBorder);
-            }
-
-            return false;
-        }
-
-        private AtlasItem CreateItemFromRegion(DynamicAtlasPage page, Rect sourceRect, Rect uvRect, string cacheKey,
-            Vector2? customPivot = null, Vector4? customBorder = null)
-        {
-            int width = Mathf.RoundToInt(sourceRect.width);
-            int height = Mathf.RoundToInt(sourceRect.height);
-
-            Rect spriteRect = new Rect(uvRect.x * page.Width, uvRect.y * page.Height, width, height);
-            Vector2 pivot = customPivot ?? new Vector2(0.5f, 0.5f);
-            Vector4 border = customBorder ?? Vector4.zero;
-
-            Sprite newSprite = Sprite.Create(page.Texture, spriteRect, pivot, 100.0f, 0, SpriteMeshType.FullRect, border);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            int spriteId = Interlocked.Increment(ref _spriteIdCounter);
-            newSprite.name = $"Atlas_Region_{cacheKey}_{page.PageId}_{spriteId}";
-#endif
-
-            AtlasItem item = GetItemFromPool();
-            item.Sprite = newSprite;
-            item.Page = page;
-            item.Path = cacheKey;
-            item.RefCount = 0;
-            item.Pivot = pivot;
-            item.Border = border;
-
-            page.IncrementActiveCount(width, height);
-
-            return item;
-        }
-
-        private bool TryInsertIntoAnyPage(Texture2D source, string path, out AtlasItem item)
-        {
-            item = null;
-
-            int pageCount = _pages.Count;
-            for (int i = pageCount - 1; i >= 0; i--)
-            {
-                var page = _pages[i];
-                if (page.TryInsert(source, out Rect uvRect))
-                {
-                    item = CreateItem(page, source, uvRect, path);
-                    return true;
-                }
-            }
-
-            if (_pages.Count == 0)
-            {
-                if (!CreateNewPage()) return false;
-                return TryInsertIntoAnyPage(source, path, out item);
-            }
-
-            return false;
-        }
-
-        private bool CreateNewPage()
-        {
-            if (_maxPages > 0 && _pages.Count >= _maxPages)
-            {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogError($"[DynamicAtlas] Max page limit reached ({_maxPages}). Cannot allocate new page.");
-#endif
                 return false;
             }
-            var page = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations, _enableBleed, _enableMipmap, _allowCpuReadPixelsFallback, _allowCpuBleedFallback);
-            _pages.Add(page);
+
+            if (!TryRetainCachedEntry(key, out AtlasEntry entry))
+            {
+                return false;
+            }
+
+            lease = CreateLease(entry);
             return true;
         }
 
-        private AtlasItem CreateItem(DynamicAtlasPage page, Texture2D source, Rect uvRect, string path)
+        public bool TryGetSprite(string key, out Sprite sprite)
         {
-            Rect spriteRect = new Rect(uvRect.x * page.Width, uvRect.y * page.Height, source.width, source.height);
-            Vector2 pivot = new Vector2(0.5f, 0.5f);
+            _threadGuard.ThrowIfNotOwnerThread(nameof(TryGetSprite));
+            sprite = null;
 
-            Sprite newSprite = Sprite.Create(page.Texture, spriteRect, pivot, 100.0f, 0, SpriteMeshType.FullRect);
+            if (_disposed || !IsValidKey(key) || !_entries.TryGetValue(key, out AtlasEntry entry))
+            {
+                return false;
+            }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            string fileName = ExtractFileName(path);
-            int pathHash = path.GetHashCode();
-            int spriteId = Interlocked.Increment(ref _spriteIdCounter);
-            int pageId = page.PageId;
-            newSprite.name = $"Atlas_{fileName}_{pathHash:X8}_{pageId}_{spriteId}";
-#endif
+            if (entry.Sprite == null)
+            {
+                RemoveEntry(entry, countAsEviction: false);
+                return false;
+            }
 
-            AtlasItem item = GetItemFromPool();
-            item.Sprite = newSprite;
-            item.Page = page;
-            item.Path = path;
-            item.RefCount = 0;
-            item.Pivot = pivot;
-            item.Border = Vector4.zero;
-
-            page.IncrementActiveCount(source.width, source.height);
-
-            return item;
+            sprite = entry.Sprite;
+            return true;
         }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        /// <summary>
-        /// Extracts and sanitizes the file name from a path for use in sprite names.
-        /// Only compiled in editor/development builds to avoid GC in release.
-        /// </summary>
-        private static string ExtractFileName(string path)
+        public int TrimUnused(int maximumEntriesToRemove = int.MaxValue)
         {
-            if (string.IsNullOrEmpty(path)) return "Unknown";
-
-            int lastSlash = Mathf.Max(path.LastIndexOf('/'), path.LastIndexOf('\\'));
-            string fileName = lastSlash >= 0 ? path.Substring(lastSlash + 1) : path;
-
-            int lastDot = fileName.LastIndexOf('.');
-            if (lastDot > 0)
+            _threadGuard.ThrowIfNotOwnerThread(nameof(TrimUnused));
+            if (_disposed || maximumEntriesToRemove <= 0)
             {
-                fileName = fileName.Substring(0, lastDot);
+                return 0;
             }
 
-            const int maxLength = 32;
-            if (fileName.Length > maxLength)
+            int removed = 0;
+            while (removed < maximumEntriesToRemove && TryEvictOldestUnused())
             {
-                fileName = fileName.Substring(0, maxLength);
+                removed++;
             }
 
-            return fileName;
-        }
-#endif
-
-        private AtlasItem GetItemFromPool()
-        {
-#if !UNITY_WEBGL || UNITY_EDITOR
-            if (_itemPoolConcurrent.TryDequeue(out var item))
-            {
-                Interlocked.Decrement(ref _poolCount);
-                return item;
-            }
-#else
-            lock (_itemPoolStack)
-            {
-                if (_itemPoolStack.Count > 0)
-                {
-                    Interlocked.Decrement(ref _poolCount);
-                    return _itemPoolStack.Pop();
-                }
-            }
-#endif
-            return new AtlasItem();
+            return removed;
         }
 
-        private void ReleaseItemToPool(AtlasItem item)
+        public DynamicAtlasStats GetStats()
         {
-            item.Sprite = null;
-            item.Page = null;
-            item.Path = null;
-            item.RefCount = 0;
-            item.Pivot = Vector2.zero;
-            item.Border = Vector4.zero;
-
-            if (_poolCount >= MaxPoolSize) return;
-
-#if !UNITY_WEBGL || UNITY_EDITOR
-            _itemPoolConcurrent.Enqueue(item);
-            Interlocked.Increment(ref _poolCount);
-#else
-            lock (_itemPoolStack)
+            _threadGuard.ThrowIfNotOwnerThread(nameof(GetStats));
+            RefreshPendingDestructionBytes();
+            if (_disposed)
             {
-                if (_poolCount < MaxPoolSize)
+                return default;
+            }
+
+            int activeEntries = 0;
+            int retainedEntries = 0;
+            int activeReferences = 0;
+            long payloadArea = 0;
+            long reservedArea = 0;
+
+            foreach (KeyValuePair<string, AtlasEntry> pair in _entries)
+            {
+                AtlasEntry entry = pair.Value;
+                if (entry.ReferenceCount > 0)
                 {
-                    _itemPoolStack.Push(item);
-                    Interlocked.Increment(ref _poolCount);
+                    activeEntries++;
+                    activeReferences += entry.ReferenceCount;
+                }
+                else
+                {
+                    retainedEntries++;
                 }
             }
-#endif
+
+            for (int i = 0; i < _pages.Count; i++)
+            {
+                payloadArea += _pages[i].PayloadPixelArea;
+                reservedArea += _pages[i].ReservedPixelArea;
+            }
+
+            long totalArea = (long)_pages.Count * _config.pageSize * _config.pageSize;
+            return new DynamicAtlasStats(
+                _pages.Count,
+                _entries.Count,
+                activeEntries,
+                retainedEntries,
+                activeReferences,
+                payloadArea,
+                reservedArea,
+                totalArea,
+                _estimatedTextureBytes,
+                _pendingDestructionBytes,
+                _config.memoryBudgetBytes,
+                _cacheHitCount,
+                _cacheMissCount,
+                _insertCount,
+                _evictionCount,
+                _rejectionCount,
+                _gpuCopyCount,
+                _cpuRawCopyCount,
+                _synchronousReadbackCount);
         }
 
-        private void TryReleasePage(DynamicAtlasPage page)
+        public int CopyPageSnapshots(List<DynamicAtlasPageSnapshot> destination)
         {
-            if (page.IsEmpty)
+            _threadGuard.ThrowIfNotOwnerThread(nameof(CopyPageSnapshots));
+            if (destination == null)
             {
-                page.Dispose();
-                _pages.Remove(page);
+                throw new ArgumentNullException(nameof(destination));
             }
+
+            destination.Clear();
+            if (_disposed)
+            {
+                return 0;
+            }
+
+            for (int i = 0; i < _pages.Count; i++)
+            {
+                destination.Add(_pages[i].CreateSnapshot());
+            }
+
+            return destination.Count;
         }
 
-        /// <summary>
-        /// Performs a double-buffering defragmentation of heavily fragmented atlas pages.
-        /// Warning: Existing UI components holding a strong reference to old Sprite objects will 
-        /// NOT automatically update their texture pointers. Call this method during loading screens 
-        /// or scene transitions when UI is rebuilt, or manually refresh Image.sprite properties.
-        /// </summary>
-        /// <param name="fragmentationThreshold">The minimum ratio of wasted space (0.0 to 1.0) to trigger a repack on a page. default is 0.5 (50% wasted).</param>
-        /// <returns>The number of pages successfully destroyed and reclaimed.</returns>
-        public int Defragment(float fragmentationThreshold = 0.5f)
+        public int CopyEntrySnapshots(List<DynamicAtlasEntrySnapshot> destination)
         {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Defragment))) return 0;
-            _lock.EnterWriteLock();
-            try
+            _threadGuard.ThrowIfNotOwnerThread(nameof(CopyEntrySnapshots));
+            if (destination == null)
             {
-                int reclaimedPagesCount = 0;
-
-                // Identify target pages (we loop backwards so we can safely remove or modify)
-                List<DynamicAtlasPage> targets = new List<DynamicAtlasPage>();
-                foreach (var page in _pages)
-                {
-                    if (!page.IsEmpty && page.FragmentationRatio >= fragmentationThreshold)
-                    {
-                        targets.Add(page);
-                    }
-                }
-
-                if (targets.Count == 0) return 0;
-
-                foreach (var oldPage in targets)
-                {
-                    // Find all active sprites currently living on this old page
-                    List<KeyValuePair<string, AtlasItem>> itemsToMove = new List<KeyValuePair<string, AtlasItem>>();
-                    foreach (var kvp in _itemCache)
-                    {
-                        if (kvp.Value.Page == oldPage && kvp.Value.RefCount > 0 && kvp.Value.Sprite != null)
-                        {
-                            itemsToMove.Add(kvp);
-                        }
-                    }
-
-                    // Create a pristine new page matching the config
-                    var newPage = new DynamicAtlasPage(_pageSize, _targetFormat, _padding, _enablePlatformOptimizations, _enableBleed, _enableMipmap, _allowCpuReadPixelsFallback, _allowCpuBleedFallback);
-                    _pages.Add(newPage);
-                    var stagedUpdates = new List<PendingDefragUpdate>(itemsToMove.Count);
-
-                    bool allMovedSuccessfully = true;
-
-                    foreach (var kvp in itemsToMove)
-                    {
-                        AtlasItem oldItem = kvp.Value;
-                        Sprite oldSprite = oldItem.Sprite;
-
-                        Rect oldRect = oldSprite.textureRect;
-
-                        if (newPage.TryInsertFromRegion(oldPage.Texture, oldRect, out Rect newUvRect))
-                        {
-                            int w = Mathf.RoundToInt(oldRect.width);
-                            int h = Mathf.RoundToInt(oldRect.height);
-                            Rect newSpriteRect = new Rect(newUvRect.x * newPage.Width, newUvRect.y * newPage.Height, w, h);
-
-                            Sprite newSprite = Sprite.Create(newPage.Texture, newSpriteRect, oldItem.Pivot, 100.0f, 0, SpriteMeshType.FullRect, oldItem.Border);
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                            newSprite.name = oldSprite.name + "_Defrag";
-#endif
-                            stagedUpdates.Add(new PendingDefragUpdate(oldItem, oldSprite, newSprite, w, h));
-                        }
-                        else
-                        {
-                            allMovedSuccessfully = false;
-                            break;
-                        }
-                    }
-
-                    if (allMovedSuccessfully)
-                    {
-                        for (int i = 0; i < stagedUpdates.Count; i++)
-                        {
-                            var update = stagedUpdates[i];
-                            update.Item.Sprite = update.NewSprite;
-                            update.Item.Page = newPage;
-                            newPage.IncrementActiveCount(update.Width, update.Height);
-                            OnSpriteRepacked?.Invoke(update.Item.Path, update.NewSprite);
-                            DestroyUnityObject(update.OldSprite);
-                        }
-                        newPage.ApplyIfNeeded();
-
-                        // The old page is now effectively useless and stripped of its inhabitants
-                        oldPage.Dispose();
-                        _pages.Remove(oldPage);
-                        reclaimedPagesCount++;
-                    }
-                    else
-                    {
-                        for (int i = 0; i < stagedUpdates.Count; i++)
-                        {
-                            if (stagedUpdates[i].NewSprite != null)
-                            {
-                                DestroyUnityObject(stagedUpdates[i].NewSprite);
-                            }
-                        }
-                        newPage.Dispose();
-                        _pages.Remove(newPage);
-                    }
-                }
-
-                return reclaimedPagesCount;
+                throw new ArgumentNullException(nameof(destination));
             }
-            finally
+
+            destination.Clear();
+            if (_disposed)
             {
-                _lock.ExitWriteLock();
+                return 0;
             }
+
+            foreach (KeyValuePair<string, AtlasEntry> pair in _entries)
+            {
+                AtlasEntry entry = pair.Value;
+                destination.Add(new DynamicAtlasEntrySnapshot(
+                    entry.Key,
+                    entry.Sprite,
+                    entry.Page.PageId,
+                    entry.ReferenceCount,
+                    entry.Placement.ContentRect,
+                    entry.CopyPath,
+                    entry.LastUseSequence));
+            }
+
+            return destination.Count;
         }
 
-        public void Reset()
+        public DynamicAtlasWriteBatch BeginBatch()
         {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Reset))) return;
-            _lock.EnterWriteLock();
-            try
-            {
-                foreach (var kvp in _itemCache)
-                {
-                    if (kvp.Value.Sprite != null)
-                    {
-                        DestroyUnityObject(kvp.Value.Sprite);
-                        kvp.Value.Sprite = null;
-                    }
-                }
+            _threadGuard.ThrowIfNotOwnerThread(nameof(BeginBatch));
+            ThrowIfDisposed();
+            _batchDepth++;
+            return new DynamicAtlasWriteBatch(this, _batchEpoch);
+        }
 
-                int pageCount = _pages.Count;
-                for (int i = 0; i < pageCount; i++)
-                {
-                    _pages[i].Dispose();
-                }
-                _pages.Clear();
-                _itemCache.Clear();
+        public int PrewarmPages(int pageCount, DynamicAtlasPageMode mode)
+        {
+            _threadGuard.ThrowIfNotOwnerThread(nameof(PrewarmPages));
+            ThrowIfDisposed();
 
-#if !UNITY_WEBGL || UNITY_EDITOR
-                while (_itemPoolConcurrent.TryDequeue(out _)) { }
-#else
-                lock (_itemPoolStack)
-                {
-                    _itemPoolStack.Clear();
-                }
-#endif
-                _poolCount = 0;
-            }
-            finally
+            if (pageCount < 0)
             {
-                _lock.ExitWriteLock();
+                throw new ArgumentOutOfRangeException(nameof(pageCount));
             }
+
+            if (mode != DynamicAtlasPageMode.GpuOnly &&
+                mode != DynamicAtlasPageMode.CpuBacked)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mode), mode, "Unknown dynamic atlas page mode.");
+            }
+
+            if (mode == DynamicAtlasPageMode.CpuBacked &&
+                !TextureFormatHelper.AllowsCpuBacking(_config.copyFallback))
+            {
+                throw new InvalidOperationException("CPU-backed pages require a CPU-copy fallback policy.");
+            }
+
+            int created = 0;
+            while (created < pageCount && TryCreatePage(mode, out _, out _))
+            {
+                created++;
+            }
+
+            return created;
+        }
+
+        public void Clear()
+        {
+            _threadGuard.ThrowIfNotOwnerThread(nameof(Clear));
+            if (_disposed)
+            {
+                return;
+            }
+
+            ClearCore();
         }
 
         public void Dispose()
         {
-            if (!DynamicAtlasThreadGuard.EnsureMainThread(nameof(Dispose))) return;
-            Reset();
-            _lock?.Dispose();
+            _threadGuard.ThrowIfNotOwnerThread(nameof(Dispose));
+            if (_disposed)
+            {
+                return;
+            }
+
+            ClearCore();
+            _disposed = true;
+#if UNITY_EDITOR
+            UnregisterEditorService(this);
+#endif
+        }
+
+        internal void ReleaseLease(string key, long entryGeneration)
+        {
+            _threadGuard.ThrowIfNotOwnerThread(nameof(ReleaseLease));
+            if (_disposed || !_entries.TryGetValue(key, out AtlasEntry entry) || entry.Generation != entryGeneration)
+            {
+                return;
+            }
+
+            ReleaseEntryReference(entry);
+        }
+
+        internal void EndBatch(long batchEpoch)
+        {
+            _threadGuard.ThrowIfNotOwnerThread(nameof(EndBatch));
+            if (_disposed)
+            {
+                return;
+            }
+
+            if (batchEpoch != _batchEpoch)
+            {
+                return;
+            }
+
+            if (_batchDepth <= 0)
+            {
+                throw new InvalidOperationException("Dynamic atlas batch depth is already zero.");
+            }
+
+            _batchDepth--;
+            if (_batchDepth == 0)
+            {
+                FlushPendingUploads();
+            }
+        }
+
+#if UNITY_EDITOR
+        [EditorBrowsable(EditorBrowsableState.Never)]
+        public static int CopyActiveEditorServices(List<DynamicAtlasService> destination)
+        {
+            if (destination == null)
+            {
+                throw new ArgumentNullException(nameof(destination));
+            }
+
+            destination.Clear();
+            for (int i = ActiveEditorServices.Count - 1; i >= 0; i--)
+            {
+                if (!ActiveEditorServices[i].TryGetTarget(out DynamicAtlasService service) || service == null || service._disposed)
+                {
+                    ActiveEditorServices.RemoveAt(i);
+                    continue;
+                }
+
+                destination.Add(service);
+            }
+
+            return destination.Count;
+        }
+#endif
+
+        private DynamicAtlasInsertStatus TryAcquireEntry(
+            string key,
+            Texture2D source,
+            RectInt sourceRect,
+            Vector2 pivot,
+            Vector4 border,
+            float pixelsPerUnit,
+            out AtlasEntry entry,
+            bool skipCacheLookup = false,
+            bool cacheMissPrepared = false)
+        {
+            _threadGuard.ThrowIfNotOwnerThread(nameof(TryAcquireEntry));
+            entry = null;
+
+            DynamicAtlasInsertStatus state = ValidateOperationAndKey(key);
+            if (state != DynamicAtlasInsertStatus.Success)
+            {
+                RecordRejection(state);
+                return state;
+            }
+
+            if (!skipCacheLookup && TryRetainCachedEntry(key, out entry))
+            {
+                return DynamicAtlasInsertStatus.CacheHit;
+            }
+
+            if (!cacheMissPrepared && !TryPrepareCacheMiss(out state))
+            {
+                RecordRejection(state);
+                return state;
+            }
+
+            if (source == null)
+            {
+                RecordRejection(DynamicAtlasInsertStatus.InvalidSource);
+                return DynamicAtlasInsertStatus.InvalidSource;
+            }
+
+            if (!IsValidRegion(source, sourceRect) || !IsValidSpriteMetadata(pivot, border, sourceRect, pixelsPerUnit))
+            {
+                RecordRejection(DynamicAtlasInsertStatus.InvalidRegion);
+                return DynamicAtlasInsertStatus.InvalidRegion;
+            }
+
+            Texture2D insertionSource = source;
+            RectInt insertionRect = sourceRect;
+            Texture2D scaledTexture = null;
+            Vector4 insertionBorder = border;
+            float insertionPixelsPerUnit = pixelsPerUnit;
+
+            int maximumContentSize = _config.pageSize - (_config.padding * 2);
+            bool requiresScale = sourceRect.width > maximumContentSize || sourceRect.height > maximumContentSize;
+            if (requiresScale && _config.oversizePolicy == DynamicAtlasOversizePolicy.Reject)
+            {
+                RecordRejection(DynamicAtlasInsertStatus.OversizedSource);
+                return DynamicAtlasInsertStatus.OversizedSource;
+            }
+
+            EnsureEntryCapacity();
+            if (_entries.Count >= _config.maxEntries)
+            {
+                RecordRejection(DynamicAtlasInsertStatus.EntryCapacityReached);
+                return DynamicAtlasInsertStatus.EntryCapacityReached;
+            }
+
+            if (requiresScale)
+            {
+                float scale = Mathf.Min(
+                    (float)maximumContentSize / sourceRect.width,
+                    (float)maximumContentSize / sourceRect.height);
+                int scaledWidth = Mathf.Max(1, Mathf.FloorToInt(sourceRect.width * scale));
+                int scaledHeight = Mathf.Max(1, Mathf.FloorToInt(sourceRect.height * scale));
+                scaledTexture = CreateScaledRegionTexture(source, sourceRect, scaledWidth, scaledHeight);
+                if (scaledTexture == null)
+                {
+                    RecordRejection(DynamicAtlasInsertStatus.CopyFailed);
+                    return DynamicAtlasInsertStatus.CopyFailed;
+                }
+
+                insertionSource = scaledTexture;
+                insertionRect = new RectInt(0, 0, scaledWidth, scaledHeight);
+                insertionBorder *= scale;
+                insertionPixelsPerUnit *= scale;
+            }
+
+            try
+            {
+                DynamicAtlasInsertStatus insertStatus = TryInsert(
+                    key,
+                    insertionSource,
+                    insertionRect,
+                    pivot,
+                    insertionBorder,
+                    insertionPixelsPerUnit,
+                    out entry);
+                if (!IsSuccessful(insertStatus))
+                {
+                    RecordRejection(insertStatus);
+                }
+
+                return insertStatus;
+            }
+            finally
+            {
+                if (scaledTexture != null)
+                {
+                    DestroyUnityObject(scaledTexture);
+                }
+            }
+        }
+
+        private DynamicAtlasInsertStatus TryInsert(
+            string key,
+            Texture2D source,
+            RectInt sourceRect,
+            Vector2 pivot,
+            Vector4 border,
+            float pixelsPerUnit,
+            out AtlasEntry entry)
+        {
+            entry = null;
+            bool gpuCandidate = CanUseGpuPage(source);
+
+            while (true)
+            {
+                DynamicAtlasPageInsertResult existingResult = TryInsertIntoExistingPages(
+                        key,
+                        source,
+                        sourceRect,
+                        pivot,
+                        border,
+                        pixelsPerUnit,
+                        gpuCandidate,
+                        out entry);
+                if (existingResult == DynamicAtlasPageInsertResult.Success)
+                {
+                    return DynamicAtlasInsertStatus.Success;
+                }
+
+                if (existingResult == DynamicAtlasPageInsertResult.CopyFailed)
+                {
+                    return DynamicAtlasInsertStatus.CopyFailed;
+                }
+
+                if (existingResult == DynamicAtlasPageInsertResult.CopyUnsupported)
+                {
+                    return DynamicAtlasInsertStatus.CopyUnsupported;
+                }
+
+                if (existingResult == DynamicAtlasPageInsertResult.NoSpace && TryEvictOldestUnused())
+                {
+                    continue;
+                }
+
+                DynamicAtlasPageMode desiredMode = gpuCandidate
+                    ? DynamicAtlasPageMode.GpuOnly
+                    : DynamicAtlasPageMode.CpuBacked;
+
+                if (desiredMode == DynamicAtlasPageMode.CpuBacked &&
+                    !TextureFormatHelper.AllowsCpuBacking(_config.copyFallback))
+                {
+                    return DynamicAtlasInsertStatus.CopyUnsupported;
+                }
+
+                if (!TryCreatePage(desiredMode, out DynamicAtlasPage page, out DynamicAtlasInsertStatus createStatus))
+                {
+                    return createStatus;
+                }
+
+                DynamicAtlasPageInsertResult insertResult = TryInsertIntoPage(
+                        page,
+                        key,
+                        source,
+                        sourceRect,
+                        pivot,
+                        border,
+                        pixelsPerUnit,
+                        out entry);
+                if (insertResult == DynamicAtlasPageInsertResult.Success)
+                {
+                    return DynamicAtlasInsertStatus.Success;
+                }
+
+                RemovePage(page);
+
+                if (desiredMode == DynamicAtlasPageMode.GpuOnly &&
+                    TextureFormatHelper.AllowsCpuBacking(_config.copyFallback))
+                {
+                    if (!TryCreatePage(DynamicAtlasPageMode.CpuBacked, out page, out createStatus))
+                    {
+                        return createStatus;
+                    }
+
+                    insertResult = TryInsertIntoPage(
+                            page,
+                            key,
+                            source,
+                            sourceRect,
+                            pivot,
+                            border,
+                            pixelsPerUnit,
+                            out entry);
+                    if (insertResult == DynamicAtlasPageInsertResult.Success)
+                    {
+                        return DynamicAtlasInsertStatus.Success;
+                    }
+
+                    RemovePage(page);
+                }
+
+                return ToInsertStatus(insertResult);
+            }
+        }
+
+        private DynamicAtlasPageInsertResult TryInsertIntoExistingPages(
+            string key,
+            Texture2D source,
+            RectInt sourceRect,
+            Vector2 pivot,
+            Vector4 border,
+            float pixelsPerUnit,
+            bool preferGpu,
+            out AtlasEntry entry)
+        {
+            entry = null;
+            bool sawNoSpace = false;
+            bool sawUnsupported = false;
+
+            if (preferGpu)
+            {
+                for (int i = 0; i < _pages.Count; i++)
+                {
+                    DynamicAtlasPage page = _pages[i];
+                    if (page.Mode != DynamicAtlasPageMode.GpuOnly)
+                    {
+                        continue;
+                    }
+
+                    DynamicAtlasPageInsertResult result = TryInsertIntoPage(
+                        page, key, source, sourceRect, pivot, border, pixelsPerUnit, out entry);
+                    if (result == DynamicAtlasPageInsertResult.Success ||
+                        result == DynamicAtlasPageInsertResult.CopyFailed)
+                    {
+                        return result;
+                    }
+
+                    sawNoSpace |= result == DynamicAtlasPageInsertResult.NoSpace;
+                    sawUnsupported |= result == DynamicAtlasPageInsertResult.CopyUnsupported;
+                }
+            }
+
+            if (TextureFormatHelper.AllowsCpuBacking(_config.copyFallback))
+            {
+                for (int i = 0; i < _pages.Count; i++)
+                {
+                    DynamicAtlasPage page = _pages[i];
+                    if (page.Mode != DynamicAtlasPageMode.CpuBacked)
+                    {
+                        continue;
+                    }
+
+                    DynamicAtlasPageInsertResult result = TryInsertIntoPage(
+                        page, key, source, sourceRect, pivot, border, pixelsPerUnit, out entry);
+                    if (result == DynamicAtlasPageInsertResult.Success ||
+                        result == DynamicAtlasPageInsertResult.CopyFailed)
+                    {
+                        return result;
+                    }
+
+                    sawNoSpace |= result == DynamicAtlasPageInsertResult.NoSpace;
+                    sawUnsupported |= result == DynamicAtlasPageInsertResult.CopyUnsupported;
+                }
+            }
+
+            return sawNoSpace || !sawUnsupported
+                ? DynamicAtlasPageInsertResult.NoSpace
+                : DynamicAtlasPageInsertResult.CopyUnsupported;
+        }
+
+        private DynamicAtlasPageInsertResult TryInsertIntoPage(
+            DynamicAtlasPage page,
+            string key,
+            Texture2D source,
+            RectInt sourceRect,
+            Vector2 pivot,
+            Vector4 border,
+            float pixelsPerUnit,
+            out AtlasEntry entry)
+        {
+            entry = null;
+            DynamicAtlasPageInsertResult pageResult = page.TryInsert(
+                source,
+                sourceRect,
+                out DynamicAtlasPlacement placement,
+                out DynamicAtlasCopyPath copyPath);
+            if (pageResult != DynamicAtlasPageInsertResult.Success)
+            {
+                return pageResult;
+            }
+
+            Sprite sprite = null;
+            try
+            {
+                sprite = Sprite.Create(
+                    page.Texture,
+                    new Rect(
+                        placement.ContentRect.x,
+                        placement.ContentRect.y,
+                        placement.ContentRect.width,
+                        placement.ContentRect.height),
+                    pivot,
+                    pixelsPerUnit,
+                    extrude: 0,
+                    SpriteMeshType.FullRect,
+                    border);
+
+                if (sprite == null)
+                {
+                    page.Release(placement);
+                    return DynamicAtlasPageInsertResult.CopyFailed;
+                }
+
+                sprite.hideFlags = HideFlags.DontSave;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                sprite.name = key;
+#endif
+                if (_batchDepth == 0)
+                {
+                    page.FlushPendingUpload();
+                }
+
+                entry = RentEntry();
+                entry.Key = key;
+                entry.Sprite = sprite;
+                entry.Page = page;
+                entry.Placement = placement;
+                entry.CopyPath = copyPath;
+                entry.ReferenceCount = 1;
+                entry.Generation = NextEntryGeneration();
+                entry.LastUseSequence = ++_useSequence;
+                _entries.Add(key, entry);
+                _insertCount++;
+                RecordCopyPath(copyPath);
+
+                return DynamicAtlasPageInsertResult.Success;
+            }
+            catch (Exception)
+            {
+                if (sprite != null)
+                {
+                    DestroyUnityObject(sprite);
+                }
+
+                page.Release(placement);
+                if (entry != null)
+                {
+                    ReturnEntry(entry);
+                    entry = null;
+                }
+
+                return DynamicAtlasPageInsertResult.CopyFailed;
+            }
+        }
+
+        private bool TryCreatePage(
+            DynamicAtlasPageMode mode,
+            out DynamicAtlasPage page,
+            out DynamicAtlasInsertStatus failureStatus)
+        {
+            page = null;
+            RefreshPendingDestructionBytes();
+            if (_pages.Count + _pendingDestructionPageCount >= _config.maxPages)
+            {
+                failureStatus = DynamicAtlasInsertStatus.PageCapacityReached;
+                return false;
+            }
+
+            long pageBytes = EstimatePageBytes(mode);
+            if (pageBytes > _config.memoryBudgetBytes ||
+                _estimatedTextureBytes > _config.memoryBudgetBytes - pageBytes)
+            {
+                failureStatus = DynamicAtlasInsertStatus.MemoryBudgetReached;
+                return false;
+            }
+
+            try
+            {
+                page = new DynamicAtlasPage(
+                    _config.pageSize,
+                    AtlasTextureFormat,
+                    _config.filterMode,
+                    _config.padding,
+                    _config.enableBleed,
+                    _config.maxEntriesPerPage,
+                    mode,
+                    TextureFormatHelper.AllowsSynchronousReadback(_config.copyFallback));
+                _pages.Add(page);
+                _estimatedTextureBytes += pageBytes;
+                failureStatus = DynamicAtlasInsertStatus.Success;
+                return true;
+            }
+            catch (Exception)
+            {
+                page?.Dispose();
+                page = null;
+                failureStatus = DynamicAtlasInsertStatus.CopyFailed;
+                return false;
+            }
+        }
+
+        private bool TryRetainCachedEntry(string key, out AtlasEntry entry)
+        {
+            if (!_entries.TryGetValue(key, out entry))
+            {
+                return false;
+            }
+
+            if (entry.Sprite == null || entry.Page == null || entry.Page.Texture == null)
+            {
+                RemoveEntry(entry, countAsEviction: false);
+                entry = null;
+                return false;
+            }
+
+            entry.ReferenceCount++;
+            RemoveRetainedLink(entry);
+            entry.LastUseSequence = ++_useSequence;
+            _cacheHitCount++;
+            return true;
+        }
+
+        private void ReleaseEntryReference(AtlasEntry entry)
+        {
+            if (entry.ReferenceCount <= 0)
+            {
+                return;
+            }
+
+            entry.ReferenceCount--;
+            entry.LastUseSequence = ++_useSequence;
+            if (entry.ReferenceCount != 0)
+            {
+                return;
+            }
+
+            if (_config.retentionPolicy == DynamicAtlasRetentionPolicy.RemoveWhenUnused)
+            {
+                RemoveEntry(entry, countAsEviction: false);
+                return;
+            }
+
+            AddRetainedLink(entry);
+        }
+
+        private void EnsureEntryCapacity()
+        {
+            while (_entries.Count >= _config.maxEntries && TryEvictOldestUnused())
+            {
+            }
+        }
+
+        private bool TryPrepareCacheMiss(out DynamicAtlasInsertStatus failureStatus)
+        {
+            _cacheMissCount++;
+            if (_entries.Count >= _config.maxEntries && _oldestRetainedEntry == null)
+            {
+                failureStatus = DynamicAtlasInsertStatus.EntryCapacityReached;
+                return false;
+            }
+
+            failureStatus = DynamicAtlasInsertStatus.Success;
+            return true;
+        }
+
+        private bool TryEvictOldestUnused()
+        {
+            AtlasEntry oldest = _oldestRetainedEntry;
+            if (oldest == null)
+            {
+                return false;
+            }
+
+            RemoveEntry(oldest, countAsEviction: true);
+            return true;
+        }
+
+        private void RemoveEntry(AtlasEntry entry, bool countAsEviction)
+        {
+            if (entry == null || entry.Key == null || !_entries.Remove(entry.Key))
+            {
+                return;
+            }
+
+            RemoveRetainedLink(entry);
+
+            DynamicAtlasPage page = entry.Page;
+            if (entry.Sprite != null)
+            {
+                DestroyUnityObject(entry.Sprite);
+            }
+
+            page?.Release(entry.Placement);
+            ReturnEntry(entry);
+
+            if (countAsEviction)
+            {
+                _evictionCount++;
+            }
+
+            if (page != null && page.IsEmpty && _pages.Count > _config.minRetainedPages)
+            {
+                RemovePage(page);
+            }
+        }
+
+        private void RemovePage(DynamicAtlasPage page)
+        {
+            if (page == null || !_pages.Remove(page))
+            {
+                return;
+            }
+
+            DisposePageAndTrackNativeLifetime(page);
+        }
+
+        private void FlushPendingUploads()
+        {
+            List<Exception> errors = null;
+            for (int i = 0; i < _pages.Count; i++)
+            {
+                try
+                {
+                    _pages[i].FlushPendingUpload();
+                }
+                catch (Exception exception)
+                {
+                    errors ??= new List<Exception>(2);
+                    errors.Add(exception);
+                }
+            }
+
+            if (errors != null)
+            {
+                throw new AggregateException("One or more dynamic atlas pages failed to upload.", errors);
+            }
+        }
+
+        private void ClearCore()
+        {
+            RefreshPendingDestructionBytes();
+            foreach (KeyValuePair<string, AtlasEntry> pair in _entries)
+            {
+                AtlasEntry entry = pair.Value;
+                if (entry.Sprite != null)
+                {
+                    DestroyUnityObject(entry.Sprite);
+                }
+
+                ReturnEntry(entry);
+            }
+
+            _entries.Clear();
+            for (int i = 0; i < _pages.Count; i++)
+            {
+                DisposePageAndTrackNativeLifetime(_pages[i]);
+            }
+
+            _pages.Clear();
+            _oldestRetainedEntry = null;
+            _newestRetainedEntry = null;
+            _estimatedTextureBytes = _pendingDestructionBytes;
+            _batchDepth = 0;
+            _batchEpoch++;
+            if (_batchEpoch == 0)
+            {
+                _batchEpoch = 1;
+            }
+        }
+
+        private DynamicAtlasSpriteLease CreateLease(AtlasEntry entry)
+        {
+            return entry == null
+                ? null
+                : new DynamicAtlasSpriteLease(this, entry.Key, entry.Generation, entry.Sprite);
+        }
+
+        private AtlasEntry RentEntry()
+        {
+            return _entryPool.Count > 0 ? _entryPool.Pop() : new AtlasEntry();
+        }
+
+        private void ReturnEntry(AtlasEntry entry)
+        {
+            entry.Reset();
+            if (_entryPool.Count < MaximumPooledEntries)
+            {
+                _entryPool.Push(entry);
+            }
+        }
+
+        private long NextEntryGeneration()
+        {
+            _nextEntryGeneration++;
+            if (_nextEntryGeneration == 0)
+            {
+                _nextEntryGeneration = 1;
+            }
+
+            return _nextEntryGeneration;
+        }
+
+        private void AddRetainedLink(AtlasEntry entry)
+        {
+            if (entry == null || entry.IsRetainedLinked)
+            {
+                return;
+            }
+
+            entry.IsRetainedLinked = true;
+            entry.RetainedPrevious = _newestRetainedEntry;
+            entry.RetainedNext = null;
+            if (_newestRetainedEntry != null)
+            {
+                _newestRetainedEntry.RetainedNext = entry;
+            }
+            else
+            {
+                _oldestRetainedEntry = entry;
+            }
+
+            _newestRetainedEntry = entry;
+        }
+
+        private void RemoveRetainedLink(AtlasEntry entry)
+        {
+            if (entry == null || !entry.IsRetainedLinked)
+            {
+                return;
+            }
+
+            AtlasEntry previous = entry.RetainedPrevious;
+            AtlasEntry next = entry.RetainedNext;
+            if (previous != null)
+            {
+                previous.RetainedNext = next;
+            }
+            else
+            {
+                _oldestRetainedEntry = next;
+            }
+
+            if (next != null)
+            {
+                next.RetainedPrevious = previous;
+            }
+            else
+            {
+                _newestRetainedEntry = previous;
+            }
+
+            entry.RetainedPrevious = null;
+            entry.RetainedNext = null;
+            entry.IsRetainedLinked = false;
+        }
+
+        private DynamicAtlasInsertStatus ValidateOperationAndKey(string key)
+        {
+            if (_disposed)
+            {
+                return DynamicAtlasInsertStatus.Disposed;
+            }
+
+            return IsValidKey(key)
+                ? DynamicAtlasInsertStatus.Success
+                : DynamicAtlasInsertStatus.InvalidKey;
+        }
+
+        private bool IsValidKey(string key)
+        {
+            return !string.IsNullOrEmpty(key) && key.Length <= _config.maxKeyLength;
+        }
+
+        private bool CanUseGpuPage(Texture2D source)
+        {
+            return source != null &&
+                   source.format == AtlasTextureFormat &&
+                   source.graphicsFormat == GraphicsFormatUtility.GetGraphicsFormat(AtlasTextureFormat, true) &&
+                   (SystemInfo.copyTextureSupport & CopyTextureSupport.Basic) != 0;
+        }
+
+        private long EstimatePageBytes(DynamicAtlasPageMode mode)
+        {
+            return TextureFormatHelper.EstimatePageBytes(
+                _config.pageSize,
+                mode == DynamicAtlasPageMode.CpuBacked
+                    ? DynamicAtlasCopyFallback.AllowCpuRawCopy
+                    : DynamicAtlasCopyFallback.GpuOnly);
+        }
+
+        private void DisposePageAndTrackNativeLifetime(DynamicAtlasPage page)
+        {
+            RefreshPendingDestructionBytes();
+            long pageBytes = EstimatePageBytes(page.Mode);
+            if (Application.isPlaying)
+            {
+                _pendingDestructionBytes += pageBytes;
+                _pendingDestructionPageCount++;
+                _pendingDestructionFrame = Time.frameCount;
+            }
+            else
+            {
+                _estimatedTextureBytes -= pageBytes;
+                if (_estimatedTextureBytes < 0)
+                {
+                    _estimatedTextureBytes = 0;
+                }
+            }
+
+            page.Dispose();
+        }
+
+        private void RefreshPendingDestructionBytes()
+        {
+            if (_pendingDestructionBytes <= 0)
+            {
+                return;
+            }
+
+            if (Application.isPlaying && Time.frameCount == _pendingDestructionFrame)
+            {
+                return;
+            }
+
+            _estimatedTextureBytes -= _pendingDestructionBytes;
+            if (_estimatedTextureBytes < 0)
+            {
+                _estimatedTextureBytes = 0;
+            }
+
+            _pendingDestructionBytes = 0;
+            _pendingDestructionPageCount = 0;
+            _pendingDestructionFrame = -1;
+        }
+
+        private void RecordCopyPath(DynamicAtlasCopyPath path)
+        {
+            switch (path)
+            {
+                case DynamicAtlasCopyPath.GpuCopy:
+                    _gpuCopyCount++;
+                    break;
+                case DynamicAtlasCopyPath.CpuRawCopy:
+                    _cpuRawCopyCount++;
+                    break;
+                case DynamicAtlasCopyPath.SynchronousGpuReadback:
+                    _synchronousReadbackCount++;
+                    break;
+            }
+        }
+
+        private void RecordRejection(DynamicAtlasInsertStatus status)
+        {
+            if (!IsSuccessful(status))
+            {
+                _rejectionCount++;
+            }
+        }
+
+        private static bool IsSuccessful(DynamicAtlasInsertStatus status)
+        {
+            return status == DynamicAtlasInsertStatus.Success || status == DynamicAtlasInsertStatus.CacheHit;
+        }
+
+        private static DynamicAtlasInsertStatus ToInsertStatus(DynamicAtlasPageInsertResult result)
+        {
+            switch (result)
+            {
+                case DynamicAtlasPageInsertResult.CopyUnsupported:
+                    return DynamicAtlasInsertStatus.CopyUnsupported;
+                case DynamicAtlasPageInsertResult.NoSpace:
+                    return DynamicAtlasInsertStatus.PageCapacityReached;
+                default:
+                    return DynamicAtlasInsertStatus.CopyFailed;
+            }
+        }
+
+        private static RectInt ToPixelRect(Rect rect)
+        {
+            return new RectInt(
+                Mathf.RoundToInt(rect.x),
+                Mathf.RoundToInt(rect.y),
+                Mathf.RoundToInt(rect.width),
+                Mathf.RoundToInt(rect.height));
+        }
+
+        private static bool IsValidRegion(Texture2D source, RectInt sourceRect)
+        {
+            return sourceRect.width > 0 &&
+                   sourceRect.height > 0 &&
+                   sourceRect.x >= 0 &&
+                   sourceRect.y >= 0 &&
+                   sourceRect.width <= source.width &&
+                   sourceRect.height <= source.height &&
+                   sourceRect.x <= source.width - sourceRect.width &&
+                   sourceRect.y <= source.height - sourceRect.height;
+        }
+
+        private static bool IsValidSpriteMetadata(
+            Vector2 pivot,
+            Vector4 border,
+            RectInt sourceRect,
+            float pixelsPerUnit)
+        {
+            return IsFinite(pivot.x) &&
+                   IsFinite(pivot.y) &&
+                   pivot.x >= 0f && pivot.x <= 1f &&
+                   pivot.y >= 0f && pivot.y <= 1f &&
+                   IsFinite(border.x) && border.x >= 0f &&
+                   IsFinite(border.y) && border.y >= 0f &&
+                   IsFinite(border.z) && border.z >= 0f &&
+                   IsFinite(border.w) && border.w >= 0f &&
+                   border.x + border.z <= sourceRect.width &&
+                   border.y + border.w <= sourceRect.height &&
+                   IsFinite(pixelsPerUnit) && pixelsPerUnit > 0f;
+        }
+
+        private static bool HasFullRectGeometry(Sprite source, Rect sourceRect)
+        {
+            Vector2[] vertices = source.vertices;
+            ushort[] triangles = source.triangles;
+            if (vertices == null || vertices.Length != 4 || triangles == null || triangles.Length != 6)
+            {
+                return false;
+            }
+
+            float pixelsPerUnit = source.pixelsPerUnit;
+            if (!IsFinite(pixelsPerUnit) || pixelsPerUnit <= 0f)
+            {
+                return false;
+            }
+
+            float left = -source.pivot.x / pixelsPerUnit;
+            float right = (sourceRect.width - source.pivot.x) / pixelsPerUnit;
+            float bottom = -source.pivot.y / pixelsPerUnit;
+            float top = (sourceRect.height - source.pivot.y) / pixelsPerUnit;
+            int cornerMask = 0;
+            for (int i = 0; i < vertices.Length; i++)
+            {
+                Vector2 vertex = vertices[i];
+                bool isLeft = Mathf.Approximately(vertex.x, left);
+                bool isRight = Mathf.Approximately(vertex.x, right);
+                bool isBottom = Mathf.Approximately(vertex.y, bottom);
+                bool isTop = Mathf.Approximately(vertex.y, top);
+                if ((!isLeft && !isRight) || (!isBottom && !isTop))
+                {
+                    return false;
+                }
+
+                int corner = (isRight ? 1 : 0) | (isTop ? 2 : 0);
+                int bit = 1 << corner;
+                if ((cornerMask & bit) != 0)
+                {
+                    return false;
+                }
+
+                cornerMask |= bit;
+            }
+
+            return cornerMask == 0b1111;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static Texture2D CreateScaledRegionTexture(
+            Texture2D source,
+            RectInt sourceRect,
+            int width,
+            int height)
+        {
+            RenderTexture temporary = null;
+            RenderTexture previous = RenderTexture.active;
+            Texture2D scaled = null;
+
+            try
+            {
+                temporary = RenderTexture.GetTemporary(
+                    width,
+                    height,
+                    0,
+                    RenderTextureFormat.ARGB32,
+                    RenderTextureReadWrite.Default);
+                Vector2 scale = new Vector2(
+                    (float)sourceRect.width / source.width,
+                    (float)sourceRect.height / source.height);
+                Vector2 offset = new Vector2(
+                    (float)sourceRect.x / source.width,
+                    (float)sourceRect.y / source.height);
+                Graphics.Blit(source, temporary, scale, offset);
+                RenderTexture.active = temporary;
+                scaled = new Texture2D(width, height, TextureFormat.RGBA32, mipChain: false);
+                scaled.hideFlags = HideFlags.DontSave;
+                scaled.ReadPixels(new Rect(0f, 0f, width, height), 0, 0, recalculateMipMaps: false);
+                scaled.Apply(updateMipmaps: false, makeNoLongerReadable: false);
+                return scaled;
+            }
+            catch (Exception)
+            {
+                if (scaled != null)
+                {
+                    DestroyUnityObject(scaled);
+                }
+
+                return null;
+            }
+            finally
+            {
+                RenderTexture.active = previous;
+                if (temporary != null)
+                {
+                    RenderTexture.ReleaseTemporary(temporary);
+                }
+            }
+        }
+
+        private void SafeUnload(string location, Texture2D texture)
+        {
+            try
+            {
+                _unloadFunc(location, texture);
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(DynamicAtlasService));
+            }
         }
 
         private static void DestroyUnityObject(UnityEngine.Object target)
         {
-            if (target == null) return;
+            if (target == null)
+            {
+                return;
+            }
 
             if (Application.isPlaying)
             {
@@ -1066,22 +1567,22 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
         }
 
-        private readonly struct PendingDefragUpdate
+#if UNITY_EDITOR
+        private static void RegisterEditorService(DynamicAtlasService service)
         {
-            public readonly AtlasItem Item;
-            public readonly Sprite OldSprite;
-            public readonly Sprite NewSprite;
-            public readonly int Width;
-            public readonly int Height;
+            ActiveEditorServices.Add(new WeakReference<DynamicAtlasService>(service));
+        }
 
-            public PendingDefragUpdate(AtlasItem item, Sprite oldSprite, Sprite newSprite, int width, int height)
+        private static void UnregisterEditorService(DynamicAtlasService service)
+        {
+            for (int i = ActiveEditorServices.Count - 1; i >= 0; i--)
             {
-                Item = item;
-                OldSprite = oldSprite;
-                NewSprite = newSprite;
-                Width = width;
-                Height = height;
+                if (!ActiveEditorServices[i].TryGetTarget(out DynamicAtlasService target) || target == null || target == service)
+                {
+                    ActiveEditorServices.RemoveAt(i);
+                }
             }
         }
+#endif
     }
 }

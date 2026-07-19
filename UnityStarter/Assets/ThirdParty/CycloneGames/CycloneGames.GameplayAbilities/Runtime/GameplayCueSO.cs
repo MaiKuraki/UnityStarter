@@ -1,3 +1,5 @@
+using System.Threading;
+
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -16,21 +18,40 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         /// <param name="parameters">Contextual information about the cue event.</param>
         /// <returns>A UniTask for async operations.</returns>
-        public virtual UniTask OnExecutedAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager) => UniTask.CompletedTask;
+        public virtual UniTask OnExecutedAsync(
+            GameplayCueParameters parameters,
+            IGameObjectPoolManager poolManager,
+            CancellationToken cancellationToken = default) => UniTask.CompletedTask;
 
         /// <summary>
-        /// Handles the activation of a persistent Gameplay Cue.
-        /// Should return the GameObject instance it creates so the manager can track its lifetime.
+        /// Handles the witnessed activation transition for a non-persistent Gameplay Cue.
+        /// Persistent cue assets implement <see cref="IPersistentGameplayCue"/> so creation and event callbacks
+        /// share one generation-stamped instance lease.
         /// </summary>
         /// <param name="parameters">Contextual information about the cue event.</param>
         /// <returns>A UniTask for async operations.</returns>
-        public virtual UniTask OnActiveAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager) => UniTask.CompletedTask;
+        public virtual UniTask OnActiveAsync(
+            GameplayCueParameters parameters,
+            IGameObjectPoolManager poolManager,
+            CancellationToken cancellationToken = default) => UniTask.CompletedTask;
+
+        /// <summary>
+        /// Handles presentation first observed while the cue is active.
+        /// This is invoked after OnActive for a witnessed activation and by itself for join-in-progress state.
+        /// </summary>
+        public virtual UniTask OnWhileActiveAsync(
+            GameplayCueParameters parameters,
+            IGameObjectPoolManager poolManager,
+            CancellationToken cancellationToken = default) => UniTask.CompletedTask;
 
         /// <summary>
         /// Handles the removal of a persistent Gameplay Cue.
         /// </summary>
         /// <param name="parameters">Contextual information about the cue event.</param>
         /// <returns>A UniTask for async operations.</returns>
-        public virtual UniTask OnRemovedAsync(GameplayCueParameters parameters, IGameObjectPoolManager poolManager) => UniTask.CompletedTask;
+        public virtual UniTask OnRemovedAsync(
+            GameplayCueParameters parameters,
+            IGameObjectPoolManager poolManager,
+            CancellationToken cancellationToken = default) => UniTask.CompletedTask;
     }
 }

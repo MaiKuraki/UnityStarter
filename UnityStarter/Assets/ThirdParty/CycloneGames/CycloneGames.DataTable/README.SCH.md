@@ -1,1051 +1,712 @@
 # CycloneGames.DataTable
 
-[English](./README.md) | 简体中文
+[English | 简体中文](README.md)
 
-面向 Unity 的模块化数据表管线。策划通过 Excel/Luban 编辑配置，运行时零 GC 查询，后端可插拔。**模块不内置加载逻辑——加载完全由开发者掌控。**
+CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag、技能数值、成长曲线、本地化文本——加载为不可变表快照，按键 O(1) 查询。每次加载的数据量由 `DataTableLoadLimits` 控制，每份数据在任何人读取前都经过 SHA-256 manifest 校验。核心程序集不含 `UnityEngine` 依赖；Luban 和 MessagePack 适配器放在独立的集成程序集中。
 
 ## 目录
 
-- [CycloneGames.DataTable](#cyclonegamesdatatable)
-  - [目录](#目录)
-  - [概述](#概述)
-    - [适用场景](#适用场景)
-    - [不适用场景](#不适用场景)
-  - [架构](#架构)
-    - [程序集分层（Pattern C）](#程序集分层pattern-c)
-  - [安装](#安装)
-    - [依赖](#依赖)
-    - [可选程序集](#可选程序集)
-  - [快速上手](#快速上手)
-    - [方式 A：纯代码（无工具依赖）](#方式-a纯代码无工具依赖)
-    - [方式 B：MessagePack 后端](#方式-bmessagepack-后端)
-    - [方式 C：Luban 后端（Excel → 代码）](#方式-cluban-后端excel--代码)
-  - [API 参考](#api-参考)
-    - [IDataRow 与 IDataTable\<T\>](#idatarow-与-idatatablet)
-    - [DataTable\<T\>](#datatablet)
-    - [DataTableRegistry](#datatableregistry)
-    - [DataTableLogger](#datatablelogger)
-      - [默认行为（零配置）](#默认行为零配置)
-      - [桥接到 CycloneGames.Logger（或任意自定义日志系统）](#桥接到-cyclonegameslogger或任意自定义日志系统)
-      - [独立 .NET 服务端（无 Unity）](#独立-net-服务端无-unity)
-  - [后端适配器](#后端适配器)
-    - [Luban 集成](#luban-集成)
-    - [MessagePack 集成](#messagepack-集成)
-    - [编写自定义后端](#编写自定义后端)
-    - [与 CycloneGames.AssetManagement 集成](#与-cyclonegamesassetmanagement-集成)
-      - [YooAsset / Raw File（生产环境推荐）](#yooasset--raw-file生产环境推荐)
-      - [Addressables / TextAsset（与所有 Provider 兼容）](#addressables--textasset与所有-provider-兼容)
-      - [完整启动管线示例](#完整启动管线示例)
-    - [与 CycloneGames.GameplayAbilities 集成](#与-cyclonegamesgameplayabilities-集成)
-  - [编辑器工具](#编辑器工具)
-    - [Luban 构建](#luban-构建)
-      - [配置](#配置)
-    - [CodeGen 后处理](#codegen-后处理)
-    - [配置校验（计划中）](#配置校验计划中)
-  - [性能设计](#性能设计)
-  - [最佳实践](#最佳实践)
-    - [1. 自己掌控加载](#1-自己掌控加载)
-    - [2. 注册所有表后调用 MarkInitialized](#2-注册所有表后调用-markinitialized)
-    - [3. 缓存高频访问的表引用](#3-缓存高频访问的表引用)
-    - [4. 对玩家输入或网络消息使用 TryGet](#4-对玩家输入或网络消息使用-tryget)
-    - [5. 保持行类型简单](#5-保持行类型简单)
-    - [6. 不要在运行时修改行数据](#6-不要在运行时修改行数据)
-  - [常见问题排查](#常见问题排查)
-    - ["如何加载 .bytes 文件？"](#如何加载-bytes-文件)
-    - ["Luban build script not found"](#luban-build-script-not-found)
-    - ["Duplicate Id X in DataTable\<T\>"](#duplicate-id-x-in-datatablet)
-    - [CS0234: ByteBuf 命名空间错误](#cs0234-bytebuf-命名空间错误)
-    - [MessagePack 反序列化失败](#messagepack-反序列化失败)
-
----
+- [概述](#概述)
+- [架构](#架构)
+- [快速上手](#快速上手)
+- [核心概念](#核心概念)
+- [使用指南](#使用指南)
+- [进阶主题](#进阶主题)
+- [常见场景](#常见场景)
+- [性能与内存](#性能与内存)
+- [故障排查](#故障排查)
 
 ## 概述
 
-每个游戏都需要配置数据——道具属性、技能参数、关卡边界、对话树。随着项目规模增长，管理这些数据会逐渐成为瓶颈：
+模块暴露 `DataTable<TKey, TRow>`（保持源顺序）、`DataTableCatalog`（把多张强类型表组成一个快照）和 `DataTableRegistry`（进程级原子发布入口）。可变游戏状态、存档事务、网络同步、数据库查询和特定 schema 的业务规则，各自归各自的系统管。
 
-| 痛点 | CycloneGames.DataTable 如何解决 |
-| --- | --- |
-| Excel 与代码同步脱节 | Luban 一键从 Excel 生成 C# 类型和二进制数据 |
-| 配置读取产生 GC 压力 | `Get(id)` 零分配——可安全用于热路径，无 LINQ、无装箱 |
-| 大表查询慢 | `Dictionary<int, T>` 底层存储，保证 O(1) |
-| 配置管线绑定特定引擎/工具 | 可插拔后端：Luban、MessagePack 或自定义 |
-| 配置代码与 Unity 强耦合 | `Core` 程序集目标 `netstandard2.0`，零 Unity API 引用 |
-| 启动时全量加载所有表 | 开发者完全掌控加载——用你自己的方式加载 bytes，传给适配器 |
+### 主要特性
 
-### 适用场景
-
-- 项目有 10 张以上由策划维护的数据表
-- 希望策划在 Excel 中工作，而非 JSON 或代码
-- 需要运行时配置查询零分配
-- 希望配置管线可跨游戏引擎移植
-- 正在开发 MMO、RPG、卡牌游戏等重内容项目
-
-### 不适用场景
-
-- 只有 2-3 张小配置表 → `ScriptableObject` 更简单
-- 需要运行时写回数据（玩家可修改的配置）→ 本模块只读
-- 重度依赖 Unity 特定编辑器功能 → Core 故意不依赖 Unity
-
----
+- **不可变表快照**：保持源顺序的 row 和期望 `O(1)` 查询。
+- **强类型 Catalog**：按准确 contract type 组合多个表。
+- **进程级原子发布**：通过 `DataTableRegistry`，支持 volatile snapshot 读取。
+- **有界 payload 加载**：通过 `DataTableBytesCache` 与 `DataTableLoadLimits`。
+- **完整性元数据**：通过 `DataTableManifest`（schema 版本、必需表、字节长度、SHA-256）。
+- **AOT-safe 注册**：通过显式 `TableDescriptor<TTableSet>` 注册生成表集合，无运行时反射。
+- **Luban 与 MessagePack adapter**：与纯 C# Core assembly 隔离。
+- **Unity Editor 集成**：`DataTableLubanSettings`、自定义 Inspector 和带安全保护的 Luban 进程 Runner。
 
 ## 架构
 
-```mermaid
-flowchart TB
-    subgraph Designer[" 策划工作流 "]
-        Excel["Excel (.xlsx)<br/>策划编辑"] -->|Luban 代码生成| Output["C# 类型 + .bytes 二进制<br/>自动生成，提交到版本控制"]
-    end
-    Designer -->|"启动时加载"| Runtime
-    subgraph Runtime[" 运行时层 "]
-        Loader["你的资产管线<br/>YooAsset / Addressables / File.IO"] -->|"原始 bytes"| Adapter["后端适配器<br/>LubanConfigProvider /<br/>MessagePackConfigProvider"]
-        Adapter --> DataTable["DataTable&lt;T&gt;<br/>O(1) Get / TryGet / All"]
-        DataTable --> Hub["DataTableRegistry<br/>全局注册表，无锁读取"]
-    end
-```
+| 程序集 | 命名空间 | 职责 |
+| --- | --- | --- |
+| `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Table、Catalog、Registry、限制、Manifest、Hash、字节 Cache、Location、日志和 Scope。纯 C#，启用 `noEngineReferences: true`。 |
+| `CycloneGames.DataTable.Unity.Runtime` | `CycloneGames.DataTable.Unity` | Unity Runtime 日志引导。 |
+| `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`、自定义 Inspector、请求校验和外部进程执行。仅 Editor。 |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | 有界的 Luban `ByteBuf` 创建和生成表集合构造。 |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | 有界的 MessagePack 行数组解码。 |
+| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | `CycloneGames.DataTable.Unity.Integrations.AssetManagement` | 可选的 UniTask `TextAsset` 和 raw-file payload loader；在 asset-style 安装方式下不参与编译。 |
 
-### 程序集分层（Pattern C）
+Core 和 Unity Runtime 会自动引用。Editor 与 Integration assembly 使用 `autoReferenced: false`；消费者 asmdef 必须引用实际使用的每个 assembly。Luban 和 MessagePack Integration 还要求对应 package 满足其 asmdef 声明的版本条件。Asset-style AssetManagement 模块不会生成 DataTable Integration 所需的 UPM `versionDefines` capability，因此该 Integration 保持不参与编译；只添加 asmdef reference 不能启用它。
 
 ```mermaid
 flowchart LR
-    Core["Core<br/>noEngineReferences: true<br/>零 Unity API"] --> UnityRt["Unity.Runtime"]
-    UnityRt --> LubanInt["Integrations.Luban"]
-    UnityRt --> MsgPackInt["Integrations.MessagePack"]
-    UnityRt --> AssetMgmtInt["Integrations.AssetManagement"]
-    UnityRt --> Editor["Unity.Editor"]
+    A[生成行或 payload 字节] --> B[应用限制并校验完整性]
+    B --> C[解码并校验行数据]
+    C --> D[构建强类型 DataTable]
+    D --> E[构建候选 DataTableCatalog]
+    E --> F[校验跨表引用]
+    F --> G[注入 Catalog 或原子发布]
+    G --> H[只读游戏逻辑消费者]
+
+    classDef input fill:#dbeafe,stroke:#2563eb,color:#172554
+    classDef validation fill:#fef3c7,stroke:#d97706,color:#451a03
+    classDef snapshot fill:#dcfce7,stroke:#16a34a,color:#052e16
+    class A input
+    class B,C,F validation
+    class D,E,G,H snapshot
 ```
 
-| 程序集 | 层级 | 依赖 | 职责 |
-| --- | --- | --- | --- |
-| `CycloneGames.DataTable.Core` | 核心 | *无* | `IDataRow`、`IDataTable<T>`、`DataTable<T>`、`DataTableRegistry`、`DataTableLogger`、`DataTableManifest` |
-| `CycloneGames.DataTable.Unity.Runtime` | Unity 适配 | Core | `DataTableUnityBootstrap` |
-| `CycloneGames.DataTable.Unity.Editor` | 编辑器 | Unity.Runtime | `DataTableLubanRunner`（Luban 构建菜单） |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | 集成 | Core + Unity.Runtime | `LubanConfigProvider` |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | 集成 | Core + Unity.Runtime + MessagePack | `MessagePackConfigProvider` |
-| `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | 集成 | Core + Unity.Runtime + AssetManagement | 由 `CYCLONE_ASSET_MANAGEMENT` 守卫的可选 bytes loader |
-
-**核心原则**：`Core` 零引擎引用（`noEngineReferences: true`）。Unity 适配程序集在启动时通过 `DataTableLogger` 委托注入平台日志实现。模块不包含任何加载逻辑——加载完全由开发者选择最适合自己项目的方案。
-
----
-
-## 安装
-
-本模块是 CycloneGames 框架的一部分，位于 `Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/`。
-
-### 依赖
-
-| 依赖 | 是否必须 | 说明 |
-| --- | --- | --- |
-| *无* | — | Core 零外部依赖。Unity.Runtime 仅依赖 Unity。 |
-| `Luban` | 可选 | Excel → 代码工作流。[luban](https://github.com/focus-creative-games/luban) |
-| `MessagePack-CSharp` | 可选 | MessagePack 二进制后端，通过 NuGet 或 UPM 安装 |
-| `CycloneGames.AssetManagement` | 可选 | 用于统一加载 TextAsset 或 raw file。只有安装该包时，对应集成程序集才会编译。 |
-
-### 可选程序集
-
-可选集成程序集通过 asmdef 的 `versionDefines` 和 `defineConstraints` 守卫。缺少对应可选包时，Unity 会跳过匹配的集成程序集；如果确定永远不用，也可以删除对应目录：
-
-- `Unity.Runtime/Integrations/Luban/` — 不使用 Luban 则删除
-- `Unity.Runtime/Integrations/MessagePack/` — 不使用 MessagePack 则删除
-- `Unity.Runtime/Integrations/AssetManagement/` — 不使用 CycloneGames.AssetManagement 则删除
-
-模块在不包含任何集成程序集时仍可正常编译和运行。
-
----
+构造、解码、Hash 和校验属于冷路径工作。游戏逻辑从已经发布的 Table 或 Catalog 中读取数据。
 
 ## 快速上手
 
-### 方式 A：纯代码（无工具依赖）
+在消费者 asmdef 中加入 `CycloneGames.DataTable.Core`。纯 C# 消费者不需要 Unity Runtime assembly。
 
-适合快速原型或配置表较少的项目。直接在 C# 中定义行数据。
+```json
+{
+  "references": [
+    "CycloneGames.DataTable.Core"
+  ]
+}
+```
 
-**第一步——定义行类型**
+### 定义整数键行
+
+主键为 `int` 时实现 `IDataRow`。发布后的行值应保持不可变。
 
 ```csharp
 using CycloneGames.DataTable;
 
-public class ItemRow : IDataRow
+public sealed class ItemRow : IDataRow
 {
-    public int Id { get; set; }
-    public string Name { get; set; }
-    public int Price { get; set; }
-    public float Weight { get; set; }
+    public ItemRow(int id, string name, int maxStack)
+    {
+        Id = id;
+        Name = name;
+        MaxStack = maxStack;
+    }
+
+    public int Id { get; }
+    public string Name { get; }
+    public int MaxStack { get; }
 }
 ```
 
-**第二步——构建并注册表**
+### 构建表
 
 ```csharp
-var table = new DataTable<ItemRow>(new[]
+var items = new DataTable<ItemRow>(new[]
 {
-    new ItemRow { Id = 1, Name = "铁剑",   Price = 100, Weight = 3.5f },
-    new ItemRow { Id = 2, Name = "钢盾",   Price = 250, Weight = 6.0f },
-    new ItemRow { Id = 3, Name = "生命药水", Price = 50,  Weight = 0.3f },
+    new ItemRow(1001, "Health Potion", 20),
+    new ItemRow(1002, "Mana Potion", 20),
 });
-
-DataTableRegistry.Register(table);
 ```
 
-**第三步——随处查询**
+构造函数会复制源数组、保留行顺序并建立 key-to-index Dictionary。遇到 null row、null key 或重复 key 时，构造会失败。
+
+### 查询行
 
 ```csharp
-var items = DataTableRegistry.Get<DataTable<ItemRow>>();
+ItemRow healthPotion = items.Get(1001);
 
-var sword = items.Get(1);             // 键缺失时抛异常
-Debug.Log(sword.Name);                // "铁剑"
+if (items.TryGet(1002, out ItemRow manaPotion))
+{
+    UseItem(manaPotion);
+}
 
-if (items.TryGet(99, out var rare))   // 安全查询
-    Debug.Log(rare.Name);
+ItemRow missing = items.GetOrDefault(9999); // 对这个 class row 返回 null
 
-foreach (var row in items.All)        // 遍历所有行
-    Debug.Log($"{row.Name}: {row.Price} 金币");
+for (int i = 0; i < items.Count; i++)
+{
+    ItemRow row = items.All[i];
+    RegisterItem(row);
+}
 ```
 
-**完整最小示例（无 Unity 依赖）：**
+当缺少 key 代表数据契约错误时使用 `Get`，找不到时会抛出 `KeyNotFoundException`。可选查询使用 `TryGet`。只有在 `default(TRow)` 对该行类型含义明确时才使用 `GetOrDefault`。
+
+## 核心概念
+
+### 自定义键类型与生成模型
+
+Row 不必实现 DataTable interface。当生成模型无法修改，或 key 不是 `int` 时，传入 key selector。
 
 ```csharp
+using System;
 using CycloneGames.DataTable;
 
-// 定义行
-public class SkillRow : IDataRow
+public sealed class LocalizedTextRow
 {
-    public int Id { get; set; }
-    public string Name { get; set; }
-    public int Damage { get; set; }
-    public float Cooldown { get; set; }
+    public LocalizedTextRow(string key, string text)
+    {
+        Key = key;
+        Text = text;
+    }
+
+    public string Key { get; }
+    public string Text { get; }
 }
 
-// 构建表
-var skills = new DataTable<SkillRow>(new[]
-{
-    new SkillRow { Id = 101, Name = "火球术", Damage = 80, Cooldown = 1.5f },
-    new SkillRow { Id = 102, Name = "冰锥术", Damage = 60, Cooldown = 0.8f },
-    new SkillRow { Id = 103, Name = "治疗术", Damage = 0,  Cooldown = 5.0f },
-});
-
-// 注册并查询
-DataTableRegistry.Register(skills);
-
-var fireball = DataTableRegistry.Get<DataTable<SkillRow>>().Get(101);
-// fireball.Damage == 80, fireball.Cooldown == 1.5f
+var texts = new DataTable<string, LocalizedTextRow>(
+    new[]
+    {
+        new LocalizedTextRow("ui.play", "Play"),
+        new LocalizedTextRow("ui.quit", "Quit"),
+    },
+    static row => row.Key,
+    StringComparer.Ordinal);
 ```
 
----
+应明确选择 key 的等价语义：
 
-### 方式 B：MessagePack 后端
+- 使用能跨越序列化和内容重建保持稳定的整数、枚举、GUID 或字符串值；
+- 大小写敏感的标识符使用 `StringComparer.Ordinal`；
+- 只有内容契约明确规定标识符不区分大小写时才使用 `StringComparer.OrdinalIgnoreCase`；
+- 持久化内容 key 不使用文化相关比较、Unity object identity 或临时 runtime handle。
 
-适合中等规模配置表数量、需要二进制加载但不想引入 Luban 复杂度的项目。
+Key selector 只在构造时对每一行执行一次，不会在每次查询时执行。
 
-**第一步——为行类型添加注解**
+### 行存储与所有权
+
+`DataTable<TKey, TRow>` 在结构上不可变：构造后不能添加、删除或替换行。`All` 按源顺序提供只读 view，查询 Dictionary 保存的是整数行索引，不会在 Dictionary 中保存第二份 row 值。
+
+结构不可变不等于深拷贝 row object。Class row 及其引用的每个可变对象必须在 Table 生命周期内保持不变。调用方提供的 comparer 也必须能安全地支持并发读取。
+
+根据源数据所有权选择构造 API：
+
+| API | 源数据处理 | 推荐用途 |
+| --- | --- | --- |
+| `new DataTable(... array ...)` | 复制数组 | 调用方继续持有源数组时的安全默认方式。 |
+| `new DataTable(... list ...)` | 把 List 元素复制到自有数组 | 已有 `List<TRow>` 的安全默认方式。 |
+| `FromEnumerable` | 物化一次，并应用行数限制 | 流式或计算产生的冷路径输入。 |
+| `FromOwnedArray` | 不复制，直接接管数组 | Decoder 生成且不存在其他可写 alias 的数组。 |
+
+```csharp
+ItemRow[] decodedRows = DecodeAndValidateItems();
+
+DataTable<ItemRow> items = DataTable<ItemRow>.FromOwnedArray(
+    decodedRows,
+    limits);
+
+decodedRows = null; // 所有权已经转移到 Table
+```
+
+`FromOwnedArray` 成功后，任何代码都不能再修改转移的数组。所有权转移只作用于数组容器；其中引用的 class instance 仍需遵守产品的不可变 row 契约。
+
+### Catalog 与发布
+
+`DataTableCatalog` 使用准确的 contract type 组合一组相关表。应先完成整个 Catalog，再把它暴露给游戏系统。
+
+```csharp
+DataTable<ItemRow> items = BuildItems();
+DataTable<string, PriceRow> prices = new DataTable<string, PriceRow>(
+    DecodePrices(),
+    static row => row.ItemCode,
+    StringComparer.Ordinal);
+
+DataTableCatalog catalog = new DataTableCatalogBuilder(limits, capacity: 2)
+    .Add<IDataTable<ItemRow>>(items)
+    .Add<IDataTable<string, PriceRow>>(prices)
+    .Build();
+
+ValidateItemReferences(catalog);
+```
+
+Catalog 按传给 `Add` 的准确类型查询。读取时必须使用同一个 contract type：
+
+```csharp
+IDataTable<ItemRow> itemTable = catalog.Get<IDataTable<ItemRow>>();
+
+if (catalog.TryGet<IDataTable<string, PriceRow>>(out var priceTable))
+{
+    ShowPrice(priceTable.Get("potion.health"));
+}
+```
+
+`DataTableCatalogBuilder` 只能消费一次。`Build()` 会把内部 map 转交给不可变 Catalog，此后对 Builder 的操作都会失败。Contract type 重复、null entry、实例类型不兼容，或表数量超过 `DataTableLoadLimits.MaxTableCount`，都会在 Catalog 创建前失败。
+
+进程级发布使用 `DataTableRegistry.Publish(catalog)` 原子替换整个 Catalog。一次跨多表操作只读取一次 `Current`——即使随后发布了另一代，已经捕获的引用仍保持内部一致。诊断信息可以记录 `Generation`。`Reset()` 只移除进程级引用，不会 Dispose Table 或 backing resource。
+
+## 使用指南
+
+### 有界 payload 加载
+
+为一组内容创建统一的限制配置。数值应来自真实生成内容、重载峰值内存测量和最低支持硬件档位。
+
+```csharp
+var limits = new DataTableLoadLimits(
+    maxTableCount: 128,
+    maxBytesPerTable: 8 * 1024 * 1024,
+    maxTotalBytes: 64L * 1024 * 1024,
+    maxRowsPerTable: 250_000,
+    maxTableNameLength: 96);
+```
+
+`DataTableLoadLimits.Default` 是较宽松的 fail-fast guardrail。正式产品通常应在每个不可信或内存敏感边界采用更严格的配置。
+
+把 payload 保存到有界 Cache：
+
+```csharp
+using var payloadCache = new DataTableBytesCache(
+    limits,
+    capacity: 16,
+    dataExtension: ".bytes",
+    clearBytesOnDispose: false);
+
+payloadCache.Add("Items", itemPayload);       // 复制 ReadOnlyMemory<byte>
+payloadCache.AddOwned("Prices", priceBytes); // 转移 byte[] 所有权
+priceBytes = null;
+
+payloadCache.Seal();
+
+ReadOnlyMemory<byte> bytes = payloadCache.GetBytes("Items.bytes");
+```
+
+Table name 会被规范化，因此 `Items` 和 `Items.bytes` 指向同一项。Cache identity 不区分大小写，防止两个 entry 在不区分大小写的文件系统上落到同一个原生路径。`Add` 和 `Set` 会复制 payload。`AddOwned` 和 `SetOwned` 避免复制，但要求调用方独占数组所有权。`Seal()` 会禁止修改。Cache 不提供自动淘汰策略；所有 reader 停止后，应 Dispose 对应内容 Scope。
+
+### Manifest 校验
+
+在解码 payload 前使用带版本的 Manifest：
+
+```csharp
+var manifest = new DataTableManifest(
+    schemaVersion: 3,
+    entries: new[]
+    {
+        new DataTableManifestEntry(
+            tableName: "Items",
+            location: "Config/Items.bytes",
+            expectedByteLength: itemPayload.Length,
+            sha256Hex: expectedItemsSha256,
+            required: true),
+        new DataTableManifestEntry(
+            tableName: "Prices",
+            location: "Config/Prices.bytes",
+            expectedByteLength: pricePayloadLength,
+            sha256Hex: expectedPricesSha256,
+            required: true),
+    },
+    limits,
+    requireKnownTables: true);
+
+manifest.EnsureSchemaVersionSupported(minimumVersion: 3, maximumVersion: 3);
+manifest.ValidateRequiredTables(payloadCache);
+manifest.ValidateBytes("Items", payloadCache.GetBytes("Items"));
+manifest.ValidateBytes("Prices", payloadCache.GetBytes("Prices"));
+```
+
+`ValidateRequiredTables` 检查必需项是否存在。`ValidateBytes` 应用已配置的字节限制，并校验 entry 的预期长度和 SHA-256。SHA-256 用于标识内容和检测损坏；来自不可信来源的内容还需要经过认证的签名和由产品负责的信任策略。
+
+Entry 未设置 `Sha256Hex` 时会有意跳过 Hash 校验。`DataTableHashUtility.Sha256Matches` 要求预期 Hash 非空；预期值缺失时返回 `false`。
+
+### 资源生命周期
+
+生成表或 row view 依赖可 Dispose 的 payload owner 时，使用 `DataTableSetScope`：
+
+```csharp
+var scope = new DataTableSetScope(
+    root: generatedTables,
+    catalog: catalog,
+    resourceOwner: payloadCache);
+
+IDataTable<ItemRow> items = scope.Get<IDataTable<ItemRow>>();
+
+// 所有 reader 停止后：
+scope.Dispose();
+```
+
+Scope 只 Dispose 显式传入的 `resourceOwner`。它会清除自身对 root 和 Catalog 的引用，但不会推断任意 Table instance 的所有权。发布的 row 或生成 view 仍可能访问 backing memory 时，不得 Dispose 对应 owner。
+
+### Luban 集成
+
+在 composition assembly 中引用 `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban`。`com.code-philosophy.luban` package 必须满足 Integration asmdef 声明的版本范围。
+
+准备有界的 `IDataTableBytesProvider`，再创建 Luban 生成的 root：
+
+```csharp
+using CycloneGames.DataTable.Unity.Integrations.Luban;
+
+cfg.Tables generatedTables = LubanDataTableSetFactory.Create(
+    payloadCache,
+    getBytes => new cfg.Tables(getBytes),
+    limits);
+```
+
+Callback 只在同步 factory call 期间、且仅在调用线程上有效。每个请求的 payload 都会复制到私有 `Luban.ByteBuf` 数组中，因此生成 parser 可以保留 buffer，而不会借用可写的 Cache memory。
+
+生成 parser 直接接收单个 `ByteBuf` 时：
+
+```csharp
+Luban.ByteBuf itemBuffer = LubanDataTableSetFactory.CreateOwnedByteBuf(
+    payloadCache,
+    "Items",
+    limits);
+```
+
+Catalog 发布前，应校验生成数据的行数、范围、稳定 ID 和跨表引用。完整的管线设置、Windows/macOS/Linux 生成命令、输出所有权和恢复操作见 [Luban 指南](../../../../../DataTable/Luban/README.SCH.md)。
+
+### MessagePack 集成
+
+引用 `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack`。Unity client package、`MessagePack.dll`、Annotations 和 Analyzer 应保持匹配版本；IL2CPP/AOT 使用 source-generated row formatter。
+
+定义 MessagePack row contract：
 
 ```csharp
 using CycloneGames.DataTable;
 using MessagePack;
 
 [MessagePackObject]
-public class MonsterRow : IDataRow
+public sealed class PackedItemRow : IDataRow
 {
-    [Key(0)] public int Id { get; set; }
-    [Key(1)] public string Name { get; set; }
-    [Key(2)] public int Hp { get; set; }
-    [Key(3)] public int Attack { get; set; }
-    [Key(4)] public float MoveSpeed { get; set; }
-}
-```
-
-**第二步——将数据序列化为 .bytes 文件**
-
-写一个小型编辑器脚本或控制台工具来转换数据：
-
-```csharp
-var monsters = new MonsterRow[]
-{
-    new MonsterRow { Id = 1, Name = "史莱姆", Hp = 50,  Attack = 10, MoveSpeed = 1.2f },
-    new MonsterRow { Id = 2, Name = "哥布林", Hp = 120, Attack = 25, MoveSpeed = 2.5f },
-};
-var bytes = MessagePackSerializer.Serialize<MonsterRow[]>(monsters);
-File.WriteAllBytes("Assets/StreamingAssets/monster.bytes", bytes);
-```
-
-**第三步——启动时加载并注册**
-
-加载是你的责任——用任何适合你项目的管线。得到 bytes 后，调用 `Build()` 即可：
-
-```csharp
-using CycloneGames.DataTable;
-using CycloneGames.DataTable.Unity.Integrations.MessagePack;
-
-// 1. 用你的方式加载 bytes（YooAsset / Addressables / File.IO / 任何方式）
-var bytes = File.ReadAllBytes(Path.Combine(Application.streamingAssetsPath, "monster.bytes"));
-
-// 2. 构建并注册——纯同步，无隐藏加载
-MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
-
-// 3. 查询
-var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
-Debug.Log($"史莱姆 HP: {slime.Hp}"); // 50
-```
-
----
-
-### 方式 C：Luban 后端（Excel → 代码）
-
-面向有专职策划团队的生产项目的推荐方案。Luban 通过一次构建步骤，从 Excel 生成 C# 类型和二进制数据。
-
-**第一步——搭建 Luban 项目**
-
-在仓库根目录（Unity 项目文件夹的同级目录）创建 `DataTable/`：
-
-```text
-your-repo/
-├── UnityStarter/          ← Unity 项目
-├── DataTable/             ← Luban 项目（手动创建）
-│   ├── Excel/             ← 放置 .xlsx 文件
-│   │   └── item.xlsx
-│   ├── gen_code_bin_to_project_lazyload.bat
-│   ├── gen_code_bin_to_project_lazyload.sh
-│   └── ...
-```
-
-目录名 `DataTable` 可通过构建配置资产修改（参见[编辑器工具](#编辑器工具)）。
-
-**第二步——设计 Excel 表格**
-
-创建 `DataTable/Excel/item.xlsx`：
-
-| Id | Name | Price | Weight |
-| --- | --- | --- | --- |
-| 1 | 铁剑 | 100 | 3.5 |
-| 2 | 钢盾 | 250 | 6.0 |
-| 3 | 生命药水 | 50 | 0.3 |
-
-**第三步——运行构建**
-
-在 Unity Editor 中：**Tools → CycloneGames → DataTable → Run Luban Build**
-
-Luban 将生成：
-- `Assets/.../Generated/Item.cs` — 实现了 `IDataRow` 的 C# 行类型
-- `Assets/StreamingAssets/item.bytes` — 运行时加载的二进制数据
-
-**第四步——启动时加载**
-
-加载是你的责任——用任何适合你项目的资产管线。得到 bytes 后，构建 Luban 的 Tables 对象并注册：
-
-```csharp
-using CycloneGames.DataTable.Unity.Integrations.Luban;
-
-public void InitializeConfigs()
-{
-    // 1. 用你的方式加载 bytes（YooAsset / Addressables / File.IO / 任何方式）
-    var itemBytes = File.ReadAllBytes(
-        Path.Combine(Application.streamingAssetsPath, "item.bytes"));
-
-    // 2. 构建 Luban 生成的 Tables（Luban 代码生成产物）
-    var tables = new Tables(fileName =>
-        new global::Luban.ByteBuf(
-            File.ReadAllBytes(Path.Combine(Application.streamingAssetsPath, fileName))));
-
-    // 3. 注册到 DataTableRegistry
-    LubanConfigProvider.RegisterLubanTable(tables.TbItem);
-    // ... 注册更多表 ...
-
-    // 4. 查询
-    var sword = DataTableRegistry.Get<TbItem>().Get(1);
-}
-```
-
-**自定义 Luban 项目路径：**
-
-创建构建配置资产（**Assets → Create → CycloneGames → DataTable → Luban Settings**）并在 Inspector 中编辑 Luban 字段。配置资产可以放在 `Assets/` 下任意位置；默认工具会按类型发现它。首次使用时，系统会自动在 `Assets/Editor/DataTable/` 下创建默认配置。
-
-编程覆写（例如 CI 流水线）：
-
-```csharp
-DataTableLubanRunner.LubanProjectDirOverride = "MyConfigs/GameData";
-DataTableLubanRunner.LubanScriptNameOverride = "my_build_script";
-// 设为 null 恢复为 SO 配置
-```
-
-**独立构建（不使用 Unity Editor）：**
-
-```bash
-# Windows
-cd DataTable
-gen_code_bin_to_project_lazyload.bat
-
-# macOS / Linux
-cd DataTable
-./gen_code_bin_to_project_lazyload.sh
-```
-
----
-
-## API 参考
-
-### IDataRow 与 IDataTable\<T\>
-
-定义数据表契约的两个核心接口，均位于 `CycloneGames.DataTable.Core`。
-
-**`IDataRow`**——每行配置数据必须实现此接口：
-
-```csharp
-public interface IDataRow
-{
-    int Id { get; }
-}
-```
-
-`Id` 是主键，在表内必须唯一。重复的 `Id` 将输出警告，只保留首次出现的行。
-
-**`IDataTable<T>`**——对类型化表的只读、零分配访问：
-
-| 成员 | 返回值 | 说明 |
-| --- | --- | --- |
-| `Get(int id)` | `T` | O(1) 查找。键不存在时抛出 `KeyNotFoundException`。适用于确定存在的键。 |
-| `GetOrDefault(int id)` | `T` | O(1) 查找。键不存在时返回 `default(T)`。适用于可选配置。 |
-| `TryGet(int id, out T row)` | `bool` | O(1) 查找。键不存在时返回 `false`。推荐用于外部输入。 |
-| `All` | `IReadOnlyList<T>` | 返回所有行。底层 `T[]` 是共享引用——禁止修改。 |
-| `Count` | `int` | 行数。 |
-
-**如何选择查询方法：**
-
-```csharp
-var table = DataTableRegistry.Get<DataTable<ItemRow>>();
-
-// 确定键存在时用 Get()——代码干净，出错立即暴露
-var sword = table.Get(1);
-
-// 玩家输入、网络消息、软引用场景用 TryGet()
-if (table.TryGet(playerInput.itemId, out var item))
-    GiveItem(item);
-else
-    SendError($"道具 {playerInput.itemId} 不存在");
-
-// 可选配置字段用 GetOrDefault()
-var config = table.GetOrDefault(specificId) ?? table.Get(DEFAULT_CONFIG_ID);
-```
-
----
-
-### DataTable\<T\>
-
-`IDataTable<T>` 的具体实现。底层使用 `Dictionary<int, T>` 实现 O(1) 查询，`T[]` 实现零拷贝 `All` 访问。
-
-**构造函数：**
-
-```csharp
-// 从数组构建——零拷贝。数组被直接存储。
-public DataTable(T[] rows);
-
-// 从 List 构建——内部 .ToArray() 复制一次。
-public DataTable(List<T> rows);
-
-// 从 IEnumerable 构建——来源不是数组或 List 时会物化一次。
-public static DataTable<T> FromEnumerable(IEnumerable<T> rows);
-```
-
-**性能提示**：优先使用数组构造，避免 `List<T>` 分配和 `.ToArray()` 复制：
-
-```csharp
-// 推荐：预构建数组
-var rows = new ItemRow[expectedCount];
-// ... 填充 rows
-var table = new DataTable<ItemRow>(rows);
-
-// 可接受：数据源本身是 List
-var list = new List<ItemRow>();
-// ... 填充 list
-var table = new DataTable<ItemRow>(list);
-
-// 可接受：一次性初始化，数据源不确定
-var table = DataTable<ItemRow>.FromEnumerable(someLinqResult);
-```
-
----
-
-### DataTableRegistry
-
-全局注册中心。所有表在启动时注册，之后以无锁方式并发读取。
-
-```csharp
-// 注册（仅限启动阶段）
-DataTableRegistry.Register(myTable);
-
-// 查询（任意位置、任意线程——注册完成后只读访问）
-var table = DataTableRegistry.Get<DataTable<ItemRow>>();
-if (DataTableRegistry.TryGet<DataTable<ItemRow>>(out var t)) { ... }
-
-// 检查初始化状态
-if (DataTableRegistry.IsInitialized) { ... }
-
-// 标记所有表已注册（阻止后续注册）
-DataTableRegistry.MarkInitialized();
-
-// 重置（测试拆解 / 热重载）
-DataTableRegistry.Reset();
-```
-
-**线程安全性**：读取是无锁的。写入（`Register`、`Reset`）必须在初始化阶段的单一线程中调用。调用 `MarkInitialized()` 后，任意线程的读取均安全，无需同步。
-
----
-
-### DataTableLogger
-
-内部日志桥接。Core 默认为 `Console.WriteLine`。启动时，`DataTableUnityBootstrap` 会路由到 Unity 的 `Debug.Log*`——但仅在委托仍为默认值时生效。最后一次写入者胜出。
-
-**本模块故意不提供加载 API。** 加载 `.bytes` 文件完全由开发者负责——用 YooAsset、Addressables、Resources 或原始 File.IO。拿到 bytes 后，传给后端适配器或直接构建 `DataTable<T>`。
-
-#### 默认行为（零配置）
-
-```csharp
-// 默认：Core 写入 Console；Unity Bootstrap 覆写为 Debug.Log*
-DataTableLogger.LogWarning("Duplicate Id 5 in DataTable<ItemRow>.");  // → Debug.LogWarning
-DataTableLogger.LogError("Failed to deserialize skill.bytes.");       // → Debug.LogError
-DataTableLogger.LogInfo("Registered DataTable<ItemRow> (42 rows).");  // → Debug.Log
-```
-
-#### 桥接到 CycloneGames.Logger（或任意自定义日志系统）
-
-在 Unity 初始化之前或之后设置委托即可。Bootstrap 会检测到它们已被覆写并跳过自身注入：
-
-```csharp
-// 在你的游戏初始化器中：
-DataTableLogger.LogWarning = msg => CycloneGames.Logger.Log.Warn(msg);
-DataTableLogger.LogError   = msg => CycloneGames.Logger.Log.Error(msg);
-DataTableLogger.LogInfo    = msg => CycloneGames.Logger.Log.Info(msg);
-```
-
-#### 独立 .NET 服务端（无 Unity）
-
-```csharp
-// 不存在 Bootstrap——Core 默认使用 Console。可按需覆写：
-DataTableLogger.LogWarning = msg => logger.Warn(msg);
-DataTableLogger.LogError   = msg => logger.Error(msg);
-DataTableLogger.LogInfo    = msg => logger.Info(msg);
-```
-
----
-
-## 后端适配器
-
-### Luban 集成
-
-**程序集：** `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban`  
-**命名空间：** `CycloneGames.DataTable.Unity.Integrations.Luban`  
-**依赖：** 来自 `com.code-philosophy.luban` 的 `Luban.Runtime`。DataTable 不再内置 Luban runtime 类型。
-
-**`LubanConfigProvider`** 是一个轻量注册助手。你需要自己加载 `.bytes` 文件并构建 Luban 的 `Tables` 对象：
-
-```csharp
-// 1. 用你的方式加载 bytes
-var bytes = YourAssetPipeline.Load("item.bytes");
-
-// 2. 构建 Luban 生成的 Tables（Luban 代码生成产物）
-var tables = new Tables(fileName =>
-    new global::Luban.ByteBuf(YourAssetPipeline.Load(fileName)));
-
-// 3. 注册到 DataTableRegistry
-LubanConfigProvider.RegisterLubanTable(tables.TbItem);
-
-// 批量注册
-LubanConfigProvider.RegisterLubanTables(
-    (typeof(TbItem),   tables.TbItem),
-    (typeof(TbSkill),  tables.TbSkill),
-    (typeof(TbMonster), tables.TbMonster)
-);
-```
-
-此类不执行任何加载操作。它仅负责注册表实例。
-
----
-
-### MessagePack 集成
-
-**程序集：** `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack`  
-**命名空间：** `CycloneGames.DataTable.Unity.Integrations.MessagePack`  
-**依赖：** `com.github.messagepack-csharp`（外部包）
-
-此程序集仅在安装了 MessagePack 包时编译（通过 `defineConstraints: ["MESSAGEPACK"]` 和 `versionDefines` 守卫）。
-
-**`MessagePackConfigProvider`** 是纯同步构建器——将 bytes 反序列化为 `DataTable<T>` 并注册：
-
-```csharp
-// 1. 用你的方式加载 bytes
-var bytes = YourAssetPipeline.Load("monster.bytes");
-
-// 2. 一步构建并注册——同步，无隐藏加载
-var table = MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
-
-// 3. 查询
-var slime = DataTableRegistry.Get<DataTable<MonsterRow>>().Get(1);
-```
-
-**行类型要求：**
-- 必须实现 `IDataRow`
-- 必须标注 `[MessagePackObject]` 和 `[Key(n)]` 注解
-- 属性必须具有 `{ get; set; }`
-
----
-
-### 编写自定义后端
-
-如果 Luban 和 MessagePack 不适用你的管线，可以实现自己的适配器：
-
-```csharp
-// 1. 编写一个静态 Provider 类
-public static class JsonConfigProvider
-{
-    public static void BuildAndRegister<TRow>(byte[] jsonBytes)
-        where TRow : IDataRow
-    {
-        var json = Encoding.UTF8.GetString(jsonBytes);
-        var rows = JsonSerializer.Deserialize<List<TRow>>(json);
-        var table = new DataTable<TRow>(rows);
-        DataTableRegistry.Register(table);
-    }
-}
-
-// 2. 启动时调用
-var bytes = YourAssetPipeline.Load("Configs/items.json");
-JsonConfigProvider.BuildAndRegister<ItemRow>(bytes);
-
-// 3. 统一查询
-var items = DataTableRegistry.Get<DataTable<ItemRow>>();
-```
-
-你的适配器只需要接收 bytes、产出实现了 `IDataRow` 的行数据，并调用 `DataTableRegistry.Register()` 即可。模块的其余部分不关心序列化格式或加载方式。
-
----
-
-### 与 CycloneGames.AssetManagement 集成
-
-如果你的项目使用了 `CycloneGames.AssetManagement`，可以通过 `AssetManagementDataTableBytesLoader` 把表 `.bytes` 作为 `TextAsset` 加载；若 Provider 支持原始二进制文件，也可以使用 `AssetManagementDataTableRawFileBytesLoader`。两者都会以 `IDataTableBytesProvider` 的形式暴露给 Luban、MessagePack 或自定义格式适配层。`DataTableAssetLoadContext` 用于携带 AssetManagement 的 bucket、tag 和 owner 元数据，`DataTableManifest` 可在格式解析前校验表名、字节长度和 SHA-256。
-
-运行时 manifest 校验会在 `CycloneGames.DataTable.Core` 内保留一个很小的 SHA-256 helper，而不是直接依赖 Unity-facing IO assemblies。构建期和 Editor 工具可以使用 `CycloneGames.IO.Runtime.FileUtility` 或 `XxHash64` 生成、比较 manifest 值，再传给 DataTable。
-
-```csharp
-using CycloneGames.DataTable;
-using CycloneGames.DataTable.Unity.Integrations.AssetManagement;
-using CycloneGames.DataTable.Unity.Integrations.Luban;
-
-var resolver = new DataTableLocationResolver("Assets/Game/DataTable/Binary");
-var loadContext = new DataTableAssetLoadContext(
-    "DataTable.Global",
-    "GameConfig.Global",
-    "GameConfigService");
-var manifest = new DataTableManifest(
-    DataTableManifest.DEFAULT_SCHEMA_VERSION,
-    new[]
-    {
-        new DataTableManifestEntry("item_tbitem"),
-        new DataTableManifestEntry("skill_tbskill"),
-    },
-    requireKnownTables: true);
-var loader = new AssetManagementDataTableBytesLoader(
-    package,
-    loadContext,
-    resolver,
-    manifest: manifest);
-
-await loader.LoadAsync(new[] { "item_tbitem", "skill_tbskill" }, cancellationToken);
-
-var tables = LubanDataTableSetFactory.Create(
-    loader,
-    byteBufLoader => new Tables(byteBufLoader));
-
-// Luban 这类立即解析格式在 Tables 构造完成后即可释放 TextAsset handle 和原始 bytes。
-loader.Dispose();
-```
-
-当 Provider 支持 `IAssetPackage.LoadRawFileAsync` 时，可用同样的构造参数切换到 `AssetManagementDataTableRawFileBytesLoader`。正式热更新管线中建议由生成 `.bytes` 的同一步构建流程写出 `expectedByteLength` 和 `sha256Hex`。
-
-#### YooAsset / Raw File（生产环境推荐）
-
-```csharp
-using CycloneGames.DataTable;
-using CycloneGames.DataTable.Unity.Integrations.MessagePack;
-using CycloneGames.AssetManagement.Runtime;
-
-public async UniTask InitializeConfigs()
-{
-    var package = AssetManagementLocator.DefaultPackage;
-
-    // 异步：通过 YooAsset raw file API 加载 .bytes 文件
-    var handle = package.LoadRawFileAsync("monster.bytes");
-    await handle.Task;
-    var bytes = handle.ReadBytes();
-    handle.Dispose();
-
-    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
-}
-
-// 同步变体（仅 YooAsset）：
-public void InitializeConfigsSync()
-{
-    var package = AssetManagementLocator.DefaultPackage;
-    var handle = package.LoadRawFileSync("monster.bytes");
-    var bytes = handle.ReadBytes();
-    handle.Dispose();
-
-    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
-}
-```
-
-#### Addressables / TextAsset（与所有 Provider 兼容）
-
-```csharp
-public async UniTask InitializeConfigs()
-{
-    var package = AssetManagementLocator.DefaultPackage;
-
-    // 以 TextAsset 形式加载（兼容 Addressables、Resources、YooAsset）
-    var handle = package.LoadAssetAsync<TextAsset>("monster.bytes");
-    await handle.Task;
-    var bytes = handle.Asset.bytes;
-    handle.Dispose();
-
-    MessagePackConfigProvider.Build<MonsterRow>(bytes, GeneratedResolverOptions);
-}
-```
-
-#### 完整启动管线示例
-
-```csharp
-public async UniTask BootstrapGameConfigs()
-{
-    var package = AssetManagementLocator.DefaultPackage;
-
-    // 加载所有配置表
-    var tasks = new[]
-    {
-        LoadTable<ItemRow>(package, "item.bytes"),
-        LoadTable<SkillRow>(package, "skill.bytes"),
-        LoadTable<MonsterRow>(package, "monster.bytes"),
-    };
-    await UniTask.WhenAll(tasks);
-
-    // 锁定写入——此后只读
-    DataTableRegistry.MarkInitialized();
-}
-
-private async UniTask LoadTable<TRow>(IAssetPackage package, string fileName)
-    where TRow : IDataRow
-{
-    var handle = package.LoadRawFileAsync(fileName);
-    await handle.Task;
-    var bytes = handle.ReadBytes();
-    handle.Dispose();
-
-    MessagePackConfigProvider.Build<TRow>(bytes, GeneratedResolverOptions);
-}
-```
-
-通用 loader 只负责资产加载和 bytes 生命周期，具体格式解析仍由 Luban、MessagePack 或项目自定义 factory 负责。
-
----
-
-### 与 CycloneGames.GameplayAbilities 集成
-
-`CycloneGames.GameplayAbilities` 内置可选的 DataTable 集成程序集，用于 GAS 风格战斗数据。大型策划数值面应放在 DataTable 中，例如 level curve、ability magnitude、monster attribute、resistance table、Boss phase value 和 starting attribute row。Gameplay identity、tag、cue、activation policy 和 effect behavior 仍应保留在 GameplayAbilities authoring asset 中。
-
-桥接层位于 `CycloneGames.GameplayAbilities/Runtime/Integrations/DataTable/`，提供：
-
-| 类型 | 作用 |
-| --- | --- |
-| `DataTableModifierFactory` | 从表格行创建 GAS `ModifierInfo`。 |
-| `DataTableMagnitudeCalculation` | 让 effect modifier 通过标准 GAS calculation path 读取 table-backed magnitude。 |
-| `DataTableAttributeInitializer<TRow>` | 将表格配置的 base/current value 应用到 `AttributeSet`。 |
-
-该 bridge 由 `CYCLONEGAMES_HAS_DATA_TABLE` 守卫。UPM 导入时，如果安装了 `com.cyclone-games.data-table`，asmdef 的 `versionDefines` 会自动定义该 symbol。`Assets/ThirdParty` 本地包导入时，需要在可见的项目构建配置中定义同名 symbol，因为 Unity 不会读取兄弟目录中的嵌套 package dependency。
-
-完整流程见 GameplayAbilities 文档：[DataTable 驱动数值调优](../CycloneGames.GameplayAbilities/README.SCH.md#datatable-驱动数值调优)。
-
----
-
-## 编辑器工具
-
-所有编辑器工具位于 `CycloneGames.DataTable.Unity.Editor`，在 **Tools → CycloneGames → DataTable** 菜单下可用。
-
-### Luban 构建
-
-**菜单：** `Tools/CycloneGames/DataTable/Run Luban Build`
-
-运行 Luban 代码生成脚本并刷新 AssetDatabase。
-
-#### 配置
-
-构建设置存储在一个可见的 **`DataTableLubanSettings`** ScriptableObject 中。配置资产可以放在 `Assets/` 下任意位置；默认工具按类型发现它，不写入隐藏的编辑器偏好。首次访问时，如果不存在配置资产，系统会自动在 `Assets/Editor/DataTable/` 下创建默认配置。
-
-**手动创建配置：** Assets → Create → CycloneGames → DataTable → Luban Settings
-
-**配置字段：**
-
-| 字段 | 默认值 | 说明 |
-| --- | --- | --- |
-| `LubanProjectDir` | `../DataTable` | Luban 项目路径，相对于仓库根目录 |
-| `LubanScriptName` | `gen_code_bin_to_project_lazyload` | 脚本名称（不含扩展名，自动追加 `.bat`/`.sh`） |
-| `LubanScriptArguments` | 空 | 追加在脚本路径后的可选命令行参数 |
-| `LubanTimeoutSeconds` | `0` | 外部进程最大等待秒数。小于等于 0 表示不限制 |
-| `RefreshAssetsAfterLubanBuild` | `true` | 构建成功后是否自动调用 `AssetDatabase.Refresh()`。注意：这并不会自动触发 Luban 构建本身——你仍然需要手动运行菜单命令或调用 `DataTableLubanRunner.Run()`。 |
-
-配置资产有**自定义 Inspector**，会显示：
-- 配置目录和构建脚本解析后的绝对路径
-- 实时校验：目录和脚本是否真实存在于磁盘上
-- 重复配置警告、已发现的 `.bat`/`.sh` 脚本，以及打开目录或运行构建的快捷操作
-
-**解析后的脚本路径：**
-
-```text
-{repoRoot}/{LubanProjectDir}/{LubanScriptName}.bat   // Windows
-{repoRoot}/{LubanProjectDir}/{LubanScriptName}.sh    // macOS / Linux
-```
-
-**编程覆写**（用于 CI 流水线或编辑器脚本）：
-
-```csharp
-// 以下覆写 SO 中的值。设为 null 恢复为 SO 配置。
-DataTableLubanRunner.LubanProjectDirOverride = "MyConfigs";
-DataTableLubanRunner.LubanScriptNameOverride = "build_all";
-```
-
-**安全保障：**
-- 默认工具使用 `AssetDatabase.FindAssets("t:DataTableLubanSettings")` 发现配置；不使用 `EditorPrefs` 或隐藏活动配置
-- 项目中应只保留一个配置资产；重复配置会触发警告并列出所有路径
-- 查找后缓存配置；调用 `DataTableLubanSettings.InvalidateCache()` 强制重新扫描
-- 如果配置资产被删除或损坏，自动重建默认配置
-- 脚本路径缺失时输出详细错误，包含发现到的配置资产路径
-
-构建过程捕获 stdout/stderr 并输出到 Unity Console。成功（`exit code 0`）后自动调用 `AssetDatabase.Refresh()`（除非 `RefreshAssetsAfterLubanBuild` 关闭）。
-
-### CodeGen 后处理
-
-`Tools~/CodeGen/CycloneGames.DataTable.CodeGen.csproj` 是 Luban 成功后执行的小型 .NET 工具。它读取 `build_config.ini`、`luban.conf`、`__tables__.xlsx` 和配置的 Excel workbook，继续生成额外的 C# 辅助代码。当前支持的后处理是字符串常量生成。
-
-该工具按项目模板复用场景设计：
-
-- 只依赖 .NET 标准库。
-- `.csproj` 是需要提交的源码；本地 `bin/` 和 `obj/` 是构建缓存。
-- 路径通过 `build_config.ini` 配置，不写死在脚本中。
-- `string_constant_scope_column` 可以把一张表拆成多个生成类。
-- `string_constant_generated_comment_language` 控制生成文件头注释语言（默认 `en`，中文项目可用 `zh-CN`）。
-
-示例：
-
-```ini
-[codegen]
-codegen_project=../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/CycloneGames.DataTable.CodeGen.csproj
-string_constant_tables=GameplayTags.TbGameplayTagDefinition
-string_constant_value_column=name
-string_constant_comment_column=comment
-string_constant_enabled_column=enabled
-string_constant_scope_column=scope
-string_constant_generated_comment_language=en
-```
-
-如果两个 scope 值会生成同一个 C# 类名，CodeGen 会提前失败并给出明确错误，避免静默覆盖文件。
-
-### 配置校验（计划中）
-
-计划实现的 `DataTableValidatorWindow` 用于校验：
-- 跨表主键重复
-- 外键完整性（例如角色表中引用的技能 ID 是否存在）
-- 数值范围检查（例如伤害值非负）
-- 必填字段缺失
-
----
-
-## 性能设计
-
-本模块为运行时零 GC 查询而设计：
-
-| 操作 | 分配 | 复杂度 | 说明 |
-| --- | --- | --- | --- |
-| `Get(id)` | **0 B** | O(1) | `Dictionary.TryGetValue` + 返回 |
-| `GetOrDefault(id)` | **0 B** | O(1) | 同 Get，无抛出路径 |
-| `TryGet(id, out T)` | **0 B** | O(1) | 直接委托给 `Dictionary.TryGetValue` |
-| `.All` | **0 B** | O(1) | 返回内部 `T[]` 的引用 |
-| `.Count` | **0 B** | O(1) | 返回 `_rowsArray.Length` |
-| 表构造 | **1 次分配** | O(n) | 精确容量的 `Dictionary<int, T>` |
-| Registry 读取 (`Get<T>`) | **0 B** | O(1) | 无锁字典引用读取 |
-
-**设计决策：**
-- 构造函数直接接收 `T[]`——零拷贝，无 `ToList()`，无 LINQ
-- `DataTableRegistry` 使用无锁读取模式：写入仅在启动时，`Volatile.Write` 保证发布可见性
-- `Dictionary<int, T>` 预分配精确行数——零扩容，碰撞率最低
-- 所有热路径方法为 non-virtual（默认 sealed），便于去虚拟化
-- 模块不内置加载逻辑——加载由开发者自由选择方案，模块不强制异步/同步/特定管线
-
----
-
-## 最佳实践
-
-### 1. 自己掌控加载
-
-本模块不提供加载 API。根据项目需求选择最适合的方案：
-
-```csharp
-// 轻量原型：直接 File.ReadAllBytes
-var bytes = File.ReadAllBytes(Path.Combine(Application.streamingAssetsPath, "item.bytes"));
-
-// 生产环境 YooAsset：
-var handle = YooAssets.LoadAssetSync<TextAsset>("item.bytes");
-var bytes = ((TextAsset)handle.AssetObject).bytes;
-
-// 生产环境 Addressables：
-var handle = Addressables.LoadAssetAsync<TextAsset>("item.bytes");
-await handle.Task;
-var bytes = handle.Result.bytes;
-```
-
-### 2. 注册所有表后调用 MarkInitialized
-
-```csharp
-public void BootstrapConfigs()
-{
-    MessagePackConfigProvider.Build<ItemRow>(itemBytes);
-    MessagePackConfigProvider.Build<SkillRow>(skillBytes);
-    DataTableRegistry.MarkInitialized();
-}
-```
-
-注册完成后调用 `MarkInitialized()` 锁定写入。标记后的读取保证线程安全。
-
-### 3. 缓存高频访问的表引用
-
-```csharp
-// 启动时
-private DataTable<ItemRow> _items;
-
-void Awake()
-{
-    _items = DataTableRegistry.Get<DataTable<ItemRow>>();
-}
-
-// 热路径中——无需 Registry 查找，直接字段访问
-void Update()
-{
-    var item = _items.Get(currentItemId);
-}
-```
-
-`DataTableRegistry.Get<T>()` 是 O(1)，但缓存可以省去 Registry 自身的字典查询。
-
-### 4. 对玩家输入或网络消息使用 TryGet
-
-```csharp
-public void HandleUseItem(int itemId)
-{
-    if (!_items.TryGet(itemId, out var item))
-    {
-        SendError($"道具 {itemId} 不存在");
-        return;
-    }
-    ApplyItemEffect(item);
-}
-```
-
-永远不要信任玩家输入——`Get()` 在键缺失时会抛异常。
-
-### 5. 保持行类型简单
-
-```csharp
-// 好的做法：纯数据
-public class ItemRow : IDataRow
-{
+    [Key(0)]
     public int Id { get; set; }
+
+    [Key(1)]
     public string Name { get; set; }
-    public int Price { get; set; }
-}
-
-// 避免：逻辑、引用、Unity 对象
-public class BadItemRow : IDataRow  // 不要这样做
-{
-    public int Id { get; set; }
-    public GameObject Prefab { get; set; }  // 错误——配置中不应有 Unity 对象
-    public void CalculatePrice() { ... }    // 错误——数据类不应有逻辑
 }
 ```
 
-行类型是纯数据。逻辑应放在使用这些行的独立系统中。
-
-### 6. 不要在运行时修改行数据
-
-内部数组是共享的。多个调用方修改行数据会导致竞态条件和 bug。如需运行时可变数据，维护一个单独的字典：
+使用显式 resolver 和安全设置解码顶层 row array：
 
 ```csharp
-// 配置数据：只读
-var baseItems = DataTableRegistry.Get<DataTable<ItemRow>>();
+using System.Threading;
+using CycloneGames.DataTable.Unity.Integrations.MessagePack;
+using MessagePack;
+using MessagePack.Resolvers;
 
-// 运行时状态：可变
-private Dictionary<int, int> _playerInventory = new();
+MessagePackSerializerOptions options =
+    MessagePackSerializerOptions.Standard.WithResolver(StandardResolver.Instance);
 
-public void AddItem(int itemId)
+MessagePackSecurity security = MessagePackSecurity.UntrustedData
+    .WithMaximumObjectGraphDepth(64)
+    .WithMaximumDecompressedSize(limits.MaxBytesPerTable);
+
+DataTable<PackedItemRow> items = MessagePackConfigProvider.Build<PackedItemRow>(
+    itemPayload,
+    options,
+    security,
+    limits,
+    CancellationToken.None);
+```
+
+Adapter 要求有界的 untrusted-data policy，在物化 row 前校验 payload 大小和顶层数组数量，观察 cancellation，并拒绝损坏、截断或带尾随字节的数据。它只使用传给 `Build` 的 options；resolver composition 应在调用点显式配置。
+
+自定义 key 使用带 key selector 和 comparer 的 `Build<TKey, TRow>`。Decoder 已经独占一个完成校验的 `TRow[]` 时，使用 `BuildRows` 把数组直接转移给 Table。
+
+### Unity Editor 与 Luban 生成
+
+通过 `Assets > Create > CycloneGames > DataTable > Luban Settings` 创建 `DataTableLubanSettings`，或者执行 `Tools > CycloneGames > DataTable > Run Luban Build`。如果设置资产不存在，Runner 会在 `Assets/Editor/DataTable/DataTableLubanSettings.asset` 创建。每个设置类型应保留一个权威设置资产。
+
+| 字段 | 含义 |
+| --- | --- |
+| `LubanProjectDir` | 相对于 Unity 项目根目录的 Luban 目录。默认指向 `../DataTable/Luban`。 |
+| `LubanScriptName` | 不带扩展名的脚本名。Runner 在 Windows 添加 `.bat`，在 macOS/Linux 添加 `.sh`。 |
+| `LubanScriptArguments` | 附加到生成命令的可选参数。 |
+| `LubanTimeoutSeconds` | 外部进程最长执行时间；无效的序列化值回退为 300 秒。 |
+| `RefreshAssetsAfterLubanBuild` | 只在成功执行后调用 `AssetDatabase.Refresh()`。 |
+
+Inspector 会显示解析后的路径和校验状态，并提供 refresh、reveal、validate 和 build 操作。启动脚本前会校验项目根目录、工作目录、脚本路径、参数和 timeout。Standard output 和 standard error 会写入有界结果。
+
+Runner 在 Editor 内只允许一个 writer。生成 wrapper 同时使用writer lock，避免 Editor、终端和 CI 并发发布。Timeout 或 cancellation 后如果无法确认子进程已经退出，应停止全部 Generator 进程、检查writer lock 和生成输出、完成恢复，然后重启 Editor，再执行下一次生成。需要派生生成配置的项目可以继承 `DataTableLubanSettings` 并覆盖其 virtual method，包括 `CreateLubanRunRequest()`，无需修改本 Package。
+
+## 进阶主题
+
+### AOT-safe 生成表集合注册
+
+Generator 生成一个包含多个 Table property 的 root object 时，使用显式 descriptor。请把示例中的生成类型和属性替换为项目 Generator 实际输出的名称。
+
+```csharp
+using CycloneGames.DataTable;
+
+var descriptors = new[]
 {
-    if (!baseItems.TryGet(itemId, out _)) return;  // 先校验配置存在
-    _playerInventory.TryGetValue(itemId, out var count);
-    _playerInventory[itemId] = count + 1;
+    new DataTableGeneratedTableCollector.TableDescriptor<MyGeneratedTables>(
+        typeof(MyGeneratedItemTable),
+        static tables => tables.Items),
+    new DataTableGeneratedTableCollector.TableDescriptor<MyGeneratedTables>(
+        typeof(MyGeneratedPriceTable),
+        static tables => tables.Prices),
+};
+
+DataTableCatalog generatedCatalog =
+    DataTableGeneratedTableCollector.CreateCatalog(generatedTables, descriptors);
+```
+
+Descriptor array 明确指定 Catalog contract type 和 property accessor。该路径不会扫描 runtime assembly，也不使用反射发现，便于 IL2CPP 和 managed stripping 下保持明确的注册图。
+
+### 生产加载与热重载
+
+一套完整的重载顺序如下：
+
+1. 使用产品级 `DataTableLoadLimits` 创建候选 payload owner。
+2. 加载必需 payload，并拒绝缺失、空、超限或未知项。
+3. 校验 Manifest schema、字节长度、Hash 和内容信任状态。
+4. 把全部 Table 解码为候选 generation。
+5. 校验字段、稳定 ID、范围、唯一性和跨表引用。
+6. 构建一个 `DataTableCatalog`。
+7. 把 Catalog 注入新的 composition scope，或调用 `DataTableRegistry.Publish`。
+8. 等待上一代数据的 reader 全部退出。
+9. Dispose 上一代的 backing resource。
+
+发布前任何步骤失败，都应丢弃候选数据，并保持 active generation 不变。Registry 不追踪 reader lease，因此资源退役必须由应用协调。
+
+### 显式注入 vs. 进程级发布
+
+消费者具有明确 owner 和生命周期时，通过构造函数传入 Catalog：
+
+```csharp
+public sealed class ItemService
+{
+    private readonly IDataTable<ItemRow> _items;
+
+    public ItemService(DataTableCatalog catalog)
+    {
+        _items = catalog.Get<IDataTable<ItemRow>>();
+    }
+
+    public ItemRow GetItem(int id) => _items.Get(id);
 }
 ```
 
----
+这种方式同时支持直接构造和任意 DI composition root；Core 不依赖具体容器。只有在应用明确需要一个进程级 Catalog generation 时才使用 `DataTableRegistry`。
 
-## 常见问题排查
+## 常见场景
 
-### "如何加载 .bytes 文件？"
+### 运行时物品与价格查询
 
-本模块故意不提供加载 API。加载是你的责任——用任何适合你项目的方式：
+游戏系统需要按不同 key 查询物品定义和价格。构建两份表，组合成 Catalog，注入到 service：
 
 ```csharp
-// 方案 A：原始 File.IO（原型开发）
-var bytes = File.ReadAllBytes(Path.Combine(Application.streamingAssetsPath, "monster.bytes"));
+public sealed class ShopService
+{
+    private readonly IDataTable<ItemRow> _items;
+    private readonly IDataTable<string, PriceRow> _prices;
 
-// 方案 B：YooAsset（生产环境）
-var handle = YooAssets.LoadAssetAsync<TextAsset>("monster.bytes");
-await handle;
-var bytes = ((TextAsset)handle.AssetObject).bytes;
+    public ShopService(DataTableCatalog catalog)
+    {
+        _items = catalog.Get<IDataTable<ItemRow>>();
+        _prices = catalog.Get<IDataTable<string, PriceRow>>();
+    }
 
-// 方案 C：Addressables（生产环境）
-var handle = Addressables.LoadAssetAsync<TextAsset>("monster.bytes");
-await handle.Task;
-var bytes = handle.Result.bytes;
-
-// 方案 D：Unity Resources（仅原型阶段）
-var ta = Resources.Load<TextAsset>("DataTable/monster");
-var bytes = ta.bytes;
+    public int GetSellPrice(int itemId)
+    {
+        ItemRow item = _items.Get(itemId);
+        return _prices.Get(item.Name).SoftCurrency;
+    }
+}
 ```
 
-拿到 bytes 后，调用 `MessagePackConfigProvider.Build<T>(bytes, options)` 或直接构建 `DataTable<T>`。
+两次查询都期望 `O(1)`。Catalog 捕获一个内部一致的快照——即使随后发布了另一代，这个 service 仍读取它构造时的快照。
 
-### "Luban build script not found"
+### 字符串 key 的本地化
 
-**原因：** 配置的 Luban 脚本路径下没有找到脚本文件。
+本地化系统使用字符串 key（`"ui.play"`、`"ui.quit"`）而非整数 ID：
 
-**修复：** 以下方案任选其一：
+```csharp
+DataTable<string, LocalizedTextRow> texts = new DataTable<string, LocalizedTextRow>(
+    LoadLocalizedRows(),
+    static row => row.Key,
+    StringComparer.Ordinal);
 
-1. 在配置的路径（默认 `../DataTable/`，相对于仓库根目录）下搭建 Luban 项目
-2. 在 Inspector 中编辑 `DataTableLubanSettings` 资产，指向你的 Luban 项目位置
-   （若无配置资产：Assets → Create → CycloneGames → DataTable → Luban Settings）
-3. 如果不使用 Luban，忽略该菜单项即可——模块在没有 Luban 时也能正常工作
+public string Localize(string key)
+{
+    return texts.TryGet(key, out LocalizedTextRow row) ? row.Text : key;
+}
+```
 
-### "Duplicate Id X in DataTable\<T\>"
+`StringComparer.Ordinal` 提供大小写敏感的标识符匹配。Key selector 只在构造时执行一次；查询时不会再次调用。
 
-**原因：** 两行数据共享了相同的 `Id` 值。
+### Catalog 原子热替换
 
-**修复：** 检查 Excel 或数据源。首次出现的行被保留，后续重复行输出警告。
+在线游戏下载新内容 generation，需要不重启就替换 Catalog。在加载 owner 上构建候选 generation，校验后原子发布：
 
-### CS0234: ByteBuf 命名空间错误
+```csharp
+public async Task ReloadContentAsync(byte[] manifestBytes, CancellationToken ct)
+{
+    DataTableBytesCache candidateCache = LoadPayloads(manifestBytes, ct);
+    DataTableManifest manifest = ParseManifest(manifestBytes, candidateCache);
+    manifest.ValidateRequiredTables(candidateCache);
 
-**原因：** Luban 集成模块的命名空间 `CycloneGames.DataTable.Unity.Integrations.Luban` 与全局 `Luban` 命名空间冲突。
+    DataTableCatalog candidateCatalog = await BuildCatalogAsync(candidateCache, manifest, ct);
+    ValidateCrossTableReferences(candidateCatalog);
 
-**修复：** 此问题已在模块中解决——使用 `global::Luban.ByteBuf` 消除歧义。
+    DataTableRegistry.Publish(candidateCatalog);
 
-### MessagePack 反序列化失败
+    // 上一代 reader 全部退出后：
+    _previousCache?.Dispose();
+    _previousCache = candidateCache;
+}
+```
 
-**原因：** 行类型缺少 `[MessagePackObject]` 或 `[Key(n)]` 注解，或者 `.bytes` 文件内容与调用的 API 期望格式不一致。
+`DataTableRegistry.Publish` 原子替换整个 Catalog；在替换前捕获 `Current` 的 reader 仍看到上一个快照。应用负责协调上一代 backing resource 的退役。
 
-**修复：**
-1. 注解行类型：`[MessagePackObject] public class MyRow : IDataRow`
-2. 注解所有属性：`[Key(0)] public int Id { get; set; }`
-3. 调用 `Build<TRow>()` 时，使用 `MessagePackSerializer.Serialize<TRow[]>(rows)` 序列化 `TRow[]`
-4. 旧的 `List<TRow>` payload 使用 `MessagePackConfigProvider.BuildList<TRow>()`
+### 无反射注册生成表集合
 
----
+代码生成器产出一个 `cfg.Tables` root，包含强类型 Table property。用显式 descriptor 注册，让注册图在 IL2CPP 与 managed stripping 下保持明确：
+
+```csharp
+var descriptors = new[]
+{
+    new DataTableGeneratedTableCollector.TableDescriptor<cfg.Tables>(
+        typeof(cfg.TbItem),
+        static tables => tables.TbItem),
+    new DataTableGeneratedTableCollector.TableDescriptor<cfg.Tables>(
+        typeof(cfg.TbPrice),
+        static tables => tables.TbPrice),
+};
+
+DataTableCatalog catalog =
+    DataTableGeneratedTableCollector.CreateCatalog(generatedTables, descriptors);
+```
+
+不进行 runtime assembly 扫描或反射发现。
+
+## 性能与内存
+
+| 操作 | 运行时特征 |
+| --- | --- |
+| 构造完成后的成功 `Get`、`GetOrDefault`、`TryGet` | 期望 `O(1)` Dictionary 查询，无有意的托管分配。 |
+| Key 缺失时调用 `Get` | 创建并抛出 `KeyNotFoundException`；不应作为常规热路径控制流。 |
+| `All[index]` | 通过只读 view 进行 `O(1)` 访问。 |
+| Table 构造 | 冷路径；除非转移所有权，否则复制数组，并分配 row view 和 key index。 |
+| Catalog 强类型查询 | 期望 `O(1)` 的 Type-keyed Dictionary 查询。 |
+| Registry 读取 | Volatile snapshot 读取，不使用 reader lock。 |
+| Registry 发布 | 串行 writer 路径；分配 state object 和诊断消息。 |
+| 字节 Cache 查询 | 加载路径，包含名称规范化和 Dictionary 查询。 |
+| Hash、Manifest 校验与解码 | 冷路径；分配和处理成本取决于后端。 |
+
+计算重载峰值内存时，应包含所有同时存活的部分：
+
+```text
+源 payload
++ Cache 自有 payload
++ Adapter 副本、解压和 Decoder scratch memory
++ Row array 与 Row 引用的 Object
++ Key-to-index Dictionary
++ 发布期间重叠的旧 Generation 与候选 Generation
+```
+
+只有能证明所有权时才使用 `FromOwnedArray` 和 `AddOwned`；节省一次复制不应以可写 alias 或 Dispose 后访问风险为代价。Cache 应跟随内容 generation 建立 Scope，不应在进程级永久保留全部 payload。对于大型 value-type row，应把行值复制成本纳入 Profile。只有代表性 Benchmark 证明它是主要瓶颈时，才增加专用访问 API。性能预算应记录 row 形状、key 类型、命中与未命中分布、表规模、后端、Unity scripting backend、目标硬件、预热方式和 GC 测量窗口。
+
+### 线程与生命周期规则
+
+- 在游戏热路径之外，由一个加载 owner 构造 Table、Catalog、Manifest 和 Cache。
+- Row、引用对象和 comparer 保持不可变时，已发布的 Table 与 Catalog 可以并发读取。
+- `DataTableCatalogBuilder` 和未 Seal 的 `DataTableBytesCache` 是单 owner 可变对象。
+- `Seal()` 禁止 Cache 修改，但它本身不是内存发布屏障。
+- 不得让 `Dispose()` 与 Cache reader，或依赖该 owner 的 Table view 并发执行。
+- `DataTableRegistry` 串行化 writer，并向 reader 暴露 volatile immutable snapshot。
+- Luban payload 请求同步执行，并留在 factory owner thread。
+- Unity object 和 AssetManagement loader 遵循 Unity main-thread affinity。
+
+线程安全来自已发布不可变快照及其所有权协议。它不会让可变 row object 或第三方 parser state 自动具备并发安全性。
+
+### 平台指南
+
+- **Windows、Linux、macOS：** 使用 Luban 指南中的平台生成 wrapper。Table identity 必须同时兼容大小写敏感和不敏感文件系统。
+- **IL2CPP 与 managed stripping：** 使用 source-generated serializer 和显式 `TableDescriptor<TTableSet>` 注册。只对后端确实要求保留的生成类型配置 preservation。
+- **iOS 与 Android：** 在 source buffer、adapter copy、解压、解码 row、index Dictionary 和 generation overlap 同时存在时，测量冷加载耗时与峰值内存。
+- **WebGL：** 不依赖后台线程。把同步解码工作和托管内存峰值控制在经过测量的帧预算或 Loading Screen 预算内。
+- **Dedicated Server：** Server composition 只引用 Core 和纯 C# adapter，排除 Unity Asset Loading 和 Editor assembly。
+- **主机平台：** 使用平台持有者工具链验证原生依赖导入、文件名规则、内存限制、AOT 行为和认证要求。
+
+每个支持的 scripting backend 和平台配置都应执行 clean Player build 与代表性内容测试。Editor 结果适合开发阶段检查，但不能替代目标 Runtime Profile。
+
+### 安全、持久化与日志
+
+文件、远程配置、补丁、Mod 和命令行选择的内容都应视为不可信输入。应限制 payload 字节、总字节、行数、表数、解压、嵌套集合、递归深度、字符串、处理时间和诊断数量。发布前校验稳定 ID、数值范围、引用、schema 版本、权限和签名。
+
+Core 不写文件，也不使用 `EditorPrefs` 或 `PlayerPrefs`。
+
+| 数据 | Owner 与生命周期 |
+| --- | --- |
+| Workbook、schema 与 Generator 配置 | 纳入版本控制的内容源。 |
+| 生成 C# 与二进制 payload | 可重建的内容管线输出；按产品管线决定提交或发布。 |
+| Manifest 与 schema version | 与匹配的 payload 一起版本化和发布。 |
+| `DataTableLubanSettings.asset` | 可见的 Unity 项目配置；保留一个权威资产。 |
+| Runtime byte cache | 由 Runtime 内容 Scope 持有，在 reader 退役后 Dispose。 |
+
+`DataTableLogger` 在 Core 中默认使用 `System.Console`。Composition root 可以设置 `LogInfo`、`LogWarning` 和 `LogError`；`CycloneGames.DataTable.Unity.Runtime` 会安装 Unity 日志。关闭 Domain Reload 时，应在 subsystem 注册阶段重置或重新绑定自定义 delegate。日志应包含 table identity、generation、stage、limit 和 failure category，但不能记录 secret 或完整恶意 payload。
+
+## 故障排查
+
+| 现象 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| 构造函数报告重复 key | 两行共享同一 key | 修正内容源或 key selector；一个 Table 内每个 key 必须唯一 |
+| `Get<TTable>()` 找不到 Catalog entry | Contract type 不正确 | 使用 `DataTableCatalogBuilder.Add<TTable>` 注册时的准确 contract type 查询 |
+| `DataTableRegistry.Get<TTable>()` 返回 `null` | 未发布 Catalog，或缺少 contract | 确认包含该 contract 的完整 Catalog 已经发布；检查 `IsInitialized`/`Generation` |
+| 大小写不同的名称被 Cache 报告为已存在 | 不区分大小写的 identity | 使用一个规范且可移植的 Table identity；Cache 和 Manifest identity 不区分大小写 |
+| 加载后修改 Cache 时抛出异常 | Cache 已 Seal | 为新的内容 generation 创建新的候选 Cache |
+| Manifest 拒绝 payload | Schema、长度或 Hash 不匹配 | 检查 schema version、规范化 Table name、预期字节长度、SHA-256 和发布版本 |
+| Luban callback 报告线程或生命周期错误 | Callback 被保存或离线程调度 | 所有生成 payload 请求都必须在 `LubanDataTableSetFactory.Create` 内同步调用；不能保存或调度 Callback |
+| MessagePack 拒绝 security policy | 安全边界不足 | 从 `MessagePackSecurity.UntrustedData` 开始，保持抗 Hash 碰撞，并把解压大小限制到 `MaxBytesPerTable` |
+| MessagePack 无法解码 row | Payload 形状错误或缺少 formatter | 确认 payload 是顶层 `TRow[]`、row formatter 已生成，并且显式 resolver 包含它 |
+| Luban Inspector 报告路径无效 | 目录或脚本配置错误 | 校验相对 Unity 项目的目录、平台脚本扩展名、脚本是否存在，以及设置资产是否唯一 |
+| Timeout 后 Luban 执行仍处于 blocked | 子进程未干净退出 | 停止 Generator 进程，检查 `.cyclonegames-datatable-writer.lock` 和输出，恢复目录，然后重启 Unity |
+| 重载内存高于 Cache Total | Generation 重叠和 Decoder scratch | Profile payload source、copy、解压、decoder object、row object、Dictionary 和新旧 generation overlap |
+
+## 验证
+
+### Core 与 Integration 测试
+
+通过 Unity Test Runner 或项目的 batchmode test 入口运行以下 EditMode test assembly：
+
+- `CycloneGames.DataTable.Tests.Editor`
+- 启用 Luban 时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.Luban`
+- 启用 MessagePack 时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack`
+- `CycloneGames.DataTable.Tests.Performance`
+
+产品测试还应加入重复和缺失 key、异常 payload、数量超限、schema 不匹配、跨表引用失败、取消、重载回滚和 backing owner 退役等 fixture。
+
+### Generator 验证
+
+生成内容前校验配置，执行对应平台 wrapper，检查执行摘要，并在提交前审核生成差异。Wrapper 命令和恢复流程见 [Luban 指南](../../../../../DataTable/Luban/README.SCH.md)。Package 内 CodeGen 工具的构建与自测试步骤见 [Tools~/CodeGen/README.SCH.md](./Tools~/CodeGen/README.SCH.md)。
+
+### Player 验证
+
+对每个支持的构建配置执行：
+
+1. 从 clean checkout 构建；
+2. 验证 asmdef 条件和 serializer 注册；
+3. 加载最小、典型和最大规模的代表性内容；
+4. 记录冷加载时间、峰值内存、保留内存和热查询分配；
+5. 覆盖损坏、缺失、取消和回滚路径；
+6. 使用 shipping scripting backend 和 managed stripping 重复验证。
+
+## API 导航
+
+| 类型 | 主要用途 |
+| --- | --- |
+| `IDataRow<TKey>` / `IDataRow` | 手写或生成 row 可选实现的稳定主键 contract。 |
+| `IDataTableRows<TRow>` | 最小、按源顺序读取的只读 row view。 |
+| `IDataTable<TKey, TRow>` / `IDataTable<TRow>` | 只读 keyed table contract。 |
+| `DataTable<TKey, TRow>` / `DataTable<TRow>` | 不可变 row storage 与 key-to-index 查询。 |
+| `DataTableLoadLimits` | 显式的表数、字节、行数和名称预算。 |
+| `DataTableCatalog` | 不可变 Type-indexed table snapshot。 |
+| `DataTableCatalogBuilder` | 一次性的候选 Catalog 构造器。 |
+| `DataTableRegistry` | 可选的进程级原子发布入口。 |
+| `DataTableGeneratedTableCollector` | AOT-safe 生成表集合收集。 |
+| `IDataTableBytesProvider` | 借用只读 payload 的访问 contract。 |
+| `DataTableBytesCache` | 有界的物化 payload array owner。 |
+| `DataTableManifest` / `DataTableManifestEntry` | Schema、存在性、字节长度、位置和 SHA-256 元数据。 |
+| `DataTableHashUtility` | SHA-256 计算、规范化和严格匹配。 |
+| `DataTableNameUtility` | 可移植的 Table name、扩展名和路径规范化。 |
+| `DataTableLocationResolver` | 构造可移植相对 Location。 |
+| `DataTableSetScope` | 管理生成 root、Catalog 和可选 backing owner 生命周期。 |
+| `DataTableLogger` | 可替换的日志边界。 |
+| `LubanDataTableSetFactory` | 创建有界且私有持有的 Luban buffer。 |
+| `MessagePackConfigProvider` | 有界 MessagePack row array 解码和 Table 构造。 |
+| `DataTableLubanSettings` | 可见的 Unity Editor 生成设置。 |
+| `DataTableLubanRunner` | 经过校验的单 writer 外部生成进程。 |
+
+## 相关文档
+
+- [Luban 目录与生成教程](../../../../../DataTable/Luban/README.SCH.md)
+- [DataTable CodeGen 教程](./Tools~/CodeGen/README.SCH.md)
+- [GameplayTags DataTable 集成](../CycloneGames.GameplayTags.DataTable/README.SCH.md)

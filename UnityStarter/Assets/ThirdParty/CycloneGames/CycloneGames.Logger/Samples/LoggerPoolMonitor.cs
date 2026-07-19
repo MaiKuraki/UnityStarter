@@ -1,136 +1,53 @@
-using UnityEngine;
 using CycloneGames.Logger;
+using UnityEngine;
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
 /// <summary>
-/// Demonstrates object pool monitoring and three-tier capacity management.
-/// Shows pool statistics and validates zero-GC behavior under load.
+/// Displays bounded queue and cache observations. This sample is diagnostic only and is
+/// not a performance or zero-allocation proof.
 /// </summary>
-public class LoggerPoolMonitor : MonoBehaviour
+public sealed class LoggerPoolMonitor : MonoBehaviour
 {
-    [Header("Test Configuration")]
-    [SerializeField] private int burstLogCount = 5000;
-    [SerializeField] private float monitorInterval = 1.0f;
+    [SerializeField] private int BurstLogCount = 5000;
+    [SerializeField] private float MonitorIntervalSeconds = 1.0f;
 
-    private float lastMonitorTime;
-    private bool hasRunBurstTest = false;
+    private float _lastMonitorTime;
+    private bool _burstCompleted;
 
-    void Start()
+    private void Update()
     {
-#if UNITY_WEBGL && !UNITY_EDITOR
-        CLogger.ConfigureSingleThreadedProcessing();
-#else
-        CLogger.ConfigureThreadedProcessing();
-#endif
-        CLogger.Instance.AddLoggerUnique(new UnityLogger());
-        CLogger.Instance.SetLogLevel(LogLevel.Info);
-
-        ShowInitialPoolState();
-    }
-
-    void Update()
-    {
-        CLogger.Instance.Pump(4096);
-
-        if (!hasRunBurstTest && Time.time > 2.0f)
+        if (!_burstCompleted && Time.time > 2.0f)
         {
-            RunBurstTest();
-            hasRunBurstTest = true;
+            RunBurstExample();
+            _burstCompleted = true;
         }
 
-        if (Time.time - lastMonitorTime >= monitorInterval)
+        if (Time.time - _lastMonitorTime >= MonitorIntervalSeconds)
         {
-            ShowPoolStatistics();
-            lastMonitorTime = Time.time;
+            ShowStatistics();
+            _lastMonitorTime = Time.time;
         }
     }
 
-    void OnDestroy()
+    [ContextMenu("Show Logger Statistics")]
+    private void ShowStatistics()
     {
-        ShowFinalPoolState();
-        CLogger.Instance.Dispose();
+        LoggerMemoryStatistics memory = CLogger.GetMemoryStatistics();
+        LogProcessingStatistics processing = CLogger.Instance.GetProcessingStatistics();
+        Debug.Log(
+            $"Logger queue: {processing.QueuedCount} messages, {processing.QueuedCharacters} characters, "
+            + $"peak {processing.PeakQueuedCount}/{processing.PeakQueuedCharacters}, dropped {processing.DroppedMessageCount}.\n"
+            + $"Caches: messages {memory.RetainedLogMessages} (peak {memory.PeakRetainedLogMessages}, misses {memory.LogMessagePoolMisses}), "
+            + $"builders {memory.RetainedStringBuilders} (peak {memory.PeakRetainedStringBuilders}, misses {memory.StringBuilderPoolMisses}).");
     }
 
-    [ContextMenu("Show Pool Statistics")]
-    void ShowPoolStatistics()
+    [ContextMenu("Run Bounded Burst Example")]
+    private void RunBurstExample()
     {
-        var sbStats = CycloneGames.Logger.Util.StringBuilderPool.GetStatistics();
-        var msgStats = LogMessagePool.GetStatistics();
-
-        Debug.Log($@"
-=== Object Pool Statistics ===
-[StringBuilder Pool]
-  Current: {sbStats.CurrentSize} | Peak: {sbStats.PeakSize}
-  Gets: {sbStats.TotalGets} | Returns: {sbStats.TotalReturns} | Misses: {sbStats.TotalMisses}
-  Discards: {sbStats.TotalDiscards} | Trims: {sbStats.TrimCount}
-  Hit Rate: {sbStats.HitRate:P1} | Discard Rate: {sbStats.DiscardRate:P1}
-
-[LogMessage Pool]
-  Current: {msgStats.CurrentSize} | Peak: {msgStats.PeakSize}
-  Gets: {msgStats.TotalGets} | Returns: {msgStats.TotalReturns} | Misses: {msgStats.TotalMisses}
-  Discards: {msgStats.TotalDiscards} | Trims: {msgStats.TrimCount}
-  Hit Rate: {msgStats.HitRate:P1} | Discard Rate: {msgStats.DiscardRate:P1}
-==============================
-");
-    }
-
-    [ContextMenu("Run Burst Test")]
-    void RunBurstTest()
-    {
-        Debug.Log($"Running burst test: {burstLogCount} logs using StringBuilder API (should be 0 GC)");
-
-        var sbStatsBefore = CycloneGames.Logger.Util.StringBuilderPool.GetStatistics();
-        var msgStatsBefore = LogMessagePool.GetStatistics();
-
-        for (int i = 0; i < burstLogCount; i++)
+        for (int i = 0; i < BurstLogCount; i++)
         {
-            CLogger.LogInfo(sb => sb.Append("Burst test message ").Append(i), "BurstTest");
+            CLogger.LogInfo(i, static (value, builder) => builder.Append("Burst message ").Append(value), "BurstSample");
         }
 
-        var sbStatsAfter = CycloneGames.Logger.Util.StringBuilderPool.GetStatistics();
-        var msgStatsAfter = LogMessagePool.GetStatistics();
-
-        Debug.Log($@"
-=== Burst Test Results ({burstLogCount} logs) ===
-[StringBuilder Pool]
-  Peak Growth: {sbStatsBefore.PeakSize} → {sbStatsAfter.PeakSize} (+{sbStatsAfter.PeakSize - sbStatsBefore.PeakSize})
-  Misses: {sbStatsAfter.TotalMisses - sbStatsBefore.TotalMisses} (Should be 0 when warm!)
-  Discards: {sbStatsAfter.TotalDiscards - sbStatsBefore.TotalDiscards}
-  
-[LogMessage Pool]
-  Peak Growth: {msgStatsBefore.PeakSize} → {msgStatsAfter.PeakSize} (+{msgStatsAfter.PeakSize - msgStatsBefore.PeakSize})
-  Misses: {msgStatsAfter.TotalMisses - msgStatsBefore.TotalMisses} (Should be 0 when warm!)
-  Discards: {msgStatsAfter.TotalDiscards - msgStatsBefore.TotalDiscards}
-============================================
-");
-    }
-
-    [ContextMenu("Reset Statistics")]
-    void ResetStatistics()
-    {
-        CycloneGames.Logger.Util.StringBuilderPool.ResetStatistics();
-        LogMessagePool.ResetStatistics();
-        Debug.Log("Pool statistics reset.");
-    }
-
-    void ShowInitialPoolState()
-    {
-        Debug.Log("Logger initialized. Pool will auto-prewarm to Target capacity.");
-        ShowPoolStatistics();
-    }
-
-    void ShowFinalPoolState()
-    {
-        Debug.Log("=== Final Pool State (Before Dispose) ===");
-        ShowPoolStatistics();
+        ShowStatistics();
     }
 }
-#else
-public class LoggerPoolMonitor : MonoBehaviour
-{
-    void Start()
-    {
-        Debug.LogWarning("LoggerPoolMonitor is only available in Editor or Development builds.");
-    }
-}
-#endif

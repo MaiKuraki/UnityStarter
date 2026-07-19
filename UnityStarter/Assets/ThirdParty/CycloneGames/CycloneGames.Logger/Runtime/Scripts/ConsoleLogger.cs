@@ -6,78 +6,142 @@ using CycloneGames.Logger.Util;
 namespace CycloneGames.Logger
 {
     /// <summary>
-    /// Logs messages to standard console output and error streams.
-    /// Zero-alloc output path: formats into a pooled StringBuilder, then writes
-    /// through a shared char buffer under a static lock to avoid both interleaving and ToString() allocation.
+    /// Synchronous stdout/stderr sink suitable for CLI and dedicated server processes.
+    /// Output is serialized to prevent record interleaving.
     /// </summary>
-    public sealed class ConsoleLogger : ILogger
+    public sealed class ConsoleLogger : ILogger, IFlushableLogger, IIdempotentLoggerSinkDisposal
     {
-        private static readonly object _consoleLock = new();
-        private static readonly char[] _charBuffer = new char[1024];
+        private static readonly object ConsoleLock = new object();
+        private static readonly char[] CharacterBuffer = new char[1024];
+
+        private readonly LogSourcePathMode _sourcePathMode;
+
+        public ConsoleLogger(LogSourcePathMode sourcePathMode = LogSourcePathMode.FileName)
+        {
+            if (sourcePathMode < LogSourcePathMode.FileName || sourcePathMode > LogSourcePathMode.FullPath)
+            {
+                throw new ArgumentOutOfRangeException(nameof(sourcePathMode));
+            }
+
+            _sourcePathMode = sourcePathMode;
+        }
 
         public void Log(LogMessage logMessage)
         {
-            TextWriter writer = logMessage.Level >= LogLevel.Error ? Console.Error : Console.Out;
+            if (logMessage == null)
+            {
+                throw new ArgumentNullException(nameof(logMessage));
+            }
 
-            StringBuilder sb = StringBuilderPool.Get();
+            TextWriter writer = logMessage.Level >= LogLevel.Error ? Console.Error : Console.Out;
+            StringBuilder builder = StringBuilderPool.Get();
             try
             {
-                sb.Append(LogLevelStrings.Get(logMessage.Level));
-                sb.Append(": ");
+                builder.Append(LogLevelStrings.Get(logMessage.Level));
+                builder.Append(": ");
                 if (!string.IsNullOrEmpty(logMessage.Category))
                 {
-                    sb.Append('[');
-                    sb.Append(logMessage.Category);
-                    sb.Append("] ");
+                    builder.Append('[');
+                    AppendEscaped(builder, logMessage.Category);
+                    builder.Append("] ");
                 }
 
-                if (logMessage.MessageBuilder != null)
-                {
-                    var mb = logMessage.MessageBuilder;
-                    for (int i = 0; i < mb.Length; i++)
-                    {
-                        sb.Append(mb[i]);
-                    }
-                }
-                else if (logMessage.OriginalMessage != null)
-                {
-                    sb.Append(logMessage.OriginalMessage);
-                }
+                logMessage.AppendMessageTo(builder, true);
+                AppendSourceLocation(builder, logMessage.FilePath, logMessage.LineNumber, _sourcePathMode);
 
-                if (!string.IsNullOrEmpty(logMessage.FilePath))
+                lock (ConsoleLock)
                 {
-                    sb.Append(" (at ");
-                    string src = logMessage.FilePath;
-                    for (int i = 0; i < src.Length; i++)
-                    {
-                        char c = src[i];
-                        sb.Append(c == '\\' ? '/' : c);
-                    }
-                    sb.Append(':');
-                    sb.Append(logMessage.LineNumber);
-                    sb.Append(')');
-                }
-
-                lock (_consoleLock)
-                {
-                    int length = sb.Length;
-                    int offset = 0;
-                    while (offset < length)
-                    {
-                        int count = Math.Min(_charBuffer.Length, length - offset);
-                        sb.CopyTo(offset, _charBuffer, 0, count);
-                        writer.Write(_charBuffer, 0, count);
-                        offset += count;
-                    }
+                    WriteBuilder(writer, builder);
                     writer.WriteLine();
                 }
             }
             finally
             {
-                StringBuilderPool.Return(sb);
+                StringBuilderPool.Return(builder);
             }
         }
 
-        public void Dispose() { }
+        public bool TryFlush(LogFlushMode mode)
+        {
+            try
+            {
+                lock (ConsoleLock)
+                {
+                    Console.Out.Flush();
+                    Console.Error.Flush();
+                }
+
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        public void Dispose()
+        {
+            TryFlush(LogFlushMode.Buffered);
+        }
+
+        private static void WriteBuilder(TextWriter writer, StringBuilder builder)
+        {
+            int offset = 0;
+            while (offset < builder.Length)
+            {
+                int count = Math.Min(CharacterBuffer.Length, builder.Length - offset);
+                builder.CopyTo(offset, CharacterBuffer, 0, count);
+                writer.Write(CharacterBuffer, 0, count);
+                offset += count;
+            }
+        }
+
+        private static void AppendSourceLocation(StringBuilder builder, string sourcePath, int lineNumber, LogSourcePathMode sourcePathMode)
+        {
+            if (string.IsNullOrEmpty(sourcePath) || sourcePathMode == LogSourcePathMode.None)
+            {
+                return;
+            }
+
+            int start = 0;
+            if (sourcePathMode == LogSourcePathMode.FileName)
+            {
+                for (int i = 0; i < sourcePath.Length; i++)
+                {
+                    char value = sourcePath[i];
+                    if (value == '/' || value == '\\')
+                    {
+                        start = i + 1;
+                    }
+                }
+            }
+
+            builder.Append(" (at ");
+            for (int i = start; i < sourcePath.Length; i++)
+            {
+                char value = sourcePath[i];
+                if (char.IsControl(value))
+                {
+                    builder.Append('_');
+                }
+                else
+                {
+                    builder.Append(value == '\\' ? '/' : value);
+                }
+            }
+
+            builder.Append(':');
+            InvariantText.AppendInt32(builder, lineNumber);
+            builder.Append(')');
+        }
+
+        private static void AppendEscaped(StringBuilder builder, string value)
+        {
+            for (int i = 0; i < value.Length; i++)
+            {
+                char character = value[i];
+                builder.Append(char.IsControl(character) ? '_' : character);
+            }
+        }
     }
 }

@@ -21,7 +21,6 @@ namespace CycloneGames.Networking.Diagnostics
         public float JitterMs { get; set; }             // Random variance added to latency
         public float PacketLossPercent { get; set; }    // 0-100
         public float DuplicatePercent { get; set; }     // 0-100
-        public float ReorderPercent { get; set; }       // 0-100
         public bool Enabled { get; set; } = true;
 
         // Presets
@@ -53,6 +52,7 @@ namespace CycloneGames.Networking.Diagnostics
             LatencyMs = preset.LatencyMs;
             JitterMs = preset.JitterMs;
             PacketLossPercent = preset.PacketLossPercent;
+            DuplicatePercent = 0f;
         }
 
         // INetTransport pass-through

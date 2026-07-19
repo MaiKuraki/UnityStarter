@@ -5,9 +5,10 @@ namespace CycloneGames.Hash.Core
 {
     /// <summary>
     /// Stable non-zero 32-bit hash helpers for deterministic ids, manifests and protocol-compatibility checks.
-    /// Guarantees a non-zero digest so callers can use 0 as an "unset" sentinel. 32-bit width suits identifier
-    /// spaces with up to a few hundred thousand distinct keys; use <see cref="StableHash64"/> for large or
-    /// security-adjacent spaces.
+    /// Maps a zero digest to <see cref="NonZeroFallback"/> so callers can reserve 0 as an unset sentinel.
+    /// This mapping introduces an additional collision with the fallback value and does not make hashes unique.
+    /// Use only for explicitly 32-bit contracts with collision detection; prefer <see cref="StableHash64"/>
+    /// when the format permits a wider value.
     /// </summary>
     public static class StableHash32
     {
@@ -47,6 +48,9 @@ namespace CycloneGames.Hash.Core
             return Fnv1a32.CombineUInt32LittleEndian(hash, value);
         }
 
+        /// <summary>
+        /// Maps 0 to <see cref="NonZeroFallback"/>. Call this on a final digest, not every intermediate state.
+        /// </summary>
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static uint EnsureNonZero(uint value)
         {

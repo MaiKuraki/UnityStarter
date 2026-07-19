@@ -4,13 +4,13 @@ using CycloneGames.GameplayTags.Core;
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     /// <summary>
-    /// Owns active gameplay effects and the indexes needed for stacking, network lookup, granted tags, and ability cleanup.
+    /// Owns active gameplay effects and the indexes needed for stacking, local reconciliation, granted tags, and ability cleanup.
     /// </summary>
-    public sealed class ActiveEffectContainer
+    internal sealed class ActiveEffectContainer
     {
         private readonly List<ActiveGameplayEffect> _activeEffects;
         private readonly Dictionary<ActiveGameplayEffect, int> _indexByEffect;
-        private readonly Dictionary<int, ActiveGameplayEffect> _effectByNetworkId;
+        private readonly Dictionary<int, ActiveGameplayEffect> _effectByReconciliationId;
         private readonly Dictionary<GameplayEffect, ActiveGameplayEffect> _stackingByTarget;
         private readonly Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect> _stackingBySource;
         private readonly Dictionary<int, List<ActiveGameplayEffect>> _effectsByGrantedTagIndex;
@@ -28,7 +28,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             _activeEffects = new List<ActiveGameplayEffect>(activeEffectCapacity);
             _indexByEffect = new Dictionary<ActiveGameplayEffect, int>(activeEffectCapacity);
-            _effectByNetworkId = new Dictionary<int, ActiveGameplayEffect>(activeEffectCapacity);
+            _effectByReconciliationId = new Dictionary<int, ActiveGameplayEffect>(activeEffectCapacity);
             _stackingByTarget = new Dictionary<GameplayEffect, ActiveGameplayEffect>(stackingCapacity);
             _stackingBySource = new Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect>(stackingCapacity);
             _effectsByGrantedTagIndex = new Dictionary<int, List<ActiveGameplayEffect>>(grantedTagCapacity);
@@ -41,14 +41,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public IReadOnlyList<ActiveGameplayEffect> ActiveEffects => _activeEffects;
         public int Count => _activeEffects.Count;
         public int IndexCount => _indexByEffect.Count;
-        public int NetworkIndexCount => _effectByNetworkId.Count;
+        public int ReconciliationIndexCount => _effectByReconciliationId.Count;
         public int GrantedTagIndexCount => _effectsByGrantedTagIndex.Count;
         public int AbilityEffectIndexCount => _effectsByAbility.Count;
         public int AbilityEffectListPoolSize => _abilityEffectListPool.Count;
 
         internal List<ActiveGameplayEffect> MutableActiveEffects => _activeEffects;
         internal Dictionary<ActiveGameplayEffect, int> MutableIndexByEffect => _indexByEffect;
-        internal Dictionary<int, ActiveGameplayEffect> MutableEffectByNetworkId => _effectByNetworkId;
+        internal Dictionary<int, ActiveGameplayEffect> MutableEffectByReconciliationId => _effectByReconciliationId;
         internal Dictionary<GameplayEffect, ActiveGameplayEffect> MutableStackingByTarget => _stackingByTarget;
         internal Dictionary<(GameplayEffect, AbilitySystemComponent), ActiveGameplayEffect> MutableStackingBySource => _stackingBySource;
         internal Dictionary<int, List<ActiveGameplayEffect>> MutableEffectsByGrantedTagIndex => _effectsByGrantedTagIndex;
@@ -66,7 +66,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (activeEffectCapacity > 0)
             {
                 _indexByEffect.EnsureCapacity(activeEffectCapacity);
-                _effectByNetworkId.EnsureCapacity(activeEffectCapacity);
+                _effectByReconciliationId.EnsureCapacity(activeEffectCapacity);
             }
 
             if (stackingCapacity > 0)
@@ -86,19 +86,19 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
         }
 
-        public bool TryGetByNetworkId(int networkId, out ActiveGameplayEffect effect)
+        public bool TryGetByReconciliationId(int reconciliationId, out ActiveGameplayEffect effect)
         {
-            return _effectByNetworkId.TryGetValue(networkId, out effect);
+            return _effectByReconciliationId.TryGetValue(reconciliationId, out effect);
         }
 
-        public ActiveGameplayEffect FindByNetworkId(int networkId)
+        public ActiveGameplayEffect FindByReconciliationId(int reconciliationId)
         {
-            if (networkId == 0)
+            if (reconciliationId == 0)
             {
                 return null;
             }
 
-            return _effectByNetworkId.TryGetValue(networkId, out var effect) &&
+            return _effectByReconciliationId.TryGetValue(reconciliationId, out var effect) &&
                 effect != null &&
                 !effect.IsExpired
                     ? effect
@@ -114,16 +114,16 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             _indexByEffect[effect] = _activeEffects.Count;
             _activeEffects.Add(effect);
-            if (effect.NetworkId != 0)
+            if (effect.ReconciliationId != 0)
             {
-                _effectByNetworkId[effect.NetworkId] = effect;
+                _effectByReconciliationId[effect.ReconciliationId] = effect;
             }
 
             TrackStackingEffect(effect);
             return true;
         }
 
-        public ActiveGameplayEffect RemoveAtSwapBack(int index)
+        public ActiveGameplayEffect RemoveAtStable(int index)
         {
             if (index < 0 || index >= _activeEffects.Count)
             {
@@ -131,35 +131,31 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
 
             var removedEffect = _activeEffects[index];
-            if (removedEffect.NetworkId != 0 &&
-                _effectByNetworkId.TryGetValue(removedEffect.NetworkId, out var indexed) &&
+            if (removedEffect.ReconciliationId != 0 &&
+                _effectByReconciliationId.TryGetValue(removedEffect.ReconciliationId, out var indexed) &&
                 ReferenceEquals(indexed, removedEffect))
             {
-                _effectByNetworkId.Remove(removedEffect.NetworkId);
+                _effectByReconciliationId.Remove(removedEffect.ReconciliationId);
             }
 
-            int lastIndex = _activeEffects.Count - 1;
-            if (index != lastIndex)
-            {
-                var movedEffect = _activeEffects[lastIndex];
-                _activeEffects[index] = movedEffect;
-                _indexByEffect[movedEffect] = index;
-            }
-
-            _activeEffects.RemoveAt(lastIndex);
+            _activeEffects.RemoveAt(index);
             _indexByEffect.Remove(removedEffect);
+            for (int movedIndex = index; movedIndex < _activeEffects.Count; movedIndex++)
+            {
+                _indexByEffect[_activeEffects[movedIndex]] = movedIndex;
+            }
             return removedEffect;
         }
 
-        public void RebuildNetworkIdIndex()
+        public void RebuildReconciliationIdIndex()
         {
-            _effectByNetworkId.Clear();
+            _effectByReconciliationId.Clear();
             for (int i = 0; i < _activeEffects.Count; i++)
             {
                 var effect = _activeEffects[i];
-                if (effect != null && !effect.IsExpired && effect.NetworkId != 0)
+                if (effect != null && !effect.IsExpired && effect.ReconciliationId != 0)
                 {
-                    _effectByNetworkId[effect.NetworkId] = effect;
+                    _effectByReconciliationId[effect.ReconciliationId] = effect;
                 }
             }
         }
@@ -179,34 +175,34 @@ namespace CycloneGames.GameplayAbilities.Runtime
             return false;
         }
 
-        public void SetNetworkId(ActiveGameplayEffect effect, int networkId)
+        public void SetReconciliationId(ActiveGameplayEffect effect, int reconciliationId)
         {
             if (effect == null)
             {
                 return;
             }
 
-            int oldNetworkId = effect.NetworkId;
-            if (oldNetworkId == networkId)
+            int oldReconciliationId = effect.ReconciliationId;
+            if (oldReconciliationId == reconciliationId)
             {
-                if (networkId != 0)
+                if (reconciliationId != 0)
                 {
-                    _effectByNetworkId[networkId] = effect;
+                    _effectByReconciliationId[reconciliationId] = effect;
                 }
                 return;
             }
 
-            if (oldNetworkId != 0 &&
-                _effectByNetworkId.TryGetValue(oldNetworkId, out var indexed) &&
+            if (oldReconciliationId != 0 &&
+                _effectByReconciliationId.TryGetValue(oldReconciliationId, out var indexed) &&
                 ReferenceEquals(indexed, effect))
             {
-                _effectByNetworkId.Remove(oldNetworkId);
+                _effectByReconciliationId.Remove(oldReconciliationId);
             }
 
-            effect.NetworkId = networkId;
-            if (networkId != 0)
+            effect.ReconciliationId = reconciliationId;
+            if (reconciliationId != 0)
             {
-                _effectByNetworkId[networkId] = effect;
+                _effectByReconciliationId[reconciliationId] = effect;
             }
         }
 
@@ -443,7 +439,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public bool ValidateIndexes()
         {
             if (_indexByEffect.Count != _activeEffects.Count ||
-                _effectByNetworkId.Count > _activeEffects.Count ||
+                _effectByReconciliationId.Count > _activeEffects.Count ||
                 _effectsByAbility.Count > _activeEffects.Count)
             {
                 return false;
@@ -459,9 +455,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     return false;
                 }
 
-                if (effect.NetworkId != 0 &&
-                    (!_effectByNetworkId.TryGetValue(effect.NetworkId, out var indexedByNetworkId) ||
-                     !ReferenceEquals(indexedByNetworkId, effect)))
+                if (effect.ReconciliationId != 0 &&
+                    (!_effectByReconciliationId.TryGetValue(effect.ReconciliationId, out var indexedByReconciliationId) ||
+                     !ReferenceEquals(indexedByReconciliationId, effect)))
                 {
                     return false;
                 }
@@ -525,7 +521,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public void ClearIndexes()
         {
             _indexByEffect.Clear();
-            _effectByNetworkId.Clear();
+            _effectByReconciliationId.Clear();
             _stackingByTarget.Clear();
             _stackingBySource.Clear();
             _effectsByGrantedTagIndex.Clear();

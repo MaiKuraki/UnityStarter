@@ -11,8 +11,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         AttributeRegistrationFailed = 1u << 0,
         InstantEffectFailed = 1u << 1,
         DurationEffectFailed = 1u << 2,
-        PredictionConfirmFailed = 1u << 3,
-        PredictionRejectFailed = 1u << 4,
+        PredictionCommitFailed = 1u << 3,
+        PredictionRollbackFailed = 1u << 4,
         DeltaCaptureFailed = 1u << 5,
         RuntimeDiagnosticsFailed = 1u << 6,
         RuntimeIndexValidationFailed = 1u << 7,
@@ -21,7 +21,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         PeriodicEffectFailed = 1u << 10,
         DeltaClearFailed = 1u << 11,
         PredictionAttributeRollbackFailed = 1u << 12,
-        PredictionAttributeConfirmFailed = 1u << 13
+        PredictionAttributeCommitFailed = 1u << 13
     }
 
     public struct GASSmokeTestResult
@@ -39,8 +39,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public int DeltaActiveEffectCount;
         public int DeltaGrantedAbilityCount;
         public float HealthAfterPeriodicTick;
-        public float HealthAfterPredictionReject;
-        public float HealthAfterPredictionConfirm;
+        public float HealthAfterPredictionRollback;
+        public float HealthAfterPredictionCommit;
         public bool DeltaHadChangesAfterClear;
         public long RuntimeThreadViolationCount;
 
@@ -52,7 +52,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         public static bool RunBasicRuntimeValidation(out GASSmokeTestResult result)
         {
             result = default;
-            var asc = new AbilitySystemComponent(new GameplayEffectContextFactory());
+            var asc = new AbilitySystemComponent();
             var delta = new GASAbilitySystemStateDeltaBuffer();
 
             try
@@ -92,8 +92,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
 
                 var buff = CreateAttributeEffect("GAS.SmokeTest.HealthBuff", EDurationPolicy.HasDuration, attributes.Health, EAttributeModifierOperation.Add, 10f, duration: 5f);
-                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(buff, asc));
-                if (asc.ActiveEffects.Count != 1)
+                GameplayEffectApplicationResult healthBuffResult = asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(buff, asc));
+                if (asc.ActiveEffects.Count != 1 ||
+                    healthBuffResult.ActiveEffect == null ||
+                    healthBuffResult.ActiveEffect.ReconciliationId <= 0)
                 {
                     result.FailureFlags |= GASSmokeTestFailureFlags.DurationEffectFailed;
                 }
@@ -144,7 +146,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     duration: 5f,
                     period: 1f);
                 var healthBeforePeriodic = attributes.Health.BaseValue;
-                asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(periodic, asc));
+                GameplayEffectApplicationResult periodicResult = asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(periodic, asc));
+                if (periodicResult.ActiveEffect == null || periodicResult.ActiveEffect.ReconciliationId <= 0)
+                {
+                    result.FailureFlags |= GASSmokeTestFailureFlags.PeriodicEffectFailed;
+                }
+
                 asc.Tick(0.01f, isServer: true);
                 result.HealthAfterPeriodicTick = attributes.Health.BaseValue;
                 if (Math.Abs(result.HealthAfterPeriodicTick - (healthBeforePeriodic - 5f)) > 0.001f)
@@ -152,47 +159,48 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     result.FailureFlags |= GASSmokeTestFailureFlags.PeriodicEffectFailed;
                 }
 
-                var confirmKey = asc.OpenPredictionWindow(null);
-                if (!confirmKey.IsValid)
+                var predictionSpec = asc.GrantAbility(new SmokeTestAbility());
+                var commitKey = asc.OpenPredictionWindow(predictionSpec);
+                if (!commitKey.IsValid)
                 {
-                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionConfirmFailed;
+                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionCommitFailed;
                 }
 
-                var rejectKey = asc.OpenPredictionWindow(null);
-                var healthBeforeRejectedPrediction = attributes.Health.BaseValue;
-                using (asc.BeginPredictionScope(rejectKey))
+                var rollbackKey = asc.OpenPredictionWindow(predictionSpec);
+                var healthBeforeRolledBackPrediction = attributes.Health.BaseValue;
+                using (asc.BeginPredictionScope(rollbackKey))
                 {
-                    var predictedDamage = CreateAttributeEffect("GAS.SmokeTest.PredictedRejectedDamage", EDurationPolicy.Instant, attributes.Health, EAttributeModifierOperation.Add, -7f);
+                    var predictedDamage = CreateAttributeEffect("GAS.SmokeTest.PredictedRolledBackDamage", EDurationPolicy.Instant, attributes.Health, EAttributeModifierOperation.Add, -7f);
                     asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(predictedDamage, asc));
                 }
 
-                if (!rejectKey.IsValid || !asc.RejectPredictionWindow(rejectKey) || asc.HasOpenPredictionWindow(rejectKey))
+                if (!rollbackKey.IsValid || !asc.RollbackPredictionWindow(rollbackKey) || asc.HasOpenPredictionWindow(rollbackKey))
                 {
-                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionRejectFailed;
+                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionRollbackFailed;
                 }
 
-                result.HealthAfterPredictionReject = attributes.Health.BaseValue;
-                if (Math.Abs(result.HealthAfterPredictionReject - healthBeforeRejectedPrediction) > 0.001f)
+                result.HealthAfterPredictionRollback = attributes.Health.BaseValue;
+                if (Math.Abs(result.HealthAfterPredictionRollback - healthBeforeRolledBackPrediction) > 0.001f)
                 {
                     result.FailureFlags |= GASSmokeTestFailureFlags.PredictionAttributeRollbackFailed;
                 }
 
-                var healthBeforeConfirmedPrediction = attributes.Health.BaseValue;
-                using (asc.BeginPredictionScope(confirmKey))
+                var healthBeforeCommittedPrediction = attributes.Health.BaseValue;
+                using (asc.BeginPredictionScope(commitKey))
                 {
-                    var confirmedDamage = CreateAttributeEffect("GAS.SmokeTest.PredictedConfirmedDamage", EDurationPolicy.Instant, attributes.Health, EAttributeModifierOperation.Add, -3f);
+                    var confirmedDamage = CreateAttributeEffect("GAS.SmokeTest.PredictedCommittedDamage", EDurationPolicy.Instant, attributes.Health, EAttributeModifierOperation.Add, -3f);
                     asc.ApplyGameplayEffectSpecToSelf(GameplayEffectSpec.Create(confirmedDamage, asc));
                 }
 
-                if (!asc.ConfirmPredictionWindow(confirmKey) || asc.HasOpenPredictionWindow(confirmKey))
+                if (!asc.CommitPredictionWindow(commitKey) || asc.HasOpenPredictionWindow(commitKey))
                 {
-                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionConfirmFailed;
+                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionCommitFailed;
                 }
 
-                result.HealthAfterPredictionConfirm = attributes.Health.BaseValue;
-                if (Math.Abs(result.HealthAfterPredictionConfirm - (healthBeforeConfirmedPrediction - 3f)) > 0.001f)
+                result.HealthAfterPredictionCommit = attributes.Health.BaseValue;
+                if (Math.Abs(result.HealthAfterPredictionCommit - (healthBeforeCommittedPrediction - 3f)) > 0.001f)
                 {
-                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionAttributeConfirmFailed;
+                    result.FailureFlags |= GASSmokeTestFailureFlags.PredictionAttributeCommitFailed;
                 }
 
                 asc.CapturePendingStateDeltaNonAlloc(delta);
@@ -264,6 +272,34 @@ namespace CycloneGames.GameplayAbilities.Runtime
         private sealed class SmokeTestAttributeSet : AttributeSet
         {
             public GameplayAttribute Health { get; } = new GameplayAttribute("Health");
+
+            protected override void RegisterAttributes()
+            {
+                RegisterAttribute(Health);
+            }
+        }
+
+        private sealed class SmokeTestAbility : GameplayAbility
+        {
+            public SmokeTestAbility()
+            {
+                Initialize(
+                    "GAS.SmokeTest.Prediction",
+                    EGameplayAbilityInstancingPolicy.InstancedPerActor,
+                    EAbilityExecutionPolicy.LocalOnly,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null);
+            }
+
+            public override GameplayAbility CreateRuntimeInstance()
+            {
+                return new SmokeTestAbility();
+            }
         }
     }
 }

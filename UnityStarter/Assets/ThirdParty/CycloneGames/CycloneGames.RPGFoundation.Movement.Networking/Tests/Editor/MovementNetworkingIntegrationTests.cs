@@ -21,12 +21,12 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
                 out NetworkMessageDescriptor descriptor), Is.True);
             Assert.That(MovementNetworkProtocol.MessageRange.Contains(descriptor.MessageId), Is.True);
             Assert.That(NetworkMessageRanges.Module.Contains(descriptor.MessageId), Is.True);
-            Assert.That(catalog.TryGetRegisteredModuleRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
+            Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange range), Is.True);
             Assert.That(range.Name, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
             Assert.That(catalog.TryGetRegisteredRange(descriptor.MessageId, out NetworkMessageIdRange protocolRange), Is.True);
             Assert.That(protocolRange.Name, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
             Assert.That(descriptor.Owner, Is.EqualTo(MovementNetworkProtocol.MessageOwner));
-            Assert.That(descriptor.Kind, Is.EqualTo(NetworkMessageKind.Module));
+            Assert.That(descriptor.ContractId, Is.EqualTo("MovementNetworkSnapshotMessage:v1"));
             Assert.That(descriptor.DefaultChannel, Is.EqualTo(NetworkChannel.UnreliableSequenced));
         }
 
@@ -38,9 +38,69 @@ namespace CycloneGames.RPGFoundation.Movement.Networking.Tests.Editor
             MovementNetworkProtocol.RegisterMessageCatalog(catalog);
             MovementNetworkProtocol.RegisterMessageCatalog(catalog);
 
-            Assert.That(catalog.Count, Is.EqualTo(7));
-            Assert.That(catalog.RangeCount, Is.EqualTo(1));
-            Assert.That(catalog.ModuleRangeCount, Is.EqualTo(1));
+            Assert.That(catalog.MessageCount, Is.EqualTo(7));
+            Assert.That(catalog.ManifestCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ProtocolManifest_UsesFrozenV1SchemasAndFingerprint()
+        {
+            NetworkProtocolManifest manifest = MovementNetworkProtocol.CreateProtocolManifest();
+            string[] canonicalSchemaLiterals =
+            {
+                "MovementManifestHandshakeMessage:v1",
+                "MovementInputCommandMessage:v1",
+                "MovementNetworkSnapshotMessage:v1",
+                "MovementCorrectionMessage:v1",
+                "MovementFullStateRequestMessage:v1",
+                "MovementAuthorityTransferMessage:v1",
+                "MovementTeleportMessage:v1"
+            };
+            ulong[] expectedSchemaHashes =
+            {
+                0x0DD5DE0CCEFCE7E8UL,
+                0xAA87AB05419B69EFUL,
+                0x2BE4EE685C0790F4UL,
+                0x758234C52F9A9A0EUL,
+                0xE17B11E352C841E9UL,
+                0xA29871158FF1EDD8UL,
+                0xCBBC9E08374EA4B9UL
+            };
+
+            Assert.That(manifest.Fingerprint, Is.EqualTo(0xC3ABA4C56241EB7BUL));
+            Assert.That(MovementNetworkProtocol.ProtocolFingerprint, Is.EqualTo(manifest.Fingerprint));
+            Assert.That(canonicalSchemaLiterals.Length, Is.EqualTo(expectedSchemaHashes.Length));
+            Assert.That(manifest.Messages.Count, Is.EqualTo(expectedSchemaHashes.Length));
+            for (int i = 0; i < expectedSchemaHashes.Length; i++)
+            {
+                Assert.That(
+                    ComputeFnv1a64(canonicalSchemaLiterals[i]),
+                    Is.EqualTo(expectedSchemaHashes[i]),
+                    canonicalSchemaLiterals[i]);
+                Assert.That(manifest.Messages[i].SchemaHash, Is.EqualTo(expectedSchemaHashes[i]));
+                Assert.That(manifest.Messages[i].ContractId, Is.EqualTo(canonicalSchemaLiterals[i]));
+            }
+        }
+
+        private static ulong ComputeFnv1a64(string canonicalLiteral)
+        {
+            const ulong offsetBasis = 14695981039346656037UL;
+            const ulong prime = 1099511628211UL;
+            ulong hash = offsetBasis;
+
+            for (int i = 0; i < canonicalLiteral.Length; i++)
+            {
+                char character = canonicalLiteral[i];
+                if (character > 0x7F)
+                {
+                    throw new AssertionException("Canonical schema literals must contain ASCII characters only.");
+                }
+
+                hash ^= (byte)character;
+                hash = unchecked(hash * prime);
+            }
+
+            return hash;
         }
 
         [Test]
