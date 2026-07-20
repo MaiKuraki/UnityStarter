@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.UIFramework is an explicitly composed UGUI window framework for Unity. It owns window sessions, validates configuration, coordinates asynchronous open and close operations, binds optional presentation and dependency-injection policies, tracks causal navigation, and releases every session-owned resource through one main-thread-confined authority.
+CycloneGames.UIFramework owns and coordinates UGUI windows in Unity. It validates configuration, opens and closes windows with async cancellation, binds optional presentation and dependency-injection policies, tracks causal navigation history, and releases every session-owned resource through one main-thread-confined service.
 
 ## Table of Contents
 
@@ -18,15 +18,17 @@ CycloneGames.UIFramework is an explicitly composed UGUI window framework for Uni
 
 ## Overview
 
-The framework provides one authoritative `UIService` per `UIRoot`, stable string window identifiers, validated `UIWindowConfiguration` assets, direct-prefab and provider-backed loading, deterministic layer placement, causal navigation, coordinated two-window transitions, scene-bound cleanup, bounded dynamic sprite-atlas pages, and locale-driven layout overrides. The same lifecycle contract scales from a small menu to a long-running live-service client or a large multi-scene game.
+`UIService` is the central window session owner. It validates configuration assets, resolves layers, binds optional extensions, executes transitions, and disposes every session-owned resource during close, rollback, or shutdown.
 
-Use it as a plain window service, with MVP, with DI, or with both. Optional capabilities stay at assembly boundaries: AssetManagement and Localization types live in dedicated integration assemblies; DI and motion drivers compile only when their packages are present. The core window contracts do not expose them.
+Windows open by stable string ID through an asset provider or by direct `UIWindowConfiguration`. Layers order windows by configuration priority. Navigation forms a causal graph of active windows and supports coordinated two-window transitions. Scene-bound windows close automatically when their owner scene changes.
 
-Game-specific screen flow, business rules, save data, network authority, input rebinding, focus arbitration, translation tables, window pooling, and platform SDK integration remain application responsibilities. Keep those policies in the composition root or in narrow optional binders and providers.
+Optional capabilities stay at assembly boundaries. MVP and navigation types live in the core `Runtime` assembly. Asset loading, localization, DI, and motion drivers compile in separate integration assemblies only when their packages are present.
+
+Screen flow, business rules, save data, input handling, and platform SDK integration belong to the composition root or optional binders.
 
 ### Key Features
 
-- **One authoritative `UIService`**: main-thread-confined window-session owner with cancellation-aware `UniTask` operations.
+- **`UIService`** as the single main-thread-confined window-session owner with cancellation-aware `UniTask` operations.
 - **Explicit binder composition**: transactional per-window extension for MVP, DI, analytics, accessibility, or project policies.
 - **Provider-backed loading**: direct-prefab or `IUIWindowAssetProvider` with AssetManagement adapter and session-owned leases.
 - **Causal navigation**: active-window graph with coordinated enter/leave transitions and caller-buffered queries.
