@@ -1,11 +1,8 @@
 {
-    "name": "CycloneGames.Service.Runtime",
-    "rootNamespace": "CycloneGames.Services.Unity",
+    "name": "CycloneGames.Service.Core",
+    "rootNamespace": "CycloneGames.Services",
     "references": [
-        "CycloneGames.Service.Core",
-        "VYaml.Core",
-        "CycloneGames.IO.Core",
-        "CycloneGames.IO.SystemIO"
+        "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
@@ -15,5 +12,5 @@
     "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false
+    "noEngineReferences": true
 }
