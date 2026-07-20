@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.Service.Tests.Core",
+    "rootNamespace": "CycloneGames.Services.Tests",
+    "references": [
+        "CycloneGames.Service.Core",
+        "CycloneGames.Hash.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
