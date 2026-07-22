@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.settings.persistence",
+  "version": "0.1.0",
+  "displayName": "CycloneGames.Settings.Persistence",
+  "description": "Optional orchestration between CycloneGames Settings and Persistence.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.settings": "0.1.0",
+    "com.cyclone-games.persistence": "0.1.0"
+  },
+  "keywords": [
+    "settings",
+    "persistence",
+    "migration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

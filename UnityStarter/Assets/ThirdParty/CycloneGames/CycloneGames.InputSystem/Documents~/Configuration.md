@@ -4,9 +4,13 @@
 
 Related: [Getting started](GettingStarted.md) | [Runtime guide](RuntimeGuide.md) | [Module reference](../README.md)
 
+## Overview
+
 This guide explains the authoring model shared by YAML, the Input System Editor, and runtime validation. The Editor and YAML represent the same data: the Editor provides discoverable fields, tooltips, validation, safe writes, and code generation; YAML remains the reviewable source format.
 
-## Configuration Hierarchy
+## Core Concepts
+
+### Configuration Hierarchy
 
 ```mermaid
 flowchart TD
@@ -21,16 +25,16 @@ flowchart TD
     M --> Q["Composite parts"]
 ```
 
-## Root Fields
+### Root Fields
 
 | Field | Required | Meaning |
 | --- | --- | --- |
-| `schemaVersion` | Yes | Runtime format version. Author new files with the current value exposed by `InputConfiguration.CurrentSchemaVersion`. |
+| `schemaVersion` | Yes | Runtime format version. Author new files with `InputConfiguration.CurrentSchemaVersion`. |
 | `schemaFingerprint` | No | Editor diagnostic value. Runtime acceptance is determined by schema and validation. |
 | `joinAction` | No | Shared join action considered for every player slot when lobby listening is active. |
 | `playerSlots` | Yes | Declared local-player configurations. Each `playerId` must be unique. |
 
-## Player Slot
+### Player Slot
 
 | Field | Required | Meaning |
 | --- | --- | --- |
@@ -40,11 +44,9 @@ flowchart TD
 | `controlSchemes` | Usually | Named device requirement sets used during join and device assignment. |
 | `contexts` | Yes | Context definitions and their action bindings. |
 
-Player IDs are configuration identities, not list positions. A two-player product commonly uses `0` and `1`, but sparse IDs are accepted when they remain within configured limits.
+Player IDs are configuration identities, not list positions. Sparse IDs are accepted when they remain within configured limits.
 
-## Control Scheme
-
-A control scheme describes which devices can satisfy a player slot.
+### Control Scheme
 
 ```yaml
 controlSchemes:
@@ -69,7 +71,7 @@ controlSchemes:
 
 Use optional mouse requirements when keyboard-only operation is valid. Use `isOr` only when the intended device rule is an explicit alternative.
 
-## Context
+### Context
 
 Contexts group actions by product state: `Gameplay` for character control, `Vehicle` for vehicle control, `Menu` for navigation, `Modal` for dialogs that must capture input.
 
@@ -83,7 +85,9 @@ Contexts group actions by product state: `Gameplay` for character control, `Vehi
 
 Runtime `InputContext` instances refer to configured context/action-map identities and own command subscriptions. Configuration defines available actions; runtime code decides which contexts are active.
 
-## Action Binding: Basic Fields
+## Usage Guide
+
+### Action Binding: Basic Fields
 
 | Field | Required | Meaning | Example |
 | --- | --- | --- | --- |
@@ -91,13 +95,13 @@ Runtime `InputContext` instances refer to configured context/action-map identiti
 | `Action Name` | Yes | Stable action identity. | `Confirm`, `Move` |
 | `Update Mode` | Yes | `EventDriven` publishes changes; `Polling` samples from the frame provider. | `EventDriven` |
 | `Device Bindings` | One binding source | Direct Unity Input System control paths. | `<Keyboard>/enter` |
-| `Composite Bindings` | One binding source | Structured composites, commonly keyboard movement. | `2DVector` |
+| `Composite Bindings` | One binding source | Structured composites such as keyboard movement. | `2DVector` |
 | `Long Press Ms` | No | Module-level long-press duration. Zero disables it. | `500` |
 | `Press Threshold` | No | Actuation threshold used by long-press timing. | `0.5` |
 
 Direct and composite bindings may coexist. Each direct path must be unique inside one action.
 
-### Choosing `Type`
+#### Choosing `Type`
 
 | Type | Typical controls | Runtime access |
 | --- | --- | --- |
@@ -107,35 +111,20 @@ Direct and composite bindings may coexist. Each direct path must be unique insid
 
 Choose the value shape consumed by product code. Validation checks that configured controls and action construction can satisfy the declaration.
 
-## Action Binding: Advanced Fields
+### Action Binding: Advanced Fields
 
 The Editor places optional metadata under `Advanced Options`.
 
-| Field | When to use it | Syntax |
+| Field | When to use | Syntax |
 | --- | --- | --- |
 | `Expected Type` | Require a specific Input System control layout. | `Button`, `Vector2` |
 | `Interactions` | Change actuation timing or phases. | `Tap`, `Hold(duration=0.5)` |
 | `Processors` | Transform values before consumers read them. | `NormalizeVector2`, `Scale(factor=2)` |
 | `Scheme Groups` | Limit a binding to declared scheme groups. | `KeyboardMouse;Gamepad` |
 
-Leave these fields empty when their constraint is not needed. Empty advanced fields are normal and reduce configuration coupling.
+Leave these fields empty when their constraint is not needed. Interactions belong to the action binding. Composite parts can define part-local processors; part-local interactions must remain empty.
 
-Interactions belong to the action binding. Composite parts can define part-local processors; part-local interactions must remain empty.
-
-## Direct Paths and Picker Behavior
-
-Device-binding rows contain an editable text field for any valid Input System control path and a compact picker for known project constants. Examples:
-
-```text
-<Keyboard>/space
-<Gamepad>/buttonSouth
-<Mouse>/delta
-<Pen>/tip
-```
-
-The picker is a convenience list, not the set of all accepted Input System paths.
-
-## Composite Binding Example
+### Composite Binding Example
 
 ```yaml
 compositeBindings:
@@ -155,18 +144,11 @@ compositeBindings:
 
 Composite part names must match the selected composite. Validation constructs a temporary action graph against the active Input System registry, so unknown composites, parts, processors, interactions, and paths fail before runtime commit.
 
-## Join Actions
+### Join Actions
 
-Join actions are used only when `StartListeningForPlayers` is active.
+Join actions are used only when `StartListeningForPlayers` is active. Root join paths are shared candidates. Slot join paths identify slot-specific candidates. Device-locking mode assigns the triggering device to the joined player. Do not duplicate the same direct path inside one join action.
 
-- Root join paths are shared candidates.
-- Slot join paths identify slot-specific candidates.
-- Device-locking mode assigns the triggering device to the joined player.
-- Shared-device mode allows multiple declared players to use the same physical device.
-
-Do not duplicate the same direct path inside one join action. A root join action and slot join actions may deliberately share a control when the lobby policy handles candidate selection.
-
-## Editor Commands and File Ownership
+### Editor Commands and File Ownership
 
 | Command | Writes | Does not write |
 | --- | --- | --- |
@@ -181,7 +163,7 @@ Do not duplicate the same direct path inside one join action. A root join action
 
 All writes validate the configuration first. Existing targets use transactional replacement and retain a bounded recovery backup.
 
-## Validation States
+### Validation States
 
 | State | Meaning | Available action |
 | --- | --- | --- |
@@ -191,7 +173,7 @@ All writes validate the configuration first. Existing targets use transactional 
 | `REVIEW` | The document is usable with a review note. | Inspect the message before saving. |
 | `INVALID` | A field, identity, budget, or Input System registration failed validation. | Edit the indicated field; persistence remains blocked. |
 
-## Authoring Checklist
+### Authoring Checklist
 
 - Player IDs are unique.
 - Context names are unique per player.
@@ -201,3 +183,12 @@ All writes validate the configuration first. Existing targets use transactional 
 - Control scheme names and binding groups match exactly.
 - Every composite and part exists in the installed Input System registry.
 - The Editor reports `VALID` before the file is committed.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Resolution |
+| --- | --- | --- |
+| Editor won't save | Validation reports `INVALID` state | Check the indicated field; resolve identity, budget, or Input System registration issues. |
+| `REVIEW` state | A non-critical issue exists with the configuration | Inspect the review message; saving is still permitted. |
+| Composite validation fails | Part names don't match, unknown composite, or missing Input System registration | Verify part names against the composite type; register custom composites before editor use. |
+| `FileInputConfigurationStore` returns `InvalidKey` | Path contains rooted segments, traversal, or unsafe characters | Use relative logical keys with `/` separator only. |

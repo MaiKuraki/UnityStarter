@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.BehaviorTree.Benchmarks",
+    "rootNamespace": "CycloneGames.BehaviorTree.Runtime.PerformanceTest",
+    "references": [
+        "CycloneGames.BehaviorTree.Runtime"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

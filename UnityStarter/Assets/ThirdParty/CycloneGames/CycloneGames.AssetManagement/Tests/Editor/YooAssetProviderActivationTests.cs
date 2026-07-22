@@ -1,3 +1,5 @@
+using System;
+
 using NUnit.Framework;
 
 using UnityEditor.Compilation;
@@ -8,14 +10,16 @@ namespace CycloneGames.AssetManagement.Tests.Editor
     public sealed class YooAssetProviderActivationTests
     {
         private const string PackageId = "com.tuyoogame.yooasset";
-        private const string QualifiedVersion = "3.0.4";
+        private const string SupportedVersionRange = "[3.0.5,4.0.0)";
+        private static readonly Version MinimumSupportedVersion = new Version(3, 0, 5);
+        private static readonly Version MaximumSupportedVersionExclusive = new Version(4, 0, 0);
         private const string ProviderAssemblyName =
             "CycloneGames.AssetManagement.Runtime.Providers.YooAsset";
         private const string ProviderTestAssemblyName =
             "CycloneGames.AssetManagement.Providers.YooAsset.Tests.Editor";
 
         [Test]
-        public void RegisteredPackage_ActivatesQualifiedProviderAndTests()
+        public void RegisteredPackage_ActivatesSupportedProviderAndTests()
         {
             PackageInfo package = FindRegisteredPackage();
             if (package == null)
@@ -25,23 +29,39 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             }
 
             Assert.That(
-                package.version,
-                Is.EqualTo(QualifiedVersion),
+                IsSupportedStableVersion(package.version),
+                Is.True,
                 $"Registered {PackageId} version '{package.version}' is not qualified by the AssetManagement provider. " +
-                $"Install the exact supported version {QualifiedVersion} or qualify and update the provider gate.");
+                $"Install a stable version in {SupportedVersionRange}, or qualify and update the provider gate.");
 
             UnityEditor.Compilation.Assembly[] assemblies =
                 CompilationPipeline.GetAssemblies(AssembliesType.Editor);
             Assert.That(
                 ContainsAssembly(assemblies, ProviderAssemblyName),
                 Is.True,
-                $"{PackageId} {QualifiedVersion} is registered, but provider assembly " +
+                $"{PackageId} {package.version} is registered, but provider assembly " +
                 $"'{ProviderAssemblyName}' is absent from Unity's active compilation graph.");
             Assert.That(
                 ContainsAssembly(assemblies, ProviderTestAssemblyName),
                 Is.True,
-                $"{PackageId} {QualifiedVersion} is registered, but provider test assembly " +
+                $"{PackageId} {package.version} is registered, but provider test assembly " +
                 $"'{ProviderTestAssemblyName}' is absent from Unity's active compilation graph.");
+        }
+
+        [TestCase(null, false)]
+        [TestCase("3.0.4", false)]
+        [TestCase("3.0.5-preview.1", false)]
+        [TestCase("3.0.5", true)]
+        [TestCase("3.0.5+build.1", true)]
+        [TestCase("3.1.0", true)]
+        [TestCase("3.99.99", true)]
+        [TestCase("4.0.0-preview.1", false)]
+        [TestCase("4.0.0", false)]
+        public void SupportedStableVersionRange_MatchesProviderPolicy(
+            string packageVersion,
+            bool expected)
+        {
+            Assert.That(IsSupportedStableVersion(packageVersion), Is.EqualTo(expected));
         }
 
         private static PackageInfo FindRegisteredPackage()
@@ -62,6 +82,36 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             }
 
             return null;
+        }
+
+        private static bool IsSupportedStableVersion(string packageVersion)
+        {
+            if (string.IsNullOrEmpty(packageVersion) ||
+                packageVersion.IndexOf("-", StringComparison.Ordinal) >= 0)
+            {
+                return false;
+            }
+
+            int metadataSeparator = packageVersion.IndexOf("+", StringComparison.Ordinal);
+            if (metadataSeparator == packageVersion.Length - 1 ||
+                (metadataSeparator >= 0 &&
+                 packageVersion.IndexOf("+", metadataSeparator + 1, StringComparison.Ordinal) >= 0))
+            {
+                return false;
+            }
+
+            string numericVersion = metadataSeparator >= 0
+                ? packageVersion.Substring(0, metadataSeparator)
+                : packageVersion;
+            if (!Version.TryParse(numericVersion, out Version version) ||
+                version.Build < 0 ||
+                version.Revision >= 0)
+            {
+                return false;
+            }
+
+            return version.CompareTo(MinimumSupportedVersion) >= 0 &&
+                   version.CompareTo(MaximumSupportedVersionExclusive) < 0;
         }
 
         private static bool ContainsAssembly(

@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.persistence.vyaml",
+  "version": "0.1.0",
+  "displayName": "CycloneGames.Persistence.VYaml",
+  "description": "Generated-resolver VYaml codec provider for CycloneGames.Persistence.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.persistence": "0.1.0",
+    "jp.hadashikick.vyaml": "1.4.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Persistence",
+    "VYaml",
+    "YAML",
+    "Codec"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

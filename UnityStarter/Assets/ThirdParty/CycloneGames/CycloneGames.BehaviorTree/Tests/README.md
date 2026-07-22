@@ -1,212 +1,338 @@
-# CycloneGames.BehaviorTree Test & Benchmark Guide
+# CycloneGames.BehaviorTree Test and Benchmark Guide
 
 [简体中文](README.SCH.md)
 
-This folder contains EditMode and PlayMode tests, benchmark runners, scheduling profiles, soak sampling, and result export for `CycloneGames.BehaviorTree`.
+This guide explains how to verify `CycloneGames.BehaviorTree`, run bounded performance experiments, and interpret the resulting evidence. Start with the functional suites, use a small benchmark smoke run, and expand to matrices or soak runs only after the smaller workload is stable.
 
-## Included parts
+The benchmark tools produce measurements for a specific Unity process, backend, build configuration, machine, and workload. A passing test or budget is not certification for a Player, IL2CPP, AOT, managed stripping, a target platform, or long-running production use.
 
-- `Editor` tests
-  - semantic consistency checks
-  - code-first builder structure and fail-fast checks
-  - authoring graph compiler validation
-  - composite/decorator edge-case checks
-  - blackboard type-slot, observer, and serialization limit checks
-  - blackboard schema fail-fast and network filtering checks
-  - deterministic blackboard and snapshot checks
-  - transactional blackboard delta validation
-  - malformed network snapshot and delta rejection checks
-  - DOD compiler fail-fast checks
-  - observer-backed zero-allocation delta flush guard
-  - editor-side benchmark baselines
-- `PlayMode` tests
-  - runtime benchmark runner smoke coverage
-  - export format coverage
-- benchmark runtime tools
-  - reusable benchmark session
-  - in-scene benchmark runner
-  - CSV / JSON export helpers
-- scale and complexity matrix support
-- realistic scheduling profiles
-- soak benchmark sampling
-- editor tooling
-  - benchmark control window
-  - benchmark scene generation
+## Five-minute verification
 
-## Scale presets
+### 1. Run the Editor suites
 
-- `500 AI Battle`
-- `1000 AI Crowd`
-- `5000 AI Stress`
-- `10000 AI Extreme`
-- `100 Players + 500 AI`
-- `Long Soak 1000 AI`
+1. Open the Unity project at `<repo-root>/UnityStarter`.
+2. Open `Window > General > Test Runner`.
+3. Select `EditMode`.
+4. Run `CycloneGames.BehaviorTree.Tests.Editor`.
+5. If the DOD assembly is active, also run `CycloneGames.BehaviorTree.Runtime.DOD.Tests.Editor`.
+6. In this checkout, also run `CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor` because both local modules and the explicit integration folder are present.
 
-## Complexity tiers
+These suites provide the fastest feedback for compiler validation, code-first construction, runtime semantics, blackboard contracts, scheduling, DOD safety, Editor authoring safety, and benchmark utilities.
+
+### 2. Run the PlayMode suites
+
+1. Switch the Test Runner to `PlayMode`.
+2. Run `CycloneGames.BehaviorTree.Tests.PlayMode`.
+
+The PlayMode assembly verifies the scene-bound benchmark runner and `BTRunnerComponent` registration, pause, disable, stop, and replay behavior.
+
+### 3. Run a bounded benchmark smoke test
+
+1. Open `Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark`.
+2. Select `Custom` and enter this smoke workload: `64` agents, `2` leaves, `1` read, `1` write, `0` decorator layers, `0` work iterations, `4` tracked keys, `8` warmup frames, `60` measurement frames, `0` soak frames, and `1` tick per frame.
+3. Leave delta flush enabled and deterministic hash checks disabled for the first run.
+4. Select `Run Editor Benchmark`.
+5. Confirm that the result is valid, the workload fields match the request, and the CSV/JSON export works.
+6. Only then increase scale, run a matrix, or start a soak test.
+
+## Test assemblies and coverage
+
+The test assemblies are `autoReferenced: false`. Unity Test Runner discovers them through their test-assembly configuration; ordinary runtime assemblies do not acquire a dependency on them.
+
+### Editor assembly
+
+`CycloneGames.BehaviorTree.Tests.Editor` contains the following test classes:
+
+| File | Primary coverage |
+| --- | --- |
+| `Consistency/BehaviorTreeAuthoringCompilerTests.cs` | Authoring graph structure, exact custom-emitter registration, protected/revalidated analysis artifacts, semantic setup validation, node/runtime-GUID uniqueness across subtree occurrences, hard traversal limits, direct built-in configuration emission, and stable UTF-16 hashing |
+| `Consistency/BehaviorTreeCodeFirstTests.cs` | Fluent builder contracts, deterministic random behavior, setup freezing and validation, malformed snapshot/delta rejection, node lifecycle reasons, Parallel/Switch/directional SubTree semantics, time and cooldown boundaries, owner-thread checks, disposal, transactional runtime graph validation, and repair after rejected graphs |
+| `Consistency/BehaviorTreeConsistencyTests.cs` | Stop/wake behavior, selector aborts, typed blackboard storage, observers, schema enforcement, deterministic serialization, local-object preservation during reads, monotonic stamp sequences, strict snapshot framing, and snapshots/deltas |
+| `Consistency/RuntimeBlackboardSafetyTests.cs` | Concurrent hash/serialization scratch exclusion, bitwise float change contracts, producer-thread delta signaling, atomic SubTree output batches, and copied Editor diagnostics |
+| `Consistency/BehaviorTreeEditorSafetyTests.cs` | Non-mutating graph population, explicit root repair, canonical diagnostics, cycle prevention, safe paste behavior, and benchmark request limits |
+| `Consistency/BehaviorTreeTickManagerTests.cs` | Capacity validation, terminal removal, deferred registration, priority movement/removal, budget validation, and LOD configuration |
+| `Performance/BehaviorTreeBenchmarkTests.cs` | Managed tick and blackboard measurements, delta flush/apply allocation guards after warmup, result assessment, batch summaries, preset matrices, and memory-budget estimates |
+
+`CycloneGames.BehaviorTree.Runtime.DOD.Tests.Editor` is a separate conditional test assembly with the same Burst, Collections, and Mathematics gates as the DOD runtime. `DataOriented/BehaviorTreeDataOrientedSafetyTests.cs` covers timing accumulation, Repeater/Retry/WaitTicks parameter domains, state-hash v2, immutable flat-tree ownership, scheduler leases, internal Job visibility, generation-safe handles, stale action requests, Job completion before public reads, owner-thread access, reactive invalidation, and empty Parallel normalization. It naturally disappears when the optional DOD dependencies are absent.
+
+`CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor` is a separate explicit test assembly. `Integrations/DeterministicMath/DeterministicMathBlackboardIntegrationTests.cs` covers fixed-point blackboard storage, schema defaults, delta round trips, and deterministic random state restoration. The assembly is `autoReferenced: false`, directly references both local modules, and is present whenever the integration folder is distributed.
+
+### PlayMode assembly
+
+`CycloneGames.BehaviorTree.Tests.PlayMode` contains:
+
+| File | Primary coverage |
+| --- | --- |
+| `PlayMode/BehaviorTreePlayModeBenchmarkTests.cs` | Runner completion, recommended matrices, priority comparisons, CSV/JSON serialization, and result-file writes |
+| `PlayMode/BehaviorTreeRunnerLifecycleTests.cs` | Managed and priority-managed runner registration across pause, disable, stop, and play transitions |
+
+### Networking tests are separate
+
+Networking verification belongs to the sibling `CycloneGames.BehaviorTree.Networking` package. Run its `CycloneGames.BehaviorTree.Networking.Tests.Editor` assembly and `BehaviorTreeNetworkingIntegrationTests.cs` when changing protocol messages, receive-state ordering, snapshots, deltas, authority, or transactional apply behavior. That suite covers composite auxiliary state in tree hashes, bridge owner-thread/disposal rules, protocol registration, payload bounds and framing, identity/order/replay checks, sequence wrap, and rejection without partial mutation. Do not treat the main package's blackboard serialization tests as a substitute for the adapter package's integration tests.
+
+## Batchmode templates
+
+Replace every angle-bracket placeholder. The Unity executable must match the version recorded by the current checkout; do not commit a machine-specific executable path.
+
+Editor tests:
+
+```text
+"<UnityEditorExecutable>" -batchmode -nographics -quit -projectPath "<repo-root>/UnityStarter" -runTests -testPlatform EditMode -assemblyNames "CycloneGames.BehaviorTree.Tests.Editor" -testResults "<results-path>/behavior-tree-editmode.xml"
+```
+
+Conditional DOD Editor tests:
+
+```text
+"<UnityEditorExecutable>" -batchmode -nographics -quit -projectPath "<repo-root>/UnityStarter" -runTests -testPlatform EditMode -assemblyNames "CycloneGames.BehaviorTree.Runtime.DOD.Tests.Editor" -testResults "<results-path>/behavior-tree-dod-editmode.xml"
+```
+
+PlayMode tests:
+
+```text
+"<UnityEditorExecutable>" -batchmode -nographics -quit -projectPath "<repo-root>/UnityStarter" -runTests -testPlatform PlayMode -assemblyNames "CycloneGames.BehaviorTree.Tests.PlayMode" -testResults "<results-path>/behavior-tree-playmode.xml"
+```
+
+Run the conditional DOD assembly, explicit DeterministicMath integration assembly, and separate Networking assembly with their own `-assemblyNames` invocation when those assemblies are in the change closure. Preserve the Unity process exit code, test XML, Editor log, checkout revision, backend, and command line as the reproducible test record.
+
+## Benchmark architecture
+
+Benchmark code is isolated in `CycloneGames.BehaviorTree.Benchmarks`, which is also `autoReferenced: false`. A test or tool assembly must reference it explicitly.
+
+- `BehaviorTreeBenchmarkSession` owns the synthetic runtime trees and delta trackers for one configuration. `RunImmediate` performs setup, warmup, measurement, soak, assessment, and disposal synchronously.
+- `BehaviorTreeBenchmarkWindow` provides guarded Editor controls for a single run, scale matrix, full matrix, priority comparison, and configured budget matrix.
+- `BehaviorTreeBenchmarkRunner` executes a configuration or matrix across PlayMode frames and can export results automatically.
+- `BehaviorTreeBenchmarkExportUtility` serializes single and batch results as CSV or JSON.
+
+`BehaviorTreeBenchmarkSession` is a synthetic workload. It is useful for repeatable comparisons of framework paths, but it does not model every gameplay system, render workload, network transport, asset stream, or platform service in a shipping title.
+
+## Benchmark dimensions
+
+### Scale presets
+
+- `AiBattle500`
+- `AiCrowd1000`
+- `AiStress5000`
+- `AiExtreme10000`
+- `Network100Players500Ai`
+- `LongSoak1000`
+- `Custom`
+
+### Complexity tiers
 
 - `Light`
 - `Medium`
 - `Heavy`
 
-Each benchmark configuration selects two dimensions:
+### Scheduling profiles
 
-- scale preset
-- complexity tier
+| Profile | Workload model |
+| --- | --- |
+| `FullRate` | Every synthetic agent is eligible on every simulated tick |
+| `LodCrowd` | Near, middle, and far groups use progressively reduced cadence |
+| `PriorityLod` | Priority and distance groups use different cadences |
+| `NetworkMixed` | A player-oriented front group stays frequent while AI groups are reduced; optional hash checks model synchronization work |
+| `FarCrowd` | Far agents receive a more aggressive cadence reduction |
+| `UltraLod` | Only a small near group remains at full cadence |
+| `PriorityManaged` | Synthetic priority-budget behavior for comparison with the other profiles |
 
-## Scheduling profiles
+These profiles model scheduling decisions inside the benchmark session. They do not prove the behavior or cost of every production AI scheduler.
 
-- `FullRate`
-  - every agent ticks every frame
-  - best for small arena or boss-fight style validation
-- `LodCrowd`
-  - near agents tick every frame
-  - mid agents tick at half rate
-  - far agents tick at a reduced crowd rate
-- `PriorityLod`
-  - critical agents keep full rate
-  - medium priority agents run at reduced cadence
-  - ambient far agents run at sparse cadence
-- `NetworkMixed`
-  - a player-heavy front band ticks every frame
-  - AI layers tick at mixed rates
-  - deterministic hash checks run on an interval
-- `FarCrowd`
-  - more aggressive far-distance crowd reduction
-  - useful for 5k+ background agents
-- `UltraLod`
-  - only a very small near set runs at full rate
-  - meant for extreme crowd-presence validation
-- `PriorityManaged`
-  - benchmark-side approximation of priority-budgeted ticking
-  - useful as a comparison baseline against full-rate and simpler LOD
+## Hard workload limits
 
-Scheduling profiles add a third dimension:
+The Editor window validates both scalar fields and derived work before running or creating a scene. The limits protect the Editor from accidental unbounded requests; they are not supported-agent-count claims.
 
-- scale preset
-- complexity tier
-- scheduling profile
+| Input | Accepted range |
+| --- | ---: |
+| Agents | `1..100000` |
+| Leaf nodes per tree | `1..512` |
+| Blackboard reads per leaf/tick | `0..256` |
+| Blackboard writes per leaf/tick | `1..256` |
+| Decorator layers per leaf | `0..64` |
+| Simulated work iterations per leaf | `0..100000` |
+| Tracked keys per agent | `0..8192` |
+| Warmup frames | `0..1000000` |
+| Measurement frames | `1..1000000` |
+| Soak frames | `0..1000000` |
+| Hash-check and soak-sample intervals | `1..1000000` |
+| Ticks per frame | `1..64` |
 
-## How to run Editor tests
+Derived limits are evaluated with checked arithmetic:
 
-1. Open Unity.
-2. Open `Window > General > Test Runner`.
-3. Switch to `EditMode`.
-4. Run assembly `CycloneGames.BehaviorTree.Tests.Editor`.
+```text
+nodesPerAgent = 1 + leafNodes * (1 + decoratorLayers)
+totalRuntimeNodes = nodesPerAgent * agents                         <= 2,000,000
+totalTrackedKeys = agents * trackedKeysPerAgent                    <= 20,000,000
+frameCount = warmupFrames + measurementFrames + soakFrames
+workPerLeaf = 1 + reads + writes + decoratorLayers + workIterations
+workUnitsPerFrame = agents * leafNodes * ticksPerFrame * workPerLeaf <= 25,000,000
+totalWorkUnits = workUnitsPerFrame * frameCount                     <= 1,000,000,000
+```
 
-Main files:
+Overflow or any exceeded scalar/derived bound rejects the request before execution. A configuration can therefore be below every scalar maximum and still be rejected by a derived bound.
 
-- `Consistency/BehaviorTreeConsistencyTests.cs`
-- `Consistency/BehaviorTreeCodeFirstTests.cs`
-- `Consistency/BehaviorTreeAuthoringCompilerTests.cs`
-- `Performance/BehaviorTreeBenchmarkTests.cs`
+## Using the benchmark window
 
-Editor tests cover success and failure paths. Remote payload tests assert that malformed input is rejected before local runtime state changes.
+Open `Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark`.
 
-## How to run PlayMode tests
+### Single runs
 
-1. Open Unity Test Runner.
-2. Switch to `PlayMode`.
-3. Run assembly `CycloneGames.BehaviorTree.Tests.PlayMode`.
+1. Choose a preset, complexity, and scheduling profile, or edit a custom configuration.
+2. Check that no validation error is shown.
+3. Select `Run Editor Benchmark` for a synchronous Editor measurement.
+4. Review the result before exporting it.
 
-Main file:
+Large synchronous Editor runs can make the Editor unresponsive until the loop completes. Establish a bounded smoke result first and prefer a generated PlayMode scene for longer frame-by-frame observation.
 
-- `PlayMode/BehaviorTreePlayModeBenchmarkTests.cs`
+### Matrix and comparison runs
 
-## How to use the benchmark panel
+- `Run Scale Matrix For Selected Complexity` compares the recommended scale presets at one complexity.
+- `Run Full Matrix (Scale x Complexity)` combines the recommended presets and all complexity tiers.
+- `Run PriorityManaged Comparison` compares `FullRate`, `PriorityLod`, `PriorityManaged`, and `UltraLod` for the selected base configuration.
+- `Run Configured Budget Matrix` runs the source-defined budget matrix. A passing matrix only means that its configured thresholds passed in that process and environment.
 
-1. Open `Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark`.
-2. Choose a scale preset, complexity tier, and scheduling profile, or adjust the benchmark configuration manually.
-3. Use `Run Editor Benchmark` for a single editor-side benchmark pass.
-4. Use `Run Scale Matrix For Selected Complexity` to compare all scale presets under the current complexity tier.
-5. Use `Run Full Matrix (Scale x Complexity)` to run the complete preset-by-complexity benchmark matrix with each preset's recommended scheduling profile.
-6. Use `Run PriorityManaged Comparison` to compare the current setup across `FullRate / PriorityLod / PriorityManaged / UltraLod`.
-7. Use `Run Production Certification Matrix` to run the matrix named by the tool with its configured budgets.
-8. Use `Create PlayMode Benchmark Scene` to generate a scene from the current config.
-9. Use `Create Scene From Preset` to generate a scene from the selected preset and complexity tier.
-10. Use `Create Scale Matrix Scene` to generate a PlayMode scene that runs all scale presets for the selected complexity tier.
-11. Use `Create Full Matrix Scene` to generate a PlayMode scene that runs the full scale-by-complexity matrix automatically.
-12. Use `Create PriorityManaged Comparison Scene` to generate a scene that auto-runs the scheduling comparison batch.
-13. Use `Create Production Certification Scene` to generate a PlayMode scene that auto-runs the certification matrix.
-14. Enter Play Mode to let the generated runner execute automatically.
+### Generated PlayMode scenes
 
-Important config fields:
+The window can create a single-run, scale-matrix, full-matrix, priority-comparison, or configured-budget-matrix scene. Before replacing the active scene, it calls Unity's modified-scene save prompt. Cancelling the prompt cancels scene creation. The newly created scene is marked dirty and remains unsaved until the user explicitly saves or discards it.
 
-- `Deterministic Hash Check`
-  - simulates periodic blackboard hash validation that is common in networked or deterministic verification flows
-- `Hash Check Interval`
-  - controls how often that validation runs
-- `Soak Frames`
-  - keeps the benchmark running after the measured phase so you can observe long-lived allocation or drift
-- `Soak Sample Interval`
-  - controls how often the soak phase samples managed memory
-- `Production Budgets`
-  - stores pass/fail thresholds for average frame time, max frame time, workload-scaled managed memory capacity, GC collections, and effective tick ratio; passing these thresholds is not Player or platform certification
-  - `Max Memory Delta` is a session-level retained-memory capacity budget, not a per-frame allocation budget; use GC collection counts, delta flush allocation guards, and soak memory drift for hot-path allocation stability
+Generated runners start automatically in PlayMode. Warmup, measurement, and soak each advance one benchmark frame per Unity frame. Single and matrix runners export according to their CSV/JSON settings.
 
-PlayMode runner behavior:
+## Programmatic sessions
 
-- `Create PlayMode Benchmark Scene` and `Create Scene From Preset` create a single-run runner.
-- `Create Scale Matrix Scene` creates a batch runner that executes all recommended scale presets for the selected complexity.
-- `Create Full Matrix Scene` creates a batch runner that executes all recommended scale presets across `Light / Medium / Heavy`.
-- `Create Production Certification Scene` creates a batch runner that executes the certification matrix, including heavy stress, network-mixed, and soak cases.
-- generated runners auto-export CSV / JSON into `Application.persistentDataPath/BehaviorTreeBenchmarkResults`.
-- if `Soak Frames > 0`, generated runners continue into soak mode before export.
+Use direct sessions only in an assembly that explicitly references `CycloneGames.BehaviorTree.Benchmarks`:
 
-Main files:
+```csharp
+var config = new BehaviorTreeBenchmarkConfig
+{
+    BenchmarkName = "BehaviorTree Smoke",
+    AgentCount = 64,
+    LeafNodesPerTree = 2,
+    BlackboardReadsPerLeafPerTick = 1,
+    WritesPerLeafPerTick = 1,
+    DecoratorLayersPerLeaf = 0,
+    SimulatedWorkIterationsPerLeaf = 0,
+    TrackedKeysPerAgent = 4,
+    WarmupFrames = 8,
+    MeasurementFrames = 60,
+    SoakFrames = 0,
+    TicksPerFrame = 1,
+    EnableDeltaFlush = true,
+    EnableDeterministicHashCheck = false
+};
 
-- `Runtime/PerformanceTest/BehaviorTreeBenchmarkModels.cs`
-- `Runtime/PerformanceTest/BehaviorTreeBenchmarkSession.cs`
-- `Runtime/PerformanceTest/BehaviorTreeBenchmarkRunner.cs`
-- `Editor/BehaviorTreeBenchmarkWindow.cs`
+BehaviorTreeBenchmarkResult result =
+    BehaviorTreeBenchmarkSession.RunImmediate(config);
+```
 
-## Exporting CSV / JSON
+`RunImmediate` includes explicit garbage collections during setup and measures only the synthetic session loop. For controlled frame progression, construct a session, call `Setup`, invoke `RunWarmupFrame`, `RunMeasuredFrame`, and `RunSoakFrame` as required, then call `Complete` and `Dispose` it.
 
-After a single benchmark completes in the benchmark window:
+The hard limits in the previous section are enforced by `BehaviorTreeBenchmarkWindow`. Direct `BehaviorTreeBenchmarkSession` calls and manually configured `BehaviorTreeBenchmarkRunner` instances must apply their own trusted configuration bounds before allocating or running. Keep benchmark-only forced collection and synthetic work out of production gameplay paths.
 
-1. Click `Export Last Result as CSV` or `Export Last Result as JSON`.
-2. Choose the target file path.
-3. The window writes the file and reveals it in the file explorer.
-4. Click `Export Last Result to Default Folder` to write both CSV and JSON into `Application.persistentDataPath/BehaviorTreeBenchmarkResults`.
+## Exports and persistence
 
-After a matrix run completes:
+The default output directory is:
 
-1. Click `Export Last Matrix as CSV` or `Export Last Matrix as JSON`.
-2. Each row or JSON item represents one scale, complexity, and scheduling-profile case.
-3. Click `Export Last Matrix to Default Folder` to write both CSV and JSON into the default benchmark result folder.
+```text
+Application.persistentDataPath/BehaviorTreeBenchmarkResults
+```
 
-## Key Result Fields
+The window can export the last single or matrix result as CSV or JSON to a selected path, or write both formats to the default directory. Generated PlayMode runners use the same default folder unless their serialized folder name is changed, and log the final path to the Unity Console.
 
-- `PotentialTicks`
-  - theoretical ticks if every agent ran every frame
-- `ExecutedTicks`
-  - actual ticks after scheduling / LOD reduction
-- `EffectiveTickRatio`
-  - executed ticks divided by potential ticks
-- `AverageActiveAgentsPerFrame`
-  - average number of agents actually ticking per measured frame
-- `PeakActiveAgentsPerFrame`
-  - highest active-agent count observed in a measured frame
-- `TotalHashChecks`
-  - number of deterministic blackboard hash passes executed
-- `PeakManagedMemoryBytes`
-  - highest managed memory sample seen during the run
-- `SoakManagedMemoryDeltaBytes`
-  - peak managed memory growth since the soak baseline
-- `ProductionBudgetPassed`
-  - true only when average frame, max frame, managed memory delta, GC, and effective tick ratio budgets all pass
-- `BudgetSummary`
-  - human-readable pass/fail summary for the run
+Benchmark files are user-local measurement artifacts, not framework configuration or a source of truth. Retain the environment metadata needed for comparison, then archive or delete the files according to the project's evidence policy. A generated scene is persisted only if the user saves it to an explicit project path.
 
-For PlayMode generated scenes, export is automatic. The runner logs the final file path in the Unity Console.
+## Interpreting results
 
-`BehaviorTreeBenchmarkExportUtility` is the shared serializer used by both tests and editor tooling.
+| Field | Meaning and limits |
+| --- | --- |
+| `PotentialTicks` | Theoretical ticks if every agent were eligible for every configured tick |
+| `ExecutedTicks` | Ticks actually executed after the selected scheduling profile |
+| `EffectiveTickRatio` | `ExecutedTicks / PotentialTicks`; intentional cadence reduction can lower this value, so check the configuration before classifying it as dropped work |
+| `AverageActiveAgentsPerFrame` / `PeakActiveAgentsPerFrame` | Average and peak synthetic agents ticked during measured frames |
+| `AverageFrameMilliseconds` / `MaxFrameMilliseconds` | Time spent in the benchmark session's measured frame loop, not complete rendered Player frame time |
+| `TicksPerSecond` | Executed synthetic ticks divided by measured elapsed time |
+| `TotalDeltaFlushes` / `TotalHashChecks` | Enabled synchronization-like work performed by the session |
+| `ManagedMemoryDeltaBytes` | Managed heap difference between session samples; process noise and GC timing can affect it |
+| `PeakManagedMemoryBytes` | Highest sampled managed heap size, not native, GPU, driver, or total process memory |
+| `SoakManagedMemoryDeltaBytes` | Peak sampled managed growth relative to the soak baseline |
+| `Gen0Collections` / `Gen1Collections` / `Gen2Collections` | Process collection-count differences observed during the session |
+| `ProductionBudgetPassed` / `BudgetSummary` | Evaluation against the configuration's thresholds, not a platform certification result |
 
-## Suggested workflow
+`MaxManagedMemoryDeltaBytes` is a retained-memory budget for the session, not a per-frame allocation limit. Use Unity Profiler allocation samples, the focused post-warmup allocation tests, GC counts, and soak drift together when investigating hot-path allocation behavior.
 
-1. Use `EditMode` tests for fast regression checks while iterating on runtime code.
-2. Use the benchmark window for quick tuning of both scale and complexity.
-3. Use `Run Scale Matrix For Selected Complexity` when you want to answer “how far does this complexity tier scale?”
-4. Use `Run Full Matrix (Scale x Complexity)` when you want a product-level comparison surface for engineering and design decisions.
-5. Use `Run Production Certification Matrix` to evaluate the configured budgets, then repeat the workload in release Player builds on representative hardware.
-6. Use generated PlayMode benchmark scenes to inspect frame behavior, LOD scheduling tradeoffs, and long-running soak scenarios before target-device validation.
-7. Export CSV / JSON snapshots to compare benchmark runs over time or across hardware tiers.
+Compare results only when the revision, Unity version, backend, build type, safety checks, hardware, power/thermal state, frame pacing, workload, and background activity are recorded and sufficiently equivalent. Editor and PlayMode measurements are useful for regression discovery, but release Player results on representative devices are required for product budgets.
+
+## Evidence workflow
+
+1. Run the focused EditMode suite and record failures before performance work.
+2. Run the runner lifecycle PlayMode tests when scene registration or scheduling changes.
+3. Establish a small benchmark smoke result and verify exports.
+4. Capture a repeated baseline with fixed configuration and environment metadata.
+5. Run only the matrix needed to answer the current capacity or scheduling question.
+6. Use Unity Profiler or platform tooling to investigate CPU samples, managed allocations, native memory, and frame-time distribution.
+7. Repeat the representative workload in a release Player on every target hardware tier that needs a claim.
+8. Run IL2CPP/AOT, managed stripping, headless, WebGL, mobile, desktop, or console-specific checks separately as applicable.
+9. Use a bounded soak run for long-lived drift, handle leaks, and collection behavior; retain start/end captures and recovery observations.
+
+No single step can be substituted for all later steps. In particular, a successful Editor benchmark does not establish Player, IL2CPP, AOT, platform, thermal, battery, long-soak, or cross-device compatibility.
+
+## Adding or changing tests
+
+1. Put pure runtime/compiler/blackboard/scheduler contracts in the focused Editor test class closest to the behavior.
+2. Put scene, `MonoBehaviour`, registration, disable/enable, and frame-bound behavior in PlayMode tests.
+3. Put Editor graph, Undo, copy/paste, asset mutation, and scene-safety behavior in `BehaviorTreeEditorSafetyTests`.
+4. Put DOD handle, Job ownership, stale completion, and flat-tree validation behavior in `BehaviorTreeDataOrientedSafetyTests`.
+5. Put DeterministicMath behavior in its explicit integration test assembly.
+6. Put Networking protocol and adapter behavior in the separate Networking package tests.
+7. For each failure path, assert both the rejection and the absence of partial state mutation where transactionality matters.
+8. Dispose runtime trees, blackboards, sessions, native owners, and subscriptions in `finally` blocks or fixture teardown.
+9. Warm up allocation-sensitive code before measuring, bound every loop and payload, and keep correctness assertions separate from noisy wall-clock thresholds.
+10. Update this English guide and `README.SCH.md` together when suites, assemblies, menu paths, limits, fields, or persistence behavior change.
+
+When changing `BTPriorityTickManagerComponent` auto-discovery, include a PlayMode case for an undefined player tag. The intended fail-closed behavior disables automatic lookup instead of repeatedly throwing from the update loop.
+
+## Troubleshooting
+
+### A test assembly is missing from Test Runner
+
+- Wait for script compilation to finish and inspect Console compile errors first.
+- Confirm the test asmdef still has `optionalUnityReferences: ["TestAssemblies"]` and references every required runtime/integration assembly.
+- The DOD suite is intentionally absent when Burst, Collections, or Mathematics version defines are inactive.
+- The DeterministicMath suite uses explicit direct references to both local assemblies. In distributions that omit either dependency, omit the integration folder and its test folder together; both are present in this checkout.
+- Networking tests appear under the sibling package's assembly, not the main BehaviorTree test assembly.
+
+### The benchmark request is rejected
+
+- Check every scalar limit, then calculate the derived node, tracked-key, per-frame work, and total-work values.
+- Reduce agents, leaves, decorators, tracked keys, ticks, work iterations, or frame counts. Raising the documented hard bounds requires an implementation and safety review; it is not a test workaround.
+
+### Scene creation does nothing
+
+- The modified-scene prompt may have been cancelled.
+- Resolve compile errors and retry with a valid bounded configuration.
+- After creation, save the dirty scene explicitly if it should become a project asset.
+
+### Results vary between runs
+
+- Stabilize warmup, background Editor activity, power mode, thermal state, and frame pacing.
+- Compare the same revision and configuration.
+- Use repeated samples and distributions; do not explain a regression from one noisy run.
+
+### Export files are missing
+
+- Check the Unity Console for the resolved path and I/O errors.
+- Resolve `Application.persistentDataPath` for the process and platform that performed the run.
+- Confirm write permission and available storage; do not redirect results into package source folders.
+
+## Minimum validation record
+
+For a shareable result, record:
+
+- repository revision and local-change status;
+- Unity version from the current checkout;
+- Editor or Player, scripting backend, architecture, build configuration, and safety settings;
+- operating system, device/hardware tier, power and thermal conditions;
+- exact benchmark configuration, preset, complexity, scheduling profile, and budgets;
+- test command or UI path, exit code, XML/log paths, CSV/JSON paths, and profiler capture paths;
+- warmup, sample count, repeated-run distribution, failures, and excluded evidence;
+- which platform, IL2CPP/AOT, stripping, memory, leak, and soak checks were not run.
+
+This record makes the measurement reproducible and prevents a local result from being generalized beyond its evidence.

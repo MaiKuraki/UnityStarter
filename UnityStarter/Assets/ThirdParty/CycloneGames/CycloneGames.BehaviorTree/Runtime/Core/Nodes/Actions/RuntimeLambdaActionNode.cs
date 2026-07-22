@@ -18,7 +18,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
             _onStop = onStop;
         }
 
-        public string Name { get; set; }
+        private string _name;
+        public string Name
+        {
+            get => _name;
+            set => SetSetupValue(ref _name, value);
+        }
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
@@ -30,7 +35,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
             return _run(blackboard);
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(
+            RuntimeBlackboard blackboard,
+            RuntimeNodeExitReason reason,
+            Exception exception)
         {
             _onStop?.Invoke(blackboard);
         }

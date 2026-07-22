@@ -1,26 +1,93 @@
+using System;
+
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
     public class RuntimeRepeatNode : RuntimeDecoratorNode
     {
-        public bool RepeatForever { get; set; } = true;
-        public int RepeatCount { get; set; } = 1;
-        public bool UseRandomRepeatCount { get; set; }
-        public int RandomRangeMin { get; set; }
-        public int RandomRangeMax { get; set; }
+        private bool _repeatForever = true;
+        private int _repeatCount = 1;
+        private bool _useRandomRepeatCount;
+        private int _randomRangeMin = 1;
+        private int _randomRangeMax = 1;
+
+        public bool RepeatForever
+        {
+            get => _repeatForever;
+            set => SetSetupValue(ref _repeatForever, value);
+        }
+
+        public int RepeatCount
+        {
+            get => _repeatCount;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if (value < 1)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(RepeatCount), value, "Repeat count must be at least 1.");
+                }
+                _repeatCount = value;
+            }
+        }
+
+        public bool UseRandomRepeatCount
+        {
+            get => _useRandomRepeatCount;
+            set => SetSetupValue(ref _useRandomRepeatCount, value);
+        }
+
+        public int RandomRangeMin
+        {
+            get => _randomRangeMin;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if (value < 1 || value == int.MaxValue)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(RandomRangeMin),
+                        value,
+                        "Repeat range minimum must be from 1 through int.MaxValue - 1.");
+                }
+                _randomRangeMin = value;
+            }
+        }
+
+        public int RandomRangeMax
+        {
+            get => _randomRangeMax;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if (value < 1 || value == int.MaxValue)
+                {
+                    throw new ArgumentOutOfRangeException(
+                        nameof(RandomRangeMax),
+                        value,
+                        "Repeat range maximum must be from 1 through int.MaxValue - 1.");
+                }
+                _randomRangeMax = value;
+            }
+        }
 
         private int _currentRepeatCount;
+        private int _targetRepeatCount;
         public int CurrentRepeatCount => _currentRepeatCount; // Exposed for debug
+
+        protected override void ValidateSetup()
+        {
+            if (!RepeatForever && UseRandomRepeatCount && RandomRangeMax < RandomRangeMin)
+            {
+                throw new InvalidOperationException("Repeat range must be ordered min <= max.");
+            }
+        }
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _currentRepeatCount = 0;
-            if (!RepeatForever && UseRandomRepeatCount)
-            {
-                var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
-                RepeatCount = randomProvider != null
-                    ? (int)randomProvider.Range(RandomRangeMin, RandomRangeMax + 1)
-                    : UnityEngine.Random.Range(RandomRangeMin, RandomRangeMax + 1);
-            }
+            _targetRepeatCount = !RepeatForever && UseRandomRepeatCount
+                ? RuntimeRandomUtility.RangeInt(blackboard, RandomRangeMin, RandomRangeMax + 1)
+                : RepeatCount;
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
@@ -33,20 +100,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             {
                 if (RepeatForever)
                 {
-                    _currentRepeatCount++;
-                    // In original logic, RepeatNode typically restarts child.
-                    // RuntimeNode.Run handles Start/Stop.
-                    // If we return Running, the Runner calls us again next tick.
-                    // But we need to reset the Child state to run it again!
-                    Child.Abort(blackboard);
+                    IncrementRepeatCount();
                     return RuntimeState.Running;
                 }
                 else
                 {
-                    _currentRepeatCount++;
-                    if (_currentRepeatCount < RepeatCount)
+                    IncrementRepeatCount();
+                    if (_currentRepeatCount < _targetRepeatCount)
                     {
-                        Child.Abort(blackboard);
                         return RuntimeState.Running;
                     }
                     else
@@ -57,6 +118,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             }
 
             return RuntimeState.Running;
+        }
+
+        private void IncrementRepeatCount()
+        {
+            if (_currentRepeatCount < int.MaxValue)
+            {
+                _currentRepeatCount++;
+            }
         }
     }
 }

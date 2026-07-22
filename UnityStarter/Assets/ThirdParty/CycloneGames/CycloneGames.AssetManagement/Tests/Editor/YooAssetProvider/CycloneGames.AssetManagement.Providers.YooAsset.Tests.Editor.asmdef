@@ -21,7 +21,7 @@
     "versionDefines": [
         {
             "name": "com.tuyoogame.yooasset",
-            "expression": "[3.0.4,3.0.5)",
+            "expression": "[3.0.5,4.0.0)",
             "define": "CYCLONEGAMES_HAS_YOOASSET"
         }
     ],

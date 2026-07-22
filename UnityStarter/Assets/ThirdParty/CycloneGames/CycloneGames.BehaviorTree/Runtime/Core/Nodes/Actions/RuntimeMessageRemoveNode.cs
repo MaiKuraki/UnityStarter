@@ -2,7 +2,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 {
     public class RuntimeMessageRemoveNode : RuntimeNode
     {
-        public int KeyHash { get; set; }
+        private int _keyHash;
+
+        public int KeyHash
+        {
+            get => _keyHash;
+            set => SetSetupValue(ref _keyHash, value);
+        }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {

@@ -1,6 +1,6 @@
 # CycloneGames.UIFramework
 
-[English | 简体中文](README.md)
+[English](README.md) | 简体中文
 
 CycloneGames.UIFramework 负责 Unity 中 UGUI 窗口的生命周期管理。它执行配置校验、通过异步取消支持打开与关闭窗口、绑定可选表现层与依赖注入策略、追踪因果导航历史，并通过单一主线程 Service 释放每个会话持有的全部资源。
 
@@ -23,8 +23,6 @@ CycloneGames.UIFramework 负责 Unity 中 UGUI 窗口的生命周期管理。它
 窗口通过稳定的字符串 ID 和 Asset Provider 加载，或通过直接的 `UIWindowConfiguration` 打开。Layer 内部按配置 Priority 确定窗口顺序。导航形成活动窗口的因果图，并支持双窗口协调过渡。Scene-bound 窗口在所属场景切换时自动关闭。
 
 可选能力保持在独立程序集边界。MVP 与导航类型位于核心 `Runtime` 程序集。Asset 加载、Localization、DI 与 Motion Driver 分别在各自的 Integration Assembly 中编译，仅在对应包存在时启用。
-
-界面流程、业务规则、存档数据、输入处理与平台 SDK 整合仍由 Composition Root 或可选 Binder 负责。
 
 ### 主要特性
 
@@ -69,7 +67,7 @@ flowchart LR
 | Asset lease | Provider 创建，`UIService` 获取 | 窗口会话 | 关闭、回滚或 Shutdown |
 | Presenter | `UIPresenterBinder` 的注册 policy | 注册的 release delegate | Binding Dispose |
 
-`UIManager` 是可选的 `MonoBehaviour` 生命周期 host。它根据序列化容量与显式 `UIRoot` 创建 `UIService`，但不提供全局访问入口。已有 composition root 的项目可直接构造 `UIService`。
+`UIManager` 是可选的 `MonoBehaviour` 生命周期 host。它根据序列化容量与显式 `UIRoot` 创建 `UIService`。已有 composition root 的项目可直接构造 `UIService`。
 
 ### 程序集布局
 
@@ -339,7 +337,7 @@ IUIWindowBinder[] binders = { presenterBinder };
 var ui = new UIService(root, assetProvider: provider, options: options, binders: binders);
 ```
 
-当 Presenter 必须在 `OnViewOpening` 期间使用调用方数据时，可使用 Contextual Factory。`OpenContext` 是调用方拥有的内存数据，不是序列化或可信契约；应在功能边界校验其类型与内容。
+当 Presenter 必须在 `OnViewOpening` 期间使用调用方数据时，可使用 Contextual Factory。`OpenContext` 是调用方拥有的内存数据；应在功能边界校验其类型与内容。
 
 ```csharp
 presenterBinder.RegisterContextual<LoginPresenter>(
@@ -436,7 +434,6 @@ UIWindow inventory = await ui.NavigateAsync(
 - 大多数窗口使用 `InheritLayerCanvas`，以保留批处理并避免额外 Canvas 与 Raycaster。只有实测有收益时才使用 `IsolatedCanvas`。
 - 需要显隐控制或内置协调过渡的窗口应添加 `CanvasGroup`。
 - Layer Canvas 持有 Sorting Range；配置 Priority 只控制同一 Layer 内的 Sibling 顺序。
-- EventSystem Selection、键盘/手柄焦点、触摸手势、返回键映射、本地多人输入路由与 Safe Area 适配由应用负责。
 
 `GetRootCanvasSize()` 返回当前 Root `RectTransform` 尺寸。Overlay 配置下 `GetUICamera()` 可以返回 `null`。
 

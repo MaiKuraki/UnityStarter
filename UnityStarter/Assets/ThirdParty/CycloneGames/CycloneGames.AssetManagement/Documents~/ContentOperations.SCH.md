@@ -2,7 +2,7 @@
 
 [English](ContentOperations.md) | 简体中文
 
-本文覆盖面向应用或 live-content 团队的下载、provider 维护、磁盘容量、内容校验、恢复与运营证据。AssetManagement 为这些工作提供有界原语；发布工作流由产品持有，因为 catalog 语义、CDN 授权、平台存储、回滚与认证因 provider 和产品而异。
+本文覆盖下载、provider 维护、磁盘容量、内容校验、恢复与运营证据。AssetManagement 为这些工作提供有界原语；发布工作流由产品持有，因为 catalog 语义、CDN 授权、平台存储、回滚与认证因 provider 和产品而异。
 
 ## 目录
 
@@ -238,7 +238,7 @@ Addressables 发布代码使用 `IAddressablesCatalogMaintenance`：
 
 #### TOCTOU 与文件系统失败
 
-成功的容量检查是 snapshot，不是预约。在任一门与写入之间，另一个进程、另一个 package、OS、浏览器或用户可能消费或撤销存储。因此：保持内容隔离直到 terminal commit；把磁盘满与 I/O 异常当作正常可恢复发布失败；在 provider 状态可能变化前持久化 mutation 边界；使用 provider API 清理 provider 缓存而非删除私有文件。
+成功的容量检查是 snapshot，不是预约。在任一门与写入之间，另一个进程、另一个 package、OS、浏览器或用户可能消费或撤销存储。保持内容隔离直到 terminal commit；把磁盘满与 I/O 异常当作正常可恢复发布失败；在 provider 状态可能变化前持久化 mutation 边界；使用 provider API 清理 provider 缓存而非删除私有文件。
 
 原子替换通常要求源与目标在同一文件系统。跨卷 move 可能退化为 copy-plus-delete 并丢失原子性。若 staging 与 activation 跨卷，复制到最终卷、按产品/平台 policy flush、再次校验最终字节，然后才切换产品可见 identity。
 

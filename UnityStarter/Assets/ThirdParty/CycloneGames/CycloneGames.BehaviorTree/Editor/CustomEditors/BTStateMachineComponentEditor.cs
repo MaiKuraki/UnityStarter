@@ -28,6 +28,13 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             EditorGUILayout.EndVertical();
         }
 
+        protected override bool IsPropertyDrawnExplicitly(string propertyName)
+        {
+            return base.IsPropertyDrawnExplicitly(propertyName) ||
+                   propertyName == "_initialState" ||
+                   propertyName == "_states";
+        }
+
         private static class Styles
         {
             public static readonly UnityEngine.GUIStyle HeaderStyle;

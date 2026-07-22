@@ -4,8 +4,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions
 {
     public class RuntimeMessageReceiveNode : RuntimeNode
     {
-        public int KeyHash { get; set; }
-        public string ExpectedMessage { get; set; }
+        private int _keyHash;
+        private string _expectedMessage;
+
+        public int KeyHash
+        {
+            get => _keyHash;
+            set => SetSetupValue(ref _keyHash, value);
+        }
+
+        public string ExpectedMessage
+        {
+            get => _expectedMessage;
+            set => SetSetupValue(ref _expectedMessage, value);
+        }
 
         public override bool CanEvaluate => true;
 

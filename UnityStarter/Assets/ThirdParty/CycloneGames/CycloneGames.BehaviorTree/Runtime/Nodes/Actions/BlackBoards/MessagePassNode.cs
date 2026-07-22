@@ -9,6 +9,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards
         [SerializeField] private string _key = "Key";
         [SerializeField] private string _message = "Message";
 
+        public string Key => _key;
+        public string Message => _message;
+
         public override BTNode Clone()
         {
             var clone = (MessagePassNode)base.Clone();

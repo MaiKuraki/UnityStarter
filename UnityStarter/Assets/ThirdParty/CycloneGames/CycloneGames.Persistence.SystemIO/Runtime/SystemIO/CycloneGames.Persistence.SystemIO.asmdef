@@ -1,0 +1,18 @@
+{
+    "name": "CycloneGames.Persistence.SystemIO",
+    "rootNamespace": "CycloneGames.Persistence.SystemIO",
+    "references": [
+        "CycloneGames.Persistence.Core",
+        "CycloneGames.IO.Core",
+        "CycloneGames.IO.SystemIO"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

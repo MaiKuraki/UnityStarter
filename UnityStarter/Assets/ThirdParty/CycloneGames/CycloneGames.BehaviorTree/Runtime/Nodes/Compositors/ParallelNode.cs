@@ -14,6 +14,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
 
         [SerializeField] private ParallelMode _mode = ParallelMode.Default;
 
-        internal int ModeValue => (int)_mode;
+        public int ModeValue => (int)_mode;
     }
 }

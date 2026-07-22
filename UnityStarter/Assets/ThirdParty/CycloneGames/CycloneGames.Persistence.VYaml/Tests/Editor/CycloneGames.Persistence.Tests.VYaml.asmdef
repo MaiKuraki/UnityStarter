@@ -1,0 +1,28 @@
+{
+    "name": "CycloneGames.Persistence.Tests.VYaml",
+    "rootNamespace": "CycloneGames.Persistence.Tests.VYaml",
+    "references": [
+        "CycloneGames.Persistence.Core",
+        "CycloneGames.Persistence.VYaml",
+        "VYaml.Core"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "VYaml.dll",
+        "VYaml.Annotations.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
