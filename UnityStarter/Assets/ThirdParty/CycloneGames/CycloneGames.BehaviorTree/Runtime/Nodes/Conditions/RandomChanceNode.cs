@@ -11,6 +11,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Conditions
         [SerializeField] private float _outOf = 1f;
         [SerializeField] private int _seed;
 
+        public float Chance => _chance;
+        public float OutOf => _outOf;
+        public int Seed => _seed;
+
         public override BTNode Clone()
         {
             var clone = (RandomChanceNode)base.Clone();

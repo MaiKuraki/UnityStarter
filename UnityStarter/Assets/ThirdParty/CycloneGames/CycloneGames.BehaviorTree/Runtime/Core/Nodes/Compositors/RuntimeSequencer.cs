@@ -9,14 +9,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         {
             _current = 0;
             // Reset children states from previous iteration so editor doesn't show stale results
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             for (int i = 0; i < children.Length; i++)
-                children[i].ResetState();
+                children[i].PrepareForActivation();
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
 
             // Self / Both: re-evaluate conditions of previously completed children
             if (_current > 0 && (AbortType == RuntimeAbortType.Self || AbortType == RuntimeAbortType.Both))
@@ -51,11 +51,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             return RuntimeState.Success;
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(RuntimeBlackboard blackboard, RuntimeNodeExitReason reason, System.Exception exception)
         {
-            if (_current < Children.Length && Children[_current].IsStarted)
+            RuntimeNode[] children = ChildArray;
+            if (_current < children.Length && children[_current].IsStarted)
             {
-                Children[_current].Abort(blackboard);
+                children[_current].Abort(blackboard);
             }
         }
     }

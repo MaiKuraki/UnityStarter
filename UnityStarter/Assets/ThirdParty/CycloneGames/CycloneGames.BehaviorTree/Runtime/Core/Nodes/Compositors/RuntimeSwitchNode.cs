@@ -1,50 +1,76 @@
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 {
     /// <summary>
-    /// N-way switch. Reads an int value from the blackboard and ticks the
-    /// matching child index. If no match, ticks the last child (default).
-    /// 0GC: uses int key hash for blackboard lookup.
+    /// Reads an integer case from the blackboard. The final child is the default branch.
+    /// Changing the selected case aborts the previously running branch before entering the new one.
     /// </summary>
     public class RuntimeSwitchNode : RuntimeCompositeNode
     {
-        public int VariableKeyHash { get; set; }
+        private int _activeIndex = -1;
+        private int _variableKeyHash;
+
+        public int VariableKeyHash
+        {
+            get => _variableKeyHash;
+            set => SetSetupValue(ref _variableKeyHash, value);
+        }
+
+        public override int CurrentIndex => _activeIndex;
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            var children = Children;
+            _activeIndex = -1;
+            RuntimeNode[] children = ChildArray;
             for (int i = 0; i < children.Length; i++)
-                children[i].ResetState();
+            {
+                children[i].PrepareForActivation();
+            }
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            var children = Children;
-            if (children == null || children.Length == 0) return RuntimeState.Failure;
+            RuntimeNode[] children = ChildArray;
+            if (children == null || children.Length == 0)
+            {
+                return RuntimeState.Failure;
+            }
 
             int caseValue = blackboard.GetInt(VariableKeyHash, -1);
-            int targetIndex;
+            int targetIndex = caseValue >= 0 && caseValue < children.Length - 1
+                ? caseValue
+                : children.Length - 1;
 
-            if (caseValue >= 0 && caseValue < children.Length - 1)
+            if (_activeIndex != targetIndex)
             {
-                targetIndex = caseValue;
-            }
-            else
-            {
-                // Default: last child
-                targetIndex = children.Length - 1;
+                if (_activeIndex >= 0 &&
+                    _activeIndex < children.Length &&
+                    children[_activeIndex].IsStarted)
+                {
+                    children[_activeIndex].Abort(blackboard);
+                }
+
+                _activeIndex = targetIndex;
             }
 
-            return children[targetIndex].Run(blackboard);
+            return children[_activeIndex].Run(blackboard);
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(
+            RuntimeBlackboard blackboard,
+            RuntimeNodeExitReason reason,
+            System.Exception exception)
         {
-            var children = Children;
-            if (children == null) return;
-            for (int i = 0; i < children.Length; i++)
+            base.OnExit(blackboard, reason, exception);
+            if (reason != RuntimeNodeExitReason.Completed)
             {
-                if (children[i].IsStarted) children[i].Abort(blackboard);
+                _activeIndex = -1;
             }
+        }
+
+        protected override void OnReset(RuntimeBlackboard blackboard)
+        {
+            base.OnReset(blackboard);
+            _activeIndex = -1;
         }
     }
 }

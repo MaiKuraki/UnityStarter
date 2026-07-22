@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Reflection;
 using System.Text;
 using CycloneGames.BehaviorTree.Runtime.Attributes;
@@ -12,6 +12,8 @@ using UnityEditor;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
 using UnityEngine.UIElements;
+using BBComparisonOp = CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBComparisonOp;
+using BBValueType = CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBValueType;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
@@ -28,27 +30,7 @@ namespace CycloneGames.BehaviorTree.Editor
         public Port OutputPort;
 
         private BehaviorTreeView _treeView;
-
-        // ── Static FieldInfo cache (avoid per-frame reflection) ──
-        private static FieldInfo s_debugLogMsgField;
-        private static FieldInfo s_waitDurationField;
-        private static FieldInfo s_msgPassKeyField;
-        private static FieldInfo s_msgPassMsgField;
-        private static FieldInfo s_msgRecvKeyField;
-        private static FieldInfo s_msgRecvMsgField;
-        private static FieldInfo s_retryMaxField;
-        private static FieldInfo s_timeoutSecondsField;
-        private static FieldInfo s_delaySecondsField;
-        private static FieldInfo s_switchKeyField;
-        private static FieldInfo s_parallelSuccessField;
-        private static FieldInfo s_msgRemoveKeyField;
-        private static FieldInfo s_subTreeAssetField;
-        private static FieldInfo s_serviceIntervalField;
-        private static FieldInfo s_serviceDeviationField;
-        private static FieldInfo s_bbCompKeyField;
-        private static FieldInfo s_bbCompOpField;
-        private static FieldInfo s_bbCompTypeField;
-        private static FieldInfo s_utilityScoreKeysField;
+        private readonly Capabilities _editableCapabilities;
 
         // ── Info text throttle (avoid per-frame string allocs) ──
         private string _cachedInfoText = "";
@@ -211,7 +193,7 @@ namespace CycloneGames.BehaviorTree.Editor
             return name;
         }
 
-        public BTNodeView(BTNode node) : base(AssetDatabase.GetAssetPath(Resources.Load<VisualTreeAsset>("BT_Node_Layout")))
+        public BTNodeView(BTNode node) : base(BehaviorTreeEditorResources.NodeLayoutPath)
         {
             this._node = node;
             this.title = ConvertToReadableName(node.name);
@@ -224,14 +206,22 @@ namespace CycloneGames.BehaviorTree.Editor
             CreateInfoElements();
             SetupTooltip();
             CreateTypeBadge();
+            _editableCapabilities = capabilities;
         }
 
-        public BTNodeView(BTNode node, Vector2 position) : base(AssetDatabase.GetAssetPath(Resources.Load<VisualTreeAsset>("BT_Node_Layout")))
+        public BTNodeView(BTNode node, Vector2 position) : base(BehaviorTreeEditorResources.NodeLayoutPath)
         {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                throw new InvalidOperationException(
+                    "Behavior tree authoring assets are read-only while the Editor is entering, running, or exiting Play Mode.");
+            }
+
             this._node = node;
             this.title = ConvertToReadableName(node.name);
             this.viewDataKey = node.GUID;
             node.Position = position;
+            EditorUtility.SetDirty(node);
 
             style.left = position.x;
             style.top = position.y;
@@ -242,6 +232,22 @@ namespace CycloneGames.BehaviorTree.Editor
             CreateInfoElements();
             SetupTooltip();
             CreateTypeBadge();
+            _editableCapabilities = capabilities;
+        }
+
+        internal void SetAuthoringReadOnly(bool isReadOnly)
+        {
+            const Capabilities authoringCapabilities =
+                Capabilities.Movable |
+                Capabilities.Deletable |
+                Capabilities.Copiable;
+
+            capabilities = isReadOnly
+                ? _editableCapabilities & ~authoringCapabilities
+                : _editableCapabilities;
+
+            InputPort?.SetEnabled(!isReadOnly);
+            OutputPort?.SetEnabled(!isReadOnly);
         }
 
         public override void OnSelected()
@@ -251,14 +257,11 @@ namespace CycloneGames.BehaviorTree.Editor
         }
 
         /// <summary>
-        /// Updates the node position and records it for undo/redo.
+        /// Updates only the visual position. The graph view commits all moved nodes in one Undo operation.
         /// </summary>
         public override void SetPosition(Rect newPos)
         {
             base.SetPosition(newPos);
-            Undo.RecordObject(_node, "Behavior Tree(Set Position)");
-            _node.Position = new Vector2(newPos.xMin, newPos.yMin);
-            EditorUtility.SetDirty(_node);
         }
 
         private BTState ToBTState(CycloneGames.BehaviorTree.Runtime.Core.RuntimeState state)
@@ -406,8 +409,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
                 if (_node is WaitNode waitNode)
                 {
-                    s_waitDurationField ??= typeof(WaitNode).GetField("_duration", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var duration = s_waitDurationField != null ? (float)s_waitDurationField.GetValue(waitNode) : 0f;
+                    float duration = waitNode.Duration;
                     s_sb.Clear(); s_sb.AppendFormat("{0:F1}", duration); s_sb.Append('s');
                     _progressLabel.text = s_sb.ToString();
                     _progressBarContainer.style.display = DisplayStyle.Flex;
@@ -480,54 +482,40 @@ namespace CycloneGames.BehaviorTree.Editor
             switch (_node)
             {
                 case DebugLogNode logNode:
-                    s_debugLogMsgField ??= typeof(DebugLogNode).GetField("_message", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var msg = s_debugLogMsgField?.GetValue(logNode) as string ?? "";
+                    string msg = logNode.Message ?? "";
                     s_sb.Clear(); s_sb.Append('"'); s_sb.Append(TruncateText(msg, 20)); s_sb.Append('"');
                     return s_sb.ToString();
 
                 case WaitNode waitNode:
-                    s_waitDurationField ??= typeof(WaitNode).GetField("_duration", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var duration = s_waitDurationField != null ? (float)s_waitDurationField.GetValue(waitNode) : 0f;
+                    float duration = waitNode.Duration;
                     s_sb.Clear(); s_sb.Append("Duration: "); s_sb.AppendFormat("{0:F2}", duration); s_sb.Append('s');
                     return s_sb.ToString();
 
                 case Runtime.Nodes.Actions.BlackBoards.MessagePassNode passNode:
-                    s_msgPassKeyField ??= typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
-                    s_msgPassMsgField ??= typeof(Runtime.Nodes.Actions.BlackBoards.MessagePassNode).GetField("_message", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var keyP = s_msgPassKeyField?.GetValue(passNode) as string ?? "";
-                    var msgP = s_msgPassMsgField?.GetValue(passNode) as string ?? "";
+                    string keyP = passNode.Key ?? "";
+                    string msgP = passNode.Message ?? "";
                     s_sb.Clear(); s_sb.Append('['); s_sb.Append(keyP); s_sb.Append("] = \""); s_sb.Append(TruncateText(msgP, 15)); s_sb.Append('"');
                     return s_sb.ToString();
 
                 case Runtime.Conditions.BlackBoards.MessageReceiveNode receiveNode:
-                    s_msgRecvKeyField ??= typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
-                    s_msgRecvMsgField ??= typeof(Runtime.Conditions.BlackBoards.MessageReceiveNode).GetField("_message", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var keyR = s_msgRecvKeyField?.GetValue(receiveNode) as string ?? "";
-                    var msgR = s_msgRecvMsgField?.GetValue(receiveNode) as string ?? "";
+                    string keyR = receiveNode.Key ?? "";
+                    string msgR = receiveNode.Message ?? "";
                     s_sb.Clear(); s_sb.Append('['); s_sb.Append(keyR); s_sb.Append("] == \""); s_sb.Append(TruncateText(msgR, 15)); s_sb.Append('"');
                     return s_sb.ToString();
 
                 case Runtime.Nodes.Actions.BlackBoards.MessageRemoveNode removeNode:
-                    s_msgRemoveKeyField ??= typeof(Runtime.Nodes.Actions.BlackBoards.MessageRemoveNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var keyRm = s_msgRemoveKeyField?.GetValue(removeNode) as string ?? "";
+                    string keyRm = removeNode.Key ?? "";
                     s_sb.Clear(); s_sb.Append("Remove [" ); s_sb.Append(keyRm); s_sb.Append(']');
                     return s_sb.ToString();
 
                 case BBComparisonNode bbCompNode:
-                    s_bbCompKeyField ??= typeof(BBComparisonNode).GetField("_key", BindingFlags.NonPublic | BindingFlags.Instance);
-                    s_bbCompOpField ??= typeof(BBComparisonNode).GetField("_operator", BindingFlags.NonPublic | BindingFlags.Instance);
-                    s_bbCompTypeField ??= typeof(BBComparisonNode).GetField("_valueType", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var bbKey = s_bbCompKeyField?.GetValue(bbCompNode) as string ?? "";
-                    var bbOp = s_bbCompOpField != null ? (CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBComparisonOp)s_bbCompOpField.GetValue(bbCompNode) : CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBComparisonOp.IsSet;
-                    var bbType = s_bbCompTypeField != null ? (CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBValueType)s_bbCompTypeField.GetValue(bbCompNode) : CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.BBValueType.Int;
-                    s_sb.Clear(); s_sb.Append('['); s_sb.Append(bbKey); s_sb.Append("] "); s_sb.Append(bbOp); s_sb.Append(" ("); s_sb.Append(bbType); s_sb.Append(')');
+                    string bbKey = bbCompNode.Key ?? "";
+                    s_sb.Clear(); s_sb.Append('['); s_sb.Append(bbKey); s_sb.Append("] "); s_sb.Append(GetDisplayName(bbCompNode.Operator)); s_sb.Append(" ("); s_sb.Append(GetDisplayName(bbCompNode.ValueType)); s_sb.Append(')');
                     return s_sb.ToString();
 
                 case ServiceNode serviceNode:
-                    s_serviceIntervalField ??= typeof(ServiceNode).GetField("_interval", BindingFlags.NonPublic | BindingFlags.Instance);
-                    s_serviceDeviationField ??= typeof(ServiceNode).GetField("_randomDeviation", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var svcInterval = s_serviceIntervalField != null ? (float)s_serviceIntervalField.GetValue(serviceNode) : 0.5f;
-                    var svcDeviation = s_serviceDeviationField != null ? (float)s_serviceDeviationField.GetValue(serviceNode) : 0f;
+                    float svcInterval = serviceNode.Interval;
+                    float svcDeviation = serviceNode.RandomDeviation;
                     s_sb.Clear(); s_sb.Append("Every "); s_sb.AppendFormat("{0:F2}", svcInterval); s_sb.Append('s');
                     if (svcDeviation > 0f) { s_sb.Append(" ±"); s_sb.AppendFormat("{0:F2}", svcDeviation); }
                     return s_sb.ToString();
@@ -544,20 +532,17 @@ namespace CycloneGames.BehaviorTree.Editor
                         return $"Repeat: (configured)";
 
                 case RetryNode retryNode:
-                    s_retryMaxField ??= typeof(RetryNode).GetField("_maxAttempts", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var maxAttempts = s_retryMaxField != null ? (int)s_retryMaxField.GetValue(retryNode) : 3;
+                    int maxAttempts = retryNode.MaxAttempts;
                     s_sb.Clear(); s_sb.Append("Max Attempts: "); s_sb.Append(maxAttempts);
                     return s_sb.ToString();
 
                 case TimeoutNode timeoutNode:
-                    s_timeoutSecondsField ??= typeof(TimeoutNode).GetField("_timeoutSeconds", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var timeout = s_timeoutSecondsField != null ? (float)s_timeoutSecondsField.GetValue(timeoutNode) : 5f;
+                    float timeout = timeoutNode.TimeoutSeconds;
                     s_sb.Clear(); s_sb.Append("Timeout: "); s_sb.AppendFormat("{0:F1}", timeout); s_sb.Append('s');
                     return s_sb.ToString();
 
                 case DelayNode delayNode:
-                    s_delaySecondsField ??= typeof(DelayNode).GetField("_delaySeconds", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var delay = s_delaySecondsField != null ? (float)s_delaySecondsField.GetValue(delayNode) : 1f;
+                    float delay = delayNode.DelaySeconds;
                     s_sb.Clear(); s_sb.Append("Delay: "); s_sb.AppendFormat("{0:F1}", delay); s_sb.Append('s');
                     return s_sb.ToString();
 
@@ -571,29 +556,25 @@ namespace CycloneGames.BehaviorTree.Editor
                     return "Until Failure";
 
                 case SubTreeNode subTreeNode:
-                    s_subTreeAssetField ??= typeof(SubTreeNode).GetField("_subTreeAsset", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var subAsset = s_subTreeAssetField?.GetValue(subTreeNode) as Runtime.BehaviorTree;
+                    Runtime.BehaviorTree subAsset = subTreeNode.SubTreeAsset;
                     if (subAsset != null)
                     { s_sb.Clear(); s_sb.Append("Tree: "); s_sb.Append(subAsset.name); return s_sb.ToString(); }
                     return "SubTree: (none)";
 
                 case SwitchNode switchNode:
-                    s_switchKeyField ??= typeof(SwitchNode).GetField("_variableKey", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var key = s_switchKeyField?.GetValue(switchNode) as string ?? "";
+                    string key = switchNode.VariableKey ?? "";
                     if (string.IsNullOrEmpty(key)) return "Switch";
                     s_sb.Clear(); s_sb.Append("Key: "); s_sb.Append(key);
                     return s_sb.ToString();
 
                 case ParallelAllNode parallelAll:
-                    s_parallelSuccessField ??= typeof(ParallelAllNode).GetField("_successThreshold", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var st = s_parallelSuccessField != null ? (int)s_parallelSuccessField.GetValue(parallelAll) : -1;
+                    int st = parallelAll.SuccessThreshold;
                     if (st < 0) return "All must succeed";
                     s_sb.Clear(); s_sb.Append("Need "); s_sb.Append(st); s_sb.Append(" success");
                     return s_sb.ToString();
 
                 case UtilitySelectorNode utilNode:
-                    s_utilityScoreKeysField ??= typeof(UtilitySelectorNode).GetField("_scoreKeys", BindingFlags.NonPublic | BindingFlags.Instance);
-                    var scoreKeys = s_utilityScoreKeysField?.GetValue(utilNode) as System.Collections.Generic.List<string>;
+                    var scoreKeys = utilNode.ScoreKeys;
                     int keysCnt = scoreKeys != null ? scoreKeys.Count : 0;
                     s_sb.Clear(); s_sb.Append("Utility ("); s_sb.Append(keysCnt); s_sb.Append(" keys)");
                     return s_sb.ToString();
@@ -607,6 +588,34 @@ namespace CycloneGames.BehaviorTree.Editor
             }
 
             return "";
+        }
+
+        private static string GetDisplayName(BBComparisonOp value)
+        {
+            switch (value)
+            {
+                case BBComparisonOp.Equal: return nameof(BBComparisonOp.Equal);
+                case BBComparisonOp.NotEqual: return nameof(BBComparisonOp.NotEqual);
+                case BBComparisonOp.GreaterThan: return nameof(BBComparisonOp.GreaterThan);
+                case BBComparisonOp.GreaterOrEqual: return nameof(BBComparisonOp.GreaterOrEqual);
+                case BBComparisonOp.LessThan: return nameof(BBComparisonOp.LessThan);
+                case BBComparisonOp.LessOrEqual: return nameof(BBComparisonOp.LessOrEqual);
+                case BBComparisonOp.IsSet: return nameof(BBComparisonOp.IsSet);
+                case BBComparisonOp.IsNotSet: return nameof(BBComparisonOp.IsNotSet);
+                default: return ((byte)value).ToString();
+            }
+        }
+
+        private static string GetDisplayName(BBValueType value)
+        {
+            switch (value)
+            {
+                case BBValueType.Int: return nameof(BBValueType.Int);
+                case BBValueType.Float: return nameof(BBValueType.Float);
+                case BBValueType.Bool: return nameof(BBValueType.Bool);
+                case BBValueType.Object: return nameof(BBValueType.Object);
+                default: return ((byte)value).ToString();
+            }
         }
 
         private string GetRuntimeModeInfo(CycloneGames.BehaviorTree.Runtime.Core.RuntimeNode node)
@@ -1011,7 +1020,7 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        /// <summary>0GC check for port connections (avoids LINQ Count() enumerator alloc).</summary>
+        /// <summary>Checks port connections without LINQ Count() or ToList() calls.</summary>
         private static bool HasAnyConnection(Port port)
         {
             if (port.connections == null) return false;

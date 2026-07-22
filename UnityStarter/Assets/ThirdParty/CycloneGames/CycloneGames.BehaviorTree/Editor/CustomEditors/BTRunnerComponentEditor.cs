@@ -1,5 +1,7 @@
 using System;
+using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Components;
+using CycloneGames.BehaviorTree.Runtime.Core;
 using UnityEditor;
 using UnityEngine;
 
@@ -38,6 +40,8 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
 
         private BTRunnerComponent _runner => (BTRunnerComponent)target;
         private bool _showBlackboard = true;
+        private readonly List<RuntimeBlackboardDebugEntry> _debugEntries =
+            new List<RuntimeBlackboardDebugEntry>(16);
 
         protected virtual void OnEnable()
         {
@@ -214,14 +218,45 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             }
             else
             {
-                bool hasAny = false;
+                bb.CopyDebugEntries(_debugEntries);
                 EditorGUI.BeginDisabledGroup(true);
-                foreach (var kv in bb.DebugIntData) { EditorGUILayout.IntField($"[int] {kv.Key}", kv.Value); hasAny = true; }
-                foreach (var kv in bb.DebugFloatData) { EditorGUILayout.FloatField($"[float] {kv.Key}", kv.Value); hasAny = true; }
-                foreach (var kv in bb.DebugBoolData) { EditorGUILayout.Toggle($"[bool] {kv.Key}", kv.Value); hasAny = true; }
-                foreach (var kv in bb.DebugObjectData) { EditorGUILayout.TextField($"[obj] {kv.Key}", kv.Value?.ToString() ?? "NULL"); hasAny = true; }
+                for (int i = 0; i < _debugEntries.Count; i++)
+                {
+                    RuntimeBlackboardDebugEntry entry = _debugEntries[i];
+                    string label = $"[{entry.ValueType}] {entry.Key}";
+                    switch (entry.ValueType)
+                    {
+                        case RuntimeBlackboardValueType.Int:
+                            EditorGUILayout.IntField(label, entry.IntValue);
+                            break;
+                        case RuntimeBlackboardValueType.Float:
+                            EditorGUILayout.FloatField(label, entry.FloatValue);
+                            break;
+                        case RuntimeBlackboardValueType.Bool:
+                            EditorGUILayout.Toggle(label, entry.BoolValue);
+                            break;
+                        case RuntimeBlackboardValueType.Vector3:
+                            EditorGUILayout.Vector3Field(label, entry.VectorValue);
+                            break;
+                        case RuntimeBlackboardValueType.Object:
+                            EditorGUILayout.TextField(label, entry.ObjectValue?.ToString() ?? "NULL");
+                            break;
+                        case RuntimeBlackboardValueType.Long:
+                            EditorGUILayout.LongField(label, entry.LongValue);
+                            break;
+                        case RuntimeBlackboardValueType.Long2:
+                            EditorGUILayout.TextField(label, $"({entry.Long2Value.X}, {entry.Long2Value.Y})");
+                            break;
+                        case RuntimeBlackboardValueType.Long3:
+                            EditorGUILayout.TextField(label, $"({entry.Long3Value.X}, {entry.Long3Value.Y}, {entry.Long3Value.Z})");
+                            break;
+                    }
+                }
                 EditorGUI.EndDisabledGroup();
-                if (!hasAny) EditorGUILayout.LabelField("No data", EditorStyles.centeredGreyMiniLabel);
+                if (_debugEntries.Count == 0)
+                {
+                    EditorGUILayout.LabelField("No data", EditorStyles.centeredGreyMiniLabel);
+                }
             }
 
             EditorGUILayout.EndVertical();
@@ -241,18 +276,23 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
                 enterChildren = false;
 
                 // Skip already drawn fields
-                if (iterator.name == "m_Script" ||
-                    iterator.name == "_startOnAwake" ||
-                    iterator.name == "_tickMode" ||
-                    iterator.name == "behaviorTree" ||
-                    iterator.name == "_initialObjects" ||
-                    iterator.name == "_blackBoard")
+                if (IsPropertyDrawnExplicitly(iterator.name))
                 {
                     continue;
                 }
 
                 EditorGUILayout.PropertyField(iterator, true);
             }
+        }
+
+        protected virtual bool IsPropertyDrawnExplicitly(string propertyName)
+        {
+            return propertyName == "m_Script" ||
+                   propertyName == "_startOnAwake" ||
+                   propertyName == "_tickMode" ||
+                   propertyName == "behaviorTree" ||
+                   propertyName == "_initialObjects" ||
+                   propertyName == "_blackBoard";
         }
     }
 }

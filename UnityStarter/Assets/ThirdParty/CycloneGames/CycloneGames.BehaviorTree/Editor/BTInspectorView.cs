@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEngine.UIElements;
 
 namespace CycloneGames.BehaviorTree.Editor
@@ -86,8 +86,20 @@ namespace CycloneGames.BehaviorTree.Editor
                 float labelWidth = _scrollView.layout.width > 0
                     ? Mathf.Max(180f, _scrollView.layout.width * 0.5f)
                     : 180f;
-                UnityEditor.EditorGUIUtility.labelWidth = labelWidth;
-                _editor.OnInspectorGUI();
+                float previousLabelWidth = UnityEditor.EditorGUIUtility.labelWidth;
+                try
+                {
+                    UnityEditor.EditorGUIUtility.labelWidth = labelWidth;
+                    using (new UnityEditor.EditorGUI.DisabledScope(
+                               UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode))
+                    {
+                        _editor.OnInspectorGUI();
+                    }
+                }
+                finally
+                {
+                    UnityEditor.EditorGUIUtility.labelWidth = previousLabelWidth;
+                }
             });
 
             _currentContainer.style.flexGrow = 1;

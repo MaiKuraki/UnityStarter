@@ -9,7 +9,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
     {
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             if (children == null || children.Length < 2) return RuntimeState.Failure;
 
             var condState = children[0].Run(blackboard);
@@ -45,9 +45,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             return RuntimeState.Failure;
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(RuntimeBlackboard blackboard, RuntimeNodeExitReason reason, System.Exception exception)
         {
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             if (children == null) return;
             for (int i = 0; i < children.Length; i++)
             {

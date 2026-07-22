@@ -134,7 +134,10 @@ namespace CycloneGames.BehaviorTree.Networking
                 return false;
             }
 
-            return context.IsClient && !context.IsServer;
+            return context.IsClient &&
+                   !context.IsServer &&
+                   context.AuthorityGeneration == agent.AuthorityGeneration &&
+                   payload.AuthorityGeneration == agent.AuthorityGeneration;
         }
     }
 

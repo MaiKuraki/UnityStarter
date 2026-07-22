@@ -10,16 +10,8 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
-    "defineConstraints": [
-        "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
-    ],
-    "versionDefines": [
-        {
-            "name": "com.cyclone-games.deterministic-math",
-            "expression": "",
-            "define": "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
-        }
-    ],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
     "noEngineReferences": false
 }

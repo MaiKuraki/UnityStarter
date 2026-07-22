@@ -61,6 +61,7 @@ namespace CycloneGames.BehaviorTree.Networking
         public ulong TreeTemplateHash;
         public ulong BlackboardHash;
         public ulong TreeStateHash;
+        public uint AuthorityGeneration;
         public byte[] Payload;
 
         public BehaviorTreeStatePayloadMessage(
@@ -71,7 +72,8 @@ namespace CycloneGames.BehaviorTree.Networking
             ulong treeTemplateHash,
             ulong blackboardHash,
             ulong treeStateHash,
-            byte[] payload)
+            byte[] payload,
+            uint authorityGeneration = 0u)
         {
             TargetNetworkId = targetNetworkId;
             Sequence = sequence;
@@ -80,6 +82,7 @@ namespace CycloneGames.BehaviorTree.Networking
             TreeTemplateHash = treeTemplateHash;
             BlackboardHash = blackboardHash;
             TreeStateHash = treeStateHash;
+            AuthorityGeneration = authorityGeneration;
             Payload = payload;
         }
 
@@ -104,6 +107,7 @@ namespace CycloneGames.BehaviorTree.Networking
         public ulong RemoteBlackboardHash;
         public ulong LocalTreeStateHash;
         public ulong RemoteTreeStateHash;
+        public uint AuthorityGeneration;
 
         public BehaviorTreeDesyncReportMessage(
             uint targetNetworkId,
@@ -113,7 +117,8 @@ namespace CycloneGames.BehaviorTree.Networking
             ulong localBlackboardHash,
             ulong remoteBlackboardHash,
             ulong localTreeStateHash,
-            ulong remoteTreeStateHash)
+            ulong remoteTreeStateHash,
+            uint authorityGeneration = 0u)
         {
             TargetNetworkId = targetNetworkId;
             Sequence = sequence;
@@ -123,6 +128,7 @@ namespace CycloneGames.BehaviorTree.Networking
             RemoteBlackboardHash = remoteBlackboardHash;
             LocalTreeStateHash = localTreeStateHash;
             RemoteTreeStateHash = remoteTreeStateHash;
+            AuthorityGeneration = authorityGeneration;
         }
 
         public bool IsValid => TargetNetworkId != 0u;

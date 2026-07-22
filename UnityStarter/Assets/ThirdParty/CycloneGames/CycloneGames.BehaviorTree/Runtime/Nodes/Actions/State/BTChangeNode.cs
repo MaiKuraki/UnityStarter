@@ -6,6 +6,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.State
     {
         [SerializeField] private string _stateId;
 
+        public string StateId => _stateId;
+
         public override BTNode Clone()
         {
             var clone = (BTChangeNode)base.Clone();

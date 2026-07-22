@@ -8,6 +8,19 @@ namespace CycloneGames.BehaviorTree.Editor
 {
     public class BehaviorTreeBenchmarkWindow : EditorWindow
     {
+        private const int MaxAgentCount = 100000;
+        private const int MaxLeafNodesPerTree = 512;
+        private const int MaxBlackboardOperationsPerLeaf = 256;
+        private const int MaxDecoratorLayersPerLeaf = 64;
+        private const int MaxSimulatedWorkIterationsPerLeaf = 100000;
+        private const int MaxTrackedKeysPerAgent = 8192;
+        private const int MaxFrameCount = 1000000;
+        private const int MaxTicksPerFrame = 64;
+        private const long MaxTotalRuntimeNodes = 2000000L;
+        private const long MaxTotalTrackedKeys = 20000000L;
+        private const long MaxWorkUnitsPerFrame = 25000000L;
+        private const long MaxTotalWorkUnits = 1000000000L;
+
         private readonly string[] _presetLabels = System.Enum.GetNames(typeof(BehaviorTreeBenchmarkPreset));
         private readonly string[] _complexityLabels = System.Enum.GetNames(typeof(BehaviorTreeBenchmarkComplexity));
         private readonly string[] _schedulingLabels = System.Enum.GetNames(typeof(BehaviorTreeBenchmarkSchedulingProfile));
@@ -34,11 +47,11 @@ namespace CycloneGames.BehaviorTree.Editor
             bool createScaleMatrixSceneRequested = false;
             bool createFullMatrixSceneRequested = false;
             bool createPriorityComparisonSceneRequested = false;
-            bool createCertificationSceneRequested = false;
+            bool createConfiguredBudgetSceneRequested = false;
             bool runScaleMatrixRequested = false;
             bool runFullMatrixRequested = false;
             bool runPriorityComparisonRequested = false;
-            bool runCertificationRequested = false;
+            bool runConfiguredBudgetRequested = false;
 
             _scrollPosition = EditorGUILayout.BeginScrollView(_scrollPosition);
             float previousLabelWidth = EditorGUIUtility.labelWidth;
@@ -93,12 +106,21 @@ namespace CycloneGames.BehaviorTree.Editor
                 _config.MinimumEffectiveTickRatio = EditorGUILayout.Slider("Min Effective Tick Ratio", (float)_config.MinimumEffectiveTickRatio, 0f, 1f);
                 _config.Sanitize();
 
-                long recommendedMemoryBudgetBytes = BehaviorTreeBenchmarkPresetCatalog.EstimateManagedMemoryDeltaBudgetBytes(_config);
-                EditorGUILayout.LabelField("Memory Budget Display", FormatBytes(_config.MaxManagedMemoryDeltaBytes));
-                EditorGUILayout.LabelField("Recommended Memory Budget", FormatBytes(recommendedMemoryBudgetBytes));
-                if (GUILayout.Button("Apply Recommended Production Budgets", GUILayout.Height(24f)))
+                bool requestIsValid = TryValidateRequest(_config, out string requestValidationError);
+                if (!requestIsValid)
                 {
-                    BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(_config);
+                    EditorGUILayout.HelpBox(requestValidationError, MessageType.Error);
+                }
+
+                EditorGUILayout.LabelField("Memory Budget Display", FormatBytes(_config.MaxManagedMemoryDeltaBytes));
+                if (requestIsValid)
+                {
+                    long recommendedMemoryBudgetBytes = BehaviorTreeBenchmarkPresetCatalog.EstimateManagedMemoryDeltaBudgetBytes(_config);
+                    EditorGUILayout.LabelField("Recommended Memory Budget", FormatBytes(recommendedMemoryBudgetBytes));
+                    if (GUILayout.Button("Apply Recommended Production Budgets", GUILayout.Height(24f)))
+                    {
+                        BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(_config);
+                    }
                 }
 
                 _config.Sanitize();
@@ -139,9 +161,9 @@ namespace CycloneGames.BehaviorTree.Editor
                     runPriorityComparisonRequested = true;
                 }
 
-                if (GUILayout.Button("Run Production Certification Matrix", GUILayout.Height(28f)))
+                if (GUILayout.Button("Run Configured Budget Matrix", GUILayout.Height(28f)))
                 {
-                    runCertificationRequested = true;
+                    runConfiguredBudgetRequested = true;
                 }
 
                 if (GUILayout.Button("Create Scale Matrix Scene", GUILayout.Height(28f)))
@@ -159,9 +181,9 @@ namespace CycloneGames.BehaviorTree.Editor
                     createPriorityComparisonSceneRequested = true;
                 }
 
-                if (GUILayout.Button("Create Production Certification Scene", GUILayout.Height(28f)))
+                if (GUILayout.Button("Create Configured Budget Scene", GUILayout.Height(28f)))
                 {
-                    createCertificationSceneRequested = true;
+                    createConfiguredBudgetSceneRequested = true;
                 }
 
                 using (new EditorGUI.DisabledScope(_lastResult == null || !_lastResult.IsValid))
@@ -262,9 +284,9 @@ namespace CycloneGames.BehaviorTree.Editor
                 GUIUtility.ExitGUI();
             }
 
-            if (createCertificationSceneRequested)
+            if (createConfiguredBudgetSceneRequested)
             {
-                EditorApplication.delayCall += CreateCertificationScene;
+                EditorApplication.delayCall += CreateConfiguredBudgetScene;
                 GUIUtility.ExitGUI();
             }
 
@@ -286,16 +308,20 @@ namespace CycloneGames.BehaviorTree.Editor
                 GUIUtility.ExitGUI();
             }
 
-            if (runCertificationRequested)
+            if (runConfiguredBudgetRequested)
             {
-                EditorApplication.delayCall += RunCertificationMatrix;
+                EditorApplication.delayCall += RunConfiguredBudgetMatrix;
                 GUIUtility.ExitGUI();
             }
         }
 
         private void RunEditorBenchmark()
         {
-            _config.Sanitize();
+            if (!ValidateBeforeExecution(_config, "Run Editor Benchmark"))
+            {
+                return;
+            }
+
             _lastResult = BehaviorTreeBenchmarkSession.RunImmediate(_config);
             _lastBatchResult = null;
             Repaint();
@@ -304,12 +330,22 @@ namespace CycloneGames.BehaviorTree.Editor
         private void RunScaleMatrix()
         {
             var presets = BehaviorTreeBenchmarkPresetCatalog.GetRecommendedPresets();
+            var configs = new BehaviorTreeBenchmarkConfig[presets.Length];
             var results = new BehaviorTreeBenchmarkResult[presets.Length];
 
             for (int i = 0; i < presets.Length; i++)
             {
-                var config = BehaviorTreeBenchmarkPresetCatalog.CreateConfig(presets[i], _config.Complexity);
-                results[i] = BehaviorTreeBenchmarkSession.RunImmediate(config);
+                configs[i] = BehaviorTreeBenchmarkPresetCatalog.CreateConfig(presets[i], _config.Complexity);
+            }
+
+            if (!ValidateBeforeExecution(configs, "Run Scale Matrix"))
+            {
+                return;
+            }
+
+            for (int i = 0; i < configs.Length; i++)
+            {
+                results[i] = BehaviorTreeBenchmarkSession.RunImmediate(configs[i]);
             }
 
             _lastBatchResult = new BehaviorTreeBenchmarkBatchResult
@@ -332,16 +368,28 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             var presets = BehaviorTreeBenchmarkPresetCatalog.GetRecommendedPresets();
             var complexities = BehaviorTreeBenchmarkPresetCatalog.GetComplexityTiers();
-            var results = new BehaviorTreeBenchmarkResult[presets.Length * complexities.Length];
+            var configs = new BehaviorTreeBenchmarkConfig[presets.Length * complexities.Length];
             int resultIndex = 0;
 
             for (int complexityIndex = 0; complexityIndex < complexities.Length; complexityIndex++)
             {
                 for (int presetIndex = 0; presetIndex < presets.Length; presetIndex++)
                 {
-                    var config = BehaviorTreeBenchmarkPresetCatalog.CreateConfig(presets[presetIndex], complexities[complexityIndex]);
-                    results[resultIndex++] = BehaviorTreeBenchmarkSession.RunImmediate(config);
+                    configs[resultIndex++] = BehaviorTreeBenchmarkPresetCatalog.CreateConfig(
+                        presets[presetIndex],
+                        complexities[complexityIndex]);
                 }
+            }
+
+            if (!ValidateBeforeExecution(configs, "Run Full Matrix"))
+            {
+                return;
+            }
+
+            var results = new BehaviorTreeBenchmarkResult[configs.Length];
+            for (int i = 0; i < configs.Length; i++)
+            {
+                results[i] = BehaviorTreeBenchmarkSession.RunImmediate(configs[i]);
             }
 
             _lastBatchResult = new BehaviorTreeBenchmarkBatchResult
@@ -370,15 +418,25 @@ namespace CycloneGames.BehaviorTree.Editor
                 BehaviorTreeBenchmarkSchedulingProfile.UltraLod
             };
 
-            var results = new BehaviorTreeBenchmarkResult[profiles.Length];
+            var configs = new BehaviorTreeBenchmarkConfig[profiles.Length];
             for (int i = 0; i < profiles.Length; i++)
             {
                 var config = _config.Clone();
                 BehaviorTreeBenchmarkPresetCatalog.ApplySchedulingProfile(config, profiles[i]);
                 BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(config);
                 config.BenchmarkName = $"{config.BenchmarkName} [{profiles[i]}]";
-                config.Sanitize();
-                results[i] = BehaviorTreeBenchmarkSession.RunImmediate(config);
+                configs[i] = config;
+            }
+
+            if (!ValidateBeforeExecution(configs, "Run Priority Comparison"))
+            {
+                return;
+            }
+
+            var results = new BehaviorTreeBenchmarkResult[profiles.Length];
+            for (int i = 0; i < configs.Length; i++)
+            {
+                results[i] = BehaviorTreeBenchmarkSession.RunImmediate(configs[i]);
             }
 
             _lastBatchResult = new BehaviorTreeBenchmarkBatchResult
@@ -397,9 +455,14 @@ namespace CycloneGames.BehaviorTree.Editor
             Repaint();
         }
 
-        private void RunCertificationMatrix()
+        private void RunConfiguredBudgetMatrix()
         {
-            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateCertificationMatrixConfigs();
+            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateConfiguredBudgetMatrixConfigs();
+            if (!ValidateBeforeExecution(configs, "Run Configured Budget Matrix"))
+            {
+                return;
+            }
+
             var results = new BehaviorTreeBenchmarkResult[configs.Length];
 
             for (int i = 0; i < configs.Length; i++)
@@ -410,7 +473,7 @@ namespace CycloneGames.BehaviorTree.Editor
             _lastBatchResult = new BehaviorTreeBenchmarkBatchResult
             {
                 GeneratedAtUtc = System.DateTime.UtcNow.ToString("O"),
-                BatchName = "Production Certification Matrix",
+                BatchName = "Configured Budget Matrix",
                 Results = results
             };
             BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(_lastBatchResult);
@@ -425,9 +488,12 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private void CreateBenchmarkScene()
         {
-            _config.Sanitize();
+            if (!ValidateBeforeExecution(_config, "Create PlayMode Benchmark Scene") ||
+                !TryCreateBenchmarkScene(out var scene))
+            {
+                return;
+            }
 
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
             var runnerObject = new GameObject("BehaviorTree Benchmark Runner");
             var runner = runnerObject.AddComponent<BehaviorTreeBenchmarkRunner>();
             runner.AutoRunOnStart = true;
@@ -438,13 +504,19 @@ namespace CycloneGames.BehaviorTree.Editor
             EditorSceneManager.MarkSceneDirty(scene);
         }
 
-        private void CreateCertificationScene()
+        private void CreateConfiguredBudgetScene()
         {
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
-            var runnerObject = new GameObject("BehaviorTree Benchmark Certification Runner");
+            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateConfiguredBudgetMatrixConfigs();
+            if (!ValidateBeforeExecution(configs, "Create Configured Budget Scene") ||
+                !TryCreateBenchmarkScene(out var scene))
+            {
+                return;
+            }
+
+            var runnerObject = new GameObject("BehaviorTree Configured Budget Benchmark Runner");
             var runner = runnerObject.AddComponent<BehaviorTreeBenchmarkRunner>();
             runner.AutoRunOnStart = true;
-            runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.CertificationMatrix;
+            runner.RunnerMode = BehaviorTreeBenchmarkRunnerMode.ConfiguredBudgetMatrix;
             runner.SetConfig(_config);
 
             Selection.activeGameObject = runnerObject;
@@ -465,7 +537,19 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private void CreateScaleMatrixScene()
         {
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+            var presets = BehaviorTreeBenchmarkPresetCatalog.GetRecommendedPresets();
+            var configs = new BehaviorTreeBenchmarkConfig[presets.Length];
+            for (int i = 0; i < presets.Length; i++)
+            {
+                configs[i] = BehaviorTreeBenchmarkPresetCatalog.CreateConfig(presets[i], _config.Complexity);
+            }
+
+            if (!ValidateBeforeExecution(configs, "Create Scale Matrix Scene") ||
+                !TryCreateBenchmarkScene(out var scene))
+            {
+                return;
+            }
+
             var runnerObject = new GameObject("BehaviorTree Benchmark Scale Matrix Runner");
             var runner = runnerObject.AddComponent<BehaviorTreeBenchmarkRunner>();
             runner.AutoRunOnStart = true;
@@ -478,7 +562,26 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private void CreateFullMatrixScene()
         {
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+            var presets = BehaviorTreeBenchmarkPresetCatalog.GetRecommendedPresets();
+            var complexities = BehaviorTreeBenchmarkPresetCatalog.GetComplexityTiers();
+            var configs = new BehaviorTreeBenchmarkConfig[presets.Length * complexities.Length];
+            int configIndex = 0;
+            for (int complexityIndex = 0; complexityIndex < complexities.Length; complexityIndex++)
+            {
+                for (int presetIndex = 0; presetIndex < presets.Length; presetIndex++)
+                {
+                    configs[configIndex++] = BehaviorTreeBenchmarkPresetCatalog.CreateConfig(
+                        presets[presetIndex],
+                        complexities[complexityIndex]);
+                }
+            }
+
+            if (!ValidateBeforeExecution(configs, "Create Full Matrix Scene") ||
+                !TryCreateBenchmarkScene(out var scene))
+            {
+                return;
+            }
+
             var runnerObject = new GameObject("BehaviorTree Benchmark Full Matrix Runner");
             var runner = runnerObject.AddComponent<BehaviorTreeBenchmarkRunner>();
             runner.AutoRunOnStart = true;
@@ -491,7 +594,12 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private void CreatePriorityComparisonScene()
         {
-            var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+            if (!ValidateBeforeExecution(_config, "Create Priority Comparison Scene") ||
+                !TryCreateBenchmarkScene(out var scene))
+            {
+                return;
+            }
+
             var runnerObject = new GameObject("BehaviorTree Benchmark Priority Comparison Runner");
             var runner = runnerObject.AddComponent<BehaviorTreeBenchmarkRunner>();
             runner.AutoRunOnStart = true;
@@ -656,6 +764,136 @@ namespace CycloneGames.BehaviorTree.Editor
             return $"{value / bytesPerMib:F2} MiB ({value})";
         }
 
+        internal static bool TryValidateRequest(BehaviorTreeBenchmarkConfig config, out string reason)
+        {
+            if (config == null)
+            {
+                reason = "Benchmark configuration is null.";
+                return false;
+            }
+
+            if (!AreScalarValuesWithinHardLimits(config))
+            {
+                reason = "One or more values exceed the benchmark editor hard limits.";
+                return false;
+            }
+
+            try
+            {
+                long nodesPerAgent = checked(1L + checked((long)config.LeafNodesPerTree * (1L + config.DecoratorLayersPerLeaf)));
+                long totalRuntimeNodes = checked(nodesPerAgent * config.AgentCount);
+                if (totalRuntimeNodes > MaxTotalRuntimeNodes)
+                {
+                    reason = $"The request would create approximately {totalRuntimeNodes:N0} runtime nodes; the editor limit is {MaxTotalRuntimeNodes:N0}.";
+                    return false;
+                }
+
+                long totalTrackedKeys = checked((long)config.AgentCount * config.TrackedKeysPerAgent);
+                if (totalTrackedKeys > MaxTotalTrackedKeys)
+                {
+                    reason = $"The request would create approximately {totalTrackedKeys:N0} tracked keys; the editor limit is {MaxTotalTrackedKeys:N0}.";
+                    return false;
+                }
+
+                long frameCount = checked((long)config.WarmupFrames + config.MeasurementFrames + config.SoakFrames);
+                long workPerLeaf = checked(
+                    1L +
+                    config.BlackboardReadsPerLeafPerTick +
+                    config.WritesPerLeafPerTick +
+                    config.DecoratorLayersPerLeaf +
+                    config.SimulatedWorkIterationsPerLeaf);
+                long workUnitsPerFrame = checked(
+                    checked((long)config.AgentCount * config.LeafNodesPerTree) *
+                    config.TicksPerFrame *
+                    workPerLeaf);
+                if (workUnitsPerFrame > MaxWorkUnitsPerFrame)
+                {
+                    reason = $"The request requires approximately {workUnitsPerFrame:N0} work units per frame; the editor limit is {MaxWorkUnitsPerFrame:N0}.";
+                    return false;
+                }
+
+                long totalWorkUnits = checked(workUnitsPerFrame * frameCount);
+                if (totalWorkUnits > MaxTotalWorkUnits)
+                {
+                    reason = $"The request requires approximately {totalWorkUnits:N0} total work units; the editor limit is {MaxTotalWorkUnits:N0}. Reduce agents, leaves, frames, ticks, or simulated work.";
+                    return false;
+                }
+            }
+            catch (System.OverflowException)
+            {
+                reason = "The derived benchmark workload exceeds the supported numeric range.";
+                return false;
+            }
+
+            reason = null;
+            return true;
+        }
+
+        private static bool AreScalarValuesWithinHardLimits(BehaviorTreeBenchmarkConfig config)
+        {
+            return config != null &&
+                config.AgentCount >= 1 && config.AgentCount <= MaxAgentCount &&
+                config.LeafNodesPerTree >= 1 && config.LeafNodesPerTree <= MaxLeafNodesPerTree &&
+                config.BlackboardReadsPerLeafPerTick >= 0 && config.BlackboardReadsPerLeafPerTick <= MaxBlackboardOperationsPerLeaf &&
+                config.WritesPerLeafPerTick >= 1 && config.WritesPerLeafPerTick <= MaxBlackboardOperationsPerLeaf &&
+                config.DecoratorLayersPerLeaf >= 0 && config.DecoratorLayersPerLeaf <= MaxDecoratorLayersPerLeaf &&
+                config.SimulatedWorkIterationsPerLeaf >= 0 && config.SimulatedWorkIterationsPerLeaf <= MaxSimulatedWorkIterationsPerLeaf &&
+                config.TrackedKeysPerAgent >= 0 && config.TrackedKeysPerAgent <= MaxTrackedKeysPerAgent &&
+                config.WarmupFrames >= 0 && config.WarmupFrames <= MaxFrameCount &&
+                config.MeasurementFrames >= 1 && config.MeasurementFrames <= MaxFrameCount &&
+                config.TicksPerFrame >= 1 && config.TicksPerFrame <= MaxTicksPerFrame &&
+                config.HashCheckIntervalFrames >= 1 && config.HashCheckIntervalFrames <= MaxFrameCount &&
+                config.SoakFrames >= 0 && config.SoakFrames <= MaxFrameCount &&
+                config.SoakSampleIntervalFrames >= 1 && config.SoakSampleIntervalFrames <= MaxFrameCount;
+        }
+
+        private static bool ValidateBeforeExecution(BehaviorTreeBenchmarkConfig config, string operation)
+        {
+            config?.Sanitize();
+            if (TryValidateRequest(config, out string reason))
+            {
+                return true;
+            }
+
+            EditorUtility.DisplayDialog(operation, reason, "OK");
+            return false;
+        }
+
+        private static bool ValidateBeforeExecution(BehaviorTreeBenchmarkConfig[] configs, string operation)
+        {
+            if (configs == null || configs.Length == 0)
+            {
+                EditorUtility.DisplayDialog(operation, "The benchmark matrix is empty.", "OK");
+                return false;
+            }
+
+            for (int i = 0; i < configs.Length; i++)
+            {
+                BehaviorTreeBenchmarkConfig config = configs[i];
+                config?.Sanitize();
+                if (!TryValidateRequest(config, out string reason))
+                {
+                    string benchmarkName = config?.BenchmarkName ?? $"Case {i + 1}";
+                    EditorUtility.DisplayDialog(operation, $"{benchmarkName}: {reason}", "OK");
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        private static bool TryCreateBenchmarkScene(out UnityEngine.SceneManagement.Scene scene)
+        {
+            scene = default;
+            if (!EditorSceneManager.SaveCurrentModifiedScenesIfUserWantsTo())
+            {
+                return false;
+            }
+
+            scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
+            return scene.IsValid();
+        }
+
         private void ApplyPreset(BehaviorTreeBenchmarkPreset preset)
         {
             if (preset == BehaviorTreeBenchmarkPreset.Custom)
@@ -671,6 +909,15 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private void ApplyComplexity(BehaviorTreeBenchmarkComplexity complexity)
         {
+            if (!AreScalarValuesWithinHardLimits(_config))
+            {
+                EditorUtility.DisplayDialog(
+                    "Behavior Tree Benchmark",
+                    "Correct values that exceed the editor hard limits before changing the complexity profile.",
+                    "OK");
+                return;
+            }
+
             if (_config.Preset == BehaviorTreeBenchmarkPreset.Custom)
             {
                 _config.Complexity = complexity;
@@ -686,6 +933,15 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private void ApplyScheduling(BehaviorTreeBenchmarkSchedulingProfile schedulingProfile)
         {
+            if (!AreScalarValuesWithinHardLimits(_config))
+            {
+                EditorUtility.DisplayDialog(
+                    "Behavior Tree Benchmark",
+                    "Correct values that exceed the editor hard limits before changing the scheduling profile.",
+                    "OK");
+                return;
+            }
+
             BehaviorTreeBenchmarkPresetCatalog.ApplySchedulingProfile(_config, schedulingProfile);
             BehaviorTreeBenchmarkPresetCatalog.ApplyProductionBudgets(_config);
             Repaint();

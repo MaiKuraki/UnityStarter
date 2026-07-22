@@ -1,0 +1,26 @@
+{
+    "name": "CycloneGames.Persistence.MessagePack",
+    "rootNamespace": "CycloneGames.Persistence.MessagePack",
+    "references": [
+        "CycloneGames.Persistence.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "MessagePack.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_MESSAGEPACK"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.github.messagepack-csharp",
+            "expression": "[3.1.8,4.0.0)",
+            "define": "CYCLONEGAMES_HAS_MESSAGEPACK"
+        }
+    ],
+    "noEngineReferences": true
+}

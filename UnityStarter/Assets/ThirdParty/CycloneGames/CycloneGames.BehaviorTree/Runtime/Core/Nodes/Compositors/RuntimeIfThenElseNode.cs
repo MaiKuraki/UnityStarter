@@ -13,14 +13,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _selectedBranch = 0;
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             for (int i = 0; i < children.Length; i++)
-                children[i].ResetState();
+                children[i].PrepareForActivation();
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             if (children == null || children.Length < 2) return RuntimeState.Failure;
 
             // Already decided: continue ticking the selected branch
@@ -51,9 +51,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             return RuntimeState.Failure;
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(RuntimeBlackboard blackboard, RuntimeNodeExitReason reason, System.Exception exception)
         {
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             if (children == null) return;
             for (int i = 0; i < children.Length; i++)
             {

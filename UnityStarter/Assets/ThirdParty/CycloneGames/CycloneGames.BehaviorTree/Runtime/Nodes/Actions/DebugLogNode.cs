@@ -6,6 +6,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions
     {
         [SerializeField] private string _message = "";
 
+        public string Message => _message;
+
         public override BTNode Clone()
         {
             DebugLogNode node = (DebugLogNode)base.Clone();

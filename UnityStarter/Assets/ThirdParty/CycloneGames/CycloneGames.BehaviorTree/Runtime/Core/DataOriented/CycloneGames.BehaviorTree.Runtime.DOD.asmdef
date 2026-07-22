@@ -11,10 +11,10 @@
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
-    "allowUnsafeCode": true,
+    "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [
         "CYCLONEGAMES_HAS_UNITY_BURST",
         "CYCLONEGAMES_HAS_UNITY_COLLECTIONS",

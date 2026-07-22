@@ -4,6 +4,7 @@ using CycloneGames.BehaviorTree.Runtime.Core;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
+    [DisallowMultipleComponent]
     public class BTDistanceLODProvider : MonoBehaviour, IBTLODProvider
     {
         [SerializeField] private BTLODConfig _config;
@@ -50,16 +51,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void Awake()
         {
+            EnsureInitialized();
+        }
+
+        internal void EnsureInitialized()
+        {
+            if (_keys != null)
+            {
+                return;
+            }
+
             const int INITIAL_CAPACITY = 64;
             _capacity = INITIAL_CAPACITY;
             _keys = new RuntimeBehaviorTree[_capacity];
             _values = new TreeLODData[_capacity];
             _count = 0;
+            _indexMap.Clear();
+            _iterBuffer.Clear();
         }
 
         public void RegisterTree(RuntimeBehaviorTree tree, Transform treeTransform)
         {
             if (tree == null || _indexMap.ContainsKey(tree)) return;
+
+            EnsureInitialized();
 
             if (_count >= _capacity)
             {
@@ -124,6 +139,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _values[last] = default;
             _indexMap.Remove(tree);
             _count--;
+        }
+
+        public bool ContainsTree(RuntimeBehaviorTree tree)
+        {
+            return tree != null && _indexMap.ContainsKey(tree);
         }
 
         public int GetPriority(RuntimeBehaviorTree tree)

@@ -1,9 +1,8 @@
 using System;
-using System.Collections;
 using System.Collections.Generic;
-using System.Reflection;
+using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
-using CycloneGames.Hash.Core;
 using CycloneGames.BehaviorTree.Runtime.Conditions;
 using CycloneGames.BehaviorTree.Runtime.Conditions.BlackBoards;
 using CycloneGames.BehaviorTree.Runtime.Core;
@@ -40,6 +39,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 throw new BehaviorTreeCompileException("Behavior tree asset is null.");
             }
 
+            options ??= BehaviorTreeCompileOptions.Default;
             BehaviorTreeCompileArtifact artifact = Analyze(source, options);
             if (!artifact.IsValid)
             {
@@ -47,11 +47,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             }
 
             context ??= new RuntimeBTContext();
-
-            var blackboard = new RuntimeBlackboard
-            {
-                Context = context
-            };
 
             RuntimeNode runtimeRoot;
             try
@@ -70,7 +65,30 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 throw new BehaviorTreeCompileException($"Root node {source.Root.GetType().Name} returned null runtime node.");
             }
 
-            return new RuntimeBehaviorTree(runtimeRoot, blackboard, context);
+            var blackboard = new RuntimeBlackboard
+            {
+                Context = context
+            };
+
+            try
+            {
+                return new RuntimeBehaviorTree(
+                    runtimeRoot,
+                    blackboard,
+                    context,
+                    new RuntimeBehaviorTreeLimits(options.MaxNodeCount, options.MaxDepth));
+            }
+            catch (Exception exception)
+            {
+                if (!blackboard.IsDisposed)
+                {
+                    blackboard.Dispose();
+                }
+
+                throw new BehaviorTreeCompileException(
+                    $"Behavior tree runtime initialization failed for '{source.name}': {exception.Message}",
+                    exception);
+            }
         }
 
         public static BehaviorTreeCompileArtifact Analyze(
@@ -78,31 +96,62 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             BehaviorTreeCompileOptions options = null)
         {
             options ??= BehaviorTreeCompileOptions.Default;
+            BehaviorTreeNodeEmitterRegistry emitters =
+                options.Emitters ?? BehaviorTreeNodeEmitterRegistry.BuiltIn;
             if (source == null)
             {
-                return BehaviorTreeCompileArtifact.Invalid(null, 0UL, 0, new List<string> { "Behavior tree asset is null." });
+                return BehaviorTreeCompileArtifact.Invalid(
+                    null,
+                    0,
+                    new List<string> { "Behavior tree asset is null." },
+                    options.MaxNodeCount,
+                    options.MaxDepth);
             }
 
-            ulong fingerprint = BehaviorTreeCompileFingerprint.Compute(source, out int nodeCount);
-            BehaviorTreeCompileCache cache = options.Cache;
-            BehaviorTreeNodeEmitterRegistry emitters = options.Emitters ?? BehaviorTreeNodeEmitterRegistry.BuiltIn;
-            if (options.UseCache && cache != null && cache.TryGet(source, fingerprint, emitters, out BehaviorTreeCompileArtifact cached))
+            List<string> errors = Validate(
+                source,
+                options.MaxNodeCount,
+                options.MaxDepth,
+                emitters,
+                out int nodeCount);
+
+            if (errors.Count > 0)
             {
-                return cached;
+                return BehaviorTreeCompileArtifact.Invalid(
+                    source,
+                    nodeCount,
+                    errors,
+                    options.MaxNodeCount,
+                    options.MaxDepth);
             }
 
-            List<string> errors = options.ValidateGraph ? Validate(source) : new List<string>(0);
-            var artifact = new BehaviorTreeCompileArtifact(source, fingerprint, nodeCount, emitters, errors);
-            if (options.UseCache && cache != null && artifact.IsValid)
-            {
-                cache.Store(artifact);
-            }
-
-            return artifact;
+            return new BehaviorTreeCompileArtifact(
+                source,
+                nodeCount,
+                emitters,
+                errors,
+                options.MaxNodeCount,
+                options.MaxDepth);
         }
 
         public static List<string> Validate(BehaviorTree source)
         {
+            return Validate(
+                source,
+                BehaviorTreeCompileOptions.DefaultMaxNodeCount,
+                BehaviorTreeCompileOptions.DefaultMaxDepth,
+                BehaviorTreeNodeEmitterRegistry.BuiltIn,
+                out _);
+        }
+
+        private static List<string> Validate(
+            BehaviorTree source,
+            int maxNodeCount,
+            int maxDepth,
+            BehaviorTreeNodeEmitterRegistry emitters,
+            out int nodeCount)
+        {
+            nodeCount = 0;
             var errors = new List<string>(4);
             if (source == null)
             {
@@ -116,124 +165,679 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 return errors;
             }
 
-            var visited = new HashSet<BTNode>();
-            var visiting = new HashSet<BTNode>();
-            var guids = new HashSet<string>();
-            ValidateNode(source.Root, "Root", visited, visiting, guids, errors);
+            if (maxNodeCount < 1)
+            {
+                errors.Add("Compile limit MaxNodeCount must be at least 1.");
+                return errors;
+            }
+
+            if (maxNodeCount > RuntimeBehaviorTreeLimits.HARD_MAX_NODE_COUNT)
+            {
+                errors.Add(
+                    $"Compile limit MaxNodeCount cannot exceed the hard safety limit of {RuntimeBehaviorTreeLimits.HARD_MAX_NODE_COUNT}.");
+                return errors;
+            }
+
+            if (maxDepth < 1)
+            {
+                errors.Add("Compile limit MaxDepth must be at least 1.");
+                return errors;
+            }
+
+            if (maxDepth > RuntimeBehaviorTreeLimits.HARD_MAX_DEPTH)
+            {
+                errors.Add(
+                    $"Compile limit MaxDepth cannot exceed the hard safety limit of {RuntimeBehaviorTreeLimits.HARD_MAX_DEPTH}.");
+                return errors;
+            }
+
+            nodeCount = ValidateGraphIterative(
+                source,
+                maxNodeCount,
+                maxDepth,
+                emitters ?? BehaviorTreeNodeEmitterRegistry.BuiltIn,
+                errors);
             return errors;
         }
 
-        private static void ValidateNode(
-            BTNode node,
-            string path,
-            HashSet<BTNode> visited,
-            HashSet<BTNode> visiting,
-            HashSet<string> guids,
-            List<string> errors)
+        internal static void ValidateForEmission(
+            BehaviorTree source,
+            int maxNodeCount,
+            int maxDepth,
+            BehaviorTreeNodeEmitterRegistry emitters,
+            out int nodeCount)
         {
-            if (node == null)
+            List<string> errors = Validate(
+                source,
+                maxNodeCount,
+                maxDepth,
+                emitters,
+                out nodeCount);
+            if (errors.Count != 0)
             {
-                errors.Add($"{path}: null node reference.");
-                return;
+                throw new BehaviorTreeCompileException(FormatErrors(source, errors));
             }
-
-            if (!string.IsNullOrEmpty(node.GUID) && !guids.Add(node.GUID))
-            {
-                errors.Add($"{path}: duplicate node GUID '{node.GUID}'.");
-            }
-
-            if (visited.Contains(node))
-            {
-                return;
-            }
-
-            if (!visiting.Add(node))
-            {
-                errors.Add($"{path}: cycle detected.");
-                return;
-            }
-
-            ValidateChildren(node, path, visited, visiting, guids, errors);
-            visiting.Remove(node);
-            visited.Add(node);
         }
 
-        private static void ValidateChildren(
+        private static int ValidateGraphIterative(
+            BehaviorTree source,
+            int maxNodeCount,
+            int maxDepth,
+            BehaviorTreeNodeEmitterRegistry emitters,
+            List<string> errors)
+        {
+            var statesByOccurrence = new Dictionary<int, Dictionary<BTNode, byte>>
+            {
+                [0] = new Dictionary<BTNode, byte>(ReferenceComparer<BTNode>.Instance)
+            };
+            var guidsByOccurrence = new Dictionary<int, HashSet<string>>
+            {
+                [0] = new HashSet<string>(StringComparer.Ordinal)
+            };
+            var guidPrefixesByOccurrence = new Dictionary<int, string>
+            {
+                [0] = null
+            };
+            var runtimeGuids = new HashSet<string>(StringComparer.Ordinal);
+            var activeAssets = new HashSet<BehaviorTree>(ReferenceComparer<BehaviorTree>.Instance)
+            {
+                source
+            };
+            var stack = new Stack<ValidationFrame>(64);
+            stack.Push(ValidationFrame.EnterNode(source.Root, "Root", 1, 0));
+            int nodeCount = 0;
+            int nextOccurrenceId = 0;
+
+            while (stack.Count > 0)
+            {
+                ValidationFrame frame = stack.Pop();
+                if (frame.Kind == ValidationFrameKind.ExitAsset)
+                {
+                    activeAssets.Remove(frame.Asset);
+                    continue;
+                }
+
+                if (frame.Kind == ValidationFrameKind.EnterAsset)
+                {
+                    BehaviorTree asset = frame.Asset;
+                    if (asset == null || asset.Root == null)
+                    {
+                        errors.Add($"{frame.Path}: subtree asset root is null.");
+                        continue;
+                    }
+
+                    if (!activeAssets.Add(asset))
+                    {
+                        errors.Add($"{frame.Path}: recursive subtree asset cycle detected at '{asset.name}'.");
+                        continue;
+                    }
+
+                    int occurrenceId = ++nextOccurrenceId;
+                    statesByOccurrence.Add(
+                        occurrenceId,
+                        new Dictionary<BTNode, byte>(ReferenceComparer<BTNode>.Instance));
+                    guidsByOccurrence.Add(
+                        occurrenceId,
+                        new HashSet<string>(StringComparer.Ordinal));
+                    string parentPrefix = guidPrefixesByOccurrence[frame.OccurrenceId];
+                    string occurrenceSegment = "bt-subtree-" +
+                        occurrenceId.ToString(CultureInfo.InvariantCulture);
+                    guidPrefixesByOccurrence.Add(
+                        occurrenceId,
+                        string.IsNullOrEmpty(parentPrefix)
+                            ? occurrenceSegment
+                            : parentPrefix + "/" + occurrenceSegment);
+                    stack.Push(ValidationFrame.ExitAsset(asset));
+                    stack.Push(ValidationFrame.EnterNode(
+                        asset.Root,
+                        $"{frame.Path}/{asset.Root.GetType().Name}",
+                        frame.Depth,
+                        occurrenceId));
+                    continue;
+                }
+
+                BTNode node = frame.Node;
+                if (node == null)
+                {
+                    errors.Add($"{frame.Path}: null node reference.");
+                    continue;
+                }
+
+                Dictionary<BTNode, byte> states = statesByOccurrence[frame.OccurrenceId];
+                if (frame.Kind == ValidationFrameKind.ExitNode)
+                {
+                    states[node] = 2;
+                    continue;
+                }
+
+                if (states.TryGetValue(node, out byte state))
+                {
+                    errors.Add(state == 1
+                        ? $"{frame.Path}: cycle detected."
+                        : $"{frame.Path}: node is referenced by more than one parent.");
+                    continue;
+                }
+
+                if (frame.Depth > maxDepth)
+                {
+                    errors.Add($"{frame.Path}: graph depth exceeds MaxDepth ({maxDepth}).");
+                    continue;
+                }
+
+                nodeCount++;
+                if (nodeCount > maxNodeCount)
+                {
+                    errors.Add($"Behavior tree node count exceeds MaxNodeCount ({maxNodeCount}).");
+                    break;
+                }
+
+                states[node] = 1;
+                HashSet<string> guids = guidsByOccurrence[frame.OccurrenceId];
+                bool occurrenceGuidUnique = true;
+                if (!string.IsNullOrEmpty(node.GUID) && !guids.Add(node.GUID))
+                {
+                    errors.Add($"{frame.Path}: duplicate node GUID '{node.GUID}'.");
+                    occurrenceGuidUnique = false;
+                }
+
+                if (occurrenceGuidUnique && !string.IsNullOrEmpty(node.GUID))
+                {
+                    string guidPrefix = guidPrefixesByOccurrence[frame.OccurrenceId];
+                    string runtimeGuid = string.IsNullOrEmpty(guidPrefix)
+                        ? node.GUID
+                        : guidPrefix + "/" + node.GUID;
+                    if (!runtimeGuids.Add(runtimeGuid))
+                    {
+                        errors.Add(
+                            $"{frame.Path}: emitted runtime node GUID '{runtimeGuid}' collides with another occurrence.");
+                    }
+                }
+
+                ValidateNodeSemantics(node, frame.Path, errors);
+                if (!emitters.CanEmit(node.GetType()))
+                {
+                    errors.Add(
+                        $"{frame.Path}: no exact runtime emitter is registered for authoring node {node.GetType().FullName}.");
+                }
+
+                stack.Push(ValidationFrame.ExitNode(node, frame.Path, frame.Depth, frame.OccurrenceId));
+                PushChildren(
+                    node,
+                    frame.Path,
+                    frame.Depth + 1,
+                    frame.OccurrenceId,
+                    stack,
+                    errors);
+            }
+
+            return nodeCount;
+        }
+
+        private static void ValidateNodeSemantics(BTNode node, string path, List<string> errors)
+        {
+            if (node is BTRootNode root && root.Child == null)
+            {
+                errors.Add($"{path}: root child is null.");
+                return;
+            }
+
+            if (node is SubTreeNode subTree)
+            {
+                if (subTree.Child == null && (subTree.SubTreeAsset == null || subTree.SubTreeAsset.Root == null))
+                {
+                    errors.Add($"{path}: subtree node has neither child nor subtree asset root.");
+                }
+                else if (subTree.Child != null && subTree.SubTreeAsset != null)
+                {
+                    errors.Add($"{path}: subtree node cannot use an inline child and a subtree asset at the same time.");
+                }
+                return;
+            }
+
+            if (node is DecoratorNode decorator && decorator.Child == null)
+            {
+                errors.Add($"{path}: decorator child is null.");
+                return;
+            }
+
+            if (node is RandomChanceNode randomChance)
+            {
+                float chance = randomChance.Chance;
+                float outOf = randomChance.OutOf;
+                if (!IsFinite(outOf) || outOf <= 0f || !IsFinite(chance) || chance < 0f || chance > outOf)
+                {
+                    errors.Add($"{path}: RandomChance requires finite values with 0 <= chance <= outOf and outOf > 0.");
+                }
+            }
+
+            if (node is BBComparisonNode comparison)
+            {
+                string key = comparison.Key;
+                float epsilon = comparison.FloatEpsilon;
+                BBComparisonOp comparisonOperator = comparison.Operator;
+                BBValueType valueType = comparison.ValueType;
+                if (string.IsNullOrWhiteSpace(key))
+                {
+                    errors.Add($"{path}: BBComparison requires a blackboard key.");
+                }
+                if ((uint)(int)comparisonOperator > (uint)BBComparisonOp.IsNotSet)
+                {
+                    errors.Add($"{path}: BBComparison operator value {(int)comparisonOperator} is invalid.");
+                }
+                if ((uint)(int)valueType > (uint)BBValueType.Object)
+                {
+                    errors.Add($"{path}: BBComparison value type {(int)valueType} is invalid.");
+                }
+                if (!IsFinite(epsilon) || epsilon < 0f)
+                {
+                    errors.Add($"{path}: BBComparison epsilon must be finite and non-negative.");
+                }
+                if (valueType == BBValueType.Bool
+                    && comparisonOperator != BBComparisonOp.Equal
+                    && comparisonOperator != BBComparisonOp.NotEqual
+                    && comparisonOperator != BBComparisonOp.IsSet
+                    && comparisonOperator != BBComparisonOp.IsNotSet)
+                {
+                    errors.Add($"{path}: bool values only support Equal, NotEqual, IsSet, or IsNotSet.");
+                }
+                if (valueType == BBValueType.Object
+                    && comparisonOperator != BBComparisonOp.IsSet
+                    && comparisonOperator != BBComparisonOp.IsNotSet)
+                {
+                    errors.Add($"{path}: object values only support IsSet or IsNotSet.");
+                }
+                if (valueType == BBValueType.Float
+                    && comparisonOperator != BBComparisonOp.IsSet
+                    && comparisonOperator != BBComparisonOp.IsNotSet
+                    && string.IsNullOrEmpty(comparison.ReferenceKey)
+                    && !IsFinite(comparison.ReferenceFloat))
+                {
+                    errors.Add($"{path}: BBComparison float reference must be finite.");
+                }
+                if (!string.IsNullOrEmpty(comparison.ReferenceKey)
+                    && string.IsNullOrWhiteSpace(comparison.ReferenceKey))
+                {
+                    errors.Add($"{path}: BBComparison reference key cannot contain only whitespace.");
+                }
+            }
+
+            if (node is WaitNode wait)
+            {
+                ValidateFiniteNonNegative(wait.Duration, path, "Wait duration", errors);
+                ValidateFiniteNonNegativeRange(wait.Range, path, "Wait", errors);
+            }
+
+            if (node is WaitSuccessNode waitSuccess)
+            {
+                ValidateFiniteNonNegative(waitSuccess.WaitTime, path, "WaitSuccess wait time", errors);
+                ValidateFiniteNonNegativeRange(waitSuccess.WaitTimeRange, path, "WaitSuccess", errors);
+            }
+
+            if (node is DelayNode delay)
+            {
+                ValidateFiniteNonNegative(delay.DelaySeconds, path, "Delay seconds", errors);
+            }
+
+            if (node is TimeoutNode timeout)
+            {
+                ValidateFiniteNonNegative(timeout.TimeoutSeconds, path, "Timeout seconds", errors);
+            }
+
+            if (node is CoolDownNode coolDown)
+            {
+                ValidateFiniteNonNegative(coolDown.CoolDown, path, "Cooldown", errors);
+            }
+
+            if (node is ServiceNode service)
+            {
+                ValidateFiniteNonNegative(service.Interval, path, "Service interval", errors);
+                ValidateFiniteNonNegative(service.RandomDeviation, path, "Service random deviation", errors);
+                if (IsFinite(service.Interval)
+                    && IsFinite(service.RandomDeviation)
+                    && (service.RandomDeviation > float.MaxValue * 0.5f
+                        || service.Interval > float.MaxValue - service.RandomDeviation))
+                {
+                    errors.Add($"{path}: Service interval and random deviation exceed the finite sampling range.");
+                }
+            }
+
+            if (node is RetryNode retry && retry.MaxAttempts != -1 && retry.MaxAttempts < 1)
+            {
+                errors.Add($"{path}: Retry MaxAttempts must be -1 or at least 1.");
+            }
+
+            if (node is RepeatNode repeat)
+            {
+                if (repeat.RepeatCount < 1)
+                {
+                    errors.Add($"{path}: Repeat count must be at least 1.");
+                }
+                ValidateRepeatRange(repeat.RandomRepeatCountRange, path, errors);
+            }
+
+            if (node is MessagePassNode messagePass)
+            {
+                ValidateAuthoringKey(messagePass.Key, path, "MessagePass", errors);
+            }
+            else if (node is MessageRemoveNode messageRemove)
+            {
+                ValidateAuthoringKey(messageRemove.Key, path, "MessageRemove", errors);
+            }
+            else if (node is MessageReceiveNode messageReceive)
+            {
+                ValidateAuthoringKey(messageReceive.Key, path, "MessageReceive", errors);
+            }
+
+            if (!(node is CompositeNode composite))
+            {
+                return;
+            }
+
+            if ((uint)(int)composite.AbortType > (uint)ConditionalAbortType.BOTH)
+            {
+                errors.Add($"{path}: conditional abort value {(int)composite.AbortType} is invalid.");
+            }
+
+            int childCount = composite.Children != null ? composite.Children.Count : 0;
+            if (node is IfThenElseNode && (childCount < 2 || childCount > 3))
+            {
+                errors.Add($"{path}: IfThenElse requires two or three children.");
+            }
+            else if (node is WhileDoElseNode && (childCount < 2 || childCount > 3))
+            {
+                errors.Add($"{path}: WhileDoElse requires two or three children.");
+            }
+            else if (childCount == 0)
+            {
+                errors.Add($"{path}: composite requires at least one child.");
+            }
+
+            if (node is ParallelNode parallel
+                && (uint)parallel.ModeValue > (uint)RuntimeParallelMode.UntilAnySuccess)
+            {
+                errors.Add($"{path}: Parallel mode value {parallel.ModeValue} is invalid.");
+            }
+
+            if (node is SwitchNode switchNode)
+            {
+                ValidateAuthoringKey(switchNode.VariableKey, path, "Switch", errors);
+            }
+
+            if (node is UtilitySelectorNode utility)
+            {
+                IReadOnlyList<string> scoreKeys = utility.ScoreKeys;
+                int scoreKeyCount = scoreKeys != null ? scoreKeys.Count : 0;
+                if (scoreKeyCount != childCount)
+                {
+                    errors.Add(
+                        $"{path}: UtilitySelector score-key count ({scoreKeyCount}) must match child count ({childCount}).");
+                }
+
+                for (int i = 0; i < scoreKeyCount; i++)
+                {
+                    if (string.IsNullOrWhiteSpace(scoreKeys[i]))
+                    {
+                        errors.Add($"{path}: UtilitySelector score key[{i}] is required.");
+                    }
+                    else if (RuntimeBlackboard.DefaultStringHashFunc(scoreKeys[i]) == 0)
+                    {
+                        errors.Add($"{path}: UtilitySelector score key[{i}] hashes to the reserved zero value.");
+                    }
+                }
+            }
+
+            if (node is ParallelAllNode parallelAll && childCount > 0)
+            {
+                int successThreshold = parallelAll.SuccessThreshold;
+                int failureThreshold = parallelAll.FailureThreshold;
+                if (!IsValidParallelThreshold(successThreshold, childCount)
+                    || !IsValidParallelThreshold(failureThreshold, childCount))
+                {
+                    errors.Add($"{path}: ParallelAll thresholds must be -1 or between 1 and child count ({childCount}).");
+                }
+                else
+                {
+                    int effectiveSuccess = successThreshold == -1 ? childCount : successThreshold;
+                    int effectiveFailure = failureThreshold == -1 ? childCount : failureThreshold;
+                    if (effectiveSuccess + effectiveFailure > childCount + 1)
+                    {
+                        errors.Add($"{path}: ParallelAll thresholds can leave a fully completed node without a terminal result.");
+                    }
+                }
+            }
+
+            if (node is ProbabilityBranch probability)
+            {
+                IReadOnlyList<float> weights = probability.Probabilities;
+                if (weights != null && weights.Count > 0)
+                {
+                    if (weights.Count != childCount)
+                    {
+                        errors.Add($"{path}: probability weight count ({weights.Count}) must match child count ({childCount}).");
+                    }
+
+                    double total = 0d;
+                    for (int i = 0; i < weights.Count; i++)
+                    {
+                        float weight = weights[i];
+                        if (!IsFinite(weight) || weight < 0f)
+                        {
+                            errors.Add($"{path}: probability weight[{i}] must be finite and non-negative.");
+                            continue;
+                        }
+                        total += weight;
+                    }
+
+                    if (total <= 0d || double.IsInfinity(total) || total > float.MaxValue)
+                    {
+                        errors.Add($"{path}: probability weights require a positive finite total no greater than float.MaxValue.");
+                    }
+                }
+            }
+        }
+
+        private static bool IsFinite(float value) => !float.IsNaN(value) && !float.IsInfinity(value);
+
+        private static void ValidateFiniteNonNegative(
+            float value,
+            string path,
+            string label,
+            List<string> errors)
+        {
+            if (!IsFinite(value) || value < 0f)
+            {
+                errors.Add($"{path}: {label} must be finite and non-negative.");
+            }
+        }
+
+        private static void ValidateFiniteNonNegativeRange(
+            Vector2 range,
+            string path,
+            string label,
+            List<string> errors)
+        {
+            if (!IsFinite(range.x) || !IsFinite(range.y)
+                || range.x < 0f
+                || range.y < range.x)
+            {
+                errors.Add($"{path}: {label} range must be finite, non-negative, and ordered min <= max.");
+            }
+        }
+
+        private static void ValidateRepeatRange(Vector2 range, string path, List<string> errors)
+        {
+            const float MaxExactFloatInteger = 16777215f;
+            if (!IsFinite(range.x)
+                || !IsFinite(range.y)
+                || range.x < 1f
+                || range.y < range.x
+                || range.y > MaxExactFloatInteger
+                || range.x != (float)Math.Truncate(range.x)
+                || range.y != (float)Math.Truncate(range.y))
+            {
+                errors.Add(
+                    $"{path}: Repeat random range must contain ordered whole counts from 1 through {MaxExactFloatInteger}.");
+            }
+        }
+
+        private static void ValidateAuthoringKey(
+            string key,
+            string path,
+            string nodeName,
+            List<string> errors)
+        {
+            if (string.IsNullOrWhiteSpace(key))
+            {
+                errors.Add($"{path}: {nodeName} requires a blackboard key.");
+            }
+        }
+
+        private static bool IsValidParallelThreshold(int threshold, int childCount)
+        {
+            return threshold == -1 || (threshold >= 1 && threshold <= childCount);
+        }
+
+        private static void PushChildren(
             BTNode node,
             string path,
-            HashSet<BTNode> visited,
-            HashSet<BTNode> visiting,
-            HashSet<string> guids,
+            int depth,
+            int occurrenceId,
+            Stack<ValidationFrame> stack,
             List<string> errors)
         {
             if (node is BTRootNode root)
             {
-                if (root.Child == null)
+                if (root.Child != null)
                 {
-                    errors.Add($"{path}: root child is null.");
-                    return;
+                    stack.Push(ValidationFrame.EnterNode(
+                        root.Child,
+                        $"{path}/{root.Child.GetType().Name}",
+                        depth,
+                        occurrenceId));
                 }
+                return;
+            }
 
-                ValidateNode(root.Child, $"{path}/{root.Child.GetType().Name}", visited, visiting, guids, errors);
+            if (node is SubTreeNode subTree)
+            {
+                if (subTree.Child != null)
+                {
+                    stack.Push(ValidationFrame.EnterNode(
+                        subTree.Child,
+                        $"{path}/{subTree.Child.GetType().Name}",
+                        depth,
+                        occurrenceId));
+                }
+                else if (subTree.SubTreeAsset != null)
+                {
+                    stack.Push(ValidationFrame.EnterAsset(
+                        subTree.SubTreeAsset,
+                        $"{path}/SubTreeAsset({subTree.SubTreeAsset.name})",
+                        depth,
+                        occurrenceId));
+                }
                 return;
             }
 
             if (node is DecoratorNode decorator)
             {
-                if (node is SubTreeNode subTree)
+                if (decorator.Child != null)
                 {
-                    ValidateSubTreeNode(subTree, path, visited, visiting, guids, errors);
-                    return;
+                    stack.Push(ValidationFrame.EnterNode(
+                        decorator.Child,
+                        $"{path}/{decorator.Child.GetType().Name}",
+                        depth,
+                        occurrenceId));
                 }
-
-                if (decorator.Child == null)
-                {
-                    errors.Add($"{path}: decorator child is null.");
-                    return;
-                }
-
-                ValidateNode(decorator.Child, $"{path}/{decorator.Child.GetType().Name}", visited, visiting, guids, errors);
                 return;
             }
 
-            if (node is CompositeNode composite)
+            if (!(node is CompositeNode composite) || composite.Children == null)
             {
-                for (int i = 0; i < composite.Children.Count; i++)
-                {
-                    BTNode child = composite.Children[i];
-                    if (child == null)
-                    {
-                        errors.Add($"{path}: child[{i}] is null.");
-                        continue;
-                    }
+                return;
+            }
 
-                    ValidateNode(child, $"{path}/{child.GetType().Name}[{i}]", visited, visiting, guids, errors);
+            for (int i = composite.Children.Count - 1; i >= 0; i--)
+            {
+                BTNode child = composite.Children[i];
+                if (child == null)
+                {
+                    errors.Add($"{path}: child[{i}] is null.");
+                    continue;
                 }
+
+                stack.Push(ValidationFrame.EnterNode(
+                    child,
+                    $"{path}/{child.GetType().Name}[{i}]",
+                    depth,
+                    occurrenceId));
             }
         }
 
-        private static void ValidateSubTreeNode(
-            SubTreeNode subTree,
-            string path,
-            HashSet<BTNode> visited,
-            HashSet<BTNode> visiting,
-            HashSet<string> guids,
-            List<string> errors)
+        private enum ValidationFrameKind : byte
         {
-            if (subTree.Child != null)
+            EnterNode,
+            ExitNode,
+            EnterAsset,
+            ExitAsset
+        }
+
+        private readonly struct ValidationFrame
+        {
+            public readonly BTNode Node;
+            public readonly BehaviorTree Asset;
+            public readonly string Path;
+            public readonly int Depth;
+            public readonly int OccurrenceId;
+            public readonly ValidationFrameKind Kind;
+
+            private ValidationFrame(
+                BTNode node,
+                BehaviorTree asset,
+                string path,
+                int depth,
+                int occurrenceId,
+                ValidationFrameKind kind)
             {
-                ValidateNode(subTree.Child, $"{path}/{subTree.Child.GetType().Name}", visited, visiting, guids, errors);
-                return;
+                Node = node;
+                Asset = asset;
+                Path = path;
+                Depth = depth;
+                OccurrenceId = occurrenceId;
+                Kind = kind;
             }
 
-            BehaviorTree subTreeAsset = subTree.SubTreeAsset;
-            if (subTreeAsset == null || subTreeAsset.Root == null)
-            {
-                errors.Add($"{path}: subtree node has neither child nor subtree asset root.");
-                return;
-            }
+            public static ValidationFrame EnterNode(BTNode node, string path, int depth, int occurrenceId) =>
+                new ValidationFrame(node, null, path, depth, occurrenceId, ValidationFrameKind.EnterNode);
 
-            ValidateNode(subTreeAsset.Root, $"{path}/SubTreeAsset/{subTreeAsset.Root.GetType().Name}", visited, visiting, guids, errors);
+            public static ValidationFrame ExitNode(BTNode node, string path, int depth, int occurrenceId) =>
+                new ValidationFrame(node, null, path, depth, occurrenceId, ValidationFrameKind.ExitNode);
+
+            public static ValidationFrame EnterAsset(
+                BehaviorTree asset,
+                string path,
+                int depth,
+                int parentOccurrenceId) =>
+                new ValidationFrame(
+                    null,
+                    asset,
+                    path,
+                    depth,
+                    parentOccurrenceId,
+                    ValidationFrameKind.EnterAsset);
+
+            public static ValidationFrame ExitAsset(BehaviorTree asset) =>
+                new ValidationFrame(null, asset, null, 0, 0, ValidationFrameKind.ExitAsset);
+        }
+
+        internal sealed class ReferenceComparer<T> : IEqualityComparer<T>
+            where T : class
+        {
+            public static readonly ReferenceComparer<T> Instance = new ReferenceComparer<T>();
+
+            public bool Equals(T x, T y) => ReferenceEquals(x, y);
+
+            public int GetHashCode(T obj) => RuntimeHelpers.GetHashCode(obj);
         }
 
         private static string FormatErrors(BehaviorTree source, IReadOnlyList<string> errors)
@@ -254,113 +858,43 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
 
     public sealed class BehaviorTreeCompileOptions
     {
+        public const int DefaultMaxNodeCount = RuntimeBehaviorTreeLimits.DEFAULT_MAX_NODE_COUNT;
+        public const int DefaultMaxDepth = RuntimeBehaviorTreeLimits.DEFAULT_MAX_DEPTH;
+
         public static BehaviorTreeCompileOptions Default => new BehaviorTreeCompileOptions();
 
-        public bool ValidateGraph { get; set; } = true;
-        public bool UseCache { get; set; } = true;
-        public BehaviorTreeCompileCache Cache { get; set; } = BehaviorTreeCompileCache.Shared;
         public BehaviorTreeNodeEmitterRegistry Emitters { get; set; } = BehaviorTreeNodeEmitterRegistry.BuiltIn;
-    }
-
-    public sealed class BehaviorTreeCompileCache
-    {
-        public static readonly BehaviorTreeCompileCache Shared = new BehaviorTreeCompileCache();
-
-        private readonly Dictionary<int, CacheEntry> _entries = new Dictionary<int, CacheEntry>(32);
-
-        public bool TryGet(
-            BehaviorTree source,
-            ulong fingerprint,
-            BehaviorTreeNodeEmitterRegistry emitters,
-            out BehaviorTreeCompileArtifact artifact)
-        {
-            artifact = null;
-            if (source == null)
-            {
-                return false;
-            }
-
-            int key = source.GetInstanceID();
-            lock (_entries)
-            {
-                if (_entries.TryGetValue(key, out CacheEntry entry)
-                    && entry.Fingerprint == fingerprint
-                    && ReferenceEquals(entry.Emitters, emitters))
-                {
-                    artifact = entry.Artifact;
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        public void Store(BehaviorTreeCompileArtifact artifact)
-        {
-            if (artifact == null || artifact.Source == null || !artifact.IsValid)
-            {
-                return;
-            }
-
-            int key = artifact.Source.GetInstanceID();
-            lock (_entries)
-            {
-                _entries[key] = new CacheEntry(artifact.Fingerprint, artifact.Emitters, artifact);
-            }
-        }
-
-        public void Clear()
-        {
-            lock (_entries)
-            {
-                _entries.Clear();
-            }
-        }
-
-        private readonly struct CacheEntry
-        {
-            public readonly ulong Fingerprint;
-            public readonly BehaviorTreeNodeEmitterRegistry Emitters;
-            public readonly BehaviorTreeCompileArtifact Artifact;
-
-            public CacheEntry(
-                ulong fingerprint,
-                BehaviorTreeNodeEmitterRegistry emitters,
-                BehaviorTreeCompileArtifact artifact)
-            {
-                Fingerprint = fingerprint;
-                Emitters = emitters;
-                Artifact = artifact;
-            }
-        }
+        public int MaxNodeCount { get; set; } = DefaultMaxNodeCount;
+        public int MaxDepth { get; set; } = DefaultMaxDepth;
     }
 
     public sealed class BehaviorTreeCompileArtifact
     {
-        private readonly List<string> _errors;
-        private readonly IReadOnlyList<string> _readOnlyErrors;
+        private readonly IReadOnlyList<string> _errors;
+        private readonly int _maxNodeCount;
+        private readonly int _maxDepth;
 
-        public BehaviorTreeCompileArtifact(
+        internal BehaviorTreeCompileArtifact(
             BehaviorTree source,
-            ulong fingerprint,
             int nodeCount,
             BehaviorTreeNodeEmitterRegistry emitters,
-            List<string> errors)
+            List<string> errors,
+            int maxNodeCount,
+            int maxDepth)
         {
             Source = source;
-            Fingerprint = fingerprint;
             NodeCount = nodeCount;
             Emitters = emitters ?? BehaviorTreeNodeEmitterRegistry.BuiltIn;
-            _errors = errors ?? new List<string>(0);
-            _readOnlyErrors = _errors.AsReadOnly();
+            _errors = (errors != null ? new List<string>(errors) : new List<string>(0)).AsReadOnly();
+            _maxNodeCount = maxNodeCount;
+            _maxDepth = maxDepth;
         }
 
         public BehaviorTree Source { get; }
-        public ulong Fingerprint { get; }
-        public int NodeCount { get; }
+        public int NodeCount { get; private set; }
         public BehaviorTreeNodeEmitterRegistry Emitters { get; }
         public bool IsValid => _errors.Count == 0;
-        public IReadOnlyList<string> Errors => _readOnlyErrors;
+        public IReadOnlyList<string> Errors => _errors;
 
         public RuntimeNode EmitRuntimeRoot()
         {
@@ -374,262 +908,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 throw new BehaviorTreeCompileException("Cannot emit a behavior tree without a root node.");
             }
 
-            var context = new BehaviorTreeEmitContext(Emitters);
+            BehaviorTreeCompiler.ValidateForEmission(
+                Source,
+                _maxNodeCount,
+                _maxDepth,
+                Emitters,
+                out int currentNodeCount);
+            NodeCount = currentNodeCount;
+
+            var context = new BehaviorTreeEmitContext(Emitters, Source);
             return context.EmitRequired(Source.Root, "root node");
         }
 
-        public static BehaviorTreeCompileArtifact Invalid(
+        internal static BehaviorTreeCompileArtifact Invalid(
             BehaviorTree source,
-            ulong fingerprint,
             int nodeCount,
-            List<string> errors)
+            List<string> errors,
+            int maxNodeCount,
+            int maxDepth)
         {
             return new BehaviorTreeCompileArtifact(
                 source,
-                fingerprint,
                 nodeCount,
                 BehaviorTreeNodeEmitterRegistry.BuiltIn,
-                errors);
-        }
-    }
-
-    internal static class BehaviorTreeCompileFingerprint
-    {
-        public static ulong Compute(BehaviorTree source, out int nodeCount)
-        {
-            nodeCount = 0;
-            ulong hash = Fnv1a64.OffsetBasis;
-            AppendNode(ref hash, source?.Root, new HashSet<BTNode>(), ref nodeCount);
-            return hash;
-        }
-
-        private static void AppendNode(ref ulong hash, BTNode node, HashSet<BTNode> visited, ref int nodeCount)
-        {
-            if (node == null)
-            {
-                AppendByte(ref hash, 0);
-                return;
-            }
-
-            if (!visited.Add(node))
-            {
-                AppendByte(ref hash, 1);
-                return;
-            }
-
-            nodeCount++;
-            Type type = node.GetType();
-            AppendString(ref hash, type.FullName);
-            AppendSerializedFields(ref hash, node, type);
-
-            if (node is BTRootNode root)
-            {
-                AppendNode(ref hash, root.Child, visited, ref nodeCount);
-                return;
-            }
-
-            if (node is SubTreeNode subTree)
-            {
-                if (subTree.Child != null)
-                {
-                    AppendNode(ref hash, subTree.Child, visited, ref nodeCount);
-                }
-                else
-                {
-                    AppendNode(ref hash, subTree.SubTreeAsset?.Root, visited, ref nodeCount);
-                }
-
-                return;
-            }
-
-            if (node is DecoratorNode decorator)
-            {
-                AppendNode(ref hash, decorator.Child, visited, ref nodeCount);
-                return;
-            }
-
-            if (node is CompositeNode composite)
-            {
-                int count = composite.Children != null ? composite.Children.Count : 0;
-                AppendInt32(ref hash, count);
-                for (int i = 0; i < count; i++)
-                {
-                    AppendNode(ref hash, composite.Children[i], visited, ref nodeCount);
-                }
-            }
-        }
-
-        private static void AppendSerializedFields(ref ulong hash, object owner, Type type)
-        {
-            while (type != null && type != typeof(ScriptableObject) && type != typeof(UnityEngine.Object))
-            {
-                FieldInfo[] fields = type.GetFields(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-                Array.Sort(fields, (a, b) => string.CompareOrdinal(a.Name, b.Name));
-                for (int i = 0; i < fields.Length; i++)
-                {
-                    FieldInfo field = fields[i];
-                    if (field.IsStatic
-                        || field.IsNotSerialized
-                        || IsEditorOnlyAuthoringField(field)
-                        || !IsSerializedField(field)
-                        || IsAuthoringReference(field.FieldType))
-                    {
-                        continue;
-                    }
-
-                    AppendString(ref hash, field.Name);
-                    AppendValue(ref hash, field.GetValue(owner));
-                }
-
-                type = type.BaseType;
-            }
-        }
-
-        private static bool IsEditorOnlyAuthoringField(FieldInfo field)
-        {
-            return field.DeclaringType == typeof(BTNode)
-                   && (string.Equals(field.Name, "_position", StringComparison.Ordinal)
-                       || string.Equals(field.Name, "GUID", StringComparison.Ordinal));
-        }
-
-        private static bool IsSerializedField(FieldInfo field)
-        {
-            return field.IsPublic || Attribute.IsDefined(field, typeof(SerializeField));
-        }
-
-        private static bool IsAuthoringReference(Type type)
-        {
-            return typeof(BTNode).IsAssignableFrom(type)
-                || typeof(BehaviorTree).IsAssignableFrom(type)
-                || typeof(IList<BTNode>).IsAssignableFrom(type);
-        }
-
-        private static void AppendValue(ref ulong hash, object value)
-        {
-            if (value == null)
-            {
-                AppendByte(ref hash, 0);
-                return;
-            }
-
-            Type type = value.GetType();
-            if (type.IsEnum)
-            {
-                AppendInt64(ref hash, Convert.ToInt64(value));
-                return;
-            }
-
-            switch (value)
-            {
-                case bool boolValue:
-                    AppendByte(ref hash, boolValue ? (byte)1 : (byte)0);
-                    return;
-                case byte byteValue:
-                    AppendByte(ref hash, byteValue);
-                    return;
-                case int intValue:
-                    AppendInt32(ref hash, intValue);
-                    return;
-                case uint uintValue:
-                    AppendUInt32(ref hash, uintValue);
-                    return;
-                case long longValue:
-                    AppendInt64(ref hash, longValue);
-                    return;
-                case ulong ulongValue:
-                    AppendUInt64(ref hash, ulongValue);
-                    return;
-                case float floatValue:
-                    AppendSingle(ref hash, floatValue);
-                    return;
-                case double doubleValue:
-                    AppendInt64(ref hash, BitConverter.DoubleToInt64Bits(doubleValue));
-                    return;
-                case string stringValue:
-                    AppendString(ref hash, stringValue);
-                    return;
-                case Vector2 vector2:
-                    AppendSingle(ref hash, vector2.x);
-                    AppendSingle(ref hash, vector2.y);
-                    return;
-                case Vector3 vector3:
-                    AppendSingle(ref hash, vector3.x);
-                    AppendSingle(ref hash, vector3.y);
-                    AppendSingle(ref hash, vector3.z);
-                    return;
-                case IList list:
-                    AppendInt32(ref hash, list.Count);
-                    for (int i = 0; i < list.Count; i++)
-                    {
-                        AppendValue(ref hash, list[i]);
-                    }
-                    return;
-            }
-
-            AppendString(ref hash, value.ToString());
-        }
-
-        private static void AppendString(ref ulong hash, string value)
-        {
-            if (value == null)
-            {
-                AppendInt32(ref hash, -1);
-                return;
-            }
-
-            AppendInt32(ref hash, value.Length);
-            for (int i = 0; i < value.Length; i++)
-            {
-                char c = value[i];
-                AppendByte(ref hash, (byte)c);
-                AppendByte(ref hash, (byte)(c >> 8));
-            }
-        }
-
-        private static void AppendSingle(ref ulong hash, float value)
-        {
-            var union = new FloatIntUnion
-            {
-                FloatValue = value
-            };
-            AppendInt32(ref hash, union.IntValue);
-        }
-
-        private static void AppendInt32(ref ulong hash, int value)
-        {
-            AppendUInt32(ref hash, unchecked((uint)value));
-        }
-
-        private static void AppendUInt32(ref ulong hash, uint value)
-        {
-            AppendByte(ref hash, (byte)value);
-            AppendByte(ref hash, (byte)(value >> 8));
-            AppendByte(ref hash, (byte)(value >> 16));
-            AppendByte(ref hash, (byte)(value >> 24));
-        }
-
-        private static void AppendInt64(ref ulong hash, long value)
-        {
-            AppendUInt64(ref hash, unchecked((ulong)value));
-        }
-
-        private static void AppendUInt64(ref ulong hash, ulong value)
-        {
-            AppendUInt32(ref hash, (uint)value);
-            AppendUInt32(ref hash, (uint)(value >> 32));
-        }
-
-        private static void AppendByte(ref ulong hash, byte value)
-        {
-            hash ^= value;
-            hash *= Fnv1a64.Prime;
-        }
-
-        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Explicit)]
-        private struct FloatIntUnion
-        {
-            [System.Runtime.InteropServices.FieldOffset(0)] public int IntValue;
-            [System.Runtime.InteropServices.FieldOffset(0)] public float FloatValue;
+                errors,
+                maxNodeCount,
+                maxDepth);
         }
     }
 
@@ -702,16 +1006,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 return false;
             }
 
-            Type type = descriptor.AuthoringType;
-            while (type != null && type != typeof(ScriptableObject))
+            if (_emitters.TryGetValue(descriptor.AuthoringType, out BehaviorTreeNodeEmitter emitter))
             {
-                if (_emitters.TryGetValue(type, out BehaviorTreeNodeEmitter emitter))
-                {
-                    runtimeNode = emitter(descriptor, context);
-                    return true;
-                }
-
-                type = type.BaseType;
+                runtimeNode = emitter(descriptor, context);
+                return true;
             }
 
             if (_fallback != null)
@@ -720,6 +1018,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             }
 
             return false;
+        }
+
+        internal bool CanEmit(Type authoringType)
+        {
+            if (authoringType == null)
+            {
+                return false;
+            }
+
+            return _emitters.ContainsKey(authoringType)
+                || (_fallback != null && _fallback.CanEmit(authoringType));
         }
 
         private static BehaviorTreeNodeEmitterRegistry CreateBuiltIn()
@@ -731,7 +1040,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             registry.RegisterCore<DebugLogNode>((source, context) =>
                 context.WithGuid(source, new RuntimeDebugLogNode
                 {
-                    Message = AuthoringField.Read<string>(source, "_message")
+                    Message = source.Message
                 }));
 
             registry.RegisterCore<WaitNode>((source, context) =>
@@ -747,39 +1056,39 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             registry.RegisterCore<MessagePassNode>((source, context) =>
                 context.WithGuid(source, new RuntimeMessagePassNode
                 {
-                    KeyHash = HashKey(AuthoringField.Read<string>(source, "_key")),
-                    Message = AuthoringField.Read<string>(source, "_message")
+                    KeyHash = HashKey(source.Key),
+                    Message = source.Message
                 }));
 
             registry.RegisterCore<MessageRemoveNode>((source, context) =>
                 context.WithGuid(source, new RuntimeMessageRemoveNode
                 {
-                    KeyHash = HashKey(AuthoringField.Read<string>(source, "_key"))
+                    KeyHash = HashKey(source.Key)
                 }));
 
             registry.RegisterCore<BTChangeNode>((source, context) =>
                 context.WithGuid(source, new RuntimeBTChangeNode
                 {
-                    StateId = AuthoringField.Read<string>(source, "_stateId")
+                    StateId = source.StateId
                 }));
 
             registry.RegisterCore<OnOffNode>((source, context) =>
                 context.WithGuid(source, new RuntimeOnOffNode
                 {
-                    IsOn = AuthoringField.Read<bool>(source, "_on")
+                    IsOn = source.IsOn
                 }));
 
             registry.RegisterCore<RandomChanceNode>((source, context) =>
                 context.WithGuid(source, new RuntimeRandomChanceNode(
-                    AuthoringField.Read<float>(source, "_chance"),
-                    AuthoringField.Read<float>(source, "_outOf"),
-                    (uint)AuthoringField.Read<int>(source, "_seed"))));
+                    source.Chance,
+                    source.OutOf,
+                    (uint)source.Seed)));
 
             registry.RegisterCore<MessageReceiveNode>((source, context) =>
                 context.WithGuid(source, new RuntimeMessageReceiveNode
                 {
-                    KeyHash = HashKey(AuthoringField.Read<string>(source, "_key")),
-                    ExpectedMessage = AuthoringField.Read<string>(source, "_message")
+                    KeyHash = HashKey(source.Key),
+                    ExpectedMessage = source.Message
                 }));
 
             registry.RegisterCore<SequencerNode>((source, context) => context.EmitComposite(source, new RuntimeSequencer()));
@@ -791,7 +1100,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             registry.RegisterCore<WhileDoElseNode>((source, context) => context.EmitComposite(source, new RuntimeWhileDoElseNode()));
 
             registry.RegisterCore<SelectorRandomNode>((source, context) =>
-                context.EmitComposite(source, new RuntimeSelectorRandom((uint)AuthoringField.Read<int>(source, "_seed"))));
+                context.EmitComposite(source, new RuntimeSelectorRandom((uint)source.Seed)));
 
             registry.RegisterCore<ParallelNode>((source, context) =>
             {
@@ -811,28 +1120,35 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             registry.RegisterCore<ParallelAllNode>((source, context) =>
                 context.EmitComposite(source, new RuntimeParallelAllNode
                 {
-                    SuccessThreshold = AuthoringField.Read<int>(source, "_successThreshold"),
-                    FailureThreshold = AuthoringField.Read<int>(source, "_failureThreshold")
+                    SuccessThreshold = source.SuccessThreshold,
+                    FailureThreshold = source.FailureThreshold
                 }));
 
             registry.RegisterCore<ProbabilityBranch>((source, context) =>
             {
                 var runtime = new RuntimeProbabilityBranch();
-                List<float> probabilities = AuthoringField.Read<List<float>>(source, "_probabilities");
-                runtime.SetWeights(probabilities != null ? probabilities.ToArray() : Array.Empty<float>());
+                IReadOnlyList<float> probabilities = source.Probabilities;
+                int count = probabilities != null ? probabilities.Count : 0;
+                var weights = new float[count];
+                for (int i = 0; i < count; i++)
+                {
+                    weights[i] = probabilities[i];
+                }
+
+                runtime.SetWeights(weights);
                 return context.EmitComposite(source, runtime);
             });
 
             registry.RegisterCore<SwitchNode>((source, context) =>
                 context.EmitComposite(source, new RuntimeSwitchNode
                 {
-                    VariableKeyHash = HashKey(AuthoringField.Read<string>(source, "_variableKey"))
+                    VariableKeyHash = HashKey(source.VariableKey)
                 }));
 
             registry.RegisterCore<UtilitySelectorNode>((source, context) =>
             {
                 var runtime = new RuntimeUtilitySelector();
-                List<string> scoreKeys = AuthoringField.Read<List<string>>(source, "_scoreKeys");
+                IReadOnlyList<string> scoreKeys = source.ScoreKeys;
                 int count = scoreKeys != null ? scoreKeys.Count : 0;
                 var hashes = new int[count];
                 for (int i = 0; i < count; i++)
@@ -865,25 +1181,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             registry.RegisterCore<CoolDownNode>((source, context) =>
                 context.EmitDecorator(source, new RuntimeCoolDownNode
                 {
-                    CoolDown = AuthoringField.Read<float>(source, "_coolDown"),
-                    ResetOnSuccess = AuthoringField.Read<bool>(source, "_resetOnSuccess")
+                    CoolDown = source.CoolDown,
+                    ResetOnSuccess = source.ResetOnSuccess
                 }));
 
             registry.RegisterCore<DelayNode>((source, context) =>
                 context.EmitDecorator(source, new RuntimeDelayNode
                 {
-                    DelaySeconds = AuthoringField.Read<float>(source, "_delaySeconds"),
-                    UseUnscaledTime = AuthoringField.Read<bool>(source, "_useUnscaledTime")
+                    DelaySeconds = source.DelaySeconds,
+                    UseUnscaledTime = source.UseUnscaledTime
                 }));
 
             registry.RegisterCore<RepeatNode>((source, context) =>
             {
-                Vector2 range = AuthoringField.Read<Vector2>(source, "_randomRepeatCountRange");
+                Vector2 range = source.RandomRepeatCountRange;
                 return context.EmitDecorator(source, new RuntimeRepeatNode
                 {
-                    RepeatForever = AuthoringField.Read<bool>(source, "_repeatForever"),
-                    RepeatCount = AuthoringField.Read<int>(source, "_repeatCount"),
-                    UseRandomRepeatCount = AuthoringField.Read<bool>(source, "_useRandomRepeatCount"),
+                    RepeatForever = source.RepeatForever,
+                    RepeatCount = source.RepeatCount,
+                    UseRandomRepeatCount = source.UseRandomRepeatCount,
                     RandomRangeMin = (int)range.x,
                     RandomRangeMax = (int)range.y
                 });
@@ -892,49 +1208,53 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             registry.RegisterCore<RetryNode>((source, context) =>
                 context.EmitDecorator(source, new RuntimeRetryNode
                 {
-                    MaxAttempts = AuthoringField.Read<int>(source, "_maxAttempts")
+                    MaxAttempts = source.MaxAttempts
                 }));
 
             registry.RegisterCore<ServiceNode>((source, context) =>
                 context.EmitDecorator(source, new RuntimeServiceNode
                 {
-                    Interval = AuthoringField.Read<float>(source, "_interval"),
-                    RandomDeviation = AuthoringField.Read<float>(source, "_randomDeviation"),
-                    UseUnscaledTime = AuthoringField.Read<bool>(source, "_useUnscaledTime")
+                    Interval = source.Interval,
+                    RandomDeviation = source.RandomDeviation,
+                    UseUnscaledTime = source.UseUnscaledTime
                 }));
 
             registry.RegisterCore<TimeoutNode>((source, context) =>
                 context.EmitDecorator(source, new RuntimeTimeoutNode
                 {
-                    TimeoutSeconds = AuthoringField.Read<float>(source, "_timeoutSeconds"),
-                    UseUnscaledTime = AuthoringField.Read<bool>(source, "_useUnscaledTime")
+                    TimeoutSeconds = source.TimeoutSeconds,
+                    UseUnscaledTime = source.UseUnscaledTime
                 }));
 
             registry.RegisterCore<WaitSuccessNode>((source, context) =>
             {
-                Vector2 range = AuthoringField.Read<Vector2>(source, "_waitTimeRange");
+                Vector2 range = source.WaitTimeRange;
                 return context.EmitDecorator(source, new RuntimeWaitSuccessNode
                 {
-                    WaitTime = AuthoringField.Read<float>(source, "_waitTime"),
-                    UseRandomRange = AuthoringField.Read<bool>(source, "_useRandomBetweenTwoConstants"),
+                    WaitTime = source.WaitTime,
+                    UseRandomRange = source.UseRandomBetweenTwoConstants,
                     RangeMin = range.x,
                     RangeMax = range.y,
-                    UseUnscaledTime = AuthoringField.Read<bool>(source, "_useUnscaledTime")
+                    UseUnscaledTime = source.UseUnscaledTime
                 });
             });
 
             registry.RegisterCore<BBComparisonNode>((source, context) =>
-                context.EmitDecorator(source, new RuntimeBBComparisonNode
+            {
+                string referenceKey = source.ReferenceKey;
+                return context.EmitDecorator(source, new RuntimeBBComparisonNode
                 {
-                    KeyHash = HashKey(AuthoringField.Read<string>(source, "_key")),
-                    Operator = AuthoringField.Read<BBComparisonOp>(source, "_operator"),
-                    ValueType = AuthoringField.Read<BBValueType>(source, "_valueType"),
-                    RefInt = AuthoringField.Read<int>(source, "_refInt"),
-                    RefFloat = AuthoringField.Read<float>(source, "_refFloat"),
-                    RefBool = AuthoringField.Read<bool>(source, "_refBool"),
-                    RefKeyHash = HashKey(AuthoringField.Read<string>(source, "_refKey")),
-                    FloatEpsilon = AuthoringField.Read<float>(source, "_floatEpsilon")
-                }));
+                    KeyHash = HashKey(source.Key),
+                    Operator = source.Operator,
+                    ValueType = source.ValueType,
+                    RefInt = source.ReferenceInt,
+                    RefFloat = source.ReferenceFloat,
+                    RefBool = source.ReferenceBool,
+                    RefKeyHash = HashKey(referenceKey),
+                    UseRefKey = !string.IsNullOrEmpty(referenceKey),
+                    FloatEpsilon = source.FloatEpsilon
+                });
+            });
 
             registry.RegisterCore<SubTreeNode>(EmitSubTree);
             registry._isReadOnly = true;
@@ -961,7 +1281,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
 
             if (source.SubTreeAsset != null && source.SubTreeAsset.Root != null)
             {
-                runtime.Child = context.EmitRequired(source.SubTreeAsset.Root, "subtree asset root");
+                runtime.Child = context.EmitSubTreeAssetRoot(
+                    source,
+                    source.SubTreeAsset,
+                    "subtree asset root");
                 return runtime;
             }
 
@@ -976,9 +1299,27 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
 
     public sealed class BehaviorTreeEmitContext
     {
-        public BehaviorTreeEmitContext(BehaviorTreeNodeEmitterRegistry registry)
+        private readonly HashSet<BehaviorTree> _activeSubTreeAssets;
+        private readonly HashSet<string> _emittedRuntimeGuids = new HashSet<string>(StringComparer.Ordinal);
+        private string _guidPrefix;
+        private int _nextSubTreeOccurrenceId;
+
+        internal BehaviorTreeEmitContext(BehaviorTreeNodeEmitterRegistry registry)
+            : this(registry, null)
+        {
+        }
+
+        internal BehaviorTreeEmitContext(
+            BehaviorTreeNodeEmitterRegistry registry,
+            BehaviorTree rootAsset)
         {
             Registry = registry ?? BehaviorTreeNodeEmitterRegistry.BuiltIn;
+            _activeSubTreeAssets = new HashSet<BehaviorTree>(
+                BehaviorTreeCompiler.ReferenceComparer<BehaviorTree>.Instance);
+            if (rootAsset != null)
+            {
+                _activeSubTreeAssets.Add(rootAsset);
+            }
         }
 
         public BehaviorTreeNodeEmitterRegistry Registry { get; }
@@ -1007,8 +1348,53 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 throw new ArgumentNullException(nameof(runtimeNode));
             }
 
-            runtimeNode.GUID = source != null ? source.GUID : null;
+            string sourceGuid = source != null ? source.GUID : null;
+            string runtimeGuid = string.IsNullOrEmpty(sourceGuid) || string.IsNullOrEmpty(_guidPrefix)
+                ? sourceGuid
+                : _guidPrefix + "/" + sourceGuid;
+            if (!string.IsNullOrEmpty(runtimeGuid) && !_emittedRuntimeGuids.Add(runtimeGuid))
+            {
+                throw new InvalidOperationException(
+                    $"Emitted runtime node GUID '{runtimeGuid}' is not unique.");
+            }
+
+            runtimeNode.GUID = runtimeGuid;
             return runtimeNode;
+        }
+
+        internal RuntimeNode EmitSubTreeAssetRoot(
+            SubTreeNode source,
+            BehaviorTree asset,
+            string role)
+        {
+            if (asset == null || asset.Root == null)
+            {
+                throw new InvalidOperationException("Subtree asset root is required.");
+            }
+
+            if (!_activeSubTreeAssets.Add(asset))
+            {
+                throw new InvalidOperationException(
+                    $"Recursive subtree asset cycle detected at '{asset.name}'.");
+            }
+
+            string previousPrefix = _guidPrefix;
+            int occurrenceId = checked(++_nextSubTreeOccurrenceId);
+            string occurrenceSegment = "bt-subtree-" +
+                occurrenceId.ToString(CultureInfo.InvariantCulture);
+            _guidPrefix = string.IsNullOrEmpty(previousPrefix)
+                ? occurrenceSegment
+                : previousPrefix + "/" + occurrenceSegment;
+
+            try
+            {
+                return EmitRequired(asset.Root, role);
+            }
+            finally
+            {
+                _guidPrefix = previousPrefix;
+                _activeSubTreeAssets.Remove(asset);
+            }
         }
 
         public TNode EmitComposite<TNode>(CompositeNode source, TNode runtimeNode) where TNode : RuntimeCompositeNode
@@ -1039,6 +1425,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 return root.Child != null ? 1 : 0;
             }
 
+            if (node is SubTreeNode subTree)
+            {
+                return subTree.Child != null
+                    || (subTree.SubTreeAsset != null && subTree.SubTreeAsset.Root != null)
+                    ? 1
+                    : 0;
+            }
+
             if (node is DecoratorNode decorator)
             {
                 return decorator.Child != null ? 1 : 0;
@@ -1053,70 +1447,4 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
         }
     }
 
-    internal static class AuthoringField
-    {
-        private static readonly Dictionary<string, FieldInfo> Fields = new Dictionary<string, FieldInfo>(128);
-
-        public static T Read<T>(BTNode source, string fieldName)
-        {
-            if (source == null)
-            {
-                return default;
-            }
-
-            FieldInfo field = GetField(source.GetType(), fieldName);
-            object value = field.GetValue(source);
-            if (value == null)
-            {
-                return default;
-            }
-
-            if (value is T typedValue)
-            {
-                return typedValue;
-            }
-
-            return (T)Convert.ChangeType(value, typeof(T));
-        }
-
-        public static int ReadEnumInt(BTNode source, string fieldName)
-        {
-            if (source == null)
-            {
-                return 0;
-            }
-
-            object value = GetField(source.GetType(), fieldName).GetValue(source);
-            return value != null ? Convert.ToInt32(value) : 0;
-        }
-
-        private static FieldInfo GetField(Type sourceType, string fieldName)
-        {
-            string key = sourceType.FullName + "." + fieldName;
-            lock (Fields)
-            {
-                if (Fields.TryGetValue(key, out FieldInfo cached))
-                {
-                    return cached;
-                }
-
-                Type current = sourceType;
-                while (current != null && current != typeof(ScriptableObject))
-                {
-                    FieldInfo field = current.GetField(
-                        fieldName,
-                        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly);
-                    if (field != null)
-                    {
-                        Fields[key] = field;
-                        return field;
-                    }
-
-                    current = current.BaseType;
-                }
-            }
-
-            throw new MissingFieldException(sourceType.FullName, fieldName);
-        }
-    }
 }

@@ -2,7 +2,7 @@
 
 [English | 简体中文](ContentOperations.SCH.md)
 
-This guide covers downloads, provider maintenance, disk capacity, content verification, recovery, and operational evidence for the application or live-content team. AssetManagement supplies bounded primitives for these jobs; the release workflow stays product-owned because catalog semantics, CDN authorization, platform storage, rollback, and certification differ by provider and product.
+This guide covers downloads, provider maintenance, disk capacity, content verification, recovery, and operational evidence. AssetManagement supplies bounded primitives for these jobs; the release workflow stays product-owned because catalog semantics, CDN authorization, platform storage, rollback, and certification differ by provider and product.
 
 ## Table of Contents
 
@@ -77,7 +77,7 @@ stateDiagram-v2
     RecoveryRequired --> Quiesced: explicit recovery decision
 ```
 
-The exact names and persistence format belong to the product. At minimum, record the product/package/channel/platform release domain, previous committed identity, intended identity, whether provider mutation may have started, staging identity if one exists, and the last terminal decision. The record needs its own schema version, validation, atomic replacement, corruption recovery, and migration. Do not store this authority in `PlayerPrefs`.
+The exact names and persistence format belong to the product. Record the product/package/channel/platform release domain, previous committed identity, intended identity, whether provider mutation may have started, staging identity if one exists, and the last terminal decision. The record needs its own schema version, validation, atomic replacement, corruption recovery, and migration. Do not store this authority in `PlayerPrefs`.
 
 ### Downloader ownership and cancellation
 
@@ -238,7 +238,7 @@ Sum only components that overlap at peak, but include them on the volume where t
 
 #### TOCTOU and filesystem failure
 
-A successful capacity check is a snapshot, not a reservation. Between either gate and the write, another process, another package, the OS, the browser, or the user can consume or revoke storage. Therefore: keep content quarantined until a terminal commit; treat disk-full and I/O exceptions as normal recoverable release failures; persist the mutation boundary before provider state can change; use provider APIs for provider-cache cleanup instead of deleting private files.
+A successful capacity check is a snapshot, not a reservation. Between either gate and the write, another process, another package, the OS, the browser, or the user can consume or revoke storage. Keep content quarantined until a terminal commit; treat disk-full and I/O exceptions as normal recoverable release failures; persist the mutation boundary before provider state can change; use provider APIs for provider-cache cleanup instead of deleting private files.
 
 Atomic replacement generally requires the source and destination to be on the same filesystem. A cross-volume move can degrade into copy-plus-delete and lose atomicity. If staging and activation cross volumes, copy to the final volume, flush according to product/platform policy, verify the final bytes again, and only then switch the product's visible identity.
 

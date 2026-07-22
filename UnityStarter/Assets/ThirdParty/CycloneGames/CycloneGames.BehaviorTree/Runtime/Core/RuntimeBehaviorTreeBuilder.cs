@@ -5,7 +5,6 @@ using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
-using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
@@ -25,7 +24,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
         }
 
-        public RuntimeBehaviorTreeBuilder(GameObject owner)
+        public RuntimeBehaviorTreeBuilder(object owner)
             : this(new RuntimeBTContext(owner))
         {
         }
@@ -42,11 +41,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             return this;
         }
 
-        public RuntimeBehaviorTreeBuilder WithOwner(GameObject owner)
+        public RuntimeBehaviorTreeBuilder WithOwner(object owner)
         {
             EnsureNotBuilt();
             _context ??= new RuntimeBTContext();
-            _context.OwnerGameObject = owner;
+            _context.Owner = owner;
             return this;
         }
 
@@ -397,22 +396,45 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 Child = _rootChild
             };
 
+            bool ownsBlackboard = _blackboard == null;
             RuntimeBlackboard blackboard = _blackboard ??
                 new RuntimeBlackboard(schema: _blackboardSchema, applySchemaDefaults: _applySchemaDefaults);
 
-            if (_blackboard != null && _blackboardSchema != null && !ReferenceEquals(_blackboard.Schema, _blackboardSchema))
+            RuntimeBehaviorTree tree = null;
+            try
             {
-                blackboard.BindSchema(_blackboardSchema, _applySchemaDefaults);
+                if (_blackboard != null &&
+                    _blackboardSchema != null &&
+                    !ReferenceEquals(_blackboard.Schema, _blackboardSchema))
+                {
+                    blackboard.BindSchema(_blackboardSchema, _applySchemaDefaults);
+                }
+
+                tree = new RuntimeBehaviorTree(root, blackboard, _context);
+                tree.TickInterval = _tickInterval;
+                _built = true;
+                return tree;
             }
-
-            blackboard.Context = _context;
-
-            var tree = new RuntimeBehaviorTree(root, blackboard, _context)
+            catch (Exception buildException)
             {
-                TickInterval = _tickInterval
-            };
-            _built = true;
-            return tree;
+                try
+                {
+                    if (tree != null && !tree.IsDisposed)
+                    {
+                        tree.Dispose();
+                    }
+                    else if (ownsBlackboard && !blackboard.IsDisposed)
+                    {
+                        blackboard.Dispose();
+                    }
+                }
+                catch (Exception cleanupException)
+                {
+                    throw new AggregateException(buildException, cleanupException);
+                }
+
+                throw;
+            }
         }
 
         private RuntimeBehaviorTreeBuilder Composite<TNode>(TNode node, Action<TNode> configure) where TNode : RuntimeCompositeNode

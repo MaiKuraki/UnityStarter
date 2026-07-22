@@ -24,8 +24,6 @@ Windows open by stable string ID through an asset provider or by direct `UIWindo
 
 Optional capabilities stay at assembly boundaries. MVP and navigation types live in the core `Runtime` assembly. Asset loading, localization, DI, and motion drivers compile in separate integration assemblies only when their packages are present.
 
-Screen flow, business rules, save data, input handling, and platform SDK integration belong to the composition root or optional binders.
-
 ### Key Features
 
 - **`UIService`** as the single main-thread-confined window-session owner with cancellation-aware `UniTask` operations.
@@ -69,7 +67,7 @@ flowchart LR
 | Asset leases | Provider, acquired by `UIService` | Window session | Close, rollback, or shutdown |
 | Presenter | `UIPresenterBinder` registration policy | Registered release delegate | Binding disposal |
 
-`UIManager` is an optional `MonoBehaviour` lifetime host. It creates a `UIService` from serialized capacities and an explicit `UIRoot`; it is not a global access point. Code that already has a composition root can construct `UIService` directly.
+`UIManager` is an optional `MonoBehaviour` lifetime host. It creates a `UIService` from serialized capacities and an explicit `UIRoot`. Code that already has a composition root can construct `UIService` directly.
 
 ### Assembly layout
 
@@ -339,7 +337,7 @@ IUIWindowBinder[] binders = { presenterBinder };
 var ui = new UIService(root, assetProvider: provider, options: options, binders: binders);
 ```
 
-When a presenter must consume caller data during `OnViewOpening`, use the contextual factory. `OpenContext` is caller-owned in-memory data, not a serialized or trusted contract; validate its type and contents at the feature boundary.
+When a presenter must consume caller data during `OnViewOpening`, use the contextual factory. `OpenContext` is caller-owned in-memory data; validate its type and contents at the feature boundary.
 
 ```csharp
 presenterBinder.RegisterContextual<LoginPresenter>(
@@ -436,7 +434,6 @@ UIWindow inventory = await ui.NavigateAsync(
 - Keep most windows on `InheritLayerCanvas`; it preserves batching and avoids an extra Canvas and raycaster. Use `IsolatedCanvas` only when measured to help.
 - Add `CanvasGroup` to windows that need visibility control or built-in coordinated transitions.
 - Layer Canvases own sorting ranges; configuration priority controls sibling order only within one layer.
-- The application owns EventSystem selection, keyboard/gamepad focus, touch gestures, back-button mapping, local-multiplayer input routing, and safe-area adaptation.
 
 `GetRootCanvasSize()` returns the current root `RectTransform` size. `GetUICamera()` may return `null` for overlay configurations.
 

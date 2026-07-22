@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.Persistence.VYaml",
+    "rootNamespace": "CycloneGames.Persistence.VYaml",
+    "references": [
+        "CycloneGames.Persistence.Core",
+        "VYaml.Core"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

@@ -11,7 +11,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Conditions
             _strategy = strategy ?? throw new ArgumentNullException(nameof(strategy));
         }
 
-        public string Name { get; set; }
+        private string _name;
+        public string Name
+        {
+            get => _name;
+            set => SetSetupValue(ref _name, value);
+        }
 
         public override bool CanEvaluate => true;
 

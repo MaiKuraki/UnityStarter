@@ -10,23 +10,28 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         Failure
     }
 
+    public enum RuntimeNodeExitReason : byte
+    {
+        Completed,
+        Aborted,
+        Faulted
+    }
+
     /// <summary>
-    /// Pre/Post condition failure policy (mirrors BehaviorTree.CPP v4 scripting conditions).
-    /// Attached to RuntimeNode via SetPreCondition / SetPostCondition.
+    /// Defines the result produced when a pre-condition or post-condition returns false.
     /// </summary>
     public enum ConditionPolicy : byte
     {
-        /// <summary>If condition returns false, node returns Failure without executing (BT.CPP _skipIf).</summary>
-        SkipWhenFalse,
-        /// <summary>If condition returns false, node returns Success without executing (BT.CPP _successIf inverted).</summary>
+        /// <summary>Return Failure without executing, or abort a running activation and return Failure.</summary>
+        FailWhenFalse,
+        /// <summary>Return Success without executing, or abort a running activation and return Success.</summary>
         SucceedWhenFalse,
-        /// <summary>If condition returns false while running, abort and return Failure (BT.CPP _while).</summary>
+        /// <summary>Abort a running activation and return Failure. Before activation this is equivalent to FailWhenFalse.</summary>
         AbortWhenFalse,
     }
 
     /// <summary>
-    /// Compact condition entry. Stored in a fixed-size array (0GC iteration).
-    /// Condition func is allocated once during setup — zero per-tick allocation.
+    /// Compact condition entry stored in a setup-time array for allocation-free iteration.
     /// </summary>
     public struct NodeCondition
     {
@@ -34,21 +39,40 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         public ConditionPolicy Policy;
     }
 
+    /// <summary>
+    /// Base class for managed behavior-tree nodes.
+    /// A node activation has exactly one exit: Completed, Aborted, or Faulted.
+    /// Reset is explicit and is not implied by normal completion or abort.
+    /// </summary>
     public abstract class RuntimeNode
     {
         public RuntimeState State { get; protected set; } = RuntimeState.NotEntered;
-        public bool IsStarted { get; private set; } = false;
-        public string GUID { get; set; }
+        public bool IsStarted { get; private set; }
 
-        // Event-driven execution: nodes can signal the tree to wake up
+        private string _guid;
+
+        /// <summary>
+        /// Stable setup-time identity used by diagnostics and synchronization.
+        /// The identity is immutable once a tree owns this node.
+        /// </summary>
+        public string GUID
+        {
+            get => _guid;
+            set
+            {
+                ThrowIfSetupFrozen();
+                _guid = value;
+            }
+        }
+
         internal RuntimeBehaviorTree OwnerTree { get; set; }
+        internal bool IsDisposed => _isDisposed;
 
-        // Pre/Post conditions (BehaviorTree.CPP v4 pattern)
-        // Allocated once during setup; null when unused (zero cost).
         private NodeCondition[] _preConditions;
         private int _preConditionCount;
         private NodeCondition[] _postConditions;
         private int _postConditionCount;
+        private bool _isDisposed;
 
         public virtual bool CanEvaluate => false;
 
@@ -56,129 +80,247 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public virtual void OnAwake() { }
 
-        /// <summary>
-        /// Attach a pre-condition evaluated every tick before OnRun.
-        /// Multiple conditions can be stacked (evaluated in order, first failure applies).
-        /// </summary>
-        public void AddPreCondition(Func<RuntimeBlackboard, bool> check, ConditionPolicy policy = ConditionPolicy.SkipWhenFalse)
+        internal void ValidateSetupNode()
         {
-            if (check == null) return;
-            if (_preConditions == null) _preConditions = new NodeCondition[2];
-            if (_preConditionCount >= _preConditions.Length)
+            ThrowIfDisposed();
+            ValidateSetup();
+        }
+
+        /// <summary>
+        /// Attaches a pre-condition evaluated before each execution step.
+        /// Conditions are evaluated in registration order and the first false result wins.
+        /// </summary>
+        public void AddPreCondition(
+            Func<RuntimeBlackboard, bool> check,
+            ConditionPolicy policy = ConditionPolicy.FailWhenFalse)
+        {
+            ThrowIfSetupFrozen();
+            if (check == null)
+            {
+                throw new ArgumentNullException(nameof(check));
+            }
+
+            if (_preConditions == null)
+            {
+                _preConditions = new NodeCondition[2];
+            }
+            else if (_preConditionCount >= _preConditions.Length)
+            {
                 Array.Resize(ref _preConditions, _preConditions.Length * 2);
+            }
+
             _preConditions[_preConditionCount++] = new NodeCondition { Check = check, Policy = policy };
         }
 
         /// <summary>
-        /// Attach a post-condition evaluated after OnRun returns Success or Failure.
-        /// Can override the result (e.g., force success on certain blackboard state).
+        /// Attaches a post-condition evaluated after OnRun returns Success or Failure.
+        /// Conditions are evaluated in registration order and the first false result wins.
         /// </summary>
-        public void AddPostCondition(Func<RuntimeBlackboard, bool> check, ConditionPolicy policy = ConditionPolicy.SkipWhenFalse)
+        public void AddPostCondition(
+            Func<RuntimeBlackboard, bool> check,
+            ConditionPolicy policy = ConditionPolicy.FailWhenFalse)
         {
-            if (check == null) return;
-            if (_postConditions == null) _postConditions = new NodeCondition[2];
-            if (_postConditionCount >= _postConditions.Length)
+            ThrowIfSetupFrozen();
+            if (check == null)
+            {
+                throw new ArgumentNullException(nameof(check));
+            }
+
+            if (_postConditions == null)
+            {
+                _postConditions = new NodeCondition[2];
+            }
+            else if (_postConditionCount >= _postConditions.Length)
+            {
                 Array.Resize(ref _postConditions, _postConditions.Length * 2);
+            }
+
             _postConditions[_postConditionCount++] = new NodeCondition { Check = check, Policy = policy };
         }
 
         public RuntimeState Run(RuntimeBlackboard blackboard)
         {
-            // Pre-condition evaluation (before execution)
-            if (_preConditionCount > 0)
+            ThrowIfDisposed();
+
+            try
             {
-                var preResult = EvaluateConditions(_preConditions, _preConditionCount, blackboard);
-                if (preResult != RuntimeState.NotEntered)
+                RuntimeState conditionResult = EvaluateConditions(_preConditions, _preConditionCount, blackboard);
+                if (conditionResult != RuntimeState.NotEntered)
                 {
-                    if (IsStarted) Abort(blackboard);
-                    return preResult;
+                    if (IsStarted)
+                    {
+                        AbortCore(blackboard);
+                    }
+
+                    State = conditionResult;
+                    return State;
                 }
-            }
 
-            if (!IsStarted)
-            {
-                OnStart(blackboard);
-                IsStarted = true;
-                State = RuntimeState.Running;
-            }
+                if (!IsStarted)
+                {
+                    IsStarted = true;
+                    State = RuntimeState.Running;
+                    OnStart(blackboard);
+                }
 
-            var previousState = State;
-            State = OnRun(blackboard);
+                RuntimeState previousState = State;
+                RuntimeState nextState = OnRun(blackboard);
+                if (nextState == RuntimeState.NotEntered ||
+                    (nextState != RuntimeState.Running &&
+                     nextState != RuntimeState.Success &&
+                     nextState != RuntimeState.Failure))
+                {
+                    throw new InvalidOperationException(
+                        $"{GetType().FullName}.OnRun returned the invalid execution state {nextState}.");
+                }
+
+                State = nextState;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (State != previousState && OwnerTree?.StatusLogger != null)
-            {
-                OwnerTree.StatusLogger.Log(GUID, previousState, State, RuntimeBTTime.GetUnityTime(false));
-            }
+                if (State != previousState && OwnerTree?.StatusLogger != null)
+                {
+                    OwnerTree.StatusLogger.Log(GUID, previousState, State, RuntimeBTTime.GetTime(blackboard, false));
+                }
 #endif
 
-            // Post-condition evaluation (override completed result)
-            if (_postConditionCount > 0 && State != RuntimeState.Running)
-            {
-                var postResult = EvaluateConditions(_postConditions, _postConditionCount, blackboard);
-                if (postResult != RuntimeState.NotEntered)
-                    State = postResult;
-            }
-
-            if (State == RuntimeState.Success || State == RuntimeState.Failure)
-            {
-                OnStop(blackboard);
-                IsStarted = false;
-            }
-
-            return State;
-        }
-
-        /// <summary>
-        /// Evaluate condition array. Returns NotEntered if all pass, otherwise the forced state.
-        /// </summary>
-        private RuntimeState EvaluateConditions(NodeCondition[] conditions, int count, RuntimeBlackboard bb)
-        {
-            for (int i = 0; i < count; i++)
-            {
-                ref var c = ref conditions[i];
-                bool passed = c.Check(bb);
-                if (!passed)
+                if (State == RuntimeState.Success || State == RuntimeState.Failure)
                 {
-                    switch (c.Policy)
+                    RuntimeState postConditionResult = EvaluateConditions(
+                        _postConditions,
+                        _postConditionCount,
+                        blackboard);
+                    if (postConditionResult != RuntimeState.NotEntered)
                     {
-                        case ConditionPolicy.SkipWhenFalse:
-                        case ConditionPolicy.AbortWhenFalse:
-                            return RuntimeState.Failure;
-                        case ConditionPolicy.SucceedWhenFalse:
-                            return RuntimeState.Success;
+                        State = postConditionResult;
                     }
+
+                    IsStarted = false;
+                    OnExit(blackboard, RuntimeNodeExitReason.Completed, null);
                 }
+
+                return State;
             }
-            return RuntimeState.NotEntered; // all passed
+            catch (Exception exception)
+            {
+                if (IsStarted)
+                {
+                    IsStarted = false;
+                    State = RuntimeState.Failure;
+                    InvokeFaultExit(blackboard, exception);
+                }
+                else if (State != RuntimeState.Failure)
+                {
+                    State = RuntimeState.Failure;
+                }
+
+                throw;
+            }
         }
 
         public void Abort(RuntimeBlackboard blackboard)
         {
-            if (IsStarted)
-            {
-                OnStop(blackboard);
-                IsStarted = false;
-                State = RuntimeState.NotEntered;
-            }
-        }
-
-        /// <summary>
-        /// Resets a completed node's state to NotEntered.
-        /// Safe to call on nodes that have finished (IsStarted == false).
-        /// Used by composite nodes when restarting iterations (e.g. Repeat).
-        /// </summary>
-        public void ResetState()
-        {
+            ThrowIfDisposed();
             if (!IsStarted)
             {
-                State = RuntimeState.NotEntered;
+                return;
+            }
+
+            try
+            {
+                AbortCore(blackboard);
+            }
+            catch
+            {
+                IsStarted = false;
+                State = RuntimeState.Failure;
+                throw;
             }
         }
 
         /// <summary>
-        /// Signals the owning tree to schedule a tick (for event-driven execution).
-        /// Call from async callbacks, coroutines, or external systems.
+        /// Aborts an active activation, clears persistent node state, and recursively resets descendants.
+        /// </summary>
+        public void Reset(RuntimeBlackboard blackboard)
+        {
+            ThrowIfDisposed();
+
+            try
+            {
+                if (IsStarted)
+                {
+                    AbortCore(blackboard);
+                }
+
+                State = RuntimeState.NotEntered;
+                OnReset(blackboard);
+            }
+            catch
+            {
+                IsStarted = false;
+                State = RuntimeState.Failure;
+                throw;
+            }
+        }
+
+        internal void PrepareForActivation()
+        {
+            ThrowIfDisposed();
+            if (IsStarted)
+            {
+                throw new InvalidOperationException("A running node cannot be prepared for a new activation.");
+            }
+
+            State = RuntimeState.NotEntered;
+        }
+
+        internal void DisposeNode(RuntimeBlackboard blackboard)
+        {
+            if (_isDisposed)
+            {
+                return;
+            }
+
+            Exception abortException = null;
+            if (IsStarted)
+            {
+                try
+                {
+                    AbortCore(blackboard);
+                }
+                catch (Exception exception)
+                {
+                    abortException = exception;
+                    IsStarted = false;
+                    State = RuntimeState.Failure;
+                }
+            }
+
+            _isDisposed = true;
+            OwnerTree = null;
+
+            try
+            {
+                OnDispose(blackboard);
+            }
+            catch (Exception disposeException)
+            {
+                if (abortException != null)
+                {
+                    throw new AggregateException(abortException, disposeException);
+                }
+
+                throw;
+            }
+
+            if (abortException != null)
+            {
+                System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(abortException).Throw();
+            }
+        }
+
+        /// <summary>
+        /// Signals the owning tree to schedule a tick. This is the only node lifecycle operation
+        /// intended to be called from a producer thread other than the tree owner thread.
         /// </summary>
         protected void EmitWakeUpSignal()
         {
@@ -187,65 +329,174 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         protected virtual void OnStart(RuntimeBlackboard blackboard) { }
         protected abstract RuntimeState OnRun(RuntimeBlackboard blackboard);
-        protected virtual void OnStop(RuntimeBlackboard blackboard) { }
+
+        /// <summary>
+        /// Called exactly once for a started activation. Faulted exits include the triggering exception.
+        /// State retains Success or Failure for Completed, NotEntered for Aborted, and Failure for Faulted.
+        /// </summary>
+        protected virtual void OnExit(
+            RuntimeBlackboard blackboard,
+            RuntimeNodeExitReason reason,
+            Exception exception)
+        {
+        }
+
+        protected virtual void OnReset(RuntimeBlackboard blackboard) { }
+
+        protected virtual void OnDispose(RuntimeBlackboard blackboard) { }
+
+        /// <summary>
+        /// Validates cross-property setup invariants before ownership is committed.
+        /// Implementations must not mutate node state or external resources.
+        /// </summary>
+        protected virtual void ValidateSetup() { }
+
+        protected void SetSetupValue<T>(ref T storage, T value)
+        {
+            ThrowIfSetupFrozen();
+            storage = value;
+        }
+
+        protected static void ValidateFiniteNonNegativeSetupValue(float value, string propertyName)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
+            {
+                throw new ArgumentOutOfRangeException(
+                    propertyName,
+                    value,
+                    "Value must be finite and non-negative.");
+            }
+        }
+
+        /// <summary>
+        /// Rejects setup mutation after ownership transfer or disposal.
+        /// Runtime state changes must use explicit execution APIs instead.
+        /// </summary>
+        protected void ThrowIfSetupFrozen()
+        {
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(GetType().FullName);
+            }
+
+            if (OwnerTree != null)
+            {
+                throw new InvalidOperationException(
+                    $"{GetType().FullName} setup is immutable after the node is owned by a runtime tree.");
+            }
+        }
+
+        private RuntimeState EvaluateConditions(
+            NodeCondition[] conditions,
+            int count,
+            RuntimeBlackboard blackboard)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                ref NodeCondition condition = ref conditions[i];
+                if (condition.Check(blackboard))
+                {
+                    continue;
+                }
+
+                switch (condition.Policy)
+                {
+                    case ConditionPolicy.FailWhenFalse:
+                    case ConditionPolicy.AbortWhenFalse:
+                        return RuntimeState.Failure;
+                    case ConditionPolicy.SucceedWhenFalse:
+                        return RuntimeState.Success;
+                    default:
+                        throw new InvalidOperationException($"Unsupported condition policy {condition.Policy}.");
+                }
+            }
+
+            return RuntimeState.NotEntered;
+        }
+
+        private void AbortCore(RuntimeBlackboard blackboard)
+        {
+            IsStarted = false;
+            State = RuntimeState.NotEntered;
+            OnExit(blackboard, RuntimeNodeExitReason.Aborted, null);
+        }
+
+        private void InvokeFaultExit(RuntimeBlackboard blackboard, Exception exception)
+        {
+            try
+            {
+                OnExit(blackboard, RuntimeNodeExitReason.Faulted, exception);
+            }
+            catch (Exception cleanupException)
+            {
+                throw new AggregateException(exception, cleanupException);
+            }
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_isDisposed)
+            {
+                throw new ObjectDisposedException(GetType().FullName);
+            }
+        }
     }
 
     /// <summary>
-    /// Recommended pattern for async/polling actions. Provides a clear lifecycle:
-    /// OnActionStart  → called once when entering from IDLE
-    /// OnActionRunning → called each tick while RUNNING (poll for completion)
-    /// OnActionHalted  → called when aborted by parent or tree shutdown
-    /// Mirrors BehaviorTree.CPP's StatefulActionNode pattern.
+    /// Base class for asynchronous or polling actions with explicit start, running, halt, and fault hooks.
     /// </summary>
     public abstract class RuntimeStatefulActionNode : RuntimeNode
     {
+        private bool _wasRunning;
+
         protected abstract RuntimeState OnActionStart(RuntimeBlackboard blackboard);
         protected abstract RuntimeState OnActionRunning(RuntimeBlackboard blackboard);
         protected virtual void OnActionHalted(RuntimeBlackboard blackboard) { }
-
-        private bool _wasRunning;
-        private bool _completedNormally;
+        protected virtual void OnActionFaulted(RuntimeBlackboard blackboard, Exception exception) { }
 
         protected sealed override void OnStart(RuntimeBlackboard blackboard)
         {
             _wasRunning = false;
-            _completedNormally = false;
         }
 
         protected sealed override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
             if (!_wasRunning)
             {
-                var result = OnActionStart(blackboard);
-                if (result == RuntimeState.Running)
-                {
-                    _wasRunning = true;
-                }
-                else
-                {
-                    _completedNormally = true;
-                }
+                RuntimeState result = OnActionStart(blackboard);
+                _wasRunning = result == RuntimeState.Running;
                 return result;
             }
 
-            var state = OnActionRunning(blackboard);
+            RuntimeState state = OnActionRunning(blackboard);
             if (state != RuntimeState.Running)
             {
-                _completedNormally = true;
+                _wasRunning = false;
             }
+
             return state;
         }
 
-        // Abort() sets State = NotEntered before calling OnStop,
-        // so we track completion separately to detect halts.
-        protected sealed override void OnStop(RuntimeBlackboard blackboard)
+        protected sealed override void OnExit(
+            RuntimeBlackboard blackboard,
+            RuntimeNodeExitReason reason,
+            Exception exception)
         {
-            if (_wasRunning && !_completedNormally)
+            if (reason == RuntimeNodeExitReason.Aborted && _wasRunning)
             {
                 OnActionHalted(blackboard);
             }
+            else if (reason == RuntimeNodeExitReason.Faulted)
+            {
+                OnActionFaulted(blackboard, exception);
+            }
+
             _wasRunning = false;
-            _completedNormally = false;
+        }
+
+        protected sealed override void OnReset(RuntimeBlackboard blackboard)
+        {
+            _wasRunning = false;
         }
     }
 }

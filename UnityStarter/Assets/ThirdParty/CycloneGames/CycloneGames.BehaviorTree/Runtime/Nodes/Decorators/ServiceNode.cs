@@ -15,6 +15,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private float _randomDeviation = 0f;
         [SerializeField] private bool _useUnscaledTime = false;
 
+        public float Interval => _interval;
+        public float RandomDeviation => _randomDeviation;
+        public bool UseUnscaledTime => _useUnscaledTime;
+
         public override BTNode Clone()
         {
             var clone = (ServiceNode)base.Clone();

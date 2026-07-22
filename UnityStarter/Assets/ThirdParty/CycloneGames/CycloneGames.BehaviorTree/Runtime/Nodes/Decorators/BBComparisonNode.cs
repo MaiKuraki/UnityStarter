@@ -26,6 +26,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [Header("Float Comparison")]
         [SerializeField] private float _floatEpsilon = 0.0001f;
 
+        public string Key => _key;
+        public BBComparisonOp Operator => _operator;
+        public BBValueType ValueType => _valueType;
+        public int ReferenceInt => _refInt;
+        public float ReferenceFloat => _refFloat;
+        public bool ReferenceBool => _refBool;
+        public string ReferenceKey => _refKey;
+        public float FloatEpsilon => _floatEpsilon;
+
         public override BTNode Clone()
         {
             var clone = (BBComparisonNode)base.Clone();

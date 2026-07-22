@@ -206,7 +206,7 @@ DI 容器拥有同一生命周期时，可注册 `IDynamicAtlas` 或 `DynamicAtl
 
 `DynamicAtlasManager` 是可选场景 Host。启用 `autoInitialize` 时在 `Awake` 创建自己拥有的 Service。`SetService(service, takeOwnership)` 支持外部 Composition Root。读取 `Service` 不会隐式初始化。独立 UI Context 需要不同预算与生命周期时，可以使用多个 Manager。
 
-端到端示例位于 `Samples/DynamicAtlasLeaseSample.cs` —— 自包含组件，使用 512 像素单页与 2 MiB 纹理预算，在 Enable 时获取一个 Sprite，在 Disable 时释放 Lease，并在 Destroy 时 Dispose 自己拥有的 Service。设置步骤见 [Samples/README.SCH.md](../Samples/README.SCH.md)。
+端到端示例位于 `Samples/DynamicAtlasLeaseSample.cs` -- 自包含组件，使用 512 像素单页与 2 MiB 纹理预算，在 Enable 时获取一个 Sprite，在 Disable 时释放 Lease，并在 Destroy 时 Dispose 自己拥有的 Service。设置步骤见 [Samples/README.SCH.md](../Samples/README.SCH.md)。
 
 ## 进阶主题
 
@@ -214,11 +214,11 @@ DI 容器拥有同一生命周期时，可注册 `IDynamicAtlas` 或 `DynamicAtl
 
 每个页面的复制模式在创建后保持不变，避免 CPU 整页上传覆盖只写入 GPU 的内容。
 
-**GPU-only 页面** —— 源与目标解析为相同 `GraphicsFormat` 且支持 `CopyTextureSupport.Basic` 时，`Graphics.CopyTexture` 直接写入 GPU-only 页面。页面初始化完成后会释放 CPU 副本。
+**GPU-only 页面** -- 源与目标解析为相同 `GraphicsFormat` 且支持 `CopyTextureSupport.Basic` 时，`Graphics.CopyTexture` 直接写入 GPU-only 页面。页面初始化完成后会释放 CPU 副本。
 
-**CPU-backed 页面** —— `AllowCpuRawCopy` 允许使用可读页面并读取与目标 `GraphicsFormat` 完全一致的可读源。`AllowSynchronousReadback` 还允许在无法 raw copy 时使用临时 RenderTexture 与 `ReadPixels`。同步 Readback 可能阻塞渲染线程；`DynamicAtlasStats.SynchronousReadbackCount` 会显示使用次数。
+**CPU-backed 页面** -- `AllowCpuRawCopy` 允许使用可读页面并读取与目标 `GraphicsFormat` 完全一致的可读源。`AllowSynchronousReadback` 还允许在无法 raw copy 时使用临时 RenderTexture 与 `ReadPixels`。同步 Readback 可能阻塞渲染线程；`DynamicAtlasStats.SynchronousReadbackCount` 会显示使用次数。
 
-**目标格式** —— 运行时页面支持 `RGBA32`。运行时压缩 block packing 不受支持。需要压缩页面存储时使用构建期 `SpriteAtlas`。
+**目标格式** -- 运行时页面支持 `RGBA32`。运行时压缩 block packing 不受支持。需要压缩页面存储时使用构建期 `SpriteAtlas`。
 
 ### ScaleDown
 

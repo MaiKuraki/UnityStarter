@@ -98,8 +98,7 @@ namespace CycloneGames.IO
                     FlushDurably(destination);
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
-                Commit(temporaryPath, destinationPath);
+                Commit(temporaryPath, destinationPath, cancellationToken);
             }
             catch
             {
@@ -167,9 +166,8 @@ namespace CycloneGames.IO
                     FlushDurably(destination);
                 }
 
-                cancellationToken.ThrowIfCancellationRequested();
                 progress?.Report(new FileTransferProgress(processedBytes, processedBytes));
-                Commit(temporaryPath, destinationPath);
+                Commit(temporaryPath, destinationPath, cancellationToken);
                 return processedBytes;
             }
             catch
@@ -190,6 +188,21 @@ namespace CycloneGames.IO
         {
             using (PathCommitCoordinator.Acquire(destinationPath))
             {
+                CommitExclusive(temporaryPath, destinationPath);
+            }
+        }
+
+        internal void Commit(
+            string temporaryPath,
+            string destinationPath,
+            CancellationToken cancellationToken)
+        {
+            using (PathCommitCoordinator.Acquire(destinationPath))
+            {
+                // Waiting for another writer is still before the commit point. Once this check
+                // succeeds, replacement is intentionally non-cancellable and must report its
+                // actual outcome instead of translating a successful commit into cancellation.
+                cancellationToken.ThrowIfCancellationRequested();
                 CommitExclusive(temporaryPath, destinationPath);
             }
         }

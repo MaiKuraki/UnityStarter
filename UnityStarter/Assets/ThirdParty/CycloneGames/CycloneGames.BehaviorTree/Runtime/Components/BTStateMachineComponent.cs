@@ -3,35 +3,49 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
-    [RequireComponent(typeof(BTRunnerComponent))]
     public class BTStateMachineComponent : BTRunnerComponent
     {
         [SerializeField] private string _initialState;
         [SerializeField] private BTFSMState[] _states;
 
-        private void Start()
+        protected override void Awake()
         {
-            SetState(_initialState);
+            BTFSMState initial = FindState(_initialState);
+            if (initial != null && initial.GetTree() != null)
+            {
+                behaviorTree = initial.GetTree();
+            }
+
+            base.Awake();
         }
 
         public void SetState(string id)
         {
-            if (string.IsNullOrEmpty(id)) return;
+            BTFSMState targetState = FindState(id);
 
-            BTFSMState targetState = null;
-            for (int i = 0; i < _states.Length; i++)
-            {
-                if (_states[i].ID == id)
-                {
-                    targetState = _states[i];
-                    break;
-                }
-            }
-
-            if (targetState != null)
+            if (targetState != null && targetState.GetTree() != null)
             {
                 SetTree(targetState.GetTree());
             }
+        }
+
+        private BTFSMState FindState(string id)
+        {
+            if (string.IsNullOrEmpty(id) || _states == null)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < _states.Length; i++)
+            {
+                BTFSMState state = _states[i];
+                if (state != null && string.Equals(state.ID, id, System.StringComparison.Ordinal))
+                {
+                    return state;
+                }
+            }
+
+            return null;
         }
     }
 }

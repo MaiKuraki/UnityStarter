@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.Persistence.Tests.Unity",
+    "rootNamespace": "CycloneGames.Persistence.Tests.Unity",
+    "references": [
+        "CycloneGames.Persistence.Core",
+        "CycloneGames.Persistence.Unity"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "UNITY_INCLUDE_TESTS"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

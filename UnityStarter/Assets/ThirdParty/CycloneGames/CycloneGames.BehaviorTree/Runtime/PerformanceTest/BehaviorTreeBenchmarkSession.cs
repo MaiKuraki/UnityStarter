@@ -193,14 +193,16 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
 
         public void Dispose()
         {
-            for (int i = 0; i < _trees.Count; i++)
-            {
-                _trees[i]?.Dispose();
-            }
-
+            // Delta trackers observe blackboards owned by the trees. Release observers
+            // before disposing their owners so teardown remains deterministic.
             for (int i = 0; i < _deltas.Count; i++)
             {
                 _deltas[i]?.Dispose();
+            }
+
+            for (int i = 0; i < _trees.Count; i++)
+            {
+                _trees[i]?.Dispose();
             }
 
             _trees.Clear();
@@ -559,15 +561,10 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             }
         }
 
-        private sealed class RuntimeBenchmarkDecoratorNode : RuntimeNode
+        private sealed class RuntimeBenchmarkDecoratorNode :
+            CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators.RuntimeDecoratorNode
         {
-            public RuntimeNode Child { get; set; }
             public int DecoratorKey { get; set; }
-
-            public override void OnAwake()
-            {
-                Child?.OnAwake();
-            }
 
             protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
             {
@@ -575,13 +572,6 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 return Child != null ? Child.Run(blackboard) : RuntimeState.Success;
             }
 
-            protected override void OnStop(RuntimeBlackboard blackboard)
-            {
-                if (Child != null && Child.IsStarted)
-                {
-                    Child.Abort(blackboard);
-                }
-            }
         }
     }
 }
