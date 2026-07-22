@@ -2,7 +2,8 @@
     "name": "CycloneGames.BehaviorTree.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.BehaviorTree.Runtime"
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Benchmarks"
     ],
     "includePlatforms": [
         "Editor"

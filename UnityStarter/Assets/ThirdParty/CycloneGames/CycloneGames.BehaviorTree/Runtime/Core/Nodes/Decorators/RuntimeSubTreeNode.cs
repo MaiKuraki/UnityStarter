@@ -1,187 +1,431 @@
+using System;
+
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
+    [Flags]
+    public enum RuntimeSubTreePortDirection : byte
+    {
+        Input = 1 << 0,
+        Output = 1 << 1,
+        InOut = Input | Output,
+    }
+
     /// <summary>
-    /// Encapsulates a sub-tree with its own scoped blackboard.
-    /// The scoped blackboard's parent chain connects to the host tree's blackboard,
-    /// enabling hierarchical data isolation with fallback reads.
+    /// Executes a subtree against an owned scoped blackboard and optionally mirrors typed ports.
+    /// Input ports are synchronized before each child step. InOut ports take one input snapshot at
+    /// activation start. Output and InOut ports are committed once, only after normal Success or
+    /// Failure completion; aborted and faulted activations discard local output.
     /// </summary>
     public class RuntimeSubTreeNode : RuntimeDecoratorNode
     {
-        private RuntimeBlackboard _scopedBlackboard;
+        private const byte PORT_AUTO = 0;
+        private const byte PORT_INT = 1;
+        private const byte PORT_FLOAT = 2;
+        private const byte PORT_BOOL = 3;
+        private const byte PORT_VECTOR3 = 4;
+        private const byte PORT_OBJECT = 5;
+        private const byte PORT_LONG = 6;
+        private const byte PORT_LONG2 = 7;
+        private const byte PORT_LONG3 = 8;
 
-        // Port remapping: maps child-local key hashes to parent key hashes
-        private int[] _localKeys;
-        private int[] _parentKeys;
-        private byte[] _portTypes; // 0=auto, 1=int, 2=float, 3=bool, 4=Vector3, 5=object
+        private RuntimeBlackboard _scopedBlackboard;
+        private int[] _localKeys = Array.Empty<int>();
+        private int[] _parentKeys = Array.Empty<int>();
+        private byte[] _portTypes = Array.Empty<byte>();
+        private RuntimeSubTreePortDirection[] _portDirections = Array.Empty<RuntimeSubTreePortDirection>();
+        private RuntimeBlackboardMutation[] _mutationScratch = Array.Empty<RuntimeBlackboardMutation>();
         private int _remapCount;
+        private bool _needsInitialInputSync;
 
         public override void OnAwake()
         {
-            base.OnAwake();
+            if (_scopedBlackboard != null)
+            {
+                throw new InvalidOperationException("The subtree node was awakened more than once.");
+            }
+
             _scopedBlackboard = new RuntimeBlackboard(null, 8);
+            base.OnAwake();
         }
 
         /// <summary>
-        /// Configure port remapping. localKeys[i] in the subtree blackboard
-        /// mirrors parentKeys[i] in the host blackboard.
+        /// Configures automatically detected port mappings. Arrays are copied during setup.
         /// </summary>
         public void SetPortRemapping(int[] localKeys, int[] parentKeys)
         {
-            _localKeys = localKeys;
-            _parentKeys = parentKeys;
-            _remapCount = localKeys != null ? localKeys.Length : 0;
-            _portTypes = _remapCount > 0 ? new byte[_remapCount] : null;
+            SetPortRemapping(localKeys, parentKeys, null, null);
         }
 
         /// <summary>
-        /// Configure port remapping with explicit types to avoid boxing.
-        /// portTypes: 0=auto, 1=int, 2=float, 3=bool, 4=Vector3, 5=object
+        /// Configures typed port mappings. Type IDs are: 0 auto, 1 int, 2 float, 3 bool,
+        /// 4 Vector3, 5 object, 6 long, 7 long2, and 8 long3. Arrays are copied during setup.
         /// </summary>
         public void SetPortRemapping(int[] localKeys, int[] parentKeys, byte[] portTypes)
         {
-            _localKeys = localKeys;
-            _parentKeys = parentKeys;
-            _portTypes = portTypes;
-            _remapCount = localKeys != null ? localKeys.Length : 0;
+            SetPortRemapping(localKeys, parentKeys, portTypes, null);
+        }
+
+        /// <summary>
+        /// Configures typed, directional port mappings. A null direction array preserves the legacy
+        /// overload as InOut: capture parent input once at activation start and commit local output on
+        /// normal completion. Use Input for values that must refresh before every child step, and
+        /// Output when the mapped parent value must not be copied into the local key. Normal scoped
+        /// blackboard parent fallback still applies to any absent local key with the same hash.
+        /// </summary>
+        public void SetPortRemapping(
+            int[] localKeys,
+            int[] parentKeys,
+            byte[] portTypes,
+            RuntimeSubTreePortDirection[] portDirections)
+        {
+            ThrowIfSetupFrozen();
+            if (IsStarted)
+            {
+                throw new InvalidOperationException("Port remapping cannot change during an active subtree execution.");
+            }
+
+            ValidatePortRemapping(localKeys, parentKeys, portTypes, portDirections);
+
+            if (localKeys == null)
+            {
+                _localKeys = Array.Empty<int>();
+                _parentKeys = Array.Empty<int>();
+                _portTypes = Array.Empty<byte>();
+                _portDirections = Array.Empty<RuntimeSubTreePortDirection>();
+                _mutationScratch = Array.Empty<RuntimeBlackboardMutation>();
+                _remapCount = 0;
+                return;
+            }
+
+            _localKeys = (int[])localKeys.Clone();
+            _parentKeys = (int[])parentKeys.Clone();
+            _remapCount = localKeys.Length;
+            _portTypes = portTypes != null
+                ? (byte[])portTypes.Clone()
+                : new byte[_remapCount];
+            if (portDirections != null)
+            {
+                _portDirections = (RuntimeSubTreePortDirection[])portDirections.Clone();
+            }
+            else
+            {
+                _portDirections = new RuntimeSubTreePortDirection[_remapCount];
+                for (int i = 0; i < _remapCount; i++)
+                {
+                    _portDirections[i] = RuntimeSubTreePortDirection.InOut;
+                }
+            }
+
+            _mutationScratch = new RuntimeBlackboardMutation[_remapCount];
         }
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            _scopedBlackboard.Parent = blackboard;
-            _scopedBlackboard.Context = blackboard.Context;
+            BindScope(blackboard);
+            _needsInitialInputSync = true;
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            if (Child == null) return RuntimeState.Failure;
-
-            SyncInputs(blackboard);
-
-            var result = Child.Run(_scopedBlackboard);
-
-            if (result != RuntimeState.Running)
+            if (Child == null)
             {
-                SyncOutputs(blackboard);
+                return RuntimeState.Failure;
             }
 
-            return result;
+            SyncInputs(blackboard, _needsInitialInputSync);
+            _needsInitialInputSync = false;
+            return Child.Run(_scopedBlackboard);
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(
+            RuntimeBlackboard blackboard,
+            RuntimeNodeExitReason reason,
+            Exception exception)
         {
-            base.OnStop(blackboard);
-            SyncOutputs(blackboard);
-            _scopedBlackboard.Clear();
-        }
-
-        private void SyncInputs(RuntimeBlackboard parent)
-        {
-            for (int i = 0; i < _remapCount; i++)
+            try
             {
-                int pk = _parentKeys[i];
-                int lk = _localKeys[i];
-                byte type = _portTypes != null ? _portTypes[i] : (byte)0;
-
-                switch (type)
+                if (Child != null && Child.IsStarted)
                 {
-                    case 1: // int
-                        _scopedBlackboard.SetInt(lk, parent.GetInt(pk));
-                        break;
-                    case 2: // float
-                        _scopedBlackboard.SetFloat(lk, parent.GetFloat(pk));
-                        break;
-                    case 3: // bool
-                        _scopedBlackboard.SetBool(lk, parent.GetBool(pk));
-                        break;
-                    case 4: // Vector3
-                        _scopedBlackboard.SetVector3(lk, parent.GetVector3(pk));
-                        break;
-                    case 5: // object
-                        if (parent.HasKey(pk))
-                        {
-                            var obj = parent.GetObject<object>(pk);
-                            if (obj != null) _scopedBlackboard.SetObject(lk, obj);
-                        }
-                        break;
-                    default: // auto-detect (fallback, may box)
-                        SyncKeyAutoDetect(parent, pk, _scopedBlackboard, lk);
-                        break;
+                    Child.Abort(_scopedBlackboard);
                 }
+
+                if (reason == RuntimeNodeExitReason.Completed)
+                {
+                    SyncOutputs(blackboard);
+                }
+            }
+            finally
+            {
+                _needsInitialInputSync = false;
+                ReleaseScope();
+            }
+        }
+
+        protected override void OnReset(RuntimeBlackboard blackboard)
+        {
+            BindScope(blackboard);
+            try
+            {
+                Child?.Reset(_scopedBlackboard);
+            }
+            finally
+            {
+                ReleaseScope();
+            }
+        }
+
+        protected override void OnDispose(RuntimeBlackboard blackboard)
+        {
+            RuntimeBlackboard scopedBlackboard = _scopedBlackboard;
+            _scopedBlackboard = null;
+            if (scopedBlackboard == null)
+            {
+                Child?.DisposeNode(blackboard);
+                return;
+            }
+
+            try
+            {
+                Child?.DisposeNode(scopedBlackboard);
+            }
+            finally
+            {
+                try
+                {
+                    scopedBlackboard.Parent = null;
+                }
+                finally
+                {
+                    try
+                    {
+                        scopedBlackboard.Context = null;
+                    }
+                    finally
+                    {
+                        scopedBlackboard.Dispose();
+                    }
+                }
+            }
+        }
+
+        private static void ValidatePortRemapping(
+            int[] localKeys,
+            int[] parentKeys,
+            byte[] portTypes,
+            RuntimeSubTreePortDirection[] portDirections)
+        {
+            if (localKeys == null || parentKeys == null)
+            {
+                if (localKeys == null &&
+                    parentKeys == null &&
+                    (portTypes == null || portTypes.Length == 0) &&
+                    (portDirections == null || portDirections.Length == 0))
+                {
+                    return;
+                }
+
+                throw new ArgumentException("Local and parent key arrays must either both be null or both be present.");
+            }
+
+            if (localKeys.Length != parentKeys.Length)
+            {
+                throw new ArgumentException("Local and parent key arrays must have identical lengths.");
+            }
+
+            if (portTypes != null && portTypes.Length != localKeys.Length)
+            {
+                throw new ArgumentException("The port type array must match the key array lengths.", nameof(portTypes));
+            }
+
+            if (portDirections != null && portDirections.Length != localKeys.Length)
+            {
+                throw new ArgumentException(
+                    "The port direction array must match the key array lengths.",
+                    nameof(portDirections));
+            }
+
+            for (int i = 0; i < localKeys.Length; i++)
+            {
+                for (int earlierIndex = 0; earlierIndex < i; earlierIndex++)
+                {
+                    if (localKeys[earlierIndex] == localKeys[i])
+                    {
+                        throw new ArgumentException(
+                            $"Local port key {localKeys[i]} appears more than once.",
+                            nameof(localKeys));
+                    }
+
+                    if (parentKeys[earlierIndex] == parentKeys[i])
+                    {
+                        throw new ArgumentException(
+                            $"Parent port key {parentKeys[i]} appears more than once.",
+                            nameof(parentKeys));
+                    }
+                }
+            }
+
+            if (portTypes != null)
+            {
+                for (int i = 0; i < portTypes.Length; i++)
+                {
+                    if (portTypes[i] > PORT_LONG3)
+                    {
+                        throw new ArgumentOutOfRangeException(
+                            nameof(portTypes),
+                            portTypes[i],
+                            $"Port type at index {i} is not supported.");
+                    }
+                }
+            }
+
+            if (portDirections != null)
+            {
+                byte supportedDirections = (byte)RuntimeSubTreePortDirection.InOut;
+                for (int i = 0; i < portDirections.Length; i++)
+                {
+                    byte direction = (byte)portDirections[i];
+                    if (direction == 0 || (direction & ~supportedDirections) != 0)
+                    {
+                        throw new ArgumentOutOfRangeException(
+                            nameof(portDirections),
+                            portDirections[i],
+                            $"Port direction at index {i} is not supported.");
+                    }
+                }
+            }
+        }
+
+        private void BindScope(RuntimeBlackboard blackboard)
+        {
+            if (_scopedBlackboard == null)
+            {
+                throw new InvalidOperationException("The subtree blackboard has not been initialized.");
+            }
+
+            _scopedBlackboard.Parent = blackboard;
+            _scopedBlackboard.Context = blackboard?.Context;
+            if (blackboard != null)
+            {
+                _scopedBlackboard.StringHashFunc = blackboard.StringHashFunc;
+            }
+        }
+
+        private void ReleaseScope()
+        {
+            if (_scopedBlackboard == null)
+            {
+                return;
+            }
+
+            try
+            {
+                _scopedBlackboard.Clear();
+            }
+            finally
+            {
+                try
+                {
+                    _scopedBlackboard.Parent = null;
+                }
+                finally
+                {
+                    _scopedBlackboard.Context = null;
+                }
+            }
+        }
+
+        private void SyncInputs(RuntimeBlackboard parent, bool includeInOut)
+        {
+            try
+            {
+                int mutationCount = CaptureMappedMutations(
+                    parent,
+                    _parentKeys,
+                    _localKeys,
+                    includeParentChain: true,
+                    removeWhenMissing: true,
+                    requiredDirection: RuntimeSubTreePortDirection.Input,
+                    excludedDirection: includeInOut
+                        ? (RuntimeSubTreePortDirection)0
+                        : RuntimeSubTreePortDirection.Output);
+                _scopedBlackboard.ApplyLocalBatch(_mutationScratch, mutationCount);
+            }
+            finally
+            {
+                Array.Clear(_mutationScratch, 0, _mutationScratch.Length);
             }
         }
 
         private void SyncOutputs(RuntimeBlackboard parent)
         {
-            for (int i = 0; i < _remapCount; i++)
+            try
             {
-                int pk = _parentKeys[i];
-                int lk = _localKeys[i];
-                byte type = _portTypes != null ? _portTypes[i] : (byte)0;
-
-                if (!_scopedBlackboard.HasKey(lk)) continue;
-
-                switch (type)
-                {
-                    case 1:
-                        parent.SetInt(pk, _scopedBlackboard.GetInt(lk));
-                        break;
-                    case 2:
-                        parent.SetFloat(pk, _scopedBlackboard.GetFloat(lk));
-                        break;
-                    case 3:
-                        parent.SetBool(pk, _scopedBlackboard.GetBool(lk));
-                        break;
-                    case 4:
-                        parent.SetVector3(pk, _scopedBlackboard.GetVector3(lk));
-                        break;
-                    case 5:
-                    {
-                        var obj = _scopedBlackboard.GetObject<object>(lk);
-                        if (obj != null) parent.SetObject(pk, obj);
-                        break;
-                    }
-                    default:
-                        SyncKeyAutoDetect(_scopedBlackboard, lk, parent, pk);
-                        break;
-                }
+                int mutationCount = CaptureMappedMutations(
+                    _scopedBlackboard,
+                    _localKeys,
+                    _parentKeys,
+                    includeParentChain: false,
+                    removeWhenMissing: false,
+                    requiredDirection: RuntimeSubTreePortDirection.Output,
+                    excludedDirection: (RuntimeSubTreePortDirection)0);
+                parent.ApplyLocalBatch(_mutationScratch, mutationCount);
+            }
+            finally
+            {
+                Array.Clear(_mutationScratch, 0, _mutationScratch.Length);
             }
         }
 
-        /// <summary>
-        /// Auto-detect value type by probing typed dictionaries via TryGet (precise, 0GC).
-        /// </summary>
-        private static void SyncKeyAutoDetect(RuntimeBlackboard src, int srcKey, RuntimeBlackboard dst, int dstKey)
+        private int CaptureMappedMutations(
+            RuntimeBlackboard source,
+            int[] sourceKeys,
+            int[] destinationKeys,
+            bool includeParentChain,
+            bool removeWhenMissing,
+            RuntimeSubTreePortDirection requiredDirection,
+            RuntimeSubTreePortDirection excludedDirection)
         {
-            if (!src.HasKey(srcKey)) return;
-
-            if (src.TryGetInt(srcKey, out var intVal))
+            int mutationCount = 0;
+            for (int i = 0; i < _remapCount; i++)
             {
-                dst.SetInt(dstKey, intVal);
-                return;
+                RuntimeSubTreePortDirection direction = _portDirections[i];
+                if ((direction & requiredDirection) == 0 ||
+                    (excludedDirection != 0 && (direction & excludedDirection) != 0))
+                {
+                    continue;
+                }
+
+                int sourceKey = sourceKeys[i];
+                int destinationKey = destinationKeys[i];
+                bool hasValue = source.TryCaptureMutation(
+                    sourceKey,
+                    includeParentChain,
+                    out RuntimeBlackboardMutation mutation);
+
+                if (!hasValue)
+                {
+                    if (!removeWhenMissing)
+                    {
+                        continue;
+                    }
+
+                    mutation.Kind = RuntimeBlackboardMutationKind.Remove;
+                }
+
+                byte configuredType = _portTypes[i];
+                if (hasValue &&
+                    configuredType != PORT_AUTO &&
+                    configuredType != (byte)mutation.Kind)
+                {
+                    throw new InvalidOperationException(
+                        $"Subtree port {i} expected value type {configuredType}, but key {sourceKey} contains {(byte)mutation.Kind}.");
+                }
+
+                mutation.Key = destinationKey;
+                _mutationScratch[mutationCount++] = mutation;
             }
 
-            if (src.TryGetFloat(srcKey, out var floatVal))
-            {
-                dst.SetFloat(dstKey, floatVal);
-                return;
-            }
-
-            if (src.TryGetBool(srcKey, out var boolVal))
-            {
-                dst.SetBool(dstKey, boolVal);
-                return;
-            }
-
-            if (src.TryGetVector3(srcKey, out var vecVal))
-            {
-                dst.SetVector3(dstKey, vecVal);
-                return;
-            }
-
-            if (src.TryGetObject<object>(srcKey, out var obj))
-            {
-                dst.SetObject(dstKey, obj);
-            }
+            return mutationCount;
         }
     }
 }

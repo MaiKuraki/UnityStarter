@@ -11,7 +11,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
             _command = command ?? throw new ArgumentNullException(nameof(command));
         }
 
-        public string Name { get; set; }
+        private string _name;
+        public string Name
+        {
+            get => _name;
+            set => SetSetupValue(ref _name, value);
+        }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {

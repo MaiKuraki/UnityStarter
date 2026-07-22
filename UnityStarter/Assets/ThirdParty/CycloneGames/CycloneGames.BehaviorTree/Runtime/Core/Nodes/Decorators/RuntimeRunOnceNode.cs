@@ -2,17 +2,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
     /// <summary>
     /// Executes child once, then returns the cached result on subsequent ticks
-    /// without re-executing. Reset via Abort.
+    /// without re-executing. The cached result is cleared only by an explicit Reset.
     /// </summary>
     public class RuntimeRunOnceNode : RuntimeDecoratorNode
     {
         private bool _hasRun;
         private RuntimeState _cachedResult;
-
-        protected override void OnStart(RuntimeBlackboard blackboard)
-        {
-            // Reset only happens via Abort, not re-entry within same tree lifetime
-        }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
@@ -29,9 +24,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             return state;
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnReset(RuntimeBlackboard blackboard)
         {
-            base.OnStop(blackboard);
+            base.OnReset(blackboard);
             _hasRun = false;
             _cachedResult = RuntimeState.NotEntered;
         }

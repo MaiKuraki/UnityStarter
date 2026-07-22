@@ -5,22 +5,41 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         private int[] _order;
         private int _currentIndex;
         private RuntimeDeterministicRandom _deterministicRandom;
+        private uint _seed;
+        private bool _shuffleOnStart = true;
 
         public RuntimeSelectorRandom(uint seed = 0u)
         {
             Seed = seed;
-            _deterministicRandom = new RuntimeDeterministicRandom(seed);
         }
 
-        public uint Seed { get; set; }
-        public bool ShuffleOnStart { get; set; } = true;
+        public uint Seed
+        {
+            get => _seed;
+            set
+            {
+                ThrowIfSetupFrozen();
+                _seed = value;
+                _deterministicRandom = new RuntimeDeterministicRandom(value);
+            }
+        }
+
+        public bool ShuffleOnStart
+        {
+            get => _shuffleOnStart;
+            set
+            {
+                ThrowIfSetupFrozen();
+                _shuffleOnStart = value;
+            }
+        }
         public override int CurrentIndex => _currentIndex;
 
         public override void OnAwake()
         {
             base.OnAwake();
 
-            RuntimeNode[] children = Children;
+            RuntimeNode[] children = ChildArray;
             int count = children != null ? children.Length : 0;
             _order = new int[count];
             for (int i = 0; i < count; i++)
@@ -40,7 +59,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            RuntimeNode[] children = Children;
+            RuntimeNode[] children = ChildArray;
             if (children == null || children.Length == 0)
             {
                 return RuntimeState.Failure;
@@ -66,9 +85,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             return RuntimeState.Failure;
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(RuntimeBlackboard blackboard, RuntimeNodeExitReason reason, System.Exception exception)
         {
-            RuntimeNode[] children = Children;
+            RuntimeNode[] children = ChildArray;
             if (children == null)
             {
                 return;

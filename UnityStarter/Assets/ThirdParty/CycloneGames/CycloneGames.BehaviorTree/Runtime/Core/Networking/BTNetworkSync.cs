@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using CycloneGames.BehaviorTree.Runtime.Core;
@@ -12,25 +13,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
     /// Three recommended sync patterns:
     ///
     /// 1. Server-Authoritative (combat AI, competitive):
-    ///    Server runs all BTs → captures snapshots → sends to clients.
-    ///    Client applies snapshots directly (no local BT execution).
-    ///    + Cheat-proof, deterministic    − Higher bandwidth, latency
+    ///    Server runs all trees, captures state, and sends it to clients.
+    ///    Clients validate matching managed execution state before synchronizing blackboard values.
+    ///    Strength: authoritative decisions. Cost: higher bandwidth and coordinated recovery.
     ///
     /// 2. Client-Predicted (responsive AI, open world):
     ///    Both server and client run BTs independently with same inputs.
-    ///    Server sends state hash each tick → client compares → full resync on mismatch.
-    ///    + Low bandwidth, responsive    − Requires deterministic execution
+    ///    Server sends a state hash; the client compares and starts coordinated recovery on mismatch.
+    ///    Strength: low bandwidth and responsiveness. Cost: deterministic inputs and scheduling.
     ///
     /// 3. Blackboard-Replicated (co-op, simple):
     ///    Only replicate blackboard key changes over network.
-    ///    Each side runs BT independently — same inputs produce same outputs.
-    ///    + Minimal bandwidth    − Eventually consistent, not instant
+    ///    Each side runs the tree independently from synchronized inputs.
+    ///    Strength: minimal bandwidth. Cost: eventual rather than immediate consistency.
     ///
     /// This class provides tools for all three patterns.
     /// </summary>
     public static class BTNetworkSync
     {
-        private const uint SNAPSHOT_MAGIC = 0x31535442u;
+        // "BTS2" in little-endian order. V2 hashes composite execution cursors.
+        private const uint SNAPSHOT_MAGIC = 0x32535442u;
 
         public readonly struct Limits
         {
@@ -75,7 +77,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
             using (var buffer = new BTStateSnapshotBuffer())
             {
-                BTStateSnapshot snapshot = CaptureSnapshot(tree, buffer);
+                BTStateSnapshot snapshot = CaptureSnapshot(tree, buffer, Limits.Default);
                 return CloneSnapshot(snapshot);
             }
         }
@@ -86,6 +88,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         /// </summary>
         public static BTStateSnapshot CaptureSnapshot(RuntimeBehaviorTree tree, BTStateSnapshotBuffer buffer)
         {
+            return CaptureSnapshot(tree, buffer, Limits.Default);
+        }
+
+        public static BTStateSnapshot CaptureSnapshot(
+            RuntimeBehaviorTree tree,
+            BTStateSnapshotBuffer buffer,
+            Limits limits)
+        {
             if (tree?.Root == null || buffer == null)
             {
                 return default;
@@ -93,22 +103,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
             var snapshot = new BTStateSnapshot();
 
-            int nodeCount = CountNodes(tree.Root);
+            buffer.CollectNodes(tree.Root, limits.MaxNodeCount);
+            int nodeCount = buffer.TraversalNodes.Count;
             buffer.EnsureNodeCapacity(nodeCount);
             snapshot.NodeStates = buffer.NodeStates;
             snapshot.NodeAuxInts = buffer.NodeAuxInts;
             snapshot.NodeCount = nodeCount;
-            int idx = 0;
-            CollectNodeStates(tree.Root, snapshot.NodeStates, snapshot.NodeAuxInts, ref idx);
+            for (int i = 0; i < nodeCount; i++)
+            {
+                RuntimeNode node = buffer.TraversalNodes[i];
+                snapshot.NodeStates[i] = (byte)node.State;
+                snapshot.NodeAuxInts[i] = node is RuntimeCompositeNode composite
+                    ? composite.CurrentIndex
+                    : 0;
+            }
 
             if (tree.Blackboard != null)
             {
                 buffer.BlackboardStream.SetLength(0);
-                tree.Blackboard.WriteTo(buffer.BlackboardWriter);
+                tree.Blackboard.WriteTo(
+                    buffer.BlackboardWriter,
+                    RuntimeBlackboardNetworkScope.Snapshot,
+                    limits.MaxBlackboardBytes);
                 buffer.BlackboardWriter.Flush();
                 snapshot.BlackboardData = buffer.BlackboardStream.GetBuffer();
                 snapshot.BlackboardDataLength = (int)buffer.BlackboardStream.Length;
-                snapshot.BlackboardHash = tree.Blackboard.ComputeHash();
+                snapshot.BlackboardHash = tree.Blackboard.ComputeHash(RuntimeBlackboardNetworkScope.Snapshot);
             }
 
             snapshot.TreeStateHash = ComputeTreeStateHash(snapshot);
@@ -119,13 +139,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         }
 
         /// <summary>
-        /// Apply a snapshot to restore a tree's execution state (client-side).
-        /// Restores blackboard data; node execution states are informational only
-        /// since managed nodes contain internal mutable state that can't be fully
-        /// restored without re-execution.
+        /// Applies the blackboard portion of a validated snapshot.
+        /// Managed node execution state is never restored by this method because
+        /// private node state cannot be reconstructed generically.
         ///
-        /// For full state restore, use the DOD system (FlatBehaviorTree + BTAgentState)
-        /// where all state is external and trivially serializable.
+        /// For full execution-state restore, use the DOD BTTickScheduler execution path,
+        /// where mutable agent state has an explicit native-memory owner.
         /// </summary>
         public static void ApplyBlackboardSnapshot(RuntimeBehaviorTree tree, BTStateSnapshot snapshot)
         {
@@ -148,7 +167,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 using (var ms = new MemoryStream(snapshot.BlackboardData, 0, blackboardLength, false))
                 using (var reader = new BinaryReader(ms))
                 {
-                    tree.Blackboard.ReadFrom(reader, limits.BlackboardLimits);
+                    tree.Blackboard.ReadFrom(
+                        reader,
+                        limits.BlackboardLimits,
+                        RuntimeBlackboardNetworkScope.Snapshot);
+                    if (ms.Position != ms.Length)
+                    {
+                        throw new InvalidDataException(
+                            "Behavior tree snapshot blackboard payload contains trailing bytes.");
+                    }
                 }
             }
         }
@@ -159,8 +186,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         /// </summary>
         public static bool CheckDesync(RuntimeBehaviorTree localTree, ulong serverHash)
         {
+            return CheckDesync(localTree, serverHash, RuntimeBlackboardNetworkScope.Networked);
+        }
+
+        public static bool CheckDesync(
+            RuntimeBehaviorTree localTree,
+            ulong serverHash,
+            RuntimeBlackboardNetworkScope blackboardScope)
+        {
             if (localTree?.Blackboard == null) return true;
-            return localTree.Blackboard.ComputeHash() != serverHash;
+            using (var buffer = new BTStateSnapshotBuffer())
+            {
+                return ComputeTreeStateHash(
+                    localTree,
+                    blackboardScope,
+                    buffer,
+                    Limits.Default) != serverHash;
+            }
         }
 
         /// <summary>
@@ -184,11 +226,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
             using (var writer = new BinaryWriter(output, Encoding.UTF8, true))
             {
-                WriteSnapshot(snapshot, writer);
+                WriteSnapshot(snapshot, writer, Limits.Default);
             }
         }
 
         public static ArraySegment<byte> SerializeSnapshot(BTStateSnapshot snapshot, BTStateSnapshotBuffer buffer)
+        {
+            return SerializeSnapshot(snapshot, buffer, Limits.Default);
+        }
+
+        public static ArraySegment<byte> SerializeSnapshot(
+            BTStateSnapshot snapshot,
+            BTStateSnapshotBuffer buffer,
+            Limits limits)
         {
             if (buffer == null)
             {
@@ -196,7 +246,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             buffer.SnapshotStream.SetLength(0);
-            WriteSnapshot(snapshot, buffer.SnapshotWriter);
+            WriteSnapshot(snapshot, buffer.SnapshotWriter, limits);
             buffer.SnapshotWriter.Flush();
             return new ArraySegment<byte>(buffer.SnapshotStream.GetBuffer(), 0, (int)buffer.SnapshotStream.Length);
         }
@@ -232,7 +282,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                     throw new InvalidDataException("Behavior tree snapshot payload has an invalid format marker.");
                 }
 
-                snapshot.IsValid = reader.ReadBoolean();
+                byte isValid = reader.ReadByte();
+                if (isValid > 1)
+                {
+                    throw new InvalidDataException("Behavior tree snapshot validity flag must be 0 or 1.");
+                }
+
+                snapshot.IsValid = isValid != 0;
                 snapshot.Timestamp = reader.ReadDouble();
                 snapshot.TreeStateHash = reader.ReadUInt64();
                 snapshot.BlackboardHash = reader.ReadUInt64();
@@ -249,9 +305,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                         $"Behavior tree snapshot node count {nodeCount} exceeds max node count {limits.MaxNodeCount}.");
                 }
 
+                long minimumRemainingBytes = checked(((long)nodeCount * 5L) + sizeof(int));
+                if (minimumRemainingBytes > ms.Length - ms.Position)
+                {
+                    throw new InvalidDataException(
+                        "Behavior tree snapshot node count cannot fit in the remaining payload bytes.");
+                }
+
                 if (nodeCount > 0)
                 {
                     snapshot.NodeStates = ReadExactBytes(reader, nodeCount);
+                    for (int i = 0; i < nodeCount; i++)
+                    {
+                        if (snapshot.NodeStates[i] > (byte)RuntimeState.Failure)
+                        {
+                            throw new InvalidDataException(
+                                $"Behavior tree snapshot node state {snapshot.NodeStates[i]} is invalid.");
+                        }
+                    }
+
                     snapshot.NodeAuxInts = new int[nodeCount];
                     for (int i = 0; i < nodeCount; i++)
                         snapshot.NodeAuxInts[i] = reader.ReadInt32();
@@ -268,6 +340,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 {
                     throw new InvalidDataException(
                         $"Behavior tree snapshot blackboard payload length {bbLen} exceeds max blackboard bytes {limits.MaxBlackboardBytes}.");
+                }
+
+                if (bbLen > ms.Length - ms.Position)
+                {
+                    throw new InvalidDataException(
+                        "Behavior tree snapshot blackboard length exceeds the remaining payload bytes.");
                 }
 
                 if (bbLen > 0)
@@ -296,55 +374,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             return bytes;
         }
 
-        // Node counting for snapshot sizing
-        private static int CountNodes(RuntimeNode node)
-        {
-            if (node == null) return 0;
-            int count = 1;
-            if (node is RuntimeCompositeNode composite && composite.Children != null)
-            {
-                for (int i = 0; i < composite.Children.Length; i++)
-                    count += CountNodes(composite.Children[i]);
-            }
-            else if (node is Nodes.Decorators.RuntimeDecoratorNode decorator)
-            {
-                count += CountNodes(decorator.Child);
-            }
-            else if (node is Nodes.RuntimeRootNode rootNode)
-            {
-                count += CountNodes(rootNode.Child);
-            }
-            return count;
-        }
-
-        private static void CollectNodeStates(RuntimeNode node, byte[] states, int[] auxInts, ref int idx)
-        {
-            if (node == null) return;
-            states[idx] = (byte)node.State;
-
-            // Store composite's current child index for state-aware sync (0GC via virtual property)
-            if (node is RuntimeCompositeNode compositeForIdx)
-            {
-                auxInts[idx] = compositeForIdx.CurrentIndex;
-            }
-            idx++;
-
-            if (node is RuntimeCompositeNode composite && composite.Children != null)
-            {
-                for (int i = 0; i < composite.Children.Length; i++)
-                    CollectNodeStates(composite.Children[i], states, auxInts, ref idx);
-            }
-            else if (node is Nodes.Decorators.RuntimeDecoratorNode decorator)
-            {
-                CollectNodeStates(decorator.Child, states, auxInts, ref idx);
-            }
-            else if (node is Nodes.RuntimeRootNode rootNode)
-            {
-                CollectNodeStates(rootNode.Child, states, auxInts, ref idx);
-            }
-        }
-
-        private static ulong ComputeTreeStateHash(BTStateSnapshot snapshot)
+        /// <summary>
+        /// Recomputes the deterministic tree-state hash carried by a snapshot.
+        /// Call this before accepting snapshot data from an untrusted boundary.
+        /// </summary>
+        public static ulong ComputeTreeStateHash(BTStateSnapshot snapshot)
         {
             const ulong FNV_OFFSET = Fnv1a64.OffsetBasis;
             const ulong FNV_PRIME = Fnv1a64.Prime;
@@ -354,21 +388,98 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             {
                 int nodeCount = GetNodeCount(snapshot);
                 for (int i = 0; i < nodeCount; i++)
+                {
+                    hash = (hash ^ 0xA1u) * FNV_PRIME;
                     hash = (hash ^ snapshot.NodeStates[i]) * FNV_PRIME;
+                    int auxiliaryState = snapshot.NodeAuxInts != null && i < snapshot.NodeAuxInts.Length
+                        ? snapshot.NodeAuxInts[i]
+                        : 0;
+                    hash = (hash ^ 0xA2u) * FNV_PRIME;
+                    hash = (hash ^ (uint)auxiliaryState) * FNV_PRIME;
+                }
+
             }
+            hash = (hash ^ 0xAFu) * FNV_PRIME;
             hash = (hash ^ snapshot.BlackboardHash) * FNV_PRIME;
             return hash;
         }
 
-        private static void WriteSnapshot(BTStateSnapshot snapshot, BinaryWriter writer)
+        /// <summary>
+        /// Computes the current node-state and blackboard hash without serializing a snapshot.
+        /// The caller selects the blackboard visibility scope explicitly.
+        /// </summary>
+        public static ulong ComputeTreeStateHash(
+            RuntimeBehaviorTree tree,
+            RuntimeBlackboardNetworkScope blackboardScope,
+            BTStateSnapshotBuffer buffer,
+            Limits limits)
         {
+            if (tree?.Root == null || tree.Blackboard == null)
+            {
+                return 0UL;
+            }
+
+            if (buffer == null)
+            {
+                throw new ArgumentNullException(nameof(buffer));
+            }
+
+            return ComputeTreeStateHash(
+                tree,
+                tree.Blackboard.ComputeHash(blackboardScope),
+                buffer,
+                limits);
+        }
+
+        public static ulong ComputeTreeStateHash(
+            RuntimeBehaviorTree tree,
+            ulong blackboardHash,
+            BTStateSnapshotBuffer buffer,
+            Limits limits)
+        {
+            if (tree?.Root == null)
+            {
+                return 0UL;
+            }
+
+            if (buffer == null)
+            {
+                throw new ArgumentNullException(nameof(buffer));
+            }
+
+            buffer.CollectNodes(tree.Root, limits.MaxNodeCount);
+            int nodeCount = buffer.TraversalNodes.Count;
+            buffer.EnsureNodeCapacity(nodeCount);
+            for (int i = 0; i < nodeCount; i++)
+            {
+                RuntimeNode node = buffer.TraversalNodes[i];
+                buffer.NodeStates[i] = (byte)node.State;
+                buffer.NodeAuxInts[i] = node is RuntimeCompositeNode composite
+                    ? composite.CurrentIndex
+                    : 0;
+            }
+
+            return ComputeTreeStateHash(new BTStateSnapshot
+            {
+                NodeStates = buffer.NodeStates,
+                NodeAuxInts = buffer.NodeAuxInts,
+                NodeCount = nodeCount,
+                BlackboardHash = blackboardHash
+            });
+        }
+
+        private static void WriteSnapshot(BTStateSnapshot snapshot, BinaryWriter writer, Limits limits)
+        {
+            int nodeCount = GetNodeCount(snapshot);
+            int blackboardLength = GetBlackboardDataLength(snapshot);
+            ValidateSnapshotWriteBudget(nodeCount, blackboardLength, limits);
+
             writer.Write(SNAPSHOT_MAGIC);
             writer.Write(snapshot.IsValid);
             writer.Write(snapshot.Timestamp);
             writer.Write(snapshot.TreeStateHash);
             writer.Write(snapshot.BlackboardHash);
 
-            int nodeCount = GetNodeCount(snapshot);
             writer.Write(nodeCount);
             if (nodeCount > 0)
             {
@@ -382,7 +493,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 }
             }
 
-            int blackboardLength = GetBlackboardDataLength(snapshot);
             writer.Write(blackboardLength);
             if (blackboardLength > 0)
             {
@@ -436,6 +546,88 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             int length = snapshot.BlackboardDataLength > 0 ? snapshot.BlackboardDataLength : snapshot.BlackboardData.Length;
             return Math.Min(length, snapshot.BlackboardData.Length);
         }
+
+        private static void ValidateSnapshotWriteBudget(int nodeCount, int blackboardLength, Limits limits)
+        {
+            if (nodeCount > limits.MaxNodeCount)
+            {
+                throw new InvalidDataException(
+                    $"Behavior tree snapshot node count {nodeCount} exceeds max node count {limits.MaxNodeCount}.");
+            }
+
+            if (blackboardLength > limits.MaxBlackboardBytes)
+            {
+                throw new InvalidDataException(
+                    $"Behavior tree snapshot blackboard size {blackboardLength} exceeds max blackboard bytes {limits.MaxBlackboardBytes}.");
+            }
+
+            long encodedSize = 37L + (nodeCount * 5L) + blackboardLength;
+            if (encodedSize > limits.MaxSnapshotBytes)
+            {
+                throw new InvalidDataException(
+                    $"Behavior tree snapshot size {encodedSize} exceeds max snapshot bytes {limits.MaxSnapshotBytes}.");
+            }
+        }
+
+        /// <summary>
+        /// Compares a snapshot's bounded execution-state projection against the live
+        /// managed tree without mutating either object. The projection contains every
+        /// node state and each composite node's public execution cursor.
+        /// </summary>
+        public static bool DoesExecutionStateMatch(
+            RuntimeBehaviorTree tree,
+            BTStateSnapshot snapshot,
+            BTStateSnapshotBuffer buffer,
+            Limits limits)
+        {
+            if (!snapshot.IsValid || tree?.Root == null || buffer == null)
+            {
+                return false;
+            }
+
+            int nodeCount = snapshot.NodeCount;
+            if (nodeCount < 0 || nodeCount > limits.MaxNodeCount)
+            {
+                return false;
+            }
+
+            if (nodeCount == 0)
+            {
+                if ((snapshot.NodeStates != null && snapshot.NodeStates.Length != 0) ||
+                    (snapshot.NodeAuxInts != null && snapshot.NodeAuxInts.Length != 0))
+                {
+                    return false;
+                }
+            }
+            else if (snapshot.NodeStates == null ||
+                     snapshot.NodeAuxInts == null ||
+                     snapshot.NodeStates.Length < nodeCount ||
+                     snapshot.NodeAuxInts.Length < nodeCount)
+            {
+                return false;
+            }
+
+            buffer.CollectNodes(tree.Root, limits.MaxNodeCount);
+            if (buffer.TraversalNodes.Count != nodeCount)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < nodeCount; i++)
+            {
+                RuntimeNode node = buffer.TraversalNodes[i];
+                int localAuxiliaryState = node is RuntimeCompositeNode composite
+                    ? composite.CurrentIndex
+                    : 0;
+                if (snapshot.NodeStates[i] != (byte)node.State ||
+                    snapshot.NodeAuxInts[i] != localAuxiliaryState)
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
     }
 
     /// <summary>
@@ -479,6 +671,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
         internal byte[] NodeStates = Array.Empty<byte>();
         internal int[] NodeAuxInts = Array.Empty<int>();
+        internal readonly List<RuntimeNode> TraversalNodes = new List<RuntimeNode>(64);
+        private readonly List<RuntimeNode> _traversalStack = new List<RuntimeNode>(64);
+        private bool _disposed;
 
         public BTStateSnapshotBuffer()
         {
@@ -488,6 +683,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
         internal void EnsureNodeCapacity(int nodeCount)
         {
+            EnsureNotDisposed();
             if (NodeStates.Length < nodeCount)
             {
                 NodeStates = new byte[nodeCount];
@@ -499,12 +695,95 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
         }
 
+        internal void CollectNodes(RuntimeNode root, int maxNodeCount)
+        {
+            EnsureNotDisposed();
+            if (maxNodeCount <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxNodeCount));
+            }
+
+            TraversalNodes.Clear();
+            _traversalStack.Clear();
+            if (root == null)
+            {
+                return;
+            }
+
+            _traversalStack.Add(root);
+            while (_traversalStack.Count > 0)
+            {
+                int last = _traversalStack.Count - 1;
+                RuntimeNode node = _traversalStack[last];
+                _traversalStack.RemoveAt(last);
+                if (node == null)
+                {
+                    throw new InvalidOperationException("Behavior tree snapshot traversal encountered a null node.");
+                }
+
+                if (TraversalNodes.Count >= maxNodeCount)
+                {
+                    throw new InvalidOperationException(
+                        $"Behavior tree snapshot exceeds the node limit of {maxNodeCount}.");
+                }
+
+                TraversalNodes.Add(node);
+                if (node is RuntimeCompositeNode composite)
+                {
+                    RuntimeNode[] children = composite.ChildArray;
+                    if (children.Length > maxNodeCount - TraversalNodes.Count - _traversalStack.Count)
+                    {
+                        throw new InvalidOperationException(
+                            $"Behavior tree snapshot exceeds the node limit of {maxNodeCount}.");
+                    }
+
+                    for (int i = children.Length - 1; i >= 0; i--)
+                    {
+                        _traversalStack.Add(children[i]);
+                    }
+                }
+                else if (node is Nodes.Decorators.RuntimeDecoratorNode decorator && decorator.Child != null)
+                {
+                    EnsureTraversalCapacity(maxNodeCount);
+                    _traversalStack.Add(decorator.Child);
+                }
+                else if (node is Nodes.RuntimeRootNode rootNode && rootNode.Child != null)
+                {
+                    EnsureTraversalCapacity(maxNodeCount);
+                    _traversalStack.Add(rootNode.Child);
+                }
+            }
+        }
+
+        private void EnsureTraversalCapacity(int maxNodeCount)
+        {
+            if (TraversalNodes.Count + _traversalStack.Count >= maxNodeCount)
+            {
+                throw new InvalidOperationException(
+                    $"Behavior tree snapshot exceeds the node limit of {maxNodeCount}.");
+            }
+        }
+
         public void Dispose()
         {
+            if (_disposed)
+            {
+                return;
+            }
+
+            _disposed = true;
             BlackboardWriter.Dispose();
             SnapshotWriter.Dispose();
             BlackboardStream.Dispose();
             SnapshotStream.Dispose();
+        }
+
+        private void EnsureNotDisposed()
+        {
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(BTStateSnapshotBuffer));
+            }
         }
     }
 }

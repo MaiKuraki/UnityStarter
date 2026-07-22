@@ -1,0 +1,8 @@
+# cgp-record: 1
+# content-version: 3
+# codec-id: test-yaml/1
+# transform-id: identity/1
+# payload-bytes: 10
+# xxh64: 8C3CEB0DE230D196
+---
+value: 42

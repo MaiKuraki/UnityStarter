@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using CycloneGames.Networking;
 
 namespace CycloneGames.BehaviorTree.Networking
@@ -30,6 +31,8 @@ namespace CycloneGames.BehaviorTree.Networking
     {
         private readonly Dictionary<string, int> _intSettings;
         private readonly Dictionary<string, string> _stringSettings;
+        private readonly ReadOnlyDictionary<string, int> _readOnlyIntSettings;
+        private readonly ReadOnlyDictionary<string, string> _readOnlyStringSettings;
 
         internal BehaviorTreeNetworkProfile(BehaviorTreeNetworkProfileBuilder builder)
         {
@@ -57,6 +60,8 @@ namespace CycloneGames.BehaviorTree.Networking
 
             _intSettings = new Dictionary<string, int>(builder.IntSettings, StringComparer.Ordinal);
             _stringSettings = new Dictionary<string, string>(builder.StringSettings, StringComparer.Ordinal);
+            _readOnlyIntSettings = new ReadOnlyDictionary<string, int>(_intSettings);
+            _readOnlyStringSettings = new ReadOnlyDictionary<string, string>(_stringSettings);
         }
 
         public string ProfileId { get; }
@@ -76,8 +81,8 @@ namespace CycloneGames.BehaviorTree.Networking
         public bool AllowClientAuthoritativeBlackboardWrites { get; }
         public bool ForceFullSnapshotOnAuthorityTransfer { get; }
 
-        public IReadOnlyDictionary<string, int> IntSettings => _intSettings;
-        public IReadOnlyDictionary<string, string> StringSettings => _stringSettings;
+        public IReadOnlyDictionary<string, int> IntSettings => _readOnlyIntSettings;
+        public IReadOnlyDictionary<string, string> StringSettings => _readOnlyStringSettings;
 
         public bool HasFeature(BehaviorTreeNetworkFeatureFlags feature)
         {

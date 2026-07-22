@@ -12,6 +12,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
         [Tooltip("-1 = all children must fail")]
         [SerializeField] private int _failureThreshold = 1;
 
+        public int SuccessThreshold => _successThreshold;
+        public int FailureThreshold => _failureThreshold;
+
         public override BTNode Clone()
         {
             var clone = (ParallelAllNode)base.Clone();

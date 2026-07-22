@@ -14,7 +14,7 @@ AssetManagement ships three providers (Resources, Addressables, YooAsset) and tw
 
 ## Overview
 
-The module exposes each provider as an `IAssetModule` with a distinct capability surface. Addressables and YooAsset cannot be active through these adapters simultaneously — the framework AssetBundle runtime guard establishes one provider authority until coexistence, shutdown ordering, and memory behavior are qualified as a complete product configuration.
+Each provider is exposed as an `IAssetModule` with a distinct capability surface. Addressables and YooAsset cannot be active through these adapters simultaneously — the framework AssetBundle runtime guard establishes one provider authority until coexistence, shutdown ordering, and memory behavior are qualified as a complete product configuration.
 
 ### Key Features
 
@@ -42,12 +42,12 @@ For example, UIFramework's dynamic-atlas sample requires `IAssetSyncOperations`,
 
 ### Optional assembly activation
 
-Optional sources compile only when: the dependency is installed in `UnityStarter/Packages/manifest.json` and resolved in `packages-lock.json`, its version satisfies the provider asmdef range, the composition asmdef references the provider/integration assembly (`autoReferenced: false`), and assembly-local conditions are satisfied.
+An optional assembly becomes eligible for compilation when its dependency is installed in `UnityStarter/Packages/manifest.json` and resolved in `packages-lock.json`, its version satisfies the asmdef `versionDefines` range, and every `defineConstraints` entry is satisfied. These assemblies use `autoReferenced: false`, so a consumer asmdef must reference the selected provider or integration assembly; that reference does not control whether the optional assembly itself is compiled.
 
 | Assembly | Supported version condition |
 | --- | --- |
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | `com.unity.addressables` `[2.11.1,2.11.2)` |
-| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | `com.tuyoogame.yooasset` `[3.0.4,3.0.5)` |
+| `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | installed `jp.hadashikick.vcontainer` |
 
@@ -69,7 +69,7 @@ The property drawer stores an Editor GUID to display the authoring object and ex
 
 ### Scene provider contract
 
-Addressables and YooAsset expose only the asynchronous `IAssetSceneLoader` capability. Unity scene integration has frame-bound asynchronous lifecycle work, so the provider-neutral API does not advertise same-frame completion. The advanced overload carries Unity `LoadSceneParameters` and supports `LocalPhysicsMode.None`, `Physics2D`, `Physics3D`, and the valid `Physics2D | Physics3D` combination. The loaded scene owns those local physics worlds and destroys them during unload.
+Addressables and YooAsset expose only the asynchronous `IAssetSceneLoader` capability. The advanced overload carries Unity `LoadSceneParameters` and supports `LocalPhysicsMode.None`, `Physics2D`, `Physics3D`, and the valid `Physics2D | Physics3D` combination. The loaded scene owns those local physics worlds and destroys them during unload.
 
 Each package owns an active-scene registry and a private origin token. Active unload validates the exact handle and registry entry. After a successful unload, `LoadSceneMode.Single` replacement, or external `SceneManager` unload, a repeated unload through the same package generation is a terminal no-op; another package or a recreated generation is rejected.
 
@@ -155,7 +155,7 @@ Pending Addressables operations reject `WaitForAsyncComplete` on every platform.
 
 ### YooAsset composition
 
-The YooAsset provider targets `com.tuyoogame.yooasset` `[3.0.4,3.0.5)`. `YooAssetModule` exclusively owns the process-global Yoo runtime.
+The YooAsset provider targets stable `com.tuyoogame.yooasset` releases in `[3.0.5,4.0.0)`. The asmdef range is the compilation envelope; SemVer prereleases sort before their final release, so a prerelease inside that envelope can enter compilation, but the activation test rejects it as unsupported. `YooAssetModule` exclusively owns the process-global Yoo runtime. Each client instance that requires an isolated writable cache must pass a distinct explicit `PackageRoot` through its file-system parameters.
 
 ```csharp
 using YooAsset;
@@ -270,7 +270,7 @@ Do not add a capability to `IAssetPackage` unless all providers can implement th
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| Provider assembly not compiling | Dependency missing or version out of range | Install and lock the exact SDK version; confirm `versionDefines` and reference the assembly from the composition asmdef |
+| Provider assembly not compiling | Dependency missing or version out of range | Install and lock a supported stable SDK version; confirm `versionDefines` and reference the assembly from the composition asmdef |
 | Addressables `ProviderOptions` rejected | Non-null options passed | `ProviderOptions` must be null for Addressables |
 | YooAsset package initialization fails | Wrong `InitializePackageOptions` subtype | Construct the exact subtype for the selected play mode and pass it through `AssetPackageInitOptions.ProviderOptions` |
 | Addressables catalog update split authority | Direct `Addressables.UpdateCatalogs` call | Route every catalog mutation through the owning package adapter |

@@ -57,10 +57,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private bool _isPaused = false;
         private bool _isStopped = false;
+        private bool _isRegistered;
+        private bool _stopEventRaised;
+        private BTTickManagerComponent _registeredTickManager;
+        private BTPriorityTickManagerComponent _registeredPriorityManager;
         private BehaviorTree _nextTree;
         private RuntimeBTContext _context;
 
         private RuntimeBehaviorTree _runtimeTree;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            _activeRunnersList.Clear();
+            _activeRunnersSet.Clear();
+        }
 
         private void OnEnable()
         {
@@ -68,13 +79,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             {
                 _activeRunnersList.Add(this);
             }
+
+            RegisterWithManager();
         }
 
         private void OnDisable()
         {
+            UnregisterFromManager();
             if (_activeRunnersSet.Remove(this))
             {
-                // Swap-remove: O(1) instead of O(n) List.Remove
+                // Preserve an unordered dense list after the O(n) lookup.
                 int idx = _activeRunnersList.IndexOf(this);
                 if (idx >= 0)
                 {
@@ -86,7 +100,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
         }
 
-        private void Awake()
+        protected virtual void Awake()
         {
             if (behaviorTree == null)
             {
@@ -95,54 +109,137 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
             if (!_startOnAwake) return;
 
-            InitializeRuntimeTree();
+            if (!InitializeRuntimeTree())
+            {
+                _isPaused = true;
+                _isStopped = true;
+                return;
+            }
+
             RegisterWithManager();
         }
 
         private void RegisterWithManager()
         {
-            if (_runtimeTree == null) return;
+            if (_isRegistered)
+            {
+                bool registrationIsAlive =
+                    (_tickMode == TickMode.Managed && _registeredTickManager != null) ||
+                    (_tickMode == TickMode.PriorityManaged && _registeredPriorityManager != null);
+                if (registrationIsAlive)
+                {
+                    return;
+                }
+
+                UnregisterFromManager();
+            }
+
+            if (_runtimeTree == null
+                || _runtimeTree.IsStopped
+                || _isPaused
+                || _isStopped
+                || !isActiveAndEnabled)
+            {
+                return;
+            }
 
             if (_tickMode == TickMode.Managed)
             {
-                BTTickManagerComponent.Instance.Register(_runtimeTree);
+                BTTickManagerComponent manager = BTTickManagerComponent.Instance;
+                if (manager != null)
+                {
+                    manager.Register(_runtimeTree);
+                    _registeredTickManager = manager;
+                    _isRegistered = true;
+                }
             }
             else if (_tickMode == TickMode.PriorityManaged)
             {
-                BTPriorityTickManagerComponent.Instance.Register(_runtimeTree, transform);
+                BTPriorityTickManagerComponent manager = BTPriorityTickManagerComponent.Instance;
+                if (manager != null)
+                {
+                    manager.Register(_runtimeTree, transform);
+                    _registeredPriorityManager = manager;
+                    _isRegistered = true;
+                }
             }
         }
 
         private void UnregisterFromManager()
         {
-            if (_runtimeTree == null) return;
+            RuntimeBehaviorTree tree = _runtimeTree;
+            if (tree != null)
+            {
+                if (_registeredTickManager != null)
+                {
+                    _registeredTickManager.Unregister(tree);
+                }
 
-            if (_tickMode == TickMode.Managed && BTTickManagerComponent.HasInstance)
-            {
-                BTTickManagerComponent.Instance?.Unregister(_runtimeTree);
+                if (_registeredPriorityManager != null)
+                {
+                    _registeredPriorityManager.Unregister(tree);
+                }
             }
-            else if (_tickMode == TickMode.PriorityManaged && BTPriorityTickManagerComponent.HasInstance)
-            {
-                BTPriorityTickManagerComponent.Instance?.Unregister(_runtimeTree);
-            }
+
+            _registeredTickManager = null;
+            _registeredPriorityManager = null;
+            _isRegistered = false;
         }
 
-        private void InitializeRuntimeTree()
+        private bool InitializeRuntimeTree(bool initializeStopped = false)
         {
-            if (behaviorTree == null) return;
+            if (behaviorTree == null) return false;
 
             _context ??= new RuntimeBTContext();
-            _context.OwnerGameObject = gameObject;
+            _context.Owner = gameObject;
 
             // Compile to Pure C# Runtime Tree
-            _runtimeTree = behaviorTree.Compile(_context);
+            RuntimeBehaviorTree compiledTree = behaviorTree.Compile(_context);
+            if (compiledTree == null)
+            {
+                Debug.LogError($"[BTRunnerComponent] Behavior tree compilation returned null on {gameObject.name}.", this);
+                return false;
+            }
 
-            ApplyInitialBlackboardObjects();
+            try
+            {
+                if (initializeStopped && !compiledTree.IsStopped)
+                {
+                    compiledTree.Stop();
+                }
+
+                if (initializeStopped)
+                {
+                    compiledTree.Blackboard.Clear();
+                }
+
+                ApplyInitialBlackboardObjects(compiledTree);
+                compiledTree.Terminated += HandleTreeTerminated;
+                _runtimeTree = compiledTree;
+                _stopEventRaised = false;
+                return true;
+            }
+            catch (Exception initializationException)
+            {
+                _isPaused = true;
+                _isStopped = true;
+                try
+                {
+                    compiledTree.Dispose();
+                }
+                catch (Exception cleanupException)
+                {
+                    throw new AggregateException(initializationException, cleanupException);
+                }
+
+                throw;
+            }
         }
 
-        private void ApplyInitialBlackboardObjects()
+        private void ApplyInitialBlackboardObjects(RuntimeBehaviorTree tree = null)
         {
-            if (_runtimeTree == null || _runtimeTree.Blackboard == null) return;
+            tree ??= _runtimeTree;
+            if (tree == null || tree.Blackboard == null) return;
 
             if (_initialObjects != null)
             {
@@ -150,22 +247,29 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 {
                     var data = _initialObjects[i];
                     if (data == null || string.IsNullOrEmpty(data.Key)) continue;
-                    _runtimeTree.Blackboard.SetObject(data.Key, data.Value);
+                    tree.Blackboard.SetObject(data.Key, data.Value);
                 }
             }
         }
 
         private void Update()
         {
+            if (_tickMode == TickMode.Managed || _tickMode == TickMode.PriorityManaged)
+            {
+                RegisterWithManager();
+                return;
+            }
+
+            if (_isRegistered)
+            {
+                UnregisterFromManager();
+            }
+
             if (_tickMode != TickMode.Self) return;
             if (_runtimeTree == null) return;
-            if (_isPaused) return;
+            if (_isPaused || _isStopped) return;
 
-            var lastState = _runtimeTree.Tick();
-            if (lastState == RuntimeState.Failure || lastState == RuntimeState.Success)
-            {
-                Stop();
-            }
+            _runtimeTree.Tick();
         }
 
         /// <summary>
@@ -174,29 +278,24 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         public RuntimeState ManualTick()
         {
             if (_runtimeTree == null) return RuntimeState.NotEntered;
-            if (_isPaused) return _runtimeTree.State;
+            if (_isPaused || _isStopped) return _runtimeTree.State;
 
-            var state = _runtimeTree.Tick();
-            if (state == RuntimeState.Failure || state == RuntimeState.Success)
-            {
-                Stop();
-            }
-            return state;
+            return _runtimeTree.Tick();
         }
 
         private void LateUpdate()
         {
             if (_nextTree == null) return;
             UnregisterFromManager();
-            if (_runtimeTree != null)
-            {
-                _runtimeTree.Dispose();
-            }
+            DisposeRuntimeTree();
             behaviorTree = _nextTree;
-            InitializeRuntimeTree();
-            RegisterWithManager();
-            _isPaused = false;
-            _isStopped = false;
+            bool initialized = InitializeRuntimeTree();
+            _isPaused = !initialized;
+            _isStopped = !initialized;
+            if (initialized)
+            {
+                RegisterWithManager();
+            }
             _nextTree = null;
         }
 
@@ -214,10 +313,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 }
             }
             UnregisterFromManager();
-            if (_runtimeTree != null)
-            {
-                _runtimeTree.Dispose();
-            }
+            DisposeRuntimeTree();
         }
 
         public void BTSendMessage(string message)
@@ -257,27 +353,35 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void SetContext(RuntimeBTContext context)
         {
-            _context = context;
-            if (_context != null)
-            {
-                _context.OwnerGameObject = gameObject;
-            }
+            EnsureContextCanChange();
+            _context = context ?? new RuntimeBTContext();
+            _context.Owner = gameObject;
 
             if (_runtimeTree != null && _runtimeTree.Blackboard != null)
             {
-                _runtimeTree.Blackboard.Context = _context;
+                _runtimeTree.SetContext(_context);
             }
         }
 
         public void SetServiceResolver(IRuntimeBTServiceResolver resolver)
         {
+            EnsureContextCanChange();
             _context ??= new RuntimeBTContext();
-            _context.OwnerGameObject = gameObject;
+            _context.Owner = gameObject;
             _context.ServiceResolver = resolver;
 
             if (_runtimeTree != null && _runtimeTree.Blackboard != null)
             {
-                _runtimeTree.Blackboard.Context = _context;
+                _runtimeTree.SetContext(_context);
+            }
+        }
+
+        private void EnsureContextCanChange()
+        {
+            if (_runtimeTree?.Root != null && _runtimeTree.Root.IsStarted)
+            {
+                throw new InvalidOperationException(
+                    "Behavior tree context cannot change while the tree has an active node stack.");
             }
         }
 
@@ -300,7 +404,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (_runtimeTree == null) return;
             if (_tickMode == TickMode.PriorityManaged)
             {
-                BTPriorityTickManagerComponent.Instance.BoostPriority(_runtimeTree, duration);
+                BTPriorityTickManagerComponent manager = _registeredPriorityManager;
+                if (manager == null)
+                {
+                    manager = BTPriorityTickManagerComponent.Instance;
+                }
+
+                manager?.BoostPriority(_runtimeTree, duration);
             }
         }
 
@@ -312,43 +422,52 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void Stop()
         {
-            if (_runtimeTree != null)
+            if (_runtimeTree == null || _runtimeTree.IsStopped)
             {
-                _runtimeTree.Stop();
+                return;
             }
-            _isPaused = true;
-            _isStopped = true;
-            OnTreeStopped?.Invoke();
+
+            _runtimeTree.Stop();
         }
 
         public void Play()
         {
-            if (_runtimeTree == null || _isStopped)
+            bool preparedForPlay = false;
+            if (_runtimeTree == null)
             {
-                UnregisterFromManager();
-                if (_runtimeTree != null)
+                if (!InitializeRuntimeTree(initializeStopped: true))
                 {
-                    _runtimeTree.Dispose();
+                    _isPaused = true;
+                    _isStopped = true;
+                    return;
                 }
-                InitializeRuntimeTree();
-                RegisterWithManager();
+
+                preparedForPlay = true;
             }
 
-            if (_runtimeTree == null) return;
-
-            if (!_isStopped)
+            if (!preparedForPlay)
             {
-                _runtimeTree.Stop();
+                if (!_runtimeTree.IsStopped)
+                {
+                    _runtimeTree.Stop();
+                }
+
+                _runtimeTree.Blackboard.Clear();
+                ApplyInitialBlackboardObjects();
             }
+
+            _stopEventRaised = false;
             _runtimeTree.Play();
-            ApplyInitialBlackboardObjects();
             _isPaused = false;
             _isStopped = false;
+            RegisterWithManager();
         }
 
         public void Pause()
         {
+            if (_isPaused || _isStopped) return;
             _isPaused = true;
+            UnregisterFromManager();
         }
 
         public void Resume()
@@ -359,6 +478,35 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
             _isPaused = false;
+            RegisterWithManager();
+        }
+
+        private void HandleTreeTerminated(RuntimeState state)
+        {
+            _isPaused = true;
+            _isStopped = true;
+            UnregisterFromManager();
+
+            if (_stopEventRaised)
+            {
+                return;
+            }
+
+            _stopEventRaised = true;
+            OnTreeStopped?.Invoke();
+        }
+
+        private void DisposeRuntimeTree()
+        {
+            if (_runtimeTree == null)
+            {
+                return;
+            }
+
+            RuntimeBehaviorTree tree = _runtimeTree;
+            _runtimeTree = null;
+            tree.Terminated -= HandleTreeTerminated;
+            tree.Dispose();
         }
 
         protected virtual void OnValidate()

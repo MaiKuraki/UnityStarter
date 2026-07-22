@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.persistence.systemio",
+  "version": "0.1.0",
+  "displayName": "CycloneGames.Persistence.SystemIO",
+  "description": "System.IO storage and Unity persistent-data-path composition for CycloneGames.Persistence.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.persistence": "0.1.0",
+    "com.cyclone-games.io": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Persistence",
+    "System.IO",
+    "Storage",
+    "Atomic"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

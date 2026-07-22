@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-A behavior tree framework for Unity with ScriptableObject authoring, code-first runtime construction, managed scheduling, optional Burst/DOD execution, transport-neutral synchronization, and GraphView tooling.
+CycloneGames.BehaviorTree is a Unity behavior-tree module with ScriptableObject authoring, managed runtime execution, bounded scheduling, graph tooling, and an opt-in Burst/Jobs execution assembly.
 
 ## Table of Contents
 
@@ -18,113 +18,100 @@ A behavior tree framework for Unity with ScriptableObject authoring, code-first 
 
 ## Overview
 
-A behavior tree answers one question: given the current world state in a blackboard, what should this agent do next? CycloneGames.BehaviorTree makes that decision through composable nodes — sequences, selectors, decorators, and leaf actions — that tick every frame until they succeed or fail.
+The module provides:
 
-The framework separates authoring from execution. ScriptableObject assets are designed in a GraphView editor; `Compile()` produces pure C# runtime nodes. The runtime path supports self-tick, centrally budgeted managed tick, priority/LOD scheduling, and an optional Burst/DOD parallel tier.
+- ScriptableObject behavior-tree assets and a GraphView editor.
+- A managed runtime graph of `RuntimeNode` objects and `RuntimeBlackboard` state.
+- A code-first `RuntimeBehaviorTreeBuilder` path that does not require an authored tree asset.
+- Explicit node activation, completion, abort, fault, reset, and disposal semantics.
+- Self, Manual, Managed, and PriorityManaged tick ownership models.
+- Typed blackboard values, schemas, snapshots, deltas, change stamps, and observers.
+- A bounded authoring compiler with explicit, reflection-free built-in emitters.
+- An opt-in, restricted DOD assembly for homogeneous flat trees executed by Burst jobs.
+- Editor and PlayMode benchmark tooling isolated in an opt-in benchmark assembly.
 
-### Key Features
+### Key features
 
-| Category | Highlights |
-| --- | --- |
-| **Architecture** | Dual-layer (SO authoring → pure C# runtime) plus `RuntimeBehaviorTreeBuilder` for code-first trees |
-| **Node Library** | Sequence, Selector, SelectorRandom, Parallel, Reactive, Utility AI, Service, SubTree, ProbabilityBranch, and more |
-| **Scheduling** | Self Tick, managed round-robin with budget cap, priority/LOD scheduling, optional Burst `IJobParallelFor` |
-| **Networking** | Bounded snapshots, state hashes, blackboard deltas; transport and authority remain external |
-| **Blackboard** | Typed dictionaries, int-key hashing, parent chain, observer notifications, stamps, opt-in locking |
-| **Time API** | `double`-precision runtime time with `IRuntimeBTTimeProvider` and Unity fallback |
-| **Editor** | GraphView with animated flowing-dot edges, state coloring, progress bars, runtime visualization |
-| **DI/IoC** | `IRuntimeBTServiceResolver` compatible with VContainer, Zenject, or custom containers |
-
-### Dependencies
-
-- Unity 2022.3 LTS+
-- `com.cyclone-games.hash` (required) — deterministic blackboard and state hashing
-- Burst + Collections + Mathematics (optional) — for DOD execution assembly
+- **ScriptableObject authoring** with Undo-aware GraphView editor, validation, and repair commands.
+- **Code-first API** via `RuntimeBehaviorTreeBuilder` with compositor, decorator, and leaf fluent methods.
+- **Rich node library** — 15+ compositors, 15+ decorators, condition strategies, and action boundaries.
+- **Typed blackboard** — `int`, `float`, `bool`, `Vector3`, `long`, `Long2`, `Long3`, `object`; FNV-1a string keys.
+- **Bounded compilation** — iterative validation, exact emitter dispatch, no private-field reflection.
+- **Managed scheduling** — round-robin and 8-bucket priority/LOD tick managers.
+- **Opt-in DOD path** — Burst/Jobs flat-tree scheduler with `BTAgentHandle` generations.
+- **Runtime `object` owner** — `GetOwner<T>()` contract without Unity type exposure in core APIs.
 
 ## Architecture
 
-### Dual-Layer Design
-
-```mermaid
-flowchart TB
-    subgraph EditorTime["Editor Time"]
-        SO["ScriptableObject Layer<br>BTNode · CompositeNode · DecoratorNode"]
-        SOFeature["• Visual GraphView editor<br>• Serialized .asset files<br>• Undo/Redo support"]
-    end
-
-    subgraph RuntimeExec["Runtime"]
-        RT["Managed Runtime Layer<br>RuntimeNode · RuntimeBlackboard"]
-        RTFeature["• Typed hot-path data<br>• Explicit lifecycle<br>• Optional Burst DOD tier"]
-    end
-
-    SO -->|"BehaviorTree.Compile()"| RT
-
-    style EditorTime fill:#2d2d3d,stroke:#666
-    style RuntimeExec fill:#1a3a1a,stroke:#4a4
-```
-
-| Aspect | ScriptableObject Layer | Runtime Layer |
-| --- | --- | --- |
-| **Purpose** | Authoring, serialization, editor UI | Game execution |
-| **Allocation policy** | Editor authoring may allocate | Reuse runtime state; profile hot paths |
-| **Unity Dependency** | Required (ScriptableObject, SerializeField) | Small bridge (`Animator.StringToHash`, `Vector3`, Time fallback) |
-| **When** | Design time + Compile() call | Every frame |
-
-### Execution Models
-
 ```mermaid
 flowchart LR
-    subgraph Tier1["Tier 1: Self Tick"]
-        A1["Component.Update()<br>independent ownership"]
-    end
-    subgraph Tier2["Tier 2: Managed Tick"]
-        A2["BTTickManager<br>Round-robin + budget"]
-    end
-    subgraph Tier3["Tier 3: Priority Managed"]
-        A3["BTPriorityTickManager<br>LOD + priority buckets"]
-    end
-    subgraph Tier4["Tier 4: Burst DOD"]
-        A4["BTTickJob<br>IJobParallelFor<br>NativeArray SoA"]
-    end
-    Tier1 --> Tier2 --> Tier3 --> Tier4
+    Asset["BehaviorTree asset\nBTNode sub-assets"] --> Compiler["Bounded validator\nexplicit emitters"]
+    Builder["RuntimeBehaviorTreeBuilder"] --> Runtime["RuntimeBehaviorTree"]
+    Compiler --> Runtime
+    Runtime --> Root["Owned RuntimeNode graph"]
+    Runtime --> Blackboard["Owned RuntimeBlackboard"]
+    Runner["BTRunnerComponent"] --> Runtime
+    Manager["Tick manager"] --> Runtime
+    Runtime -. "explicit context" .-> Services["Owner + service resolver"]
 ```
+
+### Assemblies
+
+| Assembly | Default reference | Responsibility |
+| --- | --- | --- |
+| `CycloneGames.BehaviorTree.Runtime` | Yes | Authoring assets, managed runtime, blackboard, compiler, runner, and managed schedulers |
+| `CycloneGames.BehaviorTree.Editor` | Editor only | Graph editor, inspectors, validation, and benchmark window |
+| `CycloneGames.BehaviorTree.Benchmarks` | No | Benchmark models, sessions, scene runners, and export utilities |
+| `CycloneGames.BehaviorTree.Runtime.DOD` | No | Burst/Jobs flat-tree scheduler and NativeArray state |
+| `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | No | Explicit random-provider bridge between the two local modules |
+
+The runtime assembly requires `com.cyclone-games.hash`. The DOD assembly is enabled only when Burst, Collections, and Mathematics are present, and a consumer asmdef must reference `CycloneGames.BehaviorTree.Runtime.DOD` explicitly. The DeterministicMath bridge is `autoReferenced: false` and has direct references to both local assemblies.
+
+### Ownership rules
+
+- One `RuntimeBehaviorTree` owns exactly one runtime node graph and one blackboard.
+- A runtime node graph must be acyclic, each node must have one parent and one owning tree.
+- The tree owner calls lifecycle methods on the thread that constructed the tree.
+- `RuntimeBehaviorTree.Dispose()` aborts active work, disposes node-owned resources, disposes the blackboard, and removes termination subscribers.
+- An authored `BehaviorTree` asset can create multiple independent runtime instances.
+- `BehaviorTree.Root`, `BehaviorTree.Nodes`, and each authored node link are serialized authoring data. Write them only in Edit Mode through Undo-aware tooling; Play Mode consumes a compiled runtime instance.
+- `BTRunnerComponent` owns and disposes the runtime instance that it compiles.
+- `BTTickScheduler` owns its NativeArrays but borrows its `FlatBehaviorTree`; the caller keeps the flat tree alive until the scheduler is disposed.
 
 ## Quick Start
 
-### 5-Minute Demo
+### Asset-authored tree
 
-**Step 1:** Create a Behavior Tree asset — Project window → **Create → CycloneGames → AI → BehaviorTree**. Name it `PatrolTree`.
+1. In the Project window, choose `Create > CycloneGames > AI > BehaviorTree`.
+2. Double-click the asset, or open `Tools > CycloneGames > Behavior Tree > Behavior Tree Editor`.
+3. If the asset has no root, click `Repair Root`.
+4. In the graph context menu, create a `SequencerNode`, one or more actions such as `DebugLogNode` or `WaitNode`, and connect them below the root.
+5. Click `Validate`. Resolve all diagnostics, then click `Save`.
+6. Add `BTRunnerComponent` to a GameObject, assign the tree, choose a tick mode, and enable `Start On Awake`.
+7. Enter Play Mode. Select the runner or asset to view runtime state in the graph and runner Inspector.
 
-**Step 2:** Open the editor — double-click the asset or go to **Tools → CycloneGames → Behavior Tree Editor**.
-
-**Step 3:** Build a patrol tree:
+A minimal graph is:
 
 ```mermaid
 flowchart TB
-    Root["Root"] --> Seq["Sequence"]
-    Seq --> Log1["DebugLog<br>'Starting patrol'"]
-    Seq --> Wait1["Wait<br>2 seconds"]
-    Seq --> Log2["DebugLog<br>'Patrol point reached'"]
-    Seq --> Wait2["Wait<br>1 second"]
+    Root["Root"] --> Sequence["Sequencer"]
+    Sequence --> Log["DebugLog"]
+    Sequence --> Wait["Wait"]
 ```
 
-Right-click to add: CompositeNode → Base → SequencerNode, ActionNode → Base → DebugLogNode, ActionNode → Base → WaitNode.
+The runner compiles a fresh runtime instance. The asset remains authoring data; node execution state and blackboard state live in that runtime instance.
 
-**Step 4:** Attach to a GameObject — Add Component → BTRunnerComponent, drag the asset in, check **Start On Awake**, press Play.
-
-**Step 5:** Observe — Green glow = Running, green border = Success, red border = Failure, flowing dots on edges, progress bar on WaitNode.
-
-### Code-First Runtime Trees
+### Code-first tree
 
 ```csharp
 using CycloneGames.BehaviorTree.Runtime.Core;
 
-static readonly int HasTargetKey = Animator.StringToHash("HasTarget");
-static readonly int AttackCountKey = Animator.StringToHash("AttackCount");
+private static readonly int HasTargetKey =
+    RuntimeBlackboard.DefaultStringHashFunc("HasTarget");
+private static readonly int AttackCountKey =
+    RuntimeBlackboard.DefaultStringHashFunc("AttackCount");
 
-RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder(ownerGameObject)
-    .WithServiceResolver(new RuntimeBTContext.ServiceProviderResolver(serviceProvider))
-    .WithTickInterval(1)
+RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
     .Selector()
         .Sequence()
             .Condition(bb => bb.GetBool(HasTargetKey), "HasTarget")
@@ -140,11 +127,30 @@ RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder(ownerGameObject)
     .End()
     .Build();
 
-tree.Play();
+tree.Terminated += state => HandleTreeTermination(state);
 tree.Tick();
+tree.Dispose();
 ```
 
-For reusable gameplay rules, use command and strategy objects:
+The builder can receive an existing blackboard, a `RuntimeBlackboardSchema`, a `RuntimeBTContext`, or an `IRuntimeBTServiceResolver`. It may be used only once; `Build()` closes any open builder scopes and rejects a missing root child.
+
+`RuntimeBTContext.Owner` and `WithOwner(...)` accept any reference-type owner through `object`. Core consumers retrieve it through `GetOwner<T>()`:
+
+```csharp
+public sealed class AgentRuntimeOwner { }
+
+var owner = new AgentRuntimeOwner();
+RuntimeBehaviorTree ownedTree = new RuntimeBehaviorTreeBuilder(owner)
+    .Action(_ => RuntimeState.Success)
+    .Build();
+
+AgentRuntimeOwner resolvedOwner = ownedTree.GetOwner<AgentRuntimeOwner>();
+ownedTree.Dispose();
+```
+
+When `RuntimeBTContext.Owner` is a Unity `GameObject`, `GetOwner<GameObject>()` returns that object and `GetOwner<TComponent>()` performs a component lookup. `BTRunnerComponent` continues to inject its own GameObject.
+
+For reusable behavior, prefer named command or condition objects over captured lambdas:
 
 ```csharp
 public sealed class AttackCommand : IRuntimeBTCommand
@@ -152,14 +158,6 @@ public sealed class AttackCommand : IRuntimeBTCommand
     public RuntimeState Execute(RuntimeBlackboard blackboard)
     {
         return RuntimeState.Success;
-    }
-}
-
-public sealed class HasTargetCondition : IRuntimeBTConditionStrategy
-{
-    public bool Evaluate(RuntimeBlackboard blackboard)
-    {
-        return blackboard.GetBool(HasTargetKey);
     }
 }
 
@@ -173,581 +171,426 @@ RuntimeBehaviorTree tree = new RuntimeBehaviorTreeBuilder()
 
 ## Core Concepts
 
-### BTRunnerComponent
+### Runtime lifecycle
 
-The primary MonoBehaviour for running behavior trees.
+```mermaid
+stateDiagram-v2
+    [*] --> Active: constructed
+    Active --> Active: Tick returns Running
+    Active --> StoppedSuccess: Tick returns Success
+    Active --> StoppedFailure: Tick returns Failure or throws
+    Active --> StoppedExplicit: Stop
+    StoppedSuccess --> Active: Play
+    StoppedFailure --> Active: Play
+    StoppedExplicit --> Active: Play
+    Active --> Disposed: Dispose
+    StoppedSuccess --> Disposed: Dispose
+    StoppedFailure --> Disposed: Dispose
+    StoppedExplicit --> Disposed: Dispose
+```
+
+- A newly constructed tree is active. `Tick()` starts the root activation as needed.
+- Construction validates an acyclic, single-owner runtime graph with unique runtime GUIDs. `RuntimeBehaviorTreeLimits` bounds code-first node count (default 4096, hard ceiling 65,536) and depth (default 256, hard ceiling 256).
+- If construction throws before returning, a caller-supplied blackboard has its previous context restored and remains caller-owned; an internally created blackboard is disposed. After successful construction, the tree owns and disposes its blackboard.
+- `Success` and `Failure` are terminal tree results. The tree sets `IsStopped`, clears scheduling wake-up state, and publishes `Terminated` exactly once.
+- `Stop()` aborts an active stack, sets tree state to `NotEntered`, and publishes `Terminated(NotEntered)` once.
+- `Play()` on a stopped tree resets the node graph and begins a new activation.
+- Lifecycle operations reject reentrant calls. Do not call `Tick`, `Play`, `Stop`, or `SetContext` from a node callback or `Terminated` callback.
+- After `Dispose()`, public operations throw `ObjectDisposedException` (late `WakeUp()` is ignored). Runtime node instances are single-use owners.
+
+### Node lifecycle
+
+| Hook or method | Contract |
+| --- | --- |
+| `OnAwake()` | Setup hook invoked once after the runtime graph receives its owner |
+| `OnStart(bb)` | Invoked once at the beginning of an activation |
+| `OnRun(bb)` | Invoked for each execution step; must return `Running`, `Success`, or `Failure` |
+| `OnExit(bb, Completed, null)` | Invoked once after normal `Success` or `Failure` |
+| `OnExit(bb, Aborted, null)` | Invoked once when an active node is halted by its parent or tree owner |
+| `OnExit(bb, Faulted, exception)` | Invoked once when execution throws |
+| `OnReset(bb)` | Clears persistent state for a new activation |
+| `OnDispose(bb)` | Releases resources owned by the node |
+
+`RuntimeStatefulActionNode` separates `OnActionStart`, `OnActionRunning`, `OnActionHalted`, and `OnActionFaulted`. Use `OnActionHalted` to cancel an operation only when the action had entered `Running`; normal completion does not call the halt hook.
+
+Pre- and post-conditions are registered during setup. `FailWhenFalse`, `SucceedWhenFalse`, and `AbortWhenFalse` make the false-path result explicit. A false condition aborts an already-running activation before returning its policy result.
+
+### Blackboard
+
+`RuntimeBlackboard` has separate typed stores for `int`, `float`, `bool`, `Vector3`, `long`, `RuntimeBlackboardLong2`, `RuntimeBlackboardLong3`, and `object`. Typed access avoids boxing primitive values.
+
+String-key overloads use `RuntimeBlackboard.DefaultStringHashFunc`, which is stable `BTHash.FNV1A`. Pre-hash frequently used keys once:
+
+```csharp
+private static readonly int HealthKey =
+    RuntimeBlackboard.DefaultStringHashFunc("Health");
+
+blackboard.SetInt(HealthKey, 100);
+int health = blackboard.GetInt(HealthKey);
+```
+
+A schema turns key existence, type, defaults, and synchronization flags into an explicit contract:
+
+```csharp
+RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+    .AddInt("Health", 100, RuntimeBlackboardSyncFlags.Networked)
+    .AddBool("IsAlert", false, RuntimeBlackboardSyncFlags.Delta)
+    .AddObject("Target")
+    .Build();
+
+var blackboard = new RuntimeBlackboard(schema: schema);
+```
+
+Schema-bound writes reject unknown keys and type mismatches.
+
+- Reads fall back through `Parent`; writes affect the current blackboard only.
+- A key stamp changes only when its local value changes. Use `GetStamp` for low-cost change detection.
+- Key and global observers run synchronously after the write lock is released.
+- Subscription changes allocate new callback arrays. Register during setup, unregister at owner shutdown.
+- `SubTreeNode` owns a reusable scoped blackboard. `RuntimeSubTreePortDirection.Input` refreshes a local port before every child step, `Output` commits at normal completion, and `InOut` captures initial and final values.
+
+### Compilation
+
+`BehaviorTreeCompiler` validates the authoring graph before creating mutable runtime nodes. The structural pass rejects a missing root, cycles, shared child ownership, null links, invalid arity, duplicate GUIDs, excessive size/depth, and invalid built-in node configuration.
+
+`BehaviorTreeCompiler.Analyze(...)` performs bounded iterative validation and exact authoring-type emitter preflight, then returns a `BehaviorTreeCompileArtifact`. `EmitRuntimeRoot()` revalidates the current mutable source before creating a new runtime graph.
+
+Each explicit `SubTreeNode` asset reference is an occurrence boundary. The same subtree asset can be referenced at multiple graph positions; validation counts each expansion independently, emission creates independent runtime nodes, and nested runtime GUIDs receive a deterministic occurrence prefix.
+
+`BehaviorTree.Compile(...)` catches `BehaviorTreeCompileException`, logs against the asset, and returns `null`. Composition roots that need structured failure should call `BehaviorTreeCompiler.Analyze(...)` first.
+
+Built-in emitters read explicit, read-only configuration properties and do not use private-field reflection. Emitter lookup is exact by authoring type: a derived authoring node must register its own emitter.
+
+## Usage Guide
+
+### Runners and scheduling
 
 ```csharp
 BTRunnerComponent runner = GetComponent<BTRunnerComponent>();
 
-// Lifecycle
-runner.Play();       // Start or restart
-runner.Pause();      // Pause execution
-runner.Resume();     // Resume from paused
-runner.Stop();       // Stop and reset
-
-// Blackboard data
 runner.BTSetData("Health", 100);
-runner.BTSetData("Speed", 5.5f);
-runner.BTSendMessage("EnemySpotted");
-
-// Hot-swap tree at runtime
-runner.SetTree(anotherBehaviorTreeAsset);
-
-// Tick mode
-runner.SetTickMode(TickMode.PriorityManaged);
-
-// Event-driven wake-up
 runner.WakeUp(boostedTicks: 2);
+runner.Pause();
+runner.Resume();
+runner.Stop();
+runner.Play();
 ```
 
-**Tick Modes:**
+- Natural `Success` or `Failure`, explicit `Stop`, and runtime faults all mark the runner stopped, unregister it from managed scheduling, and raise `OnTreeStopped` once.
+- `Pause()` preserves node and blackboard state and unregisters managed modes. `Resume()` continues a non-terminal tree; a stopped runner starts a new activation.
+- `Play()` on an existing runtime stops the old activation, resets the graph, clears the blackboard, and reapplies Inspector `Initial Objects`.
+- `SetTree(...)` is applied in `LateUpdate`; the old runtime is disposed and a new runtime is compiled.
+- Set context and service resolver before active execution. `RuntimeBehaviorTree.SetContext` rejects changes while a node stack is active.
 
-| Mode | Use Case | How It Works |
+### Tick modes
+
+| Mode | Owner | Policy |
 | --- | --- | --- |
-| `Self` | Independent ownership | Each component ticks in its own `Update()` |
-| `Managed` | Simple batching | `BTTickManager` round-robin with budget cap |
-| `PriorityManaged` | Priority and LOD policy | Distance LOD + 8 priority buckets + per-bucket budget |
-| `Manual` | Full control | Call `runner.ManualTick()` yourself |
+| `Self` | `BTRunnerComponent.Update` | One component tick opportunity per frame |
+| `Manual` | Caller | Caller invokes `ManualTick()` |
+| `Managed` | `BTTickManagerComponent` | Bounded round-robin scan |
+| `PriorityManaged` | `BTPriorityTickManagerComponent` | Eight priority buckets plus distance/marker LOD |
 
-### Blackboard
+`BTTickManager.TickBudget` counts trees scanned in one pass; a scanned tree may skip execution because of `TickInterval`. Registration and removal requested during a tick are deferred until the pass ends. Terminal trees are removed automatically.
 
-The blackboard is a typed key-value store shared by all nodes. Separate dictionaries avoid boxing per type.
+`BTPriorityTickManager` uses eight buckets. Each budget limits scans in that bucket; zero disables that bucket. On first `Instance` access, each scene component performs one cold-path query for already loaded authored manager components before creating a persistent fallback GameObject.
 
-```mermaid
-flowchart TB
-    BB["RuntimeBlackboard"]
-    BB --> IntDict["Dictionary‹int,int›<br>Health, Ammo, Score"]
-    BB --> FloatDict["Dictionary‹int,float›<br>Speed, Cooldown"]
-    BB --> BoolDict["Dictionary‹int,bool›<br>IsAlive, HasTarget"]
-    BB --> VecDict["Dictionary‹int,Vector3›<br>Position, Destination"]
-    BB --> ObjDict["Dictionary‹int,object›<br>Target, Weapon"]
-    BB -.->|"Parent Chain"| ParentBB["Parent BlackBoard<br>(SubTree scope)"]
-```
+### LOD configuration
 
-**Key addressing:**
+`BTLODConfig` requires strictly increasing finite distances, tick intervals of at least one, priorities from `0` through `7`, non-negative budgets, and a budget entry for every referenced priority. Distance checks use pre-squared thresholds.
+
+### Blackboard operations
 
 ```csharp
-// String keys (convenient, hashed via Animator.StringToHash)
+// Typed access via int hash keys
+blackboard.SetInt(HealthKey, 100);
+blackboard.SetFloat(SpeedKey, 5.5f);
+blackboard.SetBool(AlertKey, true);
+blackboard.SetVector3(PositionKey, transform.position);
+
+// String key convenience
 blackboard.SetInt("Health", 100);
 
-// Int keys (pre-hash during initialization)
-static readonly int k_Health = Animator.StringToHash("Health");
-blackboard.SetInt(k_Health, 100);
+// Change detection via stamps
+ulong stamp = blackboard.GetStamp(HealthKey);
+
+// Observer registration
+blackboard.AddObserver(HealthKey, (key, bb) => Debug.Log($"Health changed: {bb.GetInt(key)}"));
 ```
 
-**Observers** (push-based notifications):
+### Composite nodes
 
-```csharp
-blackboard.AddObserver("Health", (keyHash, bb) => {
-    int hp = bb.GetInt(keyHash);
-    if (hp <= 0) OnDeath();
-});
-```
+| Node | Terminal rule and important behavior |
+| --- | --- |
+| `RuntimeSequencer` | Runs children from left to right; first failure fails; all success succeeds |
+| `RuntimeSequenceWithMemory` | Continues from the last running child instead of rechecking completed predecessors |
+| `RuntimeSelector` | Runs children from left to right; first success succeeds; all failure fails |
+| `RuntimeSelectorRandom` | Shuffles a setup-time index array, then applies selector semantics. `Seed` and `ShuffleOnStart` freeze with the owned graph |
+| `RuntimeReactiveSequence` | Re-evaluates high-priority children each step and aborts a displaced running branch |
+| `RuntimeReactiveFallback` | Re-evaluates fallback priority each step and aborts a displaced running branch |
+| `RuntimeIfThenElseNode` | Child 0 is the condition; child 1 is then; child 2 is else |
+| `RuntimeWhileDoElseNode` | Uses condition/body/else child positions |
+| `RuntimeSwitchNode` | Uses a blackboard integer as a zero-based case; the last child is the default |
+| `RuntimeProbabilityBranch` | Selects once per activation from validated non-negative weights |
+| `RuntimeUtilitySelector` | Selects by configured blackboard score keys |
+| `RuntimeServiceNode` | Runs a configured service callback on an interval while its child executes |
 
-**Change detection** (stamp-based polling):
+### Parallel nodes
 
-```csharp
-ulong stamp = blackboard.GetStamp("EnemyCount");
-if (stamp != lastStamp) { /* EnemyCount changed */ }
-```
+Parallel nodes interleave branches during one tree-owner-thread tick. They do not create threads, tasks, or jobs.
 
-**Thread safety** (opt-in):
+`RuntimeParallelNode` retains each child's terminal state and does not rerun that child within the same activation:
 
-```csharp
-blackboard.EnableThreadSafety(); // allocates ReaderWriterLockSlim once
-```
-
-### Node Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> NotEntered
-    NotEntered --> Running : Run() called
-    Running --> Running : still processing
-    Running --> Success : completed
-    Running --> Failure : failed
-    Success --> NotEntered : Reset
-    Failure --> NotEntered : Reset
-    Running --> NotEntered : Abort()
-```
-
-| Hook | When | Use For |
+| Mode | Success | Failure |
 | --- | --- | --- |
-| `OnAwake()` | Once at compile time | Cache references |
-| `OnStart()` | Each time node begins Running | Initialize per-run state |
-| `OnRun()` | Every tick while Running | Core logic — return `Success`, `Failure`, or `Running` |
-| `OnStop()` | Node finishes or is aborted | Cleanup |
-| `ResetState()` | Parent restarts children | Reset counters |
+| `Default` | All children succeed | Any child fails |
+| `UntilAnyFailure` | All children succeed | Any child fails |
+| `UntilAnySuccess` | Any child succeeds | All children fail |
+| `UntilAnyComplete` | First observed child success | First observed child failure |
 
-### Runtime Time API
+`RuntimeParallelAllNode` ticks every unfinished child once per step. `SuccessThreshold` and `FailureThreshold` accept `-1` for all children or a value from `1` through child count. Failure has precedence when both thresholds are reached in one step.
 
-Time-sensitive nodes use `double`-precision via `RuntimeBTTime.GetTime(...)`:
+### Decorators and leaves
 
-```csharp
-public interface IRuntimeBTTimeProvider
-{
-    double TimeAsDouble { get; }
-    double UnscaledTimeAsDouble { get; }
-}
-```
-
-Resolution order: 1) `IRuntimeBTTimeProvider` from service resolver, 2) `UnityEngine.Time`, 3) DateTime fallback. DOD/Burst jobs use `float deltaTime` for throughput.
-
-## Usage Guide
-
-### Composite Nodes
-
-Composite nodes control execution flow of their children.
-
-#### SequencerNode
-
-Executes children left to right. Returns `Success` if **all** succeed; returns `Failure` as soon as any child fails.
-
-```mermaid
-flowchart TB
-    S["Sequencer ✓ only if all succeed"] --> C1["Child 1<br>✓ Success"]
-    S --> C2["Child 2<br>✓ Success"]
-    S --> C3["Child 3<br>✗ Failure"]
-    S --> C4["Child 4<br>⊘ Skipped"]
-```
-
-#### SelectorNode
-
-Executes children left to right. Returns `Success` as soon as **any** child succeeds.
-
-```mermaid
-flowchart TB
-    S["Selector ✓ if any succeeds"] --> C1["Child 1<br>✗ Failure"]
-    S --> C2["Child 2<br>✓ Success"]
-    S --> C3["Child 3<br>⊘ Skipped"]
-```
-
-#### Other Composite Nodes
-
-| Node | Behavior | Use Case |
-| --- | --- | --- |
-| **SelectorRandom** | Randomizes child order before selector fallback | Distribute equivalent behaviors without weight tables |
-| **SequenceWithMemory** | Resumes from last Running child | Multi-step objectives |
-| **Parallel** | Executes all children simultaneously; multiple completion modes | Simultaneous attack + animation |
-| **ParallelAll** | Ticks all children; configurable thresholds | "2 of 3 conditions must pass" |
-| **ReactiveSequence** | Re-evaluates from start every tick | Guard conditions that must stay true |
-| **ReactiveFallback** | Re-evaluates from start; interrupts lower-priority children | Priority-based behavior switching |
-| **IfThenElse** | `[0]`=condition, `[1]`=then, `[2]`=else | Branching logic |
-| **WhileDoElse** | Loops body while condition succeeds | "While in range → shoot" |
-| **SwitchNode** | N-way branch on blackboard int key | State-driven AI |
-| **ProbabilityBranch** | Randomly selects child by weights (deterministic xorshift32) | Randomized NPC behavior |
-| **UtilitySelector** | Highest blackboard float score wins | Dynamic utility AI |
-| **ServiceNode** | Periodically executes side-effect callback alongside child | Update aim direction while attacking |
-
-### Decorator Nodes
-
-Decorator nodes modify a single child's behavior.
-
-| Node | Behavior |
+| Family | Included behavior |
 | --- | --- |
-| **InvertNode** | Flip `Success` ↔ `Failure` |
-| **SucceederNode** | Always returns `Success` |
-| **ForceFailureNode** | Always returns `Failure` |
-| **RepeatNode** | Repeat child N times or forever |
-| **RetryNode** | Retry on failure up to N times |
-| **TimeoutNode** | Fail if child exceeds time limit |
-| **DelayNode** | Wait before running child |
-| **CoolDownNode** | Block re-execution until cooldown expires |
-| **RunOnceNode** | Execute once; cache and reuse result |
-| **WaitSuccessNode** | Wait for success or timeout |
-| **BlackBoardNode** | Create scoped child blackboard |
-| **SubTreeNode** | Reference another BehaviorTree asset with port remapping |
-| **BBComparisonNode** | Compare blackboard keys with operators (`==`, `!=`, `<`, `>`, `<=`, `>=`, `IsSet`, `IsNotSet`) |
+| Result | `Inverter`, `Succeeder`, `ForceFailure`, `KeepRunningUntilFailure` |
+| Repetition | `Repeat`, `Retry`, `RunOnce` |
+| Time | `Wait`, `Delay`, `Timeout`, `CoolDown`, `WaitSuccess` |
+| Blackboard | `BBComparison`, `BlackBoardNode`, `SubTreeNode`, message pass/remove/receive |
+| Branch support | `OnOff`, `RandomChance`, code-first condition strategies |
+| Project action boundary | `IRuntimeBTCommand`, `RuntimeStatefulActionNode`, lambda actions |
 
-### Action and Condition Nodes
-
-**Action nodes** (leaves that perform work):
-
-| Node | Behavior |
-| --- | --- |
-| **DebugLogNode** | Log message to console |
-| **WaitNode** | Wait for duration (fixed or random), return `Success` |
-| **MessagePassNode** | Set string value on blackboard key |
-| **MessageRemoveNode** | Remove key from blackboard |
-| **BTChangeNode** | Trigger state transition on `BTStateMachineComponent` |
-
-**Condition nodes** (evaluate, return `Success`/`Failure` never `Running`):
-
-| Node | Behavior |
-| --- | --- |
-| **OnOffNode** | Fixed `Success` or `Failure` toggle |
-| **MessageReceiveNode** | Check if key equals specific string |
-| **RandomChanceNode** | Return `Success` with `chance/outOf` probability |
-
-### Creating Custom Nodes
-
-Keep authoring data and runtime execution separate. Authoring nodes are ScriptableObjects; runtime nodes perform hot-path work.
-
-```csharp
-// === ScriptableObject authoring layer ===
-[BTInfo("Custom/Movement", "Moves agent toward target position")]
-public sealed class MoveToTargetNode : ActionNode
-{
-    [SerializeField] private string _targetKey = "TargetPosition";
-    [SerializeField] private float _arrivalRadius = 0.5f;
-    public string TargetKey => _targetKey;
-    public float ArrivalRadius => _arrivalRadius;
-}
-
-// === Pure C# runtime execution layer ===
-public sealed class RuntimeMoveToTarget : RuntimeStatefulActionNode
-{
-    private readonly int _targetKey;
-    private readonly float _arrivalRadiusSqr;
-
-    public RuntimeMoveToTarget(int targetKey, float arrivalRadius)
-    {
-        _targetKey = targetKey;
-        _arrivalRadiusSqr = arrivalRadius * arrivalRadius;
-    }
-
-    protected override RuntimeState OnActionRunning(RuntimeBlackboard bb)
-    {
-        var target = bb.GetVector3(_targetKey);
-        var agent = bb.GetService<IMovementAgent>();
-        if (agent == null) return RuntimeState.Failure;
-        float speed = bb.GetFloat("Speed", 5f);
-        return agent.MoveToward(target, _arrivalRadiusSqr, speed)
-            ? RuntimeState.Success : RuntimeState.Running;
-    }
-}
-
-// Register at composition root
-var emitters = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
-emitters.Register<MoveToTargetNode>((source, context) =>
-{
-    int key = RuntimeBlackboard.DefaultStringHashFunc(source.TargetKey);
-    return context.WithGuid(source, new RuntimeMoveToTarget(key, source.ArrivalRadius));
-});
-```
+Time-sensitive managed nodes resolve `IRuntimeBTTimeProvider` from the runtime context. Randomized nodes can resolve `IRuntimeBTRandomProvider`; otherwise they use their local deterministic generator contract.
 
 ## Advanced Topics
 
-### SubTree Composition
+### Runtime-only node
 
-Split large behavior trees into reusable modules.
-
-```mermaid
-flowchart TB
-    Main["Main Tree"] --> Sel["Selector"]
-    Sel --> Combat["SubTree<br>'CombatTree.asset'"]
-    Sel --> Explore["SubTree<br>'ExploreTree.asset'"]
-    Sel --> Idle["SubTree<br>'IdleTree.asset'"]
-```
-
-Port remapping: `Parent "EnemyPosition" → Child "TargetPos"`. SubTree runs on a scoped blackboard inheriting from parent.
-
-### Behavior Tree + State Machine
-
-Use `BTStateMachineComponent` for high-level state transitions between entire trees. Define states in Inspector, transition via `BTChangeNode` or `stateMachine.SetState("Combat")`.
-
-### Conditional Abort
-
-| Abort Type | Behavior |
-| --- | --- |
-| `None` | No interruption |
-| `Self` | Abort own subtree when condition changes |
-| `LowerPriority` | Abort lower-priority siblings when condition becomes true |
-| `Both` | Self + LowerPriority |
-
-```mermaid
-flowchart TB
-    Sel["Selector"] --> Seq1["Sequence<br>(Abort: LowerPriority)"]
-    Sel --> Seq2["Sequence<br>'Patrol'"]
-    Seq1 --> Cond["EnemyVisible?<br>(Condition)"]
-    Seq1 --> Attack["Attack"]
-    Seq2 --> WalkTo["WalkToPoint"]
-    Seq2 --> Wait["Wait"]
-```
-
-### Event-Driven Execution
+Use `RuntimeStatefulActionNode` for an operation that begins once, polls while running, and must cancel on abort:
 
 ```csharp
-// Inside a custom RuntimeNode
-protected override RuntimeState OnRun(RuntimeBlackboard bb)
+public sealed class RuntimeMoveAction : RuntimeStatefulActionNode
 {
-    if (significantEventOccurred)
-        EmitWakeUpSignal();
-    return RuntimeState.Running;
+    protected override RuntimeState OnActionStart(RuntimeBlackboard blackboard)
+    {
+        return StartMove(blackboard)
+            ? RuntimeState.Running
+            : RuntimeState.Failure;
+    }
+
+    protected override RuntimeState OnActionRunning(RuntimeBlackboard blackboard)
+    {
+        return HasArrived(blackboard)
+            ? RuntimeState.Success
+            : RuntimeState.Running;
+    }
+
+    protected override void OnActionHalted(RuntimeBlackboard blackboard)
+    {
+        CancelMove();
+    }
 }
-
-// External wake-up
-runner.WakeUp(boostedTicks: 2);
 ```
 
-### Deterministic Random
+### Authored custom node
+
+An authored node needs a ScriptableObject type and an emitter registered at the composition root:
 
 ```csharp
-var rng = new RuntimeDeterministicRandom(seed: 42);
-int index = rng.NextInt(0, 5); // same result on server and client
+var emitters = BehaviorTreeNodeEmitterRegistry.CreateWithBuiltInFallback();
+emitters.Register<MoveToTargetNode>((source, context) =>
+    context.WithGuid(
+        source,
+        new RuntimeMoveToTarget(
+            RuntimeBlackboard.DefaultStringHashFunc(source.TargetKey),
+            source.ArrivalRadius)));
+
+var options = new BehaviorTreeCompileOptions
+{
+    Emitters = emitters
+};
+
+RuntimeBehaviorTree tree = BehaviorTreeCompiler.Compile(asset, context, options);
 ```
 
-Nodes that consume random values resolve `IRuntimeBTRandomProvider` from the service registry. With `CycloneGames.DeterministicMath`, register `DeterministicMathRandomProvider` for savable/restorable random state.
+Emitter registration must be explicit and AOT-visible. Custom authoring configuration should use deliberate read-only properties rather than reading private serialized fields by reflection. `Analyze` verifies that an exact custom emitter exists.
 
-### DOD / Burst Execution
+### DOD execution
 
-The optional DOD assembly provides a data-oriented path for supported flat node types.
-
-```mermaid
-flowchart TB
-    subgraph Shared["Shared (Read-Only)"]
-        FBT["FlatBehaviorTree<br>NativeArray‹FlatNodeDef›<br>NativeArray‹int› ChildIndices"]
-    end
-    subgraph PerAgent["Per-Agent (Mutable)"]
-        State["BTAgentState<br>NativeArray‹byte› NodeStates<br>NativeArray‹int› AuxInts<br>NativeArray‹float› AuxFloats"]
-    end
-    subgraph Execution["Burst Job"]
-        Job["BTTickJob<br>IJobParallelFor<br>@BurstCompile"]
-    end
-    Shared --> Job
-    PerAgent --> Job
-```
+`CycloneGames.BehaviorTree.Runtime.DOD` is opt-in and `autoReferenced: false`. It supports a restricted flat node set and fixed `int`/`float`/`bool` blackboard slots:
 
 ```csharp
-FlatBehaviorTree flatTree = FlatTreeCompiler.Compile(runtimeTree);
-var scheduler = new BTTickScheduler(flatTree, initialCapacity: 1024, bbSlotCount: 8);
-int agentId = scheduler.AddAgent(tickInterval: 2);
-scheduler.SetBBInt(agentId, slotIndex: 0, value: 100);
-JobHandle handle = scheduler.ScheduleTick(Time.deltaTime, batchSize: 64);
+using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.DOD;
+
+var nodes = new[]
+{
+    new FlatNodeDef
+    {
+        Type = FlatNodeType.Root,
+        ChildStartIndex = 0,
+        ChildCount = 1
+    },
+    new FlatNodeDef
+    {
+        Type = FlatNodeType.BlackboardCondition,
+        BBKey = 0,
+        Compare = CompareOp.Greater,
+        CompareValue = 0
+    }
+};
+using var flatTree = new FlatBehaviorTree(nodes, new[] { 1 });
+
+using var scheduler = new BTTickScheduler(
+    flatTree,
+    bbSlotCount: 1,
+    actionSlotCount: 0,
+    initialCapacity: 256);
+
+BTAgentHandle agent = scheduler.AddAgent(tickInterval: 1);
+scheduler.SetBBInt(agent, 0, 10);
+scheduler.ScheduleTick(deltaTime: 0.016f, batchSize: 64);
 scheduler.CompleteTick();
+RuntimeState result = scheduler.GetRootState(agent);
 ```
 
-| Criteria | Use Managed | Use Burst DOD |
+Key DOD contracts:
+
+- `FlatBehaviorTree` owns persistent native storage. Dispose every scheduler before disposing the shared definition.
+- `BTAgentHandle` contains slot index plus generation. Removed or recycled slots reject stale handles.
+- Terminal agents remain terminal and are skipped by later ticks. Call `ResetAgent(handle, clearBlackboard)` to begin a new activation.
+- External actions use `BTActionRequestHandle`. Obtain it with `TryGetActionRequest`, complete with `TrySetActionStatus`.
+- The scheduler has creator/owner-thread affinity.
+- `BTTickScheduler` is the only public scheduling entry point. Its Burst `BTTickJob` is internal.
+- Every public state access completes the outstanding scheduled job before touching NativeArrays.
+
+### Persistence
+
+| Data | Owner and location | Format and lifetime |
 | --- | --- | --- |
-| Tree complexity | Any | Simple to medium (supported nodes only) |
-| Custom actions | Yes (C#) | External callback slots |
-| Object blackboard | Yes | No (int/float/bool only) |
+| Behavior-tree authoring | Project, under `Assets/` | Unity `.asset` with node sub-assets |
+| Graph layout | Same behavior-tree asset | Serialized node positions |
+| Compile analysis artifacts | Caller | Short-lived in-memory wrapper |
+| Runtime tree/blackboard | Runner or composition scope | In-memory mutable state |
+| Blackboard snapshot/delta bytes | Caller | Versioned `BTS2` snapshot and `BTDP1` delta frames |
+| Benchmark exports | User-selected path | CSV and JSON |
 
-### Multiplayer Networking
+### Platforms
 
-Three synchronization patterns:
-
-```mermaid
-flowchart LR
-    subgraph Server
-        STree["RuntimeBehaviorTree"]
-        SBB["RuntimeBlackboard"]
-    end
-    subgraph Network
-        Snap["Full Snapshot"]
-        Delta["Delta Patch"]
-        Hash["Desync Check"]
-    end
-    subgraph Client
-        CTree["RuntimeBehaviorTree"]
-        CBB["RuntimeBlackboard"]
-    end
-    SBB --> Snap --> CBB
-    SBB --> Delta --> CBB
-    SBB --> Hash
-    CBB --> Hash
-```
-
-**Server-Authoritative Snapshot:**
-
-```csharp
-var snapshot = BTNetworkSync.CaptureSnapshot(serverTree);
-byte[] data = BTNetworkSync.SerializeSnapshot(snapshot);
-SendToClient(data);
-// Client:
-var snap = BTNetworkSync.DeserializeSnapshot(data);
-BTNetworkSync.ApplyBlackboardSnapshot(clientTree, snap);
-```
-
-**Client-Predicted with Hash:**
-
-```csharp
-ulong serverHash = serverBlackboard.ComputeHash();
-if (BTNetworkSync.CheckDesync(clientTree, serverHash))
-    BTNetworkSync.ApplyBlackboardSnapshot(clientTree, BTNetworkSync.CaptureSnapshot(serverTree));
-```
-
-**Delta Blackboard Sync:**
-
-```csharp
-var delta = new BTBlackboardDelta();
-delta.TrackKey("Health");
-delta.Attach(serverBlackboard);
-
-if (delta.TryFlush(serverBlackboard, out ArraySegment<byte> patch))
-    SendToClients(patch);
-// Client:
-BTBlackboardDelta.Apply(clientBlackboard, patch);
-```
+- The managed runtime uses C#, UnityEngine, and managed collections; it contains no native plugin.
+- The DOD path uses Burst, Jobs, Collections, Mathematics, and persistent NativeArrays.
+- Built-in authoring emission uses direct property access and explicit registrations.
+- `RuntimeBehaviorTree`, managed nodes, runner components, and managed schedulers have single-owner-thread affinity.
+- `WakeUp()` is the explicit cross-thread producer signal. It carries a bounded immediate-tick budget.
+- Dedicated Server can use code-first or asset-compiled runtime trees.
 
 ## Common Scenarios
 
-### FPS / Third-Person Shooter
+### State machine integration
 
-```mermaid
-flowchart TB
-    Root --> Sel["Selector"]
-    Sel --> Combat["ReactiveSequence<br>'Combat'"]
-    Sel --> Patrol["Sequence<br>'Patrol'"]
-    Sel --> Idle["Wait 2s<br>'Idle'"]
-    Combat --> HasEnemy["BBComparison<br>EnemyID IsSet"]
-    Combat --> Service["Service 0.3s<br>'UpdateAim'"]
-    Service --> Attack["Sequence"]
-    Attack --> InRange["CheckRange"]
-    Attack --> Shoot["ShootAction"]
-    Patrol --> WalkTo["MoveToWaypoint"]
-    Patrol --> Wait["Wait 1s"]
+`BTStateMachineComponent` associates behavior-tree assets with FSM states. When the state machine transitions to a new state, the component compiles and starts the corresponding tree. Returns to a previous state replay its tree from a clean activation. The state machine and the behavior-tree runtime share one blackboard so state transitions can seed data.
+
+### LOD-based AI scheduling
+
+`BTPriorityTickManagerComponent` maps distance-based LOD levels to eight priority buckets. Near agents receive high-priority buckets with larger tick budgets; distant agents run less frequently. `BTLODConfig` enforces strictly increasing distances, valid priorities, and non-negative budgets. Combine this with `BTDistanceLODProvider` for automatic LOD level assignment based on distance to a target.
+
+### Code-first composition root
+
+When behavior trees are authored by project configuration rather than graph editing, use `RuntimeBehaviorTreeBuilder` in a composition root:
+
+```csharp
+var blackboard = new RuntimeBlackboard(schema: mySchema);
+var context = new RuntimeBTContext(owner);
+context.ServiceResolver = new MyServiceResolver();
+
+var tree = new RuntimeBehaviorTreeBuilder(context)
+    .WithBlackboard(blackboard)
+    .WithTickInterval(2)
+    .Selector()
+        .Sequence()
+            .Condition(new HasTargetCondition())
+            .CoolDown(0.5f)
+                .Command(new AttackCommand())
+            .End()
+        .End()
+        .Action(_ => RuntimeState.Success, "Idle")
+    .End()
+    .Build();
 ```
 
-Key patterns: `ReactiveSequence` for combat re-evaluation, `ServiceNode` for periodic aim updates, `BBComparison` with `IsSet`.
+### Network-synchronized blackboard
 
-### Open World RPG
-
-```mermaid
-flowchart TB
-    Root --> FSM["SwitchNode<br>'AIState' key"]
-    FSM --> Idle["Sequence<br>'Idle'"]
-    FSM --> Quest["SubTree<br>'QuestBehavior'"]
-    FSM --> Combat["SubTree<br>'CombatBehavior'"]
-    FSM --> Flee["Sequence<br>'Flee'"]
-```
-
-Key patterns: `SwitchNode` on `AIState`, `SubTreeNode` for modular behavior assets, `UtilitySelectorNode` for world-state evaluation.
-
-### RTS / Colony Sim
-
-```mermaid
-flowchart TB
-    Root --> Utility["UtilitySelector"]
-    Utility --> Gather["Sequence<br>'Gather<br>Score: GatherScore'"]
-    Utility --> Build["Sequence<br>'Build<br>Score: BuildScore'"]
-    Utility --> Fight["Sequence<br>'Fight<br>Score: FightScore'"]
-    Utility --> Rest["Sequence<br>'Rest<br>Score: RestScore'"]
-```
-
-Key patterns: `UtilitySelectorNode` for dynamic priority, `PriorityManaged` tick mode, Burst DOD for 10K+ units.
-
-### Stealth / Horror AI
-
-```mermaid
-flowchart TB
-    Root --> Reactive["ReactiveFallback"]
-    Reactive --> Alert["ReactiveSequence<br>'Alert Mode'"]
-    Reactive --> Search["Sequence<br>'Search'"]
-    Reactive --> PatrolRoute["SequenceWithMemory<br>'Patrol Route'"]
-    Alert --> SeePlayer["BBComparison<br>PlayerVisible == true"]
-    Alert --> Chase["ChasePlayer"]
-    Search --> HeardNoise["BBComparison<br>SuspicionLevel > 50"]
-    Search --> Investigate["InvestigateLocation"]
-```
-
-Key patterns: `ReactiveFallbackNode` for instant alert switching, `SequenceWithMemory` for patrol resumption.
-
-### Boss Fight (Multi-Phase)
-
-```mermaid
-flowchart TB
-    Root --> Switch["SwitchNode<br>'BossPhase'"]
-    Switch --> P1["SubTree<br>'Phase1_Melee'"]
-    Switch --> P2["SubTree<br>'Phase2_Ranged'"]
-    Switch --> P3["SubTree<br>'Phase3_Enraged'"]
-```
-
-Key patterns: `SwitchNode` on `BossPhase`, separate `SubTreeNode` per phase, `ProbabilityBranch` for varied attacks, `BossAIMarker` for P0 priority.
+Use `RuntimeBlackboard.WriteTo(BinaryWriter, RuntimeBlackboardNetworkScope)` to produce bounded snapshot payloads, and `ReadFrom(BinaryReader)` to apply them on the remote side. Snapshots carry versioned `BTS2` frames and deltas carry `BTDP1` frames. Schema `RuntimeBlackboardSyncFlags` control which keys participate in which scope. `ComputeHash()` provides FNV-1a hashes for fast desync detection.
 
 ## Performance and Memory
 
-### Tick Mode Selection
+### Cost model
 
-| Requirement | Candidate |
+| Operation | Expected cost and allocation boundary |
 | --- | --- |
-| Independent ownership, simple scheduling | `TickMode.Self` |
-| Central round-robin with frame budget | `TickMode.Managed` |
-| Distance/priority policy with per-bucket budgets | `TickMode.PriorityManaged` |
-| Flat supported nodes, explicit Native memory | Burst DOD |
-| Mixed complexity | Managed for complex trees, DOD for measured simple workloads |
+| Managed node tick | Tree traversal proportional to nodes visited; setup arrays reused |
+| Typed blackboard get/set | Average dictionary lookup; no primitive boxing; growth can allocate |
+| String-key access | Adds hashing cost; pre-hash hot keys |
+| Observer notification | Synchronous callback dispatch; subscription changes allocate arrays |
+| Managed registration | May grow manager storage; steady-state scan reuses storage |
+| Compiler analysis | Cold-path bounded graph validation and diagnostic allocations |
+| Runtime graph emission | Cold-path explicit emitter dispatch plus allocation of a new mutable node graph |
+| DOD tick | Per-agent flat traversal in a Burst job; scheduling and completion have fixed overhead |
+| Snapshot/delta | Serialization may allocate unless reusable buffer APIs are used |
 
-### Hot-Path Guidelines
+The module contains steady-state low-allocation paths. Dictionary growth, first-time arrays, subscriptions, compile operations, and capacity growth allocate.
 
-- Pre-hash keys: `static readonly int k = Animator.StringToHash("Key")`
-- Cache component references in `OnAwake()`, not `OnRun()`
-- Use `blackboard.GetInt(key)` instead of boxing `(int)blackboard.Get("key")`
-- Use `sqrMagnitude` for distance checks instead of `Vector3.Distance()`
+### Tuning sequence
 
-### Memory Optimization
+1. Establish a representative tree shape, active-agent distribution, tick cadence, and frame budget.
+2. Pre-hash keys, cache injected services, pre-size managers and DOD capacity, and remove per-tick subscriptions or closures.
+3. Use `Managed` scheduling to bound scan work; add `PriorityManaged` only when a real LOD/priority policy exists.
+4. Compare managed and DOD paths with the same observable behavior. DOD is not automatically faster for small or heterogeneous workloads.
+5. Measure release Player builds on each hardware tier. Record average, percentiles, GC, retained memory, and recovery after scene changes.
 
-- `RuntimeCompositeNode.Seal()` freezes child list to array, releases list memory
-- `BTTreePool` pools compiled tree instances with O(1) free-list recycle
-- `BTDistanceLODProvider` uses parallel arrays instead of Dictionary iteration
-- `RuntimeBlackboard` implements `IDisposable` — releases `ReaderWriterLockSlim`
-
-### Thread Safety
-
-- `RuntimeBlackboard.EnableThreadSafety()` — opt-in `ReaderWriterLockSlim`
-- Observer notifications fire outside the write lock
-- `BTTickJob` uses Burst `IJobParallelFor`; callers must respect per-agent partitioning
-- `RuntimeBehaviorTree` uses `Interlocked`/`Volatile` only for wake-up flags
-
-### Priority LOD System
-
-```mermaid
-flowchart TB
-    Config["BTLODConfig<br>(ScriptableObject)"]
-    Config --> LOD0["LOD 0: 0-10m<br>Priority 0<br>Tick every frame"]
-    Config --> LOD1["LOD 1: 10-30m<br>Priority 1<br>Tick every 2 frames"]
-    Config --> LOD2["LOD 2: 30-50m<br>Priority 2<br>Tick every 4 frames"]
-    Config --> LOD3["LOD 3: 50m+<br>Priority 3<br>Tick every 8 frames"]
-    Manager["BTPriorityTickManagerComponent"]
-    Config --> Manager
-    Manager --> Bucket0["P0 Bucket<br>Budget: 100/frame"]
-    Manager --> Bucket1["P1 Bucket<br>Budget: 50/frame"]
-    Manager --> Bucket2["P2 Bucket<br>Budget: 30/frame"]
-    Manager --> Bucket3["P3 Bucket<br>Budget: 20/frame"]
-```
-
-Priority markers: `BossAIMarker` (P0), `EliteAIMarker` (P0), `VIPNPCMarker` (P1). Implement `IBTPriorityMarker` for dynamic priority. Use `runner.BoostPriority(2f)` for event-driven priority boost.
-
-### Open World Optimization
-
-1. Distance LOD for far-away NPCs
-2. Priority markers for quest-relevant NPCs
-3. Group provider overrides (`IBTAgentGroupProvider`)
-4. Chunk-based `BTRunnerComponent` activation
-5. `BTTreePool` template pooling:
-
-```csharp
-var pool = new BTTreePool();
-int guardTemplate = pool.RegisterTemplate(guardTreeAsset);
-int instanceId = pool.Allocate(guardTemplate);
-RuntimeBehaviorTree instance = pool.GetInstance(instanceId);
-pool.TickAll();
-pool.Release(instanceId);
-```
-
-### Benchmark Tools
-
-`Tools > CycloneGames > Behavior Tree > Behavior Tree Benchmark` provides presets from `AiBattle500` to `AiExtreme10000`, scheduling profile comparison, CSV/JSON export, and memory/GC metrics.
+Benchmark code is isolated in `CycloneGames.BehaviorTree.Benchmarks`.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
+| Symptom | Cause | Resolution |
 | --- | --- | --- |
-| Tree compiles but nodes don't tick | Tree not started or paused | Call `tree.Play()` or check `IsPaused` |
-| Custom node not found in GraphView | Node not registered in emitter registry | Register in `BehaviorTreeNodeEmitterRegistry` |
-| Blackboard key returns wrong value | Key hash collision or wrong type accessor | Use typed accessors (`GetInt`, not `GetObject`) |
-| SubTree blackboard not inheriting | Port remapping not configured | Set port mappings in SubTreeNode Inspector |
-| Reactive node not re-evaluating | Abort type set to `None` | Set abort type to `Self` or `Both` |
-| High GC during tick | Boxing via untyped blackboard API | Use typed `GetInt`/`GetFloat`/`GetBool`/`GetVector3` |
-| Burst job does not compile | Missing Burst/Collections/Mathematics packages | Install required packages; DOD assembly is optional |
-| LOS check reports false positive | Obstacle layer includes target's layer | Restrict mask to environment layers only |
+| New asset shows no root | Root creation is explicit | Click `Repair Root`, then save the asset |
+| `BehaviorTree.Compile()` returns `null` | Compiler rejected the asset and logged diagnostics | Use `Validate` or `BehaviorTreeCompiler.Analyze` and fix every error |
+| Tree ticks once and stops | Root returned `Success` or `Failure` | Call `Play()` for a new activation or keep the intended branch `Running` |
+| `Play()` lost runtime blackboard values | Runner replay clears its blackboard | Reapply initialization or move persistent state to an external owner |
+| String key no longer matches an old integer key | Default hash changed to FNV1A | Migrate Graph-authored and persisted key spaces |
+| `SetContext` throws | A node stack is active or the call is reentrant | Set context before ticking or after the tree stops |
+| Managed tree is never ticked | Manager is absent, runner is paused/stopped/disabled, or bucket budget is zero | Inspect runner state, manager component, tick mode, interval, and budgets |
+| Parallel work is not using multiple CPU threads | Managed Parallel expresses branch policy only | Use Jobs/DOD only for a supported, measured workload |
+| DOD handle throws after respawn | The slot was recycled and the handle is stale | Replace stored handles with the value returned by the latest `AddAgent` |
+| DOD action completion is rejected | Request timed out, was canceled/reset, or belongs to an old generation | Drop the stale completion and use the next request token |
+| DOD asmdef cannot resolve | Optional packages or explicit assembly reference are missing | Confirm Burst/Collections/Mathematics and add the DOD asmdef reference in the consumer |
+| Editor layout is unavailable | An Editor-only asset GUID cannot be resolved | Reimport the package and verify Editor assets and their `.meta` files are intact |
 
 ## Validation
 
+### Unity Test Runner
+
+Run these assemblies as applicable:
+
 ```text
-CycloneGames.BehaviorTree.Tests.Editor                 (EditMode)
-CycloneGames.BehaviorTree.Tests.Performance             (EditMode + PlayMode)
-CycloneGames.BehaviorTree.Networking.Tests.Editor       (EditMode)
+EditMode  CycloneGames.BehaviorTree.Tests.Editor
+EditMode  CycloneGames.BehaviorTree.Runtime.DOD.Tests.Editor
+PlayMode  CycloneGames.BehaviorTree.Tests.PlayMode
+EditMode  CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
 ```
 
-Test Play Mode with Domain Reload enabled and disabled. Run benchmark matrix in release Player settings. Verify on all target platforms including IL2CPP/AOT.
+### Minimum manual Editor checks
+
+1. Create an asset, use `Repair Asset` and `Repair Root`, create/connect/delete/paste nodes, then Undo and Redo each operation.
+2. Save, close, reopen, and confirm node configuration and positions.
+3. Attempt a cycle, second parent, and second decorator/root child; confirm the editor refuses each link. Use a focused fixture to reference a node from a second asset, then confirm `Validate` reports it and `Repair Asset` refuses it.
+4. Enter Play Mode and confirm selection, pan, search, focus, and live state remain available while authoring operations are read-only.
+5. Enter Play Mode with `Self`, `Managed`, `PriorityManaged`, and `Manual` ownership as used by the product.
+6. Confirm natural completion unregisters the runner, `Play` creates a new activation, and disable/enable does not double-register.
+7. Run a bounded benchmark case before any matrix or soak run.
+
+## References
+
+- [Tests/README.md](Tests/README.md) — batchmode commands and benchmark interpretation.

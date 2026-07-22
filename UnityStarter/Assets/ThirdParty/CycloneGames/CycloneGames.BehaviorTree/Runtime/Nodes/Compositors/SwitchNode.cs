@@ -8,6 +8,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
     {
         [SerializeField] private string _variableKey = "";
 
+        public string VariableKey => _variableKey;
+
         public override BTNode Clone()
         {
             var clone = (SwitchNode)base.Clone();

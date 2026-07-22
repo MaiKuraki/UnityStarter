@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Compilation;
 using CycloneGames.BehaviorTree.Runtime.Core;
@@ -21,52 +22,19 @@ namespace CycloneGames.BehaviorTree.Runtime
         public BTNode Root;
         public List<BTNode> Nodes = new List<BTNode>();
 
-        private readonly List<BTNode> _childrenCache = new List<BTNode>(8);
-
-        public List<BTNode> GetChildren(BTNode parent)
-        {
-            _childrenCache.Clear();
-
-            BTRootNode root = parent as BTRootNode;
-            if (root != null && root.Child != null)
-            {
-                _childrenCache.Add(root.Child);
-                return _childrenCache;
-            }
-
-            DecoratorNode decorator = parent as DecoratorNode;
-            if (decorator != null && decorator.Child != null)
-            {
-                _childrenCache.Add(decorator.Child);
-                return _childrenCache;
-            }
-
-            CompositeNode composite = parent as CompositeNode;
-            if (composite != null)
-            {
-                _childrenCache.AddRange(composite.Children);
-            }
-
-            return _childrenCache;
-        }
-
         /// <summary>
-        /// Validates the behavior tree structure and removes null nodes.
+        /// Unity validation callback. Structural validation is exposed by BehaviorTreeCompiler;
+        /// serialized repair is an explicit Undo-aware Editor operation.
         /// </summary>
         public void OnValidate()
         {
-            for (int i = Nodes.Count - 1; i >= 0; i--)
+#if UNITY_EDITOR
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
             {
-                if (Nodes[i] == null)
-                {
-                    Nodes.RemoveAt(i);
-                }
+                return;
             }
+#endif
 
-            for (int i = 0; i < Nodes.Count; i++)
-            {
-                Nodes[i].OnValidate();
-            }
         }
 
         /// <summary>
@@ -74,6 +42,11 @@ namespace CycloneGames.BehaviorTree.Runtime
         /// </summary>
         public void OnDrawGizmos()
         {
+            if (Nodes == null)
+            {
+                return;
+            }
+
             for (int i = 0; i < Nodes.Count; i++)
             {
                 Nodes[i]?.OnDrawGizmos();
@@ -82,7 +55,7 @@ namespace CycloneGames.BehaviorTree.Runtime
 
         /// <summary>
         /// Compiles the ScriptableObject-based behavior tree into a pure C# runtime instance.
-        /// This method is 0GC at runtime after the initial compilation.
+        /// Compilation allocates the runtime graph. Measure steady-state execution separately for the selected tree and target platform.
         /// </summary>
         /// <returns>A new RuntimeBehaviorTree instance</returns>
         public RuntimeBehaviorTree Compile()
@@ -121,46 +94,163 @@ namespace CycloneGames.BehaviorTree.Runtime
 
         public BTNode CreateNode(System.Type type)
         {
-            var node = CreateInstance(type) as BTNode;
-            if (node == null) return null;
-            node.Tree = this;
-            node.name = type.Name;
-            node.GUID = System.Guid.NewGuid().ToString();
-            Undo.RecordObject(this, "Behavior Tree(Create Node)");
-            Nodes.Add(node);
-            if (!Application.isPlaying)
+            EnsureEditorMutationAllowed();
+            if (type == null || type.IsAbstract || !typeof(BTNode).IsAssignableFrom(type))
             {
-                AssetDatabase.AddObjectToAsset(node, this);
-                Undo.RegisterCreatedObjectUndo(node, "Behavior Tree(Create Node)");
+                throw new ArgumentException("The node type must be a concrete BTNode type.", nameof(type));
             }
 
-            return node;
+            const string undoName = "Behavior Tree(Create Node)";
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName(undoName);
+
+            BTNode node = null;
+            try
+            {
+                Undo.RegisterCompleteObjectUndo(this, undoName);
+                node = CreateInstance(type) as BTNode;
+                if (node == null)
+                {
+                    throw new InvalidOperationException($"Unity could not create behavior tree node type '{type.FullName}'.");
+                }
+
+                node.Tree = this;
+                node.name = type.Name;
+                node.GUID = System.Guid.NewGuid().ToString();
+                AttachTransientNodeToTreeAsset(node);
+                Nodes ??= new List<BTNode>();
+                Nodes.Add(node);
+                Undo.RegisterCreatedObjectUndo(node, undoName);
+                EditorUtility.SetDirty(node);
+                EditorUtility.SetDirty(this);
+                Undo.CollapseUndoOperations(undoGroup);
+                return node;
+            }
+            catch
+            {
+                Undo.RevertAllDownToGroup(undoGroup);
+                CleanupFailedCreatedNode(node);
+                throw;
+            }
         }
 
         public void AddNode(BTNode node)
         {
-            Undo.RecordObject(this, "Behavior Tree(Copy Node)");
-            Nodes.Add(node);
-            if (!Application.isPlaying)
+            EnsureEditorMutationAllowed();
+            if (node == null)
             {
-                AssetDatabase.AddObjectToAsset(node, this);
-                Undo.RegisterCreatedObjectUndo(node, "Behavior Tree(Copy Node)");
+                throw new ArgumentNullException(nameof(node));
+            }
+
+            const string undoName = "Behavior Tree(Add Node)";
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName(undoName);
+
+            bool wasTransient = string.IsNullOrEmpty(AssetDatabase.GetAssetPath(node));
+            bool attachedDuringTransaction = false;
+            try
+            {
+                Undo.RegisterCompleteObjectUndo(this, undoName);
+                Undo.RegisterCompleteObjectUndo(node, undoName);
+
+                attachedDuringTransaction = AttachTransientNodeToTreeAsset(node);
+                node.Tree = this;
+                Nodes ??= new List<BTNode>();
+                Nodes.Add(node);
+                if (wasTransient)
+                {
+                    Undo.RegisterCreatedObjectUndo(node, undoName);
+                }
+
+                EditorUtility.SetDirty(node);
+                EditorUtility.SetDirty(this);
+                Undo.CollapseUndoOperations(undoGroup);
+            }
+            catch
+            {
+                Undo.RevertAllDownToGroup(undoGroup);
+                CleanupFailedAddedNode(node, wasTransient, attachedDuringTransaction);
+                throw;
             }
         }
 
         public void DeleteNode(BTNode node)
         {
-            Undo.RecordObject(this, "Behavior Tree(Delete Node)");
-            Nodes.Remove(node);
-            for (int i = 0; i < Nodes.Count; i++)
+            EnsureEditorMutationAllowed();
+            if (node == null)
             {
-                Nodes[i].OnValidate();
+                return;
             }
+
+            const string undoName = "Behavior Tree(Delete Node)";
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName(undoName);
+
+            var affectedParents = new List<BTNode>();
+            var undoTargets = new List<UnityEngine.Object> { this };
+            if (Nodes != null)
+            {
+                for (int i = 0; i < Nodes.Count; i++)
+                {
+                    BTNode candidate = Nodes[i];
+                    if (candidate == null || candidate == node || !ReferencesChild(candidate, node))
+                    {
+                        continue;
+                    }
+
+                    affectedParents.Add(candidate);
+                    undoTargets.Add(candidate);
+                }
+            }
+
+            Undo.RegisterCompleteObjectUndo(undoTargets.ToArray(), undoName);
+
+            if (Root == node)
+            {
+                Root = null;
+            }
+
+            for (int i = 0; i < affectedParents.Count; i++)
+            {
+                BTNode parent = affectedParents[i];
+                if (parent is BTRootNode root)
+                {
+                    root.Child = null;
+                }
+                else if (parent is DecoratorNode decorator)
+                {
+                    decorator.Child = null;
+                }
+                else if (parent is CompositeNode composite)
+                {
+                    composite.RemoveChildForAuthoring(node);
+                }
+
+                EditorUtility.SetDirty(parent);
+            }
+
+            if (Nodes != null)
+            {
+                for (int i = Nodes.Count - 1; i >= 0; i--)
+                {
+                    if (Nodes[i] == node)
+                    {
+                        Nodes.RemoveAt(i);
+                    }
+                }
+            }
+
+            EditorUtility.SetDirty(this);
             Undo.DestroyObjectImmediate(node);
+            Undo.CollapseUndoOperations(undoGroup);
         }
 
         public void AddChild(BTNode parent, BTNode child)
         {
+            EnsureEditorMutationAllowed();
             BTRootNode root = parent as BTRootNode;
             if (root != null)
             {
@@ -181,8 +271,7 @@ namespace CycloneGames.BehaviorTree.Runtime
             if (composite != null)
             {
                 Undo.RecordObject(composite, "Behavior Tree(Add Child)");
-                composite.Children.Add(child);
-                composite.OnValidate();
+                composite.AddChildForAuthoring(child);
                 EditorUtility.SetDirty(composite);
             }
             parent.OnValidate();
@@ -190,6 +279,7 @@ namespace CycloneGames.BehaviorTree.Runtime
 
         public void RemoveChild(BTNode parent, BTNode child)
         {
+            EnsureEditorMutationAllowed();
             BTRootNode root = parent as BTRootNode;
             if (root != null)
             {
@@ -210,18 +300,137 @@ namespace CycloneGames.BehaviorTree.Runtime
             if (composite != null)
             {
                 Undo.RecordObject(composite, "Behavior Tree(Remove Child)");
-                composite.Children.Remove(child);
-                composite.OnValidate();
+                composite.RemoveChildForAuthoring(child);
                 EditorUtility.SetDirty(composite);
             }
             parent.OnValidate();
         }
 
+        public void NormalizeCompositeChildren(CompositeNode composite)
+        {
+            EnsureEditorMutationAllowed();
+            if (composite == null)
+            {
+                return;
+            }
+
+            Undo.RecordObject(composite, "Behavior Tree(Normalize Children)");
+            composite.NormalizeChildrenForAuthoring();
+            EditorUtility.SetDirty(composite);
+        }
+
         public void NotifyTreeChanged()
         {
+            EnsureEditorMutationAllowed();
             Undo.RecordObject(this, "Tree Changed");
             OnValidate();
             EditorUtility.SetDirty(this);
+        }
+
+        private static void EnsureEditorMutationAllowed()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                throw new InvalidOperationException(
+                    "Behavior tree authoring assets are read-only while the Editor is entering, running, or exiting Play Mode.");
+            }
+        }
+
+        private bool AttachTransientNodeToTreeAsset(BTNode node)
+        {
+            string treePath = AssetDatabase.GetAssetPath(this);
+            string nodePath = AssetDatabase.GetAssetPath(node);
+            if (string.IsNullOrEmpty(treePath))
+            {
+                if (!string.IsNullOrEmpty(nodePath))
+                {
+                    throw new InvalidOperationException(
+                        $"Cannot add persistent node '{node.name}' to a transient behavior tree.");
+                }
+
+                return false;
+            }
+
+            if (!string.IsNullOrEmpty(nodePath))
+            {
+                if (!string.Equals(nodePath, treePath, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        $"Node '{node.name}' belongs to asset '{nodePath}' and cannot be owned by behavior tree '{treePath}'.");
+                }
+
+                // AddObjectToAsset assigns the target path immediately, while IsSubAsset can remain
+                // false until the asset is synchronously imported by the owning Editor transaction.
+                return false;
+            }
+
+            if (node.Tree != null && node.Tree != this)
+            {
+                throw new InvalidOperationException(
+                    $"Transient node '{node.name}' is already owned by another behavior tree.");
+            }
+
+            AssetDatabase.AddObjectToAsset(node, this);
+            return true;
+        }
+
+        private static void CleanupFailedCreatedNode(BTNode node)
+        {
+            if (node == null)
+            {
+                return;
+            }
+
+            if (!string.IsNullOrEmpty(AssetDatabase.GetAssetPath(node)))
+            {
+                AssetDatabase.RemoveObjectFromAsset(node);
+            }
+
+            if (node != null)
+            {
+                DestroyImmediate(node);
+            }
+        }
+
+        private static void CleanupFailedAddedNode(
+            BTNode node,
+            bool wasTransient,
+            bool attachedDuringTransaction)
+        {
+            if (node != null &&
+                (attachedDuringTransaction || wasTransient) &&
+                !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(node)))
+            {
+                AssetDatabase.RemoveObjectFromAsset(node);
+            }
+        }
+
+        private static bool ReferencesChild(BTNode parent, BTNode child)
+        {
+            if (parent is BTRootNode root)
+            {
+                return root.Child == child;
+            }
+
+            if (parent is DecoratorNode decorator)
+            {
+                return decorator.Child == child;
+            }
+
+            if (!(parent is CompositeNode composite) || composite.Children == null)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < composite.Children.Count; i++)
+            {
+                if (composite.Children[i] == child)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 #endif
         #endregion

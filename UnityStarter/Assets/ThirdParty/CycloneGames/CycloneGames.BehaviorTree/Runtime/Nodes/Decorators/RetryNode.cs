@@ -8,6 +8,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
     {
         [SerializeField] private int _maxAttempts = 3;
 
+        public int MaxAttempts => _maxAttempts;
+
         public override BTNode Clone()
         {
             var clone = (RetryNode)base.Clone();

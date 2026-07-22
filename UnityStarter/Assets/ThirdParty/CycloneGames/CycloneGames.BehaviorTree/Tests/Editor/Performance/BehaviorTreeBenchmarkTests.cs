@@ -382,11 +382,11 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Performance
         }
 
         [Test]
-        public void BenchmarkPresetCatalog_CreatesCertificationMatrixWithBudgets()
+        public void BenchmarkPresetCatalog_CreatesConfiguredBudgetMatrix()
         {
-            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateCertificationMatrixConfigs();
+            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateConfiguredBudgetMatrixConfigs();
 
-            Assert.AreEqual(BehaviorTreeBenchmarkPresetCatalog.GetCertificationPresets().Length, configs.Length);
+            Assert.AreEqual(BehaviorTreeBenchmarkPresetCatalog.GetConfiguredBudgetPresets().Length, configs.Length);
             for (int i = 0; i < configs.Length; i++)
             {
                 Assert.Greater(configs[i].AgentCount, 0);

@@ -1,0 +1,25 @@
+{
+  "name": "com.cyclone-games.persistence.messagepack",
+  "version": "0.1.0",
+  "displayName": "CycloneGames.Persistence.MessagePack",
+  "description": "Optional source-generated MessagePack codec provider for CycloneGames.Persistence.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.persistence": "0.1.0",
+    "com.github.messagepack-csharp": "3.1.8"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Persistence",
+    "MessagePack",
+    "Binary",
+    "Codec"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.Persistence.Unity",
+    "rootNamespace": "CycloneGames.Persistence.Unity",
+    "references": [
+        "CycloneGames.Persistence.Core",
+        "CycloneGames.Persistence.SystemIO"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

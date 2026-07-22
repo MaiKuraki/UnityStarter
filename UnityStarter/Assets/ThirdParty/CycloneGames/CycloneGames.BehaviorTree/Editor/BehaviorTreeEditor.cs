@@ -16,6 +16,11 @@ namespace CycloneGames.BehaviorTree.Editor
         private BTInspectorView _inspectorView;
         private ToolbarSearchField _searchField;
         private Label _statsLabel;
+        private ToolbarButton _saveButton;
+        private ToolbarButton _sortButton;
+        private ToolbarButton _repairAssetButton;
+        private ToolbarButton _repairRootButton;
+        private bool _authoringReadOnly;
         [MenuItem("Tools/CycloneGames/Behavior Tree/Behavior Tree Editor")]
         public static void OpenWindow()
         {
@@ -25,8 +30,9 @@ namespace CycloneGames.BehaviorTree.Editor
         [OnOpenAsset]
         public static bool OnOpenAsset(int instanceID, int line)
         {
-            if (Selection.activeObject is Runtime.BehaviorTree)
+            if (EditorUtility.InstanceIDToObject(instanceID) is Runtime.BehaviorTree tree)
             {
+                Selection.activeObject = tree;
                 OpenWindow();
                 return true;
             }
@@ -40,7 +46,13 @@ namespace CycloneGames.BehaviorTree.Editor
 
             CreateToolbar(root);
 
-            var visualTree = Resources.Load<VisualTreeAsset>("BT_Editor_Layout");
+            var visualTree = BehaviorTreeEditorResources.EditorLayout;
+            if (visualTree == null)
+            {
+                root.Add(new Label("Behavior Tree editor assets are unavailable. See the Console for the missing asset GUID."));
+                return;
+            }
+
             visualTree.CloneTree(root);
 
             _behaviorTreeView = root.Q<BehaviorTreeView>();
@@ -48,14 +60,16 @@ namespace CycloneGames.BehaviorTree.Editor
 
             root.RegisterCallback<KeyDownEvent>(evt =>
             {
-                if (evt.keyCode == KeyCode.S && evt.ctrlKey)
+                if (evt.keyCode == KeyCode.S && evt.actionKey)
                 {
                     Save();
+                    evt.StopPropagation();
                 }
             });
 
             _behaviorTreeView.OnNodeSelectionChanged += OnNodeSelectionChange;
             OnSelectionChange();
+            RefreshAuthoringControls();
             UpdateStats();
         }
 
@@ -64,17 +78,25 @@ namespace CycloneGames.BehaviorTree.Editor
             var toolbar = new Toolbar();
             toolbar.style.flexShrink = 0;
 
-            var saveButton = new ToolbarButton(Save) { text = "Save" };
-            toolbar.Add(saveButton);
+            _saveButton = new ToolbarButton(Save) { text = "Save" };
+            toolbar.Add(_saveButton);
 
             var validateButton = new ToolbarButton(ValidateCurrentTree) { text = "Validate" };
             toolbar.Add(validateButton);
 
-            var sortButton = new ToolbarButton(() => _behaviorTreeView?.SortNodes()) { text = "Sort" };
-            toolbar.Add(sortButton);
+            _sortButton = new ToolbarButton(() => _behaviorTreeView?.SortNodes()) { text = "Sort" };
+            toolbar.Add(_sortButton);
 
             var rootButton = new ToolbarButton(() => _behaviorTreeView?.ReturnToRoot()) { text = "Focus Root" };
             toolbar.Add(rootButton);
+
+            _repairAssetButton = new ToolbarButton(RepairAuthoringData) { text = "Repair Asset" };
+            _repairAssetButton.tooltip = "Repair null or missing authoring lists and sub-asset ownership with Undo support.";
+            toolbar.Add(_repairAssetButton);
+
+            _repairRootButton = new ToolbarButton(RepairMissingRoot) { text = "Repair Root" };
+            _repairRootButton.tooltip = "Restore a missing root reference or create a root explicitly.";
+            toolbar.Add(_repairRootButton);
 
             var refreshButton = new ToolbarButton(() =>
             {
@@ -111,6 +133,12 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private void Save()
         {
+            if (_authoringReadOnly || EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                Debug.LogWarning($"{DEBUG_FLAG} Save skipped: behavior tree authoring is read-only in Play Mode.");
+                return;
+            }
+
             if (_behaviorTreeView == null || !_behaviorTreeView.HasTree || _behaviorTreeView.Tree == null)
             {
                 Debug.LogWarning($"{DEBUG_FLAG} Save skipped: no behavior tree is currently loaded.");
@@ -122,11 +150,52 @@ namespace CycloneGames.BehaviorTree.Editor
             log.AppendLine("Save Behavior Tree : " + _behaviorTreeView.Tree.name);
             log.AppendLine("Path : " + AssetDatabase.GetAssetPath(_behaviorTreeView.Tree));
             Debug.Log(log.ToString());
-            AssetDatabase.SaveAssets();
+            AssetDatabase.SaveAssetIfDirty(_behaviorTreeView.Tree);
+        }
+
+        private void RepairMissingRoot()
+        {
+            if (_behaviorTreeView == null || !_behaviorTreeView.HasTree)
+            {
+                EditorUtility.DisplayDialog("Behavior Tree Root Repair", "No tree selected.", "OK");
+                return;
+            }
+
+            bool repaired = _behaviorTreeView.TryRepairMissingRoot(out string message);
+            EditorUtility.DisplayDialog(
+                repaired ? "Behavior Tree Root Repaired" : "Behavior Tree Root Repair",
+                message,
+                "OK");
+
+            if (repaired)
+            {
+                UpdateStats();
+            }
+        }
+
+        private void RepairAuthoringData()
+        {
+            if (_behaviorTreeView == null || !_behaviorTreeView.HasTree)
+            {
+                EditorUtility.DisplayDialog("Behavior Tree Asset Repair", "No tree selected.", "OK");
+                return;
+            }
+
+            bool repaired = _behaviorTreeView.TryRepairAuthoringData(out string message);
+            EditorUtility.DisplayDialog(
+                repaired ? "Behavior Tree Asset Repaired" : "Behavior Tree Asset Repair",
+                message,
+                "OK");
+
+            if (repaired)
+            {
+                UpdateStats();
+            }
         }
 
         private void OnEnable()
         {
+            _authoringReadOnly = EditorApplication.isPlayingOrWillChangePlaymode;
             EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
             EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
             EditorApplication.update += OnEditorUpdate;
@@ -139,6 +208,8 @@ namespace CycloneGames.BehaviorTree.Editor
         }
         private void OnPlayModeStateChanged(PlayModeStateChange modeState)
         {
+            _authoringReadOnly = modeState != PlayModeStateChange.EnteredEditMode;
+            RefreshAuthoringControls();
             switch (modeState)
             {
                 case PlayModeStateChange.EnteredEditMode:
@@ -152,6 +223,15 @@ namespace CycloneGames.BehaviorTree.Editor
                 default:
                     break;
             }
+        }
+
+        private void RefreshAuthoringControls()
+        {
+            bool authoringEnabled = !_authoringReadOnly && !EditorApplication.isPlayingOrWillChangePlaymode;
+            _saveButton?.SetEnabled(authoringEnabled);
+            _sortButton?.SetEnabled(authoringEnabled);
+            _repairAssetButton?.SetEnabled(authoringEnabled);
+            _repairRootButton?.SetEnabled(authoringEnabled);
         }
 
         private Runtime.BehaviorTree _lastTree;
@@ -184,7 +264,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     if (runner)
                     {
                         _lastTree = runner.Tree;
-                        if (!Application.isPlaying)
+                        if (!Application.isPlaying && _lastTree != null)
                         {
                             _lastTree.SetEditorOwner(runner.gameObject);
                         }
@@ -321,7 +401,10 @@ namespace CycloneGames.BehaviorTree.Editor
                 ? $" | Selected: {selectedNode.Node.GetType().Name}"
                 : string.Empty;
 
-            _statsLabel.text = $"Nodes: {_behaviorTreeView.GetNodeCount()}{selectedText}";
+            string modeText = _authoringReadOnly || EditorApplication.isPlayingOrWillChangePlaymode
+                ? " | Play Mode: Read Only"
+                : string.Empty;
+            _statsLabel.text = $"Nodes: {_behaviorTreeView.GetNodeCount()}{selectedText}{modeText}";
         }
 
         private void OnInspectorUpdate()
@@ -330,6 +413,91 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 Repaint();
             }
+        }
+    }
+
+    internal static class BehaviorTreeEditorResources
+    {
+        private const string EditorLayoutGuid = "7cc5d4f0bab93384cb8db3533da654e6";
+        private const string EditorStyleGuid = "bf8be869980123747aa53e13b8e51d5b";
+        private const string NodeLayoutGuid = "657fad77865cc0f48bd32bf9e8736ff5";
+        private const string NodeStyleGuid = "58cd66f66a7c2b243b22592bb0975bf7";
+
+        private static VisualTreeAsset _editorLayout;
+        private static StyleSheet _editorStyle;
+        private static VisualTreeAsset _nodeLayout;
+        private static StyleSheet _nodeStyle;
+        private static bool _editorLayoutAttempted;
+        private static bool _editorStyleAttempted;
+        private static bool _nodeLayoutAttempted;
+        private static bool _nodeStyleAttempted;
+        private static string _nodeLayoutPath;
+
+        public static VisualTreeAsset EditorLayout => Load(
+            ref _editorLayout,
+            ref _editorLayoutAttempted,
+            EditorLayoutGuid,
+            "editor layout");
+
+        public static StyleSheet EditorStyle => Load(
+            ref _editorStyle,
+            ref _editorStyleAttempted,
+            EditorStyleGuid,
+            "editor style sheet");
+
+        public static StyleSheet NodeStyle => Load(
+            ref _nodeStyle,
+            ref _nodeStyleAttempted,
+            NodeStyleGuid,
+            "node style sheet");
+
+        public static string NodeLayoutPath
+        {
+            get
+            {
+                if (_nodeLayoutPath != null)
+                {
+                    return _nodeLayoutPath;
+                }
+
+                VisualTreeAsset layout = Load(
+                    ref _nodeLayout,
+                    ref _nodeLayoutAttempted,
+                    NodeLayoutGuid,
+                    "node layout");
+                _ = NodeStyle;
+                _nodeLayoutPath = layout == null ? string.Empty : AssetDatabase.GetAssetPath(layout);
+                return _nodeLayoutPath;
+            }
+        }
+
+        private static T Load<T>(
+            ref T cachedAsset,
+            ref bool attempted,
+            string guid,
+            string description)
+            where T : UnityEngine.Object
+        {
+            if (attempted)
+            {
+                return cachedAsset;
+            }
+
+            attempted = true;
+            string path = AssetDatabase.GUIDToAssetPath(guid);
+            if (string.IsNullOrEmpty(path))
+            {
+                Debug.LogError($"[BehaviorTreeEditor] Missing {description} asset for GUID '{guid}'.");
+                return null;
+            }
+
+            cachedAsset = AssetDatabase.LoadAssetAtPath<T>(path);
+            if (cachedAsset == null)
+            {
+                Debug.LogError($"[BehaviorTreeEditor] Failed to load {description} at '{path}' (GUID '{guid}').");
+            }
+
+            return cachedAsset;
         }
     }
 }

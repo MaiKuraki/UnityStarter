@@ -15,23 +15,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         public override void OnAwake()
         {
             base.OnAwake();
-            _completed = Children != null ? new bool[Children.Length] : System.Array.Empty<bool>();
+            _completed = ChildCount == 0 ? System.Array.Empty<bool>() : new bool[ChildCount];
         }
 
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
             _current = 0;
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             for (int i = 0; i < _completed.Length; i++)
             {
                 _completed[i] = false;
-                children[i].ResetState();
+                children[i].PrepareForActivation();
             }
         }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
 
             while (_current < children.Length)
             {
@@ -57,9 +57,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             return RuntimeState.Success;
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(RuntimeBlackboard blackboard, RuntimeNodeExitReason reason, System.Exception exception)
         {
-            var children = Children;
+            RuntimeNode[] children = ChildArray;
             for (int i = 0; i < children.Length; i++)
             {
                 if (children[i].IsStarted) children[i].Abort(blackboard);

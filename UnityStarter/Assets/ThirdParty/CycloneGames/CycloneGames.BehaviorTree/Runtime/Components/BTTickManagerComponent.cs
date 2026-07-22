@@ -2,10 +2,18 @@ using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
+    [DisallowMultipleComponent]
     public class BTTickManagerComponent : MonoBehaviour
     {
         private static BTTickManagerComponent _instance;
         private static bool _isQuitting;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+        private static void ResetStaticState()
+        {
+            _instance = null;
+            _isQuitting = false;
+        }
 
         public static bool HasInstance => _instance != null;
 
@@ -17,9 +25,17 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
                 if (_instance == null)
                 {
-                    var go = new GameObject("[BTTickManager]");
-                    _instance = go.AddComponent<BTTickManagerComponent>();
-                    DontDestroyOnLoad(go);
+                    _instance = BTManagerSceneResolver.FindExisting<BTTickManagerComponent>(nameof(BTTickManagerComponent));
+                    if (_instance == null)
+                    {
+                        var go = new GameObject("[BTTickManager]");
+                        BTTickManagerComponent created = go.AddComponent<BTTickManagerComponent>();
+                        if (_instance == null)
+                        {
+                            _instance = created;
+                        }
+                        DontDestroyOnLoad(go);
+                    }
                 }
                 return _instance;
             }
@@ -37,9 +53,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void Awake()
         {
+            if (_instance == null)
+            {
+                _instance = BTManagerSceneResolver.FindExisting<BTTickManagerComponent>(nameof(BTTickManagerComponent));
+            }
+
             if (_instance != null && _instance != this)
             {
-                Destroy(gameObject);
+                Debug.LogWarning(
+                    $"[BTTickManagerComponent] Removing duplicate manager component from '{gameObject.name}'. " +
+                    $"The active instance is '{_instance.gameObject.name}'.",
+                    this);
+                Destroy(this);
                 return;
             }
             _instance = this;

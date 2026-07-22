@@ -1,0 +1,23 @@
+{
+  "name": "com.cyclone-games.persistence",
+  "version": "0.1.0",
+  "displayName": "CycloneGames.Persistence",
+  "description": "Serializer-neutral, bounded, versioned single-record persistence contracts and orchestration.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.hash": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Persistence",
+    "Save",
+    "Storage"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

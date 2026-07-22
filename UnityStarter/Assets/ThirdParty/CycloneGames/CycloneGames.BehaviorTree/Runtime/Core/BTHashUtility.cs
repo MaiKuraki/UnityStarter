@@ -1,3 +1,4 @@
+using System;
 using System.Runtime.CompilerServices;
 using CycloneGames.Hash.Core;
 
@@ -10,29 +11,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
     ///
     /// Usage:
     ///   int key = BTHash.FNV1A("Health");  // deterministic, same result every process
-    ///   int key = BTHash.FNV1ACaseInsensitive("Health"); // case-insensitive variant
+    ///   int key = BTHash.FNV1ACaseInsensitive("Health"); // ASCII case-insensitive variant
     ///
     /// Note: These produce different hash values than Animator.StringToHash.
     /// Choose one at project initialization and use consistently.
     /// </summary>
     public static class BTHash
     {
-        private const uint FNV_OFFSET_BASIS = Fnv1a32.OffsetBasis;
-        private const uint FNV_PRIME = Fnv1a32.Prime;
-
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public static int FNV1A(string value)
         {
             if (string.IsNullOrEmpty(value)) return 0;
-
-            uint hash = FNV_OFFSET_BASIS;
-            int len = value.Length;
-            for (int i = 0; i < len; i++)
-            {
-                hash ^= (byte)value[i];
-                hash *= FNV_PRIME;
-            }
-            return (int)hash;
+            return unchecked((int)Fnv1a32.ComputeUtf16Ordinal(value.AsSpan()));
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -40,15 +30,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         {
             if (string.IsNullOrEmpty(value)) return 0;
 
-            uint hash = FNV_OFFSET_BASIS;
+            uint hash = Fnv1a32.OffsetBasis;
             int len = value.Length;
             for (int i = 0; i < len; i++)
             {
                 char c = value[i];
                 if (c >= 'A' && c <= 'Z')
                     c = (char)(c + 32);
-                hash ^= (byte)c;
-                hash *= FNV_PRIME;
+                hash ^= c;
+                hash *= Fnv1a32.Prime;
             }
             return (int)hash;
         }

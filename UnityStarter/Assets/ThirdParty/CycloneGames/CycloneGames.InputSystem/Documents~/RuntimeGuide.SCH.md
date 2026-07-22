@@ -4,9 +4,13 @@
 
 相关：[快速上手](GettingStarted.SCH.md) | [配置指南](Configuration.SCH.md) | [模块参考](../README.SCH.md)
 
+## 概述
+
 本指南覆盖 runtime ownership、配置加载、player 创建、context routing、本地多人、rebind、persistence 与 shutdown。
 
-## Runtime ownership
+## 核心概念
+
+### Runtime ownership
 
 Composition root 为一个 input session 持有一个 `InputManager`：
 
@@ -21,11 +25,9 @@ flowchart LR
     P1 --> C1["Active context stack"]
 ```
 
-Owner 负责选择并验证 configuration、创建与移除 player、订阅与取消订阅 manager event、dispose scene 或 feature 持有的 context，以及 shutdown 时 dispose manager。
+Owner 负责选择并验证 configuration、创建与移除 player、订阅与取消订阅 manager event、dispose scene 或 feature 持有的 context，以及 shutdown 时 dispose manager。除非 API 明确声明其他 thread，Unity object 与 Input System operation 都属于 Unity main thread。
 
-除非 API 明确声明其他 thread，Unity object 与 Input System operation 都属于 Unity main thread。
-
-## 加载策略
+### 加载策略
 
 `InputSystemBootstrapOptions` 声明 configuration disabled、optional 或 required：
 
@@ -52,9 +54,11 @@ InputSystemLoadResult load = await InputSystemLoader.LoadAndInitializeAsync(
 
 Invalid、inaccessible 或 oversized content 在所有 mode 下都会报告 failure。`IsBootstrapComplete` 包含 `NotConfigured`；`IsSuccess` 表示 validated runtime configuration 已 commit。
 
-## Player 创建模式
+## 使用指南
 
-### 单玩家与最佳可用 scheme
+### Player 创建模式
+
+**单玩家与最佳可用 scheme：**
 
 ```csharp
 IInputPlayer player = manager.JoinSinglePlayer(0);
@@ -73,7 +77,7 @@ IInputPlayer player = await manager.JoinSinglePlayerAsync(
     cancellationToken);
 ```
 
-### 共享键盘或共享设备
+**共享键盘或共享设备：**
 
 ```csharp
 IInputPlayer player0 = await manager.JoinPlayerOnSharedDeviceAsync(0);
@@ -82,7 +86,7 @@ IInputPlayer player1 = await manager.JoinPlayerOnSharedDeviceAsync(1);
 
 两个 slot 都必须声明适用于 shared device 的 action 与 scheme。除非产品明确允许同时响应，否则应避免 control overlap。
 
-### Lobby join
+**Lobby join：**
 
 ```csharp
 manager.OnPlayerInputReady += HandlePlayerReady;
@@ -96,7 +100,7 @@ manager.StopListeningForPlayers();
 manager.OnPlayerInputReady -= HandlePlayerReady;
 ```
 
-### 移除 player
+**移除 player：**
 
 ```csharp
 bool removed = manager.RemovePlayer(playerId);
@@ -104,7 +108,7 @@ bool removed = manager.RemovePlayer(playerId);
 
 Remove 会 dispose player-owned input resource。Product code 仍负责 despawn 对应 gameplay object，并释放 feature-owned context。
 
-## Context routing
+### Context routing
 
 `InputContext` 将 configured observable 绑定到 product command：
 
@@ -126,7 +130,7 @@ player.PushContext(gameplay);
 
 较高 priority context 先执行。Blocking context 会禁止较低 priority context dispatch。
 
-### Menu 覆盖 Gameplay
+**Menu 覆盖 Gameplay：**
 
 ```csharp
 var menu = new InputContext(
@@ -149,7 +153,7 @@ menu.Dispose();
 
 多个系统需要在 nested operation 后可靠恢复 context state 时，使用 capture scope 持有临时 modal ownership。
 
-## Event-driven 与 polling input
+### Event-driven 与 polling input
 
 产品 event-driven behavior 使用 observable API：
 
@@ -163,7 +167,7 @@ player.GetButtonObservable(actionId)
 
 Polling action 由 configured frame provider 采样。Frame-loop read 应保持 allocation-free，hot path 内不要构造 identity 或 collection。
 
-## Long press
+### Long press
 
 配置通过 `longPressMs` 与 `longPressValueThreshold` 启用 module-level long press：
 
@@ -176,7 +180,7 @@ var context = new InputContext("PlayerActions", "Gameplay")
 
 不需要 long-press 时将 `longPressMs` 设为 `0`。Action 需要 Input System phase semantics 时使用 Input System `Interactions`。
 
-## Rebind
+### Rebind
 
 修改 declared direct binding：
 
@@ -205,7 +209,7 @@ string report = InputManager.FormatConflictsReport(conflicts);
 
 Rebind 与 conflict report 应在 settings flow 中执行，不要放入 gameplay hot path。
 
-## Binding profile
+### Binding profile
 
 Manager 可以 export 覆盖 declared player 的 profile：
 
@@ -221,7 +225,7 @@ bool applied = manager.ImportBindingOverrideProfileJson(json);
 
 产品拥有 profile key、save timing、retention、account association、cloud synchronization 与 reset UX。Profile 被拒绝时保持 configured default active，并提供显式 reset 操作。
 
-## 更新配置
+### 更新配置
 
 Configuration replacement 是 session boundary：
 
@@ -234,13 +238,13 @@ Configuration replacement 是 session boundary：
 
 Replacement failure 时，manager 保留当前 committed configuration。
 
-## Persistence ownership
+### Persistence ownership
 
 `IInputConfigurationSource` 读取 configuration；`IInputConfigurationStore` 增加 save 与 delete。Store implementation 拥有 root 或 remote endpoint、path/key rule、size 与 timeout budget、atomic replacement、backup 与 recovery、cancellation 与 shutdown behavior，以及产品需要时的 encryption 与 account policy。
 
 `FileInputConfigurationStore` 将 key 限制在 configured root 内，通过 temporary file 写入，并保留一个 recovery backup。WebGL 产品应提供 browser-oriented store implementation。
 
-## Shutdown
+### Shutdown
 
 按 ownership 顺序执行 shutdown：
 
@@ -256,11 +260,22 @@ manager.Dispose();
 
 不要再次初始化 disposed manager；新的 session 应构造新的 manager。
 
-## 生产检查清单
+## 故障排除
+
+| 症状 | 可能原因 | 解决方法 |
+| --- | --- | --- |
+| Player 创建返回 `null` | 没有 device 匹配 declared scheme，或 device 已配对/保留 | 检查 Input Debugger 中的 paired user 和 device availability。 |
+| Context command 不触发 | Context 未 push、identity 大小写不匹配或 context 被更高 priority 阻止 | 验证 `ActiveContextName` 和 context push 顺序。 |
+| `ActiveDeviceKind` 持续显示 `Unknown` | 尚无 action 收到有意义的 device input | 触发一个已配置的 action；`ActiveDeviceKind` 反映观察到的 activity。 |
+| Rebind 不生效 | `oldBinding` 使用错误路径或 action identity 不匹配 | 使用 context-qualified 重载和原始配置路径。 |
+| Binding profile import 失败 | Schema 不匹配、identity selector 过时或 budget 超出 | 保持 defaults active、保留 profile、提供产品自有 reset。 |
+| Manager 意外 disposed | Domain-reload-disabled play 时触发 subsystem registration | 在 teardown 时显式 dispose manager；下一 session 构造新实例。 |
+
+### 生产检查清单
 
 - 一个 composition owner 控制 manager lifetime。
 - 每个 async operation 接收产品 cancellation token。
-- Context 有可见 owner 与 deterministic disposal。
+- Context 有可见 owner 与确定性 disposal。
 - Player join policy 显式选择 locked 或 shared device。
 - Configuration 与 profile store 有有限 budget。
 - Log 记录 status 与有界 diagnostic，不记录 raw user configuration。

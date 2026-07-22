@@ -5,6 +5,7 @@ using UnityEditor.Experimental.GraphView;
 using UnityEngine.UIElements;
 using System.Linq;
 using System.Reflection;
+using CycloneGames.BehaviorTree.Runtime.Compilation;
 using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Conditions;
@@ -25,7 +26,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
         // Cached runners to avoid FindObjectsOfType GC every frame
         private static readonly List<Runtime.Components.BTRunnerComponent> _cachedRunners = new List<Runtime.Components.BTRunnerComponent>(8);
-        private static double _lastRunnerCacheTime = 0;
+        private static double _lastRunnerCacheTime = double.NegativeInfinity;
         private const double RUNNER_CACHE_INTERVAL = 0.5; // Refresh every 0.5 seconds
 
         /// <summary>
@@ -34,7 +35,7 @@ namespace CycloneGames.BehaviorTree.Editor
         public static List<Runtime.Components.BTRunnerComponent> GetCachedRunners()
         {
             double currentTime = EditorApplication.timeSinceStartup;
-            if (currentTime - _lastRunnerCacheTime > RUNNER_CACHE_INTERVAL || _cachedRunners.Count == 0)
+            if (currentTime - _lastRunnerCacheTime > RUNNER_CACHE_INTERVAL)
             {
                 _cachedRunners.Clear();
                 var runners = Runtime.Components.BTRunnerComponent.ActiveRunners;
@@ -65,7 +66,7 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         public static void InvalidateRunnerCache()
         {
-            _lastRunnerCacheTime = 0;
+            _lastRunnerCacheTime = double.NegativeInfinity;
             _cachedRunners.Clear();
         }
 
@@ -91,11 +92,17 @@ namespace CycloneGames.BehaviorTree.Editor
 
         private BTState _lastTreeState = BTState.NOT_ENTERED;
         private string _searchFilter = string.Empty;
+        private bool _editorEventsSubscribed;
+        private bool _isAuthoringReadOnly;
+
+        internal bool IsAuthoringReadOnly => AuthoringWritesBlocked;
+        private bool AuthoringWritesBlocked =>
+            _isAuthoringReadOnly || EditorApplication.isPlayingOrWillChangePlaymode;
 
         // Cached lists to avoid per-frame ToList() allocations
         private readonly List<UnityEditor.Experimental.GraphView.Node> _cachedNodeList = new List<UnityEditor.Experimental.GraphView.Node>(64);
 
-        /// <summary>0GC node list refresh — clears and refills from GraphView.nodes enumerator.</summary>
+        /// <summary>Clears and refills the cached list from the GraphView node enumerator.</summary>
         private void RefreshCachedNodeList()
         {
             _cachedNodeList.Clear();
@@ -159,6 +166,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
         public BehaviorTreeView()
         {
+            _isAuthoringReadOnly = EditorApplication.isPlayingOrWillChangePlaymode;
             Insert(0, new GridBackground());
             var contentZoomer = new ContentZoomer();
             contentZoomer.maxScale = 2.5f;
@@ -168,11 +176,68 @@ namespace CycloneGames.BehaviorTree.Editor
             this.AddManipulator(new SelectionDragger());
             this.AddManipulator(new RectangleSelector());
 
-            var styleSheet = Resources.Load<StyleSheet>("BT_Editor_Style");
-            styleSheets.Add(styleSheet);
+            StyleSheet styleSheet = BehaviorTreeEditorResources.EditorStyle;
+            if (styleSheet != null)
+            {
+                styleSheets.Add(styleSheet);
+            }
+
+            RegisterCallback<MouseDownEvent>(OnMouseDown);
+            RegisterCallback<AttachToPanelEvent>(OnAttachedToPanel);
+            RegisterCallback<DetachFromPanelEvent>(OnDetachedFromPanel);
+        }
+
+        private void OnAttachedToPanel(AttachToPanelEvent evt)
+        {
+            SubscribeEditorEvents();
+            SetAuthoringReadOnly(EditorApplication.isPlayingOrWillChangePlaymode);
+        }
+
+        private void OnDetachedFromPanel(DetachFromPanelEvent evt)
+        {
+            UnsubscribeEditorEvents();
+        }
+
+        private void SubscribeEditorEvents()
+        {
+            if (_editorEventsSubscribed)
+            {
+                return;
+            }
 
             Undo.undoRedoPerformed += OnUndoRedo;
-            RegisterCallback<MouseDownEvent>(OnMouseDown);
+            EditorApplication.playModeStateChanged += OnPlayModeStateChanged;
+            _editorEventsSubscribed = true;
+        }
+
+        private void UnsubscribeEditorEvents()
+        {
+            if (!_editorEventsSubscribed)
+            {
+                return;
+            }
+
+            Undo.undoRedoPerformed -= OnUndoRedo;
+            EditorApplication.playModeStateChanged -= OnPlayModeStateChanged;
+            _editorEventsSubscribed = false;
+        }
+
+        private void OnPlayModeStateChanged(PlayModeStateChange state)
+        {
+            SetAuthoringReadOnly(state != PlayModeStateChange.EnteredEditMode);
+        }
+
+        private void SetAuthoringReadOnly(bool isReadOnly)
+        {
+            _isAuthoringReadOnly = isReadOnly;
+            RefreshCachedNodeList();
+            for (int i = 0; i < _cachedNodeList.Count; i++)
+            {
+                if (_cachedNodeList[i] is BTNodeView nodeView)
+                {
+                    nodeView.SetAuthoringReadOnly(isReadOnly);
+                }
+            }
         }
 
         /// <summary>
@@ -180,7 +245,7 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         private void OnMouseDown(MouseDownEvent evt)
         {
-            if (evt.altKey)
+            if (!AuthoringWritesBlocked && evt.altKey)
             {
                 var target = evt.target as VisualElement;
 
@@ -288,6 +353,7 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         public void ClearView()
         {
+            UnsubscribeEditorEvents();
             graphViewChanged -= OnGraphViewChanged;
             DeleteElements(graphElements);
             _tree = null;
@@ -333,6 +399,205 @@ namespace CycloneGames.BehaviorTree.Editor
 
         public bool HasTree => _tree != null;
 
+        internal bool TryRepairAuthoringData(out string message)
+        {
+            if (AuthoringWritesBlocked)
+            {
+                message = "Behavior tree authoring is read-only in Play Mode.";
+                return false;
+            }
+
+            if (_tree == null)
+            {
+                message = "No tree selected.";
+                return false;
+            }
+
+            if (!TryCreateRepairPlan(out AuthoringRepairPlan plan, out message))
+            {
+                return false;
+            }
+
+            const string undoName = "Repair Behavior Tree Authoring Data";
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName(undoName);
+            var attachedNodes = new List<BTNode>(plan.TransientNodes.Count);
+            bool assetSynchronizationStarted = false;
+            try
+            {
+                Undo.RegisterCompleteObjectUndo(plan.UndoTargets.ToArray(), undoName);
+
+                if (plan.IsPersistent)
+                {
+                    for (int i = 0; i < plan.TransientNodes.Count; i++)
+                    {
+                        BTNode node = plan.TransientNodes[i];
+                        attachedNodes.Add(node);
+                        AssetDatabase.AddObjectToAsset(node, _tree);
+                    }
+                }
+
+                _tree.Nodes = new List<BTNode>(plan.OrderedNodes);
+                for (int i = 0; i < _tree.Nodes.Count; i++)
+                {
+                    BTNode node = _tree.Nodes[i];
+                    node.Tree = _tree;
+                    if (node is CompositeNode composite)
+                    {
+                        _tree.NormalizeCompositeChildren(composite);
+                    }
+
+                    node.OnValidate();
+                    EditorUtility.SetDirty(node);
+                }
+
+                List<string> compilerErrors = BehaviorTreeCompiler.Validate(_tree);
+                if (compilerErrors.Count > 0)
+                {
+                    var validationFailures = new List<string>(compilerErrors.Count);
+                    for (int i = 0; i < compilerErrors.Count; i++)
+                    {
+                        validationFailures.Add("Compiler: " + compilerErrors[i]);
+                    }
+
+                    throw new InvalidOperationException(
+                        "Repair validation failed:\n" + string.Join("\n", validationFailures));
+                }
+
+                if (plan.IsPersistent)
+                {
+                    assetSynchronizationStarted = true;
+                    BehaviorTreeAuthoringUtility.SynchronizePersistentAsset(_tree);
+                }
+
+                List<string> authoringIssues = BehaviorTreeAuthoringUtility.ValidatePersistentAsset(_tree);
+                if (authoringIssues.Count > 0)
+                {
+                    var validationFailures = new List<string>(authoringIssues.Count);
+                    for (int i = 0; i < authoringIssues.Count; i++)
+                    {
+                        validationFailures.Add("Authoring: " + authoringIssues[i]);
+                    }
+
+                    throw new InvalidOperationException(
+                        "Repair validation failed:\n" + string.Join("\n", validationFailures));
+                }
+
+                EditorUtility.SetDirty(_tree);
+                if (plan.IsPersistent)
+                {
+                    for (int i = 0; i < attachedNodes.Count; i++)
+                    {
+                        Undo.RegisterCreatedObjectUndo(attachedNodes[i], undoName);
+                    }
+                }
+
+                Undo.CollapseUndoOperations(undoGroup);
+                DrawGraph();
+                message = $"Authoring data repaired and validated. Registered nodes: {_tree.Nodes.Count}.";
+                return true;
+            }
+            catch (Exception exception)
+            {
+                Undo.RevertAllDownToGroup(undoGroup);
+                DetachFailedRepairNodes(attachedNodes);
+                RestoreFailedRepairNullCollections(plan);
+                if (assetSynchronizationStarted)
+                {
+                    BehaviorTreeAuthoringUtility.SynchronizePersistentAsset(_tree);
+                    RestoreFailedRepairNullCollections(plan);
+                }
+
+                DrawGraph();
+                message = $"Repair was rolled back: {exception.Message}";
+                return false;
+            }
+        }
+
+        internal bool TryRepairMissingRoot(out string message)
+        {
+            if (AuthoringWritesBlocked)
+            {
+                message = "Behavior tree authoring is read-only in Play Mode.";
+                return false;
+            }
+
+            if (_tree == null)
+            {
+                message = "No tree selected.";
+                return false;
+            }
+
+            if (_tree.Root != null)
+            {
+                message = "The tree already has a root node.";
+                return false;
+            }
+
+            if (!EditorUtility.IsPersistent(_tree))
+            {
+                message = "The tree must be saved as an asset before it can be repaired.";
+                return false;
+            }
+
+            if (_tree.Nodes == null)
+            {
+                message = "The serialized node list is null. Run Repair Asset before repairing the root.";
+                return false;
+            }
+
+            BTRootNode reusableRoot = null;
+            int rootCount = 0;
+            for (int i = 0; i < _tree.Nodes.Count; i++)
+            {
+                if (_tree.Nodes[i] is BTRootNode root)
+                {
+                    reusableRoot = root;
+                    rootCount++;
+                }
+            }
+
+            if (rootCount > 1)
+            {
+                message = "The asset contains multiple root nodes. Resolve the duplicates before repairing the root reference.";
+                return false;
+            }
+
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Repair Behavior Tree Root");
+            Undo.RecordObject(_tree, "Repair Behavior Tree Root");
+
+            if (reusableRoot == null)
+            {
+                reusableRoot = _tree.CreateNode(typeof(BTRootNode)) as BTRootNode;
+                if (reusableRoot == null)
+                {
+                    Undo.CollapseUndoOperations(undoGroup);
+                    message = "The root node could not be created.";
+                    return false;
+                }
+
+                reusableRoot.Position = Vector2.zero;
+                EditorUtility.SetDirty(reusableRoot);
+            }
+
+            Undo.RecordObject(reusableRoot, "Repair Behavior Tree Root");
+            reusableRoot.Tree = _tree;
+            EditorUtility.SetDirty(reusableRoot);
+            _tree.Root = reusableRoot;
+            EditorUtility.SetDirty(_tree);
+            Undo.CollapseUndoOperations(undoGroup);
+
+            AssetDatabase.SaveAssetIfDirty(_tree);
+            DrawGraph();
+            message = rootCount == 1
+                ? "The existing root node reference was restored."
+                : "A new root node was created. Connect its child before running the tree.";
+            return true;
+        }
+
         public string GetValidationReport()
         {
             if (_tree == null)
@@ -341,13 +606,26 @@ namespace CycloneGames.BehaviorTree.Editor
             }
 
             var issues = new List<string>();
-
-            if (_tree.Root == null)
+            List<string> compilerErrors = BehaviorTreeCompiler.Validate(_tree);
+            for (int i = 0; i < compilerErrors.Count; i++)
             {
-                issues.Add("- Missing root node.");
+                issues.Add("- Compiler: " + compilerErrors[i]);
+            }
+
+            List<string> authoringIssues = BehaviorTreeAuthoringUtility.ValidatePersistentAsset(_tree);
+            for (int i = 0; i < authoringIssues.Count; i++)
+            {
+                issues.Add("- Authoring: " + authoringIssues[i]);
+            }
+
+            if (_tree.Nodes == null)
+            {
+                issues.Add("- The serialized node list is null. Run Repair Asset in Edit Mode.");
+                return string.Join("\n", issues);
             }
 
             var guidSet = new HashSet<string>();
+            HashSet<BTNode> reachableNodes = CollectReachableNodes();
             int orphanCount = 0;
 
             for (int i = 0; i < _tree.Nodes.Count; i++)
@@ -368,12 +646,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     issues.Add($"- {node.name}: duplicate GUID '{node.GUID}'.");
                 }
 
-                if (node.Tree != _tree)
-                {
-                    issues.Add($"- {node.name}: owner tree reference is invalid.");
-                }
-
-                if (node != _tree.Root && !IsReachableFromRoot(node))
+                if (node != _tree.Root && !reachableNodes.Contains(node))
                 {
                     orphanCount++;
                 }
@@ -412,6 +685,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     }
                 }
             }
+
         }
 
         /// <summary>
@@ -724,6 +998,11 @@ namespace CycloneGames.BehaviorTree.Editor
 
                 if (treeNode is CompositeNode composite)
                 {
+                    if (composite.Children == null)
+                    {
+                        continue;
+                    }
+
                     int childrenCount = composite.Children.Count;
                     for (int j = 0; j < childrenCount; j++)
                     {
@@ -807,22 +1086,118 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         public override List<Port> GetCompatiblePorts(Port startPort, NodeAdapter nodeAdapter)
         {
-            var portList = ports.ToList();
-            var compatiblePorts = new List<Port>(portList.Count);
-            int portCount = portList.Count;
-            for (int i = 0; i < portCount; i++)
+            var compatiblePorts = new List<Port>();
+            if (AuthoringWritesBlocked)
             {
-                var endPort = portList[i];
-                if (endPort.direction != startPort.direction && endPort.node != startPort.node)
+                return compatiblePorts;
+            }
+
+            foreach (Port endPort in ports)
+            {
+                if (CanConnectPorts(startPort, endPort, true, out _))
                 {
                     compatiblePorts.Add(endPort);
                 }
             }
+
             return compatiblePorts;
+        }
+
+        private bool CanConnectPorts(Port firstPort, Port secondPort, bool enforcePortOccupancy, out string reason)
+        {
+            reason = null;
+            if (_tree == null || firstPort == null || secondPort == null)
+            {
+                reason = "The tree or one of the ports is unavailable.";
+                return false;
+            }
+
+            if (firstPort.direction == secondPort.direction || firstPort.node == secondPort.node)
+            {
+                reason = "Connections require distinct nodes and opposite port directions.";
+                return false;
+            }
+
+            Port outputPort = firstPort.direction == Direction.Output ? firstPort : secondPort;
+            Port inputPort = firstPort.direction == Direction.Input ? firstPort : secondPort;
+            if (!(outputPort.node is BTNodeView parentView) || !(inputPort.node is BTNodeView childView))
+            {
+                reason = "Behavior tree edges must connect behavior tree nodes.";
+                return false;
+            }
+
+            BTNode parent = parentView.Node;
+            BTNode child = childView.Node;
+            if (parent == null || child == null || parent == child)
+            {
+                reason = "A node cannot be connected to itself.";
+                return false;
+            }
+
+            if (enforcePortOccupancy)
+            {
+                if (inputPort.capacity == Port.Capacity.Single && PortHasAnyConnection(inputPort))
+                {
+                    reason = "The child already has a parent.";
+                    return false;
+                }
+
+                if (outputPort.capacity == Port.Capacity.Single && PortHasAnyConnection(outputPort))
+                {
+                    reason = "This node accepts only one child.";
+                    return false;
+                }
+            }
+
+            if (HasDirectChild(parent, child))
+            {
+                reason = "The nodes are already connected.";
+                return false;
+            }
+
+            if (CountParents(child) > 0)
+            {
+                reason = "A behavior tree node can have only one parent.";
+                return false;
+            }
+
+            if ((parent is BTRootNode || parent is DecoratorNode) && GetDirectChildCount(parent) > 0)
+            {
+                reason = "This node accepts only one child.";
+                return false;
+            }
+
+            if (IsReachable(child, parent))
+            {
+                reason = "The connection would create a cycle.";
+                return false;
+            }
+
+            return true;
+        }
+
+        private static bool PortHasAnyConnection(Port port)
+        {
+            if (port?.connections == null)
+            {
+                return false;
+            }
+
+            foreach (Edge _ in port.connections)
+            {
+                return true;
+            }
+
+            return false;
         }
 
         public override EventPropagation DeleteSelection()
         {
+            if (AuthoringWritesBlocked)
+            {
+                return EventPropagation.Stop;
+            }
+
             var nodes = selection.OfType<BTNodeView>().ToList();
             if (nodes.Any(n => n.Node is BTRootNode))
             {
@@ -836,22 +1211,25 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             if (_tree == null) return;
             DrawGraph();
-            _tree.OnValidate();
-            EditorUtility.SetDirty(_tree);
         }
         /// <summary>
         /// Draws the entire behavior tree graph by creating node views and connecting edges.
         /// </summary>
         private void DrawGraph()
         {
+            if (_tree == null)
+            {
+                return;
+            }
+
             graphViewChanged -= OnGraphViewChanged;
             DeleteElements(graphElements);
             graphViewChanged += OnGraphViewChanged;
-            if (_tree.Root == null)
+
+            if (_tree.Nodes == null)
             {
-                _tree.Root = _tree.CreateNode(typeof(BTRootNode));
-                EditorUtility.SetDirty(_tree);
-                AssetDatabase.SaveAssets();
+                SetAuthoringReadOnly(AuthoringWritesBlocked);
+                return;
             }
 
             int nodeCount = _tree.Nodes.Count;
@@ -869,14 +1247,13 @@ namespace CycloneGames.BehaviorTree.Editor
                 var node = _tree.Nodes[i];
                 if (node == null) continue;
 
-                var children = _tree.GetChildren(node);
-                int childrenCount = children.Count;
+                int childrenCount = BehaviorTreeAuthoringUtility.GetChildCount(node);
                 var parentView = FindNodeView(node);
                 if (parentView == null) continue;
 
                 for (int j = 0; j < childrenCount; j++)
                 {
-                    var child = children[j];
+                    BTNode child = BehaviorTreeAuthoringUtility.GetChildAt(node, j);
                     if (child == null) continue;
 
                     var childView = FindNodeView(child);
@@ -895,37 +1272,83 @@ namespace CycloneGames.BehaviorTree.Editor
                     }
                 }
             }
+
+            SetAuthoringReadOnly(AuthoringWritesBlocked);
         }
         private GraphViewChange OnGraphViewChanged(GraphViewChange graphviewChange)
         {
+            if (AuthoringWritesBlocked)
+            {
+                if (graphviewChange.movedElements != null)
+                {
+                    for (int i = 0; i < graphviewChange.movedElements.Count; i++)
+                    {
+                        if (graphviewChange.movedElements[i] is BTNodeView nodeView && nodeView.Node != null)
+                        {
+                            Rect currentPosition = nodeView.GetPosition();
+                            currentPosition.position = nodeView.Node.Position;
+                            nodeView.SetPosition(currentPosition);
+                        }
+                    }
+
+                    graphviewChange.movedElements.Clear();
+                }
+
+                graphviewChange.elementsToRemove?.Clear();
+                graphviewChange.edgesToCreate?.Clear();
+                return graphviewChange;
+            }
+
             if (graphviewChange.elementsToRemove != null)
             {
                 int removeCount = graphviewChange.elementsToRemove.Count;
+                var nodesBeingDeleted = new HashSet<BTNode>();
+                for (int i = 0; i < removeCount; i++)
+                {
+                    if (graphviewChange.elementsToRemove[i] is BTNodeView nodeView && nodeView.Node != null)
+                    {
+                        nodesBeingDeleted.Add(nodeView.Node);
+                    }
+                }
+
                 for (int i = 0; i < removeCount; i++)
                 {
                     var elem = graphviewChange.elementsToRemove[i];
-                    if (elem is BTNodeView nodeView)
-                    {
-                        _tree.DeleteNode(nodeView.Node);
-                    }
-                    else if (elem is Edge edge)
+                    if (elem is Edge edge)
                     {
                         if (edge.input?.node is BTNodeView inputNodeView && edge.output?.node is BTNodeView outputNodeView)
                         {
-                            _tree.RemoveChild(outputNodeView.Node, inputNodeView.Node);
+                            if (!nodesBeingDeleted.Contains(inputNodeView.Node))
+                            {
+                                _tree.RemoveChild(outputNodeView.Node, inputNodeView.Node);
+                            }
                             inputNodeView.UpdatePortConnectionState();
                             outputNodeView.UpdatePortConnectionState();
                         }
                     }
                 }
+
+                for (int i = 0; i < removeCount; i++)
+                {
+                    if (graphviewChange.elementsToRemove[i] is BTNodeView nodeView)
+                    {
+                        _tree.DeleteNode(nodeView.Node);
+                    }
+                }
             }
             if (graphviewChange.edgesToCreate != null)
             {
-                int createCount = graphviewChange.edgesToCreate.Count;
-                for (int i = 0; i < createCount; i++)
+                for (int i = graphviewChange.edgesToCreate.Count - 1; i >= 0; i--)
                 {
                     var edge = graphviewChange.edgesToCreate[i];
-                    if (edge.input?.node is BTNodeView inputNodeView && edge.output?.node is BTNodeView outputNodeView)
+                    if (!CanConnectPorts(edge.output, edge.input, false, out string reason))
+                    {
+                        graphviewChange.edgesToCreate.RemoveAt(i);
+                        Debug.LogWarning($"[BehaviorTreeEditor] Connection rejected: {reason}", _tree);
+                        continue;
+                    }
+
+                    if (edge.input.node is BTNodeView inputNodeView && edge.output.node is BTNodeView outputNodeView)
                     {
                         _tree.AddChild(outputNodeView.Node, inputNodeView.Node);
                         inputNodeView.UpdatePortConnectionState();
@@ -933,6 +1356,83 @@ namespace CycloneGames.BehaviorTree.Editor
                     }
                 }
             }
+
+            if (graphviewChange.movedElements != null && graphviewChange.movedElements.Count > 0)
+            {
+                var movedNodes = new List<BTNodeView>(graphviewChange.movedElements.Count);
+                for (int i = 0; i < graphviewChange.movedElements.Count; i++)
+                {
+                    if (graphviewChange.movedElements[i] is BTNodeView nodeView && nodeView.Node != null)
+                    {
+                        movedNodes.Add(nodeView);
+                    }
+                }
+
+                if (movedNodes.Count > 0)
+                {
+                    if (_tree.Nodes == null)
+                    {
+                        return graphviewChange;
+                    }
+
+                    var movedNodeSet = new HashSet<BTNode>();
+                    var affectedParents = new HashSet<CompositeNode>();
+                    var undoTargetList = new List<UnityEngine.Object>(movedNodes.Count * 2);
+                    for (int i = 0; i < movedNodes.Count; i++)
+                    {
+                        BTNode movedNode = movedNodes[i].Node;
+                        if (movedNodeSet.Add(movedNode))
+                        {
+                            undoTargetList.Add(movedNode);
+                        }
+                    }
+
+                    for (int i = 0; i < _tree.Nodes.Count; i++)
+                    {
+                        if (!(_tree.Nodes[i] is CompositeNode composite))
+                        {
+                            continue;
+                        }
+
+                        if (composite.Children == null)
+                        {
+                            continue;
+                        }
+
+                        for (int childIndex = 0; childIndex < composite.Children.Count; childIndex++)
+                        {
+                            if (movedNodeSet.Contains(composite.Children[childIndex]))
+                            {
+                                if (affectedParents.Add(composite))
+                                {
+                                    if (!movedNodeSet.Contains(composite))
+                                    {
+                                        undoTargetList.Add(composite);
+                                    }
+                                }
+
+                                break;
+                            }
+                        }
+                    }
+
+                    Undo.RecordObjects(undoTargetList.ToArray(), "Move Behavior Tree Nodes");
+                    for (int i = 0; i < movedNodes.Count; i++)
+                    {
+                        BTNodeView nodeView = movedNodes[i];
+                        nodeView.Node.Position = nodeView.GetPosition().position;
+                        EditorUtility.SetDirty(nodeView.Node);
+                    }
+
+                    foreach (CompositeNode parent in affectedParents)
+                    {
+                        _tree.NormalizeCompositeChildren(parent);
+                    }
+
+                    EditorUtility.SetDirty(_tree);
+                }
+            }
+
             return graphviewChange;
         }
 
@@ -951,7 +1451,10 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (type.IsAbstract) continue;
                 var category = GetNodeCategory(type);
-                evt.menu.AppendAction($"ActionNode/{category}/{type.Name}", a => CreateNode(type, mousePosition));
+                evt.menu.AppendAction(
+                    $"ActionNode/{category}/{type.Name}",
+                    a => CreateNode(type, mousePosition),
+                    GetAuthoringActionStatus);
             }
 
             var sortedConditionTypes = new List<Type>(conditionTypes);
@@ -960,7 +1463,10 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (type.IsAbstract) continue;
                 var category = GetNodeCategory(type);
-                evt.menu.AppendAction($"ConditionNode/{category}/{type.Name}", a => CreateNode(type, mousePosition));
+                evt.menu.AppendAction(
+                    $"ConditionNode/{category}/{type.Name}",
+                    a => CreateNode(type, mousePosition),
+                    GetAuthoringActionStatus);
             }
 
             var sortedCompositeTypes = new List<Type>(compositeTypes);
@@ -969,7 +1475,10 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (type.IsAbstract) continue;
                 var category = GetNodeCategory(type);
-                evt.menu.AppendAction($"CompositeNode/{category}/{type.Name}", a => CreateNode(type, mousePosition));
+                evt.menu.AppendAction(
+                    $"CompositeNode/{category}/{type.Name}",
+                    a => CreateNode(type, mousePosition),
+                    GetAuthoringActionStatus);
             }
 
             var sortedDecoratorTypes = new List<Type>(decoratorTypes);
@@ -978,10 +1487,13 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (type.IsAbstract) continue;
                 var category = GetNodeCategory(type);
-                evt.menu.AppendAction($"DecoratorNode/{category}/{type.Name}", a => CreateNode(type, mousePosition));
+                evt.menu.AppendAction(
+                    $"DecoratorNode/{category}/{type.Name}",
+                    a => CreateNode(type, mousePosition),
+                    GetAuthoringActionStatus);
             }
             evt.menu.AppendSeparator();
-            evt.menu.AppendAction("Sort Nodes", a => SortNodes());
+            evt.menu.AppendAction("Sort Nodes", a => SortNodes(), GetAuthoringActionStatus);
             evt.menu.AppendAction("Return to Root", a => ReturnToRoot());
             evt.menu.AppendSeparator();
             evt.menu.AppendAction("Find Tree", a => EditorGUIUtility.PingObject(_tree));
@@ -990,8 +1502,15 @@ namespace CycloneGames.BehaviorTree.Editor
             evt.menu.AppendAction("Copy", a => CopySelectedNodes(mousePosition));
             if (_copiedNodes.Count > 0)
             {
-                evt.menu.AppendAction("Paste", a => PasteCopiedNodes(mousePosition));
+                evt.menu.AppendAction("Paste", a => PasteCopiedNodes(mousePosition), GetAuthoringActionStatus);
             }
+        }
+
+        private DropdownMenuAction.Status GetAuthoringActionStatus(DropdownMenuAction action)
+        {
+            return AuthoringWritesBlocked
+                ? DropdownMenuAction.Status.Disabled
+                : DropdownMenuAction.Status.Normal;
         }
         /// <summary>
         /// Copies selected nodes for pasting.
@@ -1001,15 +1520,13 @@ namespace CycloneGames.BehaviorTree.Editor
             _copiedNodes.Clear();
             _copiedTreePosition = mousePosition;
             var selectedNodes = selection.OfType<BTNodeView>().Select(n => n.Node).ToList();
-            foreach (var node in selectedNodes)
+            if (selectedNodes.Any(node => node is BTRootNode))
             {
-                if (node is BTRootNode)
-                {
-                    EditorUtility.DisplayDialog("Error", "Cannot copy root node", "OK");
-                    return;
-                }
-                _copiedNodes.Add(node);
+                EditorUtility.DisplayDialog("Error", "Cannot copy root node", "OK");
+                return;
             }
+
+            _copiedNodes.AddRange(selectedNodes);
         }
 
         /// <summary>
@@ -1017,102 +1534,144 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         private void PasteCopiedNodes(Vector2 mousePosition)
         {
+            if (AuthoringWritesBlocked || _tree == null || _copiedNodes.Count == 0)
+            {
+                return;
+            }
+
             Vector2 offset = mousePosition - _copiedTreePosition;
-            List<BTNode> newNodes = new List<BTNode>();
+            var nodeMap = new Dictionary<BTNode, BTNode>(_copiedNodes.Count);
 
-            foreach (var copiedNode in _copiedNodes)
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Paste Behavior Tree Nodes");
+            var createdNodes = new List<BTNode>(_copiedNodes.Count);
+            bool assetSynchronizationStarted = false;
+            try
             {
-                var newNode = copiedNode.Clone();
-                newNode.Tree = _tree;
-                newNode.Position = copiedNode.Position + offset;
-                newNode.GUID = copiedNode.GUID;
-                newNodes.Add(newNode);
-                _tree.AddNode(newNode);
-            }
-            List<CompositeNode> compositeNodes = new List<CompositeNode>();
-            List<DecoratorNode> decoratorNodes = new List<DecoratorNode>();
+                Undo.RegisterCompleteObjectUndo(_tree, "Paste Behavior Tree Nodes");
 
-            foreach (var newNode in newNodes)
-            {
-                if (newNode is CompositeNode compositeNode)
+                for (int i = 0; i < _copiedNodes.Count; i++)
                 {
-                    compositeNodes.Add(compositeNode);
-                }
-                if (newNode is DecoratorNode decoratorNode)
-                {
-                    decoratorNodes.Add(decoratorNode);
-                }
-            }
-
-            int compositeCount = compositeNodes.Count;
-            for (int i = 0; i < compositeCount; i++)
-            {
-                var compositeNode = compositeNodes[i];
-                CompositeNode copiedCompositeNode = null;
-                int copiedNodesCount = _copiedNodes.Count;
-                for (int j = 0; j < copiedNodesCount; j++)
-                {
-                    if (_copiedNodes[j]?.GUID == compositeNode.GUID)
+                    BTNode copiedNode = _copiedNodes[i];
+                    if (copiedNode == null || copiedNode is BTRootNode)
                     {
-                        copiedCompositeNode = _copiedNodes[j] as CompositeNode;
-                        break;
+                        continue;
                     }
-                }
-                if (copiedCompositeNode == null) continue;
 
-                int childrenCount = copiedCompositeNode.Children.Count;
-                for (int j = 0; j < childrenCount; j++)
-                {
-                    var childGuid = copiedCompositeNode.Children[j]?.GUID;
-                    if (string.IsNullOrEmpty(childGuid)) continue;
-
-                    int newNodeListCount = newNodes.Count;
-                    for (int k = 0; k < newNodeListCount; k++)
+                    var newNode = ScriptableObject.CreateInstance(copiedNode.GetType()) as BTNode;
+                    if (newNode == null)
                     {
-                        if (newNodes[k]?.GUID == childGuid)
+                        throw new InvalidOperationException(
+                            $"Unity could not create copied node type '{copiedNode.GetType().FullName}'.");
+                    }
+
+                    createdNodes.Add(newNode);
+                    EditorUtility.CopySerialized(copiedNode, newNode);
+                    newNode.Tree = _tree;
+                    newNode.Position = copiedNode.Position + offset;
+                    newNode.GUID = Guid.NewGuid().ToString();
+
+                    if (newNode is DecoratorNode newDecorator)
+                    {
+                        newDecorator.Child = null;
+                    }
+
+                    _tree.AddNode(newNode);
+                    nodeMap.Add(copiedNode, newNode);
+                }
+
+                foreach (KeyValuePair<BTNode, BTNode> pair in nodeMap)
+                {
+                    Undo.RegisterCompleteObjectUndo(pair.Value, "Paste Behavior Tree Nodes");
+                    if (pair.Key is CompositeNode && pair.Value is CompositeNode targetComposite)
+                    {
+                        if (targetComposite.Children == null)
                         {
-                            compositeNode.Children.Add(newNodes[k]);
-                            break;
+                            targetComposite.Children = new List<BTNode>();
                         }
-                    }
-                }
-            }
+                        else
+                        {
+                            var externalChildren = new List<BTNode>();
+                            for (int i = 0; i < targetComposite.Children.Count; i++)
+                            {
+                                BTNode sourceChild = targetComposite.Children[i];
+                                if (sourceChild != null && nodeMap.TryGetValue(sourceChild, out BTNode targetChild))
+                                {
+                                    targetComposite.Children[i] = targetChild;
+                                }
+                                else if (sourceChild != null)
+                                {
+                                    externalChildren.Add(sourceChild);
+                                }
+                            }
 
-            int decoratorCount = decoratorNodes.Count;
-            for (int i = 0; i < decoratorCount; i++)
-            {
-                var decoratorNode = decoratorNodes[i];
-                DecoratorNode copiedDecoratorNode = null;
-                int copiedNodesCount = _copiedNodes.Count;
-                for (int j = 0; j < copiedNodesCount; j++)
-                {
-                    if (_copiedNodes[j]?.GUID == decoratorNode.GUID)
+                            for (int i = 0; i < externalChildren.Count; i++)
+                            {
+                                _tree.RemoveChild(targetComposite, externalChildren[i]);
+                            }
+                        }
+
+                        _tree.NormalizeCompositeChildren(targetComposite);
+                    }
+                    else if (pair.Key is DecoratorNode sourceDecorator &&
+                             pair.Value is DecoratorNode targetDecorator &&
+                             sourceDecorator.Child != null &&
+                             nodeMap.TryGetValue(sourceDecorator.Child, out BTNode targetChild))
                     {
-                        copiedDecoratorNode = _copiedNodes[j] as DecoratorNode;
-                        break;
+                        targetDecorator.Child = targetChild;
                     }
-                }
-                if (copiedDecoratorNode == null || copiedDecoratorNode.Child == null) continue;
 
-                var childGuid = copiedDecoratorNode.Child.GUID;
-                int newNodeListCount = newNodes.Count;
-                for (int j = 0; j < newNodeListCount; j++)
+                    EditorUtility.SetDirty(pair.Value);
+                }
+
+                EditorUtility.SetDirty(_tree);
+                assetSynchronizationStarted = EditorUtility.IsPersistent(_tree);
+                BehaviorTreeAuthoringUtility.SynchronizePersistentAsset(_tree);
+                List<string> ownershipIssues = BehaviorTreeAuthoringUtility.ValidatePersistentAsset(_tree);
+                if (ownershipIssues.Count > 0)
                 {
-                    if (newNodes[j]?.GUID == childGuid)
-                    {
-                        decoratorNode.Child = newNodes[j];
-                        break;
-                    }
+                    throw new InvalidOperationException(
+                        "Pasted nodes failed authoring ownership validation:\n" + string.Join("\n", ownershipIssues));
+                }
+
+                Undo.CollapseUndoOperations(undoGroup);
+                DrawGraph();
+            }
+            catch (Exception exception)
+            {
+                Undo.RevertAllDownToGroup(undoGroup);
+                CleanupFailedPasteNodes(createdNodes);
+                if (assetSynchronizationStarted)
+                {
+                    BehaviorTreeAuthoringUtility.SynchronizePersistentAsset(_tree);
+                }
+
+                DrawGraph();
+                Debug.LogError($"[BehaviorTree] Paste transaction was rolled back: {exception.Message}", _tree);
+            }
+        }
+
+        private static void CleanupFailedPasteNodes(List<BTNode> createdNodes)
+        {
+            for (int i = 0; i < createdNodes.Count; i++)
+            {
+                BTNode node = createdNodes[i];
+                if (node == null)
+                {
+                    continue;
+                }
+
+                if (!string.IsNullOrEmpty(AssetDatabase.GetAssetPath(node)))
+                {
+                    AssetDatabase.RemoveObjectFromAsset(node);
+                }
+
+                if (node != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(node);
                 }
             }
-
-            int newNodesCount = newNodes.Count;
-            for (int i = 0; i < newNodesCount; i++)
-            {
-                newNodes[i].GUID = System.Guid.NewGuid().ToString();
-            }
-
-            DrawGraph();
         }
         /// <summary>
         /// Centers the view on the root node and resets zoom level.
@@ -1163,32 +1722,123 @@ namespace CycloneGames.BehaviorTree.Editor
             }
         }
 
-        private bool IsReachableFromRoot(BTNode target)
+        private HashSet<BTNode> CollectReachableNodes()
         {
-            if (_tree?.Root == null || target == null) return false;
-            if (_tree.Root == target) return true;
+            var visited = new HashSet<BTNode>();
+            BehaviorTreeAuthoringUtility.CollectReachableNodes(_tree, visited);
+            return visited;
+        }
 
+        private bool IsReachable(BTNode start, BTNode target)
+        {
+            if (start == null || target == null)
+            {
+                return false;
+            }
+
+            var visited = new HashSet<BTNode>();
             var stack = new Stack<BTNode>();
-            var visited = new HashSet<string>();
-            stack.Push(_tree.Root);
+            stack.Push(start);
 
             while (stack.Count > 0)
             {
-                var node = stack.Pop();
-                if (node == null) continue;
-                if (!string.IsNullOrEmpty(node.GUID) && !visited.Add(node.GUID)) continue;
-
-                var children = _tree.GetChildren(node);
-                for (int i = 0; i < children.Count; i++)
+                BTNode node = stack.Pop();
+                if (node == null || !visited.Add(node))
                 {
-                    var child = children[i];
-                    if (child == null) continue;
-                    if (child == target) return true;
-                    stack.Push(child);
+                    continue;
+                }
+
+                if (node == target)
+                {
+                    return true;
+                }
+
+                int childCount = BehaviorTreeAuthoringUtility.GetChildCount(node);
+                for (int i = 0; i < childCount; i++)
+                {
+                    BTNode child = BehaviorTreeAuthoringUtility.GetChildAt(node, i);
+                    if (child != null)
+                    {
+                        stack.Push(child);
+                    }
                 }
             }
 
             return false;
+        }
+
+        private int CountParents(BTNode child)
+        {
+            int count = 0;
+            if (_tree?.Nodes == null)
+            {
+                return count;
+            }
+
+            for (int i = 0; i < _tree.Nodes.Count; i++)
+            {
+                BTNode candidate = _tree.Nodes[i];
+                if (candidate != null && HasDirectChild(candidate, child))
+                {
+                    count++;
+                }
+            }
+
+            return count;
+        }
+
+        private static bool HasDirectChild(BTNode parent, BTNode child)
+        {
+            if (parent is BTRootNode root)
+            {
+                return root.Child == child;
+            }
+
+            if (parent is DecoratorNode decorator)
+            {
+                return decorator.Child == child;
+            }
+
+            if (parent is CompositeNode composite)
+            {
+                return composite.Children != null && composite.Children.Contains(child);
+            }
+
+            return false;
+        }
+
+        private static int GetDirectChildCount(BTNode parent)
+        {
+            if (parent is BTRootNode root)
+            {
+                return root.Child == null ? 0 : 1;
+            }
+
+            if (parent is DecoratorNode decorator)
+            {
+                return decorator.Child == null ? 0 : 1;
+            }
+
+            if (parent is CompositeNode composite)
+            {
+                if (composite.Children == null)
+                {
+                    return 0;
+                }
+
+                int count = 0;
+                for (int i = 0; i < composite.Children.Count; i++)
+                {
+                    if (composite.Children[i] != null)
+                    {
+                        count++;
+                    }
+                }
+
+                return count;
+            }
+
+            return 0;
         }
 
         #region Sort Nodes
@@ -1197,121 +1847,424 @@ namespace CycloneGames.BehaviorTree.Editor
         /// </summary>
         public void SortNodes()
         {
-            if (_tree == null || _tree.Root == null || _tree.Nodes == null) return;
+            if (AuthoringWritesBlocked || _tree == null || _tree.Root == null || _tree.Nodes == null) return;
 
-            SortNodes(Vector3.zero, _tree.Root);
-            int nodeCount = _tree.Nodes.Count;
-            for (int i = 0; i < nodeCount; i++)
+            var subtreeWidths = new Dictionary<BTNode, float>();
+            var visiting = new HashSet<BTNode>();
+            var visited = new HashSet<BTNode>();
+            if (!TryMeasureSubtree(_tree.Root, subtreeWidths, visiting, visited, 0, out string error))
             {
-                var node = _tree.Nodes[i];
-                if (node == null) continue;
-                var nodeView = FindNodeView(node);
+                EditorUtility.DisplayDialog("Behavior Tree Layout", error, "OK");
+                return;
+            }
+
+            var undoTargets = new UnityEngine.Object[subtreeWidths.Count];
+            int undoIndex = 0;
+            foreach (BTNode node in subtreeWidths.Keys)
+            {
+                undoTargets[undoIndex++] = node;
+            }
+
+            Undo.RecordObjects(undoTargets, "Layout Behavior Tree");
+            var positioned = new HashSet<BTNode>();
+            LayoutSubtree(Vector2.zero, _tree.Root, subtreeWidths, positioned);
+
+            foreach (BTNode node in positioned)
+            {
+                BTNodeView nodeView = FindNodeView(node);
                 if (nodeView != null)
                 {
                     nodeView.SetPosition(new Rect(node.Position, Vector2.zero));
                 }
+
+                EditorUtility.SetDirty(node);
             }
-        }
-        /// <summary>
-        /// Calculates the total width required for a subtree, including all descendants.
-        /// Used for centering parent nodes above their children.
-        /// </summary>
-        /// <param name="node">Root node of the subtree</param>
-        /// <returns>Total width required for the subtree</returns>
-        private float CalculateSubtreeWidth(BTNode node)
-        {
-            List<BTNode> children = _tree.GetChildren(node);
-            if (children.Count == 0)
+
+            foreach (BTNode node in positioned)
             {
-                return NODE_X_GAP;
+                if (node is CompositeNode composite)
+                {
+                    _tree.NormalizeCompositeChildren(composite);
+                }
             }
 
-            List<BTNode> childrenCopy = new List<BTNode>(children);
-
-            float totalWidth = 0;
-            foreach (var child in childrenCopy)
-            {
-                totalWidth += CalculateSubtreeWidth(child);
-            }
-
-            return Mathf.Max(totalWidth, NODE_X_GAP);
+            EditorUtility.SetDirty(_tree);
         }
 
         /// <summary>
-        /// Recursively positions nodes in a hierarchical tree layout.
-        /// Centers parent nodes above their children and ensures proper spacing.
+        /// Measures each reachable subtree once and rejects graphs that are unsafe to lay out.
         /// </summary>
-        /// <param name="position">Starting position (x, y)</param>
-        /// <param name="node">Node to position</param>
-        /// <returns>Vector3 containing (rightmostX, y, subtreeWidth)</returns>
-        private Vector3 SortNodes(Vector3 position, BTNode node)
+        private bool TryMeasureSubtree(
+            BTNode node,
+            Dictionary<BTNode, float> subtreeWidths,
+            HashSet<BTNode> visiting,
+            HashSet<BTNode> visited,
+            int depth,
+            out string error)
         {
-            List<BTNode> children = _tree.GetChildren(node);
-            List<BTNode> childrenCopy = new List<BTNode>(children);
-
-            if (childrenCopy.Count == 0)
+            const int maxLayoutDepth = 1024;
+            if (node == null)
             {
-                node.Position = new Vector2(position.x, position.y);
-                return new Vector3(position.x + NODE_X_GAP, position.y, NODE_X_GAP);
+                error = "The reachable graph contains a null node reference.";
+                return false;
             }
 
-            if (childrenCopy.Count == 1)
+            if (depth > maxLayoutDepth)
             {
-                float childWidth = CalculateSubtreeWidth(childrenCopy[0]);
-                Vector3 childResult = SortNodes(new Vector3(position.x, position.y + NODE_Y_GAP, 0), childrenCopy[0]);
-                float childCenterX = position.x + childWidth / 2;
-                float singleParentX = childCenterX - NODE_X_GAP / 2;
-                node.Position = new Vector2(singleParentX, position.y);
-                return new Vector3(childResult.x, position.y, childWidth);
+                error = $"The graph exceeds the layout depth limit of {maxLayoutDepth}.";
+                return false;
             }
 
+            if (!visiting.Add(node))
+            {
+                error = $"A cycle was detected at '{node.name}'.";
+                return false;
+            }
+
+            if (visited.Contains(node))
+            {
+                visiting.Remove(node);
+                error = $"'{node.name}' is referenced by more than one parent.";
+                return false;
+            }
+
+            int childCount = BehaviorTreeAuthoringUtility.GetChildCount(node);
+            float totalWidth = 0f;
+            for (int i = 0; i < childCount; i++)
+            {
+                BTNode child = BehaviorTreeAuthoringUtility.GetChildAt(node, i);
+                if (!TryMeasureSubtree(
+                        child,
+                        subtreeWidths,
+                        visiting,
+                        visited,
+                        depth + 1,
+                        out error))
+                {
+                    visiting.Remove(node);
+                    return false;
+                }
+
+                totalWidth += subtreeWidths[child];
+            }
+
+            visiting.Remove(node);
+            visited.Add(node);
+            subtreeWidths[node] = Mathf.Max(totalWidth, NODE_X_GAP);
+            error = null;
+            return true;
+        }
+
+        private void LayoutSubtree(
+            Vector2 position,
+            BTNode node,
+            Dictionary<BTNode, float> subtreeWidths,
+            HashSet<BTNode> positioned)
+        {
+            if (node == null || !positioned.Add(node))
+            {
+                return;
+            }
+
+            int childCount = BehaviorTreeAuthoringUtility.GetChildCount(node);
+            if (childCount == 0)
+            {
+                node.Position = position;
+                return;
+            }
+
+            float totalWidth = subtreeWidths[node];
             float currentX = position.x;
-            float childY = position.y + NODE_Y_GAP;
-            float totalWidth = 0;
-
-            List<float> subtreeWidths = new List<float>();
-            foreach (var child in childrenCopy)
+            for (int i = 0; i < childCount; i++)
             {
-                float width = CalculateSubtreeWidth(child);
-                subtreeWidths.Add(width);
-                totalWidth += width;
+                BTNode child = BehaviorTreeAuthoringUtility.GetChildAt(node, i);
+                LayoutSubtree(new Vector2(currentX, position.y + NODE_Y_GAP), child, subtreeWidths, positioned);
+                currentX += subtreeWidths[child];
             }
 
-            currentX = position.x;
-            float rightmostX = position.x;
-            for (int i = 0; i < childrenCopy.Count; i++)
-            {
-                float subtreeWidth = subtreeWidths[i];
-                Vector3 childResult = SortNodes(new Vector3(currentX, childY, 0), childrenCopy[i]);
-                rightmostX = Mathf.Max(rightmostX, childResult.x);
-                currentX += subtreeWidth;
-            }
-
-            float childrenCenterX = position.x + totalWidth / 2;
-            float parentX = childrenCenterX - NODE_X_GAP / 2;
+            float parentX = position.x + totalWidth * 0.5f - NODE_X_GAP * 0.5f;
             node.Position = new Vector2(parentX, position.y);
-
-            return new Vector3(rightmostX, position.y, totalWidth);
         }
         #endregion
+
+        private bool TryCreateRepairPlan(out AuthoringRepairPlan plan, out string message)
+        {
+            plan = null;
+            string treePath = AssetDatabase.GetAssetPath(_tree);
+            bool isPersistent = EditorUtility.IsPersistent(_tree);
+            if (isPersistent && string.IsNullOrEmpty(treePath))
+            {
+                message = "The persistent tree has no AssetDatabase path.";
+                return false;
+            }
+
+            if (!isPersistent && !string.IsNullOrEmpty(treePath))
+            {
+                message = $"The tree asset state is inconsistent for path '{treePath}'.";
+                return false;
+            }
+
+            var orderedNodes = new List<BTNode>();
+            var knownNodes = new HashSet<BTNode>();
+            AddRepairNode(_tree.Root, orderedNodes, knownNodes);
+            if (_tree.Nodes != null)
+            {
+                for (int i = 0; i < _tree.Nodes.Count; i++)
+                {
+                    AddRepairNode(_tree.Nodes[i], orderedNodes, knownNodes);
+                }
+            }
+
+            var reachableNodes = new HashSet<BTNode>();
+            var traversalOrder = new List<BTNode>();
+            BehaviorTreeAuthoringUtility.CollectReachableNodes(_tree, reachableNodes, traversalOrder);
+            for (int i = 0; i < traversalOrder.Count; i++)
+            {
+                AddRepairNode(traversalOrder[i], orderedNodes, knownNodes);
+            }
+
+            if (isPersistent)
+            {
+                UnityEngine.Object[] assets = AssetDatabase.LoadAllAssetsAtPath(treePath);
+                var discoveredNodes = new List<BTNode>();
+                for (int i = 0; i < assets.Length; i++)
+                {
+                    if (assets[i] is BTNode node)
+                    {
+                        discoveredNodes.Add(node);
+                    }
+                }
+
+                discoveredNodes.Sort(CompareAuthoringNodes);
+                for (int i = 0; i < discoveredNodes.Count; i++)
+                {
+                    AddRepairNode(discoveredNodes[i], orderedNodes, knownNodes);
+                }
+            }
+
+            var transientNodes = new List<BTNode>();
+            for (int i = 0; i < orderedNodes.Count; i++)
+            {
+                BTNode node = orderedNodes[i];
+                string nodePath = AssetDatabase.GetAssetPath(node);
+                if (!isPersistent)
+                {
+                    if (!string.IsNullOrEmpty(nodePath) || EditorUtility.IsPersistent(node))
+                    {
+                        message =
+                            $"Repair refused foreign persistent node '{DescribeAuthoringNode(node)}' in a transient tree.";
+                        return false;
+                    }
+
+                    if (node.Tree != null && node.Tree != _tree)
+                    {
+                        message =
+                            $"Repair refused transient node '{DescribeAuthoringNode(node)}' because another tree owns it.";
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                if (string.IsNullOrEmpty(nodePath))
+                {
+                    if (node.Tree != null && node.Tree != _tree)
+                    {
+                        message =
+                            $"Repair refused transient node '{DescribeAuthoringNode(node)}' because another tree owns it.";
+                        return false;
+                    }
+
+                    transientNodes.Add(node);
+                    continue;
+                }
+
+                if (!string.Equals(nodePath, treePath, StringComparison.Ordinal))
+                {
+                    message =
+                        $"Repair refused foreign node '{DescribeAuthoringNode(node)}' from asset '{nodePath}'.";
+                    return false;
+                }
+
+                // AddObjectToAsset exposes the correct path before IsSubAsset becomes true.
+                // The transaction performs a synchronous import before final ownership validation.
+            }
+
+            var nullCompositeChildLists = new List<CompositeNode>();
+            for (int i = 0; i < orderedNodes.Count; i++)
+            {
+                if (orderedNodes[i] is CompositeNode composite && composite.Children == null)
+                {
+                    nullCompositeChildLists.Add(composite);
+                }
+            }
+
+            var undoTargets = new List<UnityEngine.Object>(orderedNodes.Count + 1) { _tree };
+            for (int i = 0; i < orderedNodes.Count; i++)
+            {
+                undoTargets.Add(orderedNodes[i]);
+            }
+
+            plan = new AuthoringRepairPlan(
+                isPersistent,
+                orderedNodes,
+                transientNodes,
+                undoTargets,
+                _tree.Nodes == null,
+                nullCompositeChildLists);
+            message = null;
+            return true;
+        }
+
+        private static void AddRepairNode(
+            BTNode node,
+            List<BTNode> orderedNodes,
+            HashSet<BTNode> knownNodes)
+        {
+            if (node != null && knownNodes.Add(node))
+            {
+                orderedNodes.Add(node);
+            }
+        }
+
+        private static void DetachFailedRepairNodes(List<BTNode> attachedNodes)
+        {
+            for (int i = 0; i < attachedNodes.Count; i++)
+            {
+                BTNode node = attachedNodes[i];
+                if (node != null && !string.IsNullOrEmpty(AssetDatabase.GetAssetPath(node)))
+                {
+                    AssetDatabase.RemoveObjectFromAsset(node);
+                }
+            }
+        }
+
+        private void RestoreFailedRepairNullCollections(AuthoringRepairPlan plan)
+        {
+            if (plan.NodeRegistryWasNull)
+            {
+                _tree.Nodes = null;
+            }
+
+            for (int i = 0; i < plan.NullCompositeChildLists.Count; i++)
+            {
+                CompositeNode composite = plan.NullCompositeChildLists[i];
+                if (composite != null)
+                {
+                    composite.Children = null;
+                }
+            }
+        }
+
+        private static string DescribeAuthoringNode(BTNode node)
+        {
+            return node == null || string.IsNullOrEmpty(node.name)
+                ? node?.GetType().Name ?? "<null>"
+                : node.name;
+        }
+
+        private sealed class AuthoringRepairPlan
+        {
+            internal AuthoringRepairPlan(
+                bool isPersistent,
+                List<BTNode> orderedNodes,
+                List<BTNode> transientNodes,
+                List<UnityEngine.Object> undoTargets,
+                bool nodeRegistryWasNull,
+                List<CompositeNode> nullCompositeChildLists)
+            {
+                IsPersistent = isPersistent;
+                OrderedNodes = orderedNodes;
+                TransientNodes = transientNodes;
+                UndoTargets = undoTargets;
+                NodeRegistryWasNull = nodeRegistryWasNull;
+                NullCompositeChildLists = nullCompositeChildLists;
+            }
+
+            internal bool IsPersistent { get; }
+            internal List<BTNode> OrderedNodes { get; }
+            internal List<BTNode> TransientNodes { get; }
+            internal List<UnityEngine.Object> UndoTargets { get; }
+            internal bool NodeRegistryWasNull { get; }
+            internal List<CompositeNode> NullCompositeChildLists { get; }
+        }
+
+        private static int CompareAuthoringNodes(BTNode left, BTNode right)
+        {
+            if (ReferenceEquals(left, right)) return 0;
+            if (left == null) return 1;
+            if (right == null) return -1;
+
+            int guidComparison = string.CompareOrdinal(left.GUID ?? string.Empty, right.GUID ?? string.Empty);
+            if (guidComparison != 0) return guidComparison;
+
+            int typeComparison = string.CompareOrdinal(left.GetType().FullName, right.GetType().FullName);
+            return typeComparison != 0
+                ? typeComparison
+                : string.CompareOrdinal(left.name, right.name);
+        }
+
         #region Create Node Methods
         private void CreateNode(Type type, Vector2 position)
         {
-            var node = _tree.CreateNode(type);
-            EditorUtility.SetDirty(_tree);
-            CreateNodeView(node, position);
-        }
-        private void CreateNodeView(BTNode node, Vector2 position)
-        {
-            BTNodeView nodeView = new BTNodeView(node, position);
-            nodeView.SetTreeView(this);
-            nodeView.OnNodeSelected += OnNodeSelectionChanged;
-            AddElement(nodeView);
+            if (AuthoringWritesBlocked || _tree == null)
+            {
+                return;
+            }
+
+            const string undoName = "Create Behavior Tree Node";
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName(undoName);
+            BTNode node = null;
+            bool assetSynchronizationStarted = false;
+            try
+            {
+                node = _tree.CreateNode(type);
+                if (node == null)
+                {
+                    throw new InvalidOperationException("The behavior tree node could not be created.");
+                }
+
+                Undo.RegisterCompleteObjectUndo(node, undoName);
+                node.Position = position;
+                EditorUtility.SetDirty(node);
+                EditorUtility.SetDirty(_tree);
+                assetSynchronizationStarted = EditorUtility.IsPersistent(_tree);
+                BehaviorTreeAuthoringUtility.SynchronizePersistentAsset(_tree);
+                List<string> ownershipIssues = BehaviorTreeAuthoringUtility.ValidatePersistentAsset(_tree);
+                if (ownershipIssues.Count > 0)
+                {
+                    throw new InvalidOperationException(
+                        "Created node failed authoring ownership validation:\n" + string.Join("\n", ownershipIssues));
+                }
+
+                CreateNodeView(node);
+                Undo.CollapseUndoOperations(undoGroup);
+            }
+            catch (Exception exception)
+            {
+                Undo.RevertAllDownToGroup(undoGroup);
+                if (node != null)
+                {
+                    var failedNodes = new List<BTNode>(1) { node };
+                    CleanupFailedPasteNodes(failedNodes);
+                }
+
+                if (assetSynchronizationStarted)
+                {
+                    BehaviorTreeAuthoringUtility.SynchronizePersistentAsset(_tree);
+                }
+
+                DrawGraph();
+                Debug.LogError($"[BehaviorTree] Create transaction was rolled back: {exception.Message}", _tree);
+            }
         }
         private void CreateNodeView(BTNode node)
         {
             BTNodeView nodeView = new BTNodeView(node);
             nodeView.SetTreeView(this);
+            nodeView.SetAuthoringReadOnly(AuthoringWritesBlocked);
             nodeView.OnNodeSelected += OnNodeSelectionChanged;
             AddElement(nodeView);
         }

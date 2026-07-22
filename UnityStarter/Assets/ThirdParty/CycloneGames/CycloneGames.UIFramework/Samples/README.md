@@ -2,7 +2,7 @@
 
 English | [简体中文](README.SCH.md)
 
-These samples demonstrate explicit, provider-free composition with a directly referenced `UIWindowConfiguration`. The sample scripts require only `UniTask` and `CycloneGames.UIFramework.Runtime`. The runnable scene uses explicit camera references: the `UIFramework` prefab owns a dedicated URP Overlay `UICamera`, and the scene-owned Base Camera serializes that camera in its URP camera stack. No `CycloneGames.Services` type or runtime camera lookup participates in this composition.
+These samples demonstrate explicit, provider-free composition with a directly referenced `UIWindowConfiguration`. The sample scripts require only `UniTask` and `CycloneGames.UIFramework.Runtime`. The runnable scene uses explicit camera references: the `UIFramework` prefab owns a dedicated URP Overlay `UICamera`, and the scene-owned Base Camera serializes that camera in its URP camera stack. No global camera service or runtime camera lookup participates in this composition.
 
 ## Contents
 
@@ -27,7 +27,7 @@ The sample assembly has `autoReferenced: false`; it does not become a default de
 5. Select the scene-owned Base Camera and verify that its URP camera stack contains the `UIFramework` prefab's `UICamera` exactly once.
 6. Enter Play Mode.
 
-The scene owns the Base Camera. The `UIFramework` prefab owns the Overlay `UICamera`, and its `UIRoot` and root Canvas reference that camera explicitly. The Base-to-Overlay stack relationship is serialized in the scene; the bootstrap does not use `Camera.main`, a scene search, a global camera singleton, or `CycloneGames.Services`. When adapting the sample to another render pipeline, replace this scene-specific camera composition with the equivalent explicit setup for that pipeline.
+The scene owns the Base Camera. The `UIFramework` prefab owns the Overlay `UICamera`, and its `UIRoot` and root Canvas reference that camera explicitly. The Base-to-Overlay stack relationship is serialized in the scene; the bootstrap does not use `Camera.main`, a scene search, a global camera singleton, or a service locator. When adapting the sample to another render pipeline, replace this scene-specific camera composition with the equivalent explicit setup for that pipeline.
 
 The bootstrap:
 

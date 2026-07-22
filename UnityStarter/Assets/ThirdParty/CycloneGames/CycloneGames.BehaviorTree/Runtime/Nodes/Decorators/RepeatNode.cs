@@ -4,29 +4,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 {
     public class RepeatNode : DecoratorNode
     {
-        public bool RepeatForever => _repeatForever;
-        public bool UseRandomRepeatCount => _useRandomRepeatCount;
-
         [SerializeField] private bool _repeatForever = true;
         [SerializeField] private bool _useRandomRepeatCount = false;
         [SerializeField] private int _repeatCount = 1;
         [SerializeField] private Vector2 _randomRepeatCountRange = new Vector2(1, 3);
 
-        protected override void CheckIntegrity()
-        {
-            base.CheckIntegrity();
-            if (_repeatForever)
-            {
-                _useRandomRepeatCount = false;
-            }
-
-            if (_useRandomRepeatCount && _randomRepeatCountRange.x > _randomRepeatCountRange.y)
-            {
-                float temp = _randomRepeatCountRange.x;
-                _randomRepeatCountRange.x = _randomRepeatCountRange.y;
-                _randomRepeatCountRange.y = temp;
-            }
-        }
+        public bool RepeatForever => _repeatForever;
+        public bool UseRandomRepeatCount => _useRandomRepeatCount;
+        public int RepeatCount => _repeatCount;
+        public Vector2 RandomRepeatCountRange => _randomRepeatCountRange;
 
         public override BTNode Clone()
         {

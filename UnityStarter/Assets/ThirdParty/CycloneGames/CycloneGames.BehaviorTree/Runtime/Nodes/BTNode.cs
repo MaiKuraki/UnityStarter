@@ -10,16 +10,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
         public Vector2 Position
         {
             get => _position;
-            set
-            {
-                _position = value;
-                if (Tree != null)
-                {
-#if UNITY_EDITOR
-                    Tree.OnValidate();
-#endif
-                }
-            }
+            set => _position = value;
         }
         public BehaviorTree Tree
         {
@@ -32,6 +23,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
 
         public void OnValidate()
         {
+#if UNITY_EDITOR
+            if (UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode)
+            {
+                return;
+            }
+#endif
+
             try
             {
                 CheckIntegrity();
@@ -40,9 +38,6 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             {
                 Debug.LogError(e);
             }
-#if UNITY_EDITOR
-            UnityEditor.EditorUtility.SetDirty(this);
-#endif
         }
         protected virtual void CheckIntegrity() { }
         public virtual BTNode Clone()

@@ -1,0 +1,16 @@
+{
+  "name": "CycloneGames.Persistence.Core",
+  "rootNamespace": "CycloneGames.Persistence",
+  "references": [
+    "CycloneGames.Hash.Core"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": true
+}
