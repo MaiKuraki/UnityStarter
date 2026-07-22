@@ -8,8 +8,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
     /// </summary>
     public class RuntimeDelayNode : RuntimeDecoratorNode
     {
-        public float DelaySeconds { get; set; } = 1f;
-        public bool UseUnscaledTime { get; set; }
+        private float _delaySeconds = 1f;
+        private bool _useUnscaledTime;
+
+        public float DelaySeconds
+        {
+            get => _delaySeconds;
+            set
+            {
+                ThrowIfSetupFrozen();
+                ValidateFiniteNonNegativeSetupValue(value, nameof(DelaySeconds));
+                _delaySeconds = value;
+            }
+        }
+
+        public bool UseUnscaledTime
+        {
+            get => _useUnscaledTime;
+            set => SetSetupValue(ref _useUnscaledTime, value);
+        }
 
         private double _startTime;
         private bool _delayComplete;

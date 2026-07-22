@@ -1,10 +1,14 @@
+using System;
+using System.Collections.Generic;
+
 namespace CycloneGames.BehaviorTree.Runtime.Core
 {
     /// <summary>
-    /// 0GC tick manager for large-scale AI (1000+ agents).
-    /// Uses pre-allocated array with round-robin distribution.
+    /// Allocation-free steady-state tick manager with bounded round-robin work.
+    /// Registration changes requested from callbacks are committed after the current tick pass.
+    /// The manager is owned and called by one thread.
     /// </summary>
-    public class BTTickManager
+    public sealed class BTTickManager
     {
         private const int DEFAULT_CAPACITY = 1024;
 
@@ -12,21 +16,68 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
         private int _capacity;
         private int _count;
         private int _currentIndex;
+        private bool _isTicking;
+        private readonly List<PendingMutation> _pendingMutations;
+        private readonly int _ownerThreadId;
+        private int _tickBudget = 100;
 
-        public int TickBudget { get; set; } = 100;
-        public int Count => _count;
+        public int TickBudget
+        {
+            get => _tickBudget;
+            set
+            {
+                EnsureOwnerThread();
+                if (value < 1)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(value), value, "Tick budget must be at least 1.");
+                }
+                _tickBudget = value;
+            }
+        }
+        public int Count
+        {
+            get
+            {
+                EnsureOwnerThread();
+                return _count;
+            }
+        }
 
         public BTTickManager(int initialCapacity = DEFAULT_CAPACITY)
         {
+            if (initialCapacity < 1)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(initialCapacity),
+                    initialCapacity,
+                    "Tick manager capacity must be at least 1.");
+            }
+
             _capacity = initialCapacity;
+            _ownerThreadId = Environment.CurrentManagedThreadId;
             _trees = new RuntimeBehaviorTree[_capacity];
+            _pendingMutations = new List<PendingMutation>(Math.Min(initialCapacity, 64));
             _count = 0;
             _currentIndex = 0;
         }
 
         public void Register(RuntimeBehaviorTree tree)
         {
+            EnsureOwnerThread();
             if (tree == null) return;
+
+            if (_isTicking)
+            {
+                _pendingMutations.Add(new PendingMutation(tree, true));
+                return;
+            }
+
+            RegisterImmediate(tree);
+        }
+
+        private void RegisterImmediate(RuntimeBehaviorTree tree)
+        {
+            if (tree == null || tree.IsStopped) return;
 
             // Check if already registered
             for (int i = 0; i < _count; i++)
@@ -53,6 +104,20 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public void Unregister(RuntimeBehaviorTree tree)
         {
+            EnsureOwnerThread();
+            if (tree == null) return;
+
+            if (_isTicking)
+            {
+                _pendingMutations.Add(new PendingMutation(tree, false));
+                return;
+            }
+
+            UnregisterImmediate(tree);
+        }
+
+        private void UnregisterImmediate(RuntimeBehaviorTree tree)
+        {
             if (tree == null) return;
 
             for (int i = 0; i < _count; i++)
@@ -76,40 +141,106 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public void Tick()
         {
+            EnsureOwnerThread();
+            if (_isTicking)
+            {
+                throw new InvalidOperationException("Tick manager cannot be ticked reentrantly.");
+            }
+
             if (_count == 0) return;
 
-            int tickedCount = 0;
-            int budget = TickBudget > 0 ? TickBudget : _count;
+            int scannedCount = 0;
+            int budget = _tickBudget;
+            int snapshotCount = _count;
+            _isTicking = true;
 
-            while (tickedCount < budget && tickedCount < _count)
+            try
             {
-                var tree = _trees[_currentIndex];
-                if (tree != null && tree.ShouldTick())
+                while (scannedCount < budget && scannedCount < snapshotCount && _count > 0)
                 {
-                    var state = tree.Tick();
-                    if (state == RuntimeState.Success || state == RuntimeState.Failure)
+                    if (_currentIndex >= _count)
                     {
-                        tree.Stop();
+                        _currentIndex = 0;
                     }
-                }
 
-                _currentIndex++;
-                if (_currentIndex >= _count)
-                {
-                    _currentIndex = 0;
+                    RuntimeBehaviorTree tree = _trees[_currentIndex];
+                    if (tree == null || tree.IsStopped)
+                    {
+                        _pendingMutations.Add(new PendingMutation(tree, false));
+                    }
+                    else if (tree.ShouldTick())
+                    {
+                        RuntimeState state = tree.Tick();
+                        if (state == RuntimeState.Success || state == RuntimeState.Failure || tree.IsStopped)
+                        {
+                            _pendingMutations.Add(new PendingMutation(tree, false));
+                        }
+                    }
+
+                    _currentIndex++;
+                    scannedCount++;
                 }
-                tickedCount++;
+            }
+            finally
+            {
+                _isTicking = false;
+                ApplyPendingMutations();
             }
         }
 
         public void Clear()
         {
+            EnsureOwnerThread();
+            if (_isTicking)
+            {
+                throw new InvalidOperationException("Tick manager cannot be cleared during a tick pass.");
+            }
+
             for (int i = 0; i < _count; i++)
             {
                 _trees[i] = null;
             }
             _count = 0;
             _currentIndex = 0;
+            _pendingMutations.Clear();
+        }
+
+        private void ApplyPendingMutations()
+        {
+            for (int i = 0; i < _pendingMutations.Count; i++)
+            {
+                PendingMutation mutation = _pendingMutations[i];
+                if (mutation.Register)
+                {
+                    RegisterImmediate(mutation.Tree);
+                }
+                else
+                {
+                    UnregisterImmediate(mutation.Tree);
+                }
+            }
+            _pendingMutations.Clear();
+        }
+
+        private readonly struct PendingMutation
+        {
+            public readonly RuntimeBehaviorTree Tree;
+            public readonly bool Register;
+
+            public PendingMutation(RuntimeBehaviorTree tree, bool register)
+            {
+                Tree = tree;
+                Register = register;
+            }
+        }
+
+        private void EnsureOwnerThread()
+        {
+            if (Environment.CurrentManagedThreadId != _ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    $"BTTickManager must run on owner thread {_ownerThreadId}.");
+            }
         }
     }
 }

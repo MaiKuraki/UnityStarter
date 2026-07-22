@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
@@ -25,31 +26,71 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         /// <summary>
         /// Interval in seconds between service ticks. 0 = every frame.
         /// </summary>
-        public float Interval { get; set; } = 0.5f;
+        public float Interval
+        {
+            get => _interval;
+            set
+            {
+                ThrowIfSetupFrozen();
+                ValidateFiniteNonNegative(value, nameof(Interval));
+                _interval = value;
+            }
+        }
 
         /// <summary>
         /// Optional random deviation added to interval to stagger service updates.
         /// Actual interval = Interval + Random(-RandomDeviation, +RandomDeviation)
         /// </summary>
-        public float RandomDeviation { get; set; } = 0f;
+        public float RandomDeviation
+        {
+            get => _randomDeviation;
+            set
+            {
+                ThrowIfSetupFrozen();
+                ValidateFiniteNonNegative(value, nameof(RandomDeviation));
+                _randomDeviation = value;
+            }
+        }
 
         /// <summary>
         /// Whether to use unscaled time (UI/pause-friendly).
         /// </summary>
-        public bool UseUnscaledTime { get; set; } = false;
+        public bool UseUnscaledTime
+        {
+            get => _useUnscaledTime;
+            set => SetSetupValue(ref _useUnscaledTime, value);
+        }
 
         /// <summary>
         /// Delegate-based service callback. Set this for lightweight service logic.
         /// If null, override OnServiceUpdate instead.
         /// </summary>
-        public System.Action<RuntimeBlackboard> OnServiceTick { get; set; }
+        public System.Action<RuntimeBlackboard> OnServiceTick
+        {
+            get => _onServiceTick;
+            set => SetSetupValue(ref _onServiceTick, value);
+        }
 
+        private float _interval = 0.5f;
+        private float _randomDeviation;
+        private bool _useUnscaledTime;
+        private System.Action<RuntimeBlackboard> _onServiceTick;
         private double _lastServiceTime;
         private double _currentInterval;
 
+        protected override void ValidateSetup()
+        {
+            if (RandomDeviation > float.MaxValue * 0.5f
+                || Interval > float.MaxValue - RandomDeviation)
+            {
+                throw new InvalidOperationException(
+                    "Service interval and random deviation exceed the finite sampling range.");
+            }
+        }
+
         protected override void OnStart(RuntimeBlackboard blackboard)
         {
-            _lastServiceTime = GetTime();
+            _lastServiceTime = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
             _currentInterval = ComputeInterval(blackboard);
             // Run service immediately on start
             RunService(blackboard);
@@ -60,7 +101,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             if (Child == null) return RuntimeState.Failure;
 
             // Check service interval
-            double now = GetTime();
+            double now = RuntimeBTTime.GetTime(blackboard, UseUnscaledTime);
             if (now - _lastServiceTime >= _currentInterval)
             {
                 _lastServiceTime = now;
@@ -83,20 +124,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
             OnServiceUpdate(blackboard);
         }
 
-        private double GetTime()
-        {
-            return RuntimeBTTime.GetUnityTime(UseUnscaledTime);
-        }
-
         private double ComputeInterval(RuntimeBlackboard blackboard)
         {
             if (RandomDeviation <= 0f) return Interval;
-            var randomProvider = blackboard.GetService<IRuntimeBTRandomProvider>();
-            float deviation = randomProvider != null
-                ? randomProvider.Range(-RandomDeviation, RandomDeviation)
-                : UnityEngine.Random.Range(-RandomDeviation, RandomDeviation);
+            float deviation = RuntimeRandomUtility.Range(
+                blackboard,
+                -RandomDeviation,
+                RandomDeviation);
             float result = Interval + deviation;
             return result > 0f ? result : 0f;
+        }
+
+        private static void ValidateFiniteNonNegative(float value, string propertyName)
+        {
+            if (float.IsNaN(value) || float.IsInfinity(value) || value < 0f)
+            {
+                throw new ArgumentOutOfRangeException(
+                    propertyName,
+                    value,
+                    "Value must be finite and non-negative.");
+            }
         }
     }
 }

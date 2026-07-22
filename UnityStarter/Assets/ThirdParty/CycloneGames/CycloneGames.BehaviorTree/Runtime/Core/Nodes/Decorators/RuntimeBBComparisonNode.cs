@@ -38,27 +38,134 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
     /// </summary>
     public class RuntimeBBComparisonNode : RuntimeDecoratorNode
     {
-        public int KeyHash { get; set; }
-        public BBComparisonOp Operator { get; set; } = BBComparisonOp.IsSet;
-        public BBValueType ValueType { get; set; } = BBValueType.Int;
+        private int _keyHash;
+        private BBComparisonOp _operator = BBComparisonOp.IsSet;
+        private BBValueType _valueType = BBValueType.Int;
+        private int _refInt;
+        private float _refFloat;
+        private bool _refBool;
+        private int _refKeyHash;
+        private bool _useRefKey;
+        private float _floatEpsilon = 0.0001f;
+
+        public int KeyHash
+        {
+            get => _keyHash;
+            set => SetSetupValue(ref _keyHash, value);
+        }
+
+        public BBComparisonOp Operator
+        {
+            get => _operator;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if ((uint)(int)value > (uint)BBComparisonOp.IsNotSet)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(Operator), value, "Unsupported comparison operator.");
+                }
+                _operator = value;
+            }
+        }
+
+        public BBValueType ValueType
+        {
+            get => _valueType;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if ((uint)(int)value > (uint)BBValueType.Object)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(ValueType), value, "Unsupported blackboard value type.");
+                }
+                _valueType = value;
+            }
+        }
 
         // Typed reference values for comparison (set the one matching ValueType)
-        public int RefInt { get; set; }
-        public float RefFloat { get; set; }
-        public bool RefBool { get; set; }
+        public int RefInt
+        {
+            get => _refInt;
+            set => SetSetupValue(ref _refInt, value);
+        }
+
+        public float RefFloat
+        {
+            get => _refFloat;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if (float.IsNaN(value) || float.IsInfinity(value))
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(RefFloat), value, "Value must be finite.");
+                }
+                _refFloat = value;
+            }
+        }
+
+        public bool RefBool
+        {
+            get => _refBool;
+            set => SetSetupValue(ref _refBool, value);
+        }
 
         /// <summary>
-        /// Optional: compare against another BB key instead of a constant.
-        /// When > 0, the reference value comes from this BB key.
+        /// Optional key used when UseRefKey is true. Hash values may be negative.
         /// </summary>
-        public int RefKeyHash { get; set; }
+        public int RefKeyHash
+        {
+            get => _refKeyHash;
+            set => SetSetupValue(ref _refKeyHash, value);
+        }
+
+        public bool UseRefKey
+        {
+            get => _useRefKey;
+            set => SetSetupValue(ref _useRefKey, value);
+        }
 
         /// <summary>
         /// Float comparison epsilon for network-safe float comparisons.
         /// </summary>
-        public float FloatEpsilon { get; set; } = 0.0001f;
+        public float FloatEpsilon
+        {
+            get => _floatEpsilon;
+            set
+            {
+                ThrowIfSetupFrozen();
+                ValidateFiniteNonNegativeSetupValue(value, nameof(FloatEpsilon));
+                _floatEpsilon = value;
+            }
+        }
 
         public override bool CanEvaluate => true;
+
+        public override void OnAwake()
+        {
+            base.OnAwake();
+            ValidateSetup();
+        }
+
+        protected override void ValidateSetup()
+        {
+            if (ValueType == BBValueType.Bool
+                && Operator != BBComparisonOp.Equal
+                && Operator != BBComparisonOp.NotEqual
+                && Operator != BBComparisonOp.IsSet
+                && Operator != BBComparisonOp.IsNotSet)
+            {
+                throw new System.InvalidOperationException(
+                    "Bool comparisons only support Equal, NotEqual, IsSet, or IsNotSet.");
+            }
+
+            if (ValueType == BBValueType.Object
+                && Operator != BBComparisonOp.IsSet
+                && Operator != BBComparisonOp.IsNotSet)
+            {
+                throw new System.InvalidOperationException(
+                    "Object comparisons only support IsSet or IsNotSet.");
+            }
+        }
 
         public override bool Evaluate(RuntimeBlackboard blackboard)
         {
@@ -98,7 +205,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         private bool CompareInt(RuntimeBlackboard bb)
         {
             int lhs = bb.GetInt(KeyHash);
-            int rhs = RefKeyHash > 0 ? bb.GetInt(RefKeyHash) : RefInt;
+            int rhs = UseRefKey ? bb.GetInt(RefKeyHash) : RefInt;
 
             switch (Operator)
             {
@@ -115,7 +222,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         private bool CompareFloat(RuntimeBlackboard bb)
         {
             float lhs = bb.GetFloat(KeyHash);
-            float rhs = RefKeyHash > 0 ? bb.GetFloat(RefKeyHash) : RefFloat;
+            float rhs = UseRefKey ? bb.GetFloat(RefKeyHash) : RefFloat;
 
             switch (Operator)
             {
@@ -134,7 +241,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
         private bool CompareBool(RuntimeBlackboard bb)
         {
             bool lhs = bb.GetBool(KeyHash);
-            bool rhs = RefKeyHash > 0 ? bb.GetBool(RefKeyHash) : RefBool;
+            bool rhs = UseRefKey ? bb.GetBool(RefKeyHash) : RefBool;
 
             switch (Operator)
             {

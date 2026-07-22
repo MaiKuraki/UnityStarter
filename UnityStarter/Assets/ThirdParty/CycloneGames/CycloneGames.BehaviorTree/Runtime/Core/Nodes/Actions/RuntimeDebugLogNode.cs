@@ -2,7 +2,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 {
     public class RuntimeDebugLogNode : RuntimeNode
     {
-        public string Message { get; set; }
+        private string _message;
+
+        public string Message
+        {
+            get => _message;
+            set => SetSetupValue(ref _message, value);
+        }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {

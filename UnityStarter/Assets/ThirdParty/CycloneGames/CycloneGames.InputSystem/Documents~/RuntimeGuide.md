@@ -4,9 +4,13 @@
 
 Related: [Getting started](GettingStarted.md) | [Configuration guide](Configuration.md) | [Module reference](../README.md)
 
+## Overview
+
 This guide covers runtime ownership, configuration loading, player creation, context routing, local multiplayer, rebinding, persistence, and shutdown.
 
-## Runtime Ownership
+## Core Concepts
+
+### Runtime Ownership
 
 The composition root owns one `InputManager` for one input session:
 
@@ -21,11 +25,9 @@ flowchart LR
     P1 --> C1["Active context stack"]
 ```
 
-The owner is responsible for selecting and validating configuration, creating and removing players, subscribing and unsubscribing manager events, disposing contexts owned by scenes or features, and disposing the manager during shutdown.
+The owner is responsible for selecting and validating configuration, creating and removing players, subscribing and unsubscribing manager events, disposing contexts owned by scenes or features, and disposing the manager during shutdown. Unity objects and Input System operations belong to the Unity main thread unless an API explicitly documents another thread.
 
-Unity objects and Input System operations belong to the Unity main thread unless an API explicitly documents another thread.
-
-## Loading Policy
+### Loading Policy
 
 `InputSystemBootstrapOptions` declares whether configuration is disabled, optional, or required:
 
@@ -52,9 +54,11 @@ InputSystemLoadResult load = await InputSystemLoader.LoadAndInitializeAsync(
 
 Invalid, inaccessible, or oversized content is reported as a failure in every mode. `IsBootstrapComplete` includes `NotConfigured`; `IsSuccess` means a validated runtime configuration was committed.
 
-## Player Creation Patterns
+## Usage Guide
 
-### One player, best available scheme
+### Player Creation Patterns
+
+**One player, best available scheme:**
 
 ```csharp
 IInputPlayer player = manager.JoinSinglePlayer(0);
@@ -73,7 +77,7 @@ IInputPlayer player = await manager.JoinSinglePlayerAsync(
     cancellationToken);
 ```
 
-### Shared keyboard or shared device
+**Shared keyboard or shared device:**
 
 ```csharp
 IInputPlayer player0 = await manager.JoinPlayerOnSharedDeviceAsync(0);
@@ -82,7 +86,7 @@ IInputPlayer player1 = await manager.JoinPlayerOnSharedDeviceAsync(1);
 
 Both slots must declare actions and schemes that make sense for the shared device. Avoid overlapping controls unless the product deliberately allows simultaneous responses.
 
-### Lobby join
+**Lobby join:**
 
 ```csharp
 manager.OnPlayerInputReady += HandlePlayerReady;
@@ -96,7 +100,7 @@ manager.StopListeningForPlayers();
 manager.OnPlayerInputReady -= HandlePlayerReady;
 ```
 
-### Remove a player
+**Remove a player:**
 
 ```csharp
 bool removed = manager.RemovePlayer(playerId);
@@ -104,7 +108,7 @@ bool removed = manager.RemovePlayer(playerId);
 
 Removal disposes player-owned input resources. Product code remains responsible for despawning the corresponding gameplay object and releasing feature-owned contexts.
 
-## Context Routing
+### Context Routing
 
 An `InputContext` binds configured observables to product commands:
 
@@ -126,7 +130,7 @@ player.PushContext(gameplay);
 
 Higher-priority contexts are evaluated first. A blocking context suppresses dispatch from lower-priority contexts.
 
-### Menu over gameplay
+**Menu over gameplay:**
 
 ```csharp
 var menu = new InputContext(
@@ -149,7 +153,7 @@ menu.Dispose();
 
 Use capture scopes for temporary modal ownership when several systems must restore context state reliably after nested operations.
 
-## Event-Driven and Polled Input
+### Event-Driven and Polled Input
 
 Use observable APIs for event-driven product behavior:
 
@@ -163,7 +167,7 @@ Use `InputContext` command binding when a product wants context arbitration, blo
 
 Polling actions are sampled by the configured frame provider. Keep frame-loop reads allocation-free and avoid constructing identities or collections in the hot path.
 
-## Long Press
+### Long Press
 
 Configuration enables module-level long press with `longPressMs` and `longPressValueThreshold`:
 
@@ -176,7 +180,7 @@ var context = new InputContext("PlayerActions", "Gameplay")
 
 Set `longPressMs` to zero when long-press behavior is not required. Use Input System `Interactions` when the action needs Input System phase semantics rather than the module-level long-press observable.
 
-## Rebinding
+### Rebinding
 
 Rebind a declared direct binding:
 
@@ -205,7 +209,7 @@ string report = InputManager.FormatConflictsReport(conflicts);
 
 Run rebinding and conflict reports in settings flows, not gameplay hot paths.
 
-## Binding Profiles
+### Binding Profiles
 
 The manager exports one profile covering declared players:
 
@@ -221,7 +225,7 @@ bool applied = manager.ImportBindingOverrideProfileJson(json);
 
 The product owns the profile key, save timing, retention, account association, cloud synchronization, and reset UX. Keep the configured defaults active when a profile is rejected and present a deliberate reset action.
 
-## Updating Configuration
+### Updating Configuration
 
 Configuration replacement is a session boundary:
 
@@ -234,13 +238,13 @@ Configuration replacement is a session boundary:
 
 If replacement fails, the manager retains its current committed configuration.
 
-## Persistence Ownership
+### Persistence Ownership
 
-`IInputConfigurationSource` reads configuration. `IInputConfigurationStore` adds save and delete. A store implementation owns its root or remote endpoint, path/key rules, size and timeout budgets, atomic replacement, backup and recovery, cancellation and shutdown behavior, and encryption and account policy when required by the product.
+`IInputConfigurationSource` reads configuration. `IInputConfigurationStore` adds save and delete. A store implementation owns its root or remote endpoint, path/key rules, size and timeout budgets, atomic replacement, backup and recovery, cancellation and shutdown behavior, and encryption and account policy when required.
 
 `FileInputConfigurationStore` confines keys to its configured root, writes through a temporary file, and keeps one recovery backup. WebGL products provide a browser-oriented store implementation.
 
-## Shutdown
+### Shutdown
 
 Perform shutdown in ownership order:
 
@@ -256,7 +260,18 @@ manager.Dispose();
 
 Do not initialize a disposed manager. Construct a new manager for a new session.
 
-## Production Checklist
+## Troubleshooting
+
+| Symptom | Likely cause | Resolution |
+| --- | --- | --- |
+| Player creation returns `null` | No device matches the declared scheme, or device is already paired/reserved | Check Input Debugger for paired users and device availability. |
+| Context commands don't fire | Context not pushed, case mismatch in identity, or context blocked by higher priority | Verify `ActiveContextName` and context push order. |
+| `ActiveDeviceKind` shows `Unknown` consistently | No action has received meaningful device input yet | Trigger a configured action; `ActiveDeviceKind` reflects observed activity. |
+| Rebind doesn't take effect | Wrong binding path used as `oldBinding`, or action identity mismatch | Use context-qualified overloads and the original configured path. |
+| Binding profile import fails | Schema mismatch, identity selectors outdated, or budget exceeded | Keep defaults active, preserve the profile, and provide a product-owned reset. |
+| Manager disposed unexpectedly | Subsystem registration triggered during domain-reload-disabled play | Dispose the manager explicitly during teardown; construct a new one for the next session. |
+
+### Production Checklist
 
 - One composition owner controls the manager lifetime.
 - Every async operation receives a product cancellation token.

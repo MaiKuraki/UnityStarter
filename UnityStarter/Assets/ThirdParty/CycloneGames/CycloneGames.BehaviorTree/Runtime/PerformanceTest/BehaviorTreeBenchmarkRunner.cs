@@ -90,8 +90,8 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
                 case BehaviorTreeBenchmarkRunnerMode.PriorityComparison:
                     yield return RunPriorityComparisonCoroutine();
                     break;
-                case BehaviorTreeBenchmarkRunnerMode.CertificationMatrix:
-                    yield return RunCertificationMatrixCoroutine();
+                case BehaviorTreeBenchmarkRunnerMode.ConfiguredBudgetMatrix:
+                    yield return RunConfiguredBudgetMatrixCoroutine();
                     break;
                 default:
                     yield return RunSingleBenchmarkCoroutine(_config.Clone(), assignAsLastResult: true);
@@ -243,9 +243,9 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             BenchmarkMatrixCompleted?.Invoke(LastBatchResult);
         }
 
-        private IEnumerator RunCertificationMatrixCoroutine()
+        private IEnumerator RunConfiguredBudgetMatrixCoroutine()
         {
-            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateCertificationMatrixConfigs();
+            BehaviorTreeBenchmarkConfig[] configs = BehaviorTreeBenchmarkPresetCatalog.CreateConfiguredBudgetMatrixConfigs();
             var results = new BehaviorTreeBenchmarkResult[configs.Length];
 
             for (int i = 0; i < configs.Length; i++)
@@ -258,7 +258,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             LastBatchResult = new BehaviorTreeBenchmarkBatchResult
             {
                 GeneratedAtUtc = DateTime.UtcNow.ToString("O"),
-                BatchName = "Production Certification Matrix",
+                BatchName = "Configured Budget Matrix",
                 Results = results
             };
             BehaviorTreeBenchmarkAssessmentUtility.PopulateBatchSummary(LastBatchResult);

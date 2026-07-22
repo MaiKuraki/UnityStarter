@@ -187,10 +187,15 @@ Use this section as a navigation map. Recommended first pass: `GameplayFramework
 | **DeterministicMath** | Fixed-point deterministic math for replay, simulation, and lockstep-friendly systems. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeterministicMath/README.md) |
 | **Hash** | Deterministic hashing primitives for manifests, protocol checks, IDs, and consistency. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Hash/README.md) |
 | **IO** | Managed file and path utilities for Unity-aware foundation modules. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.IO/README.md) |
+| **Persistence** | Unity-free, bounded, versioned single-record orchestration with strict Record V1 integrity checks and serializer/storage-neutral contracts. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Persistence/README.md) |
+| **Persistence.SystemIO** | Optional System.IO storage and Unity `persistentDataPath` composition, with bounded reads and atomic commit behavior. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Persistence.SystemIO/README.md) |
+| **Persistence.VYaml** | Optional generated-resolver VYaml codec for readable UTF-8 persistence payloads. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Persistence.VYaml/README.md) |
+| **Persistence.MessagePack** | Optional assembly-gated MessagePack codec source; inactive until its pinned binary, analyzer, and Unity bridge are installed. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Persistence.MessagePack/README.md) |
 | **InputSystem** | Validated YAML input authoring with prioritized mapping contexts, per-player device ownership, local multiplayer, binding profiles, Editor tooling, and opt-in integrations. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem/README.md) |
 | **InputSystem.AssetManagement** | Optional physical package-loading bridge between InputSystem, AssetManagement, and VContainer. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.InputSystem.AssetManagement/README.md) |
 | **DeviceFeedback** | Haptics, vibration, rumble, and device-light feedback abstractions. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeviceFeedback/README.md) |
-| **Services** | Unity-facing service helpers for derived projects. | [Folder](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Services/) |
+| **Settings** | Unity-free cloned settings state with defaults, validation, forward migration, isolated snapshots, and typed post-commit notifications. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Settings/README.md) |
+| **Settings.Persistence** | Optional integration that composes Settings state and migration with one Persistence Store without coupling either Core. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Settings.Persistence/README.md) |
 | **Utility** | Common Unity utility components and helpers. | [Folder](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Utility/) |
 | **Cheat** | Build-gated internal cheat command system with VitalRouter integration. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Cheat/README.md) |
 

@@ -1,0 +1,19 @@
+{
+  "name": "com.cyclone-games.settings",
+  "version": "0.1.0",
+  "displayName": "CycloneGames.Settings",
+  "description": "A Unity-independent, validated settings state and forward migration core.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "keywords": [
+    "settings",
+    "configuration",
+    "migration"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

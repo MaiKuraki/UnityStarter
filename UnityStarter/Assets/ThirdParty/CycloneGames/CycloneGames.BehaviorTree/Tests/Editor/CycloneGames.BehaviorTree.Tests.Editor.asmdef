@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.BehaviorTree.Tests.Editor",
     "references": [
         "CycloneGames.BehaviorTree.Runtime",
-        "CycloneGames.BehaviorTree.Runtime.DOD",
+        "CycloneGames.BehaviorTree.Benchmarks",
+        "CycloneGames.BehaviorTree.Editor",
         "Unity.PerformanceTesting"
     ],
     "includePlatforms": [

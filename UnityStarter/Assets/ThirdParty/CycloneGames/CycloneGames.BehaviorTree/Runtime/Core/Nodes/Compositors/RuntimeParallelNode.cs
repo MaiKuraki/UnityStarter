@@ -1,3 +1,5 @@
+using System;
+
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
 {
     public enum RuntimeParallelMode
@@ -8,94 +10,113 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors
         UntilAnySuccess,
     }
 
+    /// <summary>
+    /// Runs child branches concurrently on the tree owner thread.
+    /// Completed children are retained in a setup-time state array and are not executed again
+    /// until the parallel node starts a new activation.
+    /// </summary>
     public class RuntimeParallelNode : RuntimeCompositeNode
     {
-        public RuntimeParallelMode Mode { get; set; } = RuntimeParallelMode.Default;
+        private RuntimeState[] _childStates = Array.Empty<RuntimeState>();
+        private RuntimeParallelMode _mode = RuntimeParallelMode.Default;
+
+        public RuntimeParallelMode Mode
+        {
+            get => _mode;
+            set
+            {
+                ThrowIfSetupFrozen();
+                if ((uint)(int)value > (uint)RuntimeParallelMode.UntilAnySuccess)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(Mode), value, "Unsupported parallel mode.");
+                }
+                _mode = value;
+            }
+        }
+
+        public override void OnAwake()
+        {
+            base.OnAwake();
+            _childStates = ChildCount == 0
+                ? Array.Empty<RuntimeState>()
+                : new RuntimeState[ChildCount];
+        }
+
+        protected override void OnStart(RuntimeBlackboard blackboard)
+        {
+            RuntimeNode[] children = ChildArray;
+            Array.Clear(_childStates, 0, _childStates.Length);
+            for (int i = 0; i < children.Length; i++)
+            {
+                children[i].PrepareForActivation();
+            }
+        }
 
         protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
         {
+            RuntimeNode[] children = ChildArray;
+            if (children == null || children.Length == 0)
+            {
+                return RuntimeState.Failure;
+            }
+
+            int successCount = 0;
+            int failureCount = 0;
+
+            for (int i = 0; i < children.Length; i++)
+            {
+                RuntimeState childState = _childStates[i];
+                if (childState != RuntimeState.Success && childState != RuntimeState.Failure)
+                {
+                    childState = children[i].Run(blackboard);
+                    _childStates[i] = childState;
+                }
+
+                if (childState == RuntimeState.Success)
+                {
+                    successCount++;
+                    if (Mode == RuntimeParallelMode.UntilAnyComplete ||
+                        Mode == RuntimeParallelMode.UntilAnySuccess)
+                    {
+                        AbortRunningChildren(blackboard);
+                        return RuntimeState.Success;
+                    }
+                }
+                else if (childState == RuntimeState.Failure)
+                {
+                    failureCount++;
+                    if (Mode == RuntimeParallelMode.Default ||
+                        Mode == RuntimeParallelMode.UntilAnyComplete ||
+                        Mode == RuntimeParallelMode.UntilAnyFailure)
+                    {
+                        AbortRunningChildren(blackboard);
+                        return RuntimeState.Failure;
+                    }
+                }
+            }
+
             switch (Mode)
             {
                 case RuntimeParallelMode.Default:
-                    return RunDefault(blackboard);
-                case RuntimeParallelMode.UntilAnyComplete:
-                    return RunUntilAnyComplete(blackboard);
                 case RuntimeParallelMode.UntilAnyFailure:
-                    return RunUntilAnyFailure(blackboard);
+                    return successCount == children.Length
+                        ? RuntimeState.Success
+                        : RuntimeState.Running;
                 case RuntimeParallelMode.UntilAnySuccess:
-                    return RunUntilAnySuccess(blackboard);
+                    return failureCount == children.Length
+                        ? RuntimeState.Failure
+                        : RuntimeState.Running;
+                case RuntimeParallelMode.UntilAnyComplete:
+                    return RuntimeState.Running;
                 default:
-                    return RuntimeState.Failure;
+                    throw new InvalidOperationException($"Unsupported parallel mode {Mode}.");
             }
         }
 
-        private RuntimeState RunDefault(RuntimeBlackboard blackboard)
+        protected override void OnReset(RuntimeBlackboard blackboard)
         {
-            var children = Children;
-            for (int i = 0; i < children.Length; i++)
-            {
-                children[i].Run(blackboard);
-            }
-            return RuntimeState.Running;
-        }
-
-        private RuntimeState RunUntilAnyComplete(RuntimeBlackboard blackboard)
-        {
-            var children = Children;
-            for (int i = 0; i < children.Length; i++)
-            {
-                var state = children[i].Run(blackboard);
-                if (state == RuntimeState.Success || state == RuntimeState.Failure)
-                {
-                    AbortAllChildren(blackboard);
-                    return RuntimeState.Success;
-                }
-            }
-            return RuntimeState.Running;
-        }
-
-        private RuntimeState RunUntilAnyFailure(RuntimeBlackboard blackboard)
-        {
-            var children = Children;
-            for (int i = 0; i < children.Length; i++)
-            {
-                var state = children[i].Run(blackboard);
-                if (state == RuntimeState.Failure)
-                {
-                    AbortAllChildren(blackboard);
-                    return RuntimeState.Success;
-                }
-            }
-            return RuntimeState.Running;
-        }
-
-        private RuntimeState RunUntilAnySuccess(RuntimeBlackboard blackboard)
-        {
-            var children = Children;
-            for (int i = 0; i < children.Length; i++)
-            {
-                var state = children[i].Run(blackboard);
-                if (state == RuntimeState.Success)
-                {
-                    AbortAllChildren(blackboard);
-                    return RuntimeState.Success;
-                }
-            }
-            return RuntimeState.Running;
-        }
-
-        private void AbortAllChildren(RuntimeBlackboard blackboard)
-        {
-            var children = Children;
-            for (int i = 0; i < children.Length; i++)
-            {
-                if (children[i].IsStarted) children[i].Abort(blackboard);
-            }
-        }
-
-        protected override void OnStop(RuntimeBlackboard blackboard)
-        {
-            AbortAllChildren(blackboard);
+            base.OnReset(blackboard);
+            Array.Clear(_childStates, 0, _childStates.Length);
         }
     }
 }

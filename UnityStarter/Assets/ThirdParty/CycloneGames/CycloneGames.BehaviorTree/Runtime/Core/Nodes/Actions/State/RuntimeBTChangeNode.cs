@@ -5,7 +5,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions.State
 {
     public class RuntimeBTChangeNode : RuntimeNode
     {
-        public string StateId { get; set; }
+        private string _stateId;
+
+        public string StateId
+        {
+            get => _stateId;
+            set => SetSetupValue(ref _stateId, value);
+        }
 
         private BTStateMachineComponent _cachedStateMachine;
         private bool _didCacheAttempt;

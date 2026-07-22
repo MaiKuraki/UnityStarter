@@ -3,13 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using CycloneGames.BehaviorTree.Runtime.Core;
+using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Core.Networking;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators;
-using CycloneGames.BehaviorTree.Runtime.DOD;
 using CycloneGames.BehaviorTree.Tests.Editor.Framework;
 using NUnit.Framework;
-using Unity.Collections;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
@@ -21,23 +20,30 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         {
             var leaf = new FixedStateNode(RuntimeState.Success);
             var tree = BehaviorTreeTestFactory.CreateRuntimeTree(leaf);
+            int terminationCount = 0;
+            tree.Terminated += _ => terminationCount++;
 
             try
             {
                 Assert.AreEqual(RuntimeState.Success, tree.Tick());
                 Assert.AreEqual(1, leaf.RunCount);
+                Assert.IsTrue(tree.IsStopped);
+                Assert.AreEqual(RuntimeState.Success, tree.State);
+                Assert.AreEqual(1, terminationCount);
 
                 tree.Stop();
 
                 Assert.IsTrue(tree.IsStopped);
-                Assert.AreEqual(RuntimeState.NotEntered, tree.Tick());
+                Assert.AreEqual(RuntimeState.Success, tree.Tick());
                 Assert.AreEqual(1, leaf.RunCount);
+                Assert.AreEqual(1, terminationCount);
 
                 tree.Play();
 
                 Assert.IsFalse(tree.IsStopped);
                 Assert.AreEqual(RuntimeState.Success, tree.Tick());
                 Assert.AreEqual(2, leaf.RunCount);
+                Assert.AreEqual(2, terminationCount);
             }
             finally
             {
@@ -234,7 +240,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
-        public void RuntimeBlackboard_ObserverCanMutateThreadSafeBlackboard()
+        public void RuntimeBlackboard_ObserverCanMutateConcurrentStorageAfterWriteLockIsReleased()
         {
             const int sourceKey = 911;
             const int targetKey = 912;
@@ -242,7 +248,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
             try
             {
-                blackboard.EnableThreadSafety();
+                blackboard.EnableConcurrentStorageAccess();
                 blackboard.AddObserver(sourceKey, (_, bb) => bb.SetInt(targetKey, bb.GetInt(sourceKey) + 1));
 
                 blackboard.SetInt(sourceKey, 4);
@@ -253,6 +259,30 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             {
                 blackboard.Dispose();
             }
+        }
+
+        [Test]
+        public void RuntimeBlackboard_DisposeIsIdempotentAndRejectsFurtherAccess()
+        {
+            var blackboard = new RuntimeBlackboard();
+            blackboard.SetInt(1, 2);
+
+            blackboard.Dispose();
+
+            Assert.IsTrue(blackboard.IsDisposed);
+            Assert.DoesNotThrow(blackboard.Dispose);
+            Assert.Throws<ObjectDisposedException>(() => blackboard.GetInt(1));
+            Assert.Throws<ObjectDisposedException>(() => blackboard.SetInt(1, 3));
+        }
+
+        [Test]
+        public void RuntimeBlackboard_RejectsParentCyclesAndEmptyStringKeys()
+        {
+            using var parent = new RuntimeBlackboard();
+            using var child = new RuntimeBlackboard(parent);
+
+            Assert.Throws<InvalidOperationException>(() => parent.Parent = child);
+            Assert.Throws<ArgumentException>(() => child.SetInt(string.Empty, 1));
         }
 
         [Test]
@@ -416,6 +446,8 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             {
                 source.SetInt(intKey, 42);
                 source.SetObject(objectKey, new object());
+                var localObject = new object();
+                restored.SetObject(objectKey, localObject);
 
                 using var stream = new MemoryStream();
                 using var writer = new BinaryWriter(stream);
@@ -427,7 +459,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 restored.ReadFrom(reader);
 
                 Assert.AreEqual(42, restored.GetInt(intKey));
-                Assert.IsFalse(restored.HasKey(objectKey));
+                Assert.AreSame(localObject, restored.GetObject<object>(objectKey));
                 Assert.AreEqual(source.ComputeHash(), restored.ComputeHash());
             }
             finally
@@ -435,6 +467,37 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 source.Dispose();
                 restored.Dispose();
             }
+        }
+
+        [Test]
+        public void RuntimeBlackboard_ReadFromKeepsSequenceMonotonic()
+        {
+            const int sourceKey = 110;
+            const int existingKey = 111;
+            const int newKey = 112;
+            using var source = new RuntimeBlackboard();
+            using var target = new RuntimeBlackboard();
+
+            source.SetInt(sourceKey, 1);
+            target.SetInt(existingKey, 1);
+            target.SetInt(existingKey, 2);
+            target.SetInt(existingKey, 3);
+            ulong priorStamp = target.GetStamp(existingKey);
+
+            using var stream = new MemoryStream();
+            using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+            {
+                source.WriteTo(writer);
+            }
+
+            stream.Position = 0;
+            using (var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, true))
+            {
+                target.ReadFrom(reader);
+            }
+
+            target.SetInt(newKey, 1);
+            Assert.That(target.GetStamp(newKey), Is.GreaterThan(priorStamp));
         }
 
         [Test]
@@ -512,6 +575,243 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 source.Dispose();
                 target.Dispose();
             }
+        }
+
+        [Test]
+        public void RuntimeBehaviorTree_DisposePermanentlyClosesWakeUpState()
+        {
+            var tree = BehaviorTreeTestFactory.CreateRuntimeTree(new FixedStateNode(RuntimeState.Running));
+            Task producer = Task.Run(() =>
+            {
+                for (int i = 0; i < 10000; i++)
+                {
+                    tree.WakeUp(8);
+                }
+            });
+
+            tree.Dispose();
+            Assert.DoesNotThrow(() => producer.GetAwaiter().GetResult());
+            Assert.DoesNotThrow(() => tree.WakeUp(8));
+            Assert.IsTrue(tree.IsDisposed);
+            Assert.IsFalse(tree.HasWakeUpRequest);
+            Assert.AreEqual(0, tree.WakeUpTickBudget);
+        }
+
+        [Test]
+        public void RuntimeBehaviorTree_RejectsDisposedBlackboardBeforeTakingNodeOwnership()
+        {
+            var child = new FixedStateNode(RuntimeState.Success);
+            var root = new RuntimeRootNode { Child = child };
+            var disposedBlackboard = new RuntimeBlackboard();
+            disposedBlackboard.Dispose();
+
+            Assert.Throws<ObjectDisposedException>(() =>
+                new RuntimeBehaviorTree(root, disposedBlackboard, new RuntimeBTContext()));
+
+            using var replacementBlackboard = new RuntimeBlackboard();
+            using var tree = new RuntimeBehaviorTree(root, replacementBlackboard, new RuntimeBTContext());
+            Assert.AreEqual(RuntimeState.Success, tree.Tick());
+        }
+
+        [Test]
+        public void RuntimeBehaviorTree_AwakeFailureRestoresCallerBlackboardContextAndOwnership()
+        {
+            var previousContext = new RuntimeBTContext();
+            var blackboard = new RuntimeBlackboard { Context = previousContext };
+            var node = new ThrowingAwakeNode();
+            var root = new RuntimeRootNode { Child = node };
+
+            try
+            {
+                Assert.Throws<InvalidOperationException>(() =>
+                    new RuntimeBehaviorTree(root, blackboard, new RuntimeBTContext()));
+
+                Assert.IsFalse(blackboard.IsDisposed);
+                Assert.AreSame(previousContext, blackboard.Context);
+                Assert.AreEqual(1, node.DisposeCount);
+            }
+            finally
+            {
+                blackboard.Dispose();
+            }
+        }
+
+        [Test]
+        public void RuntimeBehaviorTree_AwakeFailureDisposesInternallyCreatedBlackboard()
+        {
+            var node = new ThrowingAwakeNode();
+            var root = new RuntimeRootNode { Child = node };
+
+            Assert.Throws<InvalidOperationException>(() =>
+                new RuntimeBehaviorTree(root, null, new RuntimeBTContext()));
+
+            Assert.That(node.BlackboardSeenDuringDispose, Is.Not.Null);
+            Assert.IsTrue(node.BlackboardSeenDuringDispose.IsDisposed);
+            Assert.AreEqual(1, node.DisposeCount);
+        }
+
+        [Test]
+        public void RuntimeUtilitySelector_CopiesScoreKeysAndFreezesConfigurationWhenOwned()
+        {
+            const int firstScoreKey = 7101;
+            const int secondScoreKey = 7102;
+            var first = new FixedStateNode(RuntimeState.Success);
+            var second = new FixedStateNode(RuntimeState.Success);
+            var selector = new RuntimeUtilitySelector();
+            selector.AddChild(first);
+            selector.AddChild(second);
+
+            int[] scoreKeys = { firstScoreKey, secondScoreKey };
+            selector.SetScoreKeys(scoreKeys);
+            scoreKeys[0] = secondScoreKey;
+            scoreKeys[1] = firstScoreKey;
+
+            using RuntimeBehaviorTree tree = BehaviorTreeTestFactory.CreateRuntimeTree(selector);
+            tree.Blackboard.SetFloat(firstScoreKey, 10f);
+            tree.Blackboard.SetFloat(secondScoreKey, 1f);
+
+            Assert.Throws<InvalidOperationException>(() => selector.SetScoreKeys(scoreKeys));
+            Assert.AreEqual(RuntimeState.Success, tree.Tick());
+            Assert.AreEqual(1, first.RunCount);
+            Assert.AreEqual(0, second.RunCount);
+        }
+
+        [Test]
+        public void RuntimeBlackboard_HashScopesExcludeUnrelatedKeysAndSeparateValueTypes()
+        {
+            RuntimeBlackboardSchema schema = new RuntimeBlackboardSchemaBuilder()
+                .AddInt("SnapshotOnly", RuntimeBlackboardSyncFlags.Snapshot)
+                .AddInt("DeltaOnly", RuntimeBlackboardSyncFlags.Delta)
+                .Build();
+            int snapshotKey = RuntimeBlackboard.DefaultStringHashFunc("SnapshotOnly");
+            int deltaKey = RuntimeBlackboard.DefaultStringHashFunc("DeltaOnly");
+            using var scoped = new RuntimeBlackboard(schema: schema);
+            using var intValue = new RuntimeBlackboard();
+            using var floatValue = new RuntimeBlackboard();
+
+            scoped.SetInt(snapshotKey, 1);
+            scoped.SetInt(deltaKey, 2);
+            ulong snapshotHash = scoped.ComputeHash(RuntimeBlackboardNetworkScope.Snapshot);
+            ulong networkedHash = scoped.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
+            scoped.SetInt(deltaKey, 3);
+
+            Assert.AreEqual(snapshotHash, scoped.ComputeHash(RuntimeBlackboardNetworkScope.Snapshot));
+            Assert.AreNotEqual(networkedHash, scoped.ComputeHash(RuntimeBlackboardNetworkScope.Networked));
+
+            intValue.SetInt(7, 1065353216);
+            floatValue.SetFloat(7, 1f);
+            Assert.AreNotEqual(
+                intValue.ComputeHash(RuntimeBlackboardNetworkScope.Networked),
+                floatValue.ComputeHash(RuntimeBlackboardNetworkScope.Networked));
+        }
+
+        [Test]
+        public void RuntimeBlackboard_ReadFromRejectsPrimitiveObjectKeyCollisionBeforeMutation()
+        {
+            const int key = 211;
+            using var source = new RuntimeBlackboard();
+            using var target = new RuntimeBlackboard();
+            var localObject = new object();
+            source.SetInt(key, 9);
+            target.SetObject(key, localObject);
+
+            using var stream = new MemoryStream();
+            using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+            {
+                source.WriteTo(writer);
+            }
+
+            stream.Position = 0;
+            using var reader = new BinaryReader(stream, System.Text.Encoding.UTF8, true);
+            Assert.Throws<InvalidDataException>(() => target.ReadFrom(reader));
+            Assert.AreSame(localObject, target.GetObject<object>(key));
+        }
+
+        [Test]
+        public void RuntimeBlackboard_ReadFromRejectsRemoteStampBeyondDeclaredSequence()
+        {
+            const int key = 215;
+            using var source = new RuntimeBlackboard();
+            using var target = new RuntimeBlackboard();
+            source.SetInt(key, 9);
+            target.SetInt(key, 3);
+            byte[] payload;
+            using (var stream = new MemoryStream())
+            {
+                using (var writer = new BinaryWriter(stream, System.Text.Encoding.UTF8, true))
+                {
+                    source.WriteTo(writer);
+                }
+
+                payload = stream.ToArray();
+            }
+
+            Buffer.BlockCopy(BitConverter.GetBytes(2UL), 0, payload, payload.Length - sizeof(ulong), sizeof(ulong));
+            using var malformed = new MemoryStream(payload, writable: false);
+            using var reader = new BinaryReader(malformed);
+            Assert.Throws<InvalidDataException>(() => target.ReadFrom(reader));
+            Assert.AreEqual(3, target.GetInt(key));
+        }
+
+        [Test]
+        public void RuntimeBlackboard_ClearRetainsMonotonicRevisionAndEmitsTrackedRemovals()
+        {
+            const int key = 212;
+            using var source = new RuntimeBlackboard();
+            using var target = new RuntimeBlackboard();
+            using var delta = new BTBlackboardDelta(1);
+            delta.TrackKey(key);
+            delta.Attach(source);
+            source.SetInt(key, 4);
+            Assert.IsTrue(delta.TryFlush(source, out ArraySegment<byte> initial));
+            BTBlackboardDelta.Apply(target, initial);
+            ulong revisionBeforeClear = source.Revision;
+
+            source.Clear();
+
+            Assert.Greater(source.Revision, revisionBeforeClear);
+            Assert.IsTrue(delta.TryFlush(source, out ArraySegment<byte> removal));
+            BTBlackboardDelta.Apply(target, removal);
+            Assert.IsFalse(target.HasKey(key));
+
+            source.SetInt(key, 5);
+            Assert.Greater(source.GetStamp(key), revisionBeforeClear);
+        }
+
+        [Test]
+        public void BlackboardDelta_OverBudgetFlushCanBeRetriedWithoutLosingMutation()
+        {
+            const int key = 213;
+            using var source = new RuntimeBlackboard();
+            using var target = new RuntimeBlackboard();
+            using var delta = new BTBlackboardDelta(1);
+            delta.TrackKey(key);
+            delta.Attach(source);
+            source.SetLong3(key, new RuntimeBlackboardLong3(1, 2, 3));
+
+            Assert.Throws<InvalidOperationException>(
+                () => delta.TryFlush(source, maxPatchBytes: 16, out _));
+            Assert.IsTrue(delta.TryFlush(source, maxPatchBytes: 64, out ArraySegment<byte> patch));
+            BTBlackboardDelta.Apply(target, patch);
+            Assert.AreEqual(new RuntimeBlackboardLong3(1, 2, 3), target.GetLong3(key));
+        }
+
+        [Test]
+        public void BlackboardDelta_RevisionMismatchAbortsBatchBeforeMutation()
+        {
+            const int key = 214;
+            using var source = new RuntimeBlackboard();
+            using var target = new RuntimeBlackboard();
+            using var delta = new BTBlackboardDelta(1);
+            delta.TrackKey(key);
+            source.SetInt(key, 10);
+            Assert.IsTrue(delta.TryFlush(source, out ArraySegment<byte> patch));
+            ulong expectedRevision = target.Revision;
+            target.SetInt(999, 1);
+
+            Assert.Throws<InvalidOperationException>(
+                () => BTBlackboardDelta.Apply(target, patch, 1, expectedRevision));
+            Assert.IsFalse(target.HasKey(key));
         }
 
         [Test]
@@ -697,7 +997,10 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 Assert.AreEqual(sourceTree.Blackboard.ComputeHash(), targetTree.Blackboard.ComputeHash());
                 Assert.AreEqual(42, targetTree.Blackboard.GetInt(intKey));
                 Assert.AreEqual(new Vector3(9f, 8f, 7f), targetTree.Blackboard.GetVector3(vectorKey));
-                Assert.IsFalse(BTNetworkSync.CheckDesync(targetTree, snapshot.BlackboardHash));
+                Assert.IsFalse(BTNetworkSync.CheckDesync(
+                    targetTree,
+                    snapshot.TreeStateHash,
+                    RuntimeBlackboardNetworkScope.Snapshot));
             }
             finally
             {
@@ -735,7 +1038,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         }
 
         [Test]
-        public void NetworkSnapshot_RejectsInvalidFormatMarker()
+        public void NetworkSnapshot_RejectsLegacyV1FormatMarker()
         {
             var sourceTree = BehaviorTreeTestFactory.CreateRuntimeTree(new FixedStateNode(RuntimeState.Running));
 
@@ -743,7 +1046,10 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             {
                 BTStateSnapshot snapshot = BTNetworkSync.CaptureSnapshot(sourceTree);
                 byte[] bytes = BTNetworkSync.SerializeSnapshot(snapshot);
-                bytes[0] ^= 0x7F;
+                bytes[0] = (byte)'B';
+                bytes[1] = (byte)'T';
+                bytes[2] = (byte)'S';
+                bytes[3] = (byte)'1';
 
                 Assert.Throws<InvalidDataException>(() => BTNetworkSync.DeserializeSnapshot(bytes));
             }
@@ -774,59 +1080,27 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             }
         }
 
-        [Test]
-        public void FlatTreeCompiler_RootOnlyTreeCompilesToSingleNode()
+        private sealed class ThrowingAwakeNode : RuntimeNode
         {
-            var tree = BehaviorTreeTestFactory.CreateRuntimeTree(null);
+            public int DisposeCount { get; private set; }
+            public RuntimeBlackboard BlackboardSeenDuringDispose { get; private set; }
 
-            try
+            public override void OnAwake()
             {
-                using var flatTree = FlatTreeCompiler.Compile(tree, Allocator.Temp);
-
-                Assert.IsTrue(flatTree.IsCreated);
-                Assert.AreEqual(1, flatTree.NodeCount);
-                Assert.AreEqual(FlatNodeType.Succeeder, flatTree.Nodes[0].Type);
+                throw new InvalidOperationException("Expected awake failure.");
             }
-            finally
+
+            protected override RuntimeState OnRun(RuntimeBlackboard blackboard)
             {
-                tree.Dispose();
+                return RuntimeState.Success;
+            }
+
+            protected override void OnDispose(RuntimeBlackboard blackboard)
+            {
+                DisposeCount++;
+                BlackboardSeenDuringDispose = blackboard;
             }
         }
 
-        [Test]
-        public void FlatTreeCompiler_UnsupportedManagedLeafFailsFast()
-        {
-            var tree = BehaviorTreeTestFactory.CreateRuntimeTree(new FixedStateNode(RuntimeState.Success));
-
-            try
-            {
-                var exception = Assert.Throws<NotSupportedException>(() => FlatTreeCompiler.Compile(tree, Allocator.Temp));
-                StringAssert.Contains("managed leaf node", exception.Message);
-            }
-            finally
-            {
-                tree.Dispose();
-            }
-        }
-
-        [Test]
-        public void FlatTreeCompiler_UnsupportedDecoratorFailsFast()
-        {
-            var decorator = new UnsupportedDecoratorNode
-            {
-                Child = null
-            };
-            var tree = BehaviorTreeTestFactory.CreateRuntimeTree(decorator);
-
-            try
-            {
-                var exception = Assert.Throws<NotSupportedException>(() => FlatTreeCompiler.Compile(tree, Allocator.Temp));
-                StringAssert.Contains("decorator node", exception.Message);
-            }
-            finally
-            {
-                tree.Dispose();
-            }
-        }
     }
 }

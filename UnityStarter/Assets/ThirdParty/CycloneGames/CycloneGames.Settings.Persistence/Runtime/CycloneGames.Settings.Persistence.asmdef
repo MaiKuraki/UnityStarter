@@ -1,0 +1,17 @@
+{
+  "name": "CycloneGames.Settings.Persistence",
+  "rootNamespace": "CycloneGames.Settings.Persistence",
+  "references": [
+    "CycloneGames.Settings.Core",
+    "CycloneGames.Persistence.Core"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": false,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": true
+}

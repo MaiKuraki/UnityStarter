@@ -9,6 +9,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
         [SerializeField] private float _timeoutSeconds = 5f;
         [SerializeField] private bool _useUnscaledTime = false;
 
+        public float TimeoutSeconds => _timeoutSeconds;
+        public bool UseUnscaledTime => _useUnscaledTime;
+
         public override BTNode Clone()
         {
             var clone = (TimeoutNode)base.Clone();

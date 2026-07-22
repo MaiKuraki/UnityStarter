@@ -7,6 +7,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Conditions
     {
         [SerializeField] private bool _on = true;
 
+        public bool IsOn => _on;
+
         public override BTNode Clone()
         {
             var clone = (OnOffNode)base.Clone();

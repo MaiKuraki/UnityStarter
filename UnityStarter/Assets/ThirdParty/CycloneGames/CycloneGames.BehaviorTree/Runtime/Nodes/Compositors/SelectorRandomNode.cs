@@ -8,6 +8,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
     {
         [SerializeField] private int _seed;
 
+        public int Seed => _seed;
+
         public override BTNode Clone()
         {
             var clone = (SelectorRandomNode)base.Clone();

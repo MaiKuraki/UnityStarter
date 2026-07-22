@@ -1,8 +1,20 @@
+using System;
+
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
 {
     public abstract class RuntimeDecoratorNode : RuntimeNode
     {
-        public RuntimeNode Child { get; set; }
+        private RuntimeNode _child;
+
+        public RuntimeNode Child
+        {
+            get => _child;
+            set
+            {
+                ThrowIfSetupFrozen();
+                _child = value;
+            }
+        }
 
         public override bool CanEvaluate => Child != null && Child.CanEvaluate;
 
@@ -20,12 +32,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
             }
         }
 
-        protected override void OnStop(RuntimeBlackboard blackboard)
+        protected override void OnExit(
+            RuntimeBlackboard blackboard,
+            RuntimeNodeExitReason reason,
+            Exception exception)
         {
             if (Child != null && Child.IsStarted)
             {
                 Child.Abort(blackboard);
             }
+        }
+
+        protected override void OnReset(RuntimeBlackboard blackboard)
+        {
+            Child?.Reset(blackboard);
+        }
+
+        protected override void OnDispose(RuntimeBlackboard blackboard)
+        {
+            Child?.DisposeNode(blackboard);
         }
     }
 }

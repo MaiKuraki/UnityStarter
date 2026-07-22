@@ -206,7 +206,7 @@ Register `IDynamicAtlas` or `DynamicAtlasService` in a DI container when the con
 
 `DynamicAtlasManager` is an optional scene host. It creates an owned service during `Awake` when `autoInitialize` is enabled. `SetService(service, takeOwnership)` supports an external composition root. Reading `Service` never initializes it implicitly. Multiple managers are allowed when separate UI contexts require separate budgets and lifetimes.
 
-An end-to-end sample is at `Samples/DynamicAtlasLeaseSample.cs` — a self-contained component with a 512-pixel, one-page, 2 MiB texture budget that acquires a sprite on enable, releases on disable, and disposes on destroy. See [Samples/README.md](../Samples/README.md) for setup instructions.
+An end-to-end sample is at `Samples/DynamicAtlasLeaseSample.cs` -- a self-contained component with a 512-pixel, one-page, 2 MiB texture budget that acquires a sprite on enable, releases on disable, and disposes on destroy. See [Samples/README.md](../Samples/README.md) for setup instructions.
 
 ## Advanced Topics
 
@@ -214,11 +214,11 @@ An end-to-end sample is at `Samples/DynamicAtlasLeaseSample.cs` — a self-conta
 
 Pages have one immutable copy mode so CPU uploads cannot overwrite content inserted only on the GPU.
 
-**GPU-only page** — when the source and destination resolve to the same `GraphicsFormat` and `CopyTextureSupport.Basic` is available, `Graphics.CopyTexture` writes directly into a GPU-only page. The page releases its CPU copy after initialization.
+**GPU-only page** -- when the source and destination resolve to the same `GraphicsFormat` and `CopyTextureSupport.Basic` is available, `Graphics.CopyTexture` writes directly into a GPU-only page. The page releases its CPU copy after initialization.
 
-**CPU-backed page** — `AllowCpuRawCopy` permits readable pages and row-copy from a readable source with the exact destination `GraphicsFormat`. `AllowSynchronousReadback` additionally permits a temporary render texture and `ReadPixels`. Synchronous readback can stall the render thread; `DynamicAtlasStats.SynchronousReadbackCount` exposes its use.
+**CPU-backed page** -- `AllowCpuRawCopy` permits readable pages and row-copy from a readable source with the exact destination `GraphicsFormat`. `AllowSynchronousReadback` permits a temporary render texture and `ReadPixels`. Synchronous readback can stall the render thread; `DynamicAtlasStats.SynchronousReadbackCount` exposes its use.
 
-**Destination format** — `RGBA32` is the supported runtime page destination. Runtime compressed block packing is not supported. Use build-time `SpriteAtlas` compression when compressed page storage is required.
+**Destination format** -- `RGBA32` is the supported runtime page destination. Runtime compressed block packing is not supported. Use build-time `SpriteAtlas` compression when compressed page storage is required.
 
 ### ScaleDown
 

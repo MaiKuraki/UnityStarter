@@ -8,8 +8,25 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Decorators
     /// </summary>
     public class RuntimeTimeoutNode : RuntimeDecoratorNode
     {
-        public float TimeoutSeconds { get; set; } = 5f;
-        public bool UseUnscaledTime { get; set; }
+        private float _timeoutSeconds = 5f;
+        private bool _useUnscaledTime;
+
+        public float TimeoutSeconds
+        {
+            get => _timeoutSeconds;
+            set
+            {
+                ThrowIfSetupFrozen();
+                ValidateFiniteNonNegativeSetupValue(value, nameof(TimeoutSeconds));
+                _timeoutSeconds = value;
+            }
+        }
+
+        public bool UseUnscaledTime
+        {
+            get => _useUnscaledTime;
+            set => SetSetupValue(ref _useUnscaledTime, value);
+        }
 
         private double _startTime;
 

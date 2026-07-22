@@ -2,7 +2,8 @@
     "name": "CycloneGames.BehaviorTree.Tests.PlayMode",
     "rootNamespace": "CycloneGames.BehaviorTree.Tests.PlayMode",
     "references": [
-        "CycloneGames.BehaviorTree.Runtime"
+        "CycloneGames.BehaviorTree.Runtime",
+        "CycloneGames.BehaviorTree.Benchmarks"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

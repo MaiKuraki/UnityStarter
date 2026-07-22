@@ -4,12 +4,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Decorators
 {
     public class WaitSuccessNode : DecoratorNode
     {
-        public bool UseRandomBetweenTwoConstants => _useRandomBetweenTwoConstants;
-
         [SerializeField] private bool _useRandomBetweenTwoConstants = false;
         [SerializeField] private Vector2 _waitTimeRange = new Vector2(1f, 2f);
         [SerializeField] private float _waitTime = 1f;
         [SerializeField] private bool _useUnscaledTime = false;
+
+        public bool UseRandomBetweenTwoConstants => _useRandomBetweenTwoConstants;
+        public Vector2 WaitTimeRange => _waitTimeRange;
+        public float WaitTime => _waitTime;
+        public bool UseUnscaledTime => _useUnscaledTime;
 
         public override BTNode Clone()
         {

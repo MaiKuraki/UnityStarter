@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.IO is the canonical file-I/O foundation for CycloneGames modules. It provides bounded whole-file reads, streaming transfer, strict atomic commits, exact comparison, hashing, portable path sandboxing, deterministic text decoding, explicit retry policy, and Unity file-URI construction. Allocation limits, failure semantics, ownership, platform boundaries, and corruption behavior are visible in the API.
+CycloneGames.IO provides bounded whole-file reads, streaming transfer, strict atomic commits, exact comparison, file hashing, portable path sandboxing, deterministic text decoding, and explicit retry for Unity projects and pure C# services. Three capability contracts — `IFileStore`, `IAtomicFileStore`, `IStreamFileStore` — define the storage surface; `SystemFileStore` implements all three.
 
 ## Table of Contents
 
@@ -18,23 +18,19 @@ CycloneGames.IO is the canonical file-I/O foundation for CycloneGames modules. I
 
 ## Overview
 
-The package exposes a small set of capability contracts (`IFileStore`, `IAtomicFileStore`, `IStreamFileStore`) and one default System.IO implementation (`SystemFileStore`). Every whole-file read requires an explicit allocation ceiling. Every atomic commit goes through a same-directory temporary file followed by `File.Move` or `File.Replace`, never a delete-then-move. Comparison checks length and bytes exactly; hashes are never accepted as equality proof. Path sandboxing, text decoding, retry, and Unity URI construction are each isolated contracts so callers compose only what they need.
+Every whole-file read requires an explicit allocation ceiling. Every atomic commit writes to a same-directory temporary file, then calls `File.Move` or `File.Replace` — never delete-then-move. Comparison checks length and bytes exactly; hashes are not accepted as equality proof. Argument and contract violations throw `ArgumentException`, `ArgumentOutOfRangeException`, or `ArgumentNullException`. Filesystem and platform failures remain visible as their corresponding exceptions. Cancellation throws `OperationCanceledException`.
 
-The package does not log, hide exceptions, own application policy, or depend on a DI container. Save-game schemas, cloud synchronization, compression, encryption key management, virtual filesystems, content-addressable storage, and application logging belong in layers built on top of the storage contracts.
+### Key features
 
-Argument and contract violations throw `ArgumentException`, `ArgumentOutOfRangeException`, or `ArgumentNullException`. Filesystem and platform failures remain visible as their corresponding exceptions. Atomic replacement support failures throw `PlatformNotSupportedException`. Cancellation throws `OperationCanceledException`. The package never converts errors into `false`, `null`, empty content, or log-only failures, except for explicitly named `Try...` APIs.
-
-### Key Features
-
-- **Bounded reads** with an explicit maximum for every whole-file operation.
-- **Atomic commits** through same-directory temporary file plus `File.Move`/`File.Replace`; never delete-then-move.
+- **Bounded reads** with an explicit maximum byte count for every whole-file operation.
+- **Atomic commits** through same-directory temporary file plus `File.Move`/`File.Replace`.
 - **Streaming transfer** with cooperative chunk-level cancellation and caller-owned streams.
-- **Exact comparison** via `FileComparer` / `BinaryContentComparer`; hashes are not equality proof.
-- **Hashing** via `FileHasher` / `ContentHasher` (MD5, SHA-256, xxHash64) with canonical lowercase hexadecimal output.
-- **Portable path sandbox** via `FilePathSandbox` rejecting rooted input, dot segments, control characters, Windows device names, and existing reparse points.
-- **Strict text decoding** via `TextCodec` with BOM awareness and one explicit fallback encoding.
-- **Explicit retry** via `FileRetry` / `FileRetryPolicy` for idempotent operations with understood transient classification.
-- **Unity file URIs** via `UnityFileUri` for `UnityWebRequest` across StreamingAssets, PersistentData, and absolute paths.
+- **Exact comparison** via `FileComparer` and `BinaryContentComparer`.
+- **File hashing** via `FileHasher` and `ContentHasher` (MD5, SHA-256, xxHash64) with canonical lowercase hexadecimal output.
+- **Path sandbox** via `FilePathSandbox` rejecting rooted input, dot segments, control characters, and Windows device names.
+- **Text decoding** via `TextCodec` with BOM awareness and one explicit fallback encoding.
+- **Retry** via `FileRetry` and `FileRetryPolicy` for idempotent operations with understood transient classification.
+- **Unity file URIs** via `UnityFileUri` for `UnityWebRequest` across `StreamingAssets`, `PersistentData`, and absolute paths.
 
 ## Architecture
 
@@ -57,14 +53,16 @@ flowchart LR
     class Hash dependency
 ```
 
-| Assembly | Purpose |
-| --- | --- |
-| `CycloneGames.IO.Core` | Pure C# contracts, path sandbox, text codec, retry policy. No Unity or logging dependency. |
-| `CycloneGames.IO.SystemIO` | Pure C# System.IO implementation: `SystemFileStore`, atomic commit, hashing, comparison. |
-| `CycloneGames.IO.Unity` | Unity path adaptation and `UnityWebRequest` URI construction. |
-| `CycloneGames.IO.Editor` | Hardware-local benchmark window. |
-| `CycloneGames.IO.Tests.Core` / `.SystemIO` / `.Unity` | EditMode contract and integration tests. |
-| `CycloneGames.IO.Tests.Performance` | Timing and GC samples without hardware-dependent thresholds. |
+| Assembly | Path | Purpose |
+| --- | --- | --- |
+| `CycloneGames.IO.Core` | `Core/` | Pure C# contracts, path sandbox, text codec, retry policy. `noEngineReferences: true`. |
+| `CycloneGames.IO.SystemIO` | `Runtime/SystemIO/` | `SystemFileStore`, atomic commit, hashing, comparison. References `CycloneGames.Hash.Core`. |
+| `CycloneGames.IO.Unity` | `Runtime/Unity/` | Unity path adaptation and `UnityWebRequest` URI construction. |
+| `CycloneGames.IO.Editor` | `Editor/` | Hardware-local benchmark window. |
+| `CycloneGames.IO.Tests.Core` | `Tests/Core/` | Contract tests. |
+| `CycloneGames.IO.Tests.SystemIO` | `Tests/SystemIO/` | Storage, atomic, hash, and comparison integration tests. |
+| `CycloneGames.IO.Tests.Unity` | `Tests/Unity/` | Unity URI behavior tests. |
+| `CycloneGames.IO.Tests.Performance` | `Tests/Performance/` | Timing and GC samples. |
 
 | Directory | Responsibility |
 | --- | --- |
@@ -73,16 +71,16 @@ flowchart LR
 | `Core/Text/` | Strict deterministic text decoding. |
 | `Core/Retry/` | Explicit bounded retry policy. |
 | `Runtime/SystemIO/Storage/` | `SystemFileStore`, options, copy behavior, buffer policy. |
-| `Runtime/SystemIO/Atomic/` | Same-directory temporary-file transaction and commit operations. |
-| `Runtime/SystemIO/Hashing/` | File/content hashing and canonical lowercase hexadecimal output. |
+| `Runtime/SystemIO/Atomic/` | Same-directory temporary-file transaction and commit. |
+| `Runtime/SystemIO/Hashing/` | File/content hashing and canonical lowercase hex output. |
 | `Runtime/SystemIO/Comparison/` | Exact byte and file comparison. |
 | `Runtime/Unity/` | Unity file locations and `UnityWebRequest` URI construction. |
 
-Core and SystemIO public APIs use the `CycloneGames.IO` namespace. Unity-specific APIs use `CycloneGames.IO.Unity`. Async file APIs return `Task` because they define a portable BCL boundary — Unity consumers can await them from `UniTask` workflows without moving Unity types into the core contract.
+Core and SystemIO public APIs use the `CycloneGames.IO` namespace. Unity-specific APIs use `CycloneGames.IO.Unity`.
 
 ## Quick Start
 
-Add an asmdef reference to `CycloneGames.IO.SystemIO` (and `CycloneGames.IO.Unity` for Unity path support), then import the namespace:
+Add an asmdef reference to `CycloneGames.IO.SystemIO` (and `CycloneGames.IO.Unity` for Unity path support):
 
 ```csharp
 using CycloneGames.IO;
@@ -93,8 +91,6 @@ using CycloneGames.IO;
 ```csharp
 SystemFileStore.Default.WriteTextAtomically(savePath, json);
 ```
-
-If the write fails or is cancelled, the previous destination is preserved.
 
 ### Read a bounded manifest
 
@@ -122,19 +118,19 @@ string filePath = sandbox.Resolve(manifestEntry.Location);
 
 ### Capability contracts
 
-The package separates storage capabilities into three contracts so callers depend on the narrowest one:
+Three contracts let callers depend on the narrowest capability:
 
 | Contract | Purpose |
 | --- | --- |
-| `IFileStore` | Byte-oriented capability with an explicit maximum for every whole-file read. |
-| `IAtomicFileStore` | Atomic byte and stream commit capability. |
+| `IFileStore` | Byte-oriented storage with an explicit maximum for every whole-file read. |
+| `IAtomicFileStore` | Atomic byte and stream commit. |
 | `IStreamFileStore` | Caller-owned stream capability. |
 
 `SystemFileStore` implements all three. `SystemFileStoreOptions` is an immutable buffer-size and pooled-buffer clearing policy. `FileTransferProgress` reports processed bytes, known/unknown total, and ratio.
 
 ### Atomic commit semantics
 
-Atomic writes are designed for settings, manifests, journals, checkpoints, and any file whose partial replacement is unacceptable:
+Atomic writes are for settings, manifests, journals, checkpoints, and any file whose partial replacement is unacceptable:
 
 ```csharp
 SystemFileStore.Default.WriteTextAtomically(savePath, json);
@@ -145,40 +141,38 @@ await SystemFileStore.Default.WriteBytesAtomicallyAsync(
     cancellationToken);
 ```
 
-Commit behavior is deliberately strict:
+Commit behavior:
 
 1. A uniquely named temporary file is created in the destination directory.
 2. Content is written, then flushed with `FileStream.Flush(true)` where supported.
 3. A new destination is committed with `File.Move`.
 4. An existing destination is committed with `File.Replace`.
-5. Unsupported replacement fails closed — the implementation never deletes the destination and then moves the temporary file.
+5. Unsupported replacement fails closed — the destination is never deleted before moving the temporary file.
 6. Failed or cancelled operations attempt to remove their temporary file and preserve the previous destination.
 
-The operation is atomic, but business ordering remains caller-owned. With concurrent writers, each committed file is complete and the last successful operating-system commit wins. Use a higher-level revision, compare-and-swap policy, or owner queue when ordering matters.
+The operation is atomic per destination. With concurrent writers, each committed file is complete and the last successful OS commit wins. Use a higher-level revision or compare-and-swap policy when ordering matters.
 
-`Flush(true)` improves file-content durability, but no portable managed API can guarantee directory-entry persistence across every filesystem, device controller, console SDK, mobile OS, or sudden power-loss model. Critical products should validate their target filesystem and platform recovery policy.
+`Flush(true)` improves file-content durability, but no portable managed API can guarantee directory-entry persistence across every filesystem, device controller, or sudden power-loss model.
 
 ### Bounded reads
 
-Every whole-file read requires an allocation ceiling. The store validates file length before allocation, reads exactly that length, and rejects truncation or growth observed during the read. Large or untrusted content should use streams instead of increasing the bound without analysis.
+Every whole-file read requires an allocation ceiling. The store validates file length before allocation, reads exactly that length, and rejects truncation or growth observed during the read.
 
 ### Streaming and cancellation
 
-Returned streams are owned and disposed by the caller. `CreateWrite` always creates or fully truncates a file. `OpenAppend` preserves existing content, appends only, permits concurrent readers, and rejects other writers. These methods are intentionally explicit so a caller cannot confuse overwrite and append semantics.
+Returned streams are owned and disposed by the caller. `CreateWrite` creates or fully truncates a file. `OpenAppend` preserves existing content, appends only, permits concurrent readers, and rejects other writers.
 
-Cancellation is cooperative at buffer boundaries. On Unity 2022 and Windows, the implementation intentionally checks the token between chunks while passing `CancellationToken.None` into operating-system `FileStream` calls. This avoids a reproducible runtime deadlock while retaining bounded cancellation latency.
+Cancellation is cooperative at buffer boundaries. On Unity 2022 and Windows, the token is checked between chunks while `CancellationToken.None` is passed into OS `FileStream` calls, avoiding a reproducible runtime deadlock.
 
-For atomic operations, cancellation is honored until the commit phase starts. Once the destination commit begins, it runs to completion and reports its real result. A progress callback exception aborts before commit; no callback is invoked after a successful commit.
+For atomic operations, cancellation is honored until the commit phase starts. Once commit begins, it runs to completion and reports its real result.
 
 ### Path sandbox
 
-`FilePathSandbox` resolves validated portable relative paths under one trusted root. It rejects rooted input, dot segments, empty segments, control characters, non-portable filename characters, trailing dots/spaces, and Windows device names. The default `FileLinkPolicy.RejectExistingLinks` also rejects existing reparse-point/link segments.
-
-Lexical checks and existing-link inspection cannot close a time-of-check/time-of-use race against a hostile process that can mutate the filesystem concurrently. A hostile local-filesystem security boundary requires platform-specific handle-relative APIs and directory-handle ownership above this package.
+`FilePathSandbox` resolves validated portable relative paths under one trusted root. It rejects rooted input, dot segments, empty segments, control characters, non-portable filename characters, trailing dots/spaces, and Windows device names. The default `FileLinkPolicy.RejectExistingLinks` rejects existing reparse-point/link segments.
 
 ### Text decoding
 
-`TextCodec` recognizes UTF-8, UTF-16 LE/BE, and UTF-32 LE/BE byte-order marks. BOM-less content uses exactly the caller-selected fallback encoding, which defaults to strict UTF-8 without BOM. It does not guess UTF-16/UTF-32 from zero-byte patterns and does not silently replace malformed input.
+`TextCodec` recognizes UTF-8, UTF-16 LE/BE, and UTF-32 LE/BE byte-order marks. BOM-less content uses the caller-selected fallback encoding (default: strict UTF-8 without BOM). It does not guess UTF-16/UTF-32 from zero-byte patterns and does not silently replace malformed input.
 
 ```csharp
 string text = TextCodec.Decode(downloadHandler.data);
@@ -186,15 +180,13 @@ byte[] utf8 = TextCodec.Encode(text);
 
 if (!TextCodec.TryDecode(bytes, out string optionalText))
 {
-    // Handle malformed UTF-8 explicitly.
+    // Handle malformed UTF-8.
 }
 ```
 
 ## Usage Guide
 
 ### Atomic streaming from a large source
-
-For a large or generated source, stream directly into the atomic transaction:
 
 ```csharp
 using (Stream source = files.OpenRead(sourcePath))
@@ -206,8 +198,6 @@ using (Stream source = files.OpenRead(sourcePath))
         cancellationToken);
 }
 ```
-
-The source stream is caller-owned; the atomic transaction owns the temporary file and the commit.
 
 ### Exact comparison and atomic copy
 
@@ -226,7 +216,7 @@ FileCopyResult result = await SystemFileStore.Default.CopyAtomicallyAsync(
     cancellationToken);
 ```
 
-Comparison checks length and bytes exactly. `SkipIfIdentical` avoids replacing an unchanged destination; otherwise the copy is streamed into an atomic transaction.
+`SkipIfIdentical` avoids replacing an unchanged destination.
 
 ### Hashing
 
@@ -241,10 +231,10 @@ Span<byte> hash = stackalloc byte[ContentHasher.GetHashSize(FileHashAlgorithm.Xx
 ContentHasher.WriteHash(content, FileHashAlgorithm.XxHash64, hash);
 ```
 
-- Use SHA-256 for content-integrity and trust workflows.
-- xxHash64 is fast and stable but is not cryptographic.
-- MD5 is available only for interoperability with existing external formats; do not use it as a security primitive.
-- Hash comparison does not replace exact equality when correctness requires proof that all bytes match.
+- SHA-256 for content-integrity and trust workflows.
+- xxHash64 is fast and stable but not cryptographic.
+- MD5 only for interoperability with existing external formats.
+- Hash comparison does not replace exact equality.
 
 ### UnityWebRequest URIs
 
@@ -265,11 +255,11 @@ if (!UnityFileUri.TryCreate(
 }
 ```
 
-`StreamingAssets` and `PersistentData` accept validated relative paths. `AbsolutePathOrUri` accepts an absolute file path or an `http`, `https`, `file`, or `jar` URI. The package does not log failures.
+`StreamingAssets` and `PersistentData` accept validated relative paths. `AbsolutePathOrUri` accepts an absolute file path or an `http`, `https`, `file`, or `jar` URI.
 
 ### Retry
 
-Retry is never automatic. Wrap only an idempotent operation whose transient classification is understood:
+Wrap only idempotent operations whose transient classification is understood:
 
 ```csharp
 var policy = new FileRetryPolicy(
@@ -284,41 +274,37 @@ await FileRetry.ExecuteAsync(
     cancellationToken);
 ```
 
-The default classifier retries Windows sharing and lock violations only. It does not retry permission errors, invalid paths, disk-full failures, corruption, unsupported atomic replacement, or arbitrary `IOException` values.
+The default classifier retries Windows sharing and lock violations only.
 
 ## Advanced Topics
 
 ### Same-destination commit coordination
 
-Commits to the same normalized destination are serialized inside the process to avoid Windows `File.Replace` contention. Unrelated destinations remain fully parallel, and the coordination entry is removed after the final holder exits. Cross-process contention remains visible as an I/O failure and can be wrapped in an explicit `FileRetry` policy when the operation is idempotent.
-
-There is no global I/O lock, hidden scheduler, automatic retry loop, logger, service locator, or mutable global configuration.
+Commits to the same normalized destination are serialized inside the process to avoid Windows `File.Replace` contention. Unrelated destinations remain fully parallel. The coordination entry is removed after the final holder exits. Cross-process contention remains visible as an I/O failure.
 
 ### Buffer pooling and clearing
 
-The default transfer buffer is 64 KiB and can be configured from 4 KiB to 1 MiB via `SystemFileStoreOptions`. Streaming, hashing, comparison, and atomic stream copy rent buffers from `ArrayPool<byte>.Shared`.
+Default transfer buffer is 64 KiB, configurable from 4 KiB to 1 MiB via `SystemFileStoreOptions`. Streaming, hashing, comparison, and atomic stream copy rent buffers from `ArrayPool<byte>.Shared`.
 
 | `PooledBufferClearMode` | Behavior |
 | --- | --- |
 | `UsedRegion` (default) | Clears every written byte before returning the buffer. |
-| `EntireBuffer` | Clears the entire rented array for stronger isolation at higher CPU cost. |
-| `None` | Appropriate only when buffer contents are non-sensitive and maximum throughput is required. |
+| `EntireBuffer` | Clears the entire rented array. |
+| `None` | For non-sensitive content with maximum throughput. |
 
-Text convenience methods clear their temporary encoded/decoded byte arrays, and failed or cancelled bounded reads clear their partially filled allocation before releasing it to the GC. Direct write methods may leave a partial destination if they fail or are cancelled — use atomic methods when partial state is unacceptable.
+Text convenience methods clear temporary encoded/decoded byte arrays. Failed or cancelled bounded reads clear their partially filled allocation. Direct write methods may leave a partial destination — use atomic methods when partial state is unacceptable.
 
 ### Progress callbacks
 
-Progress callbacks run on the continuation context of the async operation; marshal to the Unity main thread before touching Unity objects. A callback exception aborts before commit; no callback is invoked after a successful commit.
+Progress callbacks run on the async continuation context. Marshal to the Unity main thread before touching Unity objects. A callback exception aborts before commit.
 
 ### Editor benchmark
 
-Use `Window > CycloneGames > IO Benchmark` for exploratory measurements on the current machine. Performance tests record timing and GC samples without fixed hardware-dependent throughput thresholds.
+Use `Window > CycloneGames > IO Benchmark` for exploratory measurements on the current machine.
 
 ## Common Scenarios
 
 ### Save-file persistence with crash recovery
-
-A save system needs to guarantee that a crashed write never leaves a partial save file:
 
 ```csharp
 public async Task SaveAsync(string savePath, SaveData data, CancellationToken ct)
@@ -331,11 +317,9 @@ public async Task SaveAsync(string savePath, SaveData data, CancellationToken ct
 }
 ```
 
-If the process is killed mid-write, the previous save file remains intact. A stale `.cyclone-*.tmp` file may remain in the destination directory; it can be removed only when no transaction is active.
+If the process is killed mid-write, the previous save file remains intact.
 
 ### Streaming a large download to disk
-
-A download handler streams a large asset directly to a cache file without buffering the entire payload in memory:
 
 ```csharp
 using (Stream downloadStream = await OpenDownloadStreamAsync(url, ct))
@@ -348,11 +332,7 @@ using (Stream downloadStream = await OpenDownloadStreamAsync(url, ct))
 }
 ```
 
-The atomic transaction owns the temporary file; the download stream is caller-owned and disposed by the `using`.
-
 ### Verifying asset integrity with SHA-256
-
-A build pipeline verifies that a downloaded asset matches an expected hash before installing it:
 
 ```csharp
 string actualHash = await FileHasher.ComputeHexAsync(
@@ -368,11 +348,7 @@ if (!string.Equals(actualHash, expectedSha256, StringComparison.OrdinalIgnoreCas
 }
 ```
 
-Use SHA-256 for content-integrity and trust workflows. xxHash64 is appropriate for non-cryptographic cache keys.
-
 ### Reading configuration from StreamingAssets on Android
-
-Android StreamingAssets are packed into an APK and must be accessed through `UnityWebRequest`, not `File.OpenRead`:
 
 ```csharp
 string uri = UnityFileUri.Create("Config/settings.json", UnityFileLocation.StreamingAssets);
@@ -392,11 +368,7 @@ using (UnityWebRequest request = UnityWebRequest.Get(uri))
 }
 ```
 
-`TextCodec.Decode` handles BOM-aware decoding without guessing. For persistent files (not in the APK), use `UnityFileLocation.PersistentData` and read them directly with `SystemFileStore`.
-
 ### Sandboxed mod loading
-
-A mod loader must not allow mod-provided paths to escape the mod content root:
 
 ```csharp
 var modSandbox = new FilePathSandbox(modContentRoot);
@@ -404,7 +376,6 @@ var modSandbox = new FilePathSandbox(modContentRoot);
 foreach (ModManifestEntry entry in manifest.Assets)
 {
     string resolvedPath = modSandbox.Resolve(entry.Location);
-    // resolvedPath is guaranteed to be inside modContentRoot.
     byte[] assetBytes = await SystemFileStore.Default.ReadBytesAsync(
         resolvedPath,
         maxBytes: 64 * 1024 * 1024,
@@ -413,40 +384,36 @@ foreach (ModManifestEntry entry in manifest.Assets)
 }
 ```
 
-`FilePathSandbox` rejects path traversal attempts, rooted paths, and (with `RejectExistingLinks`) reparse points that could redirect outside the trusted root.
-
 ## Performance and Memory
 
-- Default transfer buffer is 64 KiB, configurable from 4 KiB to 1 MiB.
+- Default transfer buffer: 64 KiB, configurable 4 KiB to 1 MiB.
 - Streaming, hashing, comparison, and atomic stream copy rent buffers from `ArrayPool<byte>.Shared`.
-- `PooledBufferClearMode.UsedRegion` is the default; `EntireBuffer` is stronger isolation at higher CPU cost; `None` is for non-sensitive content with maximum throughput.
+- `PooledBufferClearMode.UsedRegion` is default; `EntireBuffer` is stronger isolation; `None` is for non-sensitive content.
 - Text convenience methods clear temporary encoded/decoded byte arrays.
-- Failed or cancelled bounded reads clear their partially filled allocation before releasing it to the GC.
-- Direct write methods may leave a partial destination if they fail or are cancelled — use atomic methods when partial state is unacceptable.
-- Same-destination commit coordination is narrow and self-removing; no global I/O lock, hidden scheduler, or automatic retry loop.
-- Progress callbacks run on the continuation context; marshal to the Unity main thread before touching Unity objects.
+- Failed or cancelled bounded reads clear partially filled allocations.
+- Same-destination commit coordination is narrow and self-removing.
 
 ### Platform behavior
 
 | Platform | Notes |
 | --- | --- |
-| Windows Editor/Player | Exact case-insensitive path containment, Windows sharing semantics, `File.Replace` for existing destinations. Cooperative chunk cancellation avoids the Unity 2022 `FileStream` cancellation deadlock. |
+| Windows Editor/Player | Exact case-insensitive path containment. `File.Replace` for existing destinations. Cooperative chunk cancellation avoids Unity 2022 `FileStream` deadlock. |
 | macOS/Linux Editor/Player | Case-sensitive containment. Filesystem mount options determine atomic replace and durability behavior. |
-| Android | Packaged StreamingAssets addressed through `UnityWebRequest` URI paths; persistent files use the application sandbox. |
-| iOS/tvOS | Persistent paths are application-owned and may participate in OS backup policy; products must classify files for backup/exclusion. |
-| WebGL | StreamingAssets use URI access. System.IO persistence, quotas, synchronization, and durability depend on Unity/Emscripten filesystem configuration. |
-| Consoles | File permissions, quotas, mount lifecycle, certification rules, and atomic replace support must be verified with the target SDK and hardware. |
-| Headless/CLI | Core and SystemIO assemblies do not require `UnityEngine` and can be composed in server or tool processes. |
+| Android | Packaged StreamingAssets through `UnityWebRequest` URI paths; persistent files use application sandbox. |
+| iOS/tvOS | Persistent paths are application-owned; products must classify files for backup/exclusion. |
+| WebGL | StreamingAssets use URI access. System.IO persistence depends on Unity/Emscripten filesystem configuration. |
+| Consoles | File permissions, quotas, mount lifecycle, and atomic replace support must be verified with the target SDK. |
+| Headless/CLI | Core and SystemIO assemblies do not require `UnityEngine`. |
 
 ### Persistence inventory
 
-The runtime package creates no file until called and owns no implicit persistent state.
+The runtime package creates no file until called.
 
 | Data | Location | Owner | Cleanup |
 | --- | --- | --- | --- |
 | Caller content | Caller-provided path | Calling product/module | Caller defines schema, retention, backup, migration, and recovery |
-| Atomic temporary file | Destination directory | One atomic transaction | Removed after failure/cancellation when possible; stale files matching `.cyclone-*.tmp` can be removed only when no transaction is active |
-| Benchmark data | `Application.temporaryCachePath/CycloneGames.IO.Benchmark/<run-id>/` | Editor benchmark window | Deleted after each run; safe to delete while the benchmark is not running |
+| Atomic temporary file | Destination directory | One atomic transaction | Removed after failure/cancellation when possible; stale `.cyclone-*.tmp` files can be removed only when no transaction is active |
+| Benchmark data | `Application.temporaryCachePath/CycloneGames.IO.Benchmark/<run-id>/` | Editor benchmark window | Deleted after each run |
 
 The package does not use `PlayerPrefs`, `EditorPrefs`, `SessionState`, registry, plist, or hidden configuration files.
 
@@ -454,32 +421,28 @@ The package does not use `PlayerPrefs`, `EditorPrefs`, `SessionState`, registry,
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| `ReadBytesAsync` throws on a valid file | File grew between length check and read | Retry the read; for untrusted sources, use streaming instead of a large bound |
-| Atomic write leaves a `.cyclone-*.tmp` file | Previous transaction was interrupted | Remove the stale temp file only when no transaction is active |
+| `ReadBytesAsync` throws on a valid file | File grew between length check and read | Retry the read; for untrusted sources, use streaming |
+| Atomic write leaves a `.cyclone-*.tmp` file | Previous transaction was interrupted | Remove stale temp file only when no transaction is active |
 | `PlatformNotSupportedException` on atomic replace | Target filesystem does not support `File.Replace` | Verify the target platform; fall back to non-atomic write only if partial state is acceptable |
-| `FileRetry` does not retry an `IOException` | Default classifier only retries Windows sharing/lock violations | Confirm the failure is transient; do not broaden the classifier without understanding idempotency |
-| `UnityFileUri.TryCreate` returns `false` | Path is rooted, contains dot segments, or uses an unsupported scheme | Use a validated relative path for `StreamingAssets`/`PersistentData`; use `AbsolutePathOrUri` for absolute paths or `http`/`https`/`file`/`jar` URIs |
-| `TextCodec.TryDecode` returns `false` | Malformed UTF-8 in BOM-less content | Provide an explicit fallback encoding, or reject the input as corrupt |
-| `FileComparer.AreEqualAsync` returns `false` for identical content | Files differ in length or bytes | Compare lengths first; if equal, compare bytes — do not trust hash comparison alone for equality proof |
-| Cancellation does not abort an atomic commit | Commit phase already started | Expected; the commit runs to completion and reports its real result |
-| WebGL persistence behaves inconsistently | System.IO persistence depends on Unity/Emscripten filesystem configuration | Use IndexedDB-backed persistence above `IFileStore`; validate target browser behavior |
-| Cross-process atomic write fails | `File.Replace` contention across processes | Wrap the idempotent operation in `FileRetry`; coordinate writers with an external lock if ordering matters |
-| Progress callback touches Unity objects from a worker thread | Callback runs on the async continuation context | Marshal to the Unity main thread before touching Unity objects |
+| `FileRetry` does not retry an `IOException` | Default classifier only retries Windows sharing/lock violations | Confirm the failure is transient |
+| `UnityFileUri.TryCreate` returns `false` | Path is rooted, contains dot segments, or uses an unsupported scheme | Use validated relative path for `StreamingAssets`/`PersistentData`; use `AbsolutePathOrUri` for absolute paths |
+| `TextCodec.TryDecode` returns `false` | Malformed UTF-8 in BOM-less content | Provide an explicit fallback encoding or reject the input |
+| `FileComparer.AreEqualAsync` returns `false` for identical content | Files differ in length or bytes | Compare lengths first; if equal, compare bytes |
+| Cancellation does not abort an atomic commit | Commit phase already started | Expected; commit runs to completion |
+| WebGL persistence behaves inconsistently | System.IO persistence depends on Unity/Emscripten configuration | Use IndexedDB-backed persistence above `IFileStore` |
 
 ## Validation
 
-Automated EditMode suites cover strict text decoding and BOM behavior, portable sandbox validation and containment, retry classification and attempt limits, bounded reads and exact hashing, strict atomic replacement and deterministic injected replacement failures, concurrent atomic writers without mixed-content commits, mid-copy cancellation preserving the previous destination and cleaning temporary files, exact comparison and skip-if-identical copy, Unity URI traversal, scheme, and location behavior, and 4 MiB exact comparison, SHA-256, and xxHash64 performance samples.
-
-Run the test assemblies:
+Run EditMode tests:
 
 ```text
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter -runTests -testPlatform EditMode -assemblyNames CycloneGames.IO.Tests.Core;CycloneGames.IO.Tests.SystemIO;CycloneGames.IO.Tests.Unity -testResults <result-path> -quit
 ```
 
-Minimum Unity verification:
+Minimum verification:
 
-1. Allow script compilation and confirm that the Console has no errors.
-2. Run EditMode tests for `CycloneGames.IO.Tests.Core`, `CycloneGames.IO.Tests.SystemIO`, and `CycloneGames.IO.Tests.Unity`.
+1. Allow script compilation; confirm Console has no errors.
+2. Run `CycloneGames.IO.Tests.Core`, `CycloneGames.IO.Tests.SystemIO`, and `CycloneGames.IO.Tests.Unity` EditMode tests.
 3. Run `CycloneGames.IO.Tests.Performance` when the performance-test package is available.
 4. Validate Android/WebGL StreamingAssets URI behavior in a Player build.
-5. Validate atomic replacement, quota behavior, and sudden-termination recovery on each shipping platform and target filesystem.
+5. Validate atomic replacement, quota behavior, and sudden-termination recovery on each shipping platform.

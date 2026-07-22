@@ -5,22 +5,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 {
     public class RuntimeBTContext : IRuntimeBTContext
     {
-        public GameObject OwnerGameObject { get; set; }
+        public object Owner { get; set; }
         public IRuntimeBTServiceResolver ServiceResolver { get; set; }
 
-        public RuntimeBTContext(GameObject ownerGameObject = null, IRuntimeBTServiceResolver serviceResolver = null)
+        public RuntimeBTContext(object owner = null, IRuntimeBTServiceResolver serviceResolver = null)
         {
-            OwnerGameObject = ownerGameObject;
+            Owner = owner;
             ServiceResolver = serviceResolver;
         }
 
         public T GetOwner<T>() where T : class
         {
-            if (OwnerGameObject is T ownerAsT)
+            if (Owner is T ownerAsT)
                 return ownerAsT;
 
-            if (typeof(Component).IsAssignableFrom(typeof(T)) && OwnerGameObject != null)
-                return OwnerGameObject.GetComponent(typeof(T)) as T;
+            if (Owner is GameObject ownerGameObject &&
+                ownerGameObject != null &&
+                typeof(Component).IsAssignableFrom(typeof(T)))
+            {
+                return ownerGameObject.GetComponent(typeof(T)) as T;
+            }
 
             return null;
         }

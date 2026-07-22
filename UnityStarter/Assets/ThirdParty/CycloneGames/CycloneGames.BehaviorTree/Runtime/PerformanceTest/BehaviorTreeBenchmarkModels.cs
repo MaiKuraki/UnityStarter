@@ -13,7 +13,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
         RecommendedMatrix = 1,
         FullMatrix = 2,
         PriorityComparison = 3,
-        CertificationMatrix = 4
+        ConfiguredBudgetMatrix = 4
     }
 
     [Serializable]
@@ -227,7 +227,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             BehaviorTreeBenchmarkPreset.Network100Players500Ai
         };
 
-        private static readonly BehaviorTreeBenchmarkPreset[] CertificationPresets =
+        private static readonly BehaviorTreeBenchmarkPreset[] ConfiguredBudgetPresets =
         {
             BehaviorTreeBenchmarkPreset.AiBattle500,
             BehaviorTreeBenchmarkPreset.AiCrowd1000,
@@ -262,10 +262,10 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             return copy;
         }
 
-        public static BehaviorTreeBenchmarkPreset[] GetCertificationPresets()
+        public static BehaviorTreeBenchmarkPreset[] GetConfiguredBudgetPresets()
         {
-            var copy = new BehaviorTreeBenchmarkPreset[CertificationPresets.Length];
-            Array.Copy(CertificationPresets, copy, CertificationPresets.Length);
+            var copy = new BehaviorTreeBenchmarkPreset[ConfiguredBudgetPresets.Length];
+            Array.Copy(ConfiguredBudgetPresets, copy, ConfiguredBudgetPresets.Length);
             return copy;
         }
 
@@ -360,12 +360,12 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             return config;
         }
 
-        public static BehaviorTreeBenchmarkConfig[] CreateCertificationMatrixConfigs()
+        public static BehaviorTreeBenchmarkConfig[] CreateConfiguredBudgetMatrixConfigs()
         {
-            var configs = new BehaviorTreeBenchmarkConfig[CertificationPresets.Length];
-            for (int i = 0; i < CertificationPresets.Length; i++)
+            var configs = new BehaviorTreeBenchmarkConfig[ConfiguredBudgetPresets.Length];
+            for (int i = 0; i < ConfiguredBudgetPresets.Length; i++)
             {
-                BehaviorTreeBenchmarkPreset preset = CertificationPresets[i];
+                BehaviorTreeBenchmarkPreset preset = ConfiguredBudgetPresets[i];
                 BehaviorTreeBenchmarkComplexity complexity = preset switch
                 {
                     BehaviorTreeBenchmarkPreset.AiBattle500 => BehaviorTreeBenchmarkComplexity.Heavy,
@@ -652,15 +652,15 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             batch.SlowestMaxFrameMilliseconds = slowestMax;
             batch.PeakManagedMemoryBytes = peakMemory;
             batch.Summary = failed == 0
-                ? $"PASS: {passed}/{batch.CaseCount} cases within production budgets."
-                : $"FAIL: {failed}/{batch.CaseCount} cases exceeded production budgets.";
+                ? $"PASS: {passed}/{batch.CaseCount} cases within configured budgets."
+                : $"FAIL: {failed}/{batch.CaseCount} cases exceeded configured budgets.";
         }
 
         private static string CreateSummary(BehaviorTreeBenchmarkResult result)
         {
             if (result.ProductionBudgetPassed)
             {
-                return "PASS: all production budgets satisfied.";
+                return "PASS: all configured budgets satisfied.";
             }
 
             var builder = new StringBuilder(160);

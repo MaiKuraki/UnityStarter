@@ -8,6 +8,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Actions.BlackBoards
     {
         [SerializeField] private string _key;
 
+        public string Key => _key;
+
         public override BTNode Clone()
         {
             var clone = (MessageRemoveNode)base.Clone();

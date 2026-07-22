@@ -2,6 +2,7 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.IO;
+using System.Threading;
 
 namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 {
@@ -12,6 +13,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
     public class BTBlackboardDelta : IDisposable
     {
         public const int DEFAULT_MAX_PATCH_ENTRIES = 4096;
+
+        // "BTDP" in little-endian order. The version and fixed header size are
+        // encoded separately so malformed or future frames fail before entry parsing.
+        private const uint PATCH_MAGIC = 0x50445442u;
+        private const ushort PATCH_VERSION = 1;
+        private const ushort PATCH_HEADER_SIZE = 16;
+        private const int MIN_ENCODED_ENTRY_SIZE = sizeof(int) + sizeof(byte);
 
         private const byte TAG_INT = 0;
         private const byte TAG_FLOAT = 1;
@@ -25,13 +33,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         private readonly int[] _trackedKeys;
         private readonly ulong[] _lastStamps;
         private readonly Dictionary<int, int> _trackedIndexByKey;
-        private readonly int[] _dirtyIndices;
-        private readonly bool[] _dirtyFlags;
+        private readonly RuntimeBlackboardMutation[] _candidateMutations;
+        private readonly int[] _candidateTrackedIndices;
+        private readonly ulong[] _candidateStamps;
         private readonly BlackboardObserverCallback _dirtyObserver;
+        private readonly int _ownerThreadId;
         private int _trackedCount;
-        private int _dirtyCount;
         private readonly int _maxKeys;
         private RuntimeBlackboard _attachedBlackboard;
+        private int _acceptDirtySignals;
+        private int _dirtySignal;
         private bool _disposed;
 
         // Pooled buffers to avoid per-flush allocations in the hot path.
@@ -46,11 +57,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             _maxKeys = maxTrackedKeys;
+            _ownerThreadId = Environment.CurrentManagedThreadId;
             _trackedKeys = new int[maxTrackedKeys];
             _lastStamps = new ulong[maxTrackedKeys];
             _trackedIndexByKey = new Dictionary<int, int>(maxTrackedKeys);
-            _dirtyIndices = new int[maxTrackedKeys];
-            _dirtyFlags = new bool[maxTrackedKeys];
+            _candidateMutations = new RuntimeBlackboardMutation[maxTrackedKeys];
+            _candidateTrackedIndices = new int[maxTrackedKeys];
+            _candidateStamps = new ulong[maxTrackedKeys];
             _dirtyObserver = OnTrackedKeyChanged;
             _flushStream = new MemoryStream(256);
             _flushWriter = new BinaryWriter(_flushStream);
@@ -74,6 +87,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
         public void TrackKey(int keyHash)
         {
+            EnsureOwnerThread();
             EnsureNotDisposed();
 
             if (_trackedIndexByKey.ContainsKey(keyHash))
@@ -95,21 +109,54 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             if (_attachedBlackboard != null)
             {
                 _attachedBlackboard.AddObserver(keyHash, _dirtyObserver);
-                MarkDirty(index);
+                MarkDirty();
             }
         }
 
         public void TrackKey(string key)
         {
-            TrackKey(UnityEngine.Animator.StringToHash(key));
+            EnsureOwnerThread();
+            EnsureNotDisposed();
+            if (key == null)
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
+            StringHashFunction hashFunction = _attachedBlackboard != null
+                ? _attachedBlackboard.StringHashFunc
+                : RuntimeBlackboard.DefaultStringHashFunc;
+            TrackKey(hashFunction(key));
+        }
+
+        /// <summary>
+        /// Tracks a string key using the exact hash provider configured on the target blackboard.
+        /// Use this overload whenever a blackboard has a per-instance hash override.
+        /// </summary>
+        public void TrackKey(string key, RuntimeBlackboard blackboard)
+        {
+            EnsureOwnerThread();
+            EnsureNotDisposed();
+            if (key == null)
+            {
+                throw new ArgumentNullException(nameof(key));
+            }
+
+            if (blackboard == null)
+            {
+                throw new ArgumentNullException(nameof(blackboard));
+            }
+
+            TrackKey(blackboard.StringHashFunc(key));
         }
 
         /// <summary>
         /// Binds this delta tracker to a blackboard observer path.
-        /// When attached to the same blackboard passed to TryFlush, only dirty tracked keys are probed.
+        /// When attached to the same blackboard passed to TryFlush, an atomic observer signal
+        /// avoids scans while no tracked key changed. A signaled flush scans the bounded key set.
         /// </summary>
         public void Attach(RuntimeBlackboard blackboard, bool flushExistingValues = true)
         {
+            EnsureOwnerThread();
             EnsureNotDisposed();
             if (blackboard == null)
             {
@@ -128,9 +175,26 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
             Detach();
             _attachedBlackboard = blackboard;
-            for (int i = 0; i < _trackedCount; i++)
+            Volatile.Write(ref _acceptDirtySignals, 1);
+            int attachedCount = 0;
+            try
             {
-                _attachedBlackboard.AddObserver(_trackedKeys[i], _dirtyObserver);
+                for (; attachedCount < _trackedCount; attachedCount++)
+                {
+                    _attachedBlackboard.AddObserver(_trackedKeys[attachedCount], _dirtyObserver);
+                }
+            }
+            catch
+            {
+                Volatile.Write(ref _acceptDirtySignals, 0);
+                for (int i = 0; i < attachedCount; i++)
+                {
+                    _attachedBlackboard.RemoveObserver(_trackedKeys[i], _dirtyObserver);
+                }
+
+                _attachedBlackboard = null;
+                ClearDirty();
+                throw;
             }
 
             if (flushExistingValues)
@@ -141,13 +205,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
         public void Detach()
         {
+            EnsureOwnerThread();
             if (_disposed)
             {
                 return;
             }
 
+            Volatile.Write(ref _acceptDirtySignals, 0);
             RuntimeBlackboard blackboard = _attachedBlackboard;
-            if (blackboard != null)
+            if (blackboard != null && !blackboard.IsDisposed)
             {
                 for (int i = 0; i < _trackedCount; i++)
                 {
@@ -165,6 +231,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
         /// </summary>
         public bool TryFlush(RuntimeBlackboard bb, out ArraySegment<byte> patchSegment)
         {
+            return TryFlush(bb, int.MaxValue, out patchSegment);
+        }
+
+        /// <summary>
+        /// Builds an exact bounded patch in two phases. When the candidate patch exceeds
+        /// maxPatchBytes, no stamps or dirty flags are consumed so the caller can retry.
+        /// </summary>
+        public bool TryFlush(
+            RuntimeBlackboard bb,
+            int maxPatchBytes,
+            out ArraySegment<byte> patchSegment)
+        {
+            EnsureOwnerThread();
             EnsureNotDisposed();
 
             if (bb == null)
@@ -172,16 +251,22 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 throw new ArgumentNullException(nameof(bb));
             }
 
-            if (_attachedBlackboard == bb)
+            if (maxPatchBytes < PATCH_HEADER_SIZE)
             {
-                return TryFlushDirty(bb, out patchSegment);
+                throw new ArgumentOutOfRangeException(nameof(maxPatchBytes));
             }
 
-            return TryFlushTrackedScan(bb, out patchSegment);
+            if (_attachedBlackboard == bb)
+            {
+                return TryFlushDirty(bb, maxPatchBytes, out patchSegment);
+            }
+
+            return TryFlushTrackedScan(bb, maxPatchBytes, out patchSegment);
         }
 
         public void Dispose()
         {
+            EnsureOwnerThread();
             if (_disposed)
             {
                 return;
@@ -193,58 +278,70 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             _flushStream.Dispose();
         }
 
-        private bool TryFlushDirty(RuntimeBlackboard bb, out ArraySegment<byte> patchSegment)
+        private bool TryFlushDirty(
+            RuntimeBlackboard bb,
+            int maxPatchBytes,
+            out ArraySegment<byte> patchSegment)
         {
-            if (_dirtyCount == 0)
+            if (Interlocked.Exchange(ref _dirtySignal, 0) == 0)
             {
                 patchSegment = default;
                 return false;
             }
 
-            BeginPatch(out long countPos);
-
-            int changedCount = 0;
-            int dirtyCount = _dirtyCount;
-            _dirtyCount = 0;
-
-            for (int i = 0; i < dirtyCount; i++)
+            try
             {
-                int trackedIndex = _dirtyIndices[i];
-                _dirtyFlags[trackedIndex] = false;
-                if (WriteTrackedKeyIfChanged(bb, trackedIndex))
+                int candidateCount = 0;
+                int candidateBytes = PATCH_HEADER_SIZE;
+                for (int i = 0; i < _trackedCount; i++)
                 {
-                    changedCount++;
+                    CaptureTrackedKeyIfChanged(bb, i, ref candidateCount, ref candidateBytes);
                 }
-            }
 
-            return CompletePatch(countPos, changedCount, out patchSegment);
+                ValidateCandidateBudget(candidateBytes, maxPatchBytes);
+                return WriteCandidates(candidateCount, out patchSegment);
+            }
+            catch
+            {
+                Interlocked.Exchange(ref _dirtySignal, 1);
+                throw;
+            }
         }
 
-        private bool TryFlushTrackedScan(RuntimeBlackboard bb, out ArraySegment<byte> patchSegment)
+        private bool TryFlushTrackedScan(
+            RuntimeBlackboard bb,
+            int maxPatchBytes,
+            out ArraySegment<byte> patchSegment)
         {
-            BeginPatch(out long countPos);
-
-            int changedCount = 0;
+            int candidateCount = 0;
+            int candidateBytes = PATCH_HEADER_SIZE;
             for (int i = 0; i < _trackedCount; i++)
             {
-                if (WriteTrackedKeyIfChanged(bb, i))
-                {
-                    changedCount++;
-                }
+                CaptureTrackedKeyIfChanged(bb, i, ref candidateCount, ref candidateBytes);
             }
 
-            return CompletePatch(countPos, changedCount, out patchSegment);
+            ValidateCandidateBudget(candidateBytes, maxPatchBytes);
+            return WriteCandidates(candidateCount, out patchSegment);
         }
 
-        private void BeginPatch(out long countPos)
+        private void BeginPatch(out long bodyLengthPosition, out long countPosition)
         {
             _flushStream.Position = 0;
             _flushStream.SetLength(0);
-            countPos = _flushStream.Position;
+            _flushWriter.Write(PATCH_MAGIC);
+            _flushWriter.Write(PATCH_VERSION);
+            _flushWriter.Write(PATCH_HEADER_SIZE);
+            bodyLengthPosition = _flushStream.Position;
+            _flushWriter.Write(0);
+            countPosition = _flushStream.Position;
             _flushWriter.Write(0);
         }
 
-        private bool CompletePatch(long countPos, int changedCount, out ArraySegment<byte> patchSegment)
+        private bool CompletePatch(
+            long bodyLengthPosition,
+            long countPosition,
+            int changedCount,
+            out ArraySegment<byte> patchSegment)
         {
             if (changedCount == 0)
             {
@@ -253,111 +350,175 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             _flushWriter.Flush();
-            _flushStream.Position = countPos;
+            int encodedLength = checked((int)_flushStream.Length);
+            int bodyLength = checked(encodedLength - PATCH_HEADER_SIZE);
+            _flushStream.Position = bodyLengthPosition;
+            _flushWriter.Write(bodyLength);
+            _flushStream.Position = countPosition;
             _flushWriter.Write(changedCount);
             _flushWriter.Flush();
 
-            patchSegment = new ArraySegment<byte>(_flushStream.GetBuffer(), 0, (int)_flushStream.Length);
+            patchSegment = new ArraySegment<byte>(_flushStream.GetBuffer(), 0, encodedLength);
             return true;
         }
 
-        private bool WriteTrackedKeyIfChanged(RuntimeBlackboard bb, int trackedIndex)
+        private void CaptureTrackedKeyIfChanged(
+            RuntimeBlackboard bb,
+            int trackedIndex,
+            ref int candidateCount,
+            ref int candidateBytes)
         {
             int key = _trackedKeys[trackedIndex];
-            ulong stamp = bb.GetStamp(key);
+            if (!bb.TryCaptureNetworkMutation(key, out RuntimeBlackboardMutation mutation, out ulong stamp))
+            {
+                throw new InvalidOperationException(
+                    $"Blackboard delta key {key} contains an object value, which cannot cross the network boundary.");
+            }
+
             if (stamp == _lastStamps[trackedIndex])
             {
+                return;
+            }
+
+            _candidateMutations[candidateCount] = mutation;
+            _candidateTrackedIndices[candidateCount] = trackedIndex;
+            _candidateStamps[candidateCount] = stamp;
+            candidateBytes = checked(candidateBytes + GetEncodedMutationSize(mutation.Kind));
+            candidateCount++;
+        }
+
+        private bool WriteCandidates(int candidateCount, out ArraySegment<byte> patchSegment)
+        {
+            if (candidateCount == 0)
+            {
+                patchSegment = default;
                 return false;
             }
 
-            _lastStamps[trackedIndex] = stamp;
-
-            _flushWriter.Write(key);
-
-            if (bb.TryGetInt(key, out var intVal))
+            BeginPatch(out long bodyLengthPosition, out long countPosition);
+            for (int i = 0; i < candidateCount; i++)
             {
-                _flushWriter.Write(TAG_INT);
-                _flushWriter.Write(intVal);
-            }
-            else if (bb.TryGetFloat(key, out var floatVal))
-            {
-                _flushWriter.Write(TAG_FLOAT);
-                _flushWriter.Write(floatVal);
-            }
-            else if (bb.TryGetBool(key, out var boolVal))
-            {
-                _flushWriter.Write(TAG_BOOL);
-                _flushWriter.Write(boolVal ? (byte)1 : (byte)0);
-            }
-            else if (bb.TryGetVector3(key, out var vecVal))
-            {
-                _flushWriter.Write(TAG_VECTOR3);
-                _flushWriter.Write(vecVal.x);
-                _flushWriter.Write(vecVal.y);
-                _flushWriter.Write(vecVal.z);
-            }
-            else if (bb.TryGetLong(key, out long longVal))
-            {
-                _flushWriter.Write(TAG_LONG);
-                _flushWriter.Write(longVal);
-            }
-            else if (bb.TryGetLong2(key, out RuntimeBlackboardLong2 long2Val))
-            {
-                _flushWriter.Write(TAG_LONG2);
-                _flushWriter.Write(long2Val.X);
-                _flushWriter.Write(long2Val.Y);
-            }
-            else if (bb.TryGetLong3(key, out RuntimeBlackboardLong3 long3Val))
-            {
-                _flushWriter.Write(TAG_LONG3);
-                _flushWriter.Write(long3Val.X);
-                _flushWriter.Write(long3Val.Y);
-                _flushWriter.Write(long3Val.Z);
-            }
-            else
-            {
-                _flushWriter.Write(TAG_REMOVE);
+                WriteMutation(_candidateMutations[i]);
             }
 
-            return true;
+            bool result = CompletePatch(
+                bodyLengthPosition,
+                countPosition,
+                candidateCount,
+                out patchSegment);
+            for (int i = 0; i < candidateCount; i++)
+            {
+                _lastStamps[_candidateTrackedIndices[i]] = _candidateStamps[i];
+            }
+
+            return result;
+        }
+
+        private void WriteMutation(RuntimeBlackboardMutation mutation)
+        {
+            _flushWriter.Write(mutation.Key);
+            switch (mutation.Kind)
+            {
+                case RuntimeBlackboardMutationKind.Int:
+                    _flushWriter.Write(TAG_INT);
+                    _flushWriter.Write(mutation.IntValue);
+                    break;
+                case RuntimeBlackboardMutationKind.Float:
+                    _flushWriter.Write(TAG_FLOAT);
+                    _flushWriter.Write(mutation.FloatValue);
+                    break;
+                case RuntimeBlackboardMutationKind.Bool:
+                    _flushWriter.Write(TAG_BOOL);
+                    _flushWriter.Write(mutation.BoolValue ? (byte)1 : (byte)0);
+                    break;
+                case RuntimeBlackboardMutationKind.Vector3:
+                    _flushWriter.Write(TAG_VECTOR3);
+                    _flushWriter.Write(mutation.VectorValue.x);
+                    _flushWriter.Write(mutation.VectorValue.y);
+                    _flushWriter.Write(mutation.VectorValue.z);
+                    break;
+                case RuntimeBlackboardMutationKind.Long:
+                    _flushWriter.Write(TAG_LONG);
+                    _flushWriter.Write(mutation.LongValue);
+                    break;
+                case RuntimeBlackboardMutationKind.Long2:
+                    _flushWriter.Write(TAG_LONG2);
+                    _flushWriter.Write(mutation.Long2Value.X);
+                    _flushWriter.Write(mutation.Long2Value.Y);
+                    break;
+                case RuntimeBlackboardMutationKind.Long3:
+                    _flushWriter.Write(TAG_LONG3);
+                    _flushWriter.Write(mutation.Long3Value.X);
+                    _flushWriter.Write(mutation.Long3Value.Y);
+                    _flushWriter.Write(mutation.Long3Value.Z);
+                    break;
+                case RuntimeBlackboardMutationKind.Remove:
+                    _flushWriter.Write(TAG_REMOVE);
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unknown blackboard mutation kind {mutation.Kind}.");
+            }
+        }
+
+        private static int GetEncodedMutationSize(RuntimeBlackboardMutationKind kind)
+        {
+            const int keyAndTagBytes = sizeof(int) + sizeof(byte);
+            return kind switch
+            {
+                RuntimeBlackboardMutationKind.Int => keyAndTagBytes + sizeof(int),
+                RuntimeBlackboardMutationKind.Float => keyAndTagBytes + sizeof(float),
+                RuntimeBlackboardMutationKind.Bool => keyAndTagBytes + sizeof(byte),
+                RuntimeBlackboardMutationKind.Vector3 => keyAndTagBytes + (3 * sizeof(float)),
+                RuntimeBlackboardMutationKind.Long => keyAndTagBytes + sizeof(long),
+                RuntimeBlackboardMutationKind.Long2 => keyAndTagBytes + (2 * sizeof(long)),
+                RuntimeBlackboardMutationKind.Long3 => keyAndTagBytes + (3 * sizeof(long)),
+                RuntimeBlackboardMutationKind.Remove => keyAndTagBytes,
+                _ => throw new InvalidOperationException($"Unknown blackboard mutation kind {kind}.")
+            };
+        }
+
+        private static void ValidateCandidateBudget(int candidateBytes, int maxPatchBytes)
+        {
+            if (candidateBytes > maxPatchBytes)
+            {
+                throw new InvalidOperationException(
+                    $"Blackboard delta candidate size {candidateBytes} exceeds max patch bytes {maxPatchBytes}; tracker state was retained for retry.");
+            }
         }
 
         private void OnTrackedKeyChanged(int keyHash, RuntimeBlackboard blackboard)
         {
-            if (_trackedIndexByKey.TryGetValue(keyHash, out int trackedIndex))
+            if (Volatile.Read(ref _acceptDirtySignals) != 0)
             {
-                MarkDirty(trackedIndex);
+                Interlocked.Exchange(ref _dirtySignal, 1);
             }
         }
 
         private void MarkAllTrackedDirty()
         {
-            for (int i = 0; i < _trackedCount; i++)
+            if (_trackedCount > 0)
             {
-                MarkDirty(i);
+                Interlocked.Exchange(ref _dirtySignal, 1);
             }
         }
 
-        private void MarkDirty(int trackedIndex)
+        private void MarkDirty()
         {
-            if (_dirtyFlags[trackedIndex])
-            {
-                return;
-            }
-
-            _dirtyFlags[trackedIndex] = true;
-            _dirtyIndices[_dirtyCount] = trackedIndex;
-            _dirtyCount++;
+            Interlocked.Exchange(ref _dirtySignal, 1);
         }
 
         private void ClearDirty()
         {
-            for (int i = 0; i < _dirtyCount; i++)
-            {
-                _dirtyFlags[_dirtyIndices[i]] = false;
-            }
+            Interlocked.Exchange(ref _dirtySignal, 0);
+        }
 
-            _dirtyCount = 0;
+        private void EnsureOwnerThread()
+        {
+            if (Environment.CurrentManagedThreadId != _ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    $"BTBlackboardDelta must be accessed from owner thread {_ownerThreadId}.");
+            }
         }
 
         private void EnsureNotDisposed()
@@ -390,9 +551,38 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
         public static void Apply(RuntimeBlackboard bb, ArraySegment<byte> patch, int maxPatchEntries)
         {
+            Apply(bb, patch, maxPatchEntries, expectedRevision: 0UL, requireRevisionMatch: false);
+        }
+
+        /// <summary>
+        /// Applies a complete delta as one revision-checked blackboard transaction.
+        /// A revision mismatch aborts before mutation. Observer callbacks run after commit;
+        /// callback exceptions propagate and do not roll back committed values.
+        /// </summary>
+        public static void Apply(
+            RuntimeBlackboard bb,
+            ArraySegment<byte> patch,
+            int maxPatchEntries,
+            ulong expectedRevision)
+        {
+            Apply(bb, patch, maxPatchEntries, expectedRevision, requireRevisionMatch: true);
+        }
+
+        private static void Apply(
+            RuntimeBlackboard bb,
+            ArraySegment<byte> patch,
+            int maxPatchEntries,
+            ulong expectedRevision,
+            bool requireRevisionMatch)
+        {
             if (patch.Array == null || bb == null || patch.Count <= 0)
             {
                 return;
+            }
+
+            if (maxPatchEntries <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxPatchEntries));
             }
 
             if (patch.Offset < 0 || patch.Count < 0 || patch.Offset > patch.Array.Length - patch.Count)
@@ -401,7 +591,35 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             var reader = new DeltaPayloadReader(patch.Array, patch.Offset, patch.Count);
+            uint magic = reader.ReadUInt32();
+            if (magic != PATCH_MAGIC)
+            {
+                throw new InvalidDataException("Blackboard delta payload has an invalid format marker.");
+            }
+
+            ushort version = reader.ReadUInt16();
+            if (version != PATCH_VERSION)
+            {
+                throw new InvalidDataException($"Blackboard delta payload version {version} is not supported.");
+            }
+
+            ushort headerSize = reader.ReadUInt16();
+            if (headerSize != PATCH_HEADER_SIZE)
+            {
+                throw new InvalidDataException($"Blackboard delta header size {headerSize} is invalid.");
+            }
+
+            int bodyLength = reader.ReadInt32();
+            if (bodyLength < 0)
+            {
+                throw new InvalidDataException("Blackboard delta body length cannot be negative.");
+            }
+
             int count = reader.ReadInt32();
+            if (bodyLength != reader.Remaining)
+            {
+                throw new InvalidDataException("Blackboard delta frame length does not match its payload.");
+            }
             if (count < 0)
             {
                 throw new InvalidDataException("Blackboard delta entry count cannot be negative.");
@@ -413,9 +631,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                     $"Blackboard delta entry count {count} exceeds max patch entries {maxPatchEntries}.");
             }
 
-            DeltaEntry[] entries = count > 0
-                ? ArrayPool<DeltaEntry>.Shared.Rent(count)
-                : Array.Empty<DeltaEntry>();
+            if ((long)count * MIN_ENCODED_ENTRY_SIZE > reader.Remaining)
+            {
+                throw new InvalidDataException(
+                    "Blackboard delta entry count cannot fit in the remaining payload bytes.");
+            }
+
+            RuntimeBlackboardMutation[] entries = count > 0
+                ? ArrayPool<RuntimeBlackboardMutation>.Shared.Rent(count)
+                : Array.Empty<RuntimeBlackboardMutation>();
 
             try
             {
@@ -423,34 +647,48 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                 {
                     int key = reader.ReadInt32();
                     byte tag = reader.ReadByte();
-                    entries[i] = new DeltaEntry(key, tag);
+                    entries[i] = new RuntimeBlackboardMutation { Key = key };
 
                     switch (tag)
                     {
                         case TAG_INT:
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Int;
                             entries[i].IntValue = reader.ReadInt32();
                             break;
                         case TAG_FLOAT:
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Float;
                             entries[i].FloatValue = reader.ReadSingle();
                             break;
                         case TAG_BOOL:
-                            entries[i].BoolValue = reader.ReadByte() != 0;
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Bool;
+                            byte boolValue = reader.ReadByte();
+                            if (boolValue > 1)
+                            {
+                                throw new InvalidDataException($"Blackboard delta bool value for key {key} must be 0 or 1.");
+                            }
+
+                            entries[i].BoolValue = boolValue != 0;
                             break;
                         case TAG_VECTOR3:
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Vector3;
                             entries[i].VectorValue = new UnityEngine.Vector3(
                                 reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle());
                             break;
                         case TAG_LONG:
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Long;
                             entries[i].LongValue = reader.ReadInt64();
                             break;
                         case TAG_LONG2:
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Long2;
                             entries[i].Long2Value = new RuntimeBlackboardLong2(reader.ReadInt64(), reader.ReadInt64());
                             break;
                         case TAG_LONG3:
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Long3;
                             entries[i].Long3Value = new RuntimeBlackboardLong3(
                                 reader.ReadInt64(), reader.ReadInt64(), reader.ReadInt64());
                             break;
                         case TAG_REMOVE:
+                            entries[i].Kind = RuntimeBlackboardMutationKind.Remove;
                             break;
                         default:
                             throw new InvalidDataException($"Unknown blackboard delta value tag {tag}.");
@@ -462,74 +700,72 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                     throw new InvalidDataException("Blackboard delta payload contains trailing bytes.");
                 }
 
+                Array.Sort(entries, 0, count, MutationKeyComparer.Instance);
+                RuntimeBlackboardSchema schema = bb.Schema;
                 for (int i = 0; i < count; i++)
                 {
-                    entries[i].Apply(bb);
+                    if (i > 0 && entries[i - 1].Key == entries[i].Key)
+                    {
+                        throw new InvalidDataException($"Blackboard delta key {entries[i].Key} appears more than once.");
+                    }
+
+                    ValidateAgainst(entries[i], schema);
                 }
+
+                bb.ApplyNetworkBatch(entries, count, expectedRevision, requireRevisionMatch);
             }
             finally
             {
                 if (count > 0)
                 {
-                    ArrayPool<DeltaEntry>.Shared.Return(entries);
+                    ArrayPool<RuntimeBlackboardMutation>.Shared.Return(entries, clearArray: true);
                 }
             }
         }
 
-        private struct DeltaEntry
+        private static void ValidateAgainst(
+            RuntimeBlackboardMutation mutation,
+            RuntimeBlackboardSchema schema)
         {
-            public readonly int Key;
-            public readonly byte Tag;
-            public int IntValue;
-            public float FloatValue;
-            public bool BoolValue;
-            public UnityEngine.Vector3 VectorValue;
-            public long LongValue;
-            public RuntimeBlackboardLong2 Long2Value;
-            public RuntimeBlackboardLong3 Long3Value;
-
-            public DeltaEntry(int key, byte tag)
+            if (schema == null)
             {
-                Key = key;
-                Tag = tag;
-                IntValue = default;
-                FloatValue = default;
-                BoolValue = default;
-                VectorValue = default;
-                LongValue = default;
-                Long2Value = default;
-                Long3Value = default;
+                return;
             }
 
-            public void Apply(RuntimeBlackboard blackboard)
+            if (!schema.TryGetDefinition(mutation.Key, out RuntimeBlackboardKeyDefinition definition))
             {
-                switch (Tag)
-                {
-                    case TAG_INT:
-                        blackboard.SetInt(Key, IntValue);
-                        break;
-                    case TAG_FLOAT:
-                        blackboard.SetFloat(Key, FloatValue);
-                        break;
-                    case TAG_BOOL:
-                        blackboard.SetBool(Key, BoolValue);
-                        break;
-                    case TAG_VECTOR3:
-                        blackboard.SetVector3(Key, VectorValue);
-                        break;
-                    case TAG_LONG:
-                        blackboard.SetLong(Key, LongValue);
-                        break;
-                    case TAG_LONG2:
-                        blackboard.SetLong2(Key, Long2Value);
-                        break;
-                    case TAG_LONG3:
-                        blackboard.SetLong3(Key, Long3Value);
-                        break;
-                    case TAG_REMOVE:
-                        blackboard.Remove(Key);
-                        break;
-                }
+                throw new InvalidDataException($"Blackboard delta key {mutation.Key} is not declared in the runtime schema.");
+            }
+
+            if (!definition.UsesDelta)
+            {
+                throw new InvalidDataException($"Blackboard delta key {mutation.Key} is not enabled for delta synchronization.");
+            }
+
+            if (mutation.Kind == RuntimeBlackboardMutationKind.Remove)
+            {
+                return;
+            }
+
+            RuntimeBlackboardValueType valueType = (RuntimeBlackboardValueType)mutation.Kind;
+            if (definition.ValueType != valueType)
+            {
+                throw new InvalidDataException(
+                    $"Blackboard delta key {mutation.Key} expects {definition.ValueType}, but payload contains {valueType}.");
+            }
+        }
+
+        private sealed class MutationKeyComparer : IComparer<RuntimeBlackboardMutation>
+        {
+            public static readonly MutationKeyComparer Instance = new MutationKeyComparer();
+
+            private MutationKeyComparer()
+            {
+            }
+
+            public int Compare(RuntimeBlackboardMutation x, RuntimeBlackboardMutation y)
+            {
+                return x.Key.CompareTo(y.Key);
             }
         }
 
@@ -547,6 +783,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             }
 
             public bool IsComplete => _position == _end;
+            public int Remaining => _end - _position;
 
             public byte ReadByte()
             {
@@ -563,6 +800,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
                     | (_buffer[position + 1] << 8)
                     | (_buffer[position + 2] << 16)
                     | (_buffer[position + 3] << 24);
+            }
+
+            public uint ReadUInt32()
+            {
+                return unchecked((uint)ReadInt32());
+            }
+
+            public ushort ReadUInt16()
+            {
+                EnsureAvailable(2);
+                int position = _position;
+                _position += 2;
+                return (ushort)(_buffer[position] | (_buffer[position + 1] << 8));
             }
 
             public long ReadInt64()
@@ -583,7 +833,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
             private void EnsureAvailable(int byteCount)
             {
-                if (_position < 0 || _position + byteCount > _end)
+                if (byteCount < 0 || _position < 0 || byteCount > _end - _position)
                 {
                     throw new EndOfStreamException("Blackboard delta payload ended before the declared entry data was fully read.");
                 }
