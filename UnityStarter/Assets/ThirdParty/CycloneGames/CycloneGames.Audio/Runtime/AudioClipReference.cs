@@ -20,24 +20,93 @@ namespace CycloneGames.Audio.Runtime
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Clip Reference")]
     public sealed class AudioClipReference : ScriptableObject
     {
+        private const int MaxLocationLength = 4096;
+
         [SerializeField] private AudioLocationKind locationKind = AudioLocationKind.FilePath;
         [SerializeField, FormerlySerializedAs("location")] internal string m_Location = string.Empty;
         [SerializeField] internal string m_GUID = string.Empty;
-        [SerializeField] private bool runtimeMutable = true;
+        [SerializeField] private bool runtimeMutable;
         [SerializeField] private int version;
 
-        public AudioLocationKind LocationKind => locationKind;
-        public string Location => m_Location;
-        public string GUID => m_GUID;
-        public bool RuntimeMutable => runtimeMutable;
-        public int Version => version;
-        public bool HasEditorAssetLink => !string.IsNullOrEmpty(m_GUID);
+        public AudioLocationKind LocationKind
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".LocationKind");
+                return locationKind;
+            }
+        }
+
+        public string Location
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".Location");
+                return m_Location;
+            }
+        }
+
+        public string GUID
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".GUID");
+                return m_GUID;
+            }
+        }
+
+        public bool RuntimeMutable
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".RuntimeMutable");
+                return runtimeMutable;
+            }
+        }
+
+        public int Version
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".Version");
+                return version;
+            }
+        }
+
+        public bool HasEditorAssetLink
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".HasEditorAssetLink");
+                return !string.IsNullOrEmpty(m_GUID);
+            }
+        }
+
+        /// <summary>
+        /// Creates a non-persistent reference for runtime configuration. The caller owns the
+        /// returned ScriptableObject and must destroy it on the Unity main thread.
+        /// </summary>
+        public static AudioClipReference CreateRuntime(AudioLocationKind kind, string location, string guid = null)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".CreateRuntime");
+            var reference = CreateInstance<AudioClipReference>();
+            reference.hideFlags = HideFlags.DontSave;
+            reference.runtimeMutable = true;
+            reference.locationKind = kind;
+            reference.m_Location = location ?? string.Empty;
+            reference.m_GUID = guid ?? string.Empty;
+            reference.version = 1;
+            return reference;
+        }
 
         public void SetLocation(string newLocation)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".SetLocation");
             if (!runtimeMutable)
             {
-                return;
+                throw new InvalidOperationException(
+                    "Authored AudioClipReference assets are immutable at runtime. " +
+                    "Use AudioClipReference.CreateRuntime or TrySetLocation on a runtime-mutable reference.");
             }
 
             string normalized = newLocation ?? string.Empty;
@@ -48,11 +117,19 @@ namespace CycloneGames.Audio.Runtime
 
             m_Location = normalized;
             m_GUID = string.Empty;
-            version++;
+            IncrementVersion();
         }
 
         public void SetAssetLocation(string newLocation, string guid)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".SetAssetLocation");
+            if (!runtimeMutable)
+            {
+                throw new InvalidOperationException(
+                    "Authored AudioClipReference assets are immutable at runtime. " +
+                    "Use AudioClipReference.CreateRuntime or TrySetLocation on a runtime-mutable reference.");
+            }
+
             string normalizedLocation = newLocation ?? string.Empty;
             string normalizedGuid = guid ?? string.Empty;
             if (m_Location == normalizedLocation && m_GUID == normalizedGuid)
@@ -62,31 +139,90 @@ namespace CycloneGames.Audio.Runtime
 
             m_Location = normalizedLocation;
             m_GUID = normalizedGuid;
-            version++;
+            IncrementVersion();
+        }
+
+        public bool TrySetLocation(AudioLocationKind kind, string newLocation, string guid = null)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".TrySetLocation");
+            if (!runtimeMutable) return false;
+
+            string normalizedLocation = newLocation ?? string.Empty;
+            string normalizedGuid = guid ?? string.Empty;
+            if (locationKind == kind && m_Location == normalizedLocation && m_GUID == normalizedGuid)
+                return true;
+
+            locationKind = kind;
+            m_Location = normalizedLocation;
+            m_GUID = normalizedGuid;
+            IncrementVersion();
+            return true;
         }
 
         public string ResolveLocation()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".ResolveLocation");
+            return TryResolveLocation(out string resolvedLocation, out _) ? resolvedLocation : string.Empty;
+        }
+
+        public bool TryResolveLocation(out string resolvedLocation, out string error)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".TryResolveLocation");
+            resolvedLocation = string.Empty;
+            error = string.Empty;
+
             if (string.IsNullOrWhiteSpace(m_Location))
-                return string.Empty;
+            {
+                error = "Location is empty.";
+                return false;
+            }
+
+            if (m_Location.Length > MaxLocationLength)
+            {
+                error = $"Location exceeds the {MaxLocationLength}-character limit.";
+                return false;
+            }
+
+            if (HasNullCharacter(m_Location))
+            {
+                error = "Location contains a null character.";
+                return false;
+            }
 
             switch (locationKind)
             {
                 case AudioLocationKind.StreamingAssetsPath:
-                    return TryResolveRootedLocation(Application.streamingAssetsPath, m_Location, out string streamingAssetsLocation)
-                        ? streamingAssetsLocation
-                        : string.Empty;
+                    if (!TryResolveRootedLocation(Application.streamingAssetsPath, m_Location, out resolvedLocation))
+                    {
+                        error = "StreamingAssets location must be a safe relative path within StreamingAssets.";
+                        return false;
+                    }
+                    return true;
                 case AudioLocationKind.PersistentDataPath:
-                    return TryResolveRootedLocation(Application.persistentDataPath, m_Location, out string persistentDataLocation)
-                        ? persistentDataLocation
-                        : string.Empty;
+                    if (!TryResolveRootedLocation(Application.persistentDataPath, m_Location, out resolvedLocation))
+                    {
+                        error = "PersistentData location must be a safe relative path within persistentDataPath.";
+                        return false;
+                    }
+                    return true;
+                case AudioLocationKind.Url:
+                    if (!Uri.TryCreate(m_Location, UriKind.Absolute, out Uri uri) ||
+                        (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+                    {
+                        error = "URL must be an absolute HTTP or HTTPS URI.";
+                        return false;
+                    }
+                    resolvedLocation = m_Location;
+                    return true;
                 default:
-                    return m_Location;
+                    resolvedLocation = m_Location;
+                    return true;
             }
         }
 
         public string GetDisplayLocation()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipReference) + ".GetDisplayLocation");
             return m_Location ?? string.Empty;
         }
 
@@ -187,6 +323,14 @@ namespace CycloneGames.Audio.Runtime
                 return false;
             }
 
+            // URI-like StreamingAssets roots are resolved by UnityWebRequest on some
+            // platforms. Reject query, fragment, and percent-encoded path syntax so a
+            // provider cannot reinterpret an apparently relative path after validation.
+            if (location.IndexOf('?') >= 0 || location.IndexOf('#') >= 0 || location.IndexOf('%') >= 0)
+            {
+                return false;
+            }
+
             int segmentStart = 0;
             for (int i = 0; i <= location.Length; i++)
             {
@@ -219,6 +363,11 @@ namespace CycloneGames.Audio.Runtime
         private static bool HasNullCharacter(string value)
         {
             return value.IndexOf('\0') >= 0;
+        }
+
+        private void IncrementVersion()
+        {
+            version = version == int.MaxValue ? 1 : version + 1;
         }
     }
 }

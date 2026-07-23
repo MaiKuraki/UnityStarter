@@ -142,19 +142,6 @@ namespace CycloneGames.Audio.Editor
             return EditorApplication.isPlaying;
         }
 
-        [MenuItem("Tools/CycloneGames/Audio/Build Validation/Validate Audio Banks Before Build")]
-        private static void ToggleBuildValidationMenu()
-        {
-            AudioBankValidator.BuildValidationEnabled = !AudioBankValidator.BuildValidationEnabled;
-        }
-
-        [MenuItem("Tools/CycloneGames/Audio/Build Validation/Validate Audio Banks Before Build", true)]
-        private static bool ToggleBuildValidationMenuValidate()
-        {
-            Menu.SetChecked("Tools/CycloneGames/Audio/Build Validation/Validate Audio Banks Before Build", AudioBankValidator.BuildValidationEnabled);
-            return true;
-        }
-
         [MenuItem("Assets/CycloneGames/Audio/Validate Selected Audio Banks")]
         private static void ValidateSelectedAudioBanksMenu()
         {
@@ -185,8 +172,6 @@ namespace CycloneGames.Audio.Editor
 
         public void OnPreprocessBuild(BuildReport report)
         {
-            if (!AudioBankValidator.BuildValidationEnabled) return;
-
             AudioBankValidationSummary summary = AudioBankValidator.ValidateAllAudioBanks(true);
             if (summary.ErrorCount > 0)
             {
@@ -240,7 +225,6 @@ namespace CycloneGames.Audio.Editor
                 .AppendLine();
             ReportBuilder.Append("Runtime: active events ").Append(stats.ActiveEvents)
                 .Append(", pending removals ").Append(stats.PendingRemovals)
-                .Append(", queued commands ").Append(stats.QueuedCommands)
                 .Append(", registered parameters ").Append(stats.RegisteredParameters)
                 .Append(", registered states ").Append(stats.RegisteredStateGroups)
                 .Append(", state mix profiles ").Append(stats.RegisteredStateMixProfiles)
@@ -738,7 +722,6 @@ namespace CycloneGames.Audio.Editor
 
     internal static class AudioBankValidator
     {
-        private const string BuildValidationEditorPrefsKey = "CycloneGames.Audio.ValidateBanksBeforeBuild";
         private static readonly Dictionary<string, int> EventNameCounts = new Dictionary<string, int>(128);
         private static readonly Dictionary<string, int> AssetNameCounts = new Dictionary<string, int>(64);
         private static readonly Dictionary<string, int> StateNameCounts = new Dictionary<string, int>(16);
@@ -746,12 +729,6 @@ namespace CycloneGames.Audio.Editor
         private static readonly HashSet<AudioNode> StackNodes = new HashSet<AudioNode>();
         private static readonly AudioBankValidationReport BatchReport = new AudioBankValidationReport();
         private static readonly AudioBankValidationSummary BatchSummary = new AudioBankValidationSummary();
-
-        public static bool BuildValidationEnabled
-        {
-            get => EditorPrefs.GetBool(BuildValidationEditorPrefsKey, true);
-            set => EditorPrefs.SetBool(BuildValidationEditorPrefsKey, value);
-        }
 
         public static AudioBankValidationSummary ValidateAllAudioBanks(bool logIssues)
         {

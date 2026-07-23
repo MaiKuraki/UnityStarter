@@ -75,20 +75,9 @@ namespace CycloneGames.Audio.Runtime
                 this.stateMixProfiles = new List<AudioStateMixProfile>();
             }
 
-            for (int i = 0; i < this.parameters.Count; i++)
-            {
-                this.parameters[i]?.ResetParameter();
-            }
-
-            for (int i = 0; i < this.switches.Count; i++)
-            {
-                this.switches[i]?.ResetSwitch();
-            }
-
-            for (int i = 0; i < this.stateGroups.Count; i++)
-            {
-                this.stateGroups[i]?.ResetStateGroup();
-            }
+            // Runtime state is initialized by AudioManager when the first owning bank is
+            // registered. Resetting shared objects from ScriptableObject.OnEnable would let
+            // loading a second bank overwrite state that is still owned by the first bank.
         }
 
 #if UNITY_EDITOR
@@ -132,13 +121,14 @@ namespace CycloneGames.Audio.Runtime
         /// <returns></returns>
         public AudioEvent AddEvent(Vector2 outputPos)
         {
+            Undo.RecordObject(this, "Add Audio Event");
             AudioEvent newEvent = ScriptableObject.CreateInstance<AudioEvent>();
             newEvent.name = "New Audio Event";
             AssetDatabase.AddObjectToAsset(newEvent, this);
+            Undo.RegisterCreatedObjectUndo(newEvent, "Add Audio Event");
             newEvent.InitializeEvent(outputPos);
             this.audioEvents.Add(newEvent);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
             return newEvent;
         }
 
@@ -148,12 +138,12 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="eventToDelete"></param>
         public void DeleteEvent(AudioEvent eventToDelete)
         {
+            if (eventToDelete == null || !this.audioEvents.Contains(eventToDelete)) return;
+            Undo.RecordObject(this, "Delete Audio Event");
             eventToDelete.DeleteNodes();
             this.audioEvents.Remove(eventToDelete);
-            AssetDatabase.RemoveObjectFromAsset(eventToDelete);
-            ScriptableObject.DestroyImmediate(eventToDelete, true);
+            Undo.DestroyObjectImmediate(eventToDelete);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
         }
 
         /// <summary>
@@ -162,13 +152,14 @@ namespace CycloneGames.Audio.Runtime
         /// <returns>The AudioParameter instance that was created</returns>
         public AudioParameter AddParameter()
         {
+            Undo.RecordObject(this, "Add Audio Parameter");
             AudioParameter newParameter = ScriptableObject.CreateInstance<AudioParameter>();
             newParameter.name = "New Audio Parameter";
             newParameter.InitializeParameter();
             AssetDatabase.AddObjectToAsset(newParameter, this);
+            Undo.RegisterCreatedObjectUndo(newParameter, "Add Audio Parameter");
             this.parameters.Add(newParameter);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
             return newParameter;
         }
 
@@ -178,78 +169,83 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="parameterToDelete">The AudioParameter you wish to delete</param>
         public void DeleteParameter(AudioParameter parameterToDelete)
         {
+            if (parameterToDelete == null || !this.parameters.Contains(parameterToDelete)) return;
+            Undo.RecordObject(this, "Delete Audio Parameter");
             this.parameters.Remove(parameterToDelete);
-            AssetDatabase.RemoveObjectFromAsset(parameterToDelete);
-            ScriptableObject.DestroyImmediate(parameterToDelete, true);
+            Undo.DestroyObjectImmediate(parameterToDelete);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
         }
 
         public AudioSwitch AddSwitch()
         {
+            Undo.RecordObject(this, "Add Audio Switch");
             AudioSwitch newSwitch = ScriptableObject.CreateInstance<AudioSwitch>();
             newSwitch.name = "New Audio Switch";
             newSwitch.InitializeSwitch();
             AssetDatabase.AddObjectToAsset(newSwitch, this);
+            Undo.RegisterCreatedObjectUndo(newSwitch, "Add Audio Switch");
             this.switches.Add(newSwitch);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
             return newSwitch;
         }
 
         public void DeleteSwitch(AudioSwitch switchToDelete)
         {
+            if (switchToDelete == null || !this.switches.Contains(switchToDelete)) return;
+            Undo.RecordObject(this, "Delete Audio Switch");
             this.switches.Remove(switchToDelete);
-            AssetDatabase.RemoveObjectFromAsset(switchToDelete);
-            ScriptableObject.DestroyImmediate(switchToDelete, true);
+            Undo.DestroyObjectImmediate(switchToDelete);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
         }
 
         public AudioStateGroup AddStateGroup()
         {
+            Undo.RecordObject(this, "Add Audio State Group");
             AudioStateGroup newStateGroup = ScriptableObject.CreateInstance<AudioStateGroup>();
             newStateGroup.name = "New Audio State Group";
             newStateGroup.InitializeStateGroup();
             AssetDatabase.AddObjectToAsset(newStateGroup, this);
+            Undo.RegisterCreatedObjectUndo(newStateGroup, "Add Audio State Group");
             this.stateGroups.Add(newStateGroup);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
             return newStateGroup;
         }
 
         public void DeleteStateGroup(AudioStateGroup stateGroupToDelete)
         {
+            if (stateGroupToDelete == null || !this.stateGroups.Contains(stateGroupToDelete)) return;
+            Undo.RecordObject(this, "Delete Audio State Group");
             this.stateGroups.Remove(stateGroupToDelete);
-            AssetDatabase.RemoveObjectFromAsset(stateGroupToDelete);
-            ScriptableObject.DestroyImmediate(stateGroupToDelete, true);
+            Undo.DestroyObjectImmediate(stateGroupToDelete);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
         }
 
         public AudioStateMixProfile AddStateMixProfile()
         {
+            Undo.RecordObject(this, "Add Audio State Mix Profile");
             AudioStateMixProfile newProfile = ScriptableObject.CreateInstance<AudioStateMixProfile>();
             newProfile.name = "New Audio State Mix Profile";
             AssetDatabase.AddObjectToAsset(newProfile, this);
+            Undo.RegisterCreatedObjectUndo(newProfile, "Add Audio State Mix Profile");
             this.stateMixProfiles.Add(newProfile);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
             return newProfile;
         }
 
         public void DeleteStateMixProfile(AudioStateMixProfile profileToDelete)
         {
+            if (profileToDelete == null || !this.stateMixProfiles.Contains(profileToDelete)) return;
+            Undo.RecordObject(this, "Delete Audio State Mix Profile");
             this.stateMixProfiles.Remove(profileToDelete);
-            AssetDatabase.RemoveObjectFromAsset(profileToDelete);
-            ScriptableObject.DestroyImmediate(profileToDelete, true);
+            Undo.DestroyObjectImmediate(profileToDelete);
             EditorUtility.SetDirty(this);
-            AssetDatabase.SaveAssets();
         }
 
         public void SortEvents()
         {
+            Undo.RecordObject(this, "Sort Audio Events");
             this.audioEvents.Sort(new AudioEventComparer());
+            EditorUtility.SetDirty(this);
         }
 #endif
     }

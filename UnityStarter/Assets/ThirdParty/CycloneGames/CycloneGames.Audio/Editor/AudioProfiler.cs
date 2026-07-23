@@ -1,4 +1,4 @@
-﻿using UnityEngine;
+using UnityEngine;
 using UnityEditor;
 using UnityEngine.Audio;
 using System.Collections.Generic;
@@ -16,8 +16,9 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private sealed class ProfilerFrame
         {
-            public readonly List<ProfilerEvent> Events = new List<ProfilerEvent>(32);
+            public readonly List<ProfilerEventSnapshot> Events = new List<ProfilerEventSnapshot>(32);
             public int Count;
+            public int TotalCount;
         }
 
         private readonly ProfilerFrame[] profilerFrames = new ProfilerFrame[MaxFrames];
@@ -66,7 +67,7 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private const float WindowYInterval = 120;
         /// <summary>
-        /// Window for listing previous events
+        /// Window for listing events captured in the selected frame
         /// </summary>
         private Rect eventListRect = new Rect(0, 20, 300, 400);
         /// <summary>
@@ -74,14 +75,16 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private Vector2 eventListScrollPosition = new Vector2();
         /// <summary>
-        /// The maximum number of saved previous frames in the profiler
+        /// The maximum number of saved frames in the profiler
         /// </summary>
         private const int MaxFrames = 300;
+        private const int MaxEventsPerFrame = 2048;
         private const double SampleInterval = 0.05d;
         private const double RepaintInterval = 0.1d;
 
-        private readonly Dictionary<AudioMixerGroup, int> cachedBusIndices = new Dictionary<AudioMixerGroup, int>(32);
-        private readonly Dictionary<GameObject, int> cachedEmitterIndices = new Dictionary<GameObject, int>(32);
+        private readonly Dictionary<int, int> cachedBusIndices = new Dictionary<int, int>(32);
+        private readonly Dictionary<int, int> cachedEmitterIndices = new Dictionary<int, int>(32);
+        private ProfilerEventSnapshot currentProfiledEvent;
 
         /// <summary>
         /// Display the profiler window
@@ -143,34 +146,32 @@ namespace CycloneGames.Audio.Editor
         }
 
         /// <summary>
-        /// Get data for all ActiveEvents in the AudioManager
+        /// Capture immutable data for all ActiveEvents in the AudioManager
         /// </summary>
         private void CollectProfilerEvents()
         {
             var activeEvents = AudioManager.ActiveEvents;
-            ProfilerFrame frame = this.profilerFrames[this.profilerWriteIndex];
-            EnsureFrameCapacity(frame, activeEvents.Count);
-            frame.Count = activeEvents.Count;
+            if (activeEvents == null)
+            {
+                return;
+            }
 
-            for (int i = 0; i < activeEvents.Count; i++)
+            ProfilerFrame frame = this.profilerFrames[this.profilerWriteIndex];
+            int capturedCount = Mathf.Min(activeEvents.Count, MaxEventsPerFrame);
+            int previousCount = frame.Count;
+            EnsureFrameCapacity(frame, capturedCount);
+            frame.Count = capturedCount;
+            frame.TotalCount = activeEvents.Count;
+
+            for (int i = 0; i < capturedCount; i++)
             {
                 ActiveEvent tempActiveEvent = activeEvents[i];
-                ProfilerEvent tempProfilerEvent = frame.Events[i];
-                tempProfilerEvent.Reset();
-                tempProfilerEvent.eventName = tempActiveEvent.name;
-                
-                if (tempActiveEvent.SourceCount > 0)
-                {
-                    var source = tempActiveEvent.GetSource(0);
-                    if (source.IsValid)
-                    {
-                        tempProfilerEvent.clip = source.source.clip;
-                        tempProfilerEvent.emitterObject = source.source.gameObject;
-                        tempProfilerEvent.bus = tempActiveEvent.rootEvent.Output.mixerGroup;
-                    }
-                }
-                
-                tempProfilerEvent.activeEvent = tempActiveEvent;
+                frame.Events[i] = CaptureSnapshot(tempActiveEvent);
+            }
+
+            for (int i = capturedCount; i < previousCount; i++)
+            {
+                frame.Events[i] = default;
             }
 
             this.profilerWriteIndex = (this.profilerWriteIndex + 1) % MaxFrames;
@@ -180,11 +181,56 @@ namespace CycloneGames.Audio.Editor
             }
         }
 
+        private static ProfilerEventSnapshot CaptureSnapshot(ActiveEvent activeEvent)
+        {
+            if (activeEvent == null)
+            {
+                return default;
+            }
+
+            string emitterName = string.Empty;
+            int emitterInstanceId = 0;
+
+            GameObject emitterObject = activeEvent.emitterTransform != null
+                ? activeEvent.emitterTransform.gameObject
+                : null;
+
+            if (activeEvent.SourceCount > 0)
+            {
+                EventSource source = activeEvent.GetSource(0);
+                if (source.IsValid)
+                {
+                    emitterObject ??= source.source.gameObject;
+                }
+            }
+
+            if (emitterObject != null)
+            {
+                emitterName = emitterObject.name;
+                emitterInstanceId = emitterObject.GetInstanceID();
+            }
+
+            AudioMixerGroup bus = activeEvent.rootEvent != null && activeEvent.rootEvent.Output != null
+                ? activeEvent.rootEvent.Output.mixerGroup
+                : null;
+            string busName = bus != null ? bus.name : string.Empty;
+            int busInstanceId = bus != null ? bus.GetInstanceID() : 0;
+
+            return new ProfilerEventSnapshot(
+                activeEvent.name,
+                emitterName,
+                emitterInstanceId,
+                busName,
+                busInstanceId,
+                activeEvent.status,
+                activeEvent.timeStarted);
+        }
+
         private static void EnsureFrameCapacity(ProfilerFrame frame, int count)
         {
             while (frame.Events.Count < count)
             {
-                frame.Events.Add(new ProfilerEvent());
+                frame.Events.Add(default);
             }
         }
 
@@ -205,11 +251,22 @@ namespace CycloneGames.Audio.Editor
             GUILayout.BeginArea(this.eventListRect);
             this.eventListScrollPosition = EditorGUILayout.BeginScrollView(this.eventListScrollPosition);
 
-            var previousEvents = AudioManager.GetPreviousEvents();
-            for (int i = 0; i < previousEvents.Count; i++)
+            int frameIndex = GetFrameIndex(this.currentFrame);
+            if (frameIndex >= 0)
             {
-                ActiveEvent tempEvent = previousEvents[i];
-                GUILayout.Label(tempEvent.timeStarted + " : " + tempEvent.name + " - " + tempEvent.status.ToString());
+                ProfilerFrame frame = profilerFrames[frameIndex];
+                if (frame.TotalCount > frame.Count)
+                {
+                    EditorGUILayout.HelpBox(
+                        $"Showing {frame.Count} of {frame.TotalCount} active events.",
+                        MessageType.Info);
+                }
+
+                for (int i = 0; i < frame.Count; i++)
+                {
+                    ProfilerEventSnapshot snapshot = frame.Events[i];
+                    GUILayout.Label($"{snapshot.TimeStarted:F3} : {snapshot.EventName} - {snapshot.Status}");
+                }
             }
 
             EditorGUILayout.EndScrollView();
@@ -219,7 +276,7 @@ namespace CycloneGames.Audio.Editor
         /// <summary>
         /// Draw the nodes for the specified frame
         /// </summary>
-        /// <param name="profilerEvents">The frame to show the ActiveEvents for</param>
+        /// <param name="profilerFrame">The frame to show the captured events for</param>
         private void DrawProfilerFrame(ProfilerFrame profilerFrame)
         {
             this.eventY = 20;
@@ -234,24 +291,27 @@ namespace CycloneGames.Audio.Editor
             BeginWindows();
             for (int i = 0; i < profilerFrame.Count; i++)
             {
-                ProfilerEvent tempEvent = profilerFrame.Events[i];
-                //this.currentProfiledEvent = tempEvent;
-                if (tempEvent == null || tempEvent.activeEvent == null)
-                {
-                    continue;
-                }
+                ProfilerEventSnapshot tempEvent = profilerFrame.Events[i];
+                this.currentProfiledEvent = tempEvent;
+                GUI.Window(
+                    i * 3,
+                    new Rect(eventX, this.eventY, WindowWidth, WindowHeight),
+                    DrawEventWindow,
+                    tempEvent.EventName);
 
-                //GUI.Window(i, new Rect(eventX, this.eventY, WindowWidth, WindowHeight), DrawWindow, tempEvent.eventName);
-                tempEvent.activeEvent.DrawNode(i, new Rect(eventX, this.eventY, WindowWidth, WindowHeight));
                 int emitterIndex;
                 bool addedEmitter = false;
-                if (tempEvent.emitterObject == null)
+                if (tempEvent.EmitterInstanceId == 0)
                 {
                     if (nullEmitterIndex < 0)
                     {
-                        nullEmitterIndex = this.cachedEmitterIndices.Count + (nullEmitterIndex >= 0 ? 1 : 0);
+                        nullEmitterIndex = this.cachedEmitterIndices.Count;
                         emitterIndex = nullEmitterIndex;
-                        GUI.Window(i + 200, new Rect(emitterX, this.emitterY, WindowWidth, WindowHeight), DrawWindow, "No emitter");
+                        GUI.Window(
+                            1 + emitterIndex * 3,
+                            new Rect(emitterX, this.emitterY, WindowWidth, WindowHeight),
+                            DrawWindow,
+                            "No emitter");
                         DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, this.emitterY));
                         addedEmitter = true;
                     }
@@ -261,12 +321,15 @@ namespace CycloneGames.Audio.Editor
                         DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, 20 + WindowYInterval * emitterIndex));
                     }
                 }
-                else if (!this.cachedEmitterIndices.TryGetValue(tempEvent.emitterObject, out emitterIndex))
+                else if (!this.cachedEmitterIndices.TryGetValue(tempEvent.EmitterInstanceId, out emitterIndex))
                 {
                     emitterIndex = this.cachedEmitterIndices.Count + (nullEmitterIndex >= 0 ? 1 : 0);
-                    this.cachedEmitterIndices.Add(tempEvent.emitterObject, emitterIndex);
-                    string emitterName = tempEvent.emitterObject == null ? "No emitter" : tempEvent.emitterObject.name;
-                    GUI.Window(i + 200, new Rect(emitterX, this.emitterY, WindowWidth, WindowHeight), DrawWindow, emitterName);
+                    this.cachedEmitterIndices.Add(tempEvent.EmitterInstanceId, emitterIndex);
+                    GUI.Window(
+                        1 + emitterIndex * 3,
+                        new Rect(emitterX, this.emitterY, WindowWidth, WindowHeight),
+                        DrawWindow,
+                        tempEvent.EmitterName);
                     DrawCurve(new Vector2(eventX + WindowWidth, this.eventY), new Vector2(emitterX, this.emitterY));
                     addedEmitter = true;
                 }
@@ -277,27 +340,35 @@ namespace CycloneGames.Audio.Editor
 
                 float emitterLineY = 20 + WindowYInterval * emitterIndex;
                 int busIndex;
-                if (tempEvent.bus == null)
+                if (tempEvent.BusInstanceId == 0)
                 {
                     if (nullBusIndex < 0)
                     {
-                        nullBusIndex = this.cachedBusIndices.Count + (nullBusIndex >= 0 ? 1 : 0);
+                        nullBusIndex = this.cachedBusIndices.Count;
                         busIndex = nullBusIndex;
-                        GUI.Window(i + 100, new Rect(busX, this.busY, WindowWidth, WindowHeight), DrawWindow, "-No Bus-");
+                        GUI.Window(
+                            2 + busIndex * 3,
+                            new Rect(busX, this.busY, WindowWidth, WindowHeight),
+                            DrawWindow,
+                            "No bus");
                         DrawCurve(new Vector2(emitterX + WindowWidth, emitterLineY), new Vector2(busX, this.busY));
                         this.busY += WindowYInterval;
                     }
                     else
                     {
                         busIndex = nullBusIndex;
-                        DrawCurve(new Vector2(emitterX + WindowWidth, this.emitterY), new Vector2(busX, 20 + WindowYInterval * busIndex));
+                        DrawCurve(new Vector2(emitterX + WindowWidth, emitterLineY), new Vector2(busX, 20 + WindowYInterval * busIndex));
                     }
                 }
-                else if (!this.cachedBusIndices.TryGetValue(tempEvent.bus, out busIndex))
+                else if (!this.cachedBusIndices.TryGetValue(tempEvent.BusInstanceId, out busIndex))
                 {
                     busIndex = this.cachedBusIndices.Count + (nullBusIndex >= 0 ? 1 : 0);
-                    this.cachedBusIndices.Add(tempEvent.bus, busIndex);
-                    GUI.Window(i + 100, new Rect(busX, this.busY, WindowWidth, WindowHeight), DrawWindow, tempEvent.bus.name);
+                    this.cachedBusIndices.Add(tempEvent.BusInstanceId, busIndex);
+                    GUI.Window(
+                        2 + busIndex * 3,
+                        new Rect(busX, this.busY, WindowWidth, WindowHeight),
+                        DrawWindow,
+                        tempEvent.BusName);
                     DrawCurve(new Vector2(emitterX + WindowWidth, emitterLineY), new Vector2(busX, this.busY));
                     this.busY += WindowYInterval;
                 }
@@ -321,7 +392,16 @@ namespace CycloneGames.Audio.Editor
         /// <param name="id">Index of the window to draw</param>
         private void DrawWindow(int id)
         {
-            //EditorGUILayout.TextField("Volume:" + this.currentProfiledEvent.activeEvent.source.volume.ToString());
+            GUI.DragWindow();
+        }
+
+        private void DrawEventWindow(int id)
+        {
+            EditorGUILayout.LabelField("Status", currentProfiledEvent.Status.ToString());
+            EditorGUILayout.LabelField(
+                "Emitter",
+                currentProfiledEvent.EmitterInstanceId != 0 ? currentProfiledEvent.EmitterName : "No emitter");
+
             GUI.DragWindow();
         }
 

@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 #if UNITY_EDITOR
@@ -197,9 +197,7 @@ namespace CycloneGames.Audio.Runtime
             int connCount = (input != null && input.ConnectedNodes != null) ? input.ConnectedNodes.Length : 0;
             this.nodeRect.width = NodeWidth;
             this.nodeRect.height = CalcHeight(connCount);
-            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
-            DrawInput();
-            DrawOutput();
+            base.DrawNode(id);
         }
 
         protected override void DrawProperties()

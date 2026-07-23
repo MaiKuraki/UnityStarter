@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using System.Collections.Generic;
@@ -233,10 +233,9 @@ namespace CycloneGames.Audio.Runtime
 
             ProcessConnectedNode(0, activeEvent);
 
-            SetSourceProperties(activeEvent);
         }
 
-        private void SetSourceProperties(ActiveEvent activeEvent)
+        internal void ApplySourceProperties(ActiveEvent activeEvent)
         {
             int count = activeEvent.SourceCount;
             for (int i = 0; i < count; i++)
@@ -277,6 +276,7 @@ namespace CycloneGames.Audio.Runtime
                     {
                         var lpf = eventSource.GetComponent<AudioLowPassFilter>();
                         if (lpf == null) lpf = eventSource.gameObject.AddComponent<AudioLowPassFilter>();
+                        lpf.enabled = true;
                         lpf.cutoffFrequency = 22000f;
                         lpf.lowpassResonanceQ = 1f;
                     }
@@ -346,9 +346,7 @@ namespace CycloneGames.Audio.Runtime
         public override void DrawNode(int id)
         {
             this.nodeRect.height = CalcHeight();
-            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
-            DrawInput();
-            // Output node has no output connector
+            base.DrawNode(id);
         }
 
         /// <summary>
