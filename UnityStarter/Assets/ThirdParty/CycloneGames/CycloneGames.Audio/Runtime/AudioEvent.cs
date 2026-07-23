@@ -363,6 +363,22 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     public class AudioEvent : ScriptableObject
     {
+        private const int MaxRuntimeGraphNodes = 1024;
+        private const int MaxRuntimeGraphEdges = 4096;
+        private const int MaxRuntimeGraphDepth = 128;
+
+        private struct GraphValidationFrame
+        {
+            public AudioNode Node;
+            public int NextConnectionIndex;
+
+            public GraphValidationFrame(AudioNode node)
+            {
+                Node = node;
+                NextConnectionIndex = 0;
+            }
+        }
+
         /// <summary>
         /// The maximum number of simultaneous instances of an event that can be played
         /// </summary>
@@ -551,6 +567,12 @@ namespace CycloneGames.Audio.Runtime
                 return false;
             }
 
+            if (!TryValidateGraph(out string graphError))
+            {
+                Debug.LogErrorFormat("Invalid graph in event {0}: {1}", this.name, graphError);
+                return false;
+            }
+
             for (int i = 0; i < this.nodes.Count; i++)
             {
                 AudioNode node = this.nodes[i];
@@ -571,6 +593,119 @@ namespace CycloneGames.Audio.Runtime
                 else if (node is AudioBlendFile blendFile)
                 {
                     if (!ValidateBlendFileNode(blendFile)) return false;
+                }
+            }
+
+            return true;
+        }
+
+        /// <summary>
+        /// Validates graph ownership, edge integrity, cycles, and corruption budgets without recursion.
+        /// </summary>
+        public bool TryValidateGraph(out string error)
+        {
+            error = string.Empty;
+            if (this.output == null)
+            {
+                error = "The output node is missing.";
+                return false;
+            }
+
+            if (this.nodes == null || this.nodes.Count == 0)
+            {
+                error = "The node list is empty.";
+                return false;
+            }
+
+            if (this.nodes.Count > MaxRuntimeGraphNodes)
+            {
+                error = $"The graph contains more than {MaxRuntimeGraphNodes} nodes.";
+                return false;
+            }
+
+            var visitStates = new Dictionary<AudioNode, byte>(this.nodes.Count);
+            for (int i = 0; i < this.nodes.Count; i++)
+            {
+                AudioNode node = this.nodes[i];
+                if (node == null)
+                {
+                    error = $"Node index {i} is null.";
+                    return false;
+                }
+
+                if (visitStates.ContainsKey(node))
+                {
+                    error = $"Node '{node.name}' appears more than once in the node list.";
+                    return false;
+                }
+
+                visitStates.Add(node, 0);
+            }
+
+            if (!visitStates.ContainsKey(this.output))
+            {
+                error = "The output node is not owned by the event node list.";
+                return false;
+            }
+
+            int edgeCount = 0;
+            var stack = new List<GraphValidationFrame>(Math.Min(this.nodes.Count, MaxRuntimeGraphDepth));
+            for (int rootIndex = 0; rootIndex < this.nodes.Count; rootIndex++)
+            {
+                AudioNode root = this.nodes[rootIndex];
+                if (visitStates[root] != 0) continue;
+
+                visitStates[root] = 1;
+                stack.Add(new GraphValidationFrame(root));
+
+                while (stack.Count > 0)
+                {
+                    int frameIndex = stack.Count - 1;
+                    GraphValidationFrame frame = stack[frameIndex];
+                    AudioNodeOutput[] connections = frame.Node.RuntimeInput != null
+                        ? frame.Node.RuntimeInput.ConnectedNodes
+                        : null;
+
+                    if (connections == null || frame.NextConnectionIndex >= connections.Length)
+                    {
+                        visitStates[frame.Node] = 2;
+                        stack.RemoveAt(frameIndex);
+                        continue;
+                    }
+
+                    AudioNodeOutput connection = connections[frame.NextConnectionIndex];
+                    frame.NextConnectionIndex++;
+                    stack[frameIndex] = frame;
+
+                    edgeCount++;
+                    if (edgeCount > MaxRuntimeGraphEdges)
+                    {
+                        error = $"The graph contains more than {MaxRuntimeGraphEdges} connections.";
+                        return false;
+                    }
+
+                    AudioNode connectedNode = connection != null ? connection.ParentNode : null;
+                    if (connectedNode == null || !visitStates.TryGetValue(connectedNode, out byte state))
+                    {
+                        error = $"Node '{frame.Node.name}' has a connection to a missing or foreign node.";
+                        return false;
+                    }
+
+                    if (state == 1)
+                    {
+                        error = $"A cycle reaches node '{connectedNode.name}'.";
+                        return false;
+                    }
+
+                    if (state == 2) continue;
+                    if (stack.Count >= MaxRuntimeGraphDepth)
+                    {
+                        error = $"The graph depth exceeds {MaxRuntimeGraphDepth} nodes.";
+                        return false;
+                    }
+
+                    visitStates[connectedNode] = 1;
+                    stack.Add(new GraphValidationFrame(connectedNode));
                 }
             }
 
@@ -635,7 +770,19 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="activeEvent">The ActiveEvent for the AudioManager to update and track currently playing events</param>
         public void SetActiveEventProperties(ActiveEvent activeEvent)
         {
-            this.output.ProcessNode(activeEvent);
+            if (activeEvent == null || this.output == null || !activeEvent.TryEnterGraphNode(this.output))
+            {
+                return;
+            }
+
+            try
+            {
+                this.output.ProcessNode(activeEvent);
+            }
+            finally
+            {
+                activeEvent.ExitGraphNode(this.output);
+            }
         }
 
         /// <summary>
@@ -664,8 +811,10 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="outputPos">The position of the Output node in the canvas</param>
         public void InitializeEvent(Vector2 outputPos)
         {
+            Undo.RecordObject(this, "Initialize Audio Event");
             AudioOutput tempNode = ScriptableObject.CreateInstance<AudioOutput>();
             AssetDatabase.AddObjectToAsset(tempNode, this);
+            Undo.RegisterCreatedObjectUndo(tempNode, "Create Audio Output Node");
             tempNode.InitializeNode(outputPos);
             this.output = tempNode;
             this.nodes.Add(tempNode);
@@ -678,7 +827,10 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="newNode">The node to add</param>
         public void AddNode(AudioNode newNode)
         {
+            if (newNode == null || this.nodes.Contains(newNode)) return;
+            Undo.RecordObject(this, "Add Audio Node");
             this.nodes.Add(newNode);
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -686,14 +838,15 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public void DeleteNodes()
         {
+            Undo.RecordObject(this, "Delete Audio Event Nodes");
             for (int i = 0; i < this.nodes.Count; i++)
             {
                 if (this.nodes[i] == null) continue;
                 this.nodes[i].DeleteConnections();
-                AssetDatabase.RemoveObjectFromAsset(this.nodes[i]);
-                ScriptableObject.DestroyImmediate(this.nodes[i], true);
+                Undo.DestroyObjectImmediate(this.nodes[i]);
             }
             this.nodes.Clear();
+            this.output = null;
             EditorUtility.SetDirty(this);
         }
 
@@ -714,6 +867,8 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
+            Undo.RecordObject(this, "Delete Audio Node");
+
             for (int i = 0; i < this.nodes.Count; i++)
             {
                 AudioNode tempNode = this.nodes[i];
@@ -728,8 +883,7 @@ namespace CycloneGames.Audio.Runtime
 
             nodeToDelete.DeleteConnections();
             this.nodes.Remove(nodeToDelete);
-            AssetDatabase.RemoveObjectFromAsset(nodeToDelete);
-            ScriptableObject.DestroyImmediate(nodeToDelete, true);
+            Undo.DestroyObjectImmediate(nodeToDelete);
             EditorUtility.SetDirty(this);
         }
 
@@ -743,7 +897,9 @@ namespace CycloneGames.Audio.Runtime
                 this.parameters = new List<AudioEventParameter>();
             }
 
+            Undo.RecordObject(this, "Add Audio Event Parameter");
             this.parameters.Add(new AudioEventParameter());
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -752,7 +908,9 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="parameterToDelete">The parameter you wish to remove</param>
         public void DeleteParameter(AudioEventParameter parameterToDelete)
         {
+            Undo.RecordObject(this, "Delete Audio Event Parameter");
             this.parameters.Remove(parameterToDelete);
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -769,12 +927,23 @@ namespace CycloneGames.Audio.Runtime
             {
                 EditorGUILayout.BeginVertical(EditorStyles.helpBox);
                 AudioEventParameter tempParam = this.parameters[i];
-                tempParam.parameter = EditorGUILayout.ObjectField(tempParam.parameter, typeof(AudioParameter), false) as AudioParameter;
-                tempParam.responseCurve = EditorGUILayout.CurveField("Curve", tempParam.responseCurve);
-                tempParam.paramType = (ParameterType)EditorGUILayout.EnumPopup("Property", tempParam.paramType);
+                EditorGUI.BeginChangeCheck();
+                AudioParameter nextParameter = EditorGUILayout.ObjectField(tempParam.parameter, typeof(AudioParameter), false) as AudioParameter;
+                AnimationCurve nextCurve = EditorGUILayout.CurveField("Curve", tempParam.responseCurve);
+                ParameterType nextType = (ParameterType)EditorGUILayout.EnumPopup("Property", tempParam.paramType);
+                if (EditorGUI.EndChangeCheck())
+                {
+                    Undo.RecordObject(this, "Edit Audio Event Parameter");
+                    tempParam.parameter = nextParameter;
+                    tempParam.responseCurve = nextCurve;
+                    tempParam.paramType = nextType;
+                    EditorUtility.SetDirty(this);
+                }
                 if (GUILayout.Button("Delete Parameter"))
                 {
                     DeleteParameter(tempParam);
+                    EditorGUILayout.EndVertical();
+                    break;
                 }
                 EditorGUILayout.EndVertical();
             }

@@ -1,4 +1,4 @@
-﻿// Copyright (c) CycloneGames
+// Copyright (c) CycloneGames
 // Licensed under the MIT License.
 
 using CycloneGames.Audio.Runtime;
@@ -7,6 +7,7 @@ using UnityEngine;
 
 namespace CycloneGames.Audio.Editor
 {
+    [CanEditMultipleObjects]
     [CustomEditor(typeof(AudioPlatformProfile))]
     public sealed class AudioPlatformProfileEditor : UnityEditor.Editor
     {

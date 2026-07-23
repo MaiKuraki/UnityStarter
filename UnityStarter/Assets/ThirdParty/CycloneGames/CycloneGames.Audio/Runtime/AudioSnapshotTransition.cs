@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using UnityEngine;
@@ -35,7 +35,6 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            activeEvent.hasSnapshotTransition = true;
             float effectiveTransitionTime = 0f;
 
             if (this.useParameter && this.parameter != null && this.responseCurve != null)
@@ -47,8 +46,11 @@ namespace CycloneGames.Audio.Runtime
                 effectiveTransitionTime = this.transitionTime;
             }
 
-            this.snapshot.TransitionTo(effectiveTransitionTime);
-            AudioManager.DelayRemoveActiveEvent(activeEvent, effectiveTransitionTime);
+            if (float.IsNaN(effectiveTransitionTime) || float.IsInfinity(effectiveTransitionTime))
+                effectiveTransitionTime = 0f;
+            effectiveTransitionTime = Mathf.Max(0f, effectiveTransitionTime);
+
+            activeEvent.RegisterSnapshotTransition(this.snapshot, effectiveTransitionTime);
 
             AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
             if (connectedNodes != null && connectedNodes.Length != 0)

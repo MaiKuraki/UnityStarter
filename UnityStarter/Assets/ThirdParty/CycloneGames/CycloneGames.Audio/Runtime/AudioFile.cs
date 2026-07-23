@@ -111,16 +111,30 @@ namespace CycloneGames.Audio.Runtime
         private const int LocationKindLoaderProviderPriority = 200;
         private const int BuiltInExternalProviderPriority = 100;
 
-        private static readonly Dictionary<int, AudioClipReferenceLoader> runtimeReferenceLoaders = new Dictionary<int, AudioClipReferenceLoader>();
-        private static readonly Dictionary<AudioLocationKind, AudioClipReferenceLoader> runtimeLocationKindLoaders = new Dictionary<AudioLocationKind, AudioClipReferenceLoader>();
+        private readonly struct LoaderRegistration
+        {
+            public readonly long Id;
+            public readonly AudioClipReferenceLoader Loader;
+
+            public LoaderRegistration(long id, AudioClipReferenceLoader loader)
+            {
+                Id = id;
+                Loader = loader;
+            }
+        }
+
+        private static readonly Dictionary<int, List<LoaderRegistration>> runtimeReferenceLoaders = new Dictionary<int, List<LoaderRegistration>>();
+        private static readonly Dictionary<AudioLocationKind, List<LoaderRegistration>> runtimeLocationKindLoaders = new Dictionary<AudioLocationKind, List<LoaderRegistration>>();
         private static readonly object runtimeReferenceLoaderLock = new object();
         private static readonly List<IAudioClipProvider> providers = new List<IAudioClipProvider>();
+        private static readonly Dictionary<IAudioClipProvider, int> providerRegistrationCounts = new Dictionary<IAudioClipProvider, int>();
         private static readonly object providerLock = new object();
         private static readonly IAudioClipProvider referenceLoaderProvider = new ReferenceLoaderAudioClipProvider();
         private static readonly IAudioClipProvider locationKindLoaderProvider = new LocationKindAudioClipProvider();
         private static readonly IAudioClipProvider builtInExternalProvider = new BuiltInExternalAudioClipProvider();
         private static IAudioClipProvider[] cachedProviderSnapshot;
         private static bool providerSnapshotDirty = true;
+        private static long nextLoaderRegistrationId;
 
         static AudioClipResolver()
         {
@@ -141,6 +155,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static async UniTask<IAudioClipHandle> LoadExternalAsync(AudioClipReference reference, CancellationToken cancellationToken)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".LoadExternalAsync");
             if (reference == null || string.IsNullOrWhiteSpace(reference.Location))
                 return null;
 
@@ -151,7 +166,18 @@ namespace CycloneGames.Audio.Runtime
                 if (provider == null || !provider.CanLoad(reference))
                     continue;
 
-                IAudioClipHandle handle = await provider.LoadAsync(reference, cancellationToken);
+                IAudioClipHandle handle;
+                try
+                {
+                    handle = await provider.LoadAsync(reference, cancellationToken);
+                }
+                catch
+                {
+                    await UniTask.SwitchToMainThread();
+                    throw;
+                }
+
+                await UniTask.SwitchToMainThread();
                 if (handle != null)
                     return handle;
             }
@@ -161,26 +187,57 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ClearExternalCache()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".ClearExternalCache");
             ExternalAudioClipHandle.ClearCache();
         }
 
+        [Obsolete("Use RegisterReferenceLoaderScoped and dispose the returned registration lease.")]
         public static void RegisterReferenceLoader(AudioClipReference reference, AudioClipReferenceLoader loader)
         {
-            if (reference == null || loader == null) return;
-
-            lock (runtimeReferenceLoaderLock)
-            {
-                runtimeReferenceLoaders[reference.GetInstanceID()] = loader;
-            }
+            RegisterReferenceLoaderScoped(reference, loader);
         }
 
-        public static void RegisterManagedReferenceLoader(AudioClipReference reference, ManagedAudioClipReferenceLoader loader)
+        public static IDisposable RegisterReferenceLoaderScoped(
+            AudioClipReference reference,
+            AudioClipReferenceLoader loader)
         {
-            if (reference == null || loader == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".RegisterReferenceLoaderScoped");
+            if (reference == null || loader == null) return EmptyRegistration.Instance;
 
-            RegisterReferenceLoader(reference, async (clipReference, cancellationToken) =>
+            long registrationId = GetNextLoaderRegistrationId();
+            int referenceId = reference.GetInstanceID();
+            lock (runtimeReferenceLoaderLock)
+            {
+                if (!runtimeReferenceLoaders.TryGetValue(referenceId, out List<LoaderRegistration> registrations))
+                {
+                    registrations = new List<LoaderRegistration>(2);
+                    runtimeReferenceLoaders.Add(referenceId, registrations);
+                }
+
+                registrations.Add(new LoaderRegistration(registrationId, loader));
+            }
+
+            return new ResolverRegistration(() => UnregisterReferenceLoader(referenceId, registrationId));
+        }
+
+        [Obsolete("Use RegisterManagedReferenceLoaderScoped and dispose the returned registration lease.")]
+        public static void RegisterManagedReferenceLoader(
+            AudioClipReference reference,
+            ManagedAudioClipReferenceLoader loader)
+        {
+            RegisterManagedReferenceLoaderScoped(reference, loader);
+        }
+
+        public static IDisposable RegisterManagedReferenceLoaderScoped(
+            AudioClipReference reference,
+            ManagedAudioClipReferenceLoader loader)
+        {
+            if (reference == null || loader == null) return EmptyRegistration.Instance;
+
+            return RegisterReferenceLoaderScoped(reference, async (clipReference, cancellationToken) =>
             {
                 ManagedAudioClipLoadResult result = await loader(clipReference, cancellationToken);
+                await UniTask.SwitchToMainThread();
                 if (!result.IsValid)
                     return null;
 
@@ -188,23 +245,52 @@ namespace CycloneGames.Audio.Runtime
             });
         }
 
+        [Obsolete("Use RegisterLocationKindLoaderScoped and dispose the returned registration lease.")]
         public static void RegisterLocationKindLoader(AudioLocationKind locationKind, AudioClipReferenceLoader loader)
         {
-            if (loader == null) return;
-
-            lock (runtimeReferenceLoaderLock)
-            {
-                runtimeLocationKindLoaders[locationKind] = loader;
-            }
+            RegisterLocationKindLoaderScoped(locationKind, loader);
         }
 
-        public static void RegisterManagedLocationKindLoader(AudioLocationKind locationKind, ManagedAudioClipReferenceLoader loader)
+        public static IDisposable RegisterLocationKindLoaderScoped(
+            AudioLocationKind locationKind,
+            AudioClipReferenceLoader loader)
         {
-            if (loader == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".RegisterLocationKindLoaderScoped");
+            if (loader == null) return EmptyRegistration.Instance;
 
-            RegisterLocationKindLoader(locationKind, async (clipReference, cancellationToken) =>
+            long registrationId = GetNextLoaderRegistrationId();
+            lock (runtimeReferenceLoaderLock)
+            {
+                if (!runtimeLocationKindLoaders.TryGetValue(locationKind, out List<LoaderRegistration> registrations))
+                {
+                    registrations = new List<LoaderRegistration>(2);
+                    runtimeLocationKindLoaders.Add(locationKind, registrations);
+                }
+
+                registrations.Add(new LoaderRegistration(registrationId, loader));
+            }
+
+            return new ResolverRegistration(() => UnregisterLocationKindLoader(locationKind, registrationId));
+        }
+
+        [Obsolete("Use RegisterManagedLocationKindLoaderScoped and dispose the returned registration lease.")]
+        public static void RegisterManagedLocationKindLoader(
+            AudioLocationKind locationKind,
+            ManagedAudioClipReferenceLoader loader)
+        {
+            RegisterManagedLocationKindLoaderScoped(locationKind, loader);
+        }
+
+        public static IDisposable RegisterManagedLocationKindLoaderScoped(
+            AudioLocationKind locationKind,
+            ManagedAudioClipReferenceLoader loader)
+        {
+            if (loader == null) return EmptyRegistration.Instance;
+
+            return RegisterLocationKindLoaderScoped(locationKind, async (clipReference, cancellationToken) =>
             {
                 ManagedAudioClipLoadResult result = await loader(clipReference, cancellationToken);
+                await UniTask.SwitchToMainThread();
                 if (!result.IsValid)
                     return null;
 
@@ -215,6 +301,7 @@ namespace CycloneGames.Audio.Runtime
         public static void UnregisterReferenceLoader(AudioClipReference reference)
         {
             if (reference == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".UnregisterReferenceLoader");
 
             lock (runtimeReferenceLoaderLock)
             {
@@ -224,6 +311,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void UnregisterLocationKindLoader(AudioLocationKind locationKind)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".UnregisterLocationKindLoader");
             lock (runtimeReferenceLoaderLock)
             {
                 runtimeLocationKindLoaders.Remove(locationKind);
@@ -232,6 +320,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ClearReferenceLoaders()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".ClearReferenceLoaders");
             lock (runtimeReferenceLoaderLock)
             {
                 runtimeReferenceLoaders.Clear();
@@ -239,33 +328,54 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
+        [Obsolete("Use RegisterProviderScoped and dispose the returned registration lease.")]
         public static void RegisterProvider(IAudioClipProvider provider)
         {
-            if (provider == null) return;
+            RegisterProviderScoped(provider);
+        }
+
+        public static IDisposable RegisterProviderScoped(IAudioClipProvider provider)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".RegisterProviderScoped");
+            if (provider == null) return EmptyRegistration.Instance;
 
             lock (providerLock)
             {
-                RegisterProviderInternal(provider);
+                if (IsBuiltInProvider(provider))
+                    return EmptyRegistration.Instance;
+
+                providerRegistrationCounts.TryGetValue(provider, out int registrationCount);
+                providerRegistrationCounts[provider] = registrationCount + 1;
+                if (registrationCount == 0)
+                {
+                    RegisterProviderInternal(provider);
+                }
                 providerSnapshotDirty = true;
             }
+
+            return new ResolverRegistration(() => ReleaseProviderRegistration(provider));
         }
 
         public static void UnregisterProvider(IAudioClipProvider provider)
         {
             if (provider == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".UnregisterProvider");
 
             lock (providerLock)
             {
                 providers.Remove(provider);
+                providerRegistrationCounts.Remove(provider);
                 providerSnapshotDirty = true;
             }
         }
 
         public static void ClearCustomProviders()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".ClearCustomProviders");
             lock (providerLock)
             {
                 providers.Clear();
+                providerRegistrationCounts.Clear();
                 RegisterProviderInternal(referenceLoaderProvider);
                 RegisterProviderInternal(locationKindLoaderProvider);
                 RegisterProviderInternal(builtInExternalProvider);
@@ -276,6 +386,7 @@ namespace CycloneGames.Audio.Runtime
         public static void GetProviders(List<IAudioClipProvider> results)
         {
             if (results == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".GetProviders");
 
             lock (providerLock)
             {
@@ -286,13 +397,37 @@ namespace CycloneGames.Audio.Runtime
 
         public static ExternalAudioClipCacheStats GetExternalCacheStats()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".GetExternalCacheStats");
             return ExternalAudioClipHandle.GetCacheStats();
         }
 
         public static void GetExternalCacheEntries(List<ExternalAudioClipCacheEntryInfo> results)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".GetExternalCacheEntries");
             if (results == null) return;
             ExternalAudioClipHandle.FillCacheEntries(results);
+        }
+
+        internal static string GetDiagnosticLocation(string location)
+        {
+            if (string.IsNullOrWhiteSpace(location))
+                return string.Empty;
+
+            if (Uri.TryCreate(location, UriKind.Absolute, out Uri uri) && !string.IsNullOrEmpty(uri.Host))
+            {
+                string authority = uri.Scheme + "://" + uri.IdnHost;
+                if (!uri.IsDefaultPort)
+                    authority += ":" + uri.Port;
+                return authority + "/<redacted>";
+            }
+
+            int separatorIndex = Math.Max(location.LastIndexOf('/'), location.LastIndexOf('\\'));
+            string leafName = separatorIndex >= 0 && separatorIndex < location.Length - 1
+                ? location.Substring(separatorIndex + 1)
+                : string.Empty;
+            return string.IsNullOrEmpty(leafName)
+                ? "<redacted>"
+                : "<redacted>/" + leafName;
         }
 
         private static AudioClipReferenceLoader GetRegisteredLoader(AudioClipReference reference)
@@ -301,8 +436,13 @@ namespace CycloneGames.Audio.Runtime
 
             lock (runtimeReferenceLoaderLock)
             {
-                runtimeReferenceLoaders.TryGetValue(reference.GetInstanceID(), out AudioClipReferenceLoader loader);
-                return loader;
+                if (!runtimeReferenceLoaders.TryGetValue(reference.GetInstanceID(), out List<LoaderRegistration> registrations) ||
+                    registrations.Count == 0)
+                {
+                    return null;
+                }
+
+                return registrations[registrations.Count - 1].Loader;
             }
         }
 
@@ -310,9 +450,22 @@ namespace CycloneGames.Audio.Runtime
         {
             lock (runtimeReferenceLoaderLock)
             {
-                runtimeLocationKindLoaders.TryGetValue(locationKind, out AudioClipReferenceLoader loader);
-                return loader;
+                if (!runtimeLocationKindLoaders.TryGetValue(locationKind, out List<LoaderRegistration> registrations) ||
+                    registrations.Count == 0)
+                {
+                    return null;
+                }
+
+                return registrations[registrations.Count - 1].Loader;
             }
+        }
+
+        private static long GetNextLoaderRegistrationId()
+        {
+            long registrationId = Interlocked.Increment(ref nextLoaderRegistrationId);
+            return registrationId != 0
+                ? registrationId
+                : Interlocked.Increment(ref nextLoaderRegistrationId);
         }
 
         private static void RegisterProviderInternal(IAudioClipProvider provider)
@@ -346,6 +499,102 @@ namespace CycloneGames.Audio.Runtime
                 }
                 return cachedProviderSnapshot;
             }
+        }
+
+        private static void UnregisterReferenceLoader(int referenceId, long expectedRegistrationId)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".DisposeReferenceRegistration");
+            lock (runtimeReferenceLoaderLock)
+            {
+                if (!runtimeReferenceLoaders.TryGetValue(referenceId, out List<LoaderRegistration> registrations))
+                    return;
+
+                for (int i = registrations.Count - 1; i >= 0; i--)
+                {
+                    if (registrations[i].Id != expectedRegistrationId)
+                        continue;
+
+                    registrations.RemoveAt(i);
+                    if (registrations.Count == 0)
+                        runtimeReferenceLoaders.Remove(referenceId);
+                    return;
+                }
+            }
+        }
+
+        private static void UnregisterLocationKindLoader(
+            AudioLocationKind locationKind,
+            long expectedRegistrationId)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".DisposeLocationRegistration");
+            lock (runtimeReferenceLoaderLock)
+            {
+                if (!runtimeLocationKindLoaders.TryGetValue(locationKind, out List<LoaderRegistration> registrations))
+                    return;
+
+                for (int i = registrations.Count - 1; i >= 0; i--)
+                {
+                    if (registrations[i].Id != expectedRegistrationId)
+                        continue;
+
+                    registrations.RemoveAt(i);
+                    if (registrations.Count == 0)
+                        runtimeLocationKindLoaders.Remove(locationKind);
+                    return;
+                }
+            }
+        }
+
+        private static bool IsBuiltInProvider(IAudioClipProvider provider)
+        {
+            return ReferenceEquals(provider, referenceLoaderProvider)
+                || ReferenceEquals(provider, locationKindLoaderProvider)
+                || ReferenceEquals(provider, builtInExternalProvider);
+        }
+
+        private static void ReleaseProviderRegistration(IAudioClipProvider provider)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".DisposeProviderRegistration");
+            lock (providerLock)
+            {
+                if (!providerRegistrationCounts.TryGetValue(provider, out int registrationCount))
+                    return;
+
+                if (registrationCount > 1)
+                {
+                    providerRegistrationCounts[provider] = registrationCount - 1;
+                    return;
+                }
+
+                providerRegistrationCounts.Remove(provider);
+                providers.Remove(provider);
+                providerSnapshotDirty = true;
+            }
+        }
+
+        private sealed class ResolverRegistration : IDisposable
+        {
+            private Action unregister;
+
+            public ResolverRegistration(Action unregisterAction)
+            {
+                unregister = unregisterAction;
+            }
+
+            public void Dispose()
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioClipResolver) + ".Registration.Dispose");
+                Action action = unregister;
+                if (action == null) return;
+                unregister = null;
+                action();
+            }
+        }
+
+        private sealed class EmptyRegistration : IDisposable
+        {
+            public static readonly EmptyRegistration Instance = new EmptyRegistration();
+            public void Dispose() { }
         }
 
         private sealed class ReferenceLoaderAudioClipProvider : IAudioClipProvider
@@ -397,8 +646,7 @@ namespace CycloneGames.Audio.Runtime
                 if (reference == null || reference.LocationKind == AudioLocationKind.AssetAddress)
                     return null;
 
-                string resolvedLocation = reference.ResolveLocation();
-                return await ExternalAudioClipHandle.LoadAsync(resolvedLocation, cancellationToken);
+                return await ExternalAudioClipHandle.LoadAsync(reference, cancellationToken);
             }
         }
     }
@@ -422,13 +670,17 @@ namespace CycloneGames.Audio.Runtime
 
         public void Retain()
         {
-            if (clip == null) return;
-            Interlocked.Increment(ref refCount);
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(EmbeddedAudioClipHandle) + ".Retain");
+            if (clip == null || refCount <= 0) return;
+            refCount++;
         }
 
         public void Release()
         {
-            Interlocked.Decrement(ref refCount);
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(EmbeddedAudioClipHandle) + ".Release");
+            if (refCount <= 0) return;
+            refCount--;
+            if (refCount == 0) clip = null;
         }
 
         public void Dispose() => Release();
@@ -457,21 +709,27 @@ namespace CycloneGames.Audio.Runtime
 
         public void Retain()
         {
-            if (clip == null) return;
-            Interlocked.Increment(ref refCount);
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ManagedAudioClipHandle) + ".Retain");
+            if (clip == null || disposed != 0 || refCount <= 0) return;
+            refCount++;
         }
 
         public void Release()
         {
-            int newCount = Interlocked.Decrement(ref refCount);
-            if (newCount > 0) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ManagedAudioClipHandle) + ".Release");
+            if (disposed != 0 || refCount <= 0) return;
+            refCount--;
+            if (refCount > 0) return;
 
-            // Ensure only one thread invokes the release action
-            if (Interlocked.CompareExchange(ref disposed, 1, 0) != 0) return;
+            disposed = 1;
 
             try
             {
                 releaseAction?.Invoke();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
             }
             finally
             {
@@ -483,10 +741,45 @@ namespace CycloneGames.Audio.Runtime
         public void Dispose() => Release();
     }
 
+    internal readonly struct AudioClipCacheKey : IEquatable<AudioClipCacheKey>
+    {
+        public readonly AudioLocationKind LocationKind;
+        public readonly string Location;
+        public readonly int Version;
+
+        public AudioClipCacheKey(AudioClipReference reference)
+        {
+            LocationKind = reference != null ? reference.LocationKind : default;
+            Location = reference != null ? reference.Location ?? string.Empty : string.Empty;
+            Version = reference != null ? reference.Version : 0;
+        }
+
+        public bool Equals(AudioClipCacheKey other)
+        {
+            return LocationKind == other.LocationKind &&
+                   Version == other.Version &&
+                   string.Equals(Location, other.Location, StringComparison.Ordinal);
+        }
+
+        public override bool Equals(object obj) => obj is AudioClipCacheKey other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = (int)LocationKind;
+                hash = (hash * 397) ^ Version;
+                hash = (hash * 397) ^ (Location != null ? StringComparer.Ordinal.GetHashCode(Location) : 0);
+                return hash;
+            }
+        }
+    }
+
     internal sealed class ExternalAudioClipHandle : IAudioClipHandle
     {
         private sealed class CacheEntry
         {
+            public readonly AudioClipCacheKey Key;
             public readonly string Location;
             public AudioClip Clip;
             public string Error = string.Empty;
@@ -495,89 +788,111 @@ namespace CycloneGames.Audio.Runtime
             public int RefCount;
             public UniTask LoadTask;
             public bool LoadStarted;
+            public bool RemoveWhenUnused;
+            public UnityWebRequest Request;
 
             // Memory budget & eviction tracking
             public int AccessCount;
             public float LastAccessTime;
             public long EstimatedMemoryBytes;
 
-            public CacheEntry(string location)
+            public CacheEntry(AudioClipCacheKey key, string location)
             {
+                Key = key;
                 Location = location;
                 LastAccessTime = Time.realtimeSinceStartup;
             }
         }
 
         private static readonly object cacheLock = new object();
-        private static readonly Dictionary<string, CacheEntry> cache = new Dictionary<string, CacheEntry>(StringComparer.Ordinal);
+        private static readonly Dictionary<AudioClipCacheKey, CacheEntry> cache = new Dictionary<AudioClipCacheKey, CacheEntry>();
         private static int totalLoadRequests;
         private static int cacheHitCount;
         private static int cacheMissCount;
         private static int totalFailureCount;
 
         private CacheEntry entry;
-        private bool released;
+        private int localRefCount;
 
         private ExternalAudioClipHandle(CacheEntry entry)
         {
             this.entry = entry;
+            localRefCount = 1;
         }
 
         public bool IsDone => entry != null && entry.IsDone;
         public bool IsSuccess => entry != null && entry.IsSuccess;
         public AudioClip Clip => entry?.Clip;
         public string Error => entry?.Error ?? "Audio clip handle released.";
-        public int RefCount => entry?.RefCount ?? 0;
+        public int RefCount => localRefCount;
 
-        public static async UniTask<IAudioClipHandle> LoadAsync(string location, CancellationToken cancellationToken)
+        public static async UniTask<IAudioClipHandle> LoadAsync(AudioClipReference reference, CancellationToken cancellationToken)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".LoadAsync");
+            if (reference == null || !reference.TryResolveLocation(out string location, out _))
+                return null;
             if (string.IsNullOrWhiteSpace(location))
                 return null;
 
-            CacheEntry entry = AcquireEntry(location);
+            AudioClipCacheKey key = new AudioClipCacheKey(reference);
+            CacheEntry entry = AcquireEntry(key, location);
             var handle = new ExternalAudioClipHandle(entry);
 
             try
             {
                 await entry.LoadTask.AttachExternalCancellation(cancellationToken);
+                await UniTask.SwitchToMainThread();
                 return handle;
             }
             catch
             {
-                handle.Release();
+                await UniTask.SwitchToMainThread();
+                AudioClipHandleRelease.Safe(handle);
                 throw;
             }
         }
 
         public void Retain()
         {
-            if (released || entry == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".Retain");
+            if (localRefCount <= 0 || entry == null) return;
 
             lock (cacheLock)
             {
-                if (released || entry == null) return;
+                if (localRefCount <= 0 || entry == null) return;
+                localRefCount++;
                 entry.RefCount++;
             }
         }
 
         public void Release()
         {
-            if (released || entry == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".Release");
+            if (localRefCount <= 0 || entry == null) return;
 
             lock (cacheLock)
             {
-                if (released || entry == null) return;
+                if (localRefCount <= 0 || entry == null) return;
 
-                released = true;
+                localRefCount--;
                 entry.RefCount = Mathf.Max(0, entry.RefCount - 1);
 
                 if (entry.RefCount == 0)
                 {
-                    // Don't destroy immediately — let the eviction system handle TTL-based cleanup.
-                    // For failed loads that nobody holds, remove right away to avoid leaking error entries.
-                    if (entry.IsDone && !entry.IsSuccess)
+                    bool retainUnused = AudioManager.ExternalClipMemoryBudgetBytes > 0;
+                    if (!retainUnused)
+                    {
+                        entry.RemoveWhenUnused = true;
+                    }
+
+                    // Failed, explicitly cleared, or non-retained entries leave the cache with their last lease.
+                    if (entry.IsDone && (!entry.IsSuccess || entry.RemoveWhenUnused))
                     {
                         DestroyAndRemoveEntry(entry);
+                    }
+                    else if (!entry.IsDone && entry.RemoveWhenUnused)
+                    {
+                        entry.Request?.Abort();
                     }
                     else
                     {
@@ -585,25 +900,28 @@ namespace CycloneGames.Audio.Runtime
                     }
                 }
 
-                entry = null;
+                if (localRefCount == 0)
+                {
+                    entry = null;
+                }
             }
         }
 
         public void Dispose() => Release();
 
-        private static CacheEntry AcquireEntry(string location)
+        private static CacheEntry AcquireEntry(AudioClipCacheKey key, string location)
         {
             lock (cacheLock)
             {
                 totalLoadRequests++;
-                if (!cache.TryGetValue(location, out CacheEntry entry))
+                if (!cache.TryGetValue(key, out CacheEntry entry))
                 {
                     cacheMissCount++;
-                    entry = new CacheEntry(location);
+                    entry = new CacheEntry(key, location);
                     entry.RefCount = 1;
                     entry.LoadStarted = true;
-                    entry.LoadTask = LoadEntryAsync(entry);
-                    cache[location] = entry;
+                    entry.LoadTask = LoadEntryAsync(entry).Preserve();
+                    cache[key] = entry;
                     return entry;
                 }
 
@@ -614,7 +932,7 @@ namespace CycloneGames.Audio.Runtime
                 if (!entry.LoadStarted)
                 {
                     entry.LoadStarted = true;
-                    entry.LoadTask = LoadEntryAsync(entry);
+                    entry.LoadTask = LoadEntryAsync(entry).Preserve();
                 }
 
                 return entry;
@@ -628,16 +946,57 @@ namespace CycloneGames.Audio.Runtime
                 AudioType audioType = GetAudioType(entry.Location);
                 using (var www = UnityWebRequestMultimedia.GetAudioClip(entry.Location, audioType))
                 {
-                    await www.SendWebRequest();
+                    www.timeout = Mathf.Max(1, AudioManager.ExternalClipRequestTimeoutSeconds);
+                    lock (cacheLock)
+                    {
+                        entry.Request = www;
+                    }
 
-                    if (www.result == UnityWebRequest.Result.ConnectionError ||
-                        www.result == UnityWebRequest.Result.ProtocolError)
+                    UnityWebRequestAsyncOperation operation = www.SendWebRequest();
+                    bool downloadLimitExceeded = false;
+                    ulong downloadLimit = AudioManager.ExternalClipMaxDownloadBytes;
+                    while (!operation.isDone)
+                    {
+                        if (downloadLimit > 0 && www.downloadedBytes > downloadLimit)
+                        {
+                            downloadLimitExceeded = true;
+                            www.Abort();
+                            break;
+                        }
+
+                        await UniTask.Yield(PlayerLoopTiming.Update);
+                    }
+
+                    if (!operation.isDone)
+                        await operation;
+
+                    if (downloadLimit > 0 && www.downloadedBytes > downloadLimit)
+                    {
+                        downloadLimitExceeded = true;
+                    }
+
+                    if (downloadLimitExceeded)
                     {
                         lock (cacheLock)
                         {
-                            entry.Error = www.error;
+                            entry.Error = $"External audio download exceeds the {downloadLimit}-byte limit.";
                             entry.IsDone = true;
                             entry.IsSuccess = false;
+                            entry.Request = null;
+                            totalFailureCount++;
+                            if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
+                        }
+                        return;
+                    }
+
+                    if (www.result != UnityWebRequest.Result.Success)
+                    {
+                        lock (cacheLock)
+                        {
+                            entry.Error = $"External audio request failed ({www.result}).";
+                            entry.IsDone = true;
+                            entry.IsSuccess = false;
+                            entry.Request = null;
                             totalFailureCount++;
                             if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
                         }
@@ -648,6 +1007,7 @@ namespace CycloneGames.Audio.Runtime
                     lock (cacheLock)
                     {
                         entry.Clip = clip;
+                        entry.Request = null;
                         if (entry.Clip == null || entry.Clip.length <= 0f)
                         {
                             entry.Error = "Loaded AudioClip is invalid.";
@@ -658,17 +1018,36 @@ namespace CycloneGames.Audio.Runtime
                             return;
                         }
 
-                        entry.Clip.name = System.IO.Path.GetFileNameWithoutExtension(entry.Location);
-                        entry.IsSuccess = true;
-                        entry.IsDone = true;
+                        entry.Clip.name = GetSafeExternalClipName(entry.Location);
                         // Estimate PCM memory: samples * channels * sizeof(float)
                         entry.EstimatedMemoryBytes = (long)entry.Clip.samples * entry.Clip.channels * 4;
+                        long decodedLimit = AudioManager.ExternalClipMaxDecodedBytes;
+                        if (decodedLimit > 0 && entry.EstimatedMemoryBytes > decodedLimit)
+                        {
+                            entry.Error = $"Decoded AudioClip exceeds the {decodedLimit}-byte limit.";
+                            UnityEngine.Object.Destroy(entry.Clip);
+                            entry.Clip = null;
+                            entry.IsDone = true;
+                            entry.IsSuccess = false;
+                            totalFailureCount++;
+                            if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
+                            return;
+                        }
+
+                        entry.IsSuccess = true;
+                        entry.IsDone = true;
 
                         if (entry.RefCount == 0)
                         {
-                            // Clip loaded but nobody is waiting — keep in cache for future use.
-                            // The eviction system will clean it up after TTL expires.
-                            entry.LastAccessTime = Time.realtimeSinceStartup;
+                            // Clip loaded after its final waiter left. Retain only when policy allows it.
+                            if (entry.RemoveWhenUnused)
+                            {
+                                DestroyAndRemoveEntry(entry);
+                            }
+                            else
+                            {
+                                entry.LastAccessTime = Time.realtimeSinceStartup;
+                            }
                         }
                     }
                 }
@@ -679,9 +1058,10 @@ namespace CycloneGames.Audio.Runtime
                 {
                     entry.Error = ex is OperationCanceledException
                         ? "Audio clip load cancelled."
-                        : ex.Message;
+                        : $"External audio load failed with {ex.GetType().Name}.";
                     entry.IsDone = true;
                     entry.IsSuccess = false;
+                    entry.Request = null;
                     totalFailureCount++;
                     if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
                 }
@@ -698,30 +1078,69 @@ namespace CycloneGames.Audio.Runtime
                 entry.Clip = null;
             }
 
-            cache.Remove(entry.Location);
+            cache.Remove(entry.Key);
             entry.IsDone = true;
             entry.IsSuccess = false;
         }
 
         public static void ClearCache()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".ClearCache");
             lock (cacheLock)
             {
+                evictionCandidates.Clear();
                 foreach (var pair in cache)
                 {
-                    if (pair.Value?.Clip != null)
+                    CacheEntry entry = pair.Value;
+                    if (entry == null) continue;
+
+                    entry.RemoveWhenUnused = true;
+                    if (entry.RefCount == 0 && entry.IsDone)
                     {
-                        UnityEngine.Object.Destroy(pair.Value.Clip);
-                        pair.Value.Clip = null;
+                        evictionCandidates.Add((entry, 0f));
+                    }
+                    else if (entry.RefCount == 0)
+                    {
+                        entry.Request?.Abort();
                     }
                 }
 
-                cache.Clear();
-                totalLoadRequests = 0;
-                cacheHitCount = 0;
-                cacheMissCount = 0;
-                totalFailureCount = 0;
+                for (int i = 0; i < evictionCandidates.Count; i++)
+                    DestroyAndRemoveEntry(evictionCandidates[i].entry);
+                evictionCandidates.Clear();
+
+                if (cache.Count == 0)
+                {
+                    totalLoadRequests = 0;
+                    cacheHitCount = 0;
+                    cacheMissCount = 0;
+                    totalFailureCount = 0;
+                }
             }
+        }
+
+        private static string GetSafeExternalClipName(string location)
+        {
+            const string fallbackName = "ExternalAudioClip";
+            const int maxNameLength = 128;
+            if (string.IsNullOrEmpty(location)) return fallbackName;
+
+            string pathOnly = location;
+            if (Uri.TryCreate(location, UriKind.Absolute, out Uri absoluteUri))
+                pathOnly = absoluteUri.AbsolutePath;
+            else
+            {
+                int queryIndex = pathOnly.IndexOfAny(new[] { '?', '#' });
+                if (queryIndex >= 0) pathOnly = pathOnly.Substring(0, queryIndex);
+            }
+
+            pathOnly = pathOnly.Replace('\\', '/');
+            int slashIndex = pathOnly.LastIndexOf('/');
+            string fileName = slashIndex >= 0 ? pathOnly.Substring(slashIndex + 1) : pathOnly;
+            int extensionIndex = fileName.LastIndexOf('.');
+            if (extensionIndex > 0) fileName = fileName.Substring(0, extensionIndex);
+            if (string.IsNullOrWhiteSpace(fileName)) return fallbackName;
+            return fileName.Length <= maxNameLength ? fileName : fileName.Substring(0, maxNameLength);
         }
 
         /// <summary>
@@ -729,6 +1148,7 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static long GetTotalCachedMemoryBytes()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".GetTotalCachedMemoryBytes");
             lock (cacheLock)
             {
                 long total = 0;
@@ -749,15 +1169,17 @@ namespace CycloneGames.Audio.Runtime
         /// Returns the number of entries evicted.
         /// </summary>
         /// <param name="maxIdleSeconds">Base TTL in seconds. Clips idle longer than this are candidates.</param>
-        /// <param name="memoryBudgetBytes">If total cached memory exceeds this, evict more aggressively (0 = no budget).</param>
+        /// <param name="memoryBudgetBytes">Unused residency budget. Zero disables unused cache residency.</param>
         public static int EvictExpiredEntries(float maxIdleSeconds = 30f, long memoryBudgetBytes = 0)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".EvictExpiredEntries");
             lock (cacheLock)
             {
                 if (cache.Count == 0) return 0;
 
                 float now = Time.realtimeSinceStartup;
-                bool overBudget = memoryBudgetBytes > 0 && GetTotalCachedMemoryBytesUnsafe() > memoryBudgetBytes;
+                bool cacheDisabled = memoryBudgetBytes <= 0;
+                bool overBudget = !cacheDisabled && GetTotalCachedMemoryBytesUnsafe() > memoryBudgetBytes;
 
                 // Collect eviction candidates: refCount == 0, loaded successfully, past TTL
                 evictionCandidates.Clear();
@@ -774,7 +1196,7 @@ namespace CycloneGames.Audio.Runtime
                     if (overBudget)
                         effectiveTTL *= 0.25f; // Aggressively shorten TTL when over budget
 
-                    if (idleTime >= effectiveTTL)
+                    if (cacheDisabled || overBudget || idleTime >= effectiveTTL)
                     {
                         // Score for prioritized eviction: lower = evict first
                         float score = entry.AccessCount / Mathf.Max(idleTime, 0.01f);
@@ -821,6 +1243,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static ExternalAudioClipCacheStats GetCacheStats()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".GetCacheStats");
             lock (cacheLock)
             {
                 int entryCount = cache.Count;
@@ -856,6 +1279,7 @@ namespace CycloneGames.Audio.Runtime
         public static void FillCacheEntries(List<ExternalAudioClipCacheEntryInfo> results)
         {
             if (results == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".FillCacheEntries");
 
             lock (cacheLock)
             {
@@ -866,7 +1290,7 @@ namespace CycloneGames.Audio.Runtime
                     if (entry == null) continue;
 
                     results.Add(new ExternalAudioClipCacheEntryInfo(
-                        entry.Location,
+                        AudioClipResolver.GetDiagnosticLocation(entry.Location),
                         entry.Clip != null ? entry.Clip.name : string.Empty,
                         entry.IsDone,
                         entry.IsSuccess,
@@ -880,28 +1304,39 @@ namespace CycloneGames.Audio.Runtime
         {
             if (string.IsNullOrEmpty(path)) return AudioType.UNKNOWN;
 
-            // Find extension start from the end without allocating a substring
-            int dotIndex = path.LastIndexOf('.');
-            if (dotIndex < 0 || dotIndex >= path.Length - 1) return AudioType.UNKNOWN;
+            // Signed URLs commonly append query/fragment data. Inspect only the path portion and
+            // avoid allocating a temporary Uri or extension string on the load path.
+            int extensionEnd = path.Length;
+            bool isUriLike = path.IndexOf("://", StringComparison.Ordinal) >= 0 ||
+                             path.StartsWith("jar:", StringComparison.OrdinalIgnoreCase);
+            if (isUriLike)
+            {
+                int queryIndex = path.IndexOf('?');
+                if (queryIndex >= 0) extensionEnd = queryIndex;
+                int fragmentIndex = path.IndexOf('#');
+                if (fragmentIndex >= 0 && fragmentIndex < extensionEnd) extensionEnd = fragmentIndex;
+            }
+            if (extensionEnd <= 0) return AudioType.UNKNOWN;
 
-            int extLen = path.Length - dotIndex - 1;
+            int dotIndex = path.LastIndexOf('.', extensionEnd - 1, extensionEnd);
+            if (dotIndex < 0 || dotIndex >= extensionEnd - 1) return AudioType.UNKNOWN;
 
-            if (MatchExtension(path, dotIndex, "mp3")) return AudioType.MPEG;
-            if (MatchExtension(path, dotIndex, "wav")) return AudioType.WAV;
-            if (MatchExtension(path, dotIndex, "ogg")) return AudioType.OGGVORBIS;
-            if (MatchExtension(path, dotIndex, "aiff") || MatchExtension(path, dotIndex, "aif")) return AudioType.AIFF;
+            if (MatchExtension(path, dotIndex, extensionEnd, "mp3")) return AudioType.MPEG;
+            if (MatchExtension(path, dotIndex, extensionEnd, "wav")) return AudioType.WAV;
+            if (MatchExtension(path, dotIndex, extensionEnd, "ogg")) return AudioType.OGGVORBIS;
+            if (MatchExtension(path, dotIndex, extensionEnd, "aiff") || MatchExtension(path, dotIndex, extensionEnd, "aif")) return AudioType.AIFF;
 #if !UNITY_WEBGL
-            if (MatchExtension(path, dotIndex, "m4a") || MatchExtension(path, dotIndex, "mp4") || MatchExtension(path, dotIndex, "aac")) return AudioType.ACC;
+            if (MatchExtension(path, dotIndex, extensionEnd, "m4a") || MatchExtension(path, dotIndex, extensionEnd, "mp4") || MatchExtension(path, dotIndex, extensionEnd, "aac")) return AudioType.ACC;
 #endif
-            if (MatchExtension(path, dotIndex, "webm")) return AudioType.OGGVORBIS; // WebM audio uses Vorbis codec
-            if (MatchExtension(path, dotIndex, "flac")) return AudioType.UNKNOWN; // Unity does not natively support FLAC via UnityWebRequest
+            if (MatchExtension(path, dotIndex, extensionEnd, "webm")) return AudioType.OGGVORBIS; // WebM audio uses Vorbis codec
+            if (MatchExtension(path, dotIndex, extensionEnd, "flac")) return AudioType.UNKNOWN; // Unity does not natively support FLAC via UnityWebRequest
 
             return AudioType.UNKNOWN;
         }
 
-        private static bool MatchExtension(string path, int dotIndex, string ext)
+        private static bool MatchExtension(string path, int dotIndex, int extensionEnd, string ext)
         {
-            int extLen = path.Length - dotIndex - 1;
+            int extLen = extensionEnd - dotIndex - 1;
             if (extLen != ext.Length) return false;
 
             for (int i = 0; i < ext.Length; i++)
@@ -1027,13 +1462,14 @@ namespace CycloneGames.Audio.Runtime
                     Debug.LogWarningFormat("Invalid file length for node {0}, Event: {1}", this.name, activeEvent.rootEvent.name);
                     return;
                 }
-                CalculateStartTime(this.embeddedClip);
-                activeEvent.AddEventSource(this.embeddedClip, null, null, startTime, AudioClipResolver.CreateEmbedded(this.embeddedClip));
+                float selectedStartTime = SelectStartTime(this.embeddedClip);
+                activeEvent.AddEventSource(this.embeddedClip, null, null, selectedStartTime, AudioClipResolver.CreateEmbedded(this.embeddedClip));
             }
             else if (effectiveMode == AudioFileSourceMode.ExternalReference && this.externalReference != null)
             {
-                activeEvent.isAsync = true;
-                LoadClipAsync(activeEvent).Forget();
+                AudioEventPreparation preparation = activeEvent.BeginAsyncPreparation();
+                if (preparation != null)
+                    LoadClipAsync(preparation).Forget();
             }
             else
             {
@@ -1041,11 +1477,15 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        private async UniTaskVoid LoadClipAsync(ActiveEvent activeEvent)
+        private async UniTaskVoid LoadClipAsync(AudioEventPreparation preparation)
         {
+            IAudioClipHandle handle = null;
+            bool succeeded = false;
             try
             {
-                IAudioClipHandle handle = await AudioClipResolver.LoadExternalAsync(this.externalReference, activeEvent.GetCancellationToken());
+                handle = await AudioClipResolver.LoadExternalAsync(
+                    this.externalReference,
+                    preparation.CancellationToken);
 
                 if (handle == null)
                 {
@@ -1054,26 +1494,32 @@ namespace CycloneGames.Audio.Runtime
                         ? $"No runtime loader registered for AudioClipReference '{this.externalReference.name}' using AssetAddress mode."
                         : $"Error loading audio reference for node '{this.name}'.";
                     Debug.LogError(errorMessage);
-                    activeEvent.StopImmediate();
                     return;
                 }
 
                 if (!handle.IsSuccess || handle.Clip == null || handle.Clip.length <= 0f)
                 {
-                    Debug.LogError($"Error loading audio '{GetDisplayLocation()}': {handle.Error}");
-                    handle.Release();
-                    activeEvent.StopImmediate();
+                    Debug.LogError(
+                        $"Audio reference '{this.externalReference.name}' ({this.externalReference.LocationKind}) failed to load.");
+                    AudioClipHandleRelease.Safe(handle);
+                    handle = null;
                     return;
                 }
 
-                CalculateStartTime(handle.Clip);
-                if (!activeEvent.AddEventSource(handle.Clip, null, null, startTime, handle))
+                float selectedStartTime = SelectStartTime(handle.Clip);
+                bool sourceAccepted = preparation.TryAddSource(
+                    handle.Clip,
+                    null,
+                    null,
+                    selectedStartTime,
+                    handle);
+                handle = null;
+                if (!sourceAccepted)
                 {
-                    handle.Release();
                     return;
                 }
 
-                activeEvent.OnAsyncLoadCompleted();
+                succeeded = true;
             }
             catch (OperationCanceledException)
             {
@@ -1081,8 +1527,20 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception e)
             {
-                Debug.LogError($"Exception while loading audio clip from path '{GetDisplayLocation()}': {e.Message}");
-                activeEvent.StopImmediate();
+                string referenceName = this.externalReference != null ? this.externalReference.name : "<missing>";
+                Debug.LogError(
+                    $"Audio reference '{referenceName}' failed with {e.GetType().Name}. Location details are omitted from logs.");
+            }
+            finally
+            {
+                try
+                {
+                    AudioClipHandleRelease.Safe(handle);
+                }
+                finally
+                {
+                    preparation.Complete(succeeded);
+                }
             }
         }
 
@@ -1092,10 +1550,15 @@ namespace CycloneGames.Audio.Runtime
         /// <returns></returns>
         public void CalculateStartTime(AudioClip clip)
         {
+            SelectStartTime(clip);
+        }
+
+        private float SelectStartTime(AudioClip clip)
+        {
             if (clip == null)
             {
                 this.startTime = 0;
-                return;
+                return 0f;
             }
 
             float startTimeRatio = 0;
@@ -1109,11 +1572,7 @@ namespace CycloneGames.Audio.Runtime
             }
 
             this.startTime = clip.length * startTimeRatio;
-        }
-
-        private string GetDisplayLocation()
-        {
-            return externalReference != null ? externalReference.ResolveLocation() : string.Empty;
+            return this.startTime;
         }
 
         private AudioFileSourceMode GetEffectiveSourceMode()
@@ -1128,6 +1587,14 @@ namespace CycloneGames.Audio.Runtime
                 return AudioFileSourceMode.ExternalReference;
 
             return sourceMode;
+        }
+
+        internal bool TryGetExternalReference(out AudioClipReference reference)
+        {
+            reference = GetEffectiveSourceMode() == AudioFileSourceMode.ExternalReference
+                ? externalReference
+                : null;
+            return reference != null;
         }
 
 #if UNITY_EDITOR

@@ -12,18 +12,16 @@ namespace CycloneGames.Audio.Runtime
     /// <c>IAudioService</c>. The composition root owns service initialization and lifetime.
     /// </para>
     /// <para>
-    /// This interface does not define blanket thread safety. <c>AudioManager</c> owns Unity audio
-    /// state on the main thread. Only entry points explicitly documented as queued submissions may
-    /// be called from worker threads; all other calls require the main thread.
+    /// <c>AudioManager</c> owns Unity audio state on the main thread. Callers must marshal requests
+    /// from worker threads at their composition boundary before invoking this service.
     /// </para>
     /// </summary>
     public interface IAudioService
     {
         /// <summary>
-        /// Invoked after a bank has been fully unloaded and all <see cref="AudioSource.clip"/>
-        /// references have been cleared. External asset management systems (e.g. CycloneGames.AssetManagement,
-        /// Addressables) should subscribe to this event to release the underlying asset handles
-        /// when the audio system no longer holds any references to the bank's clips.
+        /// Invoked after a bank's runtime registrations have been removed. Events shared with another
+        /// loaded bank remain active. Embedded clips remain serialized dependencies of their graph;
+        /// external asset owners should use explicit <see cref="IAudioBankClipLease"/> ownership.
         /// </summary>
         event Action<AudioBank> OnBankUnloaded;
 
@@ -291,36 +289,47 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         /// <param name="bank">The bank asset containing events to register.</param>
         /// <param name="overwriteExisting">
-        /// When <c>true</c>, events whose names collide with previously registered entries will
-        /// overwrite them. When <c>false</c> (default), colliding names are silently skipped.
+        /// When <c>true</c>, this bank's name contributions override earlier registrations.
+        /// When <c>false</c> (default), earlier registrations remain effective. Unloading an owner
+        /// restores the next valid contribution deterministically.
         /// </param>
         void LoadBank(AudioBank bank, bool overwriteExisting = false);
 
         /// <summary>
-        /// Unload an <see cref="AudioBank"/>: stops all active events originating from this bank,
-        /// clears every <see cref="AudioSource.clip"/> reference held by the pooled sources, and
-        /// removes the bank's events from the name registry.
+        /// Unload an <see cref="AudioBank"/> and remove the registrations captured when it was loaded.
         /// <para>
-        /// After this method returns, the audio system holds <b>zero references</b> to the bank's
-        /// <see cref="AudioClip"/> assets. It is therefore safe for external asset management systems
-        /// (CycloneGames.AssetManagement, Addressables, Resources, etc.) to release or unload the
-        /// underlying assets without risking dangling references or use-after-free.
+        /// Active instances are stopped only when their <see cref="AudioEvent"/> has no remaining bank
+        /// owner. Embedded clips remain strong serialized dependencies. External clips stay resident
+        /// while an active event or caller-owned <see cref="IAudioBankClipLease"/> retains a handle.
         /// </para>
         /// <para>
-        /// The <see cref="OnBankUnloaded"/> event is raised after all cleanup is complete, providing
-        /// a hook for automated asset handle release in integrated pipelines.
+        /// The <see cref="OnBankUnloaded"/> event is raised after the runtime registry transition.
         /// </para>
         /// </summary>
         /// <param name="bank">The bank asset to unload.</param>
         void UnloadBank(AudioBank bank);
 
         /// <summary>
-        /// Preloads all externally-referenced AudioClips from a bank's events into the clip cache.
-        /// Useful for warming the cache before gameplay scenes to avoid first-play load latency.
+        /// Loads and retains each externally referenced clip under a manager-owned residency lease.
+        /// The lease remains active until the bank is unloaded, the manager shuts down, or
+        /// <c>AudioManager.ReleasePreloadedBankClips</c> is called.
         /// </summary>
         /// <param name="bank">The bank whose external clips should be preloaded.</param>
         /// <param name="cancellationToken">Token to cancel the preload operation.</param>
         /// <returns>Number of clips successfully preloaded.</returns>
         UniTask<int> PreloadBankClipsAsync(AudioBank bank, CancellationToken cancellationToken = default);
+    }
+
+    /// <summary>
+    /// Optional lifecycle-pause control implemented by audio services that can retain events in a
+    /// deliberate hold after Unity application/focus recovery.
+    /// </summary>
+    public interface IAudioLifecyclePauseControl
+    {
+        /// <summary>
+        /// Clears lifecycle holds created by an automatic pause mode whose matching auto-resume
+        /// option was disabled. Manual, global, and currently active system pause reasons remain.
+        /// </summary>
+        void ResumeLifecyclePausedEvents();
     }
 }

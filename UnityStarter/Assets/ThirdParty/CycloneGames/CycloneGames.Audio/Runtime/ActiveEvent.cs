@@ -4,6 +4,7 @@
 using System;
 using System.Threading;
 using UnityEngine;
+using UnityEngine.Audio;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -13,6 +14,17 @@ using UnityEditor;
 
 namespace CycloneGames.Audio.Runtime
 {
+    [Flags]
+    internal enum AudioPauseReason
+    {
+        None = 0,
+        Manual = 1,
+        Global = 2,
+        ApplicationPause = 4,
+        FocusLoss = 8,
+        LifecycleHold = 16
+    }
+
     /// <summary>
     /// Lightweight handle for safe ActiveEvent reference without holding strong reference
     /// </summary>
@@ -29,6 +41,7 @@ namespace CycloneGames.Audio.Runtime
 
         private ActiveEvent Resolve()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioHandle));
             return AudioManager.TryGetActiveEventByHandle(slot, generation, out ActiveEvent activeEvent)
                 ? activeEvent
                 : null;
@@ -46,6 +59,12 @@ namespace CycloneGames.Audio.Runtime
         {
             ActiveEvent activeEvent = Resolve();
             if (activeEvent != null) activeEvent.StopImmediate();
+        }
+
+        public void SetVolume(float volume)
+        {
+            ActiveEvent activeEvent = Resolve();
+            if (activeEvent != null) activeEvent.SetVolume(volume);
         }
 
         public float EstimatedRemainingTime
@@ -74,6 +93,177 @@ namespace CycloneGames.Audio.Runtime
         public bool IsValid => source != null;
     }
 
+    internal sealed class AudioEventCancellationContext
+    {
+        private CancellationTokenSource source = new CancellationTokenSource();
+        private int ownerCount = 1;
+        private bool tokenEscapedWithoutOwner;
+
+        internal CancellationToken Token
+        {
+            get
+            {
+                CancellationTokenSource current = source;
+                return current != null ? current.Token : new CancellationToken(true);
+            }
+        }
+
+        internal void Retain()
+        {
+            if (source == null || ownerCount <= 0)
+                throw new ObjectDisposedException(nameof(AudioEventCancellationContext));
+            ownerCount++;
+        }
+
+        internal void MarkTokenEscapedWithoutOwner()
+        {
+            tokenEscapedWithoutOwner = true;
+        }
+
+        internal void Cancel()
+        {
+            CancellationTokenSource current = source;
+            if (current == null || current.IsCancellationRequested) return;
+
+            try
+            {
+                current.Cancel();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+        }
+
+        internal void Release()
+        {
+            if (ownerCount <= 0) return;
+            ownerCount--;
+            if (ownerCount > 0) return;
+
+            CancellationTokenSource current = source;
+            source = null;
+            if (current == null || tokenEscapedWithoutOwner) return;
+
+            try
+            {
+                current.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Owns one asynchronous preparation operation for an <see cref="ActiveEvent"/>.
+    /// Create the scope with <see cref="ActiveEvent.BeginAsyncPreparation"/>, then complete it
+    /// exactly once after its sources have been added. Except for reading
+    /// <see cref="CancellationToken"/>, members must be used on the Unity main thread.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="TryAddSource"/> always takes ownership of a non-null clip handle, including
+    /// when the event no longer accepts the result. Call <see cref="Complete()"/> on success.
+    /// Disposing an incomplete scope completes it as failed so an abandoned operation cannot
+    /// leave the event permanently preparing.
+    /// </remarks>
+    public sealed class AudioEventPreparation : IDisposable
+    {
+        private ActiveEvent activeEvent;
+        private AudioEventCancellationContext cancellationContext;
+        private readonly int generation;
+        private readonly CancellationToken cancellationToken;
+        private bool completed;
+
+        internal AudioEventPreparation(
+            ActiveEvent activeEvent,
+            int generation,
+            AudioEventCancellationContext cancellationContext)
+        {
+            cancellationContext.Retain();
+            this.activeEvent = activeEvent;
+            this.cancellationContext = cancellationContext;
+            this.generation = generation;
+            this.cancellationToken = cancellationContext.Token;
+        }
+
+        /// <summary>
+        /// Gets the token that is cancelled when the owning event stops or is recycled.
+        /// The token may be read and observed from any thread.
+        /// </summary>
+        public CancellationToken CancellationToken => cancellationToken;
+
+        /// <summary>
+        /// Atomically adds a generation-bound source and transfers ownership of
+        /// <paramref name="clipHandle"/> to the event. If the source is rejected, the handle is
+        /// released before this method returns.
+        /// </summary>
+        /// <returns><see langword="true"/> when the source was accepted by the event.</returns>
+        public bool TryAddSource(
+            AudioClip clip,
+            AudioParameter parameter = null,
+            AnimationCurve responseCurve = null,
+            float startTime = 0f,
+            IAudioClipHandle clipHandle = null)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioEventPreparation) + ".TryAddSource");
+            if (completed || activeEvent == null)
+            {
+                AudioClipHandleRelease.Safe(clipHandle);
+                return false;
+            }
+
+            return activeEvent.TryAddAsyncEventSource(
+                generation,
+                clip,
+                parameter,
+                responseCurve,
+                startTime,
+                clipHandle);
+        }
+
+        /// <summary>Completes this preparation successfully. Repeated calls have no effect.</summary>
+        public void Complete()
+        {
+            Complete(true);
+        }
+
+        /// <summary>
+        /// Completes this preparation. Passing <see langword="false"/> fails and stops the event
+        /// if it is still the generation owned by this scope. Repeated calls have no effect.
+        /// </summary>
+        public void Complete(bool succeeded)
+        {
+            if (completed) return;
+
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioEventPreparation) + ".Complete");
+            completed = true;
+
+            ActiveEvent owner = activeEvent;
+            activeEvent = null;
+            AudioEventCancellationContext context = cancellationContext;
+            cancellationContext = null;
+            try
+            {
+                owner?.CompleteAsyncLoad(generation, succeeded);
+            }
+            finally
+            {
+                context?.Release();
+            }
+        }
+
+        /// <summary>
+        /// Fails an incomplete preparation. Call <see cref="Complete()"/> before disposal after
+        /// successfully transferring all source handles.
+        /// </summary>
+        public void Dispose()
+        {
+            Complete(false);
+        }
+    }
+
     /// <summary>
     /// Runtime event of an AudioEvent that is currently playing
     /// </summary>
@@ -82,19 +272,24 @@ namespace CycloneGames.Audio.Runtime
     {
         internal int generation;
         internal int handleSlot = -1;
+        internal bool managerOwned;
+        internal bool isInPool;
 
         private static Camera mainCamera;
         private static int mainCameraCacheFrame = -1;
 
         private const int MaxSourcesPerEvent = 8;
         private const int MaxParametersPerEvent = 8;
+        private const int MaxProcessedGraphNodes = 1024;
+        private const int MaxGraphStackDepth = 128;
+        private const int MaxSnapshotTransitionsPerEvent = 8;
 
         // ---- Hot path fields (accessed every frame in Update) ----
         // Grouped at top for better cache line utilization
         public EventStatus status = EventStatus.Initialized;
         private int sourceCount;
         private float elapsedTime;
-        private bool isPaused;
+        private AudioPauseReason pauseReasons;
         private bool hasPlayed;
         private bool hasTimeAdvanced;
         private float eventVolume;
@@ -115,6 +310,7 @@ namespace CycloneGames.Audio.Runtime
         private float occlusionFactor;       // 0 = unoccluded, 1 = fully occluded
         private float distanceLPCutoff = 22000f;
         private float coneVolumeScale = 1f;
+        private float spatialVolumeScale = 1f;
         private float currentSpread;
         private float cachedSqrDistance;     // listener distance cached on LOD tick
         private AudioLowPassFilter[] cachedLPFilters = new AudioLowPassFilter[MaxSourcesPerEvent];
@@ -133,9 +329,23 @@ namespace CycloneGames.Audio.Runtime
         internal float initialDelay;
         internal bool isAsync;
         internal bool hasSnapshotTransition;
+        private float snapshotTransitionLifetime;
         internal double scheduledDspTime = -1;
-        private CancellationTokenSource cancellationTokenSource;
+        internal bool IsScheduledPlaybackPending => scheduledDspTime > AudioSettings.dspTime;
+        private AudioEventCancellationContext cancellationContext;
         private bool callbackActivated;
+        private int pendingAsyncLoadCount;
+        private bool graphPreparationOpen;
+        private bool playbackFinalized;
+        internal bool memoryTracked;
+        private bool playbackClockStarted;
+        private readonly AudioMixerSnapshot[] snapshotTransitions = new AudioMixerSnapshot[MaxSnapshotTransitionsPerEvent];
+        private readonly float[] snapshotTransitionTimes = new float[MaxSnapshotTransitionsPerEvent];
+        private int snapshotTransitionCount;
+        private bool snapshotTransitionsApplied;
+        private readonly AudioNode[] graphNodeStack = new AudioNode[MaxGraphStackDepth];
+        private int graphNodeStackCount;
+        private int processedGraphNodeCount;
 
         // ---- Cold path fields (rarely accessed) ----
         private Transform gazeReference;
@@ -150,7 +360,11 @@ namespace CycloneGames.Audio.Runtime
         private float playStartRealtime;
 
         public int SourceCount => sourceCount;
-        public EventSource GetSource(int index) => index >= 0 && index < sourceCount ? sourcesArray[index] : default;
+        public EventSource GetSource(int index)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".GetSource");
+            return index >= 0 && index < sourceCount ? sourcesArray[index] : default;
+        }
 
         internal ReadOnlySpan<EventSource> SourcesSpan => new ReadOnlySpan<EventSource>(sourcesArray, 0, sourceCount);
 
@@ -172,38 +386,94 @@ namespace CycloneGames.Audio.Runtime
 
         public void Initialize(AudioEvent eventToPlay, Transform emitter)
         {
-            generation++;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Initialize");
+            if (managerOwned || isInPool)
+            {
+                throw new InvalidOperationException("Manager-owned ActiveEvent instances cannot be initialized directly.");
+            }
+            InitializeCore(eventToPlay, emitter);
+        }
+
+        internal void InitializeForManager(AudioEvent eventToPlay, Transform emitter)
+        {
+            managerOwned = true;
+            isInPool = false;
+            InitializeCore(eventToPlay, emitter);
+        }
+
+        private void InitializeCore(AudioEvent eventToPlay, Transform emitter)
+        {
+            if (status != EventStatus.Initialized || rootEvent != null || handleSlot >= 0)
+            {
+                throw new InvalidOperationException("An ActiveEvent cannot be initialized while it is managed or playing.");
+            }
+            if (eventToPlay == null) throw new ArgumentNullException(nameof(eventToPlay));
+
+            CancelAndReleaseCancellationContext();
+
+            unchecked
+            {
+                generation++;
+            }
+            if (generation == 0)
+            {
+                generation = 1;
+            }
             rootEvent = eventToPlay;
             name = eventToPlay.name;
             emitterTransform = emitter;
-            if (emitter != null) lastEmitterPos = emitter.position;
-
-            if (cancellationTokenSource != null)
+            if (emitter != null)
             {
-                cancellationTokenSource.Cancel();
-                cancellationTokenSource.Dispose();
-                cancellationTokenSource = null;
+                lastEmitterPos = emitter.position;
+                AudioManager.ValidateScopedParameterOwner(emitter.gameObject);
             }
-            // CTS is created lazily in GetCancellationToken() only when needed (async loads).
+
+            // The cancellation context is created lazily only when async work needs it.
 
             InitializeParameters();
         }
 
         public void Play()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Play");
+            if (status != EventStatus.Initialized || rootEvent == null)
+            {
+                throw new InvalidOperationException("An ActiveEvent can only be played once after initialization.");
+            }
             timeStarted = Time.time;
-            rootEvent.SetActiveEventProperties(this);
+            status = EventStatus.Preparing;
+            pauseReasons = AudioManager.CurrentPauseReasons;
+            graphPreparationOpen = true;
+            try
+            {
+                rootEvent.SetActiveEventProperties(this);
+            }
+            catch (Exception exception)
+            {
+                status = EventStatus.Error;
+                Debug.LogException(exception);
+            }
+            finally
+            {
+                graphPreparationOpen = false;
+            }
 
-            if (sourceCount == 0 && !hasSnapshotTransition && !isAsync)
+            if (status != EventStatus.Preparing)
+            {
+                return;
+            }
+
+            if (sourceCount == 0 && !hasSnapshotTransition && pendingAsyncLoadCount == 0 && !isAsync)
             {
                 status = EventStatus.Error;
                 return;
             }
 
-            SetStartingSourceProperties();
-            status = EventStatus.Played;
             AudioManager.RegisterActiveEvent(this);
             AudioManager.AddPreviousEvent(this);
+            TryFinalizePreparation();
+            if (status != EventStatus.Played && status != EventStatus.Preparing)
+                return;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             AudioManager.TrackEventPlayed();
@@ -212,13 +482,19 @@ namespace CycloneGames.Audio.Runtime
 
         public void Update()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Update");
+            UpdateInternal();
+        }
+
+        internal void UpdateInternal()
+        {
             if (rootEvent == null)
             {
                 StopImmediate();
                 return;
             }
 
-            if (isPaused) return;
+            if (IsPaused || status == EventStatus.Preparing) return;
 
             float dt = Time.deltaTime;
             elapsedTime += dt;
@@ -229,25 +505,41 @@ namespace CycloneGames.Audio.Runtime
                 PlayAllSources();
             }
 
+            if (hasPlayed && !playbackClockStarted && !IsScheduledPlaybackPending)
+            {
+                playbackClockStarted = true;
+                ApplySnapshotTransitions();
+            }
+
             // ---- Critical path: always runs every frame ----
 
-            if (hasPlayed && currentFadeTime < targetFadeTime)
+            if (playbackClockStarted && currentFadeTime < targetFadeTime)
             {
                 UpdateFade(dt);
+                if (status == EventStatus.Stopped) return;
             }
 
             // Track audio playback progress for completion detection
             if (hasPlayed && !hasTimeAdvanced && sourceCount > 0)
             {
-                ref var src = ref sourcesArray[0];
-                if (src.IsValid && src.source.time > 0f)
-                    hasTimeAdvanced = true;
+                for (int i = 0; i < sourceCount; i++)
+                {
+                    ref var source = ref sourcesArray[i];
+                    if (source.IsValid && source.source.time > 0f)
+                    {
+                        hasTimeAdvanced = true;
+                        break;
+                    }
+                }
             }
 
-            if (!rootEvent.Output.loop)
+            if (playbackClockStarted && sourceCount > 0 && !rootEvent.Output.loop)
             {
                 UpdateRemainingTime();
-                bool pastGracePeriod = (Time.realtimeSinceStartup - playStartRealtime) >= MinPlayGracePeriod;
+                if (status == EventStatus.Stopped) return;
+                bool pastGracePeriod = scheduledDspTime > 0
+                    ? AudioSettings.dspTime >= scheduledDspTime + MinPlayGracePeriod
+                    : (Time.realtimeSinceStartup - playStartRealtime) >= MinPlayGracePeriod;
                 if (hasPlayed && pastGracePeriod && !IsAnySourcePlaying())
                 {
                     StopImmediate();
@@ -276,8 +568,6 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            if (is3D) UpdateSpatial3D(dt);
-
             if (useGaze) UpdateGaze();
 
             if (hasActiveParameters)
@@ -285,44 +575,84 @@ namespace CycloneGames.Audio.Runtime
                 // Scale deltaTime by interval to keep interpolation speed correct
                 float scaledDt = dt * updateInterval;
                 UpdateParameters(scaledDt);
+            }
+
+            if (is3D)
+            {
+                UpdateSpatial3D(dt);
+            }
+            else if (hasActiveParameters)
+            {
                 ApplyParameters();
             }
         }
 
         public void Pause()
         {
-            if (isPaused || status != EventStatus.Played) return;
-            isPaused = true;
-            for (int i = 0; i < sourceCount; i++)
-            {
-                ref var es = ref sourcesArray[i];
-                if (es.IsValid) es.source.Pause();
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Pause");
+            SetPauseReason(AudioPauseReason.Manual, true);
         }
 
         public void Resume()
         {
-            if (!isPaused || status != EventStatus.Played) return;
-            isPaused = false;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Resume");
+            SetPauseReason(AudioPauseReason.Manual, false);
+        }
+
+        internal void SetPauseReason(AudioPauseReason reason, bool paused)
+        {
+            bool wasPaused = IsPaused;
+            if (paused)
+                pauseReasons |= reason;
+            else
+                pauseReasons &= ~reason;
+
+            bool nowPaused = IsPaused;
+            if (wasPaused == nowPaused || (status != EventStatus.Played && status != EventStatus.Preparing))
+                return;
+
+            if (nowPaused)
+            {
+                if (!hasPlayed) return;
+                for (int i = 0; i < sourceCount; i++)
+                {
+                    ref var eventSource = ref sourcesArray[i];
+                    if (eventSource.IsValid) eventSource.source.Pause();
+                }
+                return;
+            }
+
+            if (!hasPlayed)
+            {
+                if (status == EventStatus.Played && elapsedTime >= initialDelay)
+                {
+                    hasPlayed = true;
+                    PlayAllSources();
+                }
+                return;
+            }
+
             for (int i = 0; i < sourceCount; i++)
             {
-                ref var es = ref sourcesArray[i];
-                if (es.IsValid) es.source.UnPause();
+                ref var eventSource = ref sourcesArray[i];
+                if (eventSource.IsValid) eventSource.source.UnPause();
             }
         }
 
-        public bool IsPaused => isPaused;
+        public bool IsPaused => pauseReasons != AudioPauseReason.None;
 
         public void Stop()
         {
-            if (rootEvent == null || rootEvent.FadeOut <= 0)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Stop");
+            if (fadeStopQueued) return;
+            if (status != EventStatus.Played || rootEvent == null || rootEvent.FadeOut <= 0)
             {
                 StopImmediate();
             }
             else
             {
                 targetVolume = 0;
-                fadeOriginVolume = sourceCount > 0 && sourcesArray[0].IsValid ? sourcesArray[0].source.volume : 0;
+                fadeOriginVolume = eventVolume;
                 targetFadeTime = rootEvent.FadeOut;
                 currentFadeTime = 0;
                 fadeStopQueued = true;
@@ -331,90 +661,294 @@ namespace CycloneGames.Audio.Runtime
 
         public void StopImmediate()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".StopImmediate");
             if (status == EventStatus.Stopped) return;
 
-            if (cancellationTokenSource != null)
+            status = EventStatus.Stopped;
+            bool ownershipDetached = AudioManager.DeactivateActiveEvent(this);
+            if (!ownershipDetached)
             {
-                cancellationTokenSource.Cancel();
-                cancellationTokenSource.Dispose();
-                cancellationTokenSource = null;
+                StopAllSources();
             }
 
-            if (CompletionCallback != null && !callbackActivated)
+            CancelAndReleaseCancellationContext();
+
+            EventCompleted callbacks = CompletionCallback;
+            if (callbacks != null && !callbackActivated)
             {
                 callbackActivated = true;
-                CompletionCallback();
+                Delegate[] invocationList = callbacks.GetInvocationList();
+                for (int i = 0; i < invocationList.Length; i++)
+                {
+                    try
+                    {
+                        ((EventCompleted)invocationList[i])();
+                    }
+                    catch (Exception exception)
+                    {
+                        Debug.LogException(exception);
+                    }
+                }
             }
 
-            status = EventStatus.Stopped;
-            StopAllSources();
-            AudioManager.DelayRemoveActiveEvent(this);
+            AudioManager.RemoveActiveEvent(this);
         }
 
         public void SetLocalParameter(AudioParameter localParameter, float newValue)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetLocalParameter");
             for (int i = 0; i < activeParameterCount; i++)
             {
                 var param = activeParameters[i];
                 if (param != null && param.rootParameter.parameter == localParameter)
                 {
                     param.CurrentValue = newValue;
+                    ApplyParameters();
                     return;
                 }
             }
         }
 
+        /// <summary>
+        /// Begins a generation-bound asynchronous preparation operation for a custom
+        /// <see cref="AudioNode"/>. Returns <see langword="null"/> when this event is not currently
+        /// accepting preparation work.
+        /// </summary>
+        public AudioEventPreparation BeginAsyncPreparation()
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".BeginAsyncPreparation");
+            int preparationGeneration = BeginAsyncLoad();
+            if (preparationGeneration == 0)
+                return null;
+
+            try
+            {
+                AudioEventCancellationContext context = GetOrCreateCancellationContext(preparationGeneration);
+                if (context == null)
+                {
+                    CompleteAsyncLoad(preparationGeneration, false);
+                    return null;
+                }
+
+                return new AudioEventPreparation(this, preparationGeneration, context);
+            }
+            catch
+            {
+                CompleteAsyncLoad(preparationGeneration, false);
+                throw;
+            }
+        }
+
+        internal int BeginAsyncLoad()
+        {
+            if (rootEvent == null || status != EventStatus.Preparing)
+                return 0;
+
+            pendingAsyncLoadCount++;
+            return generation;
+        }
+
+        internal bool TryEnterGraphNode(AudioNode node)
+        {
+            if (node == null || status == EventStatus.Error || status == EventStatus.Stopped)
+                return false;
+
+            if (processedGraphNodeCount >= MaxProcessedGraphNodes || graphNodeStackCount >= MaxGraphStackDepth)
+            {
+                status = EventStatus.Error;
+                Debug.LogError($"AudioManager: Graph processing budget exceeded for event '{name}'.");
+                return false;
+            }
+
+            for (int i = 0; i < graphNodeStackCount; i++)
+            {
+                if (graphNodeStack[i] != node) continue;
+                status = EventStatus.Error;
+                Debug.LogError($"AudioManager: Runtime graph cycle detected in event '{name}' at node '{node.name}'.");
+                return false;
+            }
+
+            graphNodeStack[graphNodeStackCount++] = node;
+            processedGraphNodeCount++;
+            return true;
+        }
+
+        internal void ExitGraphNode(AudioNode node)
+        {
+            if (graphNodeStackCount <= 0) return;
+
+            int lastIndex = graphNodeStackCount - 1;
+            graphNodeStack[lastIndex] = null;
+            graphNodeStackCount = lastIndex;
+        }
+
+        private AudioEventCancellationContext GetOrCreateCancellationContext(int expectedGeneration)
+        {
+            if (!CanAcceptAsyncResult(expectedGeneration))
+                return null;
+
+            if (cancellationContext == null)
+                cancellationContext = new AudioEventCancellationContext();
+            return cancellationContext;
+        }
+
+        [Obsolete("Use BeginAsyncPreparation() and AudioEventPreparation.CancellationToken from an AudioNode implementation.")]
+        public CancellationToken GetCancellationToken()
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".GetCancellationToken");
+            AudioEventCancellationContext context = GetOrCreateCancellationContext(generation);
+            if (context == null)
+                return new CancellationToken(true);
+
+            // The legacy API has no matching release boundary. Avoid disposing its source after
+            // Stop so an already-returned token remains safe to observe or register against.
+            context.MarkTokenEscapedWithoutOwner();
+            return context.Token;
+        }
+
+        [Obsolete("Use AudioEventPreparation.Complete() or Dispose() for the scope returned by BeginAsyncPreparation().")]
         public void OnAsyncLoadCompleted()
         {
-            if (status == EventStatus.Stopped)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".OnAsyncLoadCompleted");
+            isAsync = false;
+            TryFinalizePreparation();
+        }
+
+        internal bool TryAddAsyncEventSource(
+            int expectedGeneration,
+            AudioClip clip,
+            AudioParameter parameter,
+            AnimationCurve responseCurve,
+            float startTime,
+            IAudioClipHandle clipHandle)
+        {
+            if (!CanAcceptAsyncResult(expectedGeneration))
             {
+                AudioClipHandleRelease.Safe(clipHandle);
+                return false;
+            }
+
+            return AddEventSource(clip, parameter, responseCurve, startTime, clipHandle);
+        }
+
+        internal void CompleteAsyncLoad(int expectedGeneration, bool succeeded)
+        {
+            if (expectedGeneration != generation || rootEvent == null)
+                return;
+
+            if (pendingAsyncLoadCount > 0)
+                pendingAsyncLoadCount--;
+
+            if (!succeeded && status != EventStatus.Stopped && status != EventStatus.Error)
+            {
+                status = EventStatus.Error;
                 StopImmediate();
                 return;
             }
 
-            SetStartingSourceProperties();
-            if (initialDelay == 0)
+            TryFinalizePreparation();
+        }
+
+        private bool CanAcceptAsyncResult(int expectedGeneration)
+        {
+            return expectedGeneration != 0 &&
+                   expectedGeneration == generation &&
+                   rootEvent != null &&
+                   status != EventStatus.Stopped &&
+                   status != EventStatus.Error;
+        }
+
+        private void TryFinalizePreparation()
+        {
+            if (graphPreparationOpen || pendingAsyncLoadCount > 0 || isAsync || playbackFinalized)
+                return;
+            if (status == EventStatus.Stopped || status == EventStatus.Error || rootEvent == null)
+                return;
+            if (sourceCount == 0 && !hasSnapshotTransition)
             {
-                hasPlayed = true;
-                PlayAllSources();
+                status = EventStatus.Error;
+                StopImmediate();
+                return;
+            }
+
+            playbackFinalized = true;
+            try
+            {
+                rootEvent.Output?.ApplySourceProperties(this);
+                SetStartingSourceProperties();
+                status = EventStatus.Played;
+                AudioManager.TrackActiveEventMemory(this);
+            }
+            catch (Exception exception)
+            {
+                status = EventStatus.Error;
+                Debug.LogException(exception);
+                StopImmediate();
             }
         }
 
-        public CancellationToken GetCancellationToken()
+        internal void RegisterSnapshotTransition(AudioMixerSnapshot snapshot, float transitionTime)
         {
-            if (cancellationTokenSource == null)
-                cancellationTokenSource = new CancellationTokenSource();
-            return cancellationTokenSource.Token;
+            if (snapshot == null) return;
+            hasSnapshotTransition = true;
+            if (float.IsNaN(transitionTime) || float.IsInfinity(transitionTime))
+                transitionTime = 0f;
+            transitionTime = Mathf.Max(0f, transitionTime);
+            snapshotTransitionLifetime = Mathf.Max(snapshotTransitionLifetime, transitionTime);
+            if (snapshotTransitionCount >= MaxSnapshotTransitionsPerEvent)
+            {
+                status = EventStatus.Error;
+                Debug.LogError($"AudioManager: Event '{name}' exceeds the {MaxSnapshotTransitionsPerEvent}-snapshot transition limit.");
+                return;
+            }
+
+            snapshotTransitions[snapshotTransitionCount] = snapshot;
+            snapshotTransitionTimes[snapshotTransitionCount] = transitionTime;
+            snapshotTransitionCount++;
         }
 
         public bool AddEventSource(AudioClip clip, AudioParameter parameter = null, AnimationCurve responseCurve = null, float startTime = 0, IAudioClipHandle clipHandle = null)
         {
-            if (rootEvent == null)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".AddEventSource");
+            if (rootEvent == null || status != EventStatus.Preparing)
             {
-                clipHandle?.Release();
-                Debug.LogWarning($"AudioManager: Can't find audio event for {name}!");
-                StopImmediate();
+                AudioClipHandleRelease.Safe(clipHandle);
+                Debug.LogWarning($"AudioManager: Event '{name}' is not accepting source additions.");
                 return false;
             }
 
             if (sourceCount >= MaxSourcesPerEvent)
             {
-                clipHandle?.Release();
+                AudioClipHandleRelease.Safe(clipHandle);
                 Debug.LogWarning($"AudioManager: Max sources ({MaxSourcesPerEvent}) reached for event {name}");
+                StopImmediate();
                 return false;
             }
 
-            AudioSource source = AudioManager.GetUnusedSource(rootEvent);
+            int expectedGeneration = generation;
+            AudioEvent expectedRootEvent = rootEvent;
+            AudioSource source = AudioManager.GetUnusedSource(rootEvent, this);
             if (source == null)
             {
                 Debug.LogWarning($"AudioManager: Can't find unused audio source for event {name}!");
-                clipHandle?.Release();
+                AudioClipHandleRelease.Safe(clipHandle);
                 StopImmediate();
+                return false;
+            }
+
+            if (generation != expectedGeneration ||
+                status != EventStatus.Preparing ||
+                rootEvent != expectedRootEvent ||
+                sourceCount >= MaxSourcesPerEvent)
+            {
+                AudioManager.ReturnSourceToPool(source);
+                AudioClipHandleRelease.Safe(clipHandle);
                 return false;
             }
 
             source.loop = rootEvent.Output.loop;
             source.clip = clip;
+            source.transform.position = lastEmitterPos;
 
             sourcesArray[sourceCount] = new EventSource
             {
@@ -425,31 +959,54 @@ namespace CycloneGames.Audio.Runtime
                 clipHandle = clipHandle
             };
             sourceCount++;
+            AudioManager.NotifyActiveEventSourcesChanged(this);
 
             return true;
         }
 
-        public void SetVolume(float newVolume) => targetVolume = newVolume;
-        public void ModulateVolume(float volumeDelta) => targetVolume += volumeDelta;
+        public void SetVolume(float newVolume)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetVolume");
+            if (float.IsNaN(newVolume) || float.IsInfinity(newVolume))
+            {
+                Debug.LogWarning("AudioManager: Event volume must be finite.");
+                return;
+            }
+            targetVolume = Mathf.Max(0f, newVolume);
+            if (currentFadeTime >= targetFadeTime)
+            {
+                eventVolume = targetVolume;
+                ApplyParameters();
+            }
+        }
+
+        public void ModulateVolume(float volumeDelta) => SetVolume(targetVolume + volumeDelta);
 
         public void SetPitch(float newPitch)
         {
-            if (newPitch <= 0)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetPitch");
+            if (float.IsNaN(newPitch) || float.IsInfinity(newPitch) || newPitch <= 0)
             {
-                Debug.LogWarning($"Invalid pitch set in event {rootEvent.name}");
+                string eventName = rootEvent != null ? rootEvent.name : name;
+                Debug.LogWarning($"Invalid pitch set in event {eventName}");
                 return;
             }
             eventPitch = newPitch;
+            ApplyParameters();
         }
 
-        public void ModulatePitch(float pitchDelta) => eventPitch += pitchDelta;
+        public void ModulatePitch(float pitchDelta) => SetPitch(eventPitch + pitchDelta);
 
         public void SetEmitterPosition(Vector3 newPos)
         {
-            if (sourceCount > 0 && sourcesArray[0].IsValid)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetEmitterPosition");
+            if (!IsFinite(newPos))
             {
-                sourcesArray[0].source.transform.position = newPos;
+                Debug.LogWarning("AudioManager: Emitter position must be finite.");
+                return;
             }
+            SetAllSourcePositions(newPos);
+            lastEmitterPos = newPos;
         }
 
         #region Source Property Settings
@@ -470,7 +1027,11 @@ namespace CycloneGames.Audio.Runtime
                 eventVolume = targetVolume;
             }
 
-            if (sourceCount == 0) return;
+            if (emitterTransform != null)
+            {
+                lastEmitterPos = emitterTransform.position;
+            }
+            SetAllSourcePositions(lastEmitterPos);
 
             SetAllSourcePitches(eventPitch);
 
@@ -491,7 +1052,7 @@ namespace CycloneGames.Audio.Runtime
 
             ApplyParameters();
 
-            if (initialDelay == 0 && !isAsync)
+            if (initialDelay == 0 && !IsPaused)
             {
                 hasPlayed = true;
                 PlayAllSources();
@@ -519,7 +1080,13 @@ namespace CycloneGames.Audio.Runtime
         private void PlayAllSources()
         {
             playStartRealtime = Time.realtimeSinceStartup;
-            bool useScheduled = scheduledDspTime > 0;
+            bool useScheduled = scheduledDspTime > AudioSettings.dspTime;
+            playbackClockStarted = !useScheduled;
+            if (!useScheduled)
+            {
+                scheduledDspTime = -1;
+                ApplySnapshotTransitions();
+            }
             for (int i = 0; i < sourceCount; i++)
             {
                 ref var es = ref sourcesArray[i];
@@ -527,12 +1094,15 @@ namespace CycloneGames.Audio.Runtime
 
                 if (useScheduled)
                 {
-                    es.source.PlayScheduled(scheduledDspTime + es.startTime);
+                    if (es.startTime > 0f)
+                        es.source.time = Mathf.Min(es.startTime, Mathf.Max(0f, es.source.clip.length - 0.001f));
+                    es.source.PlayScheduled(scheduledDspTime);
                 }
                 else
                 {
+                    if (es.startTime > 0f)
+                        es.source.time = Mathf.Min(es.startTime, Mathf.Max(0f, es.source.clip.length - 0.001f));
                     es.source.Play();
-                    if (es.startTime > 0) es.source.time = es.startTime;
                 }
             }
         }
@@ -550,8 +1120,47 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
+        private void ApplySnapshotTransitions()
+        {
+            if (snapshotTransitionsApplied) return;
+            snapshotTransitionsApplied = true;
+
+            for (int i = 0; i < snapshotTransitionCount; i++)
+            {
+                AudioMixerSnapshot snapshot = snapshotTransitions[i];
+                if (snapshot == null) continue;
+                try
+                {
+                    snapshot.TransitionTo(snapshotTransitionTimes[i]);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
+            }
+
+            if (sourceCount == 0 && hasSnapshotTransition)
+                AudioManager.DelayRemoveActiveEvent(this, snapshotTransitionLifetime);
+        }
+
+        internal void DetachSourcesToPool()
+        {
+            for (int i = 0; i < sourceCount; i++)
+            {
+                ref EventSource eventSource = ref sourcesArray[i];
+                AudioSource source = eventSource.source;
+                eventSource.source = null;
+                if (source != null)
+                {
+                    AudioManager.ReturnSourceToPool(source);
+                }
+            }
+        }
+
         public void SetAllSourcePositions(Vector3 position)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetAllSourcePositions");
+            if (!IsFinite(position)) return;
             for (int i = 0; i < sourceCount; i++)
             {
                 ref var es = ref sourcesArray[i];
@@ -677,7 +1286,9 @@ namespace CycloneGames.Audio.Runtime
             float finalLPCutoff = Mathf.Min(distanceLPCutoff, occlusionCutoff);
             bool needsLPF = output.EffectiveUseDistanceLowPass || occlusionFactor > 0.001f;
             float combinedVolumeScale = coneVolumeScale * occlusionVolumeScale;
-            bool hasVolumeModifier = output.EffectiveUseConeAttenuation || occlSettings.enabled;
+            spatialVolumeScale = output.EffectiveUseConeAttenuation || occlSettings.enabled
+                ? combinedVolumeScale
+                : 1f;
 
             // Cache LPF components once per active event lifetime (avoids repeated GetComponent)
             if (!lpFiltersCached && needsLPF)
@@ -695,15 +1306,19 @@ namespace CycloneGames.Audio.Runtime
                 ref var es = ref sourcesArray[i];
                 if (!es.IsValid) continue;
 
-                if (needsLPF)
+                if (lpFiltersCached)
                 {
                     AudioLowPassFilter lpf = cachedLPFilters[i];
-                    if (lpf != null) lpf.cutoffFrequency = finalLPCutoff;
+                    if (lpf != null)
+                    {
+                        lpf.enabled = needsLPF;
+                        lpf.cutoffFrequency = needsLPF ? finalLPCutoff : 22000f;
+                    }
                 }
 
-                if (hasVolumeModifier)
-                    es.source.volume = eventVolume * combinedVolumeScale;
             }
+
+            ApplyParameters();
         }
 
         private void InitializeParameters()
@@ -782,11 +1397,11 @@ namespace CycloneGames.Audio.Runtime
                 if (es.parameter != null && es.responseCurve != null)
                 {
                     float volumeScale = es.responseCurve.Evaluate(es.parameter.EvaluateCurrentValue());
-                    es.source.volume = eventVolume * volumeScale;
+                    es.source.volume = tempVolume * volumeScale * spatialVolumeScale;
                 }
                 else
                 {
-                    es.source.volume = tempVolume;
+                    es.source.volume = tempVolume * spatialVolumeScale;
                 }
 
                 if (spatialBlend >= 0f) es.source.spatialBlend = spatialBlend;
@@ -801,7 +1416,7 @@ namespace CycloneGames.Audio.Runtime
             if (targetFadeTime <= 0.0001f)
             {
                 eventVolume = targetVolume;
-                SetAllSourceVolumes(eventVolume);
+                ApplyParameters();
                 if (fadeStopQueued) StopImmediate();
                 return;
             }
@@ -824,10 +1439,23 @@ namespace CycloneGames.Audio.Runtime
                 eventVolume = fadeOriginVolume + (targetVolume - fadeOriginVolume) * t;
             }
 
-            SetAllSourceVolumes(eventVolume);
+            ApplyParameters();
         }
 
+        [Obsolete("Active events are reset by AudioManager. Stop the event instead of resetting it directly.")]
         public void Reset()
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Reset");
+            if (managerOwned || isInPool || rootEvent != null || handleSlot >= 0)
+            {
+                throw new InvalidOperationException(
+                    "A managed ActiveEvent cannot be reset directly. Call StopImmediate instead.");
+            }
+
+            ResetForPool();
+        }
+
+        internal void ResetForPool()
         {
             name = "";
             rootEvent = null;
@@ -835,8 +1463,11 @@ namespace CycloneGames.Audio.Runtime
             // Clear sources without reallocating
             for (int i = 0; i < sourceCount; i++)
             {
-                sourcesArray[i].clipHandle?.Release();
+                IAudioClipHandle clipHandle = sourcesArray[i].clipHandle;
                 sourcesArray[i] = default;
+                if (clipHandle == null) continue;
+
+                AudioClipHandleRelease.Safe(clipHandle);
             }
             sourceCount = 0;
 
@@ -847,6 +1478,7 @@ namespace CycloneGames.Audio.Runtime
             timeStarted = 0;
             gazeReference = null;
             emitterTransform = null;
+            lastEmitterPos = Vector3.zero;
             text = "";
             initialDelay = 0;
             eventVolume = 0;
@@ -859,7 +1491,7 @@ namespace CycloneGames.Audio.Runtime
             fadeStopQueued = false;
             hasPlayed = false;
             isAsync = false;
-            isPaused = false;
+            pauseReasons = AudioPauseReason.None;
             updateSkipCounter = 0;
             updateInterval = 1;
             is3D = false;
@@ -867,6 +1499,7 @@ namespace CycloneGames.Audio.Runtime
             occlusionFactor = 0f;
             distanceLPCutoff = 22000f;
             coneVolumeScale = 1f;
+            spatialVolumeScale = 1f;
             currentSpread = 0f;
             cachedSqrDistance = 0f;
             lpFiltersCached = false;
@@ -875,21 +1508,50 @@ namespace CycloneGames.Audio.Runtime
             callbackActivated = false;
             hasTimeAdvanced = false;
             hasSnapshotTransition = false;
+            snapshotTransitionLifetime = 0f;
             scheduledDspTime = -1;
             handleSlot = -1;
             playStartRealtime = 0;
-
-            if (cancellationTokenSource != null)
+            pendingAsyncLoadCount = 0;
+            graphPreparationOpen = false;
+            playbackFinalized = false;
+            memoryTracked = false;
+            playbackClockStarted = false;
+            for (int i = 0; i < snapshotTransitionCount; i++)
             {
-                cancellationTokenSource.Cancel();
-                cancellationTokenSource.Dispose();
-                cancellationTokenSource = null;
+                snapshotTransitions[i] = null;
+                snapshotTransitionTimes[i] = 0f;
             }
+            snapshotTransitionCount = 0;
+            snapshotTransitionsApplied = false;
+            for (int i = 0; i < graphNodeStackCount; i++)
+                graphNodeStack[i] = null;
+            graphNodeStackCount = 0;
+            processedGraphNodeCount = 0;
+
+            CancelAndReleaseCancellationContext();
 
             EstimatedRemainingTime = 0;
             Muted = false;
             Soloed = false;
             CompletionCallback = null;
+        }
+
+        private void CancelAndReleaseCancellationContext()
+        {
+            AudioEventCancellationContext context = cancellationContext;
+            cancellationContext = null;
+            if (context == null) return;
+
+            context.Cancel();
+            context.Release();
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return !float.IsNaN(value.x) && !float.IsInfinity(value.x) &&
+                   !float.IsNaN(value.y) && !float.IsInfinity(value.y) &&
+                   !float.IsNaN(value.z) && !float.IsInfinity(value.z);
         }
 
         private void UpdateRemainingTime()
@@ -900,40 +1562,47 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            if (sourceCount == 0) return;
-
-            ref var mainSource = ref sourcesArray[0];
-            if (!mainSource.IsValid || mainSource.source.clip == null)
-            {
-                StopImmediate();
-                return;
-            }
-
-            float clipLength = mainSource.source.clip.length;
-            if (clipLength <= 0)
-            {
-                StopImmediate();
-                return;
-            }
-
             if (rootEvent.Output.loop)
             {
                 EstimatedRemainingTime = 500;
-            }
-            else
-            {
-                float currentTime = mainSource.source.time;
-                float pitch = mainSource.source.pitch;
-                EstimatedRemainingTime = pitch > 0.001f ? (clipLength - currentTime) / pitch : clipLength;
+                return;
             }
 
-            if (hasTimeAdvanced && mainSource.source.time == 0)
+            float maxRemainingTime = 0f;
+            bool hasValidSource = false;
+            for (int i = 0; i < sourceCount; i++)
+            {
+                ref var eventSource = ref sourcesArray[i];
+                AudioSource source = eventSource.source;
+                AudioClip clip = source != null ? source.clip : null;
+                if (clip == null || clip.length <= 0f) continue;
+
+                hasValidSource = true;
+                float pitch = Mathf.Abs(source.pitch);
+                float remainingTime = pitch > 0.001f
+                    ? Mathf.Max(0f, clip.length - source.time) / pitch
+                    : clip.length;
+                if (remainingTime > maxRemainingTime)
+                    maxRemainingTime = remainingTime;
+            }
+
+            if (!hasValidSource)
             {
                 StopImmediate();
                 return;
             }
 
-            if (EstimatedRemainingTime <= rootEvent.FadeOut)
+            bool scheduledStartPending = IsScheduledPlaybackPending;
+            float scheduledDelay = scheduledStartPending
+                ? (float)(scheduledDspTime - AudioSettings.dspTime)
+                : 0f;
+            EstimatedRemainingTime = maxRemainingTime + scheduledDelay;
+            if (scheduledStartPending)
+            {
+                return;
+            }
+
+            if (!fadeStopQueued && EstimatedRemainingTime <= rootEvent.FadeOut)
             {
                 Stop();
             }
@@ -1007,6 +1676,7 @@ namespace CycloneGames.Audio.Runtime
 
         public void ToggleGaze(bool toggle, AudioParameter gazeParameter)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".ToggleGaze");
             useGaze = toggle;
             if (!toggle)
             {
@@ -1025,6 +1695,7 @@ namespace CycloneGames.Audio.Runtime
 
         public void SetMute(bool toggle)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetMute");
             Muted = toggle;
             for (int i = 0; i < sourceCount; i++)
             {
@@ -1035,12 +1706,14 @@ namespace CycloneGames.Audio.Runtime
 
         public void ToggleSolo()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".ToggleSolo");
             Soloed = !Soloed;
             AudioManager.ApplyActiveSolos();
         }
 
         public void SetSolo(bool toggle)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetSolo");
             Soloed = toggle;
             AudioManager.ApplyActiveSolos();
         }
@@ -1048,6 +1721,7 @@ namespace CycloneGames.Audio.Runtime
         public void ApplySolo() => SetMute(!Soloed);
         public void ClearSolo()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".ClearSolo");
             Soloed = false;
             SetMute(Muted);
         }
@@ -1086,9 +1760,10 @@ namespace CycloneGames.Audio.Runtime
 
     public enum EventStatus
     {
-        Initialized,
-        Played,
-        Stopped,
-        Error
+        Initialized = 0,
+        Played = 1,
+        Stopped = 2,
+        Error = 3,
+        Preparing = 4
     }
 }

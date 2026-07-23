@@ -97,9 +97,11 @@ namespace CycloneGames.Audio.Editor
         private bool middleButtonClicked = false;
         private bool leftButtonDown = false;
         /// <summary>
-        /// The runtime event used to preview sounds in the graph
+        /// Stable handle and temporary emitter owned by the current preview session.
         /// </summary>
-        private ActiveEvent previewEvent;
+        private AudioHandle previewHandle;
+        private GameObject previewEmitter;
+        private bool hasPreviewHandle;
         /// <summary>
         /// Selection for which editor is currently being used
         /// </summary>
@@ -167,6 +169,18 @@ namespace CycloneGames.Audio.Editor
             States
         }
 
+        private void OnEnable()
+        {
+            EditorApplication.playModeStateChanged -= HandlePlayModeStateChanged;
+            EditorApplication.playModeStateChanged += HandlePlayModeStateChanged;
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.playModeStateChanged -= HandlePlayModeStateChanged;
+            ReleasePreview(true);
+        }
+
         /// <summary>
         /// Display the graph window
         /// </summary>
@@ -186,12 +200,14 @@ namespace CycloneGames.Audio.Editor
         {
             AudioGraph graph = GetWindow<AudioGraph>();
             graph.titleContent = new GUIContent("Audio Graph");
-            graph.audioBank = bankToLoad;
+            graph.SetAudioBank(bankToLoad);
             graph.Show();
         }
 
         private void Update()
         {
+            UpdatePreviewLifecycle();
+
             if (AudioManager.Languages == null || AudioManager.Languages.Length == 0)
             {
                 AudioManager.UpdateLanguages();
@@ -330,11 +346,10 @@ namespace CycloneGames.Audio.Editor
         private void DrawEventList()
         {
             AudioBank previousBank = this.audioBank;
-            this.audioBank = EditorGUILayout.ObjectField(this.audioBank, typeof(AudioBank), false) as AudioBank;
-            if (this.audioBank != previousBank)
+            AudioBank nextBank = EditorGUILayout.ObjectField(this.audioBank, typeof(AudioBank), false) as AudioBank;
+            if (nextBank != previousBank)
             {
-                this.selectedEvent = null;
-                MarkDuplicateCacheDirty();
+                SetAudioBank(nextBank);
             }
 
             if (this.audioBank == null)
@@ -1042,9 +1057,12 @@ namespace CycloneGames.Audio.Editor
                 RunBatchEdit();
             }
             this.batchEventsScrollPosition = EditorGUILayout.BeginScrollView(this.batchEventsScrollPosition);
-            for (int i = 0; i < this.batchEventSelection.Length; i++)
+            int count = Mathf.Min(this.batchEventSelection.Length, this.audioBank.AudioEvents.Count);
+            for (int i = 0; i < count; i++)
             {
-                this.batchEventSelection[i] = EditorGUILayout.Toggle(this.audioBank.AudioEvents[i].name, this.batchEventSelection[i]);
+                AudioEvent audioEvent = this.audioBank.AudioEvents[i];
+                string label = audioEvent != null ? audioEvent.name : $"Missing Event [{i}]";
+                this.batchEventSelection[i] = EditorGUILayout.Toggle(label, this.batchEventSelection[i]);
             }
             EditorGUILayout.EndScrollView();
         }
@@ -1125,6 +1143,7 @@ namespace CycloneGames.Audio.Editor
 
             if (EditorGUI.EndChangeCheck())
             {
+                Undo.RecordObject(audioEvent, "Edit Audio Event");
                 audioEvent.name = newName;
                 audioEvent.InstanceLimit = newInstanceLimit;
                 audioEvent.FadeIn = newFadeIn;
@@ -1144,7 +1163,6 @@ namespace CycloneGames.Audio.Editor
                 EditorUtility.SetDirty(audioEvent);
                 EditorUtility.SetDirty(this.audioBank);
                 MarkDuplicateCacheDirty();
-                AssetDatabase.SaveAssets();
             }
 
             EditorGUILayout.EndScrollView();
@@ -1375,7 +1393,6 @@ namespace CycloneGames.Audio.Editor
             newEvent.name = uniqueName;
             EditorUtility.SetDirty(newEvent);
             EditorUtility.SetDirty(this.audioBank);
-            AssetDatabase.SaveAssets();
             MarkDuplicateCacheDirty();
 
             SelectEvent(newEvent);
@@ -1393,6 +1410,7 @@ namespace CycloneGames.Audio.Editor
 
             if (EditorUtility.DisplayDialog("Confirm Event Deletion", "Delete event \"" + this.selectedEvent.name + "\"?", "Yes", "No"))
             {
+                ReleasePreview(true);
                 this.audioBank.DeleteEvent(this.selectedEvent);
                 this.selectedEvent = null;
                 MarkDuplicateCacheDirty();
@@ -1408,6 +1426,11 @@ namespace CycloneGames.Audio.Editor
             if (selection == null || selection.Output == null)
             {
                 return;
+            }
+
+            if (this.selectedEvent != selection)
+            {
+                ReleasePreview(true);
             }
 
             this.selectedEvent = selection;
@@ -1427,14 +1450,47 @@ namespace CycloneGames.Audio.Editor
                 return;
             }
 
-            if (this.previewEvent != null)
+            if (this.selectedEvent == null)
             {
-                this.previewEvent.Stop();
+                EditorUtility.DisplayDialog("Can't Preview Audio Event", "Select an AudioEvent before starting a preview.", "OK");
+                return;
             }
 
-            GameObject tempEmitter = new GameObject("Preview_" + this.selectedEvent.name);
-            this.previewEvent = AudioManager.PlayEvent(this.selectedEvent, tempEmitter);
-            Destroy(tempEmitter, this.previewEvent.EstimatedRemainingTime + 1);
+            ReleasePreview(true);
+
+            this.previewEmitter = new GameObject("Preview_" + this.selectedEvent.name)
+            {
+                hideFlags = HideFlags.HideAndDontSave
+            };
+
+            ActiveEvent startedEvent;
+            try
+            {
+                startedEvent = AudioManager.PlayEvent(this.selectedEvent, this.previewEmitter);
+            }
+            catch
+            {
+                ReleasePreview(false);
+                throw;
+            }
+
+            if (startedEvent == null)
+            {
+                Debug.LogWarning($"AudioGraph: Preview failed to start event '{this.selectedEvent.name}'.", this.selectedEvent);
+                ReleasePreview(false);
+                return;
+            }
+
+            AudioHandle startedHandle = startedEvent.Handle;
+            if (!startedHandle.IsValid)
+            {
+                Debug.LogWarning($"AudioGraph: Preview event '{this.selectedEvent.name}' did not produce a valid playback handle.", this.selectedEvent);
+                ReleasePreview(false);
+                return;
+            }
+
+            this.previewHandle = startedHandle;
+            this.hasPreviewHandle = true;
         }
 
         /// <summary>
@@ -1442,9 +1498,75 @@ namespace CycloneGames.Audio.Editor
         /// </summary>
         private void StopPreview()
         {
-            if (this.previewEvent != null)
+            ReleasePreview(true);
+        }
+
+        private void SetAudioBank(AudioBank bankToLoad)
+        {
+            if (this.audioBank == bankToLoad)
             {
-                this.previewEvent.Stop();
+                return;
+            }
+
+            ReleasePreview(true);
+            this.audioBank = bankToLoad;
+            this.selectedEvent = null;
+            MarkDuplicateCacheDirty();
+        }
+
+        private void HandlePlayModeStateChanged(PlayModeStateChange state)
+        {
+            if (state == PlayModeStateChange.ExitingPlayMode || state == PlayModeStateChange.EnteredEditMode)
+            {
+                ReleasePreview(true);
+            }
+        }
+
+        private void UpdatePreviewLifecycle()
+        {
+            if (!this.hasPreviewHandle)
+            {
+                return;
+            }
+
+            if (!Application.isPlaying || !this.previewHandle.IsValid)
+            {
+                ReleasePreview(false);
+                return;
+            }
+
+            if (this.previewEmitter == null)
+            {
+                this.previewHandle.StopImmediate();
+                this.previewHandle = default;
+                this.hasPreviewHandle = false;
+            }
+        }
+
+        private void ReleasePreview(bool stopPlayback)
+        {
+            if (stopPlayback && this.hasPreviewHandle && this.previewHandle.IsValid)
+            {
+                this.previewHandle.StopImmediate();
+            }
+
+            this.previewHandle = default;
+            this.hasPreviewHandle = false;
+
+            if (this.previewEmitter == null)
+            {
+                return;
+            }
+
+            GameObject emitterToDestroy = this.previewEmitter;
+            this.previewEmitter = null;
+            if (Application.isPlaying)
+            {
+                Destroy(emitterToDestroy);
+            }
+            else
+            {
+                DestroyImmediate(emitterToDestroy);
             }
         }
 
@@ -1473,6 +1595,7 @@ namespace CycloneGames.Audio.Editor
                 if (e.type == EventType.MouseUp)
                 {
                     this.selectedOutput = null;
+                    this.selectedInput = null;
                     this.panGraph = false;
                     this.rightButtonClicked = false;
                     this.middleButtonClicked = false;
@@ -1495,8 +1618,7 @@ namespace CycloneGames.Audio.Editor
                         if (clickedInput != null)
                         {
                             // Disconnect all connections from this input
-                            clickedInput.RemoveAllConnections();
-                            EditorUtility.SetDirty(clickedInput); // Mark as dirty to save changes
+                            clickedInput.TryRemoveAllConnections();
                             e.Use(); // Consume the event
                             Repaint(); // Repaint to show the change
                             return; // Stop further processing for this event
@@ -1504,18 +1626,14 @@ namespace CycloneGames.Audio.Editor
                         else if (clickedOutput != null)
                         {
                             // Disconnect all connections from this output
-                            bool connectionWasBroken = false; // Renamed to avoid confusion and indicate intent
+                            bool connectionWasBroken = false;
                             if (selectedEvent != null)
                             {
                                 foreach (var node in selectedEvent.Nodes)
                                 {
                                     if (node.Input != null)
                                     {
-                                        // Call RemoveConnection directly. It's likely a void method.
-                                        // We assume that if it's called, it's intended to remove a connection.
-                                        node.Input.RemoveConnection(clickedOutput);
-                                        EditorUtility.SetDirty(node.Input);
-                                        connectionWasBroken = true; // Mark as true if this block is executed.
+                                        connectionWasBroken |= node.Input.TryRemoveConnection(clickedOutput);
                                     }
                                 }
                             }
@@ -1562,13 +1680,20 @@ namespace CycloneGames.Audio.Editor
         private void RunBatchEdit()
         {
             List<AudioEvent> audioEvents = this.audioBank.AudioEvents;
-            for (int i = 0; i < audioEvents.Count; i++)
+            int count = Mathf.Min(audioEvents.Count, this.batchEventSelection.Length);
+            Undo.IncrementCurrentGroup();
+            int undoGroup = Undo.GetCurrentGroup();
+            Undo.SetCurrentGroupName("Batch Edit Audio Events");
+            for (int i = 0; i < count; i++)
             {
-                if (this.batchEventSelection[i])
+                if (this.batchEventSelection[i] && audioEvents[i] != null && audioEvents[i].Output != null)
                 {
+                    Undo.RecordObject(audioEvents[i].Output, "Batch Edit Audio Events");
                     SetBatchProperties(audioEvents[i]);
+                    EditorUtility.SetDirty(audioEvents[i].Output);
                 }
             }
+            Undo.CollapseUndoOperations(undoGroup);
         }
 
         private void SetBatchProperties(AudioEvent batchEvent)
@@ -1971,6 +2096,7 @@ namespace CycloneGames.Audio.Editor
             Vector2 position = (Vector2)positionObject;
             T tempNode = ScriptableObject.CreateInstance<T>();
             AssetDatabase.AddObjectToAsset(tempNode, this.selectedEvent);
+            Undo.RegisterCreatedObjectUndo(tempNode, "Add Audio Node");
             tempNode.InitializeNode(ConvertToGlobalPosition(position));
             this.selectedEvent.AddNode(tempNode);
             EditorUtility.SetDirty(this.selectedEvent);
@@ -1986,6 +2112,7 @@ namespace CycloneGames.Audio.Editor
         {
             T tempNode = ScriptableObject.CreateInstance<T>();
             AssetDatabase.AddObjectToAsset(tempNode, this.selectedEvent);
+            Undo.RegisterCreatedObjectUndo(tempNode, "Add Audio Node");
             tempNode.InitializeNode(position);
             this.selectedEvent.AddNode(tempNode);
             EditorUtility.SetDirty(this.selectedEvent);
@@ -2040,6 +2167,7 @@ namespace CycloneGames.Audio.Editor
                 position.x -= HORIZONTAL_NODE_OFFSET;
                 AudioFile tempNode = ScriptableObject.CreateInstance<AudioFile>();
                 AssetDatabase.AddObjectToAsset(tempNode, newEvent);
+                Undo.RegisterCreatedObjectUndo(tempNode, "Add Audio File Node");
                 tempNode.InitializeNode(position);
                 tempNode.File = clips[i];
                 newEvent.AddNode(tempNode);
@@ -2068,7 +2196,6 @@ namespace CycloneGames.Audio.Editor
 
             existingNames.Clear();
             EditorUtility.SetDirty(this.audioBank);
-            AssetDatabase.SaveAssets();
             MarkDuplicateCacheDirty();
         }
 
@@ -2251,7 +2378,6 @@ namespace CycloneGames.Audio.Editor
 
             // Save all assets
             AssetDatabase.SaveAssets();
-            AssetDatabase.Refresh();
 
             Debug.Log($"AudioGraph: Saved AudioBank '{this.audioBank.name}' with {this.audioBank.AudioEvents?.Count ?? 0} events.");
         }

@@ -53,11 +53,48 @@ namespace CycloneGames.Choreography.CycloneAudio
             }
         }
 
+        private readonly struct VoiceControl
+        {
+            private readonly AudioHandle handle;
+            private readonly ActiveEvent fallbackEvent;
+            private readonly bool usesStableHandle;
+
+            public VoiceControl(ActiveEvent activeEvent)
+            {
+                AudioHandle candidate = activeEvent != null ? activeEvent.Handle : default;
+                usesStableHandle = candidate.IsValid;
+                handle = usesStableHandle ? candidate : default;
+                fallbackEvent = usesStableHandle ? null : activeEvent;
+            }
+
+            public bool IsValid => usesStableHandle
+                ? handle.IsValid
+                : fallbackEvent != null
+                    && fallbackEvent.status != EventStatus.Stopped
+                    && fallbackEvent.status != EventStatus.Error;
+
+            public void SetVolume(float volume)
+            {
+                if (usesStableHandle)
+                    handle.SetVolume(volume);
+                else
+                    fallbackEvent?.SetVolume(volume);
+            }
+
+            public void Stop()
+            {
+                if (usesStableHandle)
+                    handle.Stop();
+                else
+                    fallbackEvent?.Stop();
+            }
+        }
+
         private readonly IAudioService _audioService;
         private readonly GameObject _defaultEmitter;
         private readonly IChoreographyDiagnostics _diagnostics;
         private readonly ICycloneAudioBankState _bankState;
-        private readonly Dictionary<VoiceKey, ActiveEvent> _voices = new Dictionary<VoiceKey, ActiveEvent>(16);
+        private readonly Dictionary<VoiceKey, VoiceControl> _voices = new Dictionary<VoiceKey, VoiceControl>(16);
         private bool _warnedMissingEvent;
         private bool _warnedMissingBank;
         private bool _warnedUnsupportedKind;
@@ -108,34 +145,42 @@ namespace CycloneGames.Choreography.CycloneAudio
             activeEvent.SetVolume(Clamp01(sample.Weight));
             if (clip.HasDuration || clip.Loop)
             {
-                _voices[new VoiceKey(sample.InstanceId, sample.PlaybackChannel, sample.ClipChannel, clip.Id)] = activeEvent;
+                _voices[new VoiceKey(sample.InstanceId, sample.PlaybackChannel, sample.ClipChannel, clip.Id)] =
+                    new VoiceControl(activeEvent);
             }
         }
 
         public void UpdateClip(in ChoreographyPlaybackSample sample)
         {
             VoiceKey key = new VoiceKey(sample.InstanceId, sample.PlaybackChannel, sample.ClipChannel, sample.Clip.Id);
-            if (_voices.TryGetValue(key, out ActiveEvent activeEvent) && activeEvent != null)
+            if (_voices.TryGetValue(key, out VoiceControl voice))
             {
-                activeEvent.SetVolume(Clamp01(sample.Weight));
+                if (voice.IsValid)
+                {
+                    voice.SetVolume(Clamp01(sample.Weight));
+                }
+                else
+                {
+                    _voices.Remove(key);
+                }
             }
         }
 
         public void EndClip(in ChoreographyClipStop stop)
         {
             VoiceKey key = new VoiceKey(stop.InstanceId, stop.PlaybackChannel, stop.ClipChannel, stop.ClipId);
-            if (_voices.TryGetValue(key, out ActiveEvent activeEvent))
+            if (_voices.TryGetValue(key, out VoiceControl voice))
             {
                 _voices.Remove(key);
-                activeEvent?.Stop();
+                voice.Stop();
             }
         }
 
         public void StopAll()
         {
-            foreach (KeyValuePair<VoiceKey, ActiveEvent> pair in _voices)
+            foreach (KeyValuePair<VoiceKey, VoiceControl> pair in _voices)
             {
-                pair.Value?.Stop();
+                pair.Value.Stop();
             }
 
             _voices.Clear();

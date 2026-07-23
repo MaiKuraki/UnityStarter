@@ -49,6 +49,7 @@ namespace CycloneGames.Audio.Runtime
         public void Initialize(AudioParameter newParameter, float value)
         {
             parameter = newParameter;
+            if (!IsFinite(value)) value = 0f;
             float clamped = Clamp(value);
             currentValue = clamped;
             targetValue = clamped;
@@ -56,7 +57,7 @@ namespace CycloneGames.Audio.Runtime
 
         public void SetTarget(float value)
         {
-            if (parameter == null) return;
+            if (parameter == null || !IsFinite(value)) return;
 
             targetValue = Clamp(value);
             if (parameter.InterpolationSpeed <= 0f)
@@ -67,7 +68,8 @@ namespace CycloneGames.Audio.Runtime
 
         public void Update(float deltaTime)
         {
-            if (parameter == null || parameter.InterpolationSpeed <= 0f || currentValue == targetValue) return;
+            if (parameter == null || !IsFinite(deltaTime) || deltaTime <= 0f ||
+                parameter.InterpolationSpeed <= 0f || currentValue == targetValue) return;
 
             currentValue = Mathf.MoveTowards(currentValue, targetValue, parameter.InterpolationSpeed * deltaTime);
         }
@@ -75,6 +77,11 @@ namespace CycloneGames.Audio.Runtime
         private float Clamp(float value)
         {
             return parameter != null ? Mathf.Clamp(value, parameter.MinValue, parameter.MaxValue) : value;
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
     }
 
@@ -136,13 +143,24 @@ namespace CycloneGames.Audio.Runtime
 
         public void InitializeParameter()
         {
-            runtimeCurrentValue = Mathf.Clamp(this.defaultValue, this.minValue, this.maxValue);
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioParameter) + ".InitializeParameter");
+            float safeMin = IsFinite(this.minValue) ? this.minValue : 0f;
+            float safeMax = IsFinite(this.maxValue) ? this.maxValue : safeMin;
+            if (safeMax < safeMin)
+            {
+                float swap = safeMin;
+                safeMin = safeMax;
+                safeMax = swap;
+            }
+            float safeDefault = IsFinite(this.defaultValue) ? this.defaultValue : safeMin;
+            runtimeCurrentValue = Mathf.Clamp(safeDefault, safeMin, safeMax);
             runtimeTargetValue = runtimeCurrentValue;
             runtimeInitialized = true;
         }
 
         public void ResetParameter()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioParameter) + ".ResetParameter");
             InitializeParameter();
         }
 
@@ -153,7 +171,7 @@ namespace CycloneGames.Audio.Runtime
         public void SetValue(float newValue)
         {
             EnsureRuntimeInitialized();
-            if (this.useGaze) return;
+            if (this.useGaze || !IsFinite(newValue)) return;
 
             newValue = Mathf.Clamp(newValue, this.minValue, this.maxValue);
             if (newValue == this.TargetValue) return;
@@ -172,7 +190,8 @@ namespace CycloneGames.Audio.Runtime
         public void UpdateInterpolation(float deltaTime)
         {
             EnsureRuntimeInitialized();
-            if (this.interpolationSpeed <= 0f || this.CurrentValue == this.TargetValue) return;
+            if (!IsFinite(deltaTime) || deltaTime <= 0f ||
+                this.interpolationSpeed <= 0f || this.CurrentValue == this.TargetValue) return;
 
             this.CurrentValue = Mathf.MoveTowards(this.CurrentValue, this.TargetValue, this.interpolationSpeed * deltaTime);
         }
@@ -193,10 +212,16 @@ namespace CycloneGames.Audio.Runtime
 
         private void EnsureRuntimeInitialized()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AudioParameter));
             if (!runtimeInitialized)
             {
                 InitializeParameter();
             }
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
         }
 
 #if UNITY_EDITOR
