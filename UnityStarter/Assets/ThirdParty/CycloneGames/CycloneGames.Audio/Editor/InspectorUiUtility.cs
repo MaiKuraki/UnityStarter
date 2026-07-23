@@ -15,6 +15,7 @@ namespace CycloneGames.Audio.Editor
         private static GUIStyle foldoutLabelStyle;
         private static GUIStyle subHeaderStyle;
         private static GUIStyle subBadgeStyle;
+        private static readonly Vector3[] foldoutTrianglePoints = new Vector3[3];
 
         public static bool DrawFoldoutHeader(string title, bool foldout, Color color)
         {
@@ -137,31 +138,24 @@ namespace CycloneGames.Audio.Editor
         private static void DrawFoldoutTriangle(Rect rect, bool expanded)
         {
             Vector2 center = rect.center;
-            Vector3[] points;
 
             if (expanded)
             {
-                points = new[]
-                {
-                    new Vector3(center.x - 4f, center.y - 2f),
-                    new Vector3(center.x + 4f, center.y - 2f),
-                    new Vector3(center.x, center.y + 3f)
-                };
+                foldoutTrianglePoints[0] = new Vector3(center.x - 4f, center.y - 2f);
+                foldoutTrianglePoints[1] = new Vector3(center.x + 4f, center.y - 2f);
+                foldoutTrianglePoints[2] = new Vector3(center.x, center.y + 3f);
             }
             else
             {
-                points = new[]
-                {
-                    new Vector3(center.x - 2f, center.y - 4f),
-                    new Vector3(center.x - 2f, center.y + 4f),
-                    new Vector3(center.x + 3f, center.y)
-                };
+                foldoutTrianglePoints[0] = new Vector3(center.x - 2f, center.y - 4f);
+                foldoutTrianglePoints[1] = new Vector3(center.x - 2f, center.y + 4f);
+                foldoutTrianglePoints[2] = new Vector3(center.x + 3f, center.y);
             }
 
             Handles.BeginGUI();
             Color previousColor = Handles.color;
             Handles.color = new Color(0.90f, 0.90f, 0.90f, 0.95f);
-            Handles.DrawAAConvexPolygon(points);
+            Handles.DrawAAConvexPolygon(foldoutTrianglePoints);
             Handles.color = previousColor;
             Handles.EndGUI();
         }

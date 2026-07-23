@@ -82,6 +82,7 @@ namespace CycloneGames.Audio.Runtime
         public readonly int ActiveDuckingRuleCount;
         public readonly int ScopedParameterOverrides;
         public readonly int PendingRemovals;
+        [Obsolete("Worker command dispatch was removed; this value is always zero.")]
         public readonly int QueuedCommands;
         public readonly int ExternalCacheEntries;
         public readonly int ExternalLoadingCount;
@@ -152,7 +153,9 @@ namespace CycloneGames.Audio.Runtime
             ActiveDuckingRuleCount = activeDuckingRuleCount;
             ScopedParameterOverrides = scopedParameterOverrides;
             PendingRemovals = pendingRemovals;
-            QueuedCommands = queuedCommands;
+#pragma warning disable CS0618
+            QueuedCommands = 0;
+#pragma warning restore CS0618
             ExternalCacheEntries = externalCache.EntryCount;
             ExternalLoadingCount = externalCache.LoadingCount;
             ExternalLoadedCount = externalCache.LoadedCount;
@@ -346,82 +349,235 @@ namespace CycloneGames.Audio.Runtime
         }
     }
 
+    internal readonly struct BankNameContribution<T> where T : UnityEngine.Object
+    {
+        public readonly int OwnerBankId;
+        public readonly string Name;
+        public readonly T Value;
+        public readonly bool CanOverride;
+
+        public BankNameContribution(int ownerBankId, string name, T value, bool canOverride)
+        {
+            OwnerBankId = ownerBankId;
+            Name = name;
+            Value = value;
+            CanOverride = canOverride;
+        }
+    }
+
+    internal sealed class AudioBankRegistration
+    {
+        public readonly AudioBank Bank;
+        public readonly int BankId;
+        public readonly bool OverwriteExisting;
+        public readonly List<BankNameContribution<AudioEvent>> EventContributions = new List<BankNameContribution<AudioEvent>>();
+        public readonly List<BankNameContribution<AudioParameter>> ParameterContributions = new List<BankNameContribution<AudioParameter>>();
+        public readonly List<BankNameContribution<AudioStateGroup>> StateGroupContributions = new List<BankNameContribution<AudioStateGroup>>();
+        public readonly List<AudioEvent> OwnedEvents = new List<AudioEvent>();
+        public readonly List<AudioParameter> OwnedParameters = new List<AudioParameter>();
+        public readonly List<AudioSwitch> OwnedSwitches = new List<AudioSwitch>();
+        public readonly List<AudioStateGroup> OwnedStateGroups = new List<AudioStateGroup>();
+        public readonly List<AudioStateMixProfile> OwnedProfiles = new List<AudioStateMixProfile>();
+
+        public AudioBankRegistration(AudioBank bank, bool overwriteExisting)
+        {
+            Bank = bank;
+            BankId = bank.GetInstanceID();
+            OverwriteExisting = overwriteExisting;
+        }
+    }
+
     /// <summary>
-    /// High-performance audio event playback manager with thread-safe operations
+    /// Unity main-thread audio event playback manager.
     /// </summary>
-    public class AudioManager : MonoBehaviour, IAudioService
+    public class AudioManager : MonoBehaviour, IAudioService, IAudioLifecyclePauseControl, IAudioBankClipLeaseProvider
     {
         public static AudioManager Instance { get; private set; }
 
         private static bool AllowCreateInstance = true;
-        private static int mainThreadId;
         private static AudioListener cachedAudioListener;
         private static Camera cachedMainCamera;
         private static int cachedMainCameraFrame = -1;
-
-        // Static constructor ensures mainThreadId is set when class is first accessed
-        static AudioManager()
-        {
-            mainThreadId = Thread.CurrentThread.ManagedThreadId;
-        }
+        private static bool isTearingDown;
+        private static int managerLifecycleGeneration;
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetStaticState()
         {
-            AllowCreateInstance = true;
-            isInitialized = false;
-            Instance = null;
-            cachedAudioListener = null;
-            cachedMainCamera = null;
-            cachedMainCameraFrame = -1;
-            mainThreadId = Thread.CurrentThread.ManagedThreadId;
-            OnBankUnloaded = null;
-            activeEventHandleTable.Clear();
-            freeActiveEventHandleSlots.Clear();
-            activeInstanceCounts.Clear();
-            playingEventNameCounts.Clear();
-            activeEventIndices.Clear();
-            preparedAudioEvents.Clear();
-            parameterNameMap.Clear();
-            stateGroupNameMap.Clear();
-            registeredStateMixProfiles.Clear();
-            pendingRemovals.Clear();
-            categoryCountsCacheFrame = -1;
-            cachedStealVictimFrame = -1;
-            cachedStealVictim = null;
-            cachedStealVictimScore = float.MaxValue;
-            ClearCommandQueue();
-            AudioClipResolver.ClearExternalCache();
-            AudioClipResolver.ClearReferenceLoaders();
-            AudioClipResolver.ClearCustomProviders();
-            AudioPoolConfig.ClearCache();
-            AudioVoicePolicyProfile.ClearCache();
-            AudioPlatformProfile.ClearCache();
-            AudioDuckingProfile.ClearCache();
-            recentTriggerTimes.Clear();
-            reusableExpiredTriggerKeys.Clear();
-            lastRepeatTriggerCleanupTime = 0f;
-            totalRepeatTriggerRejections = 0;
-            totalAudibilityCulls = 0;
-            activePoolConfig = null;
-            activePlatformProfile = null;
-            activeDuckingProfile = null;
-            activePlatformSettings = AudioPlatformProfile.GetFallbackSettings();
-            reusableGlobalParameters.Clear();
-            scopedParameterOverrides.Clear();
-            reusableScopedParameterRemovalKeys.Clear();
-            activeDuckingProfile = null;
-            activeDuckingRuleCount = 0;
-            ClearActiveEventCategoryCounts();
-            globalParametersCacheDirty = true;
+            AudioRuntimeThreadGuard.CaptureCurrentThread();
+            AdvanceManagerLifecycleGeneration();
+            isTearingDown = true;
+            try
+            {
+                AllowCreateInstance = true;
+                isInitialized = false;
+                Application.quitting -= HandleQuitting;
+                Instance = null;
+                cachedAudioListener = null;
+                cachedMainCamera = null;
+                cachedMainCameraFrame = -1;
+                var banksToNotify = new List<AudioBank>(loadedBanks.Count);
+                foreach (var pair in loadedBanks)
+                {
+                    if (pair.Value != null)
+                        banksToNotify.Add(pair.Value);
+                }
+                if (ActiveEvents != null)
+                {
+                    for (int i = 0; i < ActiveEvents.Count; i++)
+                    {
+                        ActiveEvent activeEvent = ActiveEvents[i];
+                        if (activeEvent == null) continue;
+                        for (int sourceIndex = 0; sourceIndex < activeEvent.SourceCount; sourceIndex++)
+                        {
+                            EventSource eventSource = activeEvent.GetSource(sourceIndex);
+                            if (eventSource.IsValid) ResetAudioSource(eventSource.source);
+                        }
+                        activeEvent.ResetForPool();
+                    }
+                    ActiveEvents.Clear();
+                }
+                for (int i = 0; i < pendingEventRecycles.Count; i++)
+                {
+                    ActiveEvent pendingEvent = pendingEventRecycles[i].Event;
+                    if (pendingEvent != null) pendingEvent.ResetForPool();
+                }
+                pendingEventRecycles.Clear();
+                pendingEventRecycleSet.Clear();
+                for (int i = 0; i < sourcePool.Count; i++)
+                    ResetAudioSource(sourcePool[i]);
+                ReleaseAllPreloadedBankClipLeases();
+                activeEventPool.Clear();
+                availableSources.Clear();
+                sourcePool.Clear();
+                activeEventHandleTable.Clear();
+                freeActiveEventHandleSlots.Clear();
+                activeInstanceCounts.Clear();
+                playingEventNameCounts.Clear();
+                activeEventIndices.Clear();
+                preparedAudioEvents.Clear();
+                eventNameMap.Clear();
+                parameterNameMap.Clear();
+                stateGroupNameMap.Clear();
+                registeredStateMixProfiles.Clear();
+                bankRegistrations.Clear();
+                eventsBeingUnloaded.Clear();
+                bankOperationsInProgress.Clear();
+                groupsBeingReplaced.Clear();
+                preloadBankMutationVersions.Clear();
+                eventBindings.Clear();
+                parameterBindings.Clear();
+                stateGroupBindings.Clear();
+                eventOwnerCounts.Clear();
+                parameterOwnerCounts.Clear();
+                switchOwnerCounts.Clear();
+                stateGroupOwnerCounts.Clear();
+                profileOwnerCounts.Clear();
+                loadedBanks.Clear();
+                loadedBanksCacheDirty = true;
+                cachedLoadedBanksList.Clear();
+                cachedLoadedBanksReadOnly = null;
+                pendingRemovals.Clear();
+                categoryCountsCacheFrame = -1;
+                cachedStealVictimFrame = -1;
+                cachedStealVictim = null;
+                cachedStealVictimScore = float.MaxValue;
+                AudioClipResolver.ClearExternalCache();
+                AudioClipResolver.ClearReferenceLoaders();
+                AudioClipResolver.ClearCustomProviders();
+                AudioPoolConfig.ClearCache();
+                AudioVoicePolicyProfile.ClearCache();
+                AudioPlatformProfile.ClearCache();
+                AudioDuckingProfile.ClearCache();
+                recentTriggerTimes.Clear();
+                reusableExpiredTriggerKeys.Clear();
+                reusableCategorySourceCounts.Clear();
+                reusableCategoryBudgetLoads.Clear();
+                lastRepeatTriggerCleanupTime = 0f;
+                totalRepeatTriggerRejections = 0;
+                totalAudibilityCulls = 0;
+                activePoolConfig = null;
+                activePlatformProfile = null;
+                activeDuckingProfile = null;
+                activePlatformSettings = AudioPlatformProfile.GetFallbackSettings();
+                reusableGlobalParameters.Clear();
+                scopedParameterOverrides.Clear();
+                scopedParameterOwners.Clear();
+                reusableScopedParameterRemovalKeys.Clear();
+                reusableDeadParameterScopeIds.Clear();
+                lastScopedParameterOwnerCleanupFrame = -1;
+                activeDuckingProfile = null;
+                activeDuckingRuleCount = 0;
+                staticMainMixer = null;
+                currentPoolSize = 0;
+                initialPoolSize = 0;
+                maxPoolSize = 0;
+                lastPoolExpansionTime = 0f;
+                lastHighUsageTime = 0f;
+                lastShrinkTime = 0f;
+                peakPoolUsage = 0;
+                totalExpansions = 0;
+                totalSteals = 0;
+                globalVolume = 1f;
+                globalPaused = false;
+                systemPauseReasons = SystemPauseReason.None;
+                activeFocusMode = AudioFocusMode.All;
+                debugMode = false;
+                Array.Clear(previousEventsBuffer, 0, previousEventsBuffer.Length);
+                previousEventsWriteIndex = 0;
+                previousEventsCount = 0;
+                cachedPreviousEventsVersion = -1;
+                CurrentLanguage = 0;
+                Languages = null;
+                ExternalClipMemoryBudgetBytes = 0;
+                ExternalClipMaxDownloadBytes = DefaultExternalClipMaxDownloadBytes;
+                ExternalClipMaxDecodedBytes = DefaultExternalClipMaxDecodedBytes;
+                ExternalClipRequestTimeoutSeconds = DefaultExternalClipRequestTimeoutSeconds;
+                ExternalClipIdleTTL = DefaultExternalClipIdleTtlSeconds;
+                BankClipLeaseMaxDecodedBytes = DefaultBankClipLeaseMaxDecodedBytes;
+                ActiveBankClipLeaseMemoryBudgetBytes = DefaultActiveBankClipLeaseMemoryBudgetBytes;
+                activeBankClipLeaseMemoryBytes = 0L;
+                lastEvictionCheckTime = 0f;
+                ClearActiveEventCategoryCounts();
+                globalParametersCacheDirty = true;
+
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                activeClipRefCount.Clear();
+                clipMemoryCache.Clear();
+                Array.Clear(reusableTrackMemoryClips, 0, reusableTrackMemoryClips.Length);
+                TotalMemoryUsage = 0;
+                totalEventsPlayed = 0;
+                peakActiveEvents = 0;
+#endif
+
+                for (int i = 0; i < banksToNotify.Count; i++)
+                    NotifyBankUnloaded(banksToNotify[i]);
+                OnBankUnloaded = null;
+            }
+            finally
+            {
+                isTearingDown = false;
+            }
+        }
+
+        private static void AdvanceManagerLifecycleGeneration()
+        {
+            unchecked
+            {
+                managerLifecycleGeneration++;
+                if (managerLifecycleGeneration == 0)
+                    managerLifecycleGeneration++;
+            }
         }
 
         public static List<ActiveEvent> ActiveEvents { get; private set; }
 
         private static readonly Stack<ActiveEvent> activeEventPool = new Stack<ActiveEvent>(64);
+        private const int MaxRetainedActiveEvents = 64;
         private static readonly Queue<AudioSource> availableSources = new Queue<AudioSource>();
         private static readonly Stack<int> freeActiveEventHandleSlots = new Stack<int>(64);
         private static readonly List<ActiveEvent> activeEventHandleTable = new List<ActiveEvent>(64);
+        private static int nextActiveEventHandleGeneration;
         public static IReadOnlyCollection<AudioSource> AvailableSources => availableSources;
 
         // O(1) instance counting: keyed by AudioEvent.GetInstanceID()
@@ -441,6 +597,13 @@ namespace CycloneGames.Audio.Runtime
             public float RemoveTime;
         }
         private static readonly List<PendingRemoval> pendingRemovals = new List<PendingRemoval>(32);
+        private struct PendingEventRecycle
+        {
+            public ActiveEvent Event;
+            public int Generation;
+        }
+        private static readonly List<PendingEventRecycle> pendingEventRecycles = new List<PendingEventRecycle>(32);
+        private static readonly HashSet<ActiveEvent> pendingEventRecycleSet = new HashSet<ActiveEvent>();
 
         // Per-frame cached category counts (avoids recomputing on multiple steals/frame)
         private static int categoryCountsCacheFrame = -1;
@@ -449,80 +612,6 @@ namespace CycloneGames.Audio.Runtime
         private static int cachedStealVictimFrame = -1;
         private static ActiveEvent cachedStealVictim;
         private static float cachedStealVictimScore = float.MaxValue;
-        private enum AudioCommandType
-        {
-            None = 0,
-            PlayEventOnObject = 1,
-            PlayEventAtPosition = 2,
-            PlayEventByNameOnObject = 3,
-            PlayEventByNameAtPosition = 4,
-            PlayScheduledByName = 5,
-            PlayScheduledEvent = 6,
-            StopAllByEvent = 8,
-            StopAllByName = 9,
-            StopAllByGroup = 10,
-            LoadBank = 11,
-            UnloadBank = 12,
-            ClearEventNameMap = 13,
-            SetStateGroupValue = 14,
-            SetStateGroupByName = 15,
-            ExecuteActionEventOnObject = 16,
-            ExecuteActionEventAtPosition = 17
-        }
-
-        private readonly struct AudioCommand
-        {
-            public readonly AudioCommandType Type;
-            public readonly AudioEvent AudioEvent;
-            public readonly string EventName;
-            public readonly GameObject EmitterObject;
-            public readonly Vector3 Position;
-            public readonly double DspTime;
-            public readonly int Group;
-            public readonly AudioBank Bank;
-            public readonly bool OverwriteExisting;
-            public readonly AudioStateGroup StateGroup;
-            public readonly string StateName;
-            public readonly AudioActionEvent ActionEvent;
-
-            public AudioCommand(
-                AudioCommandType type,
-                AudioEvent audioEvent = null,
-                string eventName = null,
-                GameObject emitterObject = null,
-                Vector3 position = default,
-                double dspTime = 0d,
-                int group = 0,
-                AudioBank bank = null,
-                bool overwriteExisting = false,
-                AudioStateGroup stateGroup = null,
-                string stateName = null,
-                AudioActionEvent actionEvent = null)
-            {
-                Type = type;
-                AudioEvent = audioEvent;
-                EventName = eventName;
-                EmitterObject = emitterObject;
-                Position = position;
-                DspTime = dspTime;
-                Group = group;
-                Bank = bank;
-                OverwriteExisting = overwriteExisting;
-                StateGroup = stateGroup;
-                StateName = stateName;
-                ActionEvent = actionEvent;
-            }
-        }
-
-        private const int CommandQueueCapacity = 4096;
-        private static readonly object commandQueueLock = new object();
-        private static readonly AudioCommand[] commandQueue = new AudioCommand[CommandQueueCapacity];
-        private static int commandQueueHead;
-        private static int commandQueueTail;
-        private static int commandQueueCount;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-        private static int droppedCommandCount;
-#endif
         private static readonly ActiveEvent[] previousEventsBuffer = new ActiveEvent[MaxPreviousEvents];
         private static int previousEventsWriteIndex;
         private static int previousEventsCount;
@@ -607,16 +696,48 @@ namespace CycloneGames.Audio.Runtime
         private static readonly ConcurrentDictionary<string, AudioStateGroup> stateGroupNameMap = new ConcurrentDictionary<string, AudioStateGroup>();
         private static readonly List<AudioStateMixProfile> registeredStateMixProfiles = new List<AudioStateMixProfile>(32);
 
+        private static readonly Dictionary<int, AudioBankRegistration> bankRegistrations = new Dictionary<int, AudioBankRegistration>(16);
+        private static readonly Dictionary<string, List<BankNameContribution<AudioEvent>>> eventBindings = new Dictionary<string, List<BankNameContribution<AudioEvent>>>(StringComparer.Ordinal);
+        private static readonly Dictionary<string, List<BankNameContribution<AudioParameter>>> parameterBindings = new Dictionary<string, List<BankNameContribution<AudioParameter>>>(StringComparer.Ordinal);
+        private static readonly Dictionary<string, List<BankNameContribution<AudioStateGroup>>> stateGroupBindings = new Dictionary<string, List<BankNameContribution<AudioStateGroup>>>(StringComparer.Ordinal);
+        private static readonly Dictionary<int, int> eventOwnerCounts = new Dictionary<int, int>(256);
+        private static readonly Dictionary<int, int> parameterOwnerCounts = new Dictionary<int, int>(128);
+        private static readonly Dictionary<int, int> switchOwnerCounts = new Dictionary<int, int>(64);
+        private static readonly Dictionary<int, int> stateGroupOwnerCounts = new Dictionary<int, int>(64);
+        private static readonly Dictionary<int, int> profileOwnerCounts = new Dictionary<int, int>(64);
+        private static readonly HashSet<int> eventsBeingUnloaded = new HashSet<int>();
+        private static readonly HashSet<int> bankOperationsInProgress = new HashSet<int>();
+        private static readonly HashSet<int> groupsBeingReplaced = new HashSet<int>();
+        private static readonly Dictionary<int, IAudioBankClipLease> preloadedBankClipLeases = new Dictionary<int, IAudioBankClipLease>(16);
+        private static readonly Dictionary<int, PreloadBankRequest> preloadBankRequests = new Dictionary<int, PreloadBankRequest>(16);
+        private static readonly Dictionary<int, int> preloadBankMutationVersions = new Dictionary<int, int>(16);
+        private static int nextPreloadRequestId;
+
+        private sealed class PreloadBankRequest
+        {
+            public readonly int RequestId;
+            public readonly int LifecycleGeneration;
+            public readonly CancellationTokenSource Cancellation;
+
+            public PreloadBankRequest(int requestId, int lifecycleGeneration, CancellationTokenSource cancellation)
+            {
+                RequestId = requestId;
+                LifecycleGeneration = lifecycleGeneration;
+                Cancellation = cancellation;
+            }
+        }
+
         // O(1) bank tracking with instance ID as key for fast unload
         private static readonly ConcurrentDictionary<int, AudioBank> loadedBanks = new ConcurrentDictionary<int, AudioBank>();
 
         // Reusable collections to avoid allocations during bank loading
-        private static readonly Dictionary<string, int> reusableDuplicateCountCheck = new Dictionary<string, int>();
-        private static readonly HashSet<string> reusableBankRegisteredNames = new HashSet<string>();
         private static readonly List<AudioParameter> reusableGlobalParameters = new List<AudioParameter>();
         private static bool globalParametersCacheDirty = true;
         private static readonly Dictionary<AudioParameterScopeKey, AudioScopedParameterValue> scopedParameterOverrides = new Dictionary<AudioParameterScopeKey, AudioScopedParameterValue>(128);
+        private static readonly Dictionary<int, WeakReference<GameObject>> scopedParameterOwners = new Dictionary<int, WeakReference<GameObject>>(32);
         private static readonly List<AudioParameterScopeKey> reusableScopedParameterRemovalKeys = new List<AudioParameterScopeKey>(32);
+        private static readonly HashSet<int> reusableDeadParameterScopeIds = new HashSet<int>();
+        private static int lastScopedParameterOwnerCleanupFrame = -1;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         public static long TotalMemoryUsage { get; private set; }
@@ -626,16 +747,31 @@ namespace CycloneGames.Audio.Runtime
 
         private static float globalVolume = 1f;
         private static bool globalPaused;
-        private static bool systemPaused;
+        [Flags]
+        private enum SystemPauseReason
+        {
+            None = 0,
+            ApplicationPause = 1,
+            FocusLoss = 2
+        }
+        private static SystemPauseReason systemPauseReasons;
+        internal static bool IsPlaybackPaused => globalPaused || systemPauseReasons != SystemPauseReason.None;
+        internal static AudioPauseReason CurrentPauseReasons
+        {
+            get
+            {
+                AudioPauseReason reasons = globalPaused ? AudioPauseReason.Global : AudioPauseReason.None;
+                if ((systemPauseReasons & SystemPauseReason.ApplicationPause) != 0)
+                    reasons |= AudioPauseReason.ApplicationPause;
+                if ((systemPauseReasons & SystemPauseReason.FocusLoss) != 0)
+                    reasons |= AudioPauseReason.FocusLoss;
+                return reasons;
+            }
+        }
         private static AudioFocusMode activeFocusMode = AudioFocusMode.All;
         private static bool debugMode;
         public static bool DebugMode => debugMode;
         private const int MaxPreviousEvents = 300;
-
-#if UNITY_ANDROID || UNITY_IOS
-        private static float lastMobileUpdateTime;
-        private const float MobileUpdateInterval = 0.008f; // ~120Hz max to save battery
-#endif
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private static long totalEventsPlayed;
@@ -666,13 +802,8 @@ namespace CycloneGames.Audio.Runtime
 
         public static AudioRuntimeStats GetRuntimeStats()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetRuntimeStats));
             ExternalAudioClipCacheStats externalCache = AudioClipResolver.GetExternalCacheStats();
-            int queuedCommands;
-            lock (commandQueueLock)
-            {
-                queuedCommands = commandQueueCount;
-            }
-
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             long totalPlayed = Interlocked.Read(ref totalEventsPlayed);
             int peakEvents = peakActiveEvents;
@@ -705,7 +836,7 @@ namespace CycloneGames.Audio.Runtime
                 activeDuckingRuleCount,
                 scopedParameterOverrides.Count,
                 pendingRemovals.Count,
-                queuedCommands,
+                0,
                 externalCache,
                 totalPlayed,
                 peakEvents
@@ -717,6 +848,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void GetCategoryVoiceStats(List<AudioCategoryVoiceStats> results)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetCategoryVoiceStats));
             if (results == null) return;
 
             EnsureCategoryCountsCached();
@@ -734,6 +866,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static IReadOnlyList<ActiveEvent> GetPreviousEvents()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetPreviousEvents));
             int currentVersion = previousEventsWriteIndex;
             if (cachedPreviousEventsList != null && cachedPreviousEventsVersion == currentVersion)
             {
@@ -800,9 +933,15 @@ namespace CycloneGames.Audio.Runtime
         void IAudioService.LoadBank(AudioBank bank, bool overwriteExisting) => LoadBank(bank, overwriteExisting);
         void IAudioService.UnloadBank(AudioBank bank) => UnloadBank(bank);
         UniTask<int> IAudioService.PreloadBankClipsAsync(AudioBank bank, CancellationToken cancellationToken) => PreloadBankClipsAsync(bank, cancellationToken);
+        void IAudioLifecyclePauseControl.ResumeLifecyclePausedEvents() => ResumeLifecyclePausedEvents();
+        UniTask<IAudioBankClipLease> IAudioBankClipLeaseProvider.AcquireBankClipLeaseAsync(
+            AudioBank bank,
+            CancellationToken cancellationToken) => AcquireBankClipLeaseAsync(bank, cancellationToken);
 
         public void SetMixerVolume(string parameterName, float volume)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetMixerVolume));
+            if (string.IsNullOrEmpty(parameterName) || !IsFinite(volume)) return;
             if (mainMixer != null)
                 mainMixer.SetFloat(parameterName, volume);
             else
@@ -811,7 +950,8 @@ namespace CycloneGames.Audio.Runtime
 
         public static bool SetMixerParameter(string parameterName, float value)
         {
-            if (string.IsNullOrEmpty(parameterName)) return false;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetMixerParameter));
+            if (string.IsNullOrEmpty(parameterName) || !IsFinite(value)) return false;
 
             AudioMixer mixer = staticMainMixer;
             return mixer != null && mixer.SetFloat(parameterName, value);
@@ -819,6 +959,7 @@ namespace CycloneGames.Audio.Runtime
 
         public float GetMixerVolume(string parameterName)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetMixerVolume));
             if (mainMixer != null && mainMixer.GetFloat(parameterName, out float value))
                 return value;
             return 0f;
@@ -826,21 +967,31 @@ namespace CycloneGames.Audio.Runtime
 
         public static void SetGlobalVolume(float volume)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetGlobalVolume));
+            if (!IsFinite(volume)) return;
             globalVolume = Mathf.Clamp01(volume);
             AudioListener.volume = globalVolume;
         }
 
-        public static float GetGlobalVolume() => globalVolume;
+        public static float GetGlobalVolume()
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetGlobalVolume));
+            return globalVolume;
+        }
 
         public static void SetParameterValue(AudioParameter parameter, float value)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetParameterValue));
             if (parameter == null) throw new ArgumentNullException(nameof(parameter));
+            if (!IsFinite(value)) return;
 
             parameter.SetValue(value);
         }
 
         public static bool SetParameterValue(string parameterName, float value)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetParameterValue));
+            if (!IsFinite(value)) return false;
             AudioParameter parameter = GetParameterByName(parameterName);
             if (parameter == null) return false;
 
@@ -850,7 +1001,9 @@ namespace CycloneGames.Audio.Runtime
 
         public static void SetParameterValue(AudioParameter parameter, GameObject emitterObject, float value)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetParameterValue));
             if (parameter == null) throw new ArgumentNullException(nameof(parameter));
+            if (!IsFinite(value)) return;
             if (emitterObject == null)
             {
                 parameter.SetValue(value);
@@ -859,6 +1012,14 @@ namespace CycloneGames.Audio.Runtime
 
             int parameterId = parameter.GetInstanceID();
             int scopeId = emitterObject.GetInstanceID();
+            if (!scopedParameterOwners.TryGetValue(scopeId, out WeakReference<GameObject> ownerReference)
+                || !ownerReference.TryGetTarget(out GameObject currentOwner)
+                || currentOwner != emitterObject)
+            {
+                RemoveScopedParameterOverridesForScope(scopeId);
+                scopedParameterOwners[scopeId] = new WeakReference<GameObject>(emitterObject);
+            }
+
             var key = new AudioParameterScopeKey(parameterId, scopeId);
             if (!scopedParameterOverrides.TryGetValue(key, out AudioScopedParameterValue scopedValue))
             {
@@ -872,6 +1033,8 @@ namespace CycloneGames.Audio.Runtime
 
         public static bool SetParameterValue(string parameterName, GameObject emitterObject, float value)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetParameterValue));
+            if (!IsFinite(value)) return false;
             AudioParameter parameter = GetParameterByName(parameterName);
             if (parameter == null) return false;
 
@@ -881,6 +1044,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static float GetParameterValue(AudioParameter parameter)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetParameterValue));
             if (parameter == null) throw new ArgumentNullException(nameof(parameter));
 
             return parameter.EvaluateCurrentValue();
@@ -888,6 +1052,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static bool TryGetParameterValue(string parameterName, out float value)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(TryGetParameterValue));
             AudioParameter parameter = GetParameterByName(parameterName);
             if (parameter == null)
             {
@@ -901,6 +1066,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static float GetParameterValue(AudioParameter parameter, GameObject emitterObject)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetParameterValue));
             if (parameter == null) throw new ArgumentNullException(nameof(parameter));
 
             return emitterObject != null
@@ -923,35 +1089,69 @@ namespace CycloneGames.Audio.Runtime
 
         public static bool ClearParameterValue(AudioParameter parameter, GameObject emitterObject)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ClearParameterValue));
             if (parameter == null) throw new ArgumentNullException(nameof(parameter));
             if (emitterObject == null) return false;
 
-            return scopedParameterOverrides.Remove(new AudioParameterScopeKey(parameter.GetInstanceID(), emitterObject.GetInstanceID()));
+            int scopeId = emitterObject.GetInstanceID();
+            bool removed = scopedParameterOverrides.Remove(new AudioParameterScopeKey(parameter.GetInstanceID(), scopeId));
+            if (removed)
+            {
+                RemoveScopedParameterOwnerIfUnused(scopeId);
+            }
+            return removed;
         }
 
         public static bool ClearParameterValue(string parameterName, GameObject emitterObject)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ClearParameterValue));
             AudioParameter parameter = GetParameterByName(parameterName);
             return parameter != null && ClearParameterValue(parameter, emitterObject);
         }
 
+        /// <summary>
+        /// Removes every emitter-scoped parameter override owned by <paramref name="emitterObject"/>.
+        /// Call this during explicit emitter teardown when immediate cleanup is required.
+        /// Destroyed emitters are also removed automatically by the runtime maintenance pass.
+        /// </summary>
+        /// <returns>The number of removed overrides.</returns>
+        public static int ClearScopedParameterValues(GameObject emitterObject)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ClearScopedParameterValues));
+            if (emitterObject == null) return 0;
+
+            int scopeId = emitterObject.GetInstanceID();
+            int removedCount = RemoveScopedParameterOverridesForScope(scopeId);
+            scopedParameterOwners.Remove(scopeId);
+            return removedCount;
+        }
+
         public static void ClearAllScopedParameterValues()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ClearAllScopedParameterValues));
             scopedParameterOverrides.Clear();
+            scopedParameterOwners.Clear();
+        }
+
+        internal static void ValidateScopedParameterOwner(GameObject emitterObject)
+        {
+            if (emitterObject == null) return;
+
+            int scopeId = emitterObject.GetInstanceID();
+            if (!scopedParameterOwners.TryGetValue(scopeId, out WeakReference<GameObject> ownerReference))
+                return;
+            if (ownerReference.TryGetTarget(out GameObject currentOwner) && currentOwner == emitterObject)
+                return;
+
+            RemoveScopedParameterOverridesForScope(scopeId);
+            scopedParameterOwners.Remove(scopeId);
         }
 
         public static void SetState(AudioStateGroup stateGroup, int stateValue)
         {
             if (stateGroup == null) throw new ArgumentNullException(nameof(stateGroup));
 
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.SetStateGroupValue,
-                    group: stateValue,
-                    stateGroup: stateGroup));
-                return;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetState));
 
             int previousValue = stateGroup.CurrentValue;
             stateGroup.SetValue(stateValue);
@@ -966,14 +1166,7 @@ namespace CycloneGames.Audio.Runtime
             if (string.IsNullOrEmpty(stateGroupName)) return false;
             if (string.IsNullOrEmpty(stateName)) return false;
 
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.SetStateGroupByName,
-                    eventName: stateGroupName,
-                    stateName: stateName));
-                return true;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetState));
 
             AudioStateGroup stateGroup = GetStateGroupByName(stateGroupName);
             if (stateGroup == null) return false;
@@ -990,6 +1183,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static AudioStateGroup GetStateGroupByName(string stateGroupName)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetStateGroupByName));
             if (string.IsNullOrEmpty(stateGroupName)) return null;
             stateGroupNameMap.TryGetValue(stateGroupName, out AudioStateGroup result);
             return result;
@@ -997,6 +1191,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static bool TryGetState(string stateGroupName, out string stateName)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(TryGetState));
             AudioStateGroup stateGroup = GetStateGroupByName(stateGroupName);
             if (stateGroup == null)
             {
@@ -1012,14 +1207,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (actionEvent == null) throw new ArgumentNullException(nameof(actionEvent));
 
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.ExecuteActionEventOnObject,
-                    emitterObject: emitterObject,
-                    actionEvent: actionEvent));
-                return;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExecuteActionEvent));
 
             actionEvent.Execute(emitterObject);
         }
@@ -1028,14 +1216,8 @@ namespace CycloneGames.Audio.Runtime
         {
             if (actionEvent == null) throw new ArgumentNullException(nameof(actionEvent));
 
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.ExecuteActionEventAtPosition,
-                    position: position,
-                    actionEvent: actionEvent));
-                return;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExecuteActionEvent));
+            if (!IsFinite(position)) return;
 
             actionEvent.Execute(position);
         }
@@ -1046,32 +1228,74 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static AudioFocusMode FocusMode
         {
-            get => activeFocusMode;
-            set => activeFocusMode = value;
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(FocusMode));
+                return activeFocusMode;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(FocusMode));
+                activeFocusMode = value;
+            }
         }
 
         public static void PauseAll()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PauseAll));
             if (!ValidateManager()) return;
             globalPaused = true;
             int count = ActiveEvents.Count;
             for (int i = 0; i < count; i++)
-                ActiveEvents[i]?.Pause();
+                ActiveEvents[i]?.SetPauseReason(AudioPauseReason.Global, true);
         }
 
         public static void ResumeAll()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ResumeAll));
             if (!ValidateManager()) return;
             globalPaused = false;
             int count = ActiveEvents.Count;
             for (int i = 0; i < count; i++)
-                ActiveEvents[i]?.Resume();
+            {
+                ActiveEvent activeEvent = ActiveEvents[i];
+                if (activeEvent == null) continue;
+                activeEvent.SetPauseReason(AudioPauseReason.Global, false);
+            }
+        }
+
+        /// <summary>
+        /// Resumes events held after an automatic lifecycle pause whose matching auto-resume
+        /// option was disabled. Manual per-event and PauseAll reasons remain unchanged.
+        /// </summary>
+        public static void ResumeLifecyclePausedEvents()
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ResumeLifecyclePausedEvents));
+            if (!ValidateManager()) return;
+
+            int count = ActiveEvents.Count;
+            for (int i = 0; i < count; i++)
+                ActiveEvents[i]?.SetPauseReason(AudioPauseReason.LifecycleHold, false);
         }
 
         public static bool IsEventPlaying(string eventName)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(IsEventPlaying));
             if (string.IsNullOrEmpty(eventName)) return false;
-            return playingEventNameCounts.TryGetValue(eventName, out int count) && count > 0;
+            if (ActiveEvents == null) return false;
+
+            for (int i = 0; i < ActiveEvents.Count; i++)
+            {
+                ActiveEvent activeEvent = ActiveEvents[i];
+                if (activeEvent != null &&
+                    activeEvent.status == EventStatus.Played &&
+                    string.Equals(activeEvent.name, eventName, StringComparison.Ordinal))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -1080,90 +1304,68 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static void SetInstance(AudioManager manager)
         {
-            if (manager == null) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetInstance));
+            if (manager == null || isTearingDown) return;
             Instance = manager;
             if (!isInitialized) manager.Initialize();
         }
 
+        internal static void ReleaseInstance(AudioManager manager)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReleaseInstance));
+            if (ReferenceEquals(manager, null)) return;
+            if (ReferenceEquals(Instance, manager)) Cleanup();
+        }
+
         /// <summary>
-        /// Start playing an AudioEvent. Thread-safe.
+        /// Start playing an AudioEvent on the Unity main thread.
         /// </summary>
         public static ActiveEvent PlayEvent(AudioEvent eventToPlay, GameObject emitterObject)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.PlayEventOnObject,
-                    audioEvent: eventToPlay,
-                    emitterObject: emitterObject));
-                return null;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEvent));
 
             Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
             if (!ValidateManager() || !ValidateEvent(eventToPlay, emitterTransform, null, false, out RepeatTriggerKey triggerKey)) return null;
 
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
             tempEvent.Play();
-            if (tempEvent.status == EventStatus.Error)
+            if (IsFailedPlaybackStatus(tempEvent))
             {
                 RecycleInactiveEvent(tempEvent);
                 return null;
             }
 
-            if (tempEvent.status != EventStatus.Error)
+            if (!IsFailedPlaybackStatus(tempEvent))
                 CommitRepeatTrigger(triggerKey);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (tempEvent.status != EventStatus.Error)
-                TrackMemory(tempEvent, true);
-#endif
 
             return tempEvent;
         }
 
         public static ActiveEvent PlayEvent(AudioEvent eventToPlay, Vector3 position)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.PlayEventAtPosition,
-                    audioEvent: eventToPlay,
-                    position: position));
-                return null;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEvent));
 
+            if (!IsFinite(position)) return null;
             if (!ValidateManager() || !ValidateEvent(eventToPlay, null, position, false, out RepeatTriggerKey triggerKey)) return null;
 
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, null);
+            tempEvent.SetEmitterPosition(position);
             tempEvent.Play();
-            if (tempEvent.status == EventStatus.Error)
+            if (IsFailedPlaybackStatus(tempEvent))
             {
                 RecycleInactiveEvent(tempEvent);
                 return null;
             }
 
-            tempEvent.SetAllSourcePositions(position);
-            if (tempEvent.status != EventStatus.Error)
+            if (!IsFailedPlaybackStatus(tempEvent))
                 CommitRepeatTrigger(triggerKey);
-
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (tempEvent.status != EventStatus.Error)
-                TrackMemory(tempEvent, true);
-#endif
 
             return tempEvent;
         }
 
         public static ActiveEvent PlayEvent(string eventName, GameObject emitterObject)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.PlayEventByNameOnObject,
-                    eventName: eventName,
-                    emitterObject: emitterObject));
-                return null;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEvent));
 
             if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return null;
 
@@ -1181,15 +1383,9 @@ namespace CycloneGames.Audio.Runtime
 
         public static ActiveEvent PlayEvent(string eventName, Vector3 position)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.PlayEventByNameAtPosition,
-                    eventName: eventName,
-                    position: position));
-                return null;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEvent));
 
+            if (!IsFinite(position)) return null;
             if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return null;
 
             AudioEvent eventToPlay = GetEventByName(eventName);
@@ -1209,18 +1405,13 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static ActiveEvent PlayEventScheduled(string eventName, GameObject emitterObject, double dspTime)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEventScheduled));
+
+            if (!IsFinite(dspTime))
             {
-                double capturedDspTime = AudioSettings.dspTime;
-                double adjustedDspTime = dspTime > capturedDspTime ? dspTime : capturedDspTime + 0.01;
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.PlayScheduledByName,
-                    eventName: eventName,
-                    emitterObject: emitterObject,
-                    dspTime: adjustedDspTime));
+                Debug.LogWarning("AudioManager: Scheduled DSP time must be finite.");
                 return null;
             }
-
             if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return null;
 
             AudioEvent eventToPlay = GetEventByName(eventName);
@@ -1237,18 +1428,13 @@ namespace CycloneGames.Audio.Runtime
 
         public static ActiveEvent PlayEventScheduled(AudioEvent eventToPlay, GameObject emitterObject, double dspTime)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PlayEventScheduled));
+
+            if (!IsFinite(dspTime))
             {
-                double capturedDspTime = AudioSettings.dspTime;
-                double adjustedDspTime = dspTime > capturedDspTime ? dspTime : capturedDspTime + 0.01;
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.PlayScheduledEvent,
-                    audioEvent: eventToPlay,
-                    emitterObject: emitterObject,
-                    dspTime: adjustedDspTime));
+                Debug.LogWarning("AudioManager: Scheduled DSP time must be finite.");
                 return null;
             }
-
             Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
             if (!ValidateManager() || !ValidateEvent(eventToPlay, emitterTransform, null, true, out RepeatTriggerKey triggerKey)) return null;
 
@@ -1258,27 +1444,28 @@ namespace CycloneGames.Audio.Runtime
             ActiveEvent tempEvent = GetActiveEventFromPool(eventToPlay, emitterTransform);
             tempEvent.scheduledDspTime = dspTime;
             tempEvent.Play();
-            if (tempEvent.status == EventStatus.Error)
+            if (IsFailedPlaybackStatus(tempEvent))
             {
                 RecycleInactiveEvent(tempEvent);
                 return null;
             }
 
-            if (tempEvent.status != EventStatus.Error)
+            if (!IsFailedPlaybackStatus(tempEvent))
                 CommitRepeatTrigger(triggerKey);
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (tempEvent.status != EventStatus.Error)
-                TrackMemory(tempEvent, true);
-#endif
-
             return tempEvent;
+        }
+
+        private static bool IsFailedPlaybackStatus(ActiveEvent activeEvent)
+        {
+            return activeEvent == null ||
+                   (activeEvent.status != EventStatus.Preparing && activeEvent.status != EventStatus.Played);
         }
 
         private static ActiveEvent GetActiveEventFromPool(AudioEvent eventToPlay, Transform emitter)
         {
             ActiveEvent activeEvent = activeEventPool.Count > 0 ? activeEventPool.Pop() : new ActiveEvent();
-            activeEvent.Initialize(eventToPlay, emitter);
+            activeEvent.InitializeForManager(eventToPlay, emitter);
             RegisterActiveEventHandle(activeEvent);
             return activeEvent;
         }
@@ -1286,21 +1473,16 @@ namespace CycloneGames.Audio.Runtime
         private static void RecycleInactiveEvent(ActiveEvent activeEvent)
         {
             if (activeEvent == null) return;
+            if (activeEvent.handleSlot < 0 && !activeEventIndices.ContainsKey(activeEvent)) return;
 
             UnregisterActiveEventHandle(activeEvent);
-            activeEvent.Reset();
-            activeEventPool.Push(activeEvent);
+            activeEvent.DetachSourcesToPool();
+            RetainRecycledEvent(activeEvent);
         }
 
         public static void StopAll(AudioEvent eventsToStop)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.StopAllByEvent,
-                    audioEvent: eventsToStop));
-                return;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(StopAll));
 
             if (!ValidateManager()) return;
 
@@ -1314,13 +1496,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void StopAll(string eventName)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.StopAllByName,
-                    eventName: eventName));
-                return;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(StopAll));
 
             if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return;
 
@@ -1338,13 +1514,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void StopAll(int groupNum)
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.StopAllByGroup,
-                    group: groupNum));
-                return;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(StopAll));
 
             if (!ValidateManager()) return;
 
@@ -1358,14 +1528,47 @@ namespace CycloneGames.Audio.Runtime
 
         public static void RemoveActiveEvent(ActiveEvent stoppedEvent)
         {
-            if (!ValidateManager()) return;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(RemoveActiveEvent));
+            if (isTearingDown || !ValidateManager()) return;
+            if (stoppedEvent == null || !activeEventIndices.ContainsKey(stoppedEvent)) return;
 
-            // Idempotent: skip if not tracked (prevents double pool entry from delayed removal)
-            if (!activeEventIndices.TryGetValue(stoppedEvent, out int idx)) return;
+            if (stoppedEvent.status != EventStatus.Stopped)
+                stoppedEvent.StopImmediate();
+            else
+                DeactivateActiveEvent(stoppedEvent);
+        }
+
+        private static void RemoveActiveEventInternal(ActiveEvent stoppedEvent)
+        {
+            if (stoppedEvent == null) return;
+            if (DeactivateActiveEventInternal(stoppedEvent, queueForRecycle: false))
+            {
+                RecycleEventNow(stoppedEvent);
+                return;
+            }
+
+            RecycleEventNow(stoppedEvent);
+        }
+
+        internal static bool DeactivateActiveEvent(ActiveEvent stoppedEvent)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(DeactivateActiveEvent));
+            return DeactivateActiveEventInternal(stoppedEvent, queueForRecycle: true);
+        }
+
+        private static bool DeactivateActiveEventInternal(ActiveEvent stoppedEvent, bool queueForRecycle)
+        {
+            if (stoppedEvent == null || ActiveEvents == null) return false;
+
+            if (!activeEventIndices.TryGetValue(stoppedEvent, out int idx)) return false;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             // Track memory BEFORE clearing clips, so TrackMemory can read source.clip
-            TrackMemory(stoppedEvent, false);
+            if (stoppedEvent.memoryTracked)
+            {
+                TrackMemory(stoppedEvent, false);
+                stoppedEvent.memoryTracked = false;
+            }
 #endif
 
             // Decrement O(1) tracking counters
@@ -1389,18 +1592,7 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            // Clear AudioSource.clip before returning to pool.
-            int sourceCount = stoppedEvent.SourceCount;
-            for (int i = 0; i < sourceCount; i++)
-            {
-                var es = stoppedEvent.GetSource(i);
-                if (es.IsValid)
-                {
-                    ResetAudioSource(es.source);
-                    es.source.clip = null;
-                    availableSources.Enqueue(es.source);
-                }
-            }
+            stoppedEvent.DetachSourcesToPool();
 
             // O(1) swap-remove from ActiveEvents + index tracking
             int last = ActiveEvents.Count - 1;
@@ -1415,8 +1607,58 @@ namespace CycloneGames.Audio.Runtime
 
             RemovePendingRemovalsForEvent(stoppedEvent, stoppedEvent.generation);
             UnregisterActiveEventHandle(stoppedEvent);
-            stoppedEvent.Reset();
-            activeEventPool.Push(stoppedEvent);
+            if (queueForRecycle && pendingEventRecycleSet.Add(stoppedEvent))
+            {
+                pendingEventRecycles.Add(new PendingEventRecycle
+                {
+                    Event = stoppedEvent,
+                    Generation = stoppedEvent.generation
+                });
+            }
+            InvalidateVoiceSelectionCaches();
+            return true;
+        }
+
+        private static void RecycleEventNow(ActiveEvent activeEvent)
+        {
+            if (activeEvent == null || activeEventIndices.ContainsKey(activeEvent)) return;
+            if (activeEvent.handleSlot >= 0) return;
+
+            pendingEventRecycleSet.Remove(activeEvent);
+            for (int i = pendingEventRecycles.Count - 1; i >= 0; i--)
+            {
+                if (!ReferenceEquals(pendingEventRecycles[i].Event, activeEvent)) continue;
+                int last = pendingEventRecycles.Count - 1;
+                if (i < last) pendingEventRecycles[i] = pendingEventRecycles[last];
+                pendingEventRecycles.RemoveAt(last);
+            }
+
+            RetainRecycledEvent(activeEvent);
+        }
+
+        private static void ProcessPendingEventRecycles()
+        {
+            for (int i = pendingEventRecycles.Count - 1; i >= 0; i--)
+            {
+                PendingEventRecycle pending = pendingEventRecycles[i];
+                ActiveEvent activeEvent = pending.Event;
+                pendingEventRecycles.RemoveAt(i);
+                pendingEventRecycleSet.Remove(activeEvent);
+                if (activeEvent == null || activeEvent.generation != pending.Generation) continue;
+                if (activeEventIndices.ContainsKey(activeEvent) || activeEvent.handleSlot >= 0) continue;
+
+                RetainRecycledEvent(activeEvent);
+            }
+        }
+
+        private static void RetainRecycledEvent(ActiveEvent activeEvent)
+        {
+            if (activeEvent == null) return;
+
+            activeEvent.ResetForPool();
+            activeEvent.isInPool = true;
+            if (activeEventPool.Count < MaxRetainedActiveEvents)
+                activeEventPool.Push(activeEvent);
         }
 
         /// <summary>
@@ -1441,10 +1683,27 @@ namespace CycloneGames.Audio.Runtime
                 playingEventNameCounts.TryGetValue(activeEvent.name, out int nc);
                 playingEventNameCounts[activeEvent.name] = nc + 1;
             }
+
+            InvalidateVoiceSelectionCaches();
+        }
+
+        private static void InvalidateVoiceSelectionCaches()
+        {
+            categoryCountsCacheFrame = -1;
+            cachedStealVictimFrame = -1;
+            cachedStealVictim = null;
+            cachedStealVictimScore = float.MaxValue;
+        }
+
+        internal static void NotifyActiveEventSourcesChanged(ActiveEvent activeEvent)
+        {
+            if (activeEvent != null && activeEventIndices.ContainsKey(activeEvent))
+                InvalidateVoiceSelectionCaches();
         }
 
         public static void AddPreviousEvent(ActiveEvent newEvent)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AddPreviousEvent));
             previousEventsBuffer[previousEventsWriteIndex] = newEvent;
             previousEventsWriteIndex = (previousEventsWriteIndex + 1) % MaxPreviousEvents;
             if (previousEventsCount < MaxPreviousEvents) previousEventsCount++;
@@ -1512,6 +1771,14 @@ namespace CycloneGames.Audio.Runtime
                 activeEventHandleTable[slot] = activeEvent;
             }
 
+            unchecked
+            {
+                nextActiveEventHandleGeneration++;
+            }
+            if (nextActiveEventHandleGeneration == 0)
+                nextActiveEventHandleGeneration = 1;
+
+            activeEvent.generation = nextActiveEventHandleGeneration;
             activeEvent.handleSlot = slot;
         }
 
@@ -1530,6 +1797,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void UpdateLanguages()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(UpdateLanguages));
             CultureInfo[] cultures = CultureInfo.GetCultures(CultureTypes.AllCultures);
             Languages = new string[cultures.Length];
             for (int i = 0; i < cultures.Length; i++)
@@ -1538,6 +1806,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void SetDebugMode(bool toggle)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetDebugMode));
             debugMode = toggle;
             ClearSourceText();
         }
@@ -1568,6 +1837,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static PoolStatistics GetPoolStatistics()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetPoolStatistics));
             return new PoolStatistics
             {
                 ActiveEventPoolSize = activeEventPool.Count,
@@ -1585,6 +1855,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ResetPoolStatistics()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ResetPoolStatistics));
             Interlocked.Exchange(ref totalEventsPlayed, 0);
             Interlocked.Exchange(ref peakActiveEvents, 0);
             totalRepeatTriggerRejections = 0;
@@ -1598,8 +1869,15 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static void DelayRemoveActiveEvent(ActiveEvent eventToRemove, float delay = 1)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(DelayRemoveActiveEvent));
             if (eventToRemove == null) return;
-            if (!ValidateManager()) return;
+            if (isTearingDown || !ValidateManager()) return;
+            if (!activeEventIndices.ContainsKey(eventToRemove)) return;
+            if (float.IsNaN(delay) || float.IsInfinity(delay))
+            {
+                Debug.LogWarning("AudioManager: Deferred removal delay must be finite. Removing on the next update.");
+                delay = 0f;
+            }
             int generation = eventToRemove.generation;
 
             for (int i = 0; i < pendingRemovals.Count; i++)
@@ -1613,7 +1891,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 Event = eventToRemove,
                 Generation = generation,
-                RemoveTime = Time.time + delay
+                RemoveTime = Time.unscaledTime + Mathf.Max(0f, delay)
             });
         }
 
@@ -1637,7 +1915,16 @@ namespace CycloneGames.Audio.Runtime
 
         private void Awake()
         {
-            mainThreadId = Thread.CurrentThread.ManagedThreadId;
+            AudioRuntimeThreadGuard.CaptureCurrentThread();
+
+            if (isTearingDown)
+            {
+                if (Application.isPlaying)
+                    Destroy(gameObject);
+                else
+                    DestroyImmediate(gameObject);
+                return;
+            }
 
             if (Instance != null)
             {
@@ -1654,22 +1941,26 @@ namespace CycloneGames.Audio.Runtime
 
         private void OnDestroy()
         {
-            if (Instance == this) Cleanup();
+            ReleaseInstance(this);
         }
 
-        private void OnApplicationQuit() => Cleanup();
+        private void OnApplicationQuit()
+        {
+            ReleaseInstance(this);
+        }
 
         private void OnApplicationPause(bool pauseStatus)
         {
             if (pauseStatus)
             {
                 if ((activeFocusMode & AudioFocusMode.PauseOnAppPause) != 0)
-                    SystemPause();
+                    SystemPause(SystemPauseReason.ApplicationPause);
             }
             else
             {
-                if ((activeFocusMode & AudioFocusMode.ResumeOnAppResume) != 0)
-                    SystemResume();
+                SystemResume(
+                    SystemPauseReason.ApplicationPause,
+                    (activeFocusMode & AudioFocusMode.ResumeOnAppResume) != 0);
             }
         }
 
@@ -1678,12 +1969,13 @@ namespace CycloneGames.Audio.Runtime
             if (!hasFocus)
             {
                 if ((activeFocusMode & AudioFocusMode.PauseOnFocusLost) != 0)
-                    SystemPause();
+                    SystemPause(SystemPauseReason.FocusLoss);
             }
             else
             {
-                if ((activeFocusMode & AudioFocusMode.ResumeOnFocusGain) != 0)
-                    SystemResume();
+                SystemResume(
+                    SystemPauseReason.FocusLoss,
+                    (activeFocusMode & AudioFocusMode.ResumeOnFocusGain) != 0);
             }
         }
 
@@ -1691,115 +1983,165 @@ namespace CycloneGames.Audio.Runtime
         /// System-initiated pause (focus/app lifecycle). Tracked separately from manual PauseAll()
         /// so that auto-resume can work even after globalPaused was set.
         /// </summary>
-        private static void SystemPause()
+        private static void SystemPause(SystemPauseReason reason)
         {
             if (!ValidateManager()) return;
-            systemPaused = true;
+            systemPauseReasons |= reason;
+            AudioPauseReason eventReason = reason == SystemPauseReason.ApplicationPause
+                ? AudioPauseReason.ApplicationPause
+                : AudioPauseReason.FocusLoss;
             int count = ActiveEvents.Count;
             for (int i = 0; i < count; i++)
-                ActiveEvents[i]?.Pause();
+                ActiveEvents[i]?.SetPauseReason(eventReason, true);
         }
 
         /// <summary>
         /// System-initiated resume. Only resumes if the pause was system-initiated,
         /// not if the game manually called PauseAll().
         /// </summary>
-        private static void SystemResume()
+        private static void SystemResume(SystemPauseReason reason, bool autoResume)
         {
-            if (!systemPaused) return;
-            systemPaused = false;
-            if (!globalPaused)
-                ResumeAll();
+            if ((systemPauseReasons & reason) == 0) return;
+            systemPauseReasons &= ~reason;
+            AudioPauseReason eventReason = reason == SystemPauseReason.ApplicationPause
+                ? AudioPauseReason.ApplicationPause
+                : AudioPauseReason.FocusLoss;
+            int count = ActiveEvents != null ? ActiveEvents.Count : 0;
+            for (int i = 0; i < count; i++)
+            {
+                ActiveEvent activeEvent = ActiveEvents[i];
+                if (activeEvent == null) continue;
+                if (!autoResume)
+                    activeEvent.SetPauseReason(AudioPauseReason.LifecycleHold, true);
+                activeEvent.SetPauseReason(eventReason, false);
+            }
         }
 
         private static void Cleanup()
         {
-            if (ActiveEvents != null)
+            if (isTearingDown) return;
+            AudioManager instanceBeingCleaned = Instance;
+            AdvanceManagerLifecycleGeneration();
+            isTearingDown = true;
+            try
             {
-                for (int i = ActiveEvents.Count - 1; i >= 0; i--)
+                Application.quitting -= HandleQuitting;
+
+                var banksToNotify = new List<AudioBank>(loadedBanks.Count);
+                foreach (var pair in loadedBanks)
                 {
-                    if (i >= ActiveEvents.Count) continue;
-                    ActiveEvents[i]?.StopImmediate();
+                    if (pair.Value != null)
+                        banksToNotify.Add(pair.Value);
                 }
-                ActiveEvents.Clear();
-            }
 
-            activeInstanceCounts.Clear();
-            playingEventNameCounts.Clear();
-            activeEventIndices.Clear();
-            ClearActiveEventCategoryCounts();
-            pendingRemovals.Clear();
-            categoryCountsCacheFrame = -1;
-            cachedStealVictimFrame = -1;
-            cachedStealVictim = null;
+                if (ActiveEvents != null)
+                {
+                    while (ActiveEvents.Count > 0)
+                    {
+                        ActiveEvent activeEvent = ActiveEvents[ActiveEvents.Count - 1];
+                        if (activeEvent == null)
+                        {
+                            ActiveEvents.RemoveAt(ActiveEvents.Count - 1);
+                            continue;
+                        }
 
-            eventNameMap.Clear();
-            parameterNameMap.Clear();
-            stateGroupNameMap.Clear();
-            preparedAudioEvents.Clear();
-            loadedBanks.Clear();
-            loadedBanksCacheDirty = true;
+                        activeEvent.StopImmediate();
+                        if (activeEventIndices.ContainsKey(activeEvent))
+                            RemoveActiveEventInternal(activeEvent);
+                        else
+                            RecycleEventNow(activeEvent);
+                    }
+                }
+                ProcessPendingEventRecycles();
+
+                activeInstanceCounts.Clear();
+                playingEventNameCounts.Clear();
+                activeEventIndices.Clear();
+                ClearActiveEventCategoryCounts();
+                pendingRemovals.Clear();
+                pendingEventRecycles.Clear();
+                pendingEventRecycleSet.Clear();
+                categoryCountsCacheFrame = -1;
+                cachedStealVictimFrame = -1;
+                cachedStealVictim = null;
+
+                eventNameMap.Clear();
+                parameterNameMap.Clear();
+                stateGroupNameMap.Clear();
+                preparedAudioEvents.Clear();
+                bankRegistrations.Clear();
+                eventBindings.Clear();
+                parameterBindings.Clear();
+                stateGroupBindings.Clear();
+                eventOwnerCounts.Clear();
+                parameterOwnerCounts.Clear();
+                switchOwnerCounts.Clear();
+                stateGroupOwnerCounts.Clear();
+                profileOwnerCounts.Clear();
+                loadedBanks.Clear();
+                loadedBanksCacheDirty = true;
+                cachedLoadedBanksList.Clear();
+                cachedLoadedBanksReadOnly = null;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            activeClipRefCount.Clear();
-            clipMemoryCache.Clear();
-            TotalMemoryUsage = 0;
+                activeClipRefCount.Clear();
+                clipMemoryCache.Clear();
+                TotalMemoryUsage = 0;
 #endif
-            activeEventPool.Clear();
-            availableSources.Clear();
-            activeEventHandleTable.Clear();
-            freeActiveEventHandleSlots.Clear();
-            globalVolume = 1f;
-            globalPaused = false;
-            systemPaused = false;
-            activeFocusMode = AudioFocusMode.All;
-            activePlatformProfile = null;
-            activeDuckingProfile = null;
-            activePlatformSettings = AudioPlatformProfile.GetFallbackSettings();
-            ResetDuckingRuntimeState();
-            reusableGlobalParameters.Clear();
-            scopedParameterOverrides.Clear();
-            reusableScopedParameterRemovalKeys.Clear();
-            globalParametersCacheDirty = true;
-            recentTriggerTimes.Clear();
-            reusableExpiredTriggerKeys.Clear();
-            lastRepeatTriggerCleanupTime = 0f;
-            totalRepeatTriggerRejections = 0;
-            totalAudibilityCulls = 0;
-            ClearCommandQueue();
-            AudioClipResolver.ClearExternalCache();
-            AudioClipResolver.ClearReferenceLoaders();
-            AudioClipResolver.ClearCustomProviders();
-            AllowCreateInstance = false;
+                activeEventPool.Clear();
+                availableSources.Clear();
+                sourcePool.Clear();
+                activeEventHandleTable.Clear();
+                freeActiveEventHandleSlots.Clear();
+                globalVolume = 1f;
+                globalPaused = false;
+                systemPauseReasons = SystemPauseReason.None;
+                activeFocusMode = AudioFocusMode.All;
+                activePlatformProfile = null;
+                activeDuckingProfile = null;
+                activePoolConfig = null;
+                activePlatformSettings = AudioPlatformProfile.GetFallbackSettings();
+                ResetDuckingRuntimeState();
+                reusableGlobalParameters.Clear();
+                scopedParameterOverrides.Clear();
+                scopedParameterOwners.Clear();
+                reusableScopedParameterRemovalKeys.Clear();
+                reusableDeadParameterScopeIds.Clear();
+                lastScopedParameterOwnerCleanupFrame = -1;
+                globalParametersCacheDirty = true;
+                recentTriggerTimes.Clear();
+                reusableExpiredTriggerKeys.Clear();
+                lastRepeatTriggerCleanupTime = 0f;
+                totalRepeatTriggerRejections = 0;
+                totalAudibilityCulls = 0;
+                AudioClipResolver.ClearExternalCache();
+                ReleaseAllPreloadedBankClipLeases();
+                activeBankClipLeaseMemoryBytes = 0L;
+                registeredStateMixProfiles.Clear();
+                eventsBeingUnloaded.Clear();
+                bankOperationsInProgress.Clear();
+                groupsBeingReplaced.Clear();
+                preloadBankMutationVersions.Clear();
+                for (int i = 0; i < banksToNotify.Count; i++)
+                    NotifyBankUnloaded(banksToNotify[i]);
+                staticMainMixer = null;
+                currentPoolSize = 0;
+                maxPoolSize = 0;
+            }
+            finally
+            {
+                isInitialized = false;
+                if (ReferenceEquals(Instance, instanceBeingCleaned))
+                    Instance = null;
+                isTearingDown = false;
+            }
         }
 
         private void Update()
         {
-#if UNITY_ANDROID || UNITY_IOS
-            // Throttle updates on mobile to save battery.
-            // NOTE: Commands and pending removals still processed every frame
-            // to avoid delayed playback / stale removal timing.
-            float currentTime = Time.unscaledTime;
-            bool mobileThrottle = (currentTime - lastMobileUpdateTime < MobileUpdateInterval);
-            if (!mobileThrottle) lastMobileUpdateTime = currentTime;
-#endif
-
-            // Process command queue with adaptive throughput based on queue pressure
-            int queueDepth;
-            lock (commandQueueLock) { queueDepth = commandQueueCount; }
-            int maxCommandsPerFrame;
-            if (queueDepth > CommandQueueCapacity / 2) maxCommandsPerFrame = 128;
-            else if (queueDepth > CommandQueueCapacity / 4) maxCommandsPerFrame = 64;
-            else maxCommandsPerFrame = 16;
-
-            int commandProcessed = 0;
-            while (commandProcessed < maxCommandsPerFrame && TryDequeueCommand(out AudioCommand command))
-            {
-                ExecuteCommand(command);
-                commandProcessed++;
-            }
+            ProcessPendingEventRecycles();
 
             // Process pending delayed removals (replaces async void DelayRemoveActiveEvent)
-            float now = Time.time;
+            float now = Time.unscaledTime;
             for (int i = pendingRemovals.Count - 1; i >= 0; i--)
             {
                 PendingRemoval removal = pendingRemovals[i];
@@ -1811,14 +2153,10 @@ namespace CycloneGames.Audio.Runtime
                     if (i < lastPending) pendingRemovals[i] = pendingRemovals[lastPending];
                     pendingRemovals.RemoveAt(lastPending);
 
-                    if (evt != null && evt.generation == removal.Generation && evt.status != EventStatus.Error)
-                        RemoveActiveEvent(evt);
+                    if (evt != null && evt.generation == removal.Generation)
+                        evt.StopImmediate();
                 }
             }
-
-#if UNITY_ANDROID || UNITY_IOS
-            if (mobileThrottle) return;
-#endif
 
             float deltaTime = Time.deltaTime;
             UpdateGlobalParameters(deltaTime);
@@ -1847,7 +2185,7 @@ namespace CycloneGames.Audio.Runtime
                 if (i >= ActiveEvents.Count) continue;
                 var tempEvent = ActiveEvents[i];
                 if (tempEvent == null || tempEvent.status == EventStatus.Stopped) continue;
-                if (tempEvent.SourceCount == 0) continue;
+                if (tempEvent.SourceCount == 0 && !tempEvent.hasSnapshotTransition) continue;
 
                 // Recalculate LOD interval based on distance to listener
                 if (recalcLOD && tempEvent.is3D && hasListener)
@@ -1856,7 +2194,7 @@ namespace CycloneGames.Audio.Runtime
                     tempEvent.updateInterval = lodSettings.GetUpdateInterval(sqrDist);
                 }
 
-                tempEvent.Update();
+                tempEvent.UpdateInternal();
             }
 
             // Track peak usage
@@ -1870,123 +2208,13 @@ namespace CycloneGames.Audio.Runtime
             TryEvictExternalClips();
         }
 
-        private static void ExecuteCommand(in AudioCommand command)
-        {
-            switch (command.Type)
-            {
-                case AudioCommandType.PlayEventOnObject:
-                    PlayEvent(command.AudioEvent, command.EmitterObject);
-                    break;
-                case AudioCommandType.PlayEventAtPosition:
-                    PlayEvent(command.AudioEvent, command.Position);
-                    break;
-                case AudioCommandType.PlayEventByNameOnObject:
-                    PlayEvent(command.EventName, command.EmitterObject);
-                    break;
-                case AudioCommandType.PlayEventByNameAtPosition:
-                    PlayEvent(command.EventName, command.Position);
-                    break;
-                case AudioCommandType.PlayScheduledByName:
-                    PlayEventScheduled(command.EventName, command.EmitterObject, command.DspTime);
-                    break;
-                case AudioCommandType.PlayScheduledEvent:
-                    PlayEventScheduled(command.AudioEvent, command.EmitterObject, command.DspTime);
-                    break;
-                case AudioCommandType.StopAllByEvent:
-                    StopAll(command.AudioEvent);
-                    break;
-                case AudioCommandType.StopAllByName:
-                    StopAll(command.EventName);
-                    break;
-                case AudioCommandType.StopAllByGroup:
-                    StopAll(command.Group);
-                    break;
-                case AudioCommandType.LoadBank:
-                    LoadBank(command.Bank, command.OverwriteExisting);
-                    break;
-                case AudioCommandType.UnloadBank:
-                    UnloadBank(command.Bank);
-                    break;
-                case AudioCommandType.ClearEventNameMap:
-                    ClearEventNameMap();
-                    break;
-                case AudioCommandType.SetStateGroupValue:
-                    SetState(command.StateGroup, command.Group);
-                    break;
-                case AudioCommandType.SetStateGroupByName:
-                    SetState(command.EventName, command.StateName);
-                    break;
-                case AudioCommandType.ExecuteActionEventOnObject:
-                    ExecuteActionEvent(command.ActionEvent, command.EmitterObject);
-                    break;
-                case AudioCommandType.ExecuteActionEventAtPosition:
-                    ExecuteActionEvent(command.ActionEvent, command.Position);
-                    break;
-            }
-        }
-
-        private static bool TryEnqueueCommand(in AudioCommand command)
-        {
-            lock (commandQueueLock)
-            {
-                if (commandQueueCount >= CommandQueueCapacity)
-                {
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    droppedCommandCount++;
-                    if (droppedCommandCount <= 5)
-                    {
-                        Debug.LogWarning($"AudioManager: Command queue overflow. Dropped command '{command.Type}'.");
-                    }
-#endif
-                    return false;
-                }
-
-                commandQueue[commandQueueTail] = command;
-                commandQueueTail = (commandQueueTail + 1) % CommandQueueCapacity;
-                commandQueueCount++;
-                return true;
-            }
-        }
-
-        private static bool TryDequeueCommand(out AudioCommand command)
-        {
-            lock (commandQueueLock)
-            {
-                if (commandQueueCount == 0)
-                {
-                    command = default;
-                    return false;
-                }
-
-                command = commandQueue[commandQueueHead];
-                commandQueue[commandQueueHead] = default;
-                commandQueueHead = (commandQueueHead + 1) % CommandQueueCapacity;
-                commandQueueCount--;
-                return true;
-            }
-        }
-
-        private static void ClearCommandQueue()
-        {
-            lock (commandQueueLock)
-            {
-                Array.Clear(commandQueue, 0, commandQueue.Length);
-                commandQueueHead = 0;
-                commandQueueTail = 0;
-                commandQueueCount = 0;
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-                droppedCommandCount = 0;
-#endif
-            }
-        }
-
         #endregion
 
         #region Initialization
 
         private static void CreateInstance()
         {
-            if (Instance != null || !AllowCreateInstance) return;
+            if (Instance != null || !AllowCreateInstance || isTearingDown) return;
             new GameObject("AudioManager").AddComponent<AudioManager>();
         }
 
@@ -2004,6 +2232,7 @@ namespace CycloneGames.Audio.Runtime
             UpdateDucking(0f);
 
             ValidateAudioListener();
+            Application.quitting -= HandleQuitting;
             Application.quitting += HandleQuitting;
             isInitialized = true;
 
@@ -2118,6 +2347,7 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static void ReloadPoolConfig()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReloadPoolConfig));
             if (Instance == null)
             {
                 activePoolConfig = AudioPoolConfig.FindConfig();
@@ -2153,6 +2383,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ReloadVoicePolicyProfile()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReloadVoicePolicyProfile));
             if (Instance == null)
                 return;
 
@@ -2162,6 +2393,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ReloadPlatformProfile()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReloadPlatformProfile));
             if (Instance == null)
             {
                 activePlatformProfile = AudioPlatformProfile.FindConfig();
@@ -2185,6 +2417,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ReloadDuckingProfile()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReloadDuckingProfile));
             if (Instance == null)
             {
                 activeDuckingProfile = AudioDuckingProfile.FindConfig();
@@ -2202,6 +2435,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ReloadRuntimeProfiles()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReloadRuntimeProfiles));
             ReloadPoolConfig();
             ReloadVoicePolicyProfile();
             ReloadPlatformProfile();
@@ -2288,11 +2522,15 @@ namespace CycloneGames.Audio.Runtime
             {
                 AudioSource sourceToRemove = availableSources.Dequeue();
                 if (sourceToRemove == null)
+                {
+                    sourcePool.Remove(sourceToRemove);
+                    currentPoolSize = sourcePool.Count;
                     continue;
+                }
 
                 sourcePool.Remove(sourceToRemove);
                 Destroy(sourceToRemove.gameObject);
-                currentPoolSize--;
+                currentPoolSize = sourcePool.Count;
             }
 
             if (peakPoolUsage > currentPoolSize)
@@ -2419,7 +2657,14 @@ namespace CycloneGames.Audio.Runtime
         }
 
         /// <summary>Whether occlusion raycasts are enabled for the active platform profile.</summary>
-        public static bool IsOcclusionEnabled => activePlatformSettings.occlusion.enabled;
+        public static bool IsOcclusionEnabled
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(IsOcclusionEnabled));
+                return activePlatformSettings.occlusion.enabled;
+            }
+        }
 
         /// <summary>Active occlusion settings for the current platform profile.</summary>
         internal static AudioPlatformProfile.OcclusionSettings ActiveOcclusionSettings => activePlatformSettings.occlusion;
@@ -2451,7 +2696,7 @@ namespace CycloneGames.Audio.Runtime
             if (evt.IsPaused)
                 score += 15f;
 
-            if (policy.ProtectScheduledPlayback && evt.scheduledDspTime > 0)
+            if (policy.ProtectScheduledPlayback && evt.IsScheduledPlaybackPending)
                 score += 40f;
 
             float age = Mathf.Max(0f, Time.time - evt.timeStarted);
@@ -2526,7 +2771,7 @@ namespace CycloneGames.Audio.Runtime
         /// Attempt to steal a source using category-aware voice budgeting and protection scoring.
         /// Returns the stolen source or null if no suitable source found.
         /// </summary>
-        private static AudioSource TryStealSource(AudioEvent requestingEvent)
+        private static AudioSource TryStealSource(AudioEvent requestingEvent, ActiveEvent requestingActiveEvent)
         {
             if (ActiveEvents == null || ActiveEvents.Count == 0) return null;
 
@@ -2543,8 +2788,10 @@ namespace CycloneGames.Audio.Runtime
                 for (int i = 0; i < ActiveEvents.Count; i++)
                 {
                     var evt = ActiveEvents[i];
-                    if (evt == null || evt.status == EventStatus.Stopped) continue;
+                    if (evt == null || evt.status != EventStatus.Played) continue;
+                    if (ReferenceEquals(evt, requestingActiveEvent)) continue;
                     if (evt.rootEvent == null) continue;
+                    if (!HasStealableSource(evt)) continue;
 
                     float protectionScore = GetVoiceProtectionScore(evt, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
                     if (protectionScore < cachedStealVictimScore)
@@ -2559,7 +2806,7 @@ namespace CycloneGames.Audio.Runtime
             float lowestProtectionScore = cachedStealVictimScore;
             float requesterScore = GetRequesterProtectionScore(requestingEvent, reusableCategorySourceCounts, reusableCategoryBudgetLoads);
 
-            if (victim == null)
+            if (victim == null || ReferenceEquals(victim, requestingActiveEvent) || victim.status != EventStatus.Played)
                 return null;
 
             if (requestingEvent != null)
@@ -2572,29 +2819,38 @@ namespace CycloneGames.Audio.Runtime
                     return null;
             }
 
-            if (victim != null && victim.SourceCount > 0)
+            if (victim != null)
             {
-                var source = victim.GetSource(0);
-                if (source.IsValid)
-                {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    string victimName = victim.name;
-                    AudioEventCategory victimCategory = victim.rootEvent != null ? victim.rootEvent.Category : AudioEventCategory.GameplaySFX;
+                string victimName = victim.name;
+                AudioEventCategory victimCategory = victim.rootEvent != null ? victim.rootEvent.Category : AudioEventCategory.GameplaySFX;
 #endif
-                    victim.StopImmediate();
-                    RemoveActiveEvent(victim);
-                    totalSteals++;
-                    // Invalidate victim cache since victim was consumed
-                    cachedStealVictimFrame = -1;
+                victim.StopImmediate();
+                RemoveActiveEvent(victim);
+                totalSteals++;
+                // Invalidate victim cache since victim was consumed
+                cachedStealVictimFrame = -1;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                    Debug.LogWarning($"AudioManager: Voice stolen from '{victimName}' (category:{victimCategory}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
+                Debug.LogWarning($"AudioManager: Voice stolen from '{victimName}' (category:{victimCategory}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
 #endif
-                    return availableSources.Count > 0 ? availableSources.Dequeue() : null;
-                }
+                return availableSources.Count > 0 ? availableSources.Dequeue() : null;
             }
 
             return null;
+        }
+
+        private static bool HasStealableSource(ActiveEvent activeEvent)
+        {
+            if (activeEvent == null) return false;
+
+            for (int i = 0; i < activeEvent.SourceCount; i++)
+            {
+                if (activeEvent.GetSource(i).IsValid)
+                    return true;
+            }
+
+            return false;
         }
 
         /// <summary>
@@ -2681,6 +2937,12 @@ namespace CycloneGames.Audio.Runtime
 
         public static AudioSource GetUnusedSource(AudioEvent requestingEvent = null)
         {
+            return GetUnusedSource(requestingEvent, null);
+        }
+
+        internal static AudioSource GetUnusedSource(AudioEvent requestingEvent, ActiveEvent requestingActiveEvent)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetUnusedSource));
             int maxAttempts = availableSources.Count;
             int attempts = 0;
 
@@ -2689,6 +2951,9 @@ namespace CycloneGames.Audio.Runtime
                 AudioSource tempSource = availableSources.Dequeue();
                 if (tempSource != null && tempSource.gameObject != null)
                     return tempSource;
+
+                sourcePool.Remove(tempSource);
+                currentPoolSize = sourcePool.Count;
                 attempts++;
             }
 
@@ -2702,7 +2967,7 @@ namespace CycloneGames.Audio.Runtime
             }
 
             // Smart pool: try voice stealing as last resort
-            var stolenSource = TryStealSource(requestingEvent);
+            var stolenSource = TryStealSource(requestingEvent, requestingActiveEvent);
             if (stolenSource != null)
             {
                 return stolenSource;
@@ -2713,6 +2978,19 @@ namespace CycloneGames.Audio.Runtime
             Debug.LogWarning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}) for '{requesterName}'. All sources are in use and none met the current stealing policy.");
 #endif
             return null;
+        }
+
+        internal static void ReturnSourceToPool(AudioSource source)
+        {
+            if (source == null || source.gameObject == null)
+            {
+                sourcePool.Remove(source);
+                currentPoolSize = sourcePool.Count;
+                return;
+            }
+
+            ResetAudioSource(source);
+            availableSources.Enqueue(source);
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -2797,8 +3075,19 @@ namespace CycloneGames.Audio.Runtime
         }
 #endif
 
+        internal static void TrackActiveEventMemory(ActiveEvent activeEvent)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (activeEvent == null || activeEvent.memoryTracked) return;
+            TrackMemory(activeEvent, true);
+            activeEvent.memoryTracked = true;
+#endif
+        }
+
         public static bool ValidateManager()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ValidateManager));
+            if (isTearingDown) return false;
             if (Instance == null)
             {
                 if (!AllowCreateInstance) return false;
@@ -2817,12 +3106,44 @@ namespace CycloneGames.Audio.Runtime
         {
             triggerKey = default;
             if (eventToPlay == null) return false;
+            int eventId = eventToPlay.GetInstanceID();
+            if (eventsBeingUnloaded.Contains(eventId)) return false;
             if (!TryGetPreparedAudioEventData(eventToPlay, out PreparedAudioEventData preparedData) || !preparedData.Ready) return false;
             if (preparedData.InstanceLimit > 0 && CountActiveInstances(eventToPlay) >= preparedData.InstanceLimit) return false;
             if (!PassesAudibilityCulling(eventToPlay, preparedData.Output, emitterTransform, explicitPosition, isScheduledPlayback)) return false;
             if (!PassesRepeatTriggerThrottle(eventToPlay, preparedData.Category, emitterTransform, explicitPosition, isScheduledPlayback, out triggerKey)) return false;
-            if (preparedData.Group != 0) StopGroupInstances(preparedData.Group);
-            return true;
+            if (preparedData.Group == 0) return true;
+
+            int group = preparedData.Group;
+            if (!groupsBeingReplaced.Add(group)) return false;
+
+            bool requiredBankOwnership = eventOwnerCounts.ContainsKey(eventId);
+            try
+            {
+                StopGroupInstances(group);
+
+                // StopImmediate invokes completion callbacks synchronously. A callback may unload
+                // the candidate event or start another instance, so admission must be revalidated
+                // while same-group re-entry remains blocked.
+                triggerKey = default;
+                if (isTearingDown || eventToPlay == null || eventsBeingUnloaded.Contains(eventId)) return false;
+                if (requiredBankOwnership && !eventOwnerCounts.ContainsKey(eventId)) return false;
+                if (!TryGetPreparedAudioEventData(eventToPlay, out preparedData) || !preparedData.Ready) return false;
+                if (preparedData.Group != group) return false;
+                if (preparedData.InstanceLimit > 0 && CountActiveInstances(eventToPlay) >= preparedData.InstanceLimit) return false;
+                if (!PassesAudibilityCulling(eventToPlay, preparedData.Output, emitterTransform, explicitPosition, isScheduledPlayback)) return false;
+                return PassesRepeatTriggerThrottle(
+                    eventToPlay,
+                    preparedData.Category,
+                    emitterTransform,
+                    explicitPosition,
+                    isScheduledPlayback,
+                    out triggerKey);
+            }
+            finally
+            {
+                groupsBeingReplaced.Remove(group);
+            }
         }
 
         private static bool TryGetPreparedAudioEventData(AudioEvent eventToPlay, out PreparedAudioEventData preparedData)
@@ -3018,8 +3339,10 @@ namespace CycloneGames.Audio.Runtime
 
         #region Bank Management
 
+        private const int MaxBankEntriesPerCategory = 4096;
+
         /// <summary>
-        /// Load AudioBank and register events for string-based lookup. Thread-safe.
+        /// Load AudioBank and register events for string-based lookup. Must be called on the Unity main thread.
         /// </summary>
         public static void LoadBank(AudioBank bank, bool overwriteExisting = false)
         {
@@ -3029,306 +3352,474 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(LoadBank));
+
+            if (isTearingDown || !ValidateManager()) return;
+
+            if (!IsBankWithinRegistrationBudget(bank, out string budgetError))
             {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.LoadBank,
-                    bank: bank,
-                    overwriteExisting: overwriteExisting));
+                Debug.LogError($"AudioManager: Cannot load bank '{bank.name}'. {budgetError}");
                 return;
             }
 
-            if (!ValidateManager()) return;
-
-            var events = bank.AudioEvents;
-            var parameters = bank.Parameters;
-            var stateGroups = bank.StateGroups;
-            var stateMixProfiles = bank.StateMixProfiles;
-            int eventCount = events != null ? events.Count : 0;
-            int parameterCount = parameters != null ? parameters.Count : 0;
-            int stateGroupCount = stateGroups != null ? stateGroups.Count : 0;
-            int stateMixProfileCount = stateMixProfiles != null ? stateMixProfiles.Count : 0;
-            if (eventCount == 0 && parameterCount == 0 && stateGroupCount == 0 && stateMixProfileCount == 0)
+            int bankId = bank.GetInstanceID();
+            if (bankOperationsInProgress.Contains(bankId))
             {
-                Debug.LogWarning($"AudioManager: AudioBank '{bank.name}' contains no events, parameters, states, or state mix profiles.");
+                Debug.LogWarning($"AudioManager: Bank '{bank.name}' is already being modified.");
+                return;
+            }
+            if (bankRegistrations.TryGetValue(bankId, out AudioBankRegistration existingRegistration))
+            {
+                if (existingRegistration.OverwriteExisting != overwriteExisting)
+                {
+                    Debug.LogWarning(
+                        $"AudioManager: Bank '{bank.name}' is already loaded with a different overwrite policy. " +
+                        "Unload it before changing the policy.");
+                }
                 return;
             }
 
-            // Detect duplicates within bank (zero-allocation: count-based instead of List-per-key)
-            reusableDuplicateCountCheck.Clear();
+            AudioBankRegistration registration = CreateBankRegistration(bank, overwriteExisting);
+            bankRegistrations.Add(bankId, registration);
+            loadedBanks[bankId] = bank;
 
-            for (int i = 0; i < eventCount; i++)
-            {
-                var audioEvent = events[i];
-                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
+            RegisterOwnedObjects(registration);
+            AddNameContributions(registration.EventContributions, eventBindings, eventNameMap);
+            AddNameContributions(registration.ParameterContributions, parameterBindings, parameterNameMap);
+            AddNameContributions(registration.StateGroupContributions, stateGroupBindings, stateGroupNameMap);
 
-                string eventName = audioEvent.name;
-                reusableDuplicateCountCheck.TryGetValue(eventName, out int existing);
-                reusableDuplicateCountCheck[eventName] = existing + 1;
-            }
-
-            var dupEnumerator = reusableDuplicateCountCheck.GetEnumerator();
-            while (dupEnumerator.MoveNext())
-            {
-                if (dupEnumerator.Current.Value > 1)
-                    Debug.LogError($"AudioManager: Bank '{bank.name}' has {dupEnumerator.Current.Value} events named '{dupEnumerator.Current.Key}'.");
-            }
-            dupEnumerator.Dispose();
-
-            // Register events
-            reusableBankRegisteredNames.Clear();
-            int registeredCount = 0, skippedCount = 0;
-
-            for (int i = 0; i < eventCount; i++)
-            {
-                var audioEvent = events[i];
-                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
-
-                string eventName = audioEvent.name;
-                if (reusableBankRegisteredNames.Contains(eventName)) { skippedCount++; continue; }
-
-                if (eventNameMap.ContainsKey(eventName))
-                {
-                    if (overwriteExisting)
-                    {
-                        eventNameMap[eventName] = audioEvent;
-                        reusableBankRegisteredNames.Add(eventName);
-                        registeredCount++;
-                    }
-                    else
-                    {
-                        skippedCount++;
-                    }
-                }
-                else
-                {
-                    eventNameMap[eventName] = audioEvent;
-                    reusableBankRegisteredNames.Add(eventName);
-                    registeredCount++;
-                }
-            }
-
-            // Track bank with instance ID for O(1) unload
-            loadedBanks[bank.GetInstanceID()] = bank;
-            int registeredParameterCount = RegisterBankParameters(bank, overwriteExisting);
-            int registeredStateGroupCount = RegisterBankStateGroups(bank, overwriteExisting);
-            int registeredStateMixProfileCount = RegisterBankStateMixProfiles(bank);
             loadedBanksCacheDirty = true;
-            InvalidatePreparedAudioEvents(bank);
-            PrepareAudioBankRuntimeData(bank);
-            InitializeBankRuntimeState(bank);
-            ApplyAllStateMixProfiles();
             globalParametersCacheDirty = true;
+            ApplyAllStateMixProfiles();
 
-            if (registeredCount > 0)
-                Debug.Log($"AudioManager: Loaded {registeredCount} events from '{bank.name}'.");
-            if (registeredParameterCount > 0)
-                Debug.Log($"AudioManager: Registered {registeredParameterCount} parameters from '{bank.name}'.");
-            if (registeredStateGroupCount > 0)
-                Debug.Log($"AudioManager: Registered {registeredStateGroupCount} state groups from '{bank.name}'.");
-            if (registeredStateMixProfileCount > 0)
-                Debug.Log($"AudioManager: Registered {registeredStateMixProfileCount} state mix profiles from '{bank.name}'.");
-            if (skippedCount > 0)
-                Debug.LogWarning($"AudioManager: Skipped {skippedCount} duplicate events from '{bank.name}'.");
+            if (registration.OwnedEvents.Count == 0 &&
+                registration.OwnedParameters.Count == 0 &&
+                registration.OwnedSwitches.Count == 0 &&
+                registration.OwnedStateGroups.Count == 0 &&
+                registration.OwnedProfiles.Count == 0)
+            {
+                Debug.LogWarning($"AudioManager: AudioBank '{bank.name}' contains no runtime audio objects.");
+            }
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            else
+            {
+                Debug.Log(
+                    $"AudioManager: Loaded bank '{bank.name}' with {registration.OwnedEvents.Count} events, " +
+                    $"{registration.OwnedParameters.Count} parameters, {registration.OwnedStateGroups.Count} state groups, " +
+                    $"and {registration.OwnedProfiles.Count} state mix profiles.");
+            }
+#endif
+        }
+
+        private static bool IsFinite(float value)
+        {
+            return !float.IsNaN(value) && !float.IsInfinity(value);
+        }
+
+        private static bool IsFinite(double value)
+        {
+            return !double.IsNaN(value) && !double.IsInfinity(value);
+        }
+
+        private static bool IsFinite(Vector3 value)
+        {
+            return IsFinite(value.x) && IsFinite(value.y) && IsFinite(value.z);
+        }
+
+        private static bool IsBankWithinRegistrationBudget(AudioBank bank, out string error)
+        {
+            error = string.Empty;
+            if ((bank.AudioEvents?.Count ?? 0) > MaxBankEntriesPerCategory)
+                error = $"Event count exceeds {MaxBankEntriesPerCategory}.";
+            else if ((bank.Parameters?.Count ?? 0) > MaxBankEntriesPerCategory)
+                error = $"Parameter count exceeds {MaxBankEntriesPerCategory}.";
+            else if ((bank.Switches?.Count ?? 0) > MaxBankEntriesPerCategory)
+                error = $"Switch count exceeds {MaxBankEntriesPerCategory}.";
+            else if ((bank.StateGroups?.Count ?? 0) > MaxBankEntriesPerCategory)
+                error = $"State group count exceeds {MaxBankEntriesPerCategory}.";
+            else if ((bank.StateMixProfiles?.Count ?? 0) > MaxBankEntriesPerCategory)
+                error = $"State mix profile count exceeds {MaxBankEntriesPerCategory}.";
+
+            return string.IsNullOrEmpty(error);
         }
 
         /// <summary>
-        /// Callback invoked after a bank is fully unloaded and all clip references are cleared.
-        /// External asset management systems can subscribe to release underlying asset handles.
+        /// Callback invoked after runtime registrations and active playback owned by a bank are removed.
+        /// Embedded clips remain serialized dependencies of the bank graph. External asset owners may
+        /// use this notification as a coordination signal, but should prefer explicit clip leases.
         /// </summary>
         public static event Action<AudioBank> OnBankUnloaded;
 
         /// <summary>
-        /// Unload an AudioBank: stops all active events from this bank, immediately clears every
-        /// AudioSource.clip reference, removes name mappings, and fires <see cref="OnBankUnloaded"/>.
-        /// After this method returns, the audio system holds zero references to the bank's clips,
-        /// making it safe for external asset managers to release the underlying assets.
+        /// Unload an AudioBank: stops active events attributed to this bank, clears their AudioSource
+        /// clip references, removes runtime name mappings, and fires <see cref="OnBankUnloaded"/>.
         /// </summary>
         public static void UnloadBank(AudioBank bank)
         {
             if (bank == null) return;
 
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(
-                    AudioCommandType.UnloadBank,
-                    bank: bank));
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(UnloadBank));
+
+            if (isTearingDown || !ValidateManager()) return;
+
+            int bankId = bank.GetInstanceID();
+            ReleasePreloadedBankClipLease(bankId);
+            if (!bankRegistrations.TryGetValue(bankId, out AudioBankRegistration registration))
                 return;
-            }
 
-            if (!ValidateManager()) return;
+            if (!bankOperationsInProgress.Add(bankId)) return;
 
-            var events = bank.AudioEvents;
-            int eventCount = events != null ? events.Count : 0;
-            int parameterCount = bank.Parameters != null ? bank.Parameters.Count : 0;
-            int stateGroupCount = bank.StateGroups != null ? bank.StateGroups.Count : 0;
-            int stateMixProfileCount = bank.StateMixProfiles != null ? bank.StateMixProfiles.Count : 0;
-            if (eventCount == 0 && parameterCount == 0 && stateGroupCount == 0 && stateMixProfileCount == 0) return;
-
-            // Stop and immediately clean up all active events from this bank.
-            // Immediate removal (instead of DelayRemoveActiveEvent) guarantees that all
-            // AudioSource.clip references are cleared before this method returns.
-            if (eventCount > 0 && ActiveEvents != null && ActiveEvents.Count > 0)
+            var orphanedEvents = new List<AudioEvent>(registration.OwnedEvents.Count);
+            try
             {
-                for (int i = ActiveEvents.Count - 1; i >= 0; i--)
+                bankRegistrations.Remove(bankId);
+                loadedBanks.TryRemove(bankId, out _);
+
+                RemoveNameContributions(registration.EventContributions, eventBindings, eventNameMap);
+                RemoveNameContributions(registration.ParameterContributions, parameterBindings, parameterNameMap);
+                RemoveNameContributions(registration.StateGroupContributions, stateGroupBindings, stateGroupNameMap);
+
+                UnregisterOwnedObjects(registration, orphanedEvents);
+                for (int i = 0; i < orphanedEvents.Count; i++)
                 {
-                    if (i >= ActiveEvents.Count) continue;
-                    var tempEvent = ActiveEvents[i];
-                    if (tempEvent?.rootEvent != null && events.Contains(tempEvent.rootEvent))
+                    AudioEvent orphanedEvent = orphanedEvents[i];
+                    if (orphanedEvent != null) eventsBeingUnloaded.Add(orphanedEvent.GetInstanceID());
+                }
+
+                if (orphanedEvents.Count > 0 && ActiveEvents != null && ActiveEvents.Count > 0)
+                {
+                    for (int i = ActiveEvents.Count - 1; i >= 0; i--)
                     {
-                        tempEvent.StopImmediate();
-                        // RemoveActiveEvent is idempotent; safe even if DelayRemoveActiveEvent fires later
-                        RemoveActiveEvent(tempEvent);
+                        if (i >= ActiveEvents.Count) continue;
+                        ActiveEvent activeEvent = ActiveEvents[i];
+                        if (activeEvent?.rootEvent == null || !orphanedEvents.Contains(activeEvent.rootEvent))
+                            continue;
+
+                        activeEvent.StopImmediate();
                     }
                 }
-            }
 
-            // Remove name mappings
-            int removedCount = 0;
-
-            for (int i = 0; i < eventCount; i++)
-            {
-                var audioEvent = events[i];
-                if (audioEvent == null || string.IsNullOrEmpty(audioEvent.name)) continue;
-
-                string eventName = audioEvent.name;
-                if (eventNameMap.TryGetValue(eventName, out AudioEvent mappedEvent) && mappedEvent == audioEvent)
-                {
-                    eventNameMap.TryRemove(eventName, out _);
-                    removedCount++;
-                }
-            }
-
-            UnregisterBankParameters(bank);
-            UnregisterBankStateGroups(bank);
-            UnregisterBankStateMixProfiles(bank);
-            loadedBanks.TryRemove(bank.GetInstanceID(), out _);
-            loadedBanksCacheDirty = true;
-            InvalidatePreparedAudioEvents(bank);
-            ResetBankRuntimeState(bank);
-            globalParametersCacheDirty = true;
+                loadedBanksCacheDirty = true;
+                globalParametersCacheDirty = true;
+                ApplyAllStateMixProfiles();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            if (removedCount > 0)
-                Debug.Log($"AudioManager: Unloaded {removedCount} events from '{bank.name}'.");
+                Debug.Log($"AudioManager: Unloaded bank '{bank.name}'.");
 #endif
 
-            // Notify external systems (AssetManagement, Addressables, etc.) that the bank
-            // is fully released and its asset handles can be safely disposed.
-            OnBankUnloaded?.Invoke(bank);
+                NotifyBankUnloaded(registration.Bank);
+            }
+            finally
+            {
+                for (int i = 0; i < orphanedEvents.Count; i++)
+                {
+                    AudioEvent orphanedEvent = orphanedEvents[i];
+                    if (orphanedEvent != null) eventsBeingUnloaded.Remove(orphanedEvent.GetInstanceID());
+                }
+                bankOperationsInProgress.Remove(bankId);
+            }
         }
 
-        private static int RegisterBankParameters(AudioBank bank, bool overwriteExisting)
+        private static AudioBankRegistration CreateBankRegistration(AudioBank bank, bool overwriteExisting)
         {
-            var parameters = bank.Parameters;
-            if (parameters == null) return 0;
+            var registration = new AudioBankRegistration(bank, overwriteExisting);
+            var uniqueIds = new HashSet<int>();
 
-            int registeredCount = 0;
-            for (int i = 0; i < parameters.Count; i++)
+            var eventNames = new Dictionary<string, AudioEvent>(StringComparer.Ordinal);
+            List<AudioEvent> events = bank.AudioEvents;
+            if (events != null)
             {
-                AudioParameter parameter = parameters[i];
-                if (parameter == null || string.IsNullOrEmpty(parameter.name)) continue;
-
-                string parameterName = parameter.name;
-                if (parameterNameMap.ContainsKey(parameterName) && !overwriteExisting)
-                    continue;
-
-                parameterNameMap[parameterName] = parameter;
-                registeredCount++;
+                for (int i = 0; i < events.Count; i++)
+                {
+                    AudioEvent audioEvent = events[i];
+                    if (audioEvent == null) continue;
+                    AddUniqueObject(registration.OwnedEvents, uniqueIds, audioEvent);
+                    if (!string.IsNullOrEmpty(audioEvent.name) && !eventNames.ContainsKey(audioEvent.name))
+                        eventNames.Add(audioEvent.name, audioEvent);
+                }
             }
 
-            return registeredCount;
+            foreach (var pair in eventNames)
+            {
+                registration.EventContributions.Add(
+                    new BankNameContribution<AudioEvent>(registration.BankId, pair.Key, pair.Value, overwriteExisting));
+            }
+
+            uniqueIds.Clear();
+            var parameterNames = new Dictionary<string, AudioParameter>(StringComparer.Ordinal);
+            IReadOnlyList<AudioParameter> parameters = bank.Parameters;
+            if (parameters != null)
+            {
+                for (int i = 0; i < parameters.Count; i++)
+                {
+                    AudioParameter parameter = parameters[i];
+                    if (parameter == null) continue;
+                    AddUniqueObject(registration.OwnedParameters, uniqueIds, parameter);
+                    if (string.IsNullOrEmpty(parameter.name)) continue;
+                    if (overwriteExisting || !parameterNames.ContainsKey(parameter.name))
+                        parameterNames[parameter.name] = parameter;
+                }
+            }
+
+            foreach (var pair in parameterNames)
+            {
+                registration.ParameterContributions.Add(
+                    new BankNameContribution<AudioParameter>(registration.BankId, pair.Key, pair.Value, overwriteExisting));
+            }
+
+            uniqueIds.Clear();
+            IReadOnlyList<AudioSwitch> switches = bank.Switches;
+            if (switches != null)
+            {
+                for (int i = 0; i < switches.Count; i++)
+                    AddUniqueObject(registration.OwnedSwitches, uniqueIds, switches[i]);
+            }
+
+            uniqueIds.Clear();
+            var stateGroupNames = new Dictionary<string, AudioStateGroup>(StringComparer.Ordinal);
+            IReadOnlyList<AudioStateGroup> stateGroups = bank.StateGroups;
+            if (stateGroups != null)
+            {
+                for (int i = 0; i < stateGroups.Count; i++)
+                {
+                    AudioStateGroup stateGroup = stateGroups[i];
+                    if (stateGroup == null) continue;
+                    AddUniqueObject(registration.OwnedStateGroups, uniqueIds, stateGroup);
+                    if (string.IsNullOrEmpty(stateGroup.name)) continue;
+                    if (overwriteExisting || !stateGroupNames.ContainsKey(stateGroup.name))
+                        stateGroupNames[stateGroup.name] = stateGroup;
+                }
+            }
+
+            foreach (var pair in stateGroupNames)
+            {
+                registration.StateGroupContributions.Add(
+                    new BankNameContribution<AudioStateGroup>(registration.BankId, pair.Key, pair.Value, overwriteExisting));
+            }
+
+            uniqueIds.Clear();
+            IReadOnlyList<AudioStateMixProfile> profiles = bank.StateMixProfiles;
+            if (profiles != null)
+            {
+                for (int i = 0; i < profiles.Count; i++)
+                    AddUniqueObject(registration.OwnedProfiles, uniqueIds, profiles[i]);
+            }
+
+            return registration;
         }
 
-        private static void UnregisterBankParameters(AudioBank bank)
+        private static void AddUniqueObject<T>(List<T> destination, HashSet<int> uniqueIds, T value)
+            where T : UnityEngine.Object
         {
-            var parameters = bank.Parameters;
-            if (parameters == null) return;
+            if (value != null && uniqueIds.Add(value.GetInstanceID()))
+                destination.Add(value);
+        }
 
-            for (int i = 0; i < parameters.Count; i++)
+        private static void RegisterOwnedObjects(AudioBankRegistration registration)
+        {
+            for (int i = 0; i < registration.OwnedEvents.Count; i++)
             {
-                AudioParameter parameter = parameters[i];
-                if (parameter == null || string.IsNullOrEmpty(parameter.name)) continue;
+                AudioEvent audioEvent = registration.OwnedEvents[i];
+                if (IncrementOwnerCount(eventOwnerCounts, audioEvent.GetInstanceID()))
+                    preparedAudioEvents[audioEvent.GetInstanceID()] = PrepareAudioEventData(audioEvent);
+            }
 
-                string parameterName = parameter.name;
-                if (parameterNameMap.TryGetValue(parameterName, out AudioParameter mappedParameter) && mappedParameter == parameter)
-                {
-                    parameterNameMap.TryRemove(parameterName, out _);
-                }
+            for (int i = 0; i < registration.OwnedParameters.Count; i++)
+            {
+                AudioParameter parameter = registration.OwnedParameters[i];
+                if (IncrementOwnerCount(parameterOwnerCounts, parameter.GetInstanceID()))
+                    parameter.ResetParameter();
+            }
 
+            for (int i = 0; i < registration.OwnedSwitches.Count; i++)
+            {
+                AudioSwitch audioSwitch = registration.OwnedSwitches[i];
+                if (IncrementOwnerCount(switchOwnerCounts, audioSwitch.GetInstanceID()))
+                    audioSwitch.ResetSwitch();
+            }
+
+            for (int i = 0; i < registration.OwnedStateGroups.Count; i++)
+            {
+                AudioStateGroup stateGroup = registration.OwnedStateGroups[i];
+                if (IncrementOwnerCount(stateGroupOwnerCounts, stateGroup.GetInstanceID()))
+                    stateGroup.ResetStateGroup();
+            }
+
+            for (int i = 0; i < registration.OwnedProfiles.Count; i++)
+            {
+                AudioStateMixProfile profile = registration.OwnedProfiles[i];
+                if (IncrementOwnerCount(profileOwnerCounts, profile.GetInstanceID()))
+                    registeredStateMixProfiles.Add(profile);
+            }
+        }
+
+        private static void UnregisterOwnedObjects(
+            AudioBankRegistration registration,
+            List<AudioEvent> orphanedEvents)
+        {
+            for (int i = 0; i < registration.OwnedEvents.Count; i++)
+            {
+                AudioEvent audioEvent = registration.OwnedEvents[i];
+                if (!DecrementOwnerCount(eventOwnerCounts, audioEvent.GetInstanceID())) continue;
+                preparedAudioEvents.Remove(audioEvent.GetInstanceID());
+                orphanedEvents.Add(audioEvent);
+            }
+
+            for (int i = 0; i < registration.OwnedParameters.Count; i++)
+            {
+                AudioParameter parameter = registration.OwnedParameters[i];
+                if (!DecrementOwnerCount(parameterOwnerCounts, parameter.GetInstanceID())) continue;
                 RemoveScopedParameterOverrides(parameter.GetInstanceID());
+                parameter.ResetParameter();
+            }
+
+            for (int i = 0; i < registration.OwnedSwitches.Count; i++)
+            {
+                AudioSwitch audioSwitch = registration.OwnedSwitches[i];
+                if (DecrementOwnerCount(switchOwnerCounts, audioSwitch.GetInstanceID()))
+                    audioSwitch.ResetSwitch();
+            }
+
+            for (int i = 0; i < registration.OwnedStateGroups.Count; i++)
+            {
+                AudioStateGroup stateGroup = registration.OwnedStateGroups[i];
+                if (DecrementOwnerCount(stateGroupOwnerCounts, stateGroup.GetInstanceID()))
+                    stateGroup.ResetStateGroup();
+            }
+
+            for (int i = 0; i < registration.OwnedProfiles.Count; i++)
+            {
+                AudioStateMixProfile profile = registration.OwnedProfiles[i];
+                if (DecrementOwnerCount(profileOwnerCounts, profile.GetInstanceID()))
+                    registeredStateMixProfiles.Remove(profile);
             }
         }
 
-        private static int RegisterBankStateGroups(AudioBank bank, bool overwriteExisting)
+        private static bool IncrementOwnerCount(Dictionary<int, int> ownerCounts, int instanceId)
         {
-            var stateGroups = bank.StateGroups;
-            if (stateGroups == null) return 0;
-
-            int registeredCount = 0;
-            for (int i = 0; i < stateGroups.Count; i++)
+            if (ownerCounts.TryGetValue(instanceId, out int count))
             {
-                AudioStateGroup stateGroup = stateGroups[i];
-                if (stateGroup == null || string.IsNullOrEmpty(stateGroup.name)) continue;
+                ownerCounts[instanceId] = count + 1;
+                return false;
+            }
 
-                string stateGroupName = stateGroup.name;
-                if (stateGroupNameMap.ContainsKey(stateGroupName) && !overwriteExisting)
+            ownerCounts.Add(instanceId, 1);
+            return true;
+        }
+
+        private static bool DecrementOwnerCount(Dictionary<int, int> ownerCounts, int instanceId)
+        {
+            if (!ownerCounts.TryGetValue(instanceId, out int count))
+                return false;
+
+            if (count > 1)
+            {
+                ownerCounts[instanceId] = count - 1;
+                return false;
+            }
+
+            ownerCounts.Remove(instanceId);
+            return true;
+        }
+
+        private static void AddNameContributions<T>(
+            List<BankNameContribution<T>> contributions,
+            Dictionary<string, List<BankNameContribution<T>>> bindings,
+            ConcurrentDictionary<string, T> effectiveMap)
+            where T : UnityEngine.Object
+        {
+            for (int i = 0; i < contributions.Count; i++)
+            {
+                BankNameContribution<T> contribution = contributions[i];
+                if (!bindings.TryGetValue(contribution.Name, out List<BankNameContribution<T>> list))
+                {
+                    list = new List<BankNameContribution<T>>(2);
+                    bindings.Add(contribution.Name, list);
+                }
+
+                list.Add(contribution);
+                RecomputeNameBinding(contribution.Name, list, effectiveMap);
+            }
+        }
+
+        private static void RemoveNameContributions<T>(
+            List<BankNameContribution<T>> contributions,
+            Dictionary<string, List<BankNameContribution<T>>> bindings,
+            ConcurrentDictionary<string, T> effectiveMap)
+            where T : UnityEngine.Object
+        {
+            for (int i = 0; i < contributions.Count; i++)
+            {
+                BankNameContribution<T> contribution = contributions[i];
+                if (!bindings.TryGetValue(contribution.Name, out List<BankNameContribution<T>> list))
                     continue;
 
-                stateGroupNameMap[stateGroupName] = stateGroup;
-                registeredCount++;
-            }
-
-            return registeredCount;
-        }
-
-        private static void UnregisterBankStateGroups(AudioBank bank)
-        {
-            var stateGroups = bank.StateGroups;
-            if (stateGroups == null) return;
-
-            for (int i = 0; i < stateGroups.Count; i++)
-            {
-                AudioStateGroup stateGroup = stateGroups[i];
-                if (stateGroup == null || string.IsNullOrEmpty(stateGroup.name)) continue;
-
-                string stateGroupName = stateGroup.name;
-                if (stateGroupNameMap.TryGetValue(stateGroupName, out AudioStateGroup mappedStateGroup) && mappedStateGroup == stateGroup)
+                for (int entryIndex = list.Count - 1; entryIndex >= 0; entryIndex--)
                 {
-                    stateGroupNameMap.TryRemove(stateGroupName, out _);
+                    if (list[entryIndex].OwnerBankId == contribution.OwnerBankId)
+                        list.RemoveAt(entryIndex);
+                }
+
+                if (list.Count == 0)
+                {
+                    bindings.Remove(contribution.Name);
+                    effectiveMap.TryRemove(contribution.Name, out _);
+                }
+                else
+                {
+                    RecomputeNameBinding(contribution.Name, list, effectiveMap);
                 }
             }
         }
 
-        private static int RegisterBankStateMixProfiles(AudioBank bank)
+        private static void RecomputeNameBinding<T>(
+            string name,
+            List<BankNameContribution<T>> contributions,
+            ConcurrentDictionary<string, T> effectiveMap)
+            where T : UnityEngine.Object
         {
-            var profiles = bank.StateMixProfiles;
-            if (profiles == null) return 0;
-
-            int registeredCount = 0;
-            for (int i = 0; i < profiles.Count; i++)
+            T effectiveValue = null;
+            bool hasValue = false;
+            for (int i = 0; i < contributions.Count; i++)
             {
-                AudioStateMixProfile profile = profiles[i];
-                if (profile == null || registeredStateMixProfiles.Contains(profile)) continue;
+                BankNameContribution<T> contribution = contributions[i];
+                if (contribution.Value == null) continue;
 
-                registeredStateMixProfiles.Add(profile);
-                registeredCount++;
+                if (!hasValue)
+                {
+                    effectiveValue = contribution.Value;
+                    hasValue = true;
+                }
+                else if (contribution.CanOverride)
+                {
+                    effectiveValue = contribution.Value;
+                }
             }
 
-            return registeredCount;
+            if (hasValue)
+                effectiveMap[name] = effectiveValue;
+            else
+                effectiveMap.TryRemove(name, out _);
         }
 
-        private static void UnregisterBankStateMixProfiles(AudioBank bank)
+        private static void NotifyBankUnloaded(AudioBank bank)
         {
-            var profiles = bank.StateMixProfiles;
-            if (profiles == null) return;
+            if (bank == null) return;
 
-            for (int i = 0; i < profiles.Count; i++)
+            Action<AudioBank> callbacks = OnBankUnloaded;
+            if (callbacks == null) return;
+
+            Delegate[] invocationList = callbacks.GetInvocationList();
+            for (int i = 0; i < invocationList.Length; i++)
             {
-                AudioStateMixProfile profile = profiles[i];
-                if (profile == null) continue;
-
-                registeredStateMixProfiles.Remove(profile);
+                try
+                {
+                    ((Action<AudioBank>)invocationList[i])(bank);
+                }
+                catch (Exception exception)
+                {
+                    Debug.LogException(exception);
+                }
             }
         }
 
@@ -3370,8 +3861,47 @@ namespace CycloneGames.Audio.Runtime
             reusableScopedParameterRemovalKeys.Clear();
         }
 
+        private static int RemoveScopedParameterOverridesForScope(int scopeId)
+        {
+            reusableScopedParameterRemovalKeys.Clear();
+
+            var enumerator = scopedParameterOverrides.GetEnumerator();
+            while (enumerator.MoveNext())
+            {
+                AudioParameterScopeKey key = enumerator.Current.Key;
+                if (key.ScopeId == scopeId)
+                    reusableScopedParameterRemovalKeys.Add(key);
+            }
+            enumerator.Dispose();
+
+            int removedCount = reusableScopedParameterRemovalKeys.Count;
+            for (int i = 0; i < removedCount; i++)
+            {
+                scopedParameterOverrides.Remove(reusableScopedParameterRemovalKeys[i]);
+            }
+
+            reusableScopedParameterRemovalKeys.Clear();
+            return removedCount;
+        }
+
+        private static void RemoveScopedParameterOwnerIfUnused(int scopeId)
+        {
+            var enumerator = scopedParameterOverrides.GetEnumerator();
+            while (enumerator.MoveNext())
+            {
+                if (enumerator.Current.Key.ScopeId == scopeId)
+                {
+                    enumerator.Dispose();
+                    return;
+                }
+            }
+            enumerator.Dispose();
+            scopedParameterOwners.Remove(scopeId);
+        }
+
         public static AudioEvent GetEventByName(string eventName)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetEventByName));
             if (string.IsNullOrEmpty(eventName)) return null;
             eventNameMap.TryGetValue(eventName, out AudioEvent result);
             return result;
@@ -3379,6 +3909,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static AudioParameter GetParameterByName(string parameterName)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetParameterByName));
             if (string.IsNullOrEmpty(parameterName)) return null;
             parameterNameMap.TryGetValue(parameterName, out AudioParameter result);
             return result;
@@ -3386,52 +3917,24 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ClearEventNameMap()
         {
-            if (Thread.CurrentThread.ManagedThreadId != mainThreadId)
-            {
-                TryEnqueueCommand(new AudioCommand(AudioCommandType.ClearEventNameMap));
-                return;
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ClearEventNameMap));
 
             int count = eventNameMap.Count;
             eventNameMap.Clear();
-            preparedAudioEvents.Clear();
+            eventBindings.Clear();
             if (count > 0)
                 Debug.Log($"AudioManager: Cleared {count} events from name map.");
         }
 
-        private static void PrepareAudioBankRuntimeData(AudioBank bank)
+        public static int GetRegisteredEventCount()
         {
-            if (bank?.AudioEvents == null) return;
-
-            List<AudioEvent> events = bank.AudioEvents;
-            for (int i = 0; i < events.Count; i++)
-            {
-                AudioEvent audioEvent = events[i];
-                if (audioEvent == null) continue;
-
-                preparedAudioEvents[audioEvent.GetInstanceID()] = PrepareAudioEventData(audioEvent);
-            }
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetRegisteredEventCount));
+            return eventNameMap.Count;
         }
-
-        private static void InvalidatePreparedAudioEvents(AudioBank bank)
-        {
-            if (bank?.AudioEvents == null) return;
-
-            List<AudioEvent> events = bank.AudioEvents;
-            for (int i = 0; i < events.Count; i++)
-            {
-                AudioEvent audioEvent = events[i];
-                if (audioEvent != null)
-                {
-                    preparedAudioEvents.Remove(audioEvent.GetInstanceID());
-                }
-            }
-        }
-
-        public static int GetRegisteredEventCount() => eventNameMap.Count;
 
         public static Dictionary<string, List<AudioEvent>> ValidateBankForDuplicateNames(AudioBank bank)
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ValidateBankForDuplicateNames));
             var duplicates = new Dictionary<string, List<AudioEvent>>();
             if (bank?.AudioEvents == null) return duplicates;
 
@@ -3507,6 +4010,7 @@ namespace CycloneGames.Audio.Runtime
 
         public static IReadOnlyCollection<AudioBank> GetLoadedBanks()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetLoadedBanks));
             if (loadedBanksCacheDirty)
             {
                 cachedLoadedBanksList.Clear();
@@ -3520,58 +4024,57 @@ namespace CycloneGames.Audio.Runtime
             return cachedLoadedBanksReadOnly;
         }
 
-        public static int GetLoadedBankCount() => loadedBanks.Count;
-
-        private static void InitializeBankRuntimeState(AudioBank bank)
+        public static int GetLoadedBankCount()
         {
-            if (bank == null) return;
-
-            var parameters = bank.Parameters;
-            if (parameters != null)
-            {
-                for (int i = 0; i < parameters.Count; i++)
-                {
-                    parameters[i]?.ResetParameter();
-                }
-            }
-
-            var switches = bank.Switches;
-            if (switches != null)
-            {
-                for (int i = 0; i < switches.Count; i++)
-                {
-                    switches[i]?.ResetSwitch();
-                }
-            }
-
-            var stateGroups = bank.StateGroups;
-            if (stateGroups != null)
-            {
-                for (int i = 0; i < stateGroups.Count; i++)
-                {
-                    stateGroups[i]?.ResetStateGroup();
-                }
-            }
-        }
-
-        private static void ResetBankRuntimeState(AudioBank bank)
-        {
-            InitializeBankRuntimeState(bank);
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetLoadedBankCount));
+            return loadedBanks.Count;
         }
 
         private static void RefreshLoadedBankRuntimeState()
         {
-            var enumerator = loadedBanks.GetEnumerator();
-            while (enumerator.MoveNext())
+            var visitedIds = new HashSet<int>();
+            foreach (var pair in bankRegistrations)
             {
-                InitializeBankRuntimeState(enumerator.Current.Value);
+                AudioBankRegistration registration = pair.Value;
+                for (int i = 0; i < registration.OwnedParameters.Count; i++)
+                {
+                    AudioParameter parameter = registration.OwnedParameters[i];
+                    if (parameter != null && visitedIds.Add(parameter.GetInstanceID()))
+                        parameter.ResetParameter();
+                }
             }
-            enumerator.Dispose();
+
+            visitedIds.Clear();
+            foreach (var pair in bankRegistrations)
+            {
+                AudioBankRegistration registration = pair.Value;
+                for (int i = 0; i < registration.OwnedSwitches.Count; i++)
+                {
+                    AudioSwitch audioSwitch = registration.OwnedSwitches[i];
+                    if (audioSwitch != null && visitedIds.Add(audioSwitch.GetInstanceID()))
+                        audioSwitch.ResetSwitch();
+                }
+            }
+
+            visitedIds.Clear();
+            foreach (var pair in bankRegistrations)
+            {
+                AudioBankRegistration registration = pair.Value;
+                for (int i = 0; i < registration.OwnedStateGroups.Count; i++)
+                {
+                    AudioStateGroup stateGroup = registration.OwnedStateGroups[i];
+                    if (stateGroup != null && visitedIds.Add(stateGroup.GetInstanceID()))
+                        stateGroup.ResetStateGroup();
+                }
+            }
+
             ApplyAllStateMixProfiles();
         }
 
         private static void UpdateGlobalParameters(float deltaTime)
         {
+            CleanupDestroyedScopedParameterOwners();
+
             if (globalParametersCacheDirty)
             {
                 RebuildGlobalParametersCache();
@@ -3588,6 +4091,60 @@ namespace CycloneGames.Audio.Runtime
                 scopedEnumerator.Current.Value.Update(deltaTime);
             }
             scopedEnumerator.Dispose();
+        }
+
+        private static void CleanupDestroyedScopedParameterOwners()
+        {
+            int frame = Time.frameCount;
+            if (lastScopedParameterOwnerCleanupFrame >= 0
+                && frame - lastScopedParameterOwnerCleanupFrame < 120)
+            {
+                return;
+            }
+
+            lastScopedParameterOwnerCleanupFrame = frame;
+            reusableDeadParameterScopeIds.Clear();
+
+            var ownerEnumerator = scopedParameterOwners.GetEnumerator();
+            while (ownerEnumerator.MoveNext())
+            {
+                KeyValuePair<int, WeakReference<GameObject>> owner = ownerEnumerator.Current;
+                if (!owner.Value.TryGetTarget(out GameObject emitterObject) || emitterObject == null)
+                {
+                    reusableDeadParameterScopeIds.Add(owner.Key);
+                }
+            }
+            ownerEnumerator.Dispose();
+
+            if (reusableDeadParameterScopeIds.Count == 0)
+            {
+                return;
+            }
+
+            reusableScopedParameterRemovalKeys.Clear();
+            var overrideEnumerator = scopedParameterOverrides.GetEnumerator();
+            while (overrideEnumerator.MoveNext())
+            {
+                AudioParameterScopeKey key = overrideEnumerator.Current.Key;
+                if (reusableDeadParameterScopeIds.Contains(key.ScopeId))
+                {
+                    reusableScopedParameterRemovalKeys.Add(key);
+                }
+            }
+            overrideEnumerator.Dispose();
+
+            for (int i = 0; i < reusableScopedParameterRemovalKeys.Count; i++)
+            {
+                scopedParameterOverrides.Remove(reusableScopedParameterRemovalKeys[i]);
+            }
+
+            foreach (int scopeId in reusableDeadParameterScopeIds)
+            {
+                scopedParameterOwners.Remove(scopeId);
+            }
+
+            reusableScopedParameterRemovalKeys.Clear();
+            reusableDeadParameterScopeIds.Clear();
         }
 
         private static void UpdateDucking(float deltaTime)
@@ -3677,23 +4234,19 @@ namespace CycloneGames.Audio.Runtime
         private static void RebuildGlobalParametersCache()
         {
             reusableGlobalParameters.Clear();
-
-            var bankEnumerator = loadedBanks.GetEnumerator();
-            while (bankEnumerator.MoveNext())
+            var visitedIds = new HashSet<int>();
+            foreach (var pair in bankRegistrations)
             {
-                var parameters = bankEnumerator.Current.Value?.Parameters;
-                if (parameters == null) continue;
-
+                List<AudioParameter> parameters = pair.Value.OwnedParameters;
                 for (int i = 0; i < parameters.Count; i++)
                 {
-                    var parameter = parameters[i];
-                    if (parameter != null)
+                    AudioParameter parameter = parameters[i];
+                    if (parameter != null && visitedIds.Add(parameter.GetInstanceID()))
                     {
                         reusableGlobalParameters.Add(parameter);
                     }
                 }
             }
-            bankEnumerator.Dispose();
 
             globalParametersCacheDirty = false;
         }
@@ -3726,36 +4279,258 @@ namespace CycloneGames.Audio.Runtime
             source.SetScheduledEndTime(double.MaxValue);
             source.transform.localPosition = Vector3.zero;
             source.transform.localRotation = Quaternion.identity;
+
+            AudioLowPassFilter lowPassFilter = source.GetComponent<AudioLowPassFilter>();
+            if (lowPassFilter != null)
+            {
+                lowPassFilter.cutoffFrequency = 22000f;
+                lowPassFilter.lowpassResonanceQ = 1f;
+                lowPassFilter.enabled = false;
+            }
         }
 
         #endregion
 
         #region Clip Preload & Memory Budget
 
+        private const int MaxExternalClipReferencesPerBank = 1024;
+        private const ulong DefaultExternalClipMaxDownloadBytes = 64UL * 1024UL * 1024UL;
+        private const long DefaultExternalClipMaxDecodedBytes = 256L * 1024L * 1024L;
+        private const long DefaultBankClipLeaseMaxDecodedBytes = 512L * 1024L * 1024L;
+        private const long DefaultActiveBankClipLeaseMemoryBudgetBytes = 1024L * 1024L * 1024L;
+        private const int DefaultExternalClipRequestTimeoutSeconds = 30;
+        private const float DefaultExternalClipIdleTtlSeconds = 30f;
+        private static long externalClipMemoryBudgetBytes;
+        private static ulong externalClipMaxDownloadBytes = DefaultExternalClipMaxDownloadBytes;
+        private static long externalClipMaxDecodedBytes = DefaultExternalClipMaxDecodedBytes;
+        private static int externalClipRequestTimeoutSeconds = DefaultExternalClipRequestTimeoutSeconds;
+        private static float externalClipIdleTtl = DefaultExternalClipIdleTtlSeconds;
+        private static long bankClipLeaseMaxDecodedBytes = DefaultBankClipLeaseMaxDecodedBytes;
+        private static long activeBankClipLeaseMemoryBudgetBytes = DefaultActiveBankClipLeaseMemoryBudgetBytes;
+        private static long activeBankClipLeaseMemoryBytes;
+
         /// <summary>
-        /// Memory budget in bytes for externally-loaded clips. 0 = no budget limit.
-        /// Set per-platform via AudioPoolConfig or manually.
+        /// Memory budget in bytes for retaining unused externally-loaded clips.
+        /// A value of 0 disables unused cache residency; active leases are never evicted.
         /// </summary>
-        public static long ExternalClipMemoryBudgetBytes { get; set; } = 0;
+        public static long ExternalClipMemoryBudgetBytes
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMemoryBudgetBytes));
+                return externalClipMemoryBudgetBytes;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMemoryBudgetBytes));
+                externalClipMemoryBudgetBytes = Math.Max(0L, value);
+            }
+        }
+
+        /// <summary>Maximum encoded bytes accepted by the built-in external loader per clip.</summary>
+        public static ulong ExternalClipMaxDownloadBytes
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaxDownloadBytes));
+                return externalClipMaxDownloadBytes;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaxDownloadBytes));
+                externalClipMaxDownloadBytes = value;
+            }
+        }
+
+        /// <summary>Maximum estimated decoded PCM bytes accepted per externally loaded clip.</summary>
+        public static long ExternalClipMaxDecodedBytes
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaxDecodedBytes));
+                return externalClipMaxDecodedBytes;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaxDecodedBytes));
+                externalClipMaxDecodedBytes = Math.Max(0L, value);
+            }
+        }
+
+        /// <summary>Timeout in seconds for built-in external clip requests.</summary>
+        public static int ExternalClipRequestTimeoutSeconds
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipRequestTimeoutSeconds));
+                return externalClipRequestTimeoutSeconds;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipRequestTimeoutSeconds));
+                externalClipRequestTimeoutSeconds = Math.Max(1, value);
+            }
+        }
 
         /// <summary>
         /// Idle TTL (seconds) for unused external clips before eviction. Default 30s.
         /// </summary>
-        public static float ExternalClipIdleTTL { get; set; } = 30f;
+        public static float ExternalClipIdleTTL
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipIdleTTL));
+                return externalClipIdleTtl;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipIdleTTL));
+                externalClipIdleTtl = float.IsNaN(value) || float.IsInfinity(value) ? 0f : Mathf.Max(0f, value);
+            }
+        }
+
+        /// <summary>Maximum estimated decoded bytes retained by one bank clip lease.</summary>
+        public static long BankClipLeaseMaxDecodedBytes
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(BankClipLeaseMaxDecodedBytes));
+                return bankClipLeaseMaxDecodedBytes;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(BankClipLeaseMaxDecodedBytes));
+                bankClipLeaseMaxDecodedBytes = Math.Max(0L, value);
+            }
+        }
+
+        /// <summary>Maximum estimated decoded bytes reserved across all active bank clip leases.</summary>
+        public static long ActiveBankClipLeaseMemoryBudgetBytes
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveBankClipLeaseMemoryBudgetBytes));
+                return activeBankClipLeaseMemoryBudgetBytes;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveBankClipLeaseMemoryBudgetBytes));
+                activeBankClipLeaseMemoryBudgetBytes = Math.Max(0L, value);
+            }
+        }
+
+        public static long ActiveBankClipLeaseMemoryBytes
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveBankClipLeaseMemoryBytes));
+                return activeBankClipLeaseMemoryBytes;
+            }
+        }
 
         private static float lastEvictionCheckTime;
 
         /// <summary>
-        /// Preloads all AudioClipReference-based external clips from a bank's events
-        /// into the external clip cache. This warms the cache so that first PlayEvent
-        /// calls don't incur load latency.
+        /// Preloads and retains all AudioClipReference-based external clips from a bank's
+        /// events. The manager-owned residency lease remains active until the bank is
+        /// unloaded, <see cref="ReleasePreloadedBankClips"/> is called, or the manager shuts down.
         /// </summary>
         /// <param name="bank">The bank whose events' external clips should be preloaded.</param>
         /// <param name="cancellationToken">Token to cancel the preload operation.</param>
         /// <returns>Number of clips successfully preloaded.</returns>
         public static async UniTask<int> PreloadBankClipsAsync(AudioBank bank, CancellationToken cancellationToken = default)
         {
-            if (bank == null || bank.AudioEvents == null) return 0;
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(PreloadBankClipsAsync));
+            if (bank == null || isTearingDown) return 0;
+
+            int bankId = bank.GetInstanceID();
+            CancellationTokenSource linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            CancellationToken linkedToken = linkedCancellation.Token;
+            var request = new PreloadBankRequest(
+                GetNextPreloadRequestId(),
+                managerLifecycleGeneration,
+                linkedCancellation);
+            preloadBankMutationVersions[bankId] = request.RequestId;
+            preloadBankRequests.TryGetValue(bankId, out PreloadBankRequest previousRequest);
+            if (previousRequest != null)
+                preloadBankRequests.Remove(bankId);
+
+            IAudioBankClipLease lease = null;
+            try
+            {
+                // Cancellation callbacks are synchronous and may re-enter preload/release/unload.
+                // Publish this request only if no later mutation won during that callback.
+                if (previousRequest != null)
+                    SafeCancelCancellationSource(previousRequest.Cancellation);
+                if (!IsCurrentPreloadMutation(bankId, request))
+                    return 0;
+
+                linkedToken.ThrowIfCancellationRequested();
+                preloadBankRequests[bankId] = request;
+                if (preloadedBankClipLeases.TryGetValue(bankId, out IAudioBankClipLease previousLease))
+                {
+                    // Release the previous reservation before acquiring its replacement. Keeping
+                    // both would double-count shared clips and can reject a same-bank refresh at
+                    // an otherwise sufficient aggregate budget.
+                    preloadedBankClipLeases.Remove(bankId);
+                    SafeDisposeBankClipLease(previousLease);
+                    linkedToken.ThrowIfCancellationRequested();
+                    if (!IsCurrentPreloadMutation(bankId, request))
+                        return 0;
+                }
+
+                lease = await AcquireBankClipLeaseAsync(bank, linkedToken);
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(PreloadBankClipsAsync) + " continuation");
+                linkedToken.ThrowIfCancellationRequested();
+
+                if (!IsCurrentPreloadMutation(bankId, request) ||
+                    !preloadBankRequests.TryGetValue(bankId, out PreloadBankRequest currentRequest) ||
+                    !ReferenceEquals(currentRequest, request))
+                {
+                    return 0;
+                }
+
+                preloadBankRequests.Remove(bankId);
+                int loadedCount = lease != null ? lease.LoadedCount : 0;
+                preloadedBankClipLeases[bankId] = lease;
+                lease = null;
+                return loadedCount;
+            }
+            finally
+            {
+                if (preloadBankRequests.TryGetValue(bankId, out PreloadBankRequest currentRequest) &&
+                    ReferenceEquals(currentRequest, request))
+                {
+                    preloadBankRequests.Remove(bankId);
+                }
+
+                SafeDisposeBankClipLease(lease);
+                SafeDisposeCancellationSource(linkedCancellation);
+                RemoveCompletedPreloadMutation(bankId, request.RequestId);
+            }
+        }
+
+        /// <summary>Releases the manager-owned residency lease created by <see cref="PreloadBankClipsAsync"/>.</summary>
+        public static bool ReleasePreloadedBankClips(AudioBank bank)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReleasePreloadedBankClips));
+            return bank != null && ReleasePreloadedBankClipLease(bank.GetInstanceID());
+        }
+
+        /// <summary>
+        /// Loads and retains all external clips referenced by a bank. The returned lease owns
+        /// every successful clip handle and must be disposed on the Unity main thread.
+        /// </summary>
+        public static async UniTask<IAudioBankClipLease> AcquireBankClipLeaseAsync(
+            AudioBank bank,
+            CancellationToken cancellationToken = default)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(AcquireBankClipLeaseAsync));
+            int lifecycleGeneration = managerLifecycleGeneration;
+            if (isTearingDown)
+                throw new InvalidOperationException("Audio clip leases cannot be acquired while AudioManager is shutting down.");
+            if (bank == null || bank.AudioEvents == null)
+                return new AudioBankClipLease(bank, 0, Array.Empty<IAudioClipHandle>(), 0, 0L, lifecycleGeneration);
 
             using var references = new PooledAudioClipReferenceSet();
 
@@ -3765,61 +4540,301 @@ namespace CycloneGames.Audio.Runtime
                 var audioEvent = bank.AudioEvents[i];
                 if (audioEvent == null) continue;
 
-                CollectExternalClipReferences(audioEvent, references);
+                if (!CollectExternalClipReferences(audioEvent, references))
+                {
+                    throw new InvalidOperationException(
+                        $"AudioBank '{bank.name}' exceeds the {MaxExternalClipReferencesPerBank}-clip preload limit.");
+                }
             }
 
-            if (references.Count == 0) return 0;
+            if (references.Count == 0)
+                return new AudioBankClipLease(bank, 0, Array.Empty<IAudioClipHandle>(), 0, 0L, lifecycleGeneration);
 
-            int successCount = 0;
+            var retainedHandles = new List<IAudioClipHandle>(references.Count);
+            int failedCount = 0;
+            long reservedDecodedBytes = 0L;
+            IAudioClipHandle pendingHandle = null;
 
-            for (int i = 0; i < references.Count; i++)
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                IAudioClipHandle handle = null;
-                try
+                for (int i = 0; i < references.Count; i++)
                 {
-                    handle = await AudioClipResolver.LoadExternalAsync(references[i], cancellationToken);
-                    if (handle != null && handle.IsSuccess)
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    pendingHandle = null;
+                    try
                     {
-                        successCount++;
+                        pendingHandle = await AudioClipResolver.LoadExternalAsync(references[i], cancellationToken);
+                        AudioRuntimeThreadGuard.EnsureMainThread(nameof(AcquireBankClipLeaseAsync) + " continuation");
+                        cancellationToken.ThrowIfCancellationRequested();
+                        if (isTearingDown || lifecycleGeneration != managerLifecycleGeneration)
+                        {
+                            AudioClipHandleRelease.Safe(pendingHandle);
+                            pendingHandle = null;
+                            throw new OperationCanceledException(
+                                "AudioManager lifecycle changed while acquiring a bank clip lease.",
+                                cancellationToken);
+                        }
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        AudioClipHandleRelease.Safe(pendingHandle);
+                        pendingHandle = null;
+                        throw;
+                    }
+                    catch (Exception exception)
+                    {
+                        AudioClipHandleRelease.Safe(pendingHandle);
+                        pendingHandle = null;
+                        failedCount++;
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+                        Debug.LogException(exception);
+#endif
+                        continue;
+                    }
+
+                    if (pendingHandle != null && pendingHandle.IsSuccess && pendingHandle.Clip != null)
+                    {
+                        long decodedBytes = EstimateDecodedClipBytes(pendingHandle.Clip);
+                        long perLeaseLimit = bankClipLeaseMaxDecodedBytes;
+                        bool exceedsPerLeaseLimit = perLeaseLimit > 0 &&
+                            (decodedBytes > perLeaseLimit - Math.Min(reservedDecodedBytes, perLeaseLimit));
+                        bool exceedsCounterCapacity = decodedBytes > long.MaxValue - reservedDecodedBytes;
+                        if (exceedsPerLeaseLimit || exceedsCounterCapacity ||
+                            !TryReserveActiveBankClipLeaseBytes(decodedBytes))
+                        {
+                            AudioClipHandleRelease.Safe(pendingHandle);
+                            pendingHandle = null;
+                            failedCount++;
+                            continue;
+                        }
+
+                        reservedDecodedBytes += decodedBytes;
+                        retainedHandles.Add(pendingHandle);
+                        pendingHandle = null;
+                    }
+                    else
+                    {
+                        AudioClipHandleRelease.Safe(pendingHandle);
+                        pendingHandle = null;
+                        failedCount++;
                     }
                 }
-                finally
-                {
-                    handle?.Release();
-                }
+            }
+            catch
+            {
+                AudioClipHandleRelease.Safe(pendingHandle);
+                for (int i = 0; i < retainedHandles.Count; i++)
+                    AudioClipHandleRelease.Safe(retainedHandles[i]);
+                ReleaseActiveBankClipLeaseBytes(reservedDecodedBytes, lifecycleGeneration);
+                throw;
             }
 
-#if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.Log($"AudioManager: Preloaded {successCount}/{references.Count} external clips from '{bank.name}'.");
-#endif
-            return successCount;
+            try
+            {
+                return new AudioBankClipLease(
+                    bank,
+                    references.Count,
+                    retainedHandles.ToArray(),
+                    failedCount,
+                    reservedDecodedBytes,
+                    lifecycleGeneration);
+            }
+            catch
+            {
+                for (int i = 0; i < retainedHandles.Count; i++)
+                    AudioClipHandleRelease.Safe(retainedHandles[i]);
+                ReleaseActiveBankClipLeaseBytes(reservedDecodedBytes, lifecycleGeneration);
+                throw;
+            }
         }
 
-        private static void CollectExternalClipReferences(AudioEvent audioEvent, PooledAudioClipReferenceSet references)
+        private static long EstimateDecodedClipBytes(AudioClip clip)
         {
-            if (audioEvent == null) return;
+            if (clip == null) return 0L;
+            long samples = Math.Max(0, clip.samples);
+            long channels = Math.Max(0, clip.channels);
+            if (samples == 0L || channels == 0L) return 0L;
+            if (samples > long.MaxValue / channels / 4L) return long.MaxValue;
+            return samples * channels * 4L;
+        }
+
+        private static bool TryReserveActiveBankClipLeaseBytes(long decodedBytes)
+        {
+            decodedBytes = Math.Max(0L, decodedBytes);
+            long budget = activeBankClipLeaseMemoryBudgetBytes;
+            if (decodedBytes > long.MaxValue - activeBankClipLeaseMemoryBytes)
+                return false;
+            if (budget > 0 && decodedBytes > budget - Math.Min(activeBankClipLeaseMemoryBytes, budget))
+                return false;
+
+            activeBankClipLeaseMemoryBytes += decodedBytes;
+            return true;
+        }
+
+        internal static void ReleaseActiveBankClipLeaseBytes(long decodedBytes, int lifecycleGeneration)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ReleaseActiveBankClipLeaseBytes));
+            if (decodedBytes <= 0L || lifecycleGeneration != managerLifecycleGeneration) return;
+            activeBankClipLeaseMemoryBytes = Math.Max(0L, activeBankClipLeaseMemoryBytes - decodedBytes);
+        }
+
+        private static bool ReleasePreloadedBankClipLease(int bankId)
+        {
+            int mutationVersion = GetNextPreloadRequestId();
+            preloadBankMutationVersions[bankId] = mutationVersion;
+            try
+            {
+                bool changed = CancelPreloadBankRequest(bankId);
+                if (!IsCurrentPreloadMutationVersion(bankId, mutationVersion))
+                    return changed;
+                if (!preloadedBankClipLeases.TryGetValue(bankId, out IAudioBankClipLease lease))
+                    return changed;
+
+                preloadedBankClipLeases.Remove(bankId);
+                SafeDisposeBankClipLease(lease);
+                return true;
+            }
+            finally
+            {
+                RemoveCompletedPreloadMutation(bankId, mutationVersion);
+            }
+        }
+
+        private static void ReleaseAllPreloadedBankClipLeases()
+        {
+            if (preloadBankRequests.Count > 0)
+            {
+                var requests = new List<PreloadBankRequest>(preloadBankRequests.Values);
+                preloadBankRequests.Clear();
+                for (int i = 0; i < requests.Count; i++)
+                    SafeCancelCancellationSource(requests[i].Cancellation);
+            }
+
+            if (preloadedBankClipLeases.Count == 0) return;
+
+            var leases = new List<IAudioBankClipLease>(preloadedBankClipLeases.Values);
+            preloadedBankClipLeases.Clear();
+            for (int i = 0; i < leases.Count; i++)
+                SafeDisposeBankClipLease(leases[i]);
+        }
+
+        private static int GetNextPreloadRequestId()
+        {
+            unchecked
+            {
+                nextPreloadRequestId++;
+                if (nextPreloadRequestId == 0)
+                    nextPreloadRequestId++;
+                return nextPreloadRequestId;
+            }
+        }
+
+        private static bool IsCurrentPreloadMutation(int bankId, PreloadBankRequest request)
+        {
+            return request != null &&
+                   !isTearingDown &&
+                   request.LifecycleGeneration == managerLifecycleGeneration &&
+                   IsCurrentPreloadMutationVersion(bankId, request.RequestId);
+        }
+
+        private static bool IsCurrentPreloadMutationVersion(int bankId, int expectedMutationVersion)
+        {
+            return preloadBankMutationVersions.TryGetValue(bankId, out int mutationVersion) &&
+                   mutationVersion == expectedMutationVersion;
+        }
+
+        private static void RemoveCompletedPreloadMutation(int bankId, int expectedMutationVersion)
+        {
+            if (preloadBankRequests.ContainsKey(bankId) || preloadedBankClipLeases.ContainsKey(bankId))
+                return;
+            if (preloadBankMutationVersions.TryGetValue(bankId, out int mutationVersion) &&
+                mutationVersion == expectedMutationVersion)
+            {
+                preloadBankMutationVersions.Remove(bankId);
+            }
+        }
+
+        private static bool CancelPreloadBankRequest(int bankId)
+        {
+            if (!preloadBankRequests.TryGetValue(bankId, out PreloadBankRequest request))
+                return false;
+
+            preloadBankRequests.Remove(bankId);
+            SafeCancelCancellationSource(request.Cancellation);
+            return true;
+        }
+
+        private static void SafeCancelCancellationSource(CancellationTokenSource cancellation)
+        {
+            if (cancellation == null) return;
+            try
+            {
+                cancellation.Cancel();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+        }
+
+        private static void SafeDisposeCancellationSource(CancellationTokenSource cancellation)
+        {
+            if (cancellation == null) return;
+            try
+            {
+                cancellation.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+        }
+
+        private static void SafeDisposeBankClipLease(IAudioBankClipLease lease)
+        {
+            if (lease == null) return;
+            try
+            {
+                lease.Dispose();
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+        }
+
+        private static bool CollectExternalClipReferences(AudioEvent audioEvent, PooledAudioClipReferenceSet references)
+        {
+            if (audioEvent == null) return true;
 
             var nodes = audioEvent.Nodes;
-            if (nodes == null) return;
+            if (nodes == null) return true;
 
             for (int i = 0; i < nodes.Count; i++)
             {
                 var node = nodes[i];
-                if (node is AudioFile audioFile)
+                if (node is AudioFile audioFile &&
+                    audioFile.TryGetExternalReference(out AudioClipReference audioFileReference))
                 {
-                    references.Add(audioFile.ExternalReference);
+                    references.Add(audioFileReference);
                 }
-                else if (node is AudioVoiceFile voiceFile)
+                else if (node is AudioVoiceFile voiceFile &&
+                         voiceFile.TryGetExternalReference(out AudioClipReference voiceFileReference))
                 {
-                    references.Add(voiceFile.ExternalReference);
+                    references.Add(voiceFileReference);
                 }
-                else if (node is AudioBlendFile blendFile)
+                else if (node is AudioBlendFile blendFile &&
+                         blendFile.TryGetExternalReference(out AudioClipReference blendFileReference))
                 {
-                    references.Add(blendFile.ExternalReference);
+                    references.Add(blendFileReference);
                 }
+
+                if (references.Count > MaxExternalClipReferencesPerBank)
+                    return false;
             }
+
+            return true;
         }
 
         /// <summary>
@@ -3845,6 +4860,7 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static long GetExternalClipCacheMemoryBytes()
         {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(GetExternalClipCacheMemoryBytes));
             return ExternalAudioClipHandle.GetTotalCachedMemoryBytes();
         }
 
@@ -3854,7 +4870,8 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ApplyActiveSolos()
         {
-            ValidateManager();
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ApplyActiveSolos));
+            if (!ValidateManager()) return;
 
             bool soloActive = false;
             int count = ActiveEvents.Count;
@@ -3875,7 +4892,8 @@ namespace CycloneGames.Audio.Runtime
 
         public static void ClearActiveSolos()
         {
-            ValidateManager();
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ClearActiveSolos));
+            if (!ValidateManager()) return;
             int count = ActiveEvents.Count;
             for (int i = 0; i < count; i++) ActiveEvents[i].ClearSolo();
         }

@@ -1,4 +1,4 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using UnityEngine;
@@ -225,9 +225,7 @@ namespace CycloneGames.Audio.Runtime
             AutoSortConnectionsIfNeeded();
             this.nodeRect.width  = NodeWidth;
             this.nodeRect.height = CalcHeight();
-            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
-            DrawInput();
-            DrawOutput();
+            base.DrawNode(id);
         }
 
         protected override void DrawProperties()

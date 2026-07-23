@@ -1,8 +1,7 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using System;
-using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 #if UNITY_EDITOR
@@ -64,6 +63,14 @@ namespace CycloneGames.Audio.Runtime
             return sourceMode;
         }
 
+        internal bool TryGetExternalReference(out AudioClipReference reference)
+        {
+            reference = GetEffectiveSourceMode() == AudioFile.AudioFileSourceMode.ExternalReference
+                ? externalReference
+                : null;
+            return reference != null;
+        }
+
         public AudioClipReference ExternalReference => this.externalReference;
         public AudioClip File
         {
@@ -80,13 +87,14 @@ namespace CycloneGames.Audio.Runtime
 
             if (effectiveMode == AudioFile.AudioFileSourceMode.EmbeddedClip && this.file != null)
             {
-                CalculateStartTime(this.file);
-                activeEvent.AddEventSource(this.file, this.parameter, this.responseCurve, this.startTime, AudioClipResolver.CreateEmbedded(this.file));
+                float selectedStartTime = SelectStartTime(this.file);
+                activeEvent.AddEventSource(this.file, this.parameter, this.responseCurve, selectedStartTime, AudioClipResolver.CreateEmbedded(this.file));
             }
             else if (effectiveMode == AudioFile.AudioFileSourceMode.ExternalReference && this.externalReference != null)
             {
-                activeEvent.isAsync = true;
-                LoadClipAsync(activeEvent).Forget();
+                AudioEventPreparation preparation = activeEvent.BeginAsyncPreparation();
+                if (preparation != null)
+                    LoadClipAsync(preparation, activeEvent.name).Forget();
             }
             else
             {
@@ -94,48 +102,75 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        private async UniTaskVoid LoadClipAsync(ActiveEvent activeEvent)
+        private async UniTaskVoid LoadClipAsync(AudioEventPreparation preparation, string eventName)
         {
+            IAudioClipHandle handle = null;
+            bool succeeded = false;
             try
             {
-                IAudioClipHandle handle = await AudioClipResolver.LoadExternalAsync(this.externalReference, activeEvent.GetCancellationToken());
+                handle = await AudioClipResolver.LoadExternalAsync(
+                    this.externalReference,
+                    preparation.CancellationToken);
 
                 if (handle == null)
                 {
-                    Debug.LogError($"No loader found for BlendFile reference '{externalReference?.name}' in event '{activeEvent.name}'.");
-                    activeEvent.StopImmediate();
+                    Debug.LogError($"No loader found for BlendFile reference '{externalReference?.name}' in event '{eventName}'.");
                     return;
                 }
 
                 if (!handle.IsSuccess || handle.Clip == null || handle.Clip.length <= 0f)
                 {
-                    Debug.LogError($"Error loading blend clip '{externalReference?.ResolveLocation()}': {handle.Error}");
-                    handle.Release();
-                    activeEvent.StopImmediate();
+                    string referenceName = externalReference != null ? externalReference.name : "<missing>";
+                    Debug.LogError($"Blend audio reference '{referenceName}' failed to load.");
+                    AudioClipHandleRelease.Safe(handle);
+                    handle = null;
                     return;
                 }
 
-                CalculateStartTime(handle.Clip);
-                if (!activeEvent.AddEventSource(handle.Clip, this.parameter, this.responseCurve, this.startTime, handle))
+                float selectedStartTime = SelectStartTime(handle.Clip);
+                bool sourceAccepted = preparation.TryAddSource(
+                    handle.Clip,
+                    this.parameter,
+                    this.responseCurve,
+                    selectedStartTime,
+                    handle);
+                handle = null;
+                if (!sourceAccepted)
                 {
-                    handle.Release();
                     return;
                 }
 
-                activeEvent.OnAsyncLoadCompleted();
+                succeeded = true;
             }
             catch (OperationCanceledException) { }
             catch (Exception e)
             {
-                Debug.LogError($"Exception loading blend clip '{externalReference?.ResolveLocation()}': {e.Message}");
-                activeEvent.StopImmediate();
+                string referenceName = externalReference != null ? externalReference.name : "<missing>";
+                Debug.LogError(
+                    $"Blend audio reference '{referenceName}' failed with {e.GetType().Name}. Location details are omitted from logs.");
+            }
+            finally
+            {
+                try
+                {
+                    AudioClipHandleRelease.Safe(handle);
+                }
+                finally
+                {
+                    preparation.Complete(succeeded);
+                }
             }
         }
 
         /// <summary>Compute a random start-time offset for the given clip.</summary>
         public void CalculateStartTime(AudioClip clip)
         {
-            if (clip == null) { this.startTime = 0; return; }
+            SelectStartTime(clip);
+        }
+
+        private float SelectStartTime(AudioClip clip)
+        {
+            if (clip == null) { this.startTime = 0; return 0f; }
 
             float clampedMin = Mathf.Clamp01(this.minStartTime);
             float clampedMax = Mathf.Clamp01(this.maxStartTime);
@@ -143,6 +178,7 @@ namespace CycloneGames.Audio.Runtime
                 ? UnityEngine.Random.Range(clampedMin, clampedMax)
                 : clampedMin;
             this.startTime = clip.length * ratio;
+            return this.startTime;
         }
 
         // Keep backwards-compatible public API
@@ -182,9 +218,7 @@ namespace CycloneGames.Audio.Runtime
         public override void DrawNode(int id)
         {
             this.nodeRect.height = CalcHeight();
-            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
-            DrawInput();
-            DrawOutput();
+            base.DrawNode(id);
         }
 
         protected override void DrawProperties()
