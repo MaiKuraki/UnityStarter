@@ -8,9 +8,22 @@ using CycloneGames.Audio.Runtime;
 
 namespace CycloneGames.Audio.Editor
 {
+    [CanEditMultipleObjects]
     [CustomEditor(typeof(AudioManager), true)]
     public class AudioManagerEditor : UnityEditor.Editor
     {
+        private static readonly string[] HandledSerializedProperties =
+        {
+            "m_Script",
+            "focusMode",
+            "customPoolSize",
+            "poolConfigOverride",
+            "voicePolicyProfileOverride",
+            "platformProfileOverride",
+            "duckingProfileOverride",
+            "mainMixer"
+        };
+
         // Foldout states
         private bool showSettings = true;
         private bool showStatistics = true;
@@ -241,6 +254,8 @@ namespace CycloneGames.Audio.Editor
             EditorGUILayout.Space(3);
             EditorGUILayout.PropertyField(_mainMixerProp);
 
+            DrawPropertiesExcluding(serializedObject, HandledSerializedProperties);
+
             EditorGUILayout.EndVertical();
 
             serializedObject.ApplyModifiedProperties();
@@ -292,7 +307,6 @@ namespace CycloneGames.Audio.Editor
             DrawStatRow("Active Events", stats.ActiveEvents.ToString());
             DrawStatRow("Peak Active Events", stats.PeakActiveEvents.ToString());
             DrawStatRow("Total Played", stats.TotalEventsPlayed.ToString());
-            DrawStatRow("Queued Commands", stats.QueuedCommands.ToString());
             DrawStatRow("Pending Removals", stats.PendingRemovals.ToString());
             DrawStatRow("Scoped Parameters", stats.ScopedParameterOverrides.ToString());
             DrawStatRow("Total Memory", ToMemorySizeString(stats.TotalMemoryUsage));

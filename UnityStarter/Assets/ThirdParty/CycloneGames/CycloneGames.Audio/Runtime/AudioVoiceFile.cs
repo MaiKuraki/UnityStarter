@@ -1,8 +1,7 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using System;
-using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 #if UNITY_EDITOR
@@ -69,6 +68,14 @@ namespace CycloneGames.Audio.Runtime
             return sourceMode;
         }
 
+        internal bool TryGetExternalReference(out AudioClipReference reference)
+        {
+            reference = GetEffectiveSourceMode() == AudioFile.AudioFileSourceMode.ExternalReference
+                ? externalReference
+                : null;
+            return reference != null;
+        }
+
         public AudioClipReference ExternalReference => this.externalReference;
         public AudioClip File => this.file;
 
@@ -87,8 +94,9 @@ namespace CycloneGames.Audio.Runtime
             }
             else if (effectiveMode == AudioFile.AudioFileSourceMode.ExternalReference && this.externalReference != null)
             {
-                activeEvent.isAsync = true;
-                LoadClipAsync(activeEvent).Forget();
+                AudioEventPreparation preparation = activeEvent.BeginAsyncPreparation();
+                if (preparation != null)
+                    LoadClipAsync(preparation, activeEvent.name).Forget();
             }
             else
             {
@@ -96,40 +104,57 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        private async UniTaskVoid LoadClipAsync(ActiveEvent activeEvent)
+        private async UniTaskVoid LoadClipAsync(AudioEventPreparation preparation, string eventName)
         {
+            IAudioClipHandle handle = null;
+            bool succeeded = false;
             try
             {
-                IAudioClipHandle handle = await AudioClipResolver.LoadExternalAsync(this.externalReference, activeEvent.GetCancellationToken());
+                handle = await AudioClipResolver.LoadExternalAsync(
+                    this.externalReference,
+                    preparation.CancellationToken);
 
                 if (handle == null)
                 {
-                    Debug.LogError($"No loader found for VoiceFile reference '{externalReference?.name}' in event '{activeEvent.name}'.");
-                    activeEvent.StopImmediate();
+                    Debug.LogError($"No loader found for VoiceFile reference '{externalReference?.name}' in event '{eventName}'.");
                     return;
                 }
 
                 if (!handle.IsSuccess || handle.Clip == null || handle.Clip.length <= 0f)
                 {
-                    Debug.LogError($"Error loading voice clip '{externalReference?.ResolveLocation()}': {handle.Error}");
-                    handle.Release();
-                    activeEvent.StopImmediate();
+                    string referenceName = externalReference != null ? externalReference.name : "<missing>";
+                    Debug.LogError($"Voice audio reference '{referenceName}' failed to load.");
+                    AudioClipHandleRelease.Safe(handle);
+                    handle = null;
                     return;
                 }
 
-                if (!activeEvent.AddEventSource(handle.Clip, null, null, 0, handle))
+                bool sourceAccepted = preparation.TryAddSource(handle.Clip, null, null, 0f, handle);
+                handle = null;
+                if (!sourceAccepted)
                 {
-                    handle.Release();
                     return;
                 }
 
-                activeEvent.OnAsyncLoadCompleted();
+                succeeded = true;
             }
             catch (OperationCanceledException) { }
             catch (Exception e)
             {
-                Debug.LogError($"Exception loading voice clip '{externalReference?.ResolveLocation()}': {e.Message}");
-                activeEvent.StopImmediate();
+                string referenceName = externalReference != null ? externalReference.name : "<missing>";
+                Debug.LogError(
+                    $"Voice audio reference '{referenceName}' failed with {e.GetType().Name}. Location details are omitted from logs.");
+            }
+            finally
+            {
+                try
+                {
+                    AudioClipHandleRelease.Safe(handle);
+                }
+                finally
+                {
+                    preparation.Complete(succeeded);
+                }
             }
         }
 
@@ -165,9 +190,7 @@ namespace CycloneGames.Audio.Runtime
         public override void DrawNode(int id)
         {
             this.nodeRect.height = CalcHeight();
-            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
-            DrawInput();
-            DrawOutput();
+            base.DrawNode(id);
         }
 
         protected override void DrawProperties()

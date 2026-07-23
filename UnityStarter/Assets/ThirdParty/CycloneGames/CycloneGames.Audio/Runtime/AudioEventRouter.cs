@@ -1,5 +1,7 @@
-﻿using System.Collections;
+using System;
 using System.Collections.Generic;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
@@ -7,15 +9,28 @@ namespace CycloneGames.Audio.Runtime
     public class AudioEventRouter : MonoBehaviour
     {
         public AudioTrigger[] triggers;
-        private List<ActiveEvent> activeOnEnabledEvents = new List<ActiveEvent>();
+        private readonly List<AudioHandle> activeOnEnabledEvents = new List<AudioHandle>(4);
+        private CancellationTokenSource loopCancellation;
         private const float MIN_LOOP_TIME = 1.0f;
         private const float MAX_LOOP_TIME = 1000.0f;
 
         public void OnEnable()
         {
-            for (int i = 0; i < this.triggers.Length; i++)
+            CancelLoopingTriggers();
+
+            if (triggers == null)
             {
-                AudioTrigger tempTrigger = this.triggers[i];
+                return;
+            }
+
+            for (int i = 0; i < triggers.Length; i++)
+            {
+                AudioTrigger tempTrigger = triggers[i];
+                if (tempTrigger == null)
+                {
+                    continue;
+                }
+
                 if (tempTrigger.triggerOnEvent == UnityTrigger.OnEnable)
                 {
                     if (tempTrigger.loopTrigger)
@@ -24,7 +39,7 @@ namespace CycloneGames.Audio.Runtime
                     }
                     else
                     {
-                        this.activeOnEnabledEvents.Add(PlayTraceableTrigger(i));
+                        TrackEnabledEvent(PlayTraceableTrigger(i));
                     }
                 }
             }
@@ -32,21 +47,32 @@ namespace CycloneGames.Audio.Runtime
 
         public void OnDisable()
         {
-            for (int i = 0; i < this.triggers.Length; i++)
-            {
-                AudioTrigger tempTrigger = this.triggers[i];
-                if (tempTrigger.triggerOnEvent == UnityTrigger.OnDisable)
-                {
-                    PlayAudioTrigger(i);
-                }
+            CancelLoopingTriggers();
 
-                StopEnabledEvents();
+            if (triggers != null)
+            {
+                for (int i = 0; i < triggers.Length; i++)
+                {
+                    AudioTrigger tempTrigger = triggers[i];
+                    if (tempTrigger != null && tempTrigger.triggerOnEvent == UnityTrigger.OnDisable)
+                    {
+                        PlayAudioTrigger(i);
+                    }
+                }
             }
+
+            StopEnabledEvents();
+        }
+
+        private void OnDestroy()
+        {
+            CancelLoopingTriggers();
+            StopEnabledEvents();
         }
 
         public void PlayAudioEvent(AudioEvent eventToPlay)
         {
-            AudioManager.PlayEvent(eventToPlay, this.gameObject);
+            AudioManager.PlayEvent(eventToPlay, gameObject);
         }
 
         public void PlayAudioTrigger(int triggerNum)
@@ -56,7 +82,13 @@ namespace CycloneGames.Audio.Runtime
 
         public void StartLoopingTrigger(int triggerNum)
         {
-            StartCoroutine(PlayLoopingTrigger(triggerNum));
+            if (!isActiveAndEnabled || !TryGetTrigger(triggerNum, out AudioTrigger trigger))
+            {
+                return;
+            }
+
+            loopCancellation ??= new CancellationTokenSource();
+            PlayLoopingTriggerAsync(triggerNum, trigger, loopCancellation.Token).Forget();
         }
 
         public void StopEvents(AudioEvent eventToStop)
@@ -71,50 +103,120 @@ namespace CycloneGames.Audio.Runtime
 
         public void StopEnabledEvents()
         {
-            for (int i = 0; i < this.activeOnEnabledEvents.Count; i++)
+            for (int i = 0; i < activeOnEnabledEvents.Count; i++)
             {
-                ActiveEvent tempEvent = this.activeOnEnabledEvents[i];
-                if (tempEvent != null)
-                {
-                    tempEvent.Stop();
-                }
+                activeOnEnabledEvents[i].Stop();
             }
 
-            this.activeOnEnabledEvents.Clear();
+            activeOnEnabledEvents.Clear();
         }
 
-        private ActiveEvent PlayTraceableTrigger(int triggerNum)
+        private AudioHandle PlayTraceableTrigger(int triggerNum)
         {
-            AudioTrigger tempTrigger = triggers[triggerNum];
+            if (!TryGetTrigger(triggerNum, out AudioTrigger tempTrigger) || tempTrigger.eventToTrigger == null)
+            {
+                return default;
+            }
+
+            ActiveEvent activeEvent;
             if (!tempTrigger.usePosition && tempTrigger.soundEmitter == null)
             {
-                return AudioManager.PlayEvent(tempTrigger.eventToTrigger, this.gameObject);
+                activeEvent = AudioManager.PlayEvent(tempTrigger.eventToTrigger, gameObject);
             }
             else if (tempTrigger.usePosition)
             {
-                return AudioManager.PlayEvent(tempTrigger.eventToTrigger, tempTrigger.soundPosition);
+                activeEvent = AudioManager.PlayEvent(tempTrigger.eventToTrigger, tempTrigger.soundPosition);
             }
             else
             {
-                return AudioManager.PlayEvent(tempTrigger.eventToTrigger, tempTrigger.soundEmitter);
+                activeEvent = AudioManager.PlayEvent(tempTrigger.eventToTrigger, tempTrigger.soundEmitter);
+            }
+
+            return activeEvent != null ? activeEvent.Handle : default;
+        }
+
+        private async UniTask PlayLoopingTriggerAsync(
+            int triggerNum,
+            AudioTrigger loopTrigger,
+            CancellationToken cancellationToken)
+        {
+            try
+            {
+                float minimumDelay = Mathf.Clamp(loopTrigger.loopTimeMin, MIN_LOOP_TIME, MAX_LOOP_TIME);
+                float maximumDelay = Mathf.Clamp(loopTrigger.loopTimeMax, minimumDelay, MAX_LOOP_TIME);
+
+                while (!cancellationToken.IsCancellationRequested && isActiveAndEnabled)
+                {
+                    if (!TryGetTrigger(triggerNum, out AudioTrigger currentTrigger) ||
+                        !ReferenceEquals(currentTrigger, loopTrigger))
+                    {
+                        return;
+                    }
+
+                    TrackEnabledEvent(PlayTraceableTrigger(triggerNum));
+                    float timeUntilNextLoop = UnityEngine.Random.Range(minimumDelay, maximumDelay);
+                    await UniTask.Delay(
+                        TimeSpan.FromSeconds(timeUntilNextLoop),
+                        DelayType.DeltaTime,
+                        PlayerLoopTiming.Update,
+                        cancellationToken);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is the normal shutdown path for a disabled or destroyed router.
             }
         }
 
-        private IEnumerator PlayLoopingTrigger(int triggerNum)
+        private void TrackEnabledEvent(AudioHandle handle)
         {
-            AudioTrigger loopTrigger = triggers[triggerNum];
-            loopTrigger.loopTimeMin = Mathf.Clamp(loopTrigger.loopTimeMin, MIN_LOOP_TIME, MAX_LOOP_TIME);
-            loopTrigger.loopTimeMax = Mathf.Clamp(loopTrigger.loopTimeMax, MIN_LOOP_TIME, MAX_LOOP_TIME);
-            while (this.enabled)
+            for (int i = activeOnEnabledEvents.Count - 1; i >= 0; i--)
             {
-                PlayAudioTrigger(triggerNum);
-                float timeUntilNextLoop = Random.Range(loopTrigger.loopTimeMin, loopTrigger.loopTimeMax);
-                yield return new WaitForSeconds(timeUntilNextLoop);
+                if (!activeOnEnabledEvents[i].IsValid)
+                {
+                    activeOnEnabledEvents.RemoveAt(i);
+                }
+            }
+
+            if (handle.IsValid)
+            {
+                activeOnEnabledEvents.Add(handle);
+            }
+        }
+
+        private bool TryGetTrigger(int triggerNum, out AudioTrigger trigger)
+        {
+            if (triggers == null || triggerNum < 0 || triggerNum >= triggers.Length)
+            {
+                trigger = null;
+                return false;
+            }
+
+            trigger = triggers[triggerNum];
+            return trigger != null;
+        }
+
+        private void CancelLoopingTriggers()
+        {
+            CancellationTokenSource cancellation = loopCancellation;
+            loopCancellation = null;
+            if (cancellation == null)
+            {
+                return;
+            }
+
+            try
+            {
+                cancellation.Cancel();
+            }
+            finally
+            {
+                cancellation.Dispose();
             }
         }
     }
 
-    [System.Serializable]
+    [Serializable]
     public class AudioTrigger
     {
         public AudioEvent eventToTrigger = null;

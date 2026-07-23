@@ -7,11 +7,12 @@ using UnityEngine;
 
 namespace CycloneGames.Audio.Editor
 {
+    [CanEditMultipleObjects]
     [CustomEditor(typeof(AudioVoicePolicyProfile))]
     public sealed class AudioVoicePolicyProfileEditor : UnityEditor.Editor
     {
         private static string[] allConfigGuids;
-        private static bool hasCheckedForDuplicates;
+        private static bool duplicateCacheDirty = true;
 
         private bool showCriticalUI = true;
         private bool showGameplaySFX = true;
@@ -45,6 +46,14 @@ namespace CycloneGames.Audio.Editor
             ambient = serializedObject.FindProperty("ambient");
             music = serializedObject.FindProperty("music");
             stylesInitialized = false;
+            duplicateCacheDirty = true;
+            EditorApplication.projectChanged -= MarkDuplicateCacheDirty;
+            EditorApplication.projectChanged += MarkDuplicateCacheDirty;
+        }
+
+        private void OnDisable()
+        {
+            EditorApplication.projectChanged -= MarkDuplicateCacheDirty;
         }
 
         public override void OnInspectorGUI()
@@ -101,11 +110,16 @@ namespace CycloneGames.Audio.Editor
 
         private void CheckForDuplicates()
         {
-            if (!hasCheckedForDuplicates || Event.current.type == EventType.Layout)
+            if (duplicateCacheDirty || allConfigGuids == null)
             {
                 allConfigGuids = AssetDatabase.FindAssets("t:AudioVoicePolicyProfile");
-                hasCheckedForDuplicates = true;
+                duplicateCacheDirty = false;
             }
+        }
+
+        private void MarkDuplicateCacheDirty()
+        {
+            duplicateCacheDirty = true;
         }
 
         private void DrawDuplicateWarning()

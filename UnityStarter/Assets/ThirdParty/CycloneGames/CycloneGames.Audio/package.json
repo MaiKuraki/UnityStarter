@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.audio",
   "version": "1.0.0",
   "displayName": "CycloneGames.Audio",
-  "description": "A Unity audio authoring and playback module derived from Microsoft's Audio-Manager-for-Unity, with bounded command dispatch, bank loading, pooling policies, and Editor tooling.",
+  "description": "A Unity audio authoring and playback module derived from Microsoft's Audio-Manager-for-Unity, with bank-owned metadata, pooled playback, explicit external clip residency, and Editor graph tooling.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {

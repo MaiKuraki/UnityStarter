@@ -31,6 +31,8 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField, HideInInspector]
         protected AudioNodeOutput output;
 
+        internal AudioNodeInput RuntimeInput => input;
+
         /// <summary>
         /// The minimum possible value for an AudioSource's volume property
         /// </summary>
@@ -85,7 +87,19 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            parentNode.ProcessNode(activeEvent);
+            if (!activeEvent.TryEnterGraphNode(parentNode))
+            {
+                return;
+            }
+
+            try
+            {
+                parentNode.ProcessNode(activeEvent);
+            }
+            finally
+            {
+                activeEvent.ExitGraphNode(parentNode);
+            }
         }
 
         /// <summary>
@@ -138,16 +152,18 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public virtual void DeleteConnections()
         {
+            Undo.RecordObject(this, "Delete Audio Node Connections");
             if (this.input != null)
             {
-                AssetDatabase.RemoveObjectFromAsset(this.input);
-                ScriptableObject.DestroyImmediate(this.input, true);
+                Undo.DestroyObjectImmediate(this.input);
+                this.input = null;
             }
             if (this.output != null)
             {
-                AssetDatabase.RemoveObjectFromAsset(this.output);
-                ScriptableObject.DestroyImmediate(this.output, true);
+                Undo.DestroyObjectImmediate(this.output);
+                this.output = null;
             }
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -156,7 +172,31 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="id"></param>
         public virtual void DrawNode(int id)
         {
-            this.nodeRect = GUI.Window(id, this.nodeRect, DrawWindow, this.name);
+            Rect previousRect = this.nodeRect;
+            bool interactionStarted = Event.current.type == EventType.MouseDown
+                && previousRect.Contains(Event.current.mousePosition);
+            if (interactionStarted)
+            {
+                Undo.RecordObject(this, "Edit Audio Node");
+            }
+
+            EditorGUI.BeginChangeCheck();
+            Rect nextRect = GUI.Window(id, previousRect, DrawWindow, this.name);
+            bool windowChanged = EditorGUI.EndChangeCheck();
+            if (nextRect.position != previousRect.position)
+            {
+                if (!interactionStarted)
+                {
+                    Undo.RecordObject(this, "Move Audio Node");
+                }
+                this.nodeRect = nextRect;
+                windowChanged = true;
+            }
+
+            if (windowChanged)
+            {
+                EditorUtility.SetDirty(this);
+            }
             DrawInput();
             DrawOutput();
         }
@@ -167,7 +207,10 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="newPosition"></param>
         public void SetPosition(Vector2 newPosition)
         {
+            if (this.nodeRect.position == newPosition) return;
+            Undo.RecordObject(this, "Move Audio Node");
             this.nodeRect.position = newPosition;
+            EditorUtility.SetDirty(this);
         }
 
         public void MoveBy(Vector2 offset)
@@ -181,11 +224,14 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="singleConnection"></param>
         protected void AddInput(bool singleConnection = false)
         {
+            Undo.RecordObject(this, "Create Audio Node Input");
             this.input = ScriptableObject.CreateInstance<AudioNodeInput>();
             AssetDatabase.AddObjectToAsset(this.input, this);
+            Undo.RegisterCreatedObjectUndo(this.input, "Create Audio Node Input");
             this.input.name = this.name + "Input";
             this.input.ParentNode = this;
             this.input.SetSingleConnection(singleConnection);
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -193,10 +239,13 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         protected void AddOutput()
         {
+            Undo.RecordObject(this, "Create Audio Node Output");
             this.output = ScriptableObject.CreateInstance<AudioNodeOutput>();
             AssetDatabase.AddObjectToAsset(this.output, this);
+            Undo.RegisterCreatedObjectUndo(this.output, "Create Audio Node Output");
             this.output.name = this.name + "Output";
             this.output.ParentNode = this;
+            EditorUtility.SetDirty(this);
         }
 
         /// <summary>
@@ -340,7 +389,9 @@ namespace CycloneGames.Audio.Runtime
                     return;
                 }
 
+                Undo.RecordObject(node, "Move Audio Node Tree");
                 node.nodeRect.position -= offset;
+                EditorUtility.SetDirty(node);
 
                 AudioNodeInput input = node.input;
                 AudioNodeOutput[] outputs = input != null ? input.ConnectedNodes : null;
