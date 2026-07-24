@@ -27,6 +27,7 @@ namespace CycloneGames.BehaviorTree.Editor
         // Cached runners to avoid FindObjectsOfType GC every frame
         private static readonly List<Runtime.Components.BTRunnerComponent> _cachedRunners = new List<Runtime.Components.BTRunnerComponent>(8);
         private static double _lastRunnerCacheTime = double.NegativeInfinity;
+        private static bool _runnerFallbackPending = true;
         private const double RUNNER_CACHE_INTERVAL = 0.5; // Refresh every 0.5 seconds
 
         /// <summary>
@@ -48,13 +49,14 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
 
                 // Fallback for editor edge-cases (domain reload/scene reload timing).
-                if (_cachedRunners.Count == 0)
+                if (_cachedRunners.Count == 0 && _runnerFallbackPending)
                 {
                     var foundRunners = UnityEngine.Object.FindObjectsOfType<Runtime.Components.BTRunnerComponent>();
                     for (int i = 0; i < foundRunners.Length; i++)
                     {
                         _cachedRunners.Add(foundRunners[i]);
                     }
+                    _runnerFallbackPending = false;
                 }
                 _lastRunnerCacheTime = currentTime;
             }
@@ -67,6 +69,7 @@ namespace CycloneGames.BehaviorTree.Editor
         public static void InvalidateRunnerCache()
         {
             _lastRunnerCacheTime = double.NegativeInfinity;
+            _runnerFallbackPending = true;
             _cachedRunners.Clear();
         }
 

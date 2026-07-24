@@ -24,13 +24,69 @@ namespace CycloneGames.AIPerception.Networking
             bool isServer,
             bool isClient,
             int localConnectionId,
-            uint authorityGeneration = 0u)
+            uint authorityGeneration)
         {
             IsServer = isServer;
             IsClient = isClient;
             LocalConnectionId = localConnectionId;
             AuthorityGeneration = authorityGeneration;
         }
+
+        public bool IsValid => (IsServer || IsClient) && LocalConnectionId >= 0 && AuthorityGeneration != 0u;
+    }
+
+    public readonly struct AIPerceptionRemoteSnapshotContext
+    {
+        public readonly int SenderConnectionId;
+        public readonly int AuthoritativeServerConnectionId;
+        public readonly bool IsSenderAuthenticated;
+        public readonly bool IsServerToClient;
+        public readonly uint AuthorityGeneration;
+        public readonly bool HasAppliedSnapshot;
+        public readonly ushort LastAppliedSequence;
+        public readonly int LastAppliedTick;
+
+        public AIPerceptionRemoteSnapshotContext(
+            int senderConnectionId,
+            int authoritativeServerConnectionId,
+            bool isSenderAuthenticated,
+            bool isServerToClient,
+            uint authorityGeneration,
+            bool hasAppliedSnapshot = false,
+            ushort lastAppliedSequence = 0,
+            int lastAppliedTick = 0)
+        {
+            SenderConnectionId = senderConnectionId;
+            AuthoritativeServerConnectionId = authoritativeServerConnectionId;
+            IsSenderAuthenticated = isSenderAuthenticated;
+            IsServerToClient = isServerToClient;
+            AuthorityGeneration = authorityGeneration;
+            HasAppliedSnapshot = hasAppliedSnapshot;
+            LastAppliedSequence = lastAppliedSequence;
+            LastAppliedTick = lastAppliedTick;
+        }
+
+        public bool IsValid =>
+            SenderConnectionId >= 0 &&
+            AuthoritativeServerConnectionId >= 0 &&
+            AuthorityGeneration != 0u &&
+            (!HasAppliedSnapshot || (LastAppliedSequence != 0 && LastAppliedTick >= 0));
+    }
+
+    public enum AIPerceptionRemoteSnapshotResult : byte
+    {
+        Invalid = 0,
+        Allowed = 1,
+        InvalidLocalContext = 2,
+        InvalidObserver = 3,
+        InvalidInboundContext = 4,
+        UnauthenticatedSender = 5,
+        InvalidDirection = 6,
+        SenderIsNotAuthority = 7,
+        AuthorityGenerationMismatch = 8,
+        MalformedSnapshot = 9,
+        StaleTick = 10,
+        ReplayedOrOutOfOrderSequence = 11
     }
 
     public readonly struct NetworkedAIPerceptionObserver
@@ -52,7 +108,7 @@ namespace CycloneGames.AIPerception.Networking
             uint interestLayerMask,
             bool alwaysRelevant,
             NetworkVector3 interestPosition,
-            uint authorityGeneration = 0u)
+            uint authorityGeneration)
         {
             ObserverNetworkId = observerNetworkId;
             OwnerConnectionId = ownerConnectionId;
@@ -64,7 +120,11 @@ namespace CycloneGames.AIPerception.Networking
             AuthorityGeneration = authorityGeneration;
         }
 
-        public bool IsValid => ObserverNetworkId != 0u && InterestPosition.IsFinite();
+        public bool IsValid =>
+            ObserverNetworkId != 0u &&
+            OwnerConnectionId >= 0 &&
+            AuthorityGeneration != 0u &&
+            InterestPosition.IsFinite();
     }
 
     public interface IAIPerceptionNetworkAuthorityResolver
@@ -77,10 +137,12 @@ namespace CycloneGames.AIPerception.Networking
             in AIPerceptionNetworkAuthorityContext context,
             in NetworkedAIPerceptionObserver observer);
 
-        bool CanApplyRemotePerception(
+        AIPerceptionRemoteSnapshotResult ValidateRemotePerception(
             in AIPerceptionNetworkAuthorityContext context,
+            in AIPerceptionRemoteSnapshotContext inbound,
             in NetworkedAIPerceptionObserver observer,
-            in AIPerceptionDetectionSnapshotMessage snapshot);
+            in AIPerceptionDetectionSnapshotMessage snapshot,
+            ReadOnlySpan<AIPerceptionDetectionEntry> entries);
     }
 
     public sealed class ServerAuthoritativeAIPerceptionAuthorityResolver : IAIPerceptionNetworkAuthorityResolver
@@ -89,7 +151,8 @@ namespace CycloneGames.AIPerception.Networking
             in AIPerceptionNetworkAuthorityContext context,
             in NetworkedAIPerceptionObserver observer)
         {
-            if (!observer.IsValid)
+            if (!context.IsValid || !observer.IsValid ||
+                context.AuthorityGeneration != observer.AuthorityGeneration)
             {
                 return AIPerceptionNetworkAuthorityRole.None;
             }
@@ -99,32 +162,88 @@ namespace CycloneGames.AIPerception.Networking
                 return AIPerceptionNetworkAuthorityRole.ServerAuthority;
             }
 
-            if (context.IsClient && context.LocalConnectionId == observer.OwnerConnectionId)
-            {
-                return AIPerceptionNetworkAuthorityRole.AutonomousObserver;
-            }
-
-            return AIPerceptionNetworkAuthorityRole.SimulatedObserver;
+            return context.IsClient && context.LocalConnectionId == observer.OwnerConnectionId
+                ? AIPerceptionNetworkAuthorityRole.AutonomousObserver
+                : AIPerceptionNetworkAuthorityRole.SimulatedObserver;
         }
 
         public bool CanProduceAuthoritativePerception(
             in AIPerceptionNetworkAuthorityContext context,
             in NetworkedAIPerceptionObserver observer)
         {
-            return context.IsServer && observer.IsValid;
+            return context.IsValid && context.IsServer && observer.IsValid &&
+                   context.AuthorityGeneration == observer.AuthorityGeneration;
         }
 
-        public bool CanApplyRemotePerception(
+        public AIPerceptionRemoteSnapshotResult ValidateRemotePerception(
             in AIPerceptionNetworkAuthorityContext context,
+            in AIPerceptionRemoteSnapshotContext inbound,
             in NetworkedAIPerceptionObserver observer,
-            in AIPerceptionDetectionSnapshotMessage snapshot)
+            in AIPerceptionDetectionSnapshotMessage snapshot,
+            ReadOnlySpan<AIPerceptionDetectionEntry> entries)
         {
-            if (!observer.IsValid || !snapshot.IsValid || snapshot.ObserverNetworkId != observer.ObserverNetworkId)
+            if (!context.IsValid || !context.IsClient || context.IsServer)
             {
-                return false;
+                return AIPerceptionRemoteSnapshotResult.InvalidLocalContext;
             }
 
-            return context.IsClient && !context.IsServer;
+            if (!observer.IsValid || snapshot.ObserverNetworkId != observer.ObserverNetworkId)
+            {
+                return AIPerceptionRemoteSnapshotResult.InvalidObserver;
+            }
+
+            if (!inbound.IsValid)
+            {
+                return AIPerceptionRemoteSnapshotResult.InvalidInboundContext;
+            }
+
+            if (!inbound.IsSenderAuthenticated)
+            {
+                return AIPerceptionRemoteSnapshotResult.UnauthenticatedSender;
+            }
+
+            if (!inbound.IsServerToClient)
+            {
+                return AIPerceptionRemoteSnapshotResult.InvalidDirection;
+            }
+
+            if (inbound.SenderConnectionId != inbound.AuthoritativeServerConnectionId)
+            {
+                return AIPerceptionRemoteSnapshotResult.SenderIsNotAuthority;
+            }
+
+            if (inbound.AuthorityGeneration != observer.AuthorityGeneration ||
+                inbound.AuthorityGeneration != snapshot.AuthorityGeneration ||
+                inbound.AuthorityGeneration != context.AuthorityGeneration)
+            {
+                return AIPerceptionRemoteSnapshotResult.AuthorityGenerationMismatch;
+            }
+
+            if (AIPerceptionNetworkMessageValidator.Validate(in snapshot, entries) !=
+                AIPerceptionNetworkMessageValidationResult.Valid)
+            {
+                return AIPerceptionRemoteSnapshotResult.MalformedSnapshot;
+            }
+
+            if (!inbound.HasAppliedSnapshot)
+            {
+                return AIPerceptionRemoteSnapshotResult.Allowed;
+            }
+
+            if (snapshot.Tick < inbound.LastAppliedTick)
+            {
+                return AIPerceptionRemoteSnapshotResult.StaleTick;
+            }
+
+            return IsNewerSequence(snapshot.Sequence, inbound.LastAppliedSequence)
+                ? AIPerceptionRemoteSnapshotResult.Allowed
+                : AIPerceptionRemoteSnapshotResult.ReplayedOrOutOfOrderSequence;
+        }
+
+        private static bool IsNewerSequence(ushort candidate, ushort previous)
+        {
+            ushort delta = unchecked((ushort)(candidate - previous));
+            return delta != 0 && delta < 0x8000;
         }
     }
 
@@ -156,8 +275,16 @@ namespace CycloneGames.AIPerception.Networking
             IList<INetConnection> results);
     }
 
+    /// <summary>Adapts AIPerception observers to the shared Networking interest evaluator.</summary>
     public sealed class AIPerceptionNetworkObserverResolver : IAIPerceptionNetworkObserverResolver
     {
+        private readonly INetworkInterestEvaluator _interestEvaluator;
+
+        public AIPerceptionNetworkObserverResolver(INetworkInterestEvaluator interestEvaluator = null)
+        {
+            _interestEvaluator = interestEvaluator ?? DefaultNetworkInterestEvaluator.Instance;
+        }
+
         public int ResolveObservers(
             in AIPerceptionReplicationContext context,
             IReadOnlyList<INetConnection> candidates,
@@ -175,26 +302,52 @@ namespace CycloneGames.AIPerception.Networking
             }
 
             results.Clear();
-
-            if (!context.Observer.IsValid || context.Policy.Interest == NetworkReplicationInterest.None)
+            if (!context.Observer.IsValid)
             {
                 return 0;
             }
 
+            NetworkReplicationPolicy effectivePolicy = CreateEffectivePolicy(in context);
+            var replicatedObject = new NetworkReplicatedObject(
+                context.Observer.ObserverNetworkId,
+                effectivePolicy,
+                context.Observer.InterestPosition,
+                context.Observer.OwnerConnectionId,
+                context.Observer.OwnerPlayerId,
+                context.Observer.TeamId,
+                context.Observer.InterestLayerMask);
+
             for (int i = 0; i < candidates.Count; i++)
             {
                 INetConnection connection = candidates[i];
-                if (connection == null || !connection.IsConnected)
+                if (connection == null || !connection.IsConnected || ContainsConnection(results, connection.ConnectionId))
                 {
                     continue;
                 }
 
-                if (context.Policy.RequireAuthenticated && !connection.IsAuthenticated)
+                NetworkInterestObserver sourceObserver = default;
+                bool hasSourceObserver = observerSource != null &&
+                                         observerSource.TryGetObserver(
+                                             connection.ConnectionId,
+                                             out sourceObserver);
+                if (hasSourceObserver && !sourceObserver.IsValid)
                 {
                     continue;
                 }
 
-                if (ShouldReplicateToConnection(context, connection, observerSource))
+                var observer = new NetworkReplicationObserver(
+                    connection.ConnectionId,
+                    hasSourceObserver && sourceObserver.PlayerId != 0UL
+                        ? sourceObserver.PlayerId
+                        : connection.PlayerId,
+                    hasSourceObserver ? sourceObserver.TeamId : 0,
+                    hasSourceObserver ? sourceObserver.Position : NetworkVector3.Zero,
+                    hasSourceObserver ? sourceObserver.Radius : 0f,
+                    hasSourceObserver ? sourceObserver.LayerMask : NetworkReplicationObserver.ALL_LAYERS,
+                    connection.IsAuthenticated,
+                    connection.Quality);
+
+                if (_interestEvaluator.IsInterested(in observer, in replicatedObject, out _))
                 {
                     results.Add(connection);
                 }
@@ -203,74 +356,36 @@ namespace CycloneGames.AIPerception.Networking
             return results.Count;
         }
 
-        private static bool ShouldReplicateToConnection(
-            in AIPerceptionReplicationContext context,
-            INetConnection connection,
-            IAIPerceptionNetworkObserverSource observerSource)
+        private static NetworkReplicationPolicy CreateEffectivePolicy(in AIPerceptionReplicationContext context)
         {
-            if (context.Observer.AlwaysRelevant || context.Policy.HasInterest(NetworkReplicationInterest.Always))
+            if (!context.Observer.AlwaysRelevant ||
+                context.Policy.HasInterest(NetworkReplicationInterest.Always))
             {
-                return true;
+                return context.Policy;
             }
 
-            bool isOwner = context.Observer.OwnerConnectionId == connection.ConnectionId;
-            if (isOwner)
-            {
-                return context.Policy.IncludeOwner || context.Policy.HasInterest(NetworkReplicationInterest.Owner);
-            }
+            return new NetworkReplicationPolicy(
+                context.Policy.Interest | NetworkReplicationInterest.Always,
+                context.Policy.Channel,
+                context.Policy.MaxDistance,
+                context.Policy.MinIntervalTicks,
+                context.Policy.Priority,
+                context.Policy.IncludeOwner,
+                context.Policy.RequireAuthenticated,
+                context.Policy.SendUnchanged);
+        }
 
-            if (context.Policy.HasInterest(NetworkReplicationInterest.Team) &&
-                IsTeamObserver(context, connection, observerSource))
+        private static bool ContainsConnection(IList<INetConnection> results, int connectionId)
+        {
+            for (int i = 0; i < results.Count; i++)
             {
-                return true;
-            }
-
-            if (context.Policy.HasInterest(NetworkReplicationInterest.Area) &&
-                IsAreaObserver(context, connection, observerSource))
-            {
-                return true;
+                if (results[i] != null && results[i].ConnectionId == connectionId)
+                {
+                    return true;
+                }
             }
 
             return false;
         }
-
-        private static bool IsTeamObserver(
-            in AIPerceptionReplicationContext context,
-            INetConnection connection,
-            IAIPerceptionNetworkObserverSource observerSource)
-        {
-            if (context.Observer.TeamId == 0 || observerSource == null)
-            {
-                return false;
-            }
-
-            return observerSource.TryGetObserver(connection.ConnectionId, out NetworkInterestObserver observer) &&
-                   observer.TeamId == context.Observer.TeamId;
-        }
-
-        private static bool IsAreaObserver(
-            in AIPerceptionReplicationContext context,
-            INetConnection connection,
-            IAIPerceptionNetworkObserverSource observerSource)
-        {
-            if (context.Policy.MaxDistance <= 0f || observerSource == null)
-            {
-                return false;
-            }
-
-            if (!observerSource.TryGetObserver(connection.ConnectionId, out NetworkInterestObserver observer))
-            {
-                return false;
-            }
-
-            if ((observer.LayerMask & context.Observer.InterestLayerMask) == 0u)
-            {
-                return false;
-            }
-
-            float radius = context.Policy.MaxDistance;
-            return NetworkVector3.SqrDistance(observer.Position, context.Observer.InterestPosition) <= radius * radius;
-        }
     }
 }
-

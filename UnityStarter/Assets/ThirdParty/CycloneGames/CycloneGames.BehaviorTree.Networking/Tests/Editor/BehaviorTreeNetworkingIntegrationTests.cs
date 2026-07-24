@@ -4,9 +4,15 @@ using System.IO;
 using System.Threading;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Networking;
+using CycloneGames.BehaviorTree.Runtime.Nodes;
+using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.Networking;
 using CycloneGames.Networking.Replication;
 using NUnit.Framework;
+using UnityEditor;
+using UnityEngine;
+using BehaviorTreeAsset = CycloneGames.BehaviorTree.Runtime.BehaviorTree;
+using UnityObject = UnityEngine.Object;
 
 namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
 {
@@ -325,6 +331,87 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
             {
                 source.Dispose();
                 target.Dispose();
+            }
+        }
+
+        [Test]
+        public void CompiledStrictSchema_EnforcesSnapshotDeltaAndLocalObjectNetworkScopes()
+        {
+            const string SnapshotKey = "SnapshotHealth";
+            const string DeltaKey = "DeltaAlert";
+            const string LocalObjectKey = "LocalTarget";
+            const ulong FrozenProtocolFingerprint = 0x633B1F15F69258ABUL;
+            BehaviorTreeAsset asset = CreateStrictSchemaTree(
+                SnapshotKey,
+                DeltaKey,
+                LocalObjectKey);
+            RuntimeBehaviorTree source = null;
+            RuntimeBehaviorTree target = null;
+
+            try
+            {
+                source = asset.Compile();
+                target = asset.Compile();
+                Assert.That(source, Is.Not.Null);
+                Assert.That(target, Is.Not.Null);
+
+                RuntimeBlackboardSchema schema = source.Blackboard.Schema;
+                Assert.That(schema, Is.Not.Null);
+                Assert.That(target.Blackboard.Schema.ContractVersion, Is.EqualTo(schema.ContractVersion));
+                int snapshotHash = RuntimeBlackboard.DefaultStringHashFunc(SnapshotKey);
+                int deltaHash = RuntimeBlackboard.DefaultStringHashFunc(DeltaKey);
+                int objectHash = RuntimeBlackboard.DefaultStringHashFunc(LocalObjectKey);
+                Assert.That(schema.UsesSnapshot(snapshotHash), Is.True);
+                Assert.That(schema.UsesDelta(snapshotHash), Is.False);
+                Assert.That(schema.UsesSnapshot(deltaHash), Is.False);
+                Assert.That(schema.UsesDelta(deltaHash), Is.True);
+                Assert.That(schema.IsNetworkedKey(objectHash), Is.False);
+                Assert.That(schema.DeltaKeyCount, Is.EqualTo(1));
+                Assert.That(schema.GetDeltaKey(0), Is.EqualTo(deltaHash));
+
+                var sourceLocalObject = new object();
+                var targetLocalObject = new object();
+                source.Blackboard.SetInt(snapshotHash, 11);
+                source.Blackboard.SetObject(objectHash, sourceLocalObject);
+                target.Blackboard.SetObject(objectHash, targetLocalObject);
+
+                using var bridge = new BehaviorTreeNetworkSyncBridge(
+                    BehaviorTreeNetworkProfiles.BlackboardReplicated);
+                BehaviorTreeStatePayloadMessage snapshot = bridge.CaptureSnapshot(
+                    1u,
+                    source,
+                    tick: 1,
+                    sequence: 1,
+                    treeTemplateHash: 0UL);
+
+                Assert.That(TryApplyFirst(bridge, target, snapshot), Is.True);
+                Assert.That(target.Blackboard.GetInt(snapshotHash), Is.EqualTo(11));
+                Assert.That(target.Blackboard.GetInt(deltaHash), Is.EqualTo(2));
+                Assert.That(target.Blackboard.GetObject<object>(objectHash), Is.SameAs(targetLocalObject));
+
+                using BTBlackboardDelta delta = BTBlackboardDelta.CreateForSchema(schema);
+                source.Blackboard.SetInt(deltaHash, 31);
+                Assert.That(bridge.TryCreateBlackboardDelta(
+                    1u,
+                    source,
+                    delta,
+                    tick: 2,
+                    sequence: 2,
+                    treeTemplateHash: 0UL,
+                    out BehaviorTreeStatePayloadMessage deltaMessage), Is.True);
+                Assert.That(ReadInt32LittleEndian(deltaMessage.Payload, 12), Is.EqualTo(1));
+                Assert.That(ReadInt32LittleEndian(deltaMessage.Payload, 16), Is.EqualTo(deltaHash));
+                Assert.That(TryApplyFirst(bridge, target, deltaMessage), Is.True);
+                Assert.That(target.Blackboard.GetInt(snapshotHash), Is.EqualTo(11));
+                Assert.That(target.Blackboard.GetInt(deltaHash), Is.EqualTo(31));
+                Assert.That(target.Blackboard.GetObject<object>(objectHash), Is.SameAs(targetLocalObject));
+                Assert.That(BehaviorTreeNetworkProtocol.ProtocolFingerprint, Is.EqualTo(FrozenProtocolFingerprint));
+            }
+            finally
+            {
+                source?.Dispose();
+                target?.Dispose();
+                DestroyAuthoringTree(asset);
             }
         }
 
@@ -1073,6 +1160,92 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
                 writer.Flush();
                 return stream.ToArray();
             }
+        }
+
+        private static BehaviorTreeAsset CreateStrictSchemaTree(
+            string snapshotKey,
+            string deltaKey,
+            string localObjectKey)
+        {
+            var tree = ScriptableObject.CreateInstance<BehaviorTreeAsset>();
+            var root = ScriptableObject.CreateInstance<BTRootNode>();
+            var wait = ScriptableObject.CreateInstance<WaitNode>();
+            wait.Duration = 1000f;
+            root.Child = wait;
+            root.Tree = tree;
+            wait.Tree = tree;
+            tree.Root = root;
+            tree.Nodes.Add(root);
+            tree.Nodes.Add(wait);
+
+            var serializedTree = new SerializedObject(tree);
+            serializedTree.FindProperty("_blackboardSchemaEnabled").boolValue = true;
+            serializedTree.FindProperty("_blackboardSchemaFormatVersion").intValue =
+                BehaviorTreeAsset.CurrentBlackboardSchemaFormatVersion;
+            serializedTree.FindProperty("_blackboardContractVersion").intValue = 7;
+            SerializedProperty keys = serializedTree.FindProperty("_blackboardKeys");
+            keys.arraySize = 3;
+            ConfigureSchemaKey(
+                keys.GetArrayElementAtIndex(0),
+                snapshotKey,
+                RuntimeBlackboardValueType.Int,
+                RuntimeBlackboardSyncFlags.Snapshot,
+                hasDefaultValue: true,
+                intDefaultValue: 1);
+            ConfigureSchemaKey(
+                keys.GetArrayElementAtIndex(1),
+                deltaKey,
+                RuntimeBlackboardValueType.Int,
+                RuntimeBlackboardSyncFlags.Delta,
+                hasDefaultValue: true,
+                intDefaultValue: 2);
+            ConfigureSchemaKey(
+                keys.GetArrayElementAtIndex(2),
+                localObjectKey,
+                RuntimeBlackboardValueType.Object,
+                RuntimeBlackboardSyncFlags.LocalOnly,
+                hasDefaultValue: false,
+                intDefaultValue: 0);
+            serializedTree.ApplyModifiedPropertiesWithoutUndo();
+            tree.OnValidate();
+            return tree;
+        }
+
+        private static void ConfigureSchemaKey(
+            SerializedProperty property,
+            string name,
+            RuntimeBlackboardValueType valueType,
+            RuntimeBlackboardSyncFlags syncFlags,
+            bool hasDefaultValue,
+            int intDefaultValue)
+        {
+            property.FindPropertyRelative("_name").stringValue = name;
+            property.FindPropertyRelative("_valueType").intValue = (int)valueType;
+            property.FindPropertyRelative("_syncFlags").intValue = (int)syncFlags;
+            property.FindPropertyRelative("_hasDefaultValue").boolValue = hasDefaultValue;
+            property.FindPropertyRelative("_intDefaultValue").intValue = intDefaultValue;
+        }
+
+        private static void DestroyAuthoringTree(BehaviorTreeAsset tree)
+        {
+            if (tree == null)
+            {
+                return;
+            }
+
+            BTRootNode root = tree.Root as BTRootNode;
+            BTNode child = root != null ? root.Child : null;
+            if (child != null)
+            {
+                UnityObject.DestroyImmediate(child);
+            }
+
+            if (root != null)
+            {
+                UnityObject.DestroyImmediate(root);
+            }
+
+            UnityObject.DestroyImmediate(tree);
         }
 
         private static void WriteDeltaHeader(BinaryWriter writer, int entryCount, int bodyLength)

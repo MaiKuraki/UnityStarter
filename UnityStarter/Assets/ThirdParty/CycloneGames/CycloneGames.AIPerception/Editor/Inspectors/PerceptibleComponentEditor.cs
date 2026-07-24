@@ -1,34 +1,48 @@
-using UnityEngine;
-using UnityEditor;
 using CycloneGames.AIPerception.Runtime;
+using UnityEditor;
+using UnityEngine;
 
 namespace CycloneGames.AIPerception.Editor
 {
-    [CustomEditor(typeof(PerceptibleComponent), true)]  // true = supports derived classes
+    [CustomEditor(typeof(PerceptibleComponent), true)]
     [CanEditMultipleObjects]
     public class PerceptibleComponentEditor : UnityEditor.Editor
     {
-        private static readonly Color HeaderColor = new Color(0.2f, 0.8f, 0.6f, 1f);
-        private static readonly Color DerivedSectionBgColor = new Color(0.6f, 0.4f, 0.8f, 0.25f);
-        private static readonly Color DerivedLabelColor = new Color(0.8f, 0.6f, 1f);
-        private static readonly Color RuntimeStatsBgColor = new Color(0.15f, 0.15f, 0.15f, 0.8f);
-        private static readonly Color RuntimeStatsTextColor = new Color(0.8f, 0.8f, 0.8f);
+        private const string AuthoringLockedMessage =
+            "Perceptible authoring is locked in Play Mode because registration data is captured by the runtime registry.";
 
-        // Cached GUIStyles (0-allocation in OnInspectorGUI)
-        private static GUIStyle _headerStyle;
-        private static GUIStyle _derivedLabelStyle;
-        private static GUIStyle _runtimeStatsStyle;
+        private static readonly Color HeaderColor = new Color(0.18f, 0.66f, 0.48f, 1f);
+        private static readonly Color IdentityColor = new Color(0.34f, 0.62f, 0.82f, 1f);
+        private static readonly Color DetectionColor = new Color(0.84f, 0.61f, 0.18f, 1f);
+        private static readonly Color SoundColor = new Color(0.3f, 0.68f, 0.9f, 1f);
+        private static readonly Color SceneDebugColor = new Color(0.16f, 0.58f, 0.66f, 1f);
+        private static readonly Color DebugColor = new Color(0.34f, 0.72f, 0.42f, 1f);
+        private static readonly Color AdditionalColor = new Color(0.58f, 0.42f, 0.74f, 1f);
 
-        // Cached GUIContent (0-allocation in OnInspectorGUI)
-        private static readonly GUIContent LabelTypeId = new GUIContent("Type ID");
-        private static readonly GUIContent LabelTag = new GUIContent("Tag");
-        private static readonly GUIContent LabelDetectionRadius = new GUIContent("Detection Radius");
-        private static readonly GUIContent LabelIsDetectable = new GUIContent("Is Detectable");
-        private static readonly GUIContent LabelLosPoint = new GUIContent("LOS Point (Optional)");
-        private static readonly GUIContent LabelIsSoundSource = new GUIContent("Is Sound Source");
-        private static readonly GUIContent LabelLoudness = new GUIContent("Loudness");
-        private static readonly GUIContent LabelShowDebugOverlay = new GUIContent("Show Debug Overlay");
-        private static readonly GUIContent LabelDerivedFields = new GUIContent("Custom Fields");
+        private static readonly GUIContent HeaderTitle = new GUIContent("Perceptible");
+        private static readonly GUIContent IdentityTitle = new GUIContent("Identity");
+        private static readonly GUIContent DetectionTitle = new GUIContent("Detection Geometry");
+        private static readonly GUIContent SoundTitle = new GUIContent("Hearing Source");
+        private static readonly GUIContent SceneDebugTitle = new GUIContent("Scene Diagnostics");
+        private static readonly GUIContent RuntimeTitle = new GUIContent("Runtime Diagnostics");
+        private static readonly GUIContent AdditionalFieldsTitle = new GUIContent("Additional Fields");
+        private static readonly GUIContent TypeIdLabel = new GUIContent(
+            "Type ID",
+            "Stable numeric identity used by sensor filters. Keep IDs stable across content and save data.");
+        private static readonly GUIContent TypeNameLabel = new GUIContent("Resolved Type");
+        private static readonly GUIContent TagLabel = new GUIContent("Tag");
+        private static readonly GUIContent DetectionRadiusLabel = new GUIContent("Detection Radius");
+        private static readonly GUIContent LosPointLabel = new GUIContent("LOS Point (Optional)");
+        private static readonly GUIContent LoudnessLabel = new GUIContent("Loudness");
+        private static readonly GUIContent SelectedComponentsLabel = new GUIContent("Selected Components");
+        private static readonly GUIContent ValidHandlesLabel = new GUIContent("Valid Handles");
+        private static readonly GUIContent DetectableComponentsLabel = new GUIContent("Detectable Components");
+        private static readonly GUIContent SoundSourcesLabel = new GUIContent("Sound Sources");
+        private static readonly GUIContent RuntimeIdLabel = new GUIContent("Runtime ID");
+        private static readonly GUIContent RuntimePositionLabel = new GUIContent("Position");
+        private static readonly GUIContent PinSceneGizmosLabel = new GUIContent(
+            "Pin Scene Gizmos",
+            "Keep this perceptible's detection volume and LOS marker visible when it is not selected.");
 
         private SerializedProperty _typeId;
         private SerializedProperty _tag;
@@ -38,8 +52,27 @@ namespace CycloneGames.AIPerception.Editor
         private SerializedProperty _loudness;
         private SerializedProperty _isSoundSource;
         private SerializedProperty _showDebugOverlay;
+        private SerializedProperty[] _remainingProperties;
+        private bool _propertiesValid;
 
-        private bool _showDerivedFieldsFoldout = true;
+        private bool _showIdentity = true;
+        private bool _showDetection = true;
+        private bool _showSound = true;
+        private bool _showSceneDiagnostics = true;
+        private bool _showRuntimeDiagnostics = true;
+        private bool _showAdditionalFields = true;
+
+        private int _cachedTypeId = int.MinValue;
+        private readonly GUIContent _cachedTypeName = new GUIContent();
+
+        private double _nextRuntimeRepaintTime;
+        private bool _runtimeSnapshotDirty = true;
+        private int _runtimeComponentCount;
+        private int _runtimeValidHandleCount;
+        private int _runtimeDetectableCount;
+        private int _runtimeSoundSourceCount;
+        private int _runtimeId;
+        private Vector3 _runtimePosition;
 
         protected virtual void OnEnable()
         {
@@ -51,173 +84,342 @@ namespace CycloneGames.AIPerception.Editor
             _loudness = serializedObject.FindProperty("_loudness");
             _isSoundSource = serializedObject.FindProperty("_isSoundSource");
             _showDebugOverlay = serializedObject.FindProperty("_showDebugOverlay");
+
+            _propertiesValid = InspectorUiUtility.AreAssigned(
+                _typeId,
+                _tag,
+                _detectionRadius,
+                _isDetectable,
+                _losPoint,
+                _loudness,
+                _isSoundSource,
+                _showDebugOverlay);
+
+            if (_propertiesValid)
+            {
+                _remainingProperties = InspectorUiUtility.CacheRemainingProperties(
+                    serializedObject,
+                    _typeId,
+                    _tag,
+                    _detectionRadius,
+                    _isDetectable,
+                    _losPoint,
+                    _loudness,
+                    _isSoundSource,
+                    _showDebugOverlay);
+            }
+
+            EditorApplication.update -= OnEditorUpdate;
+            EditorApplication.update += OnEditorUpdate;
+        }
+
+        protected virtual void OnDisable()
+        {
+            EditorApplication.update -= OnEditorUpdate;
         }
 
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
+            InspectorUiUtility.DrawInspectorTitle(
+                HeaderTitle.text,
+                "Stable target identity and detection geometry",
+                HeaderColor);
 
-            DrawCustomHeader();
-            DrawMainSection();
+            if (!_propertiesValid)
+            {
+                EditorGUILayout.HelpBox(
+                    "The custom inspector could not resolve the expected serialized fields. The default inspector is shown to prevent hidden data.",
+                    MessageType.Error);
+                DrawDefaultInspector();
+                return;
+            }
 
-            // Draw derived class fields
-            DrawDerivedClassFields();
+            bool authoringLocked = Application.isPlaying;
+            if (authoringLocked)
+            {
+                InspectorUiUtility.DrawAuthoringLockedHelpBox(AuthoringLockedMessage);
+            }
+
+            DrawSceneDiagnostics();
+
+            using (new EditorGUI.DisabledScope(authoringLocked))
+            {
+                DrawIdentitySection();
+                DrawDetectionSection();
+                DrawSoundSection();
+                InspectorUiUtility.DrawRemainingProperties(
+                    _remainingProperties,
+                    ref _showAdditionalFields,
+                    AdditionalFieldsTitle,
+                    AdditionalColor);
+            }
+
+            if (Application.isPlaying)
+            {
+                DrawRuntimeDiagnostics();
+            }
 
             serializedObject.ApplyModifiedProperties();
         }
 
-        protected virtual void DrawCustomHeader()
+        private void DrawIdentitySection()
         {
-            EditorGUILayout.Space(2);
-            var rect = GUILayoutUtility.GetRect(0, 28, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(rect, HeaderColor);
-
-            if (_headerStyle == null)
+            string badge = _typeId.hasMultipleDifferentValues ? "MIXED" : "TYPE " + _typeId.intValue;
+            InspectorUiUtility.DrawSectionHeader(
+                ref _showIdentity,
+                IdentityTitle,
+                IdentityColor,
+                badge: badge,
+                badgeColor: InspectorUiUtility.NeutralColor);
+            if (!_showIdentity)
             {
-                _headerStyle = new GUIStyle(EditorStyles.boldLabel)
-                {
-                    fontSize = 14,
-                    alignment = TextAnchor.MiddleCenter
-                };
-                _headerStyle.normal.textColor = Color.white;
+                return;
             }
 
-            EditorGUI.LabelField(rect, "Perceptible", _headerStyle);
-            EditorGUILayout.Space(4);
+            InspectorUiUtility.BeginPanel();
+            using (new EditorGUI.IndentLevelScope())
+            {
+                EditorGUILayout.PropertyField(_typeId, TypeIdLabel);
+                DrawResolvedTypeName();
+                EditorGUILayout.PropertyField(_tag, TagLabel);
+            }
+            InspectorUiUtility.EndPanel();
         }
 
-        protected virtual void DrawDerivedClassFields()
+        private void DrawDetectionSection()
         {
-            // Check if this is a derived class
-            if (target.GetType() == typeof(PerceptibleComponent)) return;
-
-            // Find and draw fields from derived classes
-            var iterator = serializedObject.GetIterator();
-            bool hasFields = false;
-
-            if (_derivedLabelStyle == null)
+            InspectorUiUtility.DrawSectionHeader(
+                ref _showDetection,
+                DetectionTitle,
+                DetectionColor,
+                _isDetectable);
+            if (!_showDetection)
             {
-                _derivedLabelStyle = new GUIStyle(EditorStyles.boldLabel)
-                {
-                    alignment = TextAnchor.MiddleLeft
-                };
-                _derivedLabelStyle.normal.textColor = DerivedLabelColor;
+                return;
             }
 
-            // Collect derived class fields
-            if (iterator.NextVisible(true)) // Skip script field
+            InspectorUiUtility.BeginPanel();
+            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUI.DisabledScope(!InspectorUiUtility.IsEnabledOrMixed(_isDetectable)))
             {
-                while (iterator.NextVisible(false))
+                EditorGUILayout.PropertyField(_detectionRadius, DetectionRadiusLabel);
+                EditorGUILayout.PropertyField(_losPoint, LosPointLabel);
+
+                if (!_losPoint.hasMultipleDifferentValues && _losPoint.objectReferenceValue == null)
                 {
-                    // Skip base class fields
-                    if (IsBaseClassField(iterator.name)) continue;
-
-                    if (!hasFields)
-                    {
-                        hasFields = true;
-                        EditorGUILayout.Space(8);
-                        var bgRect = GUILayoutUtility.GetRect(0, 20, GUILayout.ExpandWidth(true));
-                        EditorGUI.DrawRect(bgRect, DerivedSectionBgColor);
-
-                        var foldoutRect = new Rect(bgRect.x + 2, bgRect.y + 2, 14, 16);
-                        _showDerivedFieldsFoldout = EditorGUI.Foldout(foldoutRect, _showDerivedFieldsFoldout, GUIContent.none, true);
-
-                        var labelRect = new Rect(bgRect.x + 18, bgRect.y + 1, bgRect.width - 18, 18);
-                        EditorGUI.LabelField(labelRect, LabelDerivedFields, _derivedLabelStyle);
-                    }
-
-                    if (_showDerivedFieldsFoldout)
-                    {
-                        EditorGUI.indentLevel++;
-                        EditorGUILayout.PropertyField(iterator, true);
-                        EditorGUI.indentLevel--;
-                    }
+                    EditorGUILayout.HelpBox(
+                        "No LOS point is assigned. Line-of-sight checks use the component transform position.",
+                        MessageType.Info);
                 }
             }
+            InspectorUiUtility.EndPanel();
         }
 
-        private bool IsBaseClassField(string fieldName)
+        private void DrawSoundSection()
         {
-            return fieldName == "_typeId" || fieldName == "_tag" ||
-                   fieldName == "_detectionRadius" || fieldName == "_isDetectable" ||
-                   fieldName == "_losPoint" || fieldName == "_loudness" ||
-                   fieldName == "_isSoundSource" || fieldName == "_showDebugOverlay" ||
-                   fieldName == "_debugToggleKey";
+            InspectorUiUtility.DrawSectionHeader(ref _showSound, SoundTitle, SoundColor, _isSoundSource);
+            if (!_showSound)
+            {
+                return;
+            }
+
+            InspectorUiUtility.BeginPanel();
+            using (new EditorGUI.IndentLevelScope())
+            using (new EditorGUI.DisabledScope(!InspectorUiUtility.IsEnabledOrMixed(_isSoundSource)))
+            {
+                EditorGUILayout.PropertyField(_loudness, LoudnessLabel);
+            }
+            InspectorUiUtility.EndPanel();
         }
 
-        protected virtual void DrawMainSection()
+        private void DrawSceneDiagnostics()
         {
-            EditorGUILayout.LabelField("Type", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_typeId, LabelTypeId);
-            EditorGUILayout.PropertyField(_tag, LabelTag);
-
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("Detection", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_detectionRadius, LabelDetectionRadius);
-            EditorGUILayout.PropertyField(_isDetectable, LabelIsDetectable);
-            EditorGUILayout.PropertyField(_losPoint, LabelLosPoint);
-
-            if (_losPoint.objectReferenceValue == null)
+            string badge;
+            Color badgeColor;
+            if (AIPerceptionEditorUtility.GlobalShowGizmos)
             {
-                EditorGUILayout.HelpBox("No LOS Point set. Using transform position for line-of-sight checks.", MessageType.Info);
+                badge = "SHOWING ALL";
+                badgeColor = InspectorUiUtility.SuccessColor;
+            }
+            else if (_showDebugOverlay.hasMultipleDifferentValues)
+            {
+                badge = "MIXED";
+                badgeColor = InspectorUiUtility.NeutralColor;
+            }
+            else if (_showDebugOverlay.boolValue)
+            {
+                badge = "PINNED";
+                badgeColor = InspectorUiUtility.SuccessColor;
+            }
+            else
+            {
+                badge = "SELECTED";
+                badgeColor = InspectorUiUtility.NeutralColor;
             }
 
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("Sound", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_isSoundSource, LabelIsSoundSource);
-            if (_isSoundSource.boolValue)
+            InspectorUiUtility.DrawSectionHeader(
+                ref _showSceneDiagnostics,
+                SceneDebugTitle,
+                SceneDebugColor,
+                badge: badge,
+                badgeColor: badgeColor);
+            if (!_showSceneDiagnostics)
             {
-                EditorGUILayout.PropertyField(_loudness, LabelLoudness);
+                return;
             }
 
-            EditorGUILayout.Space(4);
-            EditorGUILayout.LabelField("Debug", EditorStyles.miniBoldLabel);
-            EditorGUILayout.PropertyField(_showDebugOverlay, LabelShowDebugOverlay);
-
-            if (Application.isPlaying)
+            InspectorUiUtility.BeginPanel();
+            EditorGUILayout.PropertyField(_showDebugOverlay, PinSceneGizmosLabel);
+            EditorGUI.BeginChangeCheck();
+            bool filledVolumes = EditorGUILayout.ToggleLeft(
+                "Filled Debug Volumes (Session)",
+                AIPerceptionEditorUtility.FilledVolumes);
+            if (EditorGUI.EndChangeCheck())
             {
-                EditorGUILayout.Space(8);
-                DrawRuntimeInfo();
+                AIPerceptionEditorUtility.FilledVolumes = filledVolumes;
+            }
+
+            string buttonLabel = AIPerceptionEditorUtility.GlobalShowGizmos
+                ? "Return to Selected and Pinned"
+                : "Show All Perception Gizmos (Session)";
+            if (GUILayout.Button(buttonLabel))
+            {
+                AIPerceptionEditorUtility.GlobalShowGizmos = !AIPerceptionEditorUtility.GlobalShowGizmos;
+            }
+
+            EditorGUILayout.HelpBox(
+                "Selected perceptibles are always previewed. Pin this component to keep it visible, or use Tools > CycloneGames > AI Perception > Scene Gizmos to pin a mixed selection. Sound sources receive an orange marker.",
+                MessageType.None);
+            InspectorUiUtility.EndPanel();
+        }
+
+        private void DrawResolvedTypeName()
+        {
+            if (_typeId.hasMultipleDifferentValues)
+            {
+                return;
+            }
+
+            int typeId = _typeId.intValue;
+            if (_cachedTypeId != typeId)
+            {
+                _cachedTypeId = typeId;
+                _cachedTypeName.text = PerceptibleTypes.GetTypeName(typeId);
+            }
+
+            using (new EditorGUI.DisabledScope(true))
+            {
+                EditorGUILayout.LabelField(TypeNameLabel, _cachedTypeName);
             }
         }
 
-        protected virtual void DrawRuntimeInfo()
+        private void DrawRuntimeDiagnostics()
         {
-            var perceptible = (PerceptibleComponent)target;
-
-            var statsRect = GUILayoutUtility.GetRect(0, 22, GUILayout.ExpandWidth(true));
-            EditorGUI.DrawRect(statsRect, RuntimeStatsBgColor);
-
-            if (_runtimeStatsStyle == null)
+            if (_runtimeSnapshotDirty)
             {
-                _runtimeStatsStyle = new GUIStyle(EditorStyles.boldLabel)
+                RefreshRuntimeSnapshot();
+            }
+
+            bool allHandlesValid = _runtimeValidHandleCount == _runtimeComponentCount;
+            InspectorUiUtility.DrawSectionHeader(
+                ref _showRuntimeDiagnostics,
+                RuntimeTitle,
+                DebugColor,
+                badge: allHandlesValid ? "REGISTERED" : "ATTENTION",
+                badgeColor: allHandlesValid
+                    ? InspectorUiUtility.SuccessColor
+                    : InspectorUiUtility.WarningColor);
+            if (!_showRuntimeDiagnostics)
+            {
+                return;
+            }
+
+            InspectorUiUtility.BeginPanel();
+            InspectorUiUtility.DrawStatusRow(
+                SelectedComponentsLabel.text,
+                _runtimeComponentCount.ToString(),
+                InspectorUiUtility.NeutralColor);
+            InspectorUiUtility.DrawStatusRow(
+                ValidHandlesLabel.text,
+                _runtimeValidHandleCount.ToString(),
+                allHandlesValid ? InspectorUiUtility.SuccessColor : InspectorUiUtility.WarningColor);
+            InspectorUiUtility.DrawStatusRow(
+                DetectableComponentsLabel.text,
+                _runtimeDetectableCount.ToString(),
+                DetectionColor);
+            InspectorUiUtility.DrawStatusRow(
+                SoundSourcesLabel.text,
+                _runtimeSoundSourceCount.ToString(),
+                SoundColor);
+
+            if (_runtimeComponentCount == 1)
+            {
+                InspectorUiUtility.DrawSubsectionLabel("Selected Target");
+                using (new EditorGUI.DisabledScope(true))
                 {
-                    alignment = TextAnchor.MiddleCenter
-                };
-                _runtimeStatsStyle.normal.textColor = RuntimeStatsTextColor;
+                    EditorGUILayout.IntField(RuntimeIdLabel, _runtimeId);
+                    EditorGUILayout.Vector3Field(RuntimePositionLabel.text, _runtimePosition);
+                }
             }
+            InspectorUiUtility.EndPanel();
+        }
 
-            EditorGUI.LabelField(statsRect, "Runtime Info", _runtimeStatsStyle);
+        private void RefreshRuntimeSnapshot()
+        {
+            _runtimeComponentCount = 0;
+            _runtimeValidHandleCount = 0;
+            _runtimeDetectableCount = 0;
+            _runtimeSoundSourceCount = 0;
+            _runtimeId = 0;
+            _runtimePosition = default;
 
-            GUI.enabled = false;
-            EditorGUILayout.IntField("ID", perceptible.PerceptibleId);
-            EditorGUILayout.Toggle("Handle Valid", perceptible.Handle.IsValid);
-            EditorGUILayout.Vector3Field("Position", perceptible.Position);
-            EditorGUILayout.LabelField("Type Name", PerceptibleTypes.GetTypeName(perceptible.PerceptibleTypeId));
-            GUI.enabled = true;
-
-            var detectors = perceptible.GetDetectors();
-            if (detectors.Count > 0)
+            Object[] selectedTargets = targets;
+            for (int i = 0; i < selectedTargets.Length; i++)
             {
-                EditorGUILayout.HelpBox($"Detected by {detectors.Count} AI(s)!", MessageType.Warning);
+                var perceptible = selectedTargets[i] as PerceptibleComponent;
+                if (perceptible == null)
+                {
+                    continue;
+                }
+
+                _runtimeComponentCount++;
+                if (perceptible.Handle.IsValid)
+                {
+                    _runtimeValidHandleCount++;
+                }
+
+                if (perceptible.IsDetectable)
+                {
+                    _runtimeDetectableCount++;
+                }
+
+                if (perceptible.IsSoundSource)
+                {
+                    _runtimeSoundSourceCount++;
+                }
+
+                if (selectedTargets.Length == 1)
+                {
+                    _runtimeId = perceptible.PerceptibleId;
+                    _runtimePosition = perceptible.transform.position;
+                }
             }
 
-            if (GUILayout.Button(perceptible.ShowDebugOverlay ? "Hide Debug Overlay" : "Show Debug Overlay"))
+            _runtimeSnapshotDirty = false;
+        }
+
+        private void OnEditorUpdate()
+        {
+            double previousRefreshTime = _nextRuntimeRepaintTime;
+            InspectorUiUtility.RequestRuntimeRepaint(
+                this,
+                _showRuntimeDiagnostics,
+                ref _nextRuntimeRepaintTime);
+            if (_nextRuntimeRepaintTime != previousRefreshTime)
             {
-                perceptible.ShowDebugOverlay = !perceptible.ShowDebugOverlay;
+                _runtimeSnapshotDirty = true;
             }
-
-            Repaint();
         }
     }
 }

@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.BehaviorTree is a Unity behavior-tree module with ScriptableObject authoring, managed runtime execution, bounded scheduling, graph tooling, and an opt-in Burst/Jobs execution assembly.
+CycloneGames.BehaviorTree is a Unity behavior-tree module. Author trees as ScriptableObject assets with a GraphView editor, or build them in code with `RuntimeBehaviorTreeBuilder`. The module includes a managed runtime, typed blackboard, bounded scheduling, and an opt-in Burst/Jobs DOD path.
 
 ## Table of Contents
 
@@ -23,19 +23,19 @@ The module provides:
 - ScriptableObject behavior-tree assets and a GraphView editor.
 - A managed runtime graph of `RuntimeNode` objects and `RuntimeBlackboard` state.
 - A code-first `RuntimeBehaviorTreeBuilder` path that does not require an authored tree asset.
-- Explicit node activation, completion, abort, fault, reset, and disposal semantics.
+- Explicit node activation, completion, abort, fault, reset, and disposal.
 - Self, Manual, Managed, and PriorityManaged tick ownership models.
-- Typed blackboard values, schemas, snapshots, deltas, change stamps, and observers.
+- Typed blackboard values, an embedded opt-in strict authoring schema, snapshots, deltas, change stamps, and observers.
 - A bounded authoring compiler with explicit, reflection-free built-in emitters.
-- An opt-in, restricted DOD assembly for homogeneous flat trees executed by Burst jobs.
-- Editor and PlayMode benchmark tooling isolated in an opt-in benchmark assembly.
+- An opt-in DOD assembly for homogeneous flat trees executed by Burst jobs.
+- Editor and PlayMode benchmark tooling in an opt-in benchmark assembly.
 
 ### Key features
 
 - **ScriptableObject authoring** with Undo-aware GraphView editor, validation, and repair commands.
 - **Code-first API** via `RuntimeBehaviorTreeBuilder` with compositor, decorator, and leaf fluent methods.
-- **Rich node library** — 15+ compositors, 15+ decorators, condition strategies, and action boundaries.
-- **Typed blackboard** — `int`, `float`, `bool`, `Vector3`, `long`, `Long2`, `Long3`, `object`; FNV-1a string keys.
+- **Node library** — 15+ compositors, 15+ decorators, condition strategies, and action boundaries.
+- **Typed blackboard** — `int`, `float`, `bool`, `Vector3`, `long`, `Long2`, `Long3`, `object`; FNV-1a string keys and an opt-in strict contract.
 - **Bounded compilation** — iterative validation, exact emitter dispatch, no private-field reflection.
 - **Managed scheduling** — round-robin and 8-bucket priority/LOD tick managers.
 - **Opt-in DOD path** — Burst/Jobs flat-tree scheduler with `BTAgentHandle` generations.
@@ -46,6 +46,8 @@ The module provides:
 ```mermaid
 flowchart LR
     Asset["BehaviorTree asset\nBTNode sub-assets"] --> Compiler["Bounded validator\nexplicit emitters"]
+    Asset --> Contract["Embedded optional\nstrict blackboard schema"]
+    Contract --> Compiler
     Builder["RuntimeBehaviorTreeBuilder"] --> Runtime["RuntimeBehaviorTree"]
     Compiler --> Runtime
     Runtime --> Root["Owned RuntimeNode graph"]
@@ -101,6 +103,21 @@ flowchart TB
 
 The runner compiles a fresh runtime instance. The asset remains authoring data; node execution state and blackboard state live in that runtime instance.
 
+### Five-minute strict blackboard setup
+
+Strict schema authoring is embedded in each `BehaviorTree` asset and is opt-in. Existing assets remain in Legacy Open mode until explicitly enabled.
+
+1. Select the behavior-tree asset in the Project window.
+2. In **Blackboard Contract**, enable **Strict Schema**.
+3. Keep the read-only **Format Version** unchanged. Start **Contract Version** at `1` for a new contract.
+4. Add the keys used by the graph. For example, add `HasTarget` as `Bool` with default `false`, `Health` as `Int` with default `100`, and `Target` as `Object` without a default.
+5. Keep **Sync Flags** at `LocalOnly` unless an implemented persistence or networking path owns the synchronization policy.
+6. Open the graph. Supported key fields keep manual text editing and add a schema-backed dropdown; typed fields show only compatible entries.
+7. Add `Target` to the runner's **Initial Objects** when the instance needs a scene object.
+8. Select the tree again, click **Validate Tree**, resolve every diagnostic, then enter Play Mode.
+
+On compile, root schema defaults are applied first. `BTRunnerComponent` then applies **Initial Objects** in array order, so the last duplicate Object entry wins. Replaying the runner restores root defaults and reapplies the same initial Object entries before the next activation.
+
 ### Code-first tree
 
 ```csharp
@@ -132,9 +149,9 @@ tree.Tick();
 tree.Dispose();
 ```
 
-The builder can receive an existing blackboard, a `RuntimeBlackboardSchema`, a `RuntimeBTContext`, or an `IRuntimeBTServiceResolver`. It may be used only once; `Build()` closes any open builder scopes and rejects a missing root child.
+The builder can receive an existing blackboard, a `RuntimeBlackboardSchema`, a `RuntimeBTContext`, or an `IRuntimeBTServiceResolver`. It may be used only once; `Build()` closes open builder scopes and rejects a missing root child.
 
-`RuntimeBTContext.Owner` and `WithOwner(...)` accept any reference-type owner through `object`. Core consumers retrieve it through `GetOwner<T>()`:
+`RuntimeBTContext.Owner` and `WithOwner(...)` accept any reference-type owner through `object`. Retrieve it with `GetOwner<T>()`:
 
 ```csharp
 public sealed class AgentRuntimeOwner { }
@@ -189,7 +206,7 @@ stateDiagram-v2
     StoppedExplicit --> Disposed: Dispose
 ```
 
-- A newly constructed tree is active. `Tick()` starts the root activation as needed.
+- A newly constructed tree is active. `Tick()` starts root activation as needed.
 - Construction validates an acyclic, single-owner runtime graph with unique runtime GUIDs. `RuntimeBehaviorTreeLimits` bounds code-first node count (default 4096, hard ceiling 65,536) and depth (default 256, hard ceiling 256).
 - If construction throws before returning, a caller-supplied blackboard has its previous context restored and remains caller-owned; an internally created blackboard is disposed. After successful construction, the tree owns and disposes its blackboard.
 - `Success` and `Failure` are terminal tree results. The tree sets `IsStopped`, clears scheduling wake-up state, and publishes `Terminated` exactly once.
@@ -249,13 +266,76 @@ Schema-bound writes reject unknown keys and type mismatches.
 - Subscription changes allocate new callback arrays. Register during setup, unregister at owner shutdown.
 - `SubTreeNode` owns a reusable scoped blackboard. `RuntimeSubTreePortDirection.Input` refreshes a local port before every child step, `Output` commits at normal completion, and `InOut` captures initial and final values.
 
+### Asset-authored strict blackboard schema
+
+The authoring schema belongs to the `BehaviorTree` asset; it is not a separate project asset or global registry. The compiler converts it into one immutable `RuntimeBlackboardSchema` for the root runtime blackboard.
+
+| Mode | Inspector state | Empty key list | Runtime contract |
+| --- | --- | --- | --- |
+| Legacy Open | **Strict Schema** off | Ignored | Dynamic string/hash keys remain allowed; this preserves existing assets |
+| Strict Empty | **Strict Schema** on | Valid | No Blackboard key is permitted; useful for trees that intentionally have no Blackboard dependency |
+| Strict Populated | **Strict Schema** on | One or more entries | Authored keys must exist with the required type; runtime writes reject unknown keys and type mismatches |
+
+Enabling strict mode is therefore a behavior change even when the list is empty. Do not use an empty strict schema as a temporary placeholder on a tree that already reads or writes Blackboard data.
+
+The Inspector supports all eight runtime value types:
+
+| Type | Authoring default | Important rule |
+| --- | --- | --- |
+| `Int`, `Bool`, `Long`, `Long2`, `Long3` | Optional | Serialized directly in the tree asset |
+| `Float`, `Vector3` | Optional | Every default component must be finite; `NaN` and infinity are rejected |
+| `Object` | None | Must remain `LocalOnly`; inject instance references through runner **Initial Objects** or code |
+
+Every new entry starts as `Int`, `LocalOnly`, with no default. The schema compiler rejects null entries, blank or edge-whitespace names, names longer than 256 UTF-16 code units, duplicate names, FNV-1a collisions, the reserved zero hash, unsupported enum values, invalid synchronization flags, more than 4,096 entries, non-finite defaults, synchronized Object keys, and Object authoring defaults.
+
+The key picker reads the selected tree's schema directly. It does not replace the serialized string field: manual editing remains available, while missing declarations, hash collisions, and incompatible types produce an Inspector warning. `SwitchNode` accepts `Int`, `UtilitySelectorNode` scores accept `Float`, message pass/receive and runner **Initial Objects** accept `Object`, and `BBComparison` follows its selected comparison value type. The compiler remains authoritative even if a field has no custom picker.
+
+Use the public cache-backed query when a composition root needs to inspect the authoring contract before compilation:
+
+```csharp
+if (!treeAsset.TryGetRuntimeBlackboardSchema(
+        out RuntimeBlackboardSchema schema,
+        out string schemaError))
+{
+    throw new InvalidOperationException(schemaError);
+}
+
+// Legacy Open mode succeeds with schema == null.
+RuntimeBehaviorTree runtime = treeAsset.Compile(context);
+```
+
+`Format Version` and `Contract Version` serve different owners:
+
+- **Format Version** identifies the module's serialized authoring layout. It is read-only in the Inspector, and the compiler accepts only the current format. Do not edit it as a gameplay or release version.
+- **Contract Version** is project-controlled metadata and must be at least `1`. Increment it when a released name, type, synchronization policy, or default changes incompatibly. It does not perform data migration or network negotiation by itself.
+
+Key names are contract identities because their stable FNV-1a hashes are used at runtime and across applicable persistence/network boundaries. Treat a rename as removal plus addition. For a released contract, keep both names during a transition, copy or migrate data explicitly, coordinate every producer and consumer, and remove the old key only after compatibility is no longer required.
+
+Migrate an existing asset in this order:
+
+1. Leave **Strict Schema** off while inventorying every authored key, code-driven write, runner Initial Object, subtree dependency, snapshot/save field, and network consumer.
+2. Add the complete root contract with `LocalOnly` as the default policy. Set defaults only for values owned by a new activation.
+3. Add optional strict subset declarations to reusable subtrees, then validate every root that embeds them.
+4. Fix all key/type diagnostics and add explicit data migration for renamed or retired keys.
+5. Coordinate persistence and network releases, increment **Contract Version** for incompatible released changes, then enable strict mode.
+6. Test reload, replay, save/load, network mismatch, and rollback before changing production assets in bulk.
+
+Disabling **Strict Schema** is a reversible authoring rollback to Legacy Open behavior, but it does not reverse already-written save data, network payloads, or key renames.
+
 ### Compilation
 
-`BehaviorTreeCompiler` validates the authoring graph before creating mutable runtime nodes. The structural pass rejects a missing root, cycles, shared child ownership, null links, invalid arity, duplicate GUIDs, excessive size/depth, and invalid built-in node configuration.
+`BehaviorTreeCompiler` validates the authoring graph before creating mutable runtime nodes. The structural pass rejects a missing root, cycles, shared child ownership, null links, invalid arity, duplicate GUIDs, excessive size/depth, invalid built-in node configuration, and strict-schema key/type violations.
 
 `BehaviorTreeCompiler.Analyze(...)` performs bounded iterative validation and exact authoring-type emitter preflight, then returns a `BehaviorTreeCompileArtifact`. `EmitRuntimeRoot()` revalidates the current mutable source before creating a new runtime graph.
 
 Each explicit `SubTreeNode` asset reference is an occurrence boundary. The same subtree asset can be referenced at multiple graph positions; validation counts each expansion independently, emission creates independent runtime nodes, and nested runtime GUIDs receive a deterministic occurrence prefix.
+
+The root tree is the only runtime schema authority for the complete expanded occurrence graph:
+
+- An open subtree under a strict root is validated against the root schema.
+- A strict subtree under a strict parent must be an exact subset of that parent contract and therefore of the root contract. For every subtree entry, name, type, sync flags, default-presence flag, and default value must match. Nested subtrees cannot borrow a root-only key omitted by their direct reusable parent declaration.
+- A strict subtree under a Legacy Open root is rejected because it would introduce a second authority.
+- Only root schema defaults initialize or reset the root runtime Blackboard. Scoped Blackboard instances retain their distinct local key space, including code-first port remapping; values crossing back into the root are validated by the root schema. Subtree declarations validate authored reusable dependencies, and their defaults are not applied a second time.
 
 `BehaviorTree.Compile(...)` catches `BehaviorTreeCompileException`, logs against the asset, and returns `null`. Composition roots that need structured failure should call `BehaviorTreeCompiler.Analyze(...)` first.
 
@@ -278,7 +358,8 @@ runner.Play();
 
 - Natural `Success` or `Failure`, explicit `Stop`, and runtime faults all mark the runner stopped, unregister it from managed scheduling, and raise `OnTreeStopped` once.
 - `Pause()` preserves node and blackboard state and unregisters managed modes. `Resume()` continues a non-terminal tree; a stopped runner starts a new activation.
-- `Play()` on an existing runtime stops the old activation, resets the graph, clears the blackboard, and reapplies Inspector `Initial Objects`.
+- `Play()` on an existing runtime stops the old activation, resets the graph, resets the Blackboard to root schema defaults (or empty state in Legacy Open mode), and then reapplies Inspector `Initial Objects`.
+- Every **Initial Objects** key is an `Object` write. Strict trees must declare each key as `Object`; later duplicate entries overwrite earlier entries. Object keys are always `LocalOnly` and cannot have authoring defaults.
 - `SetTree(...)` is applied in `LateUpdate`; the old runtime is disposed and a new runtime is compiled.
 - Set context and service resolver before active execution. `RuntimeBehaviorTree.SetContext` rejects changes while a node stack is active.
 
@@ -469,7 +550,7 @@ Key DOD contracts:
 
 | Data | Owner and location | Format and lifetime |
 | --- | --- | --- |
-| Behavior-tree authoring | Project, under `Assets/` | Unity `.asset` with node sub-assets |
+| Behavior-tree authoring | Project, under `Assets/` | Unity `.asset` with node sub-assets and optional embedded strict Blackboard schema |
 | Graph layout | Same behavior-tree asset | Serialized node positions |
 | Compile analysis artifacts | Caller | Short-lived in-memory wrapper |
 | Runtime tree/blackboard | Runner or composition scope | In-memory mutable state |
@@ -493,7 +574,7 @@ Key DOD contracts:
 
 ### LOD-based AI scheduling
 
-`BTPriorityTickManagerComponent` maps distance-based LOD levels to eight priority buckets. Near agents receive high-priority buckets with larger tick budgets; distant agents run less frequently. `BTLODConfig` enforces strictly increasing distances, valid priorities, and non-negative budgets. Combine this with `BTDistanceLODProvider` for automatic LOD level assignment based on distance to a target.
+`BTPriorityTickManagerComponent` maps distance-based LOD levels to eight priority buckets. Near agents receive high-priority buckets with larger tick budgets; distant agents run less frequently. `BTLODConfig` enforces strictly increasing distances, valid priorities, and non-negative budgets. Combine with `BTDistanceLODProvider` for automatic LOD level assignment based on distance to a target.
 
 ### Code-first composition root
 
@@ -523,6 +604,10 @@ var tree = new RuntimeBehaviorTreeBuilder(context)
 
 Use `RuntimeBlackboard.WriteTo(BinaryWriter, RuntimeBlackboardNetworkScope)` to produce bounded snapshot payloads, and `ReadFrom(BinaryReader)` to apply them on the remote side. Snapshots carry versioned `BTS2` frames and deltas carry `BTDP1` frames. Schema `RuntimeBlackboardSyncFlags` control which keys participate in which scope. `ComputeHash()` provides FNV-1a hashes for fast desync detection.
 
+Authoring entries default to `LocalOnly`. Choose `Snapshot`, `Delta`, or `Networked` only when the owning integration defines authority, ordering, rate limits, payload limits, resynchronization, and failure recovery. Sync flags filter serialization; they do not create a transport or make the Blackboard multi-thread safe. `Object` keys never participate in synchronization.
+
+Clients, servers, replay tools, and save/load consumers must coordinate the same released key names, hashes, types, flags, defaults, and contract version before exchanging state. `Contract Version` is available on `RuntimeBlackboardSchema`, but it is not an automatic wire handshake. The networking composition root must reject or migrate incompatible manifests/templates before applying snapshot or delta payloads.
+
 ## Performance and Memory
 
 ### Cost model
@@ -535,19 +620,25 @@ Use `RuntimeBlackboard.WriteTo(BinaryWriter, RuntimeBlackboardNetworkScope)` to 
 | Observer notification | Synchronous callback dispatch; subscription changes allocate arrays |
 | Managed registration | May grow manager storage; steady-state scan reuses storage |
 | Compiler analysis | Cold-path bounded graph validation and diagnostic allocations |
+| Strict schema compilation | Cold-path array/dictionary construction and sort; cached per authoring asset until validation or deserialization invalidates it |
 | Runtime graph emission | Cold-path explicit emitter dispatch plus allocation of a new mutable node graph |
 | DOD tick | Per-agent flat traversal in a Burst job; scheduling and completion have fixed overhead |
 | Snapshot/delta | Serialization may allocate unless reusable buffer APIs are used |
 
-The module contains steady-state low-allocation paths. Dictionary growth, first-time arrays, subscriptions, compile operations, and capacity growth allocate.
+The module contains steady-state low-allocation paths. Dictionary growth, first-time arrays, subscriptions, compile operations, schema compilation, and capacity growth allocate. Strict schema parsing is not performed during `Tick`; runtime access continues through typed stores and precomputed integer hashes. Schema-bound writes add a dictionary contract lookup before mutation.
+
+The embedded authoring schema has a hard limit of 4,096 entries. Default snapshot/delta limits remain 4,096 entries per value type and 16,384 total entries. These are safety ceilings, not sizing targets: keep each tree contract narrow, pre-hash hot keys, and measure representative Player builds.
+
+`BehaviorTree` authoring data and its schema cache are Unity main-thread owned. `TryGetRuntimeBlackboardSchema`, Inspector editing, graph validation, and asset compilation must remain on the main thread. The compiled managed runtime retains its existing single-owner-thread affinity; strict mode adds no background worker and no new lock. The DOD flat-tree path has its own fixed-slot Blackboard contract and does not consume this embedded authoring schema.
 
 ### Tuning sequence
 
 1. Establish a representative tree shape, active-agent distribution, tick cadence, and frame budget.
 2. Pre-hash keys, cache injected services, pre-size managers and DOD capacity, and remove per-tick subscriptions or closures.
-3. Use `Managed` scheduling to bound scan work; add `PriorityManaged` only when a real LOD/priority policy exists.
-4. Compare managed and DOD paths with the same observable behavior. DOD is not automatically faster for small or heterogeneous workloads.
-5. Measure release Player builds on each hardware tier. Record average, percentiles, GC, retained memory, and recovery after scene changes.
+3. Enable strict schemas after inventorying real keys; do not create speculative global contracts or fill the 4,096-entry ceiling.
+4. Use `Managed` scheduling to bound scan work; add `PriorityManaged` only when a real LOD/priority policy exists.
+5. Compare managed and DOD paths with the same observable behavior. DOD is not automatically faster for small or heterogeneous workloads.
+6. Measure release Player builds on each hardware tier. Record average, percentiles, GC, retained memory, and recovery after scene changes.
 
 Benchmark code is isolated in `CycloneGames.BehaviorTree.Benchmarks`.
 
@@ -557,8 +648,12 @@ Benchmark code is isolated in `CycloneGames.BehaviorTree.Benchmarks`.
 | --- | --- | --- |
 | New asset shows no root | Root creation is explicit | Click `Repair Root`, then save the asset |
 | `BehaviorTree.Compile()` returns `null` | Compiler rejected the asset and logged diagnostics | Use `Validate` or `BehaviorTreeCompiler.Analyze` and fix every error |
+| Strict Empty tree rejects an existing node key | Strict mode with zero entries permits no Blackboard dependency | Declare every required key, or disable strict mode until migration is complete |
+| Key picker is disabled | The tree is Legacy Open, the strict schema is invalid, or no compatible key exists | Select the tree asset, enable/fix its strict schema, and add an entry of the required type |
+| Strict subtree is incompatible | The root is open or the child declaration is not an exact root subset | Make the root authoritative and copy exact child definitions into the root contract |
+| Runner fails while applying `Initial Objects` | A strict schema does not declare that key as `Object` | Add a matching LocalOnly Object entry or remove the runner entry |
 | Tree ticks once and stops | Root returned `Success` or `Failure` | Call `Play()` for a new activation or keep the intended branch `Running` |
-| `Play()` lost runtime blackboard values | Runner replay clears its blackboard | Reapply initialization or move persistent state to an external owner |
+| `Play()` lost runtime Blackboard values | Runner replay intentionally restores root defaults, then Initial Objects | Store activation-persistent data in an external owner and inject it explicitly |
 | String key no longer matches an old integer key | Default hash changed to FNV1A | Migrate Graph-authored and persisted key spaces |
 | `SetContext` throws | A node stack is active or the call is reentrant | Set context before ticking or after the tree stops |
 | Managed tree is never ticked | Manager is absent, runner is paused/stopped/disabled, or bucket budget is zero | Inspect runner state, manager component, tick mode, interval, and budgets |
@@ -584,13 +679,18 @@ EditMode  CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
 ### Minimum manual Editor checks
 
 1. Create an asset, use `Repair Asset` and `Repair Root`, create/connect/delete/paste nodes, then Undo and Redo each operation.
-2. Save, close, reopen, and confirm node configuration and positions.
-3. Attempt a cycle, second parent, and second decorator/root child; confirm the editor refuses each link. Use a focused fixture to reference a node from a second asset, then confirm `Validate` reports it and `Repair Asset` refuses it.
-4. Enter Play Mode and confirm selection, pan, search, focus, and live state remain available while authoring operations are read-only.
-5. Enter Play Mode with `Self`, `Managed`, `PriorityManaged`, and `Manual` ownership as used by the product.
-6. Confirm natural completion unregisters the runner, `Play` creates a new activation, and disable/enable does not double-register.
-7. Run a bounded benchmark case before any matrix or soak run.
+2. Confirm a pre-existing asset remains Legacy Open. Enable Strict Schema on a copy, leave it empty, and confirm a Blackboard-using node fails validation.
+3. Add correctly typed keys, use each available dropdown, save, close, reopen, and confirm entries, defaults, sync flags, node configuration, and positions persist through Undo/Redo.
+4. Change one key to an incompatible type and create one duplicate name; confirm the Inspector and `Validate Tree` report errors and compilation refuses the asset.
+5. Compile a strict tree and confirm root defaults are present. Set runner Initial Objects, call `Play()` twice, and confirm defaults reset before Object entries are reapplied.
+6. Reference a reusable subtree. Confirm an exact strict subset passes, an incompatible child definition fails, a strict child under an open root fails, and child defaults are not applied independently.
+7. Attempt a cycle, second parent, and second decorator/root child; confirm the editor refuses each link. Use a focused fixture to reference a node from a second asset, then confirm `Validate` reports it and `Repair Asset` refuses it.
+8. Enter Play Mode and confirm selection, pan, search, focus, and live state remain available while authoring operations are read-only.
+9. Enter Play Mode with `Self`, `Managed`, `PriorityManaged`, and `Manual` ownership as used by the product.
+10. Confirm natural completion unregisters the runner, `Play` creates a new activation, and disable/enable does not double-register.
+11. For synchronized keys, validate matching client/server manifests and an intentional mismatch before sending state. Confirm the integration rejects or migrates the mismatch.
+12. Run a bounded benchmark case before any matrix or soak run.
 
 ## References
 
-- [Tests/README.md](Tests/README.md) — batchmode commands and benchmark interpretation.
+- [Tests/README.md](Tests/README.md) -- batchmode commands and benchmark interpretation.
