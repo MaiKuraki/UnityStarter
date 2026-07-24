@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.AIPerception.Tests.Editor",
     "references": [
         "CycloneGames.AIPerception",
+        "CycloneGames.AIPerception.Editor",
         "Unity.Collections",
         "Unity.Mathematics"
     ],

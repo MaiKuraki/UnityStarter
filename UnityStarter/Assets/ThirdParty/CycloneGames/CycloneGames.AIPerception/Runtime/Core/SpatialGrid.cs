@@ -1,16 +1,35 @@
+using System;
 using System.Collections.Generic;
 using Unity.Collections;
 using Unity.Mathematics;
 
 namespace CycloneGames.AIPerception.Runtime
 {
+    /// <summary>
+    /// Main-thread spatial broadphase over the immutable registry snapshot. Queries write indices
+    /// into caller-owned persistent storage and fall back to a linear scan for very large bounds.
+    /// </summary>
     public sealed class SpatialGrid
     {
-        private const int CELL_DIM_BITS = 20;
-        private const int CELL_DIM_OFFSET = 1 << (CELL_DIM_BITS - 1); // 524288 — handles negative coords
+        private const long MaximumCellVisitsPerQuery = 65536L;
 
-        private readonly Dictionary<long, CellRange> _cellRanges = new Dictionary<long, CellRange>();
-        private float _cellSize;
+        private readonly struct CellCoordinate : IEquatable<CellCoordinate>
+        {
+            public CellCoordinate(int x, int y, int z)
+            {
+                X = x;
+                Y = y;
+                Z = z;
+            }
+
+            public int X { get; }
+            public int Y { get; }
+            public int Z { get; }
+
+            public bool Equals(CellCoordinate other) => X == other.X && Y == other.Y && Z == other.Z;
+            public override bool Equals(object obj) => obj is CellCoordinate other && Equals(other);
+            public override int GetHashCode() => HashCode.Combine(X, Y, Z);
+        }
 
         private struct CellRange
         {
@@ -18,136 +37,220 @@ namespace CycloneGames.AIPerception.Runtime
             public int Count;
         }
 
+        private sealed class CellComparer : IComparer<PerceptibleData>
+        {
+            public float CellSize { get; set; }
+
+            public int Compare(PerceptibleData left, PerceptibleData right)
+            {
+                CellCoordinate leftCell = GetCell(left.Position, CellSize);
+                CellCoordinate rightCell = GetCell(right.Position, CellSize);
+                int x = leftCell.X.CompareTo(rightCell.X);
+                if (x != 0)
+                {
+                    return x;
+                }
+
+                int y = leftCell.Y.CompareTo(rightCell.Y);
+                if (y != 0)
+                {
+                    return y;
+                }
+
+                int z = leftCell.Z.CompareTo(rightCell.Z);
+                if (z != 0)
+                {
+                    return z;
+                }
+
+                int registry = left.RegistryId.CompareTo(right.RegistryId);
+                if (registry != 0)
+                {
+                    return registry;
+                }
+
+                int id = left.Id.CompareTo(right.Id);
+                return id != 0 ? id : left.Generation.CompareTo(right.Generation);
+            }
+        }
+
+        private readonly Dictionary<CellCoordinate, CellRange> _cellRanges =
+            new Dictionary<CellCoordinate, CellRange>(256);
+        private readonly CellComparer _comparer = new CellComparer();
+        private float _cellSize;
+
         public float CellSize => _cellSize;
 
         public SpatialGrid(float cellSize = 20f)
         {
-            _cellSize = math.max(cellSize, 1f);
+            SetCellSize(cellSize);
         }
 
         public void SetCellSize(float size)
         {
-            _cellSize = math.max(size, 1f);
+            if (!math.isfinite(size) || size <= 0f)
+            {
+                throw new ArgumentOutOfRangeException(nameof(size), "Spatial-grid cell size must be finite and positive.");
+            }
+
+            _cellSize = size;
+            _comparer.CellSize = _cellSize;
         }
 
         /// <summary>
-        /// Sorts data by cell index in-place and builds cell boundary map.
-        /// After rebuild, data is ordered by spatial locality — enabling zero-allocation contiguous-slice queries.
+        /// Sorts the active snapshot by cell and stable handle, then records contiguous cell ranges.
         /// </summary>
         public void Rebuild(PerceptibleData[] data, int count)
         {
+            if (data == null)
+            {
+                throw new ArgumentNullException(nameof(data));
+            }
+
+            if (count < 0 || count > data.Length)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count));
+            }
+
             _cellRanges.Clear();
+            if (count == 0)
+            {
+                return;
+            }
 
-            if (count == 0) return;
+            Array.Sort(data, 0, count, _comparer);
 
-            System.Array.Sort(data, 0, count, new CellKeyComparer(_cellSize));
-
-            long currentKey = GetCellKey(data[0].Position, _cellSize);
+            CellCoordinate current = GetCell(data[0].Position, _cellSize);
             int cellStart = 0;
-
             for (int i = 1; i <= count; i++)
             {
-                if (i == count || GetCellKey(data[i].Position, _cellSize) != currentKey)
+                if (i != count)
                 {
-                    _cellRanges[currentKey] = new CellRange { StartIndex = cellStart, Count = i - cellStart };
-
-                    if (i < count)
+                    CellCoordinate candidate = GetCell(data[i].Position, _cellSize);
+                    if (candidate.Equals(current))
                     {
-                        currentKey = GetCellKey(data[i].Position, _cellSize);
-                        cellStart = i;
+                        continue;
                     }
+                }
+
+                _cellRanges.Add(current, new CellRange { StartIndex = cellStart, Count = i - cellStart });
+                if (i < count)
+                {
+                    current = GetCell(data[i].Position, _cellSize);
+                    cellStart = i;
                 }
             }
         }
 
         /// <summary>
-        /// Creates a NativeArray from contiguous slices of spatially-ordered data.
-        /// Zero intermediate allocations — no List, no index collection. CALLER MUST DISPOSE.
+        /// Writes exact center-distance candidates to <paramref name="results"/>. Returns false and
+        /// clears the list when the configured hard capacity would be exceeded.
         /// </summary>
-        public NativeArray<PerceptibleData> CreateFilteredCopy(
+        public bool CollectIndices(
             PerceptibleData[] allData,
             int totalCount,
             float3 origin,
             float range,
-            Allocator allocator = Allocator.TempJob)
+            ref NativeList<int> results,
+            int maximumResults)
         {
-            if (_cellRanges.Count == 0 || totalCount == 0)
+            if (allData == null)
             {
-                var full = new NativeArray<PerceptibleData>(math.max(totalCount, 1), allocator);
-                for (int i = 0; i < totalCount; i++)
-                    full[i] = allData[i];
-                return full;
+                throw new ArgumentNullException(nameof(allData));
             }
 
-            float invCellSize = 1f / _cellSize;
-            int minCX = (int)math.floor((origin.x - range) * invCellSize);
-            int maxCX = (int)math.floor((origin.x + range) * invCellSize);
-            int minCY = (int)math.floor((origin.y - range) * invCellSize);
-            int maxCY = (int)math.floor((origin.y + range) * invCellSize);
-            int minCZ = (int)math.floor((origin.z - range) * invCellSize);
-            int maxCZ = (int)math.floor((origin.z + range) * invCellSize);
-
-            float rangeSq = range * range;
-            int candidateCount = 0;
-
-            for (int cx = minCX; cx <= maxCX; cx++)
+            if (totalCount < 0 || totalCount > allData.Length)
             {
-                for (int cy = minCY; cy <= maxCY; cy++)
-                {
-                    for (int cz = minCZ; cz <= maxCZ; cz++)
-                    {
-                        long key = PackCellKey(cx, cy, cz);
-                        if (!_cellRanges.TryGetValue(key, out var cellRange)) continue;
+                throw new ArgumentOutOfRangeException(nameof(totalCount));
+            }
 
-                        for (int j = cellRange.StartIndex; j < cellRange.StartIndex + cellRange.Count; j++)
+            if (!results.IsCreated)
+            {
+                throw new ArgumentException("Candidate storage must be created by the sensor owner.", nameof(results));
+            }
+
+            results.Clear();
+            if (totalCount == 0)
+            {
+                return true;
+            }
+
+            if (!math.all(math.isfinite(origin)) || !math.isfinite(range) || range < 0f || maximumResults <= 0)
+            {
+                return false;
+            }
+
+            CellCoordinate minimum = GetCell(origin - range, _cellSize);
+            CellCoordinate maximum = GetCell(origin + range, _cellSize);
+            long cellCount = SaturatingProduct(
+                InclusiveLength(minimum.X, maximum.X),
+                InclusiveLength(minimum.Y, maximum.Y),
+                InclusiveLength(minimum.Z, maximum.Z));
+            float rangeSquared = range * range;
+            bool useDoubleDistance = !math.isfinite(rangeSquared);
+            double rangeSquaredDouble = (double)range * range;
+
+            if (_cellRanges.Count == 0 || cellCount > MaximumCellVisitsPerQuery)
+            {
+                return CollectLinear(
+                    allData,
+                    totalCount,
+                    origin,
+                    rangeSquared,
+                    rangeSquaredDouble,
+                    useDoubleDistance,
+                    ref results,
+                    maximumResults);
+            }
+
+            for (int x = minimum.X; ; x++)
+            {
+                for (int y = minimum.Y; ; y++)
+                {
+                    for (int z = minimum.Z; ; z++)
+                    {
+                        if (_cellRanges.TryGetValue(new CellCoordinate(x, y, z), out CellRange cellRange))
                         {
-                            if (math.distancesq(allData[j].Position, origin) <= rangeSq)
-                                candidateCount++;
+                            int end = cellRange.StartIndex + cellRange.Count;
+                            for (int i = cellRange.StartIndex; i < end; i++)
+                            {
+                                if (IsWithinRange(
+                                        allData[i].Position,
+                                        origin,
+                                        rangeSquared,
+                                        rangeSquaredDouble,
+                                        useDoubleDistance))
+                                {
+                                    if (results.Length >= maximumResults)
+                                    {
+                                        results.Clear();
+                                        return false;
+                                    }
+
+                                    results.Add(i);
+                                }
+                            }
+                        }
+
+                        if (z == maximum.Z)
+                        {
+                            break;
                         }
                     }
+
+                    if (y == maximum.Y)
+                    {
+                        break;
+                    }
+                }
+
+                if (x == maximum.X)
+                {
+                    break;
                 }
             }
 
-            int resultCount = math.max(candidateCount, 1);
-            var result = new NativeArray<PerceptibleData>(resultCount, allocator);
-            int writeIdx = 0;
-
-            for (int cx = minCX; cx <= maxCX; cx++)
-            {
-                for (int cy = minCY; cy <= maxCY; cy++)
-                {
-                    for (int cz = minCZ; cz <= maxCZ; cz++)
-                    {
-                        long key = PackCellKey(cx, cy, cz);
-                        if (!_cellRanges.TryGetValue(key, out var cellRange)) continue;
-
-                        for (int j = cellRange.StartIndex; j < cellRange.StartIndex + cellRange.Count; j++)
-                        {
-                            if (math.distancesq(allData[j].Position, origin) <= rangeSq)
-                                result[writeIdx++] = allData[j];
-                        }
-                    }
-                }
-            }
-
-            return result;
-        }
-
-        private static long PackCellKey(int cx, int cy, int cz)
-        {
-            ulong ux = (ulong)(cx + CELL_DIM_OFFSET) & ((1u << CELL_DIM_BITS) - 1);
-            ulong uy = (ulong)(cy + CELL_DIM_OFFSET) & ((1u << CELL_DIM_BITS) - 1);
-            ulong uz = (ulong)(cz + CELL_DIM_OFFSET) & ((1u << CELL_DIM_BITS) - 1);
-            return (long)((ux << (CELL_DIM_BITS * 2)) | (uy << CELL_DIM_BITS) | uz);
-        }
-
-        private static long GetCellKey(float3 position, float cellSize)
-        {
-            float invCellSize = 1f / cellSize;
-            int cx = (int)math.floor(position.x * invCellSize);
-            int cy = (int)math.floor(position.y * invCellSize);
-            int cz = (int)math.floor(position.z * invCellSize);
-            return PackCellKey(cx, cy, cz);
+            return true;
         }
 
         public void Clear()
@@ -155,26 +258,107 @@ namespace CycloneGames.AIPerception.Runtime
             _cellRanges.Clear();
         }
 
-        private sealed class CellKeyComparer : IComparer<PerceptibleData>
+        private static bool CollectLinear(
+            PerceptibleData[] data,
+            int count,
+            float3 origin,
+            float rangeSquared,
+            double rangeSquaredDouble,
+            bool useDoubleDistance,
+            ref NativeList<int> results,
+            int maximumResults)
         {
-            private readonly float _cellSize;
-
-            public CellKeyComparer(float cellSize)
+            for (int i = 0; i < count; i++)
             {
-                _cellSize = cellSize;
+                if (!IsWithinRange(
+                        data[i].Position,
+                        origin,
+                        rangeSquared,
+                        rangeSquaredDouble,
+                        useDoubleDistance))
+                {
+                    continue;
+                }
+
+                if (results.Length >= maximumResults)
+                {
+                    results.Clear();
+                    return false;
+                }
+
+                results.Add(i);
             }
 
-            public int Compare(PerceptibleData x, PerceptibleData y)
+            return true;
+        }
+
+        private static bool IsWithinRange(
+            float3 position,
+            float3 origin,
+            float rangeSquared,
+            double rangeSquaredDouble,
+            bool useDoubleDistance)
+        {
+            if (!math.all(math.isfinite(position)))
             {
-                long keyX = GetCellKey(x.Position);
-                long keyY = GetCellKey(y.Position);
-                return keyX.CompareTo(keyY);
+                return false;
             }
 
-            private long GetCellKey(float3 position)
+            if (!useDoubleDistance)
             {
-                return SpatialGrid.GetCellKey(position, _cellSize);
+                float distanceSquared = math.distancesq(position, origin);
+                return math.isfinite(distanceSquared) && distanceSquared <= rangeSquared;
             }
+
+            double x = (double)position.x - origin.x;
+            double y = (double)position.y - origin.y;
+            double z = (double)position.z - origin.z;
+            return (x * x) + (y * y) + (z * z) <= rangeSquaredDouble;
+        }
+
+        private static CellCoordinate GetCell(float3 position, float cellSize)
+        {
+            double inverseCellSize = 1d / cellSize;
+            return new CellCoordinate(
+                FloorToInt((double)position.x * inverseCellSize),
+                FloorToInt((double)position.y * inverseCellSize),
+                FloorToInt((double)position.z * inverseCellSize));
+        }
+
+        private static int FloorToInt(double value)
+        {
+            if (value <= int.MinValue)
+            {
+                return int.MinValue;
+            }
+
+            if (value >= int.MaxValue)
+            {
+                return int.MaxValue;
+            }
+
+            return (int)Math.Floor(value);
+        }
+
+        private static long InclusiveLength(int minimum, int maximum)
+        {
+            return (long)maximum - minimum + 1L;
+        }
+
+        private static long SaturatingProduct(long x, long y, long z)
+        {
+            if (x <= 0L || y <= 0L || z <= 0L || x > MaximumCellVisitsPerQuery)
+            {
+                return long.MaxValue;
+            }
+
+            long xy = x * y;
+            if (xy > MaximumCellVisitsPerQuery || z > MaximumCellVisitsPerQuery / xy)
+            {
+                return long.MaxValue;
+            }
+
+            return xy * z;
         }
     }
 }

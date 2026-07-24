@@ -17,14 +17,28 @@ namespace CycloneGames.AIPerception.Networking
         public const ushort MSG_AUTHORITY_TRANSFER = MESSAGE_ID_BASE + 4;
         public const ushort MSG_FULL_STATE_REQUEST = MESSAGE_ID_BASE + 5;
 
-        public const int DEFAULT_MAX_EVENT_PAYLOAD_SIZE = 256;
+        public const int DEFAULT_MAX_EVENT_PAYLOAD_SIZE = AIPerceptionNetworkWireCodec.DetectionEventPayloadBytes;
         public const int DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE = NetworkConstants.DefaultMaxPayloadSize * 4;
-        public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
+        public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = AIPerceptionNetworkWireCodec.AuthorityTransferPayloadBytes;
+        public const int MAX_SNAPSHOT_ENTRIES =
+            (DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE - AIPerceptionNetworkWireCodec.DetectionSnapshotHeaderBytes) /
+            AIPerceptionNetworkWireCodec.DetectionEntryBytes;
+
+        public const AIPerceptionNetworkFeatureFlags KNOWN_FEATURES =
+            AIPerceptionNetworkFeatureFlags.DetectionEvents |
+            AIPerceptionNetworkFeatureFlags.DetectionSnapshots |
+            AIPerceptionNetworkFeatureFlags.MemorySnapshots |
+            AIPerceptionNetworkFeatureFlags.AuthorityTransfer |
+            AIPerceptionNetworkFeatureFlags.InterestFiltered |
+            AIPerceptionNetworkFeatureFlags.TeamShared |
+            AIPerceptionNetworkFeatureFlags.DebugSpectator |
+            AIPerceptionNetworkFeatureFlags.HostMigrationSnapshot;
 
         // Frozen FNV-1a64 identities of the versioned wire contracts ("<contract-name>:v1").
         private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0xE24FD3DF9C74AB1CUL;
         private const ulong DETECTION_EVENT_SCHEMA_V1 = 0x7FB1540691D2B0BFUL;
         private const ulong DETECTION_SNAPSHOT_SCHEMA_V1 = 0xA9F15D28F3BC339DUL;
+        private const ulong MEMORY_SNAPSHOT_SCHEMA_V1 = 0xE163CF3EDDDC2E25UL;
         private const ulong AUTHORITY_TRANSFER_SCHEMA_V1 = 0xDD0A7C2010BB2D4CUL;
         private const ulong FULL_STATE_REQUEST_SCHEMA_V1 = 0xF715DC535205849DUL;
 
@@ -47,6 +61,11 @@ namespace CycloneGames.AIPerception.Networking
         public static bool IsSupportedProtocolVersion(byte protocolVersion)
         {
             return Module.IsSupportedProtocolVersion(protocolVersion);
+        }
+
+        public static bool AreKnownFeatures(AIPerceptionNetworkFeatureFlags features)
+        {
+            return (features & ~KNOWN_FEATURES) == 0;
         }
 
         public static bool TryRegisterMessageCatalog(INetworkMessageEndpoint messageEndpoint)
@@ -73,19 +92,20 @@ namespace CycloneGames.AIPerception.Networking
 
             builder
                 .SetMetadata("module", "AIPerception")
-                .SetMetadata("snapshot", "Detection and stimulus memory payloads")
+                .SetMetadata("wire", "Fixed little-endian v1")
+                .SetMetadata("snapshot", "Caller-owned canonical detection entry spans")
                 .AddMessage(
                     "AIPerceptionManifestHandshakeMessage:v1",
                     MSG_MANIFEST_HANDSHAKE,
                     MANIFEST_HANDSHAKE_SCHEMA_V1,
                     NetworkChannel.Reliable,
-                    DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
+                    AIPerceptionNetworkWireCodec.HandshakePayloadBytes)
                 .AddMessage(
                     "AIPerceptionDetectionEventMessage:v1",
                     MSG_DETECTION_EVENT,
                     DETECTION_EVENT_SCHEMA_V1,
                     NetworkChannel.UnreliableSequenced,
-                    DEFAULT_MAX_EVENT_PAYLOAD_SIZE)
+                    AIPerceptionNetworkWireCodec.DetectionEventPayloadBytes)
                 .AddMessage(
                     "AIPerceptionDetectionSnapshotMessage:v1",
                     MSG_DETECTION_SNAPSHOT,
@@ -93,9 +113,9 @@ namespace CycloneGames.AIPerception.Networking
                     NetworkChannel.UnreliableSequenced,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
                 .AddMessage(
-                    "AIPerceptionDetectionSnapshotMessage:v1",
+                    "AIPerceptionMemorySnapshotMessage:v1",
                     MSG_MEMORY_SNAPSHOT,
-                    DETECTION_SNAPSHOT_SCHEMA_V1,
+                    MEMORY_SNAPSHOT_SCHEMA_V1,
                     NetworkChannel.Reliable,
                     DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
                 .AddMessage(
@@ -103,13 +123,13 @@ namespace CycloneGames.AIPerception.Networking
                     MSG_AUTHORITY_TRANSFER,
                     AUTHORITY_TRANSFER_SCHEMA_V1,
                     NetworkChannel.Reliable,
-                    DEFAULT_MAX_CONTROL_PAYLOAD_SIZE)
+                    AIPerceptionNetworkWireCodec.AuthorityTransferPayloadBytes)
                 .AddMessage(
                     "AIPerceptionFullStateRequestMessage:v1",
                     MSG_FULL_STATE_REQUEST,
                     FULL_STATE_REQUEST_SCHEMA_V1,
                     NetworkChannel.Reliable,
-                    DEFAULT_MAX_CONTROL_PAYLOAD_SIZE);
+                    AIPerceptionNetworkWireCodec.FullStateRequestPayloadBytes);
 
             return builder.Build();
         }

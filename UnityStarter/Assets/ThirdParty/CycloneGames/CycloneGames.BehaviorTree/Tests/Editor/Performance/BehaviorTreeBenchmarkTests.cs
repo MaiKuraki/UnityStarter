@@ -88,6 +88,90 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Performance
         }
 
         [Test, Performance]
+        public void RuntimeBlackboard_StrictSchemaReadWrite_IsBenchmarked()
+        {
+            var definitions = new RuntimeBlackboardKeyDefinition[BlackboardOpCount];
+            for (int i = 0; i < definitions.Length; i++)
+            {
+                definitions[i] = new RuntimeBlackboardKeyDefinition(
+                    i + 1,
+                    string.Empty,
+                    RuntimeBlackboardValueType.Int,
+                    RuntimeBlackboardSyncFlags.LocalOnly,
+                    false,
+                    default);
+            }
+
+            var schema = new RuntimeBlackboardSchema(definitions);
+            var blackboard = new RuntimeBlackboard(
+                initialCapacity: BlackboardOpCount,
+                schema: schema,
+                applySchemaDefaults: false);
+
+            try
+            {
+                Measure.Method(() =>
+                    {
+                        for (int i = 0; i < BlackboardOpCount; i++)
+                        {
+                            int key = i + 1;
+                            blackboard.SetInt(key, i);
+                            _ = blackboard.GetInt(key);
+                        }
+                    })
+                    .WarmupCount(5)
+                    .MeasurementCount(20)
+                    .IterationsPerMeasurement(5)
+                    .Run();
+            }
+            finally
+            {
+                blackboard.Dispose();
+            }
+        }
+
+        [Test]
+        public void RuntimeBlackboard_StrictSchemaWrite_DoesNotAllocateAfterWarmup()
+        {
+            var schema = new RuntimeBlackboardSchema(new[]
+            {
+                new RuntimeBlackboardKeyDefinition(
+                    1,
+                    "Value",
+                    RuntimeBlackboardValueType.Int,
+                    RuntimeBlackboardSyncFlags.LocalOnly,
+                    false,
+                    default)
+            });
+            var blackboard = new RuntimeBlackboard(
+                initialCapacity: 1,
+                schema: schema,
+                applySchemaDefaults: false);
+
+            try
+            {
+                for (int i = 0; i < 64; i++)
+                {
+                    blackboard.SetInt(1, i);
+                }
+
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                for (int i = 0; i < 512; i++)
+                {
+                    blackboard.SetInt(1, i + 1000);
+                    _ = blackboard.GetInt(1);
+                }
+                long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                Assert.AreEqual(0L, allocated);
+            }
+            finally
+            {
+                blackboard.Dispose();
+            }
+        }
+
+        [Test, Performance]
         public void BlackboardDelta_Flush64TrackedKeys_IsBenchmarked()
         {
             var blackboard = new RuntimeBlackboard(initialCapacity: DeltaTrackedKeyCount);

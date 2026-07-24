@@ -192,6 +192,57 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
             yield return null;
         }
 
+        [UnityTest]
+        public IEnumerator Runner_ManualPlayRestoresStrictSchemaDefaultsAndInitialObjects()
+        {
+            const string RetryKey = "RetryCount";
+            const string TargetKey = "Target";
+            const int DefaultRetryCount = 3;
+            Runtime.BehaviorTree asset = CreateLongRunningTree();
+            ConfigureStrictSchema(asset, RetryKey, DefaultRetryCount, TargetKey);
+
+            var initialTarget = new GameObject("BehaviorTreeRunner-InitialTarget");
+            var replacementTarget = new GameObject("BehaviorTreeRunner-ReplacementTarget");
+            var runnerObject = new GameObject("BehaviorTreeRunner-StrictSchema");
+            runnerObject.SetActive(false);
+            BTRunnerComponent runner = runnerObject.AddComponent<BTRunnerComponent>();
+            SetField(runner, "behaviorTree", asset);
+            SetField(runner, "_tickMode", TickMode.Manual);
+            SetField(runner, "_startOnAwake", false);
+            SetInitialObject(runner, TargetKey, initialTarget);
+            runnerObject.SetActive(true);
+            yield return null;
+
+            Assert.That(asset.TryGetRuntimeBlackboardSchema(
+                out RuntimeBlackboardSchema schema,
+                out string schemaError), Is.True, schemaError);
+            Assert.That(schema, Is.Not.Null);
+            Assert.That(schema.Count, Is.EqualTo(2));
+
+            runner.Play();
+
+            RuntimeBlackboard blackboard = runner.RuntimeTree.Blackboard;
+            Assert.That(blackboard.Schema, Is.SameAs(schema));
+            Assert.That(blackboard.GetInt(RetryKey), Is.EqualTo(DefaultRetryCount));
+            Assert.That(blackboard.GetObject<GameObject>(TargetKey), Is.SameAs(initialTarget));
+
+            blackboard.SetInt(RetryKey, 99);
+            blackboard.SetObject(TargetKey, replacementTarget);
+            runner.Stop();
+            runner.Play();
+
+            Assert.That(runner.RuntimeTree, Is.Not.Null);
+            Assert.That(runner.RuntimeTree.Blackboard, Is.SameAs(blackboard));
+            Assert.That(blackboard.GetInt(RetryKey), Is.EqualTo(DefaultRetryCount));
+            Assert.That(blackboard.GetObject<GameObject>(TargetKey), Is.SameAs(initialTarget));
+
+            Object.Destroy(runnerObject);
+            Object.Destroy(initialTarget);
+            Object.Destroy(replacementTarget);
+            yield return null;
+            DestroyTree(asset);
+        }
+
         private static IEnumerator VerifyManagedLifecycle(TickMode tickMode)
         {
             Runtime.BehaviorTree asset = CreateLongRunningTree();
@@ -403,6 +454,49 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
             return tree;
         }
 
+        private static void ConfigureStrictSchema(
+            Runtime.BehaviorTree tree,
+            string intKey,
+            int intDefaultValue,
+            string objectKey)
+        {
+            FieldInfo keysField = FindField(tree.GetType(), "_blackboardKeys");
+            var keys = (IList)Activator.CreateInstance(keysField.FieldType);
+            Type keyType = keysField.FieldType.GetGenericArguments()[0];
+
+            object intDefinition = Activator.CreateInstance(keyType, true);
+            SetField(intDefinition, "_name", intKey);
+            SetField(intDefinition, "_valueType", RuntimeBlackboardValueType.Int);
+            SetField(intDefinition, "_syncFlags", RuntimeBlackboardSyncFlags.LocalOnly);
+            SetField(intDefinition, "_hasDefaultValue", true);
+            SetField(intDefinition, "_intDefaultValue", intDefaultValue);
+            keys.Add(intDefinition);
+
+            object objectDefinition = Activator.CreateInstance(keyType, true);
+            SetField(objectDefinition, "_name", objectKey);
+            SetField(objectDefinition, "_valueType", RuntimeBlackboardValueType.Object);
+            SetField(objectDefinition, "_syncFlags", RuntimeBlackboardSyncFlags.LocalOnly);
+            keys.Add(objectDefinition);
+
+            SetField(tree, "_blackboardSchemaEnabled", true);
+            SetField(tree, "_blackboardSchemaFormatVersion", Runtime.BehaviorTree.CurrentBlackboardSchemaFormatVersion);
+            SetField(tree, "_blackboardContractVersion", RuntimeBlackboardSchema.DefaultContractVersion);
+            keysField.SetValue(tree, keys);
+            tree.OnValidate();
+        }
+
+        private static void SetInitialObject(BTRunnerComponent runner, string key, Object value)
+        {
+            FieldInfo initialObjectsField = FindField(typeof(BTRunnerComponent), "_initialObjects");
+            Type entryType = initialObjectsField.FieldType.GetElementType();
+            Array entries = Array.CreateInstance(entryType, 1);
+            object entry = Activator.CreateInstance(entryType, true);
+            SetField(entry, "KeyField", key);
+            SetField(entry, "ValueField", value);
+            entries.SetValue(entry, 0);
+            initialObjectsField.SetValue(runner, entries);
+        }
+
         private static void DestroyTree(Runtime.BehaviorTree tree)
         {
             if (tree == null) return;
@@ -414,11 +508,31 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
 
         private static void SetField(object target, string fieldName, object value)
         {
-            FieldInfo field = typeof(BTRunnerComponent).GetField(
-                fieldName,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+            FieldInfo field = FindField(target.GetType(), fieldName);
             Assert.That(field, Is.Not.Null, $"Missing field {fieldName}.");
             field.SetValue(target, value);
+        }
+
+        private static FieldInfo FindField(Type type, string fieldName)
+        {
+            while (type != null)
+            {
+                FieldInfo field = type.GetField(
+                    fieldName,
+                    BindingFlags.Instance |
+                    BindingFlags.Public |
+                    BindingFlags.NonPublic |
+                    BindingFlags.DeclaredOnly);
+                if (field != null)
+                {
+                    return field;
+                }
+
+                type = type.BaseType;
+            }
+
+            Assert.Fail($"Missing field {fieldName}.");
+            return null;
         }
 
 #if UNITY_EDITOR

@@ -212,14 +212,35 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
     public sealed class RuntimeBlackboardSchema
     {
-        public static readonly RuntimeBlackboardSchema Empty = new RuntimeBlackboardSchema(Array.Empty<RuntimeBlackboardKeyDefinition>());
+        public const int DefaultContractVersion = 1;
+
+        public static readonly RuntimeBlackboardSchema Empty =
+            new RuntimeBlackboardSchema(
+                Array.Empty<RuntimeBlackboardKeyDefinition>(),
+                DefaultContractVersion);
 
         private readonly RuntimeBlackboardKeyDefinition[] _entries;
         private readonly Dictionary<int, int> _indexByHash;
         private readonly int[] _deltaKeys;
 
         public RuntimeBlackboardSchema(RuntimeBlackboardKeyDefinition[] entries)
+            : this(entries, DefaultContractVersion)
         {
+        }
+
+        public RuntimeBlackboardSchema(
+            RuntimeBlackboardKeyDefinition[] entries,
+            int contractVersion)
+        {
+            if (contractVersion < 1)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(contractVersion),
+                    contractVersion,
+                    "Blackboard contract version must be at least 1.");
+            }
+
+            ContractVersion = contractVersion;
             if (entries == null || entries.Length == 0)
             {
                 _entries = Array.Empty<RuntimeBlackboardKeyDefinition>();
@@ -266,6 +287,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 
         public int Count => _entries.Length;
         public int DeltaKeyCount => _deltaKeys.Length;
+        public int ContractVersion { get; }
 
         public RuntimeBlackboardKeyDefinition GetEntry(int index)
         {

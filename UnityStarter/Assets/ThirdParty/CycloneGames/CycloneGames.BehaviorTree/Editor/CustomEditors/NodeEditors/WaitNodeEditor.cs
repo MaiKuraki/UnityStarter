@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using UnityEditor;
@@ -64,6 +65,25 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors.NodeEditors
                     propertyPath == firstExcluded ||
                     propertyPath == secondExcluded ||
                     propertyPath == thirdExcluded)
+                {
+                    continue;
+                }
+
+                EditorGUILayout.PropertyField(iterator, true);
+            }
+        }
+
+        public static void DrawRemainingProperties(
+            SerializedObject serializedObject,
+            ISet<string> excludedProperties)
+        {
+            SerializedProperty iterator = serializedObject.GetIterator();
+            bool enterChildren = true;
+            while (iterator.NextVisible(enterChildren))
+            {
+                enterChildren = false;
+                if (iterator.propertyPath == "m_Script" ||
+                    (excludedProperties != null && excludedProperties.Contains(iterator.propertyPath)))
                 {
                     continue;
                 }

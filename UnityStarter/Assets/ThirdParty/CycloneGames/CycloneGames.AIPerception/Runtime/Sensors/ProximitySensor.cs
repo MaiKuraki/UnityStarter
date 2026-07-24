@@ -1,9 +1,9 @@
 using System;
+using CycloneGames.AIPerception.Runtime.Jobs;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
-using CycloneGames.AIPerception.Runtime.Jobs;
 
 namespace CycloneGames.AIPerception.Runtime
 {
@@ -16,9 +16,10 @@ namespace CycloneGames.AIPerception.Runtime
         public bool FilterByType;
 
         [Header("Memory")]
-        [Tooltip("Seconds to remember a target after it leaves sensor range. 0 disables memory.")]
-        [Range(0f, 60f)]
-        public float MemoryDuration;
+        [Range(0f, 60f)] public float MemoryDuration;
+
+        [Header("Capacity")]
+        public PerceptionSensorCapacity Capacity;
 
         public static ProximitySensorConfig Default => new ProximitySensorConfig
         {
@@ -26,331 +27,474 @@ namespace CycloneGames.AIPerception.Runtime
             UpdateInterval = 0.15f,
             TargetTypeId = PerceptibleTypes.Default,
             FilterByType = false,
-            MemoryDuration = 2f
+            MemoryDuration = 2f,
+            Capacity = PerceptionSensorCapacity.Default
         };
     }
 
-    public class ProximitySensor : ISensor, IDisposable
+    public sealed class ProximitySensor : ISensor, ISensorManagerOwned
     {
         private readonly int _sensorId;
+        private readonly SensorManager _owner;
         private readonly Transform _sensorTransform;
+        private PerceptibleHandle _ignoredTarget;
         private ProximitySensorConfig _config;
-
-        // Detection results (stable for reading)
-        private NativeList<PerceptibleHandle> _detectedHandles;
-        private NativeList<DetectionResult> _detectionResults;
-
-        // Staging buffer for deferred mode
-        private NativeList<PerceptibleHandle> _stagingHandles;
-        private NativeList<DetectionResult> _stagingResults;
-        
-        // Stimulus memory — persists after target leaves sensor range
-        private NativeList<StimulusMemoryEntry> _memoryEntries;
-
-        // Job data (reused each frame)
+        private PerceptionSensorCapacity _capacity;
+        private NativeList<int> _candidateIndices;
         private NativeArray<float> _jobProximity;
-        private NativeArray<PerceptibleData> _jobTargetData;
+        private NativeArray<PerceptibleData> _queryTargets;
+        private SensorResultBuffer _resultBuffer;
         private JobHandle _currentJobHandle;
+        private float3 _queryOrigin;
+        private double _queryTimestamp;
+        private int _queryTargetCount;
+        private int _candidateCursor;
         private bool _jobScheduled;
-        private int _jobTargetCount;
         private bool _hasPendingResults;
-
-        private float _lastUpdateTime;
+        private bool _initialized;
         private bool _disposed;
+        private bool _isEnabled = true;
+        private double _lastUpdateTime;
 
-        public int SensorId => _sensorId;
-        public SensorType Type => SensorType.Proximity;
-        public bool IsEnabled { get; set; } = true;
-        public float UpdateInterval => _config.UpdateInterval;
-        public float LastUpdateTime => _lastUpdateTime;
-        public bool HasDetection => (_detectedHandles.IsCreated && _detectedHandles.Length > 0) || (_memoryEntries.IsCreated && _memoryEntries.Length > 0);
-        public int DetectedCount => (_detectedHandles.IsCreated ? _detectedHandles.Length : 0) + (_memoryEntries.IsCreated ? _memoryEntries.Length : 0);
-
-        public float Radius => _config.Radius;
-        public float3 Position => _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
-
-        public ProximitySensor(Transform sensorTransform, ProximitySensorConfig config)
+        public ProximitySensor(
+            Transform sensorTransform,
+            ProximitySensorConfig config,
+            PerceptibleHandle ignoredTarget = default)
+            : this(sensorTransform, config, SensorManager.Instance, ignoredTarget)
         {
-            _sensorId = SensorManager.Instance?.GenerateSensorId() ?? 0;
-            _sensorTransform = sensorTransform;
-            _config = config;
+        }
 
+        public ProximitySensor(
+            Transform sensorTransform,
+            ProximitySensorConfig config,
+            SensorManager owner,
+            PerceptibleHandle ignoredTarget = default)
+        {
+            _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            _sensorId = _owner.GenerateSensorId();
+            _sensorTransform = sensorTransform;
+            _ignoredTarget = ignoredTarget;
+            _config = config;
             Initialize();
         }
 
+        public int SensorId => _sensorId;
+        public SensorType Type => SensorType.Proximity;
+        public bool IsEnabled
+        {
+            get => _isEnabled;
+            set
+            {
+                _owner.EnsureOwnerThread();
+                ThrowIfDisposed();
+                if (_isEnabled == value)
+                {
+                    return;
+                }
+
+                CompleteAndCommitPending();
+                _isEnabled = value;
+                if (!value)
+                {
+                    _resultBuffer.ClearAll();
+                    LastUpdateStatus = SensorUpdateStatus.Ready;
+                }
+            }
+        }
+        public float UpdateInterval => _config.UpdateInterval;
+        public double LastUpdateTime => _lastUpdateTime;
+        public float Radius => _config.Radius;
+        public float3 Position
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
+            }
+        }
+        public ProximitySensorConfig Config => _config;
+        public SensorUpdateStatus LastUpdateStatus { get; private set; }
+        public bool HasDetection
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer != null && _resultBuffer.HasResults;
+            }
+        }
+
+        public int DetectedCount
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer?.ResultCount ?? 0;
+            }
+        }
+
+        public int MemoryCount
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer?.MemoryCount ?? 0;
+            }
+        }
+        SensorManager ISensorManagerOwned.Owner => _owner;
+        bool ISensorManagerOwned.IsDisposed => _disposed;
+
         public void Initialize()
         {
-            _detectedHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
-            _detectionResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
-            _stagingHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
-            _stagingResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
-            _memoryEntries = new NativeList<StimulusMemoryEntry>(32, Allocator.Persistent);
+            _owner.EnsureOwnerThread();
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(ProximitySensor));
+            }
+
+            if (_initialized)
+            {
+                return;
+            }
+
+            _capacity = _config.Capacity.Normalize();
+            RecreateStorage(in _capacity);
+            _initialized = true;
+            LastUpdateStatus = SensorUpdateStatus.Ready;
+        }
+
+        public void ApplyConfig(in ProximitySensorConfig config)
+        {
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            PerceptionSensorCapacity normalized = config.Capacity.Normalize();
+            if (!_capacity.HasSameLimits(in normalized))
+            {
+                RecreateStorage(in normalized);
+            }
+
+            _config = config;
+        }
+
+        public void SetIgnoredTarget(PerceptibleHandle target)
+        {
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            _ignoredTarget = target;
         }
 
         public void UpdateSensor(float deltaTime)
         {
-            if (_disposed || _sensorTransform == null) return;
-
-            // Complete previous job if any
-            CompleteJob();
-
-            var registry = PerceptibleRegistry.Instance;
-            if (registry == null || registry.IsDisposed)
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            double timestamp = Time.timeAsDouble;
+            if (_sensorTransform == null || !IsConfigurationValid())
             {
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                _lastUpdateTime = Time.time;
+                CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
                 return;
             }
 
-            // RebuildData is called once per frame by SensorManager.Update
-            int targetCount = registry.GetDataCount();
-
-            if (targetCount == 0)
+            PerceptibleRegistry registry = _owner.Registry;
+            if (registry.GetDataCount() == 0)
             {
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                _lastUpdateTime = Time.time;
+                CommitEmpty(timestamp, SensorUpdateStatus.NoTargets);
                 return;
             }
 
-            // Create a spatially filtered copy for job processing
-            _jobTargetData = registry.CreateNativeDataCopyInRange(Position, _config.Radius, Allocator.TempJob);
-            _jobTargetCount = _jobTargetData.Length;
-
-            // Allocate job output
-            if (!_jobProximity.IsCreated || _jobProximity.Length < _jobTargetCount)
+            _queryOrigin = Position;
+            _queryTimestamp = timestamp;
+            float queryRange = _config.Radius + registry.MaximumDetectionRadius;
+            if (!math.isfinite(queryRange))
             {
-                if (_jobProximity.IsCreated) _jobProximity.Dispose();
-                _jobProximity = new NativeArray<float>(_jobTargetCount, Allocator.Persistent);
+                CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
+                return;
             }
 
-            // Schedule Burst job for sphere query
+            if (!registry.CollectCandidateIndices(
+                    _queryOrigin,
+                    queryRange,
+                    ref _candidateIndices,
+                    _capacity.MaximumCandidates))
+            {
+                CommitEmpty(timestamp, SensorUpdateStatus.CandidateCapacityExceeded);
+                return;
+            }
+
+            _queryTargetCount = _candidateIndices.Length;
+            if (_queryTargetCount == 0)
+            {
+                CommitEmpty(timestamp, SensorUpdateStatus.NoTargets);
+                return;
+            }
+
+            EnsureJobCapacity(_queryTargetCount);
+            _queryTargets = registry.NativeData;
             var job = new ProximityQueryJob
             {
-                Targets = _jobTargetData,
-                Origin = Position,
+                Targets = _queryTargets,
+                CandidateIndices = _candidateIndices.AsArray(),
+                Origin = _queryOrigin,
                 Radius = _config.Radius,
                 TargetTypeId = _config.TargetTypeId,
                 FilterByType = _config.FilterByType,
+                IgnoredTarget = _ignoredTarget,
                 Proximity = _jobProximity
             };
 
-            _currentJobHandle = job.Schedule(_jobTargetCount, 64);
+            _currentJobHandle = job.Schedule(_queryTargetCount, 64);
             _jobScheduled = true;
-
-            var manager = SensorManager.Instance;
-            if (manager != null && manager.UseDeferredJobCompletion)
+            _hasPendingResults = true;
+            if (_owner.UseDeferredJobCompletion && _owner.IsRegistered(this))
             {
-                manager.AddToBatch(_currentJobHandle);
-                _hasPendingResults = true;
+                _owner.AddToBatch(_currentJobHandle);
             }
             else
             {
-                _currentJobHandle.Complete();
-                _jobScheduled = false;
-
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _detectedHandles, _detectionResults);
-                MergeMemory();
-
-                if (_jobTargetData.IsCreated)
-                {
-                    _jobTargetData.Dispose();
-                    _jobTargetData = default;
-                }
-                _jobTargetCount = 0;
+                CompleteAndCommitPending();
             }
-
-            _lastUpdateTime = Time.time;
         }
 
         public void ProcessJobResults()
         {
-            if (!_hasPendingResults) return;
-            if (!_jobTargetData.IsCreated || _jobTargetCount == 0)
+            _owner.EnsureOwnerThread();
+            if (!_disposed)
             {
-                _hasPendingResults = false;
+                CompleteAndCommitPending();
+            }
+        }
+
+        private void CompleteAndCommitPending()
+        {
+            if (!_hasPendingResults)
+            {
                 return;
             }
 
             CompleteJob();
-
-            _stagingHandles.Clear();
-            _stagingResults.Clear();
-            ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _stagingHandles, _stagingResults);
-
-            _detectedHandles.Clear();
-            _detectionResults.Clear();
-            for (int i = 0; i < _stagingHandles.Length; i++)
+            _resultBuffer.BeginUpdate();
+            SensorUpdateStatus status = SensorUpdateStatus.Ready;
+            int nextCursor = _candidateCursor;
+            for (int offset = 0; offset < _queryTargetCount; offset++)
             {
-                _detectedHandles.Add(_stagingHandles[i]);
-                _detectionResults.Add(_stagingResults[i]);
-            }
-            MergeMemory();
+                int i = (_candidateCursor + offset) % _queryTargetCount;
+                float proximity = _jobProximity[i];
+                if (proximity < 0f)
+                {
+                    if (status == SensorUpdateStatus.Ready)
+                    {
+                        status = SensorUpdateStatus.CoordinateRangeExceeded;
+                    }
 
-            if (_jobTargetData.IsCreated)
-            {
-                _jobTargetData.Dispose();
-                _jobTargetData = default;
+                    continue;
+                }
+
+                if (proximity < 0.01f)
+                {
+                    continue;
+                }
+
+                PerceptibleData target = _queryTargets[_candidateIndices[i]];
+                if (!PerceptionNumerics.TryGetFiniteDistance(
+                        in _queryOrigin,
+                        in target.Position,
+                        out _,
+                        out float distance))
+                {
+                    status = SensorUpdateStatus.CoordinateRangeExceeded;
+                    continue;
+                }
+
+                if (!_resultBuffer.TryAddLive(new DetectionResult
+                    {
+                        Target = target.ToHandle(),
+                        Distance = distance,
+                        LastKnownPosition = target.Position,
+                        DetectionTime = _queryTimestamp,
+                        Visibility = proximity,
+                        SensorType = SensorType.Proximity,
+                        IsFromMemory = false
+                    }))
+                {
+                    status = SensorUpdateStatus.ResultCapacityExceeded;
+                    nextCursor = i;
+                    break;
+                }
             }
-            _jobTargetCount = 0;
+
+            if (_queryTargetCount > 0)
+            {
+                _candidateCursor = nextCursor % _queryTargetCount;
+            }
+
+            LastUpdateStatus = _resultBuffer.Commit(
+                _queryTimestamp,
+                _config.MemoryDuration,
+                SensorType.Proximity,
+                status);
+            _lastUpdateTime = _queryTimestamp;
+            _queryTargetCount = 0;
+            _queryTargets = default;
             _hasPendingResults = false;
         }
 
-        private void ProcessJobResultsInternal(
-            NativeArray<PerceptibleData> targets,
-            int count,
-            NativeList<PerceptibleHandle> outHandles,
-            NativeList<DetectionResult> outResults)
+        private void CommitEmpty(double timestamp, SensorUpdateStatus status)
         {
-            float3 origin = Position;
-
-            for (int i = 0; i < count; i++)
-            {
-                float proximity = _jobProximity[i];
-                if (proximity < 0.01f) continue;
-
-                var target = targets[i];
-                float dist = math.distance(origin, target.Position);
-
-                outHandles.Add(target.ToHandle());
-                outResults.Add(new DetectionResult
-                {
-                    Target = target.ToHandle(),
-                    Distance = dist,
-                    LastKnownPosition = target.Position,
-                    DetectionTime = Time.time,
-                    Visibility = proximity,
-                    SensorType = (int)SensorType.Proximity
-                });
-            }
+            _resultBuffer.BeginUpdate();
+            LastUpdateStatus = _resultBuffer.Commit(
+                timestamp,
+                _config.MemoryDuration,
+                SensorType.Proximity,
+                status);
+            _lastUpdateTime = timestamp;
         }
 
-        private void MergeMemory()
+        private bool IsConfigurationValid()
         {
-            if (_config.MemoryDuration <= 0f || !_memoryEntries.IsCreated) return;
-
-            float now = Time.time;
-            var refreshed = new NativeArray<bool>(_memoryEntries.Length, Allocator.Temp);
-
-            for (int i = 0; i < _detectionResults.Length; i++)
-            {
-                var dr = _detectionResults[i];
-                int memIdx = FindMemoryIndex(dr.Target);
-
-                if (memIdx >= 0)
-                {
-                    var entry = _memoryEntries[memIdx];
-                    entry.LastDetectedTime = now;
-                    entry.LastKnownPosition = dr.LastKnownPosition;
-                    entry.PeakVisibility = math.max(entry.PeakVisibility, dr.Visibility);
-                    entry.DistanceAtDetection = dr.Distance;
-                    _memoryEntries[memIdx] = entry;
-                    refreshed[memIdx] = true;
-                }
-                else
-                {
-                    _memoryEntries.Add(new StimulusMemoryEntry
-                    {
-                        Target = dr.Target,
-                        LastKnownPosition = dr.LastKnownPosition,
-                        LastDetectedTime = now,
-                        PeakVisibility = dr.Visibility,
-                        SensorType = (int)SensorType.Proximity,
-                        DistanceAtDetection = dr.Distance
-                    });
-                }
-            }
-
-            for (int i = _memoryEntries.Length - 1; i >= 0; i--)
-            {
-                if (i < refreshed.Length && refreshed[i]) continue;
-
-                var entry = _memoryEntries[i];
-                float age = now - entry.LastDetectedTime;
-
-                if (age >= _config.MemoryDuration)
-                {
-                    _memoryEntries.RemoveAtSwapBack(i);
-                    continue;
-                }
-
-                float visibility = entry.PeakVisibility * (1f - age / _config.MemoryDuration);
-                if (visibility <= 0.01f)
-                {
-                    _memoryEntries.RemoveAtSwapBack(i);
-                    continue;
-                }
-
-                var memResult = new DetectionResult
-                {
-                    Target = entry.Target,
-                    Distance = entry.DistanceAtDetection,
-                    LastKnownPosition = entry.LastKnownPosition,
-                    DetectionTime = entry.LastDetectedTime,
-                    Visibility = visibility,
-                    SensorType = (int)SensorType.Proximity,
-                    IsFromMemory = true
-                };
-
-                _detectionResults.Add(memResult);
-                _detectedHandles.Add(entry.Target);
-            }
-
-            if (refreshed.IsCreated) refreshed.Dispose();
+            return math.isfinite(_config.Radius) && _config.Radius >= 0f &&
+                   math.isfinite(_config.UpdateInterval) && _config.UpdateInterval >= 0f &&
+                   math.isfinite(_config.MemoryDuration) && _config.MemoryDuration >= 0f;
         }
 
-        private int FindMemoryIndex(PerceptibleHandle target)
+        private void EnsureJobCapacity(int required)
         {
-            for (int i = 0; i < _memoryEntries.Length; i++)
+            if (_jobProximity.IsCreated && _jobProximity.Length >= required)
             {
-                if (_memoryEntries[i].Target == target) return i;
+                return;
             }
-            return -1;
+
+            int current = _jobProximity.IsCreated ? _jobProximity.Length : 0;
+            int doubled = current <= _capacity.MaximumCandidates / 2
+                ? current * 2
+                : _capacity.MaximumCandidates;
+            int capacity = math.min(_capacity.MaximumCandidates, math.max(required, math.max(1, doubled)));
+            var replacement = new NativeArray<float>(capacity, Allocator.Persistent);
+            if (_jobProximity.IsCreated)
+            {
+                _jobProximity.Dispose();
+            }
+
+            _jobProximity = replacement;
         }
 
-        public int MemoryCount => _memoryEntries.IsCreated ? _memoryEntries.Length : 0;
+        private void RecreateStorage(in PerceptionSensorCapacity capacity)
+        {
+            NativeList<int> candidates = default;
+            NativeArray<float> output = default;
+            SensorResultBuffer resultBuffer = null;
+            try
+            {
+                candidates = new NativeList<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
+                output = new NativeArray<float>(capacity.InitialCandidateCapacity, Allocator.Persistent);
+                resultBuffer = new SensorResultBuffer(in capacity);
+            }
+            catch
+            {
+                if (candidates.IsCreated)
+                {
+                    candidates.Dispose();
+                }
+
+                if (output.IsCreated)
+                {
+                    output.Dispose();
+                }
+
+                resultBuffer?.Dispose();
+                throw;
+            }
+
+            if (_candidateIndices.IsCreated)
+            {
+                _candidateIndices.Dispose();
+            }
+
+            if (_jobProximity.IsCreated)
+            {
+                _jobProximity.Dispose();
+            }
+
+            _resultBuffer?.Dispose();
+            _capacity = capacity;
+            _candidateIndices = candidates;
+            _jobProximity = output;
+            _resultBuffer = resultBuffer;
+            _candidateCursor = 0;
+            LastUpdateStatus = SensorUpdateStatus.Ready;
+        }
 
         private void CompleteJob()
         {
-            if (_jobScheduled)
+            if (!_jobScheduled)
             {
-                _currentJobHandle.Complete();
-                _jobScheduled = false;
+                return;
             }
+
+            _currentJobHandle.Complete();
+            _currentJobHandle = default;
+            _jobScheduled = false;
+        }
+
+        public bool TryGetResult(int index, out DetectionResult result)
+        {
+            _owner.EnsureOwnerThread();
+            if (_resultBuffer != null)
+            {
+                return _resultBuffer.TryGetResult(index, out result);
+            }
+
+            result = default;
+            return false;
+        }
+
+        public DetectionResult GetResult(int index) =>
+            TryGetResult(index, out DetectionResult result) ? result : default;
+
+        public void GetDetectionResults(ref NativeList<DetectionResult> results)
+        {
+            _owner.EnsureOwnerThread();
+            _resultBuffer.CopyResultsTo(ref results);
         }
 
         public void GetDetectedHandles(ref NativeList<PerceptibleHandle> results)
         {
-            for (int i = 0; i < _detectedHandles.Length; i++)
-            {
-                results.Add(_detectedHandles[i]);
-            }
+            _owner.EnsureOwnerThread();
+            _resultBuffer.CopyHandlesTo(ref results);
         }
 
-        public DetectionResult GetResult(int index)
+        private void ThrowIfDisposed()
         {
-            return index >= 0 && index < _detectionResults.Length
-                ? _detectionResults[index]
-                : default;
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(ProximitySensor));
+            }
         }
 
         public void Dispose()
         {
-            if (_disposed) return;
+            _owner.EnsureOwnerThread();
+            if (_disposed)
+            {
+                return;
+            }
+
+            _owner.OnOwnedSensorDisposing(this);
+            CompleteAndCommitPending();
             _disposed = true;
+            LastUpdateStatus = SensorUpdateStatus.Disposed;
+            if (_candidateIndices.IsCreated)
+            {
+                _candidateIndices.Dispose();
+            }
 
-            CompleteJob();
+            if (_jobProximity.IsCreated)
+            {
+                _jobProximity.Dispose();
+            }
 
-            if (_detectedHandles.IsCreated) _detectedHandles.Dispose();
-            if (_detectionResults.IsCreated) _detectionResults.Dispose();
-            if (_stagingHandles.IsCreated) _stagingHandles.Dispose();
-            if (_stagingResults.IsCreated) _stagingResults.Dispose();
-            if (_jobProximity.IsCreated) _jobProximity.Dispose();
-            if (_jobTargetData.IsCreated) _jobTargetData.Dispose();
-            if (_memoryEntries.IsCreated) _memoryEntries.Dispose();
+            _resultBuffer?.Dispose();
+            _resultBuffer = null;
         }
     }
 }

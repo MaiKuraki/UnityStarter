@@ -151,6 +151,66 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             Assert.AreEqual(22, blackboard.GetInt(SecondParentKey));
         }
 
+        [Test]
+        public void ResetToSchemaDefaults_CommitsFinalStateBeforeStableOrderedNotifications()
+        {
+            const int FirstDefaultKey = 10;
+            const int RemovedKey = 15;
+            const int SecondDefaultKey = 20;
+            var schema = new RuntimeBlackboardSchema(
+                new[]
+                {
+                    new RuntimeBlackboardKeyDefinition(
+                        FirstDefaultKey,
+                        "FirstDefault",
+                        RuntimeBlackboardValueType.Int,
+                        RuntimeBlackboardSyncFlags.LocalOnly,
+                        hasDefaultValue: true,
+                        defaultValue: RuntimeBlackboardValue.Int(1)),
+                    new RuntimeBlackboardKeyDefinition(
+                        RemovedKey,
+                        "Removed",
+                        RuntimeBlackboardValueType.Int,
+                        RuntimeBlackboardSyncFlags.LocalOnly,
+                        hasDefaultValue: false,
+                        defaultValue: default),
+                    new RuntimeBlackboardKeyDefinition(
+                        SecondDefaultKey,
+                        "SecondDefault",
+                        RuntimeBlackboardValueType.Bool,
+                        RuntimeBlackboardSyncFlags.LocalOnly,
+                        hasDefaultValue: true,
+                        defaultValue: RuntimeBlackboardValue.Bool(true))
+                });
+            using var blackboard = new RuntimeBlackboard(schema: schema);
+            blackboard.SetInt(FirstDefaultKey, 99);
+            blackboard.SetInt(RemovedKey, 5);
+            blackboard.SetBool(SecondDefaultKey, false);
+            var observedKeys = new List<int>();
+            blackboard.AddGlobalObserver((key, committed) =>
+            {
+                observedKeys.Add(key);
+                Assert.That(committed.GetInt(FirstDefaultKey), Is.EqualTo(1));
+                Assert.That(committed.HasKey(RemovedKey), Is.False);
+                Assert.That(committed.GetBool(SecondDefaultKey), Is.True);
+            });
+
+            blackboard.ResetToSchemaDefaults();
+
+            Assert.That(observedKeys, Is.EqualTo(new[] { FirstDefaultKey, RemovedKey, SecondDefaultKey }));
+            Assert.That(blackboard.GetInt(FirstDefaultKey), Is.EqualTo(1));
+            Assert.That(blackboard.HasKey(RemovedKey), Is.False);
+            Assert.That(blackboard.GetBool(SecondDefaultKey), Is.True);
+
+            ulong firstDefaultStamp = blackboard.GetStamp(FirstDefaultKey);
+            ulong secondDefaultStamp = blackboard.GetStamp(SecondDefaultKey);
+            observedKeys.Clear();
+            blackboard.ResetToSchemaDefaults();
+            Assert.That(observedKeys, Is.Empty);
+            Assert.That(blackboard.GetStamp(FirstDefaultKey), Is.EqualTo(firstDefaultStamp));
+            Assert.That(blackboard.GetStamp(SecondDefaultKey), Is.EqualTo(secondDefaultStamp));
+        }
+
 #if UNITY_EDITOR
         [Test]
         public void DebugEntriesAreCopiedWithoutExposingMutableStorage()

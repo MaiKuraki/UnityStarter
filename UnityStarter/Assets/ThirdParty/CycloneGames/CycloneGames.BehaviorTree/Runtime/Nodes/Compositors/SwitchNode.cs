@@ -1,4 +1,5 @@
 using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Core;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
@@ -6,7 +7,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
     [BTInfo("Conditional", "N-way switch based on a blackboard int variable. Last child is the default branch.")]
     public class SwitchNode : CompositeNode
     {
-        [SerializeField] private string _variableKey = "";
+        [SerializeField, BehaviorTreeBlackboardKey(RuntimeBlackboardValueType.Int)]
+        private string _variableKey = "";
 
         public string VariableKey => _variableKey;
 
