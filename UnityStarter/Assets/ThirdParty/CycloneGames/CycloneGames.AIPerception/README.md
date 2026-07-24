@@ -1,8 +1,8 @@
 # CycloneGames.AIPerception
 
-English | [简体中文](./README.SCH.md)
+[English | 简体中文](README.SCH.md)
 
-AI perception components for sight, hearing, proximity, stimulus memory, distance-based update frequency, and Burst/Jobs query processing.
+CycloneGames.AIPerception is a Unity runtime module for continuous world perception. It registers perceptible targets, captures an immutable world snapshot, runs sight/hearing/proximity prefilters through Burst/Jobs, and exposes live and remembered detections to gameplay code.
 
 ## Table of Contents
 
@@ -18,431 +18,666 @@ AI perception components for sight, hearing, proximity, stimulus memory, distanc
 
 ## Overview
 
-AIPerception answers one question: given a set of sensors and registered perceptible objects in the world, what does this AI agent currently detect? Three sensor types — sight (cone + LOS), hearing (sphere + occlusion), and proximity (radius trigger) — query a 3D spatial grid using Burst-compiled jobs. Results persist in stimulus memory with configurable decay, and distance-based LOD reduces update frequency for distant agents.
+Use this module when Unity agents need continuous senses:
 
-Use this module when AI agents need awareness of their surroundings through configurable senses, and when hundreds or thousands of agents require batched job scheduling.
+- sight within a 3D cone, with optional main-thread Physics line-of-sight checks;
+- hearing from perceptibles marked as continuous sound sources (`IsSoundSource == true`);
+- proximity within a 3D radius;
+- short-lived stimulus memory after direct detection ends;
+- distance-based sensor update throttling (LOD).
 
-### Key Features
+The data model is genre-neutral. A target has a stable integer type, position, detection radius, loudness, sound-source state, and an optional tag. Teams, stealth, threat, faction, damage, and behavior selection remain in product code.
 
-- **Three sensor types**: Sight (cone FOV + LOS raycast), Hearing (sphere + wall occlusion), Proximity (simple radius trigger).
-- **Burst/Jobs** `IJobParallelFor` pre-filtering with SIMD acceleration.
-- **Stimulus memory** with configurable duration and linear visibility decay.
-- **LOD system** with distance-based update frequency scaling.
-- **3D spatial grid** for O(k) range queries instead of O(n) full scans.
-- **Extensible type system** with integer-based classification.
-- **Deferred mode** for batched job completion in `LateUpdate`.
+### Assemblies and dependencies
 
-### Dependencies
+| Assembly | Platform | Responsibility |
+| --- | --- | --- |
+| `CycloneGames.AIPerception` | Runtime | Registry, snapshots, spatial broadphase, sensors, jobs, memory, and Unity components |
+| `CycloneGames.AIPerception.Editor` | Editor | Custom Inspectors, validation, runtime diagnostics, and Scene gizmos |
+| `CycloneGames.AIPerception.Tests.Editor` | Editor tests | Core contract and boundary tests |
 
-- `com.unity.collections` (2.1+)
-- `com.unity.burst` (1.8+)
-- `com.unity.mathematics` (1.3+)
+Runtime dependencies: `Unity.Burst`, `Unity.Collections`, `Unity.Mathematics`.
 
 ## Architecture
 
-```
-PerceptibleComponent ──Register──> PerceptibleRegistry (generational handles)
-                                         │
-                                    RebuildData (once/frame)
-                                         │
-                                   SpatialGrid (3D cell sort)
-                                         │
-AIPerceptionComponent ──creates──> SightSensor ──> SightConeQueryJob [Burst]
-                            │     HearingSensor ──> SphereQueryJob   [Burst]
-                            │     ProximitySensor ──> ProximityQueryJob [Burst]
-                            │           │
-                            │     ProcessJobResults
-                            │           │
-                            │     MergeMemory (stimulus persistence)
-                            │           │
-                            └── Query API <── DetectionResult[] (live + memory)
+```mermaid
+flowchart LR
+    P["IPerceptible / PerceptibleComponent"] -->|register / unregister| R["PerceptibleRegistry"]
+    R -->|capture dynamic values| S["Immutable frame snapshot"]
+    S --> G["SpatialGrid broadphase"]
+    G --> J["Burst sensor prefilter jobs"]
+    J -->|complete| F["Main-thread refinement"]
+    F --> B["Bounded results and stimulus memory"]
+    B --> Q["Gameplay query API"]
+    M["PerceptionManagerComponent"] --> SM["SensorManager"]
+    SM --> R
+    SM --> J
+    SM --> F
+
+    classDef authoring fill:#2f6f9f,color:#fff,stroke:#183d58;
+    classDef runtime fill:#2d7d57,color:#fff,stroke:#17442f;
+    classDef worker fill:#9a6b1f,color:#fff,stroke:#594012;
+    classDef output fill:#7b4d9c,color:#fff,stroke:#432957;
+    class P,M authoring;
+    class R,S,G,SM,F runtime;
+    class J worker;
+    class B,Q output;
 ```
 
-### Key Types
+One manager update:
 
-| Type | Role |
-| --- | --- |
-| `PerceptibleHandle` | Value-type handle (Id + Generation) — no GC, no dangling refs |
-| `PerceptibleData` | Blittable struct for Burst job input |
-| `DetectionResult` | Sensor output: target, distance, position, visibility, `IsFromMemory` |
-| `StimulusMemoryEntry` | Persists after target leaves range; visibility decays linearly |
-| `SensorLODLevel` | Distance threshold + frequency multiplier |
+1. Complete and commit work still pending from the previous deferred update.
+2. Sample every registered `IPerceptible` on the owner thread.
+3. Rebuild the sorted spatial snapshot and native copy only when captured data changed.
+4. Select candidates for sensors whose effective interval elapsed.
+5. Run Burst-compatible prefilters against the immutable native snapshot.
+6. Complete immediately or in `LateUpdate`, depending on scheduling configuration.
+7. Perform Unity Physics refinement on the main thread, then commit live results and memory.
+
+Jobs borrow the registry snapshot and sensor-owned buffers. The manager completes pending jobs before publishing another snapshot or removing a sensor.
 
 ## Quick Start
 
-**Step 1:** Mark detectable objects by adding `PerceptibleComponent`:
+### 1. Add a manager
 
-```csharp
-var perceptible = gameObject.AddComponent<PerceptibleComponent>();
-perceptible.SetTypeId(PerceptibleTypes.Enemy);
-```
+Create a scene object and add `PerceptionManagerComponent`. An instance is created automatically when an `AIPerceptionComponent` initializes, but an explicit manager makes world capacity, spatial cell size, scheduling, and LOD visible.
 
-**Step 2:** Add perception to AI agents with `AIPerceptionComponent`. Configure in Inspector: sight sensor (cone FOV, max distance, LOS), hearing sensor (radius, occlusion), proximity sensor (trigger radius). Each sensor has independent memory duration.
+Keep `Deferred Job Completion` enabled unless gameplay needs results in the same `Update`. Start with a finite `Maximum Perceptibles`. Tune `Spatial Cell Size` from profiling data.
 
-**Step 3:** Query results:
+### 2. Mark targets
+
+Add `PerceptibleComponent` to each detectable object:
 
 ```csharp
 using CycloneGames.AIPerception.Runtime;
 
-public class AIBrain : MonoBehaviour
+PerceptibleComponent target = GetComponent<PerceptibleComponent>();
+target.SetTypeId(PerceptibleTypes.Enemy);
+target.SetDetectionRadius(1.25f);
+target.SetSoundSource(true);
+target.SetLoudness(0.8f);
+```
+
+- assign a stable project-owned `Type ID`;
+- set `Detection Radius` to its world-space detection extent;
+- assign `LOS Point` when the transform origin is unsuitable;
+- enable `Is Sound Source` only for continuous hearing emitters;
+- set `Loudness` to a non-negative hearing range multiplier.
+
+`PerceptibleComponent` registers automatically in `OnEnable`. If finite world capacity rejected that attempt, release capacity and call `TryRegister()` once from a cold-path recovery workflow. Do not retry every frame.
+
+### 3. Add senses to an agent
+
+Add `AIPerceptionComponent` to the AI object. Enable the required senses and configure them in the Inspector. When the same GameObject has `PerceptibleComponent`, its handle is excluded from all built-in sensor queries.
+
+### 4. Consume results
+
+```csharp
+using CycloneGames.AIPerception.Runtime;
+using UnityEngine;
+
+[RequireComponent(typeof(AIPerceptionComponent))]
+public sealed class GuardAwareness : MonoBehaviour
 {
     private AIPerceptionComponent _perception;
 
-    void Start() => _perception = GetComponent<AIPerceptionComponent>();
-
-    void Update()
+    private void Awake()
     {
-        if (_perception.HasSightDetection)
+        _perception = GetComponent<AIPerceptionComponent>();
+    }
+
+    private void Update()
+    {
+        SightSensor sight = _perception.SightSensor;
+        if (sight == null || !sight.TryGetResult(0, out DetectionResult result))
         {
-            var target = _perception.GetClosestSightTarget();
-            Debug.Log($"See: {((PerceptibleComponent)target).name}");
+            return;
         }
 
-        if (_perception.HasProximityDetection)
+        if (result.IsFromMemory)
         {
-            var nearest = _perception.GetClosestProximityTarget();
-            Debug.Log($"Nearby at {nearest.Position}");
+            Investigate(result.LastKnownPosition);
+            return;
         }
+
+        IPerceptible target = PerceptibleRegistry.Instance.Get(result.Target);
+        if (target is PerceptibleComponent component)
+        {
+            Engage(component.gameObject);
+        }
+    }
+
+    private void Investigate(Unity.Mathematics.float3 position)
+    {
+        // Feed the last known position to product-specific navigation or behavior code.
+    }
+
+    private void Engage(GameObject target)
+    {
+        // Product-specific decision and authority remain outside perception.
     }
 }
 ```
 
+Results are ordered by distance, then by runtime handle fields. `TryGetResult` avoids a temporary collection.
+
 ## Core Concepts
 
-### PerceptibleComponent
+### Runtime handles
 
-Makes a GameObject detectable. `[DisallowMultipleComponent]`, implements `IPerceptible`.
+`PerceptibleHandle` contains `RegistryId`, `Id`, and `Generation`:
 
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| Type ID | `int` | 0 | Perceptible category |
-| Tag | `string` | "" | Optional filter tag |
-| Detection Radius | `float` | 1 | Proximity trigger size |
-| Is Detectable | `bool` | true | Toggle detection |
-| LOS Point | `Transform` | null | Line-of-sight origin (falls back to transform) |
-| Is Sound Source | `bool` | false | Mark as audio emitter |
-| Loudness | `float` | 1 | Sound volume (0–10) |
+- valid only in the registry that issued it;
+- slot reuse changes the generation and invalidates old handles;
+- it is a process-local identity — do not persist, save, or send over the network;
+- the two-argument constructor creates an unscoped comparison handle that a registry never resolves.
+
+### Perceptible data
+
+| Member | Meaning |
+| --- | --- |
+| `PerceptibleTypeId` | Stable category used by the exact-type filter |
+| `IsDetectable` | Whether the target enters the current snapshot |
+| `Position` | Center used by broadphase and distance tests |
+| `DetectionRadius` | Non-negative target extent added to sensor range |
+| `Loudness` | Non-negative hearing range multiplier |
+| `IsSoundSource` | Required for built-in hearing |
+| `GetLOSPoint()` | Point used by sight raycasts |
+| `Tag` | Consumer metadata; built-in sensors do not filter by tag |
+
+The registry samples these members once per manager update. Non-finite position, LOS point, radius, or loudness excludes the target from that snapshot.
+
+### Stable type IDs
+
+Persistent or networked contracts use explicitly assigned IDs:
 
 ```csharp
-var handle = perceptible.Handle;    // generational handle
-var pos = perceptible.Position;     // float3 world position
-perceptible.SetLoudness(0.5f);      // dynamic loudness
+public static class GamePerceptibleTypes
+{
+    public const int AlarmEmitter = 1001;
+
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+    private static void Register()
+    {
+        PerceptibleTypes.RegisterType(AlarmEmitter, "AlarmEmitter");
+    }
+}
 ```
 
-### AIPerceptionComponent
+`RegisterType(string)` allocates in process registration order — suitable only for non-persistent, non-networked extensions.
 
-Sensor host for AI agents. `[DisallowMultipleComponent]`.
+### Detection results
 
-| Field | Type | Default |
-| --- | --- | --- |
-| Enable Sight | `bool` | true |
-| Sight Config | `SightSensorConfig` | default |
-| Enable Hearing | `bool` | false |
-| Hearing Config | `HearingSensorConfig` | default |
-| Enable Proximity | `bool` | false |
-| Proximity Config | `ProximitySensorConfig` | default |
+`DetectionResult` contains the target handle, sensor-relative distance, last known position, detection time, `Visibility`, sensor type, and `IsFromMemory`.
+
+`Visibility` is sensor-specific strength: sight uses angular strength, hearing uses audibility after optional attenuation, proximity uses distance intensity. Memory linearly decays from the most recent live detection's visibility.
+
+Read results without a temporary collection:
 
 ```csharp
-bool hasSight = perception.HasSightDetection;
-int sightCount = perception.SightDetectedCount;
-IPerceptible target = perception.GetClosestSightTarget();
-SightSensor sight = perception.SightSensor;
-var result = sight.GetResult(0);
+SightSensor sensor = perception.SightSensor;
+for (int i = 0; sensor != null && i < sensor.DetectedCount; i++)
+{
+    if (sensor.TryGetResult(i, out DetectionResult result))
+    {
+        Consume(result);
+    }
+}
 ```
 
-### PerceptionManagerComponent
-
-Global system driver. Auto-created as `[PerceptionManager]` in `DontDestroyOnLoad`.
-
-| Field | Type | Default | Description |
-| --- | --- | --- | --- |
-| Deferred Job Completion | `bool` | false | Batch jobs in LateUpdate |
-| LOD Reference | `Transform` | null | Distance reference (camera/player) |
-| LOD Levels | `SensorLODLevel[]` | 3 levels | Distance → frequency multiplier |
+Copy methods append to caller-owned storage:
 
 ```csharp
-PerceptionManagerComponent.Instance.UseDeferredJobCompletion = true;
+var results = new Unity.Collections.NativeList<DetectionResult>(
+    sensor.DetectedCount,
+    Unity.Collections.Allocator.Temp);
+try
+{
+    sensor.GetDetectionResults(ref results);
+    // Consume results here.
+}
+finally
+{
+    results.Dispose();
+}
 ```
 
 ## Usage Guide
 
-### Sight Sensor
+### Sight
 
-Cone-shaped visual detection with Burst pre-filter and main-thread LOS raycast.
+Sight uses a Burst cone prefilter followed by optional main-thread `Physics.Raycast`.
 
-| Property | Range | Default | Description |
-| --- | --- | --- | --- |
-| Half Angle | 0–180 deg | 60 | Half of total FOV |
-| Max Distance | 0–200 m | 30 | Detection range |
-| Update Interval | 0–5 s | 0.1 | Seconds between updates |
-| Obstacle Layer | LayerMask | Default | Layers blocking LOS |
-| Use Line of Sight | bool | true | Raycast visibility check |
-| Filter by Type | bool | false | Only specific Type ID |
-| Memory Duration | 0–60 s | 3 | Persist after leaving FOV |
+| Setting | Default | Description |
+| --- | ---: | --- |
+| `HalfAngle` | 60 degrees | Half of total 3D FOV; finite range 0–180 |
+| `MaxDistance` | 30 | Base range; target radius is added |
+| `UpdateInterval` | 0.1 s | Base interval before LOD |
+| `UseLineOfSight` | enabled | Enables 3D Physics refinement |
+| `ObstacleLayer` | default raycast layers | Layers treated as occluders |
+| `MaximumLineOfSightChecksPerUpdate` | 64 | Positive values bound checks; 0 is unlimited |
+| `FilterByType` | disabled | Exact `TargetTypeId` match when enabled |
+| `MemoryDuration` | 3 s | Zero disables memory |
 
-### Hearing Sensor
+Exclude target colliders from `ObstacleLayer` unless they intentionally block sight. When the LOS budget is reached, sight commits already refined results, reports `LineOfSightBudgetExceeded`, and advances its cursor.
 
-Sphere-based audio detection with wall occlusion attenuation.
+### Hearing
 
-| Property | Range | Default | Description |
-| --- | --- | --- | --- |
-| Radius | 0–100 m | 15 | Detection sphere |
-| Update Interval | 0–5 s | 0.2 | Seconds between updates |
-| Use Occlusion | bool | true | Wall attenuation |
-| Occlusion Layer | LayerMask | Default | Layers blocking sound |
-| Occlusion Attenuation | 0–1 | 0.5 | Volume through walls |
-| Memory Duration | 0–60 s | 5 | Persist after sound fades |
+Hearing accepts only `IsSoundSource == true` targets. Effective range:
 
-### Proximity Sensor
-
-Simple spherical trigger — no LOS, no occlusion.
-
-| Property | Range | Default | Description |
-| --- | --- | --- | --- |
-| Radius | 0–50 m | 5 | Trigger sphere |
-| Update Interval | 0–5 s | 0.15 | Seconds between updates |
-| Memory Duration | 0–60 s | 2 | Persist after leaving range |
-
-### Stimulus Memory
-
-When a target leaves sensor range, it is not immediately forgotten. Entries persist with linearly decaying visibility.
-
+```text
+(sensor Radius x target Loudness) + target DetectionRadius
 ```
-Detection → MemoryEntry (PeakVisibility, LastDetectedTime)
-              │
-              ├── Re-detected → refresh time, update peak
-              │
-              └── Not detected → age increases
-                      │
-                      ├── age < MemoryDuration → emit as IsFromMemory result
-                      └── age >= MemoryDuration → RemoveAtSwapBack
+
+| Setting | Default | Description |
+| --- | ---: | --- |
+| `Radius` | 15 | Base continuous-emission range |
+| `UpdateInterval` | 0.2 s | Base interval before LOD |
+| `UseOcclusion` | enabled | Enables main-thread `Physics.Linecast` |
+| `OcclusionLayer` | default raycast layers | Layers treated as sound blockers |
+| `OcclusionAttenuation` | 0.5 | Finite multiplier in 0–1 |
+| `MaximumOcclusionChecksPerUpdate` | 64 | Positive values bound linecasts; 0 is unlimited |
+| `FilterByType` | disabled | Optional exact type filter |
+| `MemoryDuration` | 5 s | Zero disables memory |
+
+Hearing does not inspect `AudioSource`, mixer state, clips, volume curves, or one-shot events. `Loudness == 0` and `DetectionRadius == 0` produce no result, including at the sensor origin.
+
+### Proximity
+
+Proximity performs a Burst sphere test without Physics occlusion:
+
+```text
+effective range = sensor Radius + target DetectionRadius
 ```
+
+| Setting | Default | Description |
+| --- | ---: | --- |
+| `Radius` | 5 | Base proximity range |
+| `UpdateInterval` | 0.15 s | Base interval before LOD |
+| `FilterByType` | disabled | Optional exact type filter |
+| `MemoryDuration` | 2 s | Zero disables memory |
+
+Zero effective radius returns no detection, including at the same position.
+
+### Stimulus memory
+
+Each built-in sensor owns independent bounded memory:
+
+1. A live detection creates or refreshes one entry per handle.
+2. A refreshed entry is emitted only as live output, never as a duplicate memory result.
+3. A missed but unexpired entry is emitted with `IsFromMemory == true`.
+4. Visibility decays linearly with age.
+5. Entries are removed at the configured duration or when decayed visibility reaches the internal 0.01 threshold.
+6. At capacity, the oldest entry is evicted.
+
+Memory uses `Time.timeAsDouble` and follows Unity game time. A refresh replaces the stored position, timestamp, distance, and visibility with the latest live detection.
+
+### Result iteration patterns
+
+**Index-based (no GC):**
 
 ```csharp
-sightConfig.MemoryDuration = 3f;    // Remember what you saw for 3s
-hearingConfig.MemoryDuration = 5f;  // Remember sounds for 5s
-
-for (int i = 0; i < perception.SightSensor.DetectedCount; i++)
+SightSensor sensor = perception.SightSensor;
+for (int i = 0; sensor != null && i < sensor.DetectedCount; i++)
 {
-    var r = perception.SightSensor.GetResult(i);
-    if (r.IsFromMemory)
-        Debug.Log($"Remembered: {r.LastKnownPosition}, vis={r.Visibility:F2}");
-}
-```
-
-Long durations (5–10s) create hunting AI; short durations (1–2s) create reactive AI.
-
-### Type System
-
-Integer-based extensible classification:
-
-| ID | Constant | Description |
-| --- | --- | --- |
-| 0 | `PerceptibleTypes.Default` | Unspecified |
-| 1 | `PerceptibleTypes.Player` | Player characters |
-| 2 | `PerceptibleTypes.Enemy` | Hostile NPCs |
-| 3 | `PerceptibleTypes.Ally` | Friendly NPCs |
-| 4 | `PerceptibleTypes.Neutral` | Neutral entities |
-| 5 | `PerceptibleTypes.Interactable` | Interactive objects |
-| 6 | `PerceptibleTypes.SoundSource` | Audio emitters |
-
-```csharp
-public static class MyTypes
-{
-    public static int Treasure;
-    public static int Trap;
-
-    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-    static void Init()
+    if (sensor.TryGetResult(i, out DetectionResult result))
     {
-        Treasure = PerceptibleTypes.RegisterType("Treasure");
-        Trap = PerceptibleTypes.RegisterType("Trap");
+        // Consume result.
     }
 }
+```
 
-sightConfig.FilterByType = true;
-sightConfig.TargetTypeId = PerceptibleTypes.Enemy;
+**Bulk copy:**
+
+```csharp
+var results = new NativeList<DetectionResult>(128, Allocator.Temp);
+try
+{
+    sensor.GetDetectionResults(ref results);
+    foreach (DetectionResult result in results) { /* ... */ }
+}
+finally { results.Dispose(); }
+```
+
+**Handle-only (lightweight):**
+
+```csharp
+var handles = new NativeList<PerceptibleHandle>(64, Allocator.Temp);
+try
+{
+    sensor.GetDetectedHandles(ref handles);
+    foreach (PerceptibleHandle handle in handles)
+    {
+        IPerceptible target = PerceptibleRegistry.Instance.Get(handle);
+        // ...
+    }
+}
+finally { handles.Dispose(); }
 ```
 
 ## Advanced Topics
 
-### Spatial Partitioning
+### Runtime reconfiguration
 
-All sensors use a 3D uniform grid (20m cell size default). `RebuildData` sorts `PerceptibleData[]` by cell key; queries iterate overlapping cells and copy contiguous slices. The grid is fully 3D (X/Y/Z), handling multi-story buildings and flying units.
-
-### Job Scheduling
-
-**Immediate mode** (default): Jobs complete within `Update()`, results available immediately.
-
-**Deferred mode**: Jobs are batched and completed in `LateUpdate()`.
-
-```
-Update():     schedule jobs → previous frame results visible
-LateUpdate(): complete all → atomic swap → new results visible
-```
+Sensor behavior can be changed at runtime:
 
 ```csharp
-PerceptionManagerComponent.Instance.UseDeferredJobCompletion = true;
-```
-
-### LOD System
-
-```
-Sensor position → distance to LOD Reference → LOD multiplier → effective interval
-
-Default levels:
-  0–30m:   1.00x (full frequency)
-  30–80m:  0.50x (half frequency)
-  80–200m: 0.10x (minimal frequency)
-```
-
-```csharp
-SensorManager.Instance.ConfigureLOD(
-    Camera.main.transform,
-    new[] {
-        new SensorLODLevel { Distance = 30f, FrequencyMultiplier = 1.0f },
-        new SensorLODLevel { Distance = 100f, FrequencyMultiplier = 0.25f },
-    }
-);
-```
-
-### Extending the System
-
-```csharp
-// Custom perceptible
-public class WeaponPerceptible : PerceptibleComponent
+SightSensor sight = perception.SightSensor;
+if (sight != null)
 {
-    [SerializeField] private int _dangerLevel;
-    public int DangerLevel => _dangerLevel;
+    SightSensorConfig config = sight.Config;
+    config.MaxDistance = 45f;
+    config.MemoryDuration = 1.5f;
+    sight.ApplyConfig(in config);
 }
+```
 
-// Custom AI perception
-public class AdvancedPerception : AIPerceptionComponent
+`AIPerceptionComponent.ApplyAuthoringConfiguration` is a cold-path rebuild. It drains, unregisters, disposes, and recreates component-owned sensors.
+
+### World capacity
+
+`PerceptionManagerComponent.Maximum Perceptibles` configures the registry hard limit:
+
+- a positive value rejects registrations after exhaustion;
+- `0` permits safe-point array growth without a module-level hard limit;
+- a limit cannot be lowered below the active count.
+
+### Per-sensor capacity
+
+Each sensor config embeds `PerceptionSensorCapacity`:
+
+| Field | Default | Behavior |
+| --- | ---: | --- |
+| `InitialCandidateCapacity` | 64 | Initial persistent broadphase-index storage |
+| `MaximumCandidates` | 16384 | Hard candidates per query |
+| `InitialResultCapacity` | 32 | Initial persistent result storage |
+| `MaximumResults` | 1024 | Hard live-plus-memory result count |
+| `InitialMemoryCapacity` | 32 | Initial persistent memory storage |
+| `MaximumMemoryEntries` | 1024 | Hard remembered-target count |
+
+Capacity failure is explicit:
+
+- `CandidateCapacityExceeded`: rejects and clears the current live candidate query;
+- `ResultCapacityExceeded`: prevents additional live or remembered output;
+- `LineOfSightBudgetExceeded`: partial sight refinement;
+- `OcclusionBudgetExceeded`: partial hearing refinement.
+
+Record these states in development telemetry. Do not treat them as silent normal truncation.
+
+### LOD frequency
+
+`SensorLODLevel.FrequencyMultiplier` scales update frequency:
+
+```text
+effective interval = base UpdateInterval / FrequencyMultiplier
+```
+
+| Distance from reference | Default multiplier | Interval scale |
+| --- | ---: | ---: |
+| up to 30 | 1.00 | 1x |
+| up to 80 | 0.50 | 2x |
+| up to 200 and beyond | 0.25 | 4x |
+
+Distances must be finite, positive, and strictly increasing. Multipliers must be in `(0, 1]`. A null reference or empty levels disables LOD.
+
+### Lifecycle and ownership
+
+| Object | Owner | Shutdown rule |
+| --- | --- | --- |
+| `PerceptibleComponent` registration | Enabled component | Unregisters in `OnDisable` |
+| Built-in component sensors | `AIPerceptionComponent` | Unregisters and disposes on disable/rebuild |
+| Directly constructed sensor | Constructing integration | Unregister, then `Dispose` |
+| Sensor buffers and jobs | Sensor | Complete pending work before releasing buffers |
+| Registry snapshot/native storage | `PerceptibleRegistry` | Dispose during world shutdown/reset |
+| Sensor scheduling | The `SensorManager` supplied at construction | Dispose before its registry |
+
+Direct ownership example:
+
+```csharp
+public sealed class OwnedSightSense : MonoBehaviour
 {
-    [SerializeField] private float _alertLevel;
+    private SensorManager _manager;
+    private SightSensor _sensor;
 
-    protected override void Update()
+    private void OnEnable()
     {
-        base.Update();
-        _alertLevel = HasSightDetection
-            ? Mathf.Min(_alertLevel + Time.deltaTime, 1f)
-            : Mathf.Max(_alertLevel - Time.deltaTime * 0.5f, 0f);
+        _ = PerceptionManagerComponent.Instance;
+        _manager = SensorManager.Instance;
+        PerceptibleComponent self = GetComponent<PerceptibleComponent>();
+        PerceptibleHandle ignored = self != null
+            ? self.Handle
+            : PerceptibleHandle.Invalid;
+
+        SightSensorConfig config = SightSensorConfig.Default;
+        config.UseLineOfSight = false;
+        _sensor = new SightSensor(transform, config, _manager, ignored);
+        _manager.Register(_sensor);
+    }
+
+    private void OnDisable()
+    {
+        if (_sensor == null)
+        {
+            return;
+        }
+
+        if (_manager != null && !_manager.IsDisposed)
+        {
+            _manager.Unregister(_sensor);
+        }
+
+        _sensor.Dispose();
+        _sensor = null;
+        _manager = null;
     }
 }
 ```
 
-Implement `ISensor` and `IDisposable`, register via `SensorManager.Instance.Register()` for custom sensors.
+All three built-in sensor families expose the same explicit-owner overload: `(Transform, Config, SensorManager owner, PerceptibleHandle ignoredTarget = default)`.
 
-### Editor Tools
+### Thread affinity
 
-- `Tools > CycloneGames > AI Perception` — global debug overlay toggle and gizmo commands.
-- Custom Inspectors for `AIPerceptionComponent`, `PerceptibleComponent`, and `PerceptionManagerComponent`.
-- Runtime debug overlay: in-game GUI showing live detections and memory entries with live markers (`>`, `~`, `*`) and memory markers (`<`, `~M`, `.M` with `[mem]` suffix).
-- "Always Show Gizmos" — displays sensor wireframes for all AIs without individual selection.
+`PerceptibleRegistry` and `SensorManager` capture an owner managed-thread ID and reject mutating calls from another thread. Registration, unregistration, capture, configuration, result commit, Physics checks, and disposal belong to that owner thread.
+
+Worker jobs read immutable native snapshots and write sensor-owned arrays. They do not access `Transform`, `GameObject`, managed perceptibles, or Unity Physics.
+
+### Immediate and deferred completion
+
+- Immediate mode completes a sensor inside `UpdateSensor`; results are available when it returns.
+- Deferred mode schedules eligible sensors in manager `Update` and completes/commits them in `LateUpdate`.
+- Switching deferred mode off first completes pending work.
+- Removing or disposing a sensor drains its pending job.
+
+### Extension patterns
+
+`PerceptibleComponent`, `AIPerceptionComponent`, and `PerceptionManagerComponent` are sealed adapters. Extend through composition:
+
+- place product behavior beside `AIPerceptionComponent`;
+- implement `IPerceptible` for another data source;
+- implement `ISensor` for a product-specific sense;
+- register direct sensors with `SensorManager`;
+- keep Unity object and Physics access in adapter/refinement boundaries.
+
+An `ISensor` implementation must define ownership, bounded capacity, update status, scheduling, result visibility, disposal, and thread affinity. The manager does not supply those policies automatically.
+
+Custom sensors must not reentrantly register or unregister sensors from `UpdateSensor` or `ProcessJobResults`. Queue collection changes and apply them at an owner-thread safe point outside manager iteration.
+
+### Networking bridge
+
+Runtime handles are never network identities. The optional sibling module `CycloneGames.AIPerception.Networking` integrates with `CycloneGames.Networking` through stable network target identities, protocol versions, authority policy, and observer filtering. See its [documentation](../CycloneGames.AIPerception.Networking/README.md).
 
 ## Common Scenarios
 
-### Guard with Sight and Hearing
+### Detecting the closest target
 
 ```csharp
-perception.EnableSight = true;
-perception.EnableHearing = true;
-perception.SightConfig.MaxDistance = 20f;
-perception.SightConfig.MemoryDuration = 3f;
-perception.HearingConfig.Radius = 10f;
-perception.HearingConfig.MemoryDuration = 5f;
-
-void Update()
+SightSensor sight = perception.SightSensor;
+if (sight != null && sight.HasDetection)
 {
-    if (HasSightDetection)
-        Chase(GetClosestSightTarget());
-    else if (perception.SightSensor.MemoryCount > 0)
-        Investigate(perception.SightSensor.GetResult(0).LastKnownPosition);
+    // Results are pre-sorted by distance.
+    if (sight.TryGetResult(0, out DetectionResult closest))
+    {
+        IPerceptible target = PerceptibleRegistry.Instance.Get(closest.Target);
+        if (target is PerceptibleComponent component)
+        {
+            // Use component.gameObject for navigation, combat, etc.
+        }
+    }
 }
 ```
 
-### Proximity Warning System
+### Detecting all targets with a type filter
 
 ```csharp
-perception.EnableProximity = true;
-perception.ProximityConfig.Radius = 3f;
-perception.ProximityConfig.MemoryDuration = 0f; // no memory
-
-void Update()
+SightSensor sight = perception.SightSensor;
+for (int i = 0; sight != null && i < sight.DetectedCount; i++)
 {
-    if (HasProximityDetection)
-        OnNearbyThreat(GetClosestProximityTarget());
+    if (!sight.TryGetResult(i, out DetectionResult result))
+    {
+        continue;
+    }
+
+    IPerceptible target = PerceptibleRegistry.Instance.Get(result.Target);
+    if (target != null && target.PerceptibleTypeId == PerceptibleTypes.Enemy)
+    {
+        // Process enemy target.
+    }
 }
 ```
 
-### Type-Filtered Enemy Detection
+### Handling memory-only targets
 
 ```csharp
-perception.SightConfig.FilterByType = true;
-perception.SightConfig.TargetTypeId = PerceptibleTypes.Enemy;
-perception.SightConfig.UseLineOfSight = true;
+for (int i = 0; i < sight.DetectedCount; i++)
+{
+    if (!sight.TryGetResult(i, out DetectionResult result))
+    {
+        continue;
+    }
+
+    if (result.IsFromMemory)
+    {
+        // Target is no longer directly detected.
+        // Use result.LastKnownPosition and result.Visibility.
+        AIInvestigate(result.LastKnownPosition, result.Visibility);
+    }
+    else
+    {
+        // Target is currently detected. Full data available.
+        IPerceptible target = PerceptibleRegistry.Instance.Get(result.Target);
+        AIEngage(target);
+    }
+}
+```
+
+### Dynamically changing sensor configuration
+
+```csharp
+void OnEnterAlertMode(AIPerceptionComponent perception)
+{
+    SightSensor sight = perception.SightSensor;
+    if (sight == null) return;
+
+    var config = sight.Config;
+    config.MaxDistance = 60f;
+    config.UpdateInterval = 0.05f;
+    config.HalfAngle = 90f;
+    sight.ApplyConfig(in config);
+}
+
+void OnExitAlertMode(AIPerceptionComponent perception)
+{
+    SightSensor sight = perception.SightSensor;
+    if (sight == null) return;
+
+    var config = sight.Config;
+    config.MaxDistance = 30f;
+    config.UpdateInterval = 0.1f;
+    config.HalfAngle = 60f;
+    sight.ApplyConfig(in config);
+}
 ```
 
 ## Performance and Memory
 
-### Tuning Checklist
+### Cost factors
 
-1. **Update Interval**: Choose from gameplay response requirements, then measure.
-2. **Type Filtering**: Only scan relevant types.
-3. **Disable LOS**: When walls aren't relevant, skip raycasts.
-4. **Enable LOD**: Reduce distant sensor frequency when stale results are acceptable.
-5. **Deferred Mode**: Compare batched completion with immediate result visibility.
-6. **Memory Duration = 0**: Disable memory for sensors that don't need it.
+| Variable | Dominant cost |
+| --- | --- |
+| N | All registered perceptibles sampled per manager update |
+| C | Broadphase candidates processed by one sensor job |
+| R | Main-thread sight LOS or hearing occlusion checks |
+| M | Memory entries processed by one sensor |
+| S | Sensors whose effective interval expires in one frame |
 
-### Capacity
+Runtime characteristics:
 
-```csharp
-PerceptibleRegistry.Instance.SetMaxCapacity(32768); // 0 = unlimited growth
-```
+- managed/native arrays, candidate lists, result lists, memory lists, and lookup storage are reused after reaching required capacity;
+- registration growth, first use, capacity growth, configuration rebuild, and spatial dictionary growth are allocation points;
+- snapshot capture is O(N) even when captured values do not change;
+- query bounds include maximum relevant target radius or loudness before per-target final tests;
+- a query spanning more than the grid cell-visit safety threshold falls back to a linear snapshot scan;
+- sight and hearing Physics refinement remains on the main thread;
+- committed output is sorted for deterministic distance-first consumption.
 
-Registry capacity is a memory and failure-policy setting. A finite maximum rejects registrations after exhaustion; 0 allows growth and requires product-owned memory monitoring.
+### Numerical limits
 
-### PerceptibleRegistry API
+Finite inputs first use a float fast path. If a distance square overflows while the final distance is still representable, the guarded path recomputes in double, then returns a finite float result. When the true offset exceeds `float.MaxValue`, jobs write an internal `-1` sentinel; built-in sensors map it to `CoordinateRangeExceeded` (9), omit that target, and do not issue a Physics query.
 
-```csharp
-var r = PerceptibleRegistry.Instance;
-PerceptibleHandle h = r.Register(perceptible);  // O(1)
-r.Unregister(h);                                  // O(1)
-IPerceptible p = r.Get(h);                       // O(1)
-bool valid = r.IsValid(h);                       // O(1)
-r.SetMaxCapacity(16384);
-```
+Practical Unity Physics precision degrades far below `float.MaxValue`. Large-world products should keep active simulation near a floating origin or partition the world.
 
-### SensorManager API
+### Tuning order
 
-```csharp
-var m = SensorManager.Instance;
-m.Register(sensor);
-m.Unregister(sensor);
-m.ConfigureLOD(referenceTransform, lodLevels);
-```
+1. Define gameplay latency per sense.
+2. Set finite world and sensor capacities from peak distributions plus an explicit margin.
+3. Disable unused senses.
+4. Increase intervals where stale data is acceptable.
+5. Configure and verify an authoritative LOD reference.
+6. Bound sight LOS and hearing occlusion checks with positive budgets.
+7. Restrict obstacle and occlusion masks.
+8. Set memory duration to zero when persistence is unnecessary.
+9. Tune cell size from measured density and ranges.
+10. Compare immediate and deferred scheduling in the target Player.
 
-### Platform
+### Editor workflow
 
-The Runtime assembly uses Unity Burst, Collections, Mathematics, and Jobs. Verify package support, worker availability, Burst compilation, and memory limits in a Player build for every target. Do not assume WebGL worker behavior or console Burst support from Editor execution.
+Custom Inspectors provided for `PerceptibleComponent`, `AIPerceptionComponent`, and `PerceptionManagerComponent` use `SerializedObject`/`SerializedProperty`, support multi-object editing, preserve Undo and Prefab overrides, and lock authoring in Play Mode.
+
+During Play Mode, use `Tools > CycloneGames > AI Perception > Show All Runtime Gizmos (Session)`. The toggle is session-scoped and resets on exit.
+
+### Platform notes
+
+| Target family | Required validation |
+| --- | --- |
+| Windows, Linux, macOS | Player build, Burst compilation, worker scheduling, Physics masks, shutdown, and long-run memory |
+| iOS, Android | IL2CPP/AOT build, device thermal profile, worker count, native memory, pause/resume, and reload |
+| WebGL | Backend/package compatibility, actual Job execution model, memory ceiling, latency, and deferred behavior |
+| Dedicated Server | Headless lifecycle, 3D Physics, authority-owned LOD, and no camera assumptions |
+| Consoles | Licensed SDK build, Burst/Jobs support, memory limits, suspend/resume, and certification constraints |
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
+| Status | Meaning | Action |
 | --- | --- | --- |
-| Detection not working | Perceptible not enabled or sensor off | Check `Is Detectable` and sensor toggle in Inspector; verify range, FOV, LOS |
-| "LOS Blocked" when target is visible | Obstacle layer includes target's layer | Restrict mask to environment layers (walls, floors) |
-| Memory entries not appearing | `MemoryDuration` is 0 | Set `MemoryDuration > 0` on the sensor config |
-| Inspector labels blank | Editor font issue | Use default Editor font |
-| Registry capacity exceeded | Max capacity reached | Call `SetMaxCapacity(32768)` at startup or set to 0 for unlimited |
-| High CPU on many agents | No LOD configured | Enable LOD with distance thresholds on PerceptionManager |
-| Burst jobs not compiling | Missing Burst/Collections/Mathematics | Install required packages and verify Burst is enabled |
+| `Uninitialized` | No usable sensor state | Check construction and lifecycle |
+| `Ready` | Latest query and commit completed | No action |
+| `NoTargets` | No live candidates | Check registration, detectability, range, and filter |
+| `CandidateCapacityExceeded` | Candidate hard limit rejected the live query | Increase measured budget or reduce density/range |
+| `ResultCapacityExceeded` | Result hard limit truncated live or remembered output, including memory-only updates | Increase measured budget or narrow query/memory |
+| `LineOfSightBudgetExceeded` | Sight returned a partial refined set | Raise positive budget or reduce raycast work |
+| `OcclusionBudgetExceeded` | Hearing returned a partial occlusion-refined set | Raise a measured positive budget or reduce linecasts |
+| `CoordinateRangeExceeded` (9) | A target distance cannot be represented by the float result/Physics contract | Omit the target and move the active world closer to a floating origin |
+| `InvalidConfiguration` | Transform or finite/range rule is invalid | Correct config and lifetime |
+| `Disposed` | Sensor buffers are no longer usable | Stop querying or construct a new sensor |
 
-## Validation
-
-```text
-CycloneGames.AIPerception.Tests.Editor            (EditMode)
-CycloneGames.AIPerception.Networking.Tests.Editor (EditMode)
-```
-
-Compile without errors, test Play Mode, and run Player builds on each target platform. Verify Burst compilation, memory limits, and IL2CPP/AOT compatibility.
+| Symptom | Check |
+| --- | --- |
+| Target is never detected | Enabled state, `IsDetectable`, finite data, exact type filter, and range |
+| Hearing ignores a target | `IsSoundSource`, loudness, target radius, type filter, and occlusion mask |
+| Sight is blocked by its target | Remove target layers from `ObstacleLayer` or choose another LOS point |
+| Results appear one phase later | Deferred mode commits in `LateUpdate`; adjust order or use immediate mode |
+| Closest target is null while memory exists | Handle no longer resolves; consume `LastKnownPosition` |
+| Capacity status appears | Inspect measured peak distribution; do not ignore it |
+| LOD has no effect | Assign reference, increasing distances, and multipliers in `(0, 1]` |
+| Runtime Inspector is locked | Use sensor APIs or a cold-path rebuild |
+| Global gizmos disappear | Session state resets on Play Mode exit |

@@ -2,255 +2,302 @@
 
 [English](./README.md) | 简体中文
 
-`CycloneGames.AIPerception.Networking` 将 `CycloneGames.AIPerception` 桥接到 `CycloneGames.Networking`。它提供协议元数据、detection event 和 snapshot DTO、memory snapshot DTO、full-state request DTO、authority transfer DTO、profile 配置和 runtime sync bridge。基础 AIPerception 包不依赖 `CycloneGames.Networking`；只有当 AI perception 数据需要跨 Cyclone 网络边界传递时才需要本桥接包。
+`CycloneGames.AIPerception.Networking` 是 `CycloneGames.AIPerception` 到 `CycloneGames.Networking` 的桥接模块。它把检测结果转换为稳定网络标识，定义固定 v1 wire schema，校验不可信 payload，应用 server-authority 规则，并适配感知相关性到共享 interest evaluator。
 
 ## 目录
 
 - [概述](#概述)
 - [架构](#架构)
 - [快速上手](#快速上手)
-- [核心概念](#核心概念)
-- [使用指南](#使用指南)
-- [进阶主题](#进阶主题)
-- [常见场景](#常见场景)
-- [性能与内存](#性能与内存)
+- [核心规则](#核心规则)
+- [协议参考](#协议参考)
 - [故障排查](#故障排查)
 
 ## 概述
 
-本桥接 adapter 将 perception runtime 的 `DetectionResult` 值转换为协议定义的网络消息。它通过 `IAIPerceptionNetworkTargetResolver` 将 `PerceptibleHandle` 映射为稳定 network id，支持事件、快照和记忆快照复制，并按 `AIPerceptionNetworkProfile` 校验 payload。
+本模块连接本地感知到网络。游戏的 composition root 显式持有 transport、endpoint、serializer 和 session，并连接到本 bridge。
 
-### 主要特性
+| Assembly | 职责 | 引用 |
+| --- | --- | --- |
+| `CycloneGames.AIPerception.Networking.Core` | 协议 manifest、不可变 DTO header、profile fingerprint、校验、canonical hash、固定小端 codec | `CycloneGames.Networking.Core`、`CycloneGames.Hash.Core` |
+| `CycloneGames.AIPerception.Networking.Runtime` | `DetectionResult` 映射、有界 canonical selection、authority 校验、共享 interest evaluator adapter | Core、`CycloneGames.AIPerception`、`CycloneGames.Networking.Core`、`Unity.Mathematics` |
+| `CycloneGames.AIPerception.Networking.Tests.Editor` | golden bytes、round-trip、畸形输入、authority、interest 和 allocation 契约 | Core 和 Runtime |
 
-- **Protocol manifest** 使用 StableHash contract identity 和消息 ID `15000-15999`。
-- **Detection event 消息**支持逐目标推送通知。
-- **Snapshot 消息**支持批量检测和记忆状态复制。
-- **Full-state request 和 authority transfer** 消息支持。
-- **Target resolver contract** 用于将感知句柄映射为 network id。
-- **纯 C# Core 程序集**，不依赖 UnityEngine。
+Core assembly 不依赖 `UnityEngine`。Runtime assembly 桥接本地感知，不在 wire 上暴露 Unity object identity。
 
 ## 架构
 
-| 程序集 | 职责 | Unity 依赖 |
-| --- | --- | --- |
-| `CycloneGames.AIPerception.Networking.Core` | Protocol manifest、message DTO、profile 配置、stable hash helper | 不引用 UnityEngine |
-| `CycloneGames.AIPerception.Networking.Runtime` | Sync bridge、target resolver contract、authority resolver、observer resolver | 不引用 UnityEngine；通过 AIPerception 使用 `Unity.Mathematics` |
-| `CycloneGames.AIPerception.Networking.Tests.Editor` | EditMode 覆盖 | 不引用 UnityEngine |
-
-全部 assembly 使用 `autoReferenced: false`。Consumer asmdef 必须显式引用 Core，使用 bridge 时还需引用 Runtime。
-
 ```mermaid
-graph TD
-    Detection["DetectionResult"]
-    TargetResolver["IAIPerceptionNetworkTargetResolver"]
-    Entry["AIPerceptionDetectionEntry"]
-    Bridge["AIPerceptionNetworkSyncBridge"]
-    Event["AIPerceptionDetectionEventMessage"]
-    Snapshot["AIPerceptionDetectionSnapshotMessage"]
-    Request["AIPerceptionFullStateRequestMessage"]
-    Transfer["AIPerceptionAuthorityTransferMessage"]
-    Endpoint["INetworkMessageEndpoint"]
+flowchart LR
+    P["AIPerception DetectionResults"] --> B["SyncBridge"]
+    B -->|解析句柄| R["TargetResolver"]
+    R --> N["网络 entity ID"]
+    N --> E["Canonical entries"]
+    E --> C["WireCodec"]
+    C --> W["Wire bytes"]
+    W --> EP["Network endpoint"]
+    EP -->|校验| A["Authority resolver"]
+    A -->|应用| S["远程状态"]
+    I["InterestEvaluator"] -->|过滤| O["Observer selection"]
 
-    Detection --> Bridge
-    TargetResolver --> Bridge
-    Bridge --> Entry
-    Entry --> Event
-    Entry --> Snapshot
-    Bridge --> Request
-    Bridge --> Transfer
-    Event --> Endpoint
-    Snapshot --> Endpoint
-    Request --> Endpoint
-    Transfer --> Endpoint
+    classDef source fill:#2f6f9f,color:#fff,stroke:#183d58;
+    classDef bridge fill:#2d7d57,color:#fff,stroke:#17442f;
+    classDef codec fill:#9a6b1f,color:#fff,stroke:#594012;
+    classDef output fill:#7b4d9c,color:#fff,stroke:#432957;
+    class P source;
+    class B,R bridge;
+    class N,E,C bridge;
+    class W codec;
+    class EP,A,S,O output;
+    class I output;
 ```
 
 ## 快速上手
 
-在 composition root 中注册协议：
+### 1. 选择并交换 profile
+
+Profile 不可变，内置 profile 是可缓存的实例：
 
 ```csharp
 using CycloneGames.AIPerception.Networking;
-using CycloneGames.Networking;
 
-public static class AIPerceptionNetworkInstaller
-{
-    public static void Configure(INetworkMessageCatalog catalog)
-    {
-        AIPerceptionNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
-}
+AIPerceptionNetworkProfile profile =
+    AIPerceptionNetworkProfiles.ServerAuthoritative;
+
+AIPerceptionManifestHandshakeMessage localHandshake =
+    AIPerceptionManifestHandshakeMessage.CreateLocal(profile);
 ```
 
-创建 detection event 端点：
+编码后通过项目 endpoint 发送：
 
 ```csharp
-using CycloneGames.AIPerception.Networking;
-using CycloneGames.AIPerception.Runtime;
+Span<byte> handshakeBytes =
+    stackalloc byte[AIPerceptionNetworkWireCodec.HandshakePayloadBytes];
 
-public sealed class DetectionEventEndpoint
+if (AIPerceptionNetworkWireCodec.TryWriteHandshake(
+        in localHandshake,
+        handshakeBytes,
+        out int handshakeLength) != AIPerceptionNetworkWireCodecResult.Success)
 {
-    private readonly AIPerceptionNetworkSyncBridge _bridge;
-    private readonly IAIPerceptionNetworkTargetResolver _targets;
+    throw new InvalidOperationException("The local AIPerception handshake is invalid.");
+}
 
-    public DetectionEventEndpoint(IAIPerceptionNetworkTargetResolver targets)
-    {
-        _bridge = new AIPerceptionNetworkSyncBridge(AIPerceptionNetworkProfiles.ServerAuthoritative);
-        _targets = targets;
-    }
+NetworkSendResult sendResult = endpoint.SendToServer(
+    AIPerceptionNetworkProtocol.MSG_MANIFEST_HANDSHAKE,
+    handshakeBytes.Slice(0, handshakeLength),
+    NetworkChannel.Reliable);
+```
 
-    public bool TryCreateEvent(
-        uint observerNetworkId, DetectionResult detection,
-        int tick, ushort sequence,
-        out AIPerceptionDetectionEventMessage message)
-    {
-        return _bridge.TryCreateDetectionEvent(
-            observerNetworkId, detection, _targets,
-            tick, sequence, AIPerceptionNetworkEventKind.Detected,
-            out message);
-    }
+接收端必须先 decode 并协商，再启用感知流量：
+
+```csharp
+if (AIPerceptionNetworkWireCodec.TryReadHandshake(
+        payload.Bytes,
+        out AIPerceptionManifestHandshakeMessage remote) !=
+    AIPerceptionNetworkWireCodecResult.Success)
+{
+    return;
+}
+
+AIPerceptionNetworkHandshakeResult negotiation = remote.Negotiate(profile);
+if (negotiation != AIPerceptionNetworkHandshakeResult.Compatible)
+{
+    return;
 }
 ```
 
-## 核心概念
+### 2. 把 detection 映射到可复用 entry buffer
 
-| 类型 | 作用 |
+Resolver 连接本地 perception handle 与稳定网络 entity ID：
+
+```csharp
+var bridge = new AIPerceptionNetworkSyncBridge(profile);
+
+// 每个 observer/session owner 分配一次并持续复用。
+var entryBuffer = new AIPerceptionDetectionEntry[profile.MaxSnapshotEntries];
+
+AIPerceptionDetectionEntryWriteResult write = bridge.WriteDetectionEntries(
+    detections,
+    targetResolver,
+    entryBuffer,
+    tick,
+    sourceSensorId);
+
+ReadOnlySpan<AIPerceptionDetectionEntry> entries =
+    entryBuffer.AsSpan(0, write.WrittenCount);
+
+if (!write.IsComplete)
+{
+    telemetry.RecordPerceptionSnapshotLoss(
+        write.UnresolvedCount,
+        write.InvalidCount,
+        write.CapacityLimitedCount,
+        write.DuplicateCount);
+}
+```
+
+容量不足时，bridge 保留 canonical 顺序最小的 entries。容量损失总是显式报告。
+
+### 3. 创建、编码并发送 snapshot
+
+```csharp
+AIPerceptionNetworkMessageValidationResult createResult = bridge.TryCreateSnapshot(
+    observerNetworkId,
+    AIPerceptionNetworkSensorKind.Any,
+    entries,
+    tick,
+    sequence,
+    authorityGeneration,
+    out AIPerceptionDetectionSnapshotMessage snapshot);
+
+if (createResult != AIPerceptionNetworkMessageValidationResult.Valid)
+{
+    return;
+}
+
+int payloadLength = AIPerceptionNetworkWireCodec.GetSnapshotPayloadBytes(entries.Length);
+Span<byte> snapshotBytes = reusablePayloadBuffer.AsSpan(0, payloadLength);
+
+if (AIPerceptionNetworkWireCodec.TryWriteDetectionSnapshot(
+        in snapshot,
+        entries,
+        snapshotBytes,
+        out int bytesWritten) != AIPerceptionNetworkWireCodecResult.Success)
+{
+    return;
+}
+
+if (endpoint.GetMaxPayloadSize(
+        AIPerceptionNetworkProtocol.MSG_DETECTION_SNAPSHOT,
+        profile.SnapshotChannel) < bytesWritten)
+{
+    return;
+}
+
+endpoint.SendToClient(
+    connection,
+    AIPerceptionNetworkProtocol.MSG_DETECTION_SNAPSHOT,
+    snapshotBytes.Slice(0, bytesWritten),
+    profile.SnapshotChannel);
+```
+
+Memory snapshot 使用 `MSG_MEMORY_SNAPSHOT` 和 `profile.MemorySnapshotChannel`。Empty snapshot（零 entry）表示权威空集合。
+
+### 4. 安全接收 snapshot
+
+在应用状态前先 decode 到可复用 destination：
+
+```csharp
+Span<AIPerceptionDetectionEntry> decodedEntries = receiveEntryBuffer;
+
+AIPerceptionNetworkWireCodecResult decodeResult =
+    AIPerceptionNetworkWireCodec.TryReadDetectionSnapshot(
+        payload.Bytes,
+        decodedEntries,
+        out AIPerceptionDetectionSnapshotMessage snapshot,
+        out int decodedCount);
+
+if (decodeResult != AIPerceptionNetworkWireCodecResult.Success)
+{
+    return;
+}
+
+var inbound = new AIPerceptionRemoteSnapshotContext(
+    senderConnectionId: payload.Connection.ConnectionId,
+    authoritativeServerConnectionId: session.AuthoritativeServerConnectionId,
+    isSenderAuthenticated: payload.Connection.IsAuthenticated,
+    isServerToClient: payload.Direction == NetworkMessageDirection.ServerToClient,
+    authorityGeneration: session.AuthorityGeneration,
+    hasAppliedSnapshot: state.HasSnapshot,
+    lastAppliedSequence: state.LastSequence,
+    lastAppliedTick: state.LastTick);
+
+AIPerceptionRemoteSnapshotResult authorityResult = authorityResolver.ValidateRemotePerception(
+    in localAuthority,
+    in inbound,
+    in observer,
+    in snapshot,
+    decodedEntries.Slice(0, decodedCount));
+
+if (authorityResult != AIPerceptionRemoteSnapshotResult.Allowed)
+{
+    return;
+}
+
+// 先提交状态，再发布 observer notification。
+state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
+```
+
+## 核心规则
+
+- `PerceptibleHandle` 永远不作为网络标识序列化。`IAIPerceptionNetworkTargetResolver` 提供稳定 `TargetNetworkId`。
+- `TargetNetworkId` 必须非零，`PerceptibleTypeId` 必须非负。
+- 所有多字节 wire 字段显式采用 little-endian。不使用 raw-struct copy、反射或通用 serializer。
+- Snapshot entry 位于调用方持有的 span，snapshot message 只包含 metadata 和 `EntryCount`。
+- Entry 必须严格遵循 `AIPerceptionNetworkHash.CompareCanonical` 顺序。乱序或重复 payload 被拒绝。
+- `SensorKind.Any` header 可包含混合 sensor kind；具体 kind 要求每个 entry 一致。
+- Position、distance 和 visibility 必须为有限值。Distance 非负，visibility 在 `[0, 1]`。
+- State hash 是对 canonical entry 精确字段的 FNV-1a64，用于漂移检测。
+- Profile hash 覆盖全部强类型同步设置。Peer 协商 supported/required feature flags。
+- Remote snapshot 只有通过 payload、认证方向、authoritative sender、generation 和 replay 校验后才能应用。
+- Interest filtering 委托给 `INetworkInterestEvaluator`。
+
+## 协议参考
+
+### Wire v1 契约
+
+| Message | ID | Payload 字节数 | 默认 channel |
+| --- | ---: | ---: | --- |
+| Manifest handshake | 15000 | 26 | Reliable |
+| Detection event | 15001 | 62 | UnreliableSequenced |
+| Detection snapshot | 15002 | `26 + EntryCount * 38`，最大 4800 | UnreliableSequenced |
+| Memory snapshot | 15003 | `26 + EntryCount * 38`，最大 4800 | Reliable |
+| Authority transfer | 15004 | 47 | Reliable |
+| Full-state request | 15005 | 24 | Reliable |
+
+协议上限最多容纳 125 个 entry。新增、移除、重排或改变字段语义时需要新的 wire contract。
+
+### Canonical ordering 与有界选择
+
+`WriteDetectionEntries` 扫描 detection 时维护有序、有界 destination。对于 N 个 detection 和容量 K（协议限 125），算法最坏需要 `O(N log K + N * K)` 工作，不使用内部 heap storage。输入重排后选择结果确定。
+
+### Interest filtering
+
+`AIPerceptionNetworkObserverResolver` 把 candidate 转换为 `NetworkReplicationObserver`，observer 转换为 `NetworkReplicatedObject`，然后调用 `INetworkInterestEvaluator`。AIPerception 与 Networking 共享相同语义：按 connection/player ID 匹配 owner、认证与 interest layer、team relevance、area relevance 和 `IncludeOwner` 支持。
+
+### Profile 与 scheduling
+
+Profile 定义 supported/required features、channel、interval、snapshot budget 和 authority-transfer 行为。`ProfileHash` 对强类型值进行确定性计算。Interval 是 policy 值 — network session 或 replication loop 负责 tick scheduling、拥塞响应和 send retry。
+
+### 安全与失败处理
+
+| 失败 | 必需响应 |
 | --- | --- |
-| `AIPerceptionNetworkProfile` | 不可变 runtime profile：channel、interval、feature flags、payload limit |
-| `AIPerceptionNetworkProfiles` | 内置 profile factory（server-authoritative、shared team awareness、debug spectator） |
-| `AIPerceptionNetworkProtocol` | 拥有消息范围 `15000-15999` 和默认 protocol manifest |
-| `AIPerceptionDetectionEntry` | 单个 perceived target 的网络表示：sensor kind、flags、position、distance、visibility、tick、source sensor id |
-| `AIPerceptionDetectionEventMessage` | 单个 detection event payload |
-| `AIPerceptionDetectionSnapshotMessage` | 包含多个 detection entry 的 snapshot payload |
-| `AIPerceptionNetworkSyncBridge` | 将 `DetectionResult` 转换为 event 和 snapshot DTO |
-| `IAIPerceptionNetworkTargetResolver` | 将 `PerceptibleHandle` 映射为 network id 和 perceptible type id |
-| `IAIPerceptionNetworkAuthorityResolver` | 解析 networked perception observer 的读写 authority |
+| Length、enum、flags、float、order、count 或 hash 无效 | 丢弃 payload；增加有界 telemetry；执行会话 abuse policy |
+| Profile、fingerprint、version 或 feature 不匹配 | 按产品策略禁用本模块流量或拒绝 peer |
+| 未认证、方向错误或 sender 非 authority | 丢弃并记录 authority violation |
+| Generation 不匹配、stale tick、replay 或 sequence 乱序 | 丢弃且不改变 replay state |
+| Destination capacity 太小 | 使用配置好的有界 buffer 或拒绝 |
+| 本地 entry selection 为 partial | 记录每类 loss |
 
-### 协议消息
+FNV state hash 只是同步 checksum，不是认证码。传输认证和密码学完整性仍由 `CycloneGames.Networking` 负责。
 
-| Message | ID | Channel | Payload |
-| --- | ---: | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `15000` | Reliable | `AIPerceptionManifestHandshakeMessage` |
-| `MSG_DETECTION_EVENT` | `15001` | UnreliableSequenced | `AIPerceptionDetectionEventMessage` |
-| `MSG_DETECTION_SNAPSHOT` | `15002` | UnreliableSequenced | `AIPerceptionDetectionSnapshotMessage` |
-| `MSG_MEMORY_SNAPSHOT` | `15003` | Reliable | `AIPerceptionDetectionSnapshotMessage` |
-| `MSG_AUTHORITY_TRANSFER` | `15004` | Reliable | `AIPerceptionAuthorityTransferMessage` |
-| `MSG_FULL_STATE_REQUEST` | `15005` | Reliable | `AIPerceptionFullStateRequestMessage` |
+### 内存与线程
 
-## 使用指南
-
-### 创建 Detection Snapshot
-
-先写入调用方持有的 buffer，再从已写入的 span 创建 snapshot：
-
-```csharp
-using System;
-using CycloneGames.AIPerception.Networking;
-using CycloneGames.AIPerception.Runtime;
-
-public sealed class DetectionSnapshotEndpoint
-{
-    private readonly AIPerceptionNetworkSyncBridge _bridge = new();
-
-    public AIPerceptionDetectionSnapshotMessage CreateSnapshot(
-        uint observerNetworkId,
-        ReadOnlySpan<DetectionResult> detections,
-        IAIPerceptionNetworkTargetResolver targets,
-        Span<AIPerceptionDetectionEntry> buffer,
-        int tick, ushort sequence)
-    {
-        int count = _bridge.WriteDetectionEntries(detections, targets, buffer, tick);
-        return _bridge.CreateSnapshot(
-            observerNetworkId,
-            AIPerceptionNetworkSensorKind.Any,
-            buffer.Slice(0, count),
-            tick, sequence);
-    }
-}
-```
-
-### Profile 配置
-
-```csharp
-using CycloneGames.AIPerception.Networking;
-
-public static class AIPerceptionProfileFactory
-{
-    public static AIPerceptionNetworkProfile Create()
-    {
-        return AIPerceptionNetworkProfiles
-            .CreateServerAuthoritativeBuilder()
-            .SetInt("project.max_debug_entries", 16)
-            .Build();
-    }
-}
-```
-
-## 进阶主题
-
-### 协议 Identity
-
-`AIPerceptionNetworkProtocol.CreateProtocolManifest` 构建完整 manifest。注册会原子提交完整 range 和全部 descriptor。每个 descriptor 具有显式 `ContractId`（如 `AIPerceptionDetectionEventMessage:v1`）和 FNV-1a 64-bit `SchemaHash`。Payload layout 变更需分配新 contract identity。
-
-### 扩展点
-
-- 为项目 entity id 系统实现 `IAIPerceptionNetworkTargetResolver`。
-- 为自定义 authority ownership 实现 `IAIPerceptionNetworkAuthorityResolver`。
-- 当 observer 数据由 gameplay、zone 或 backend 系统持有时，实现 `IAIPerceptionNetworkObserverSource`。
-- 项目专用 perception 消息放入独立项目自有 manifest，使用 `NetworkMessageRanges.User`。
-
-## 常见场景
-
-### 服务端权威 Detection Sync
-
-服务端查询传感器，将结果转换为网络条目并广播：
-
-```csharp
-// 服务端 Tick
-var detections = perception.GetAllSightDetections();
-var buffer = _entryBuffer; // 预分配的 AIPerceptionDetectionEntry[]
-int count = _bridge.WriteDetectionEntries(detections, _targets, buffer, tick);
-
-var snapshot = _bridge.CreateSnapshot(
-    observerNetId, AIPerceptionNetworkSensorKind.Sight,
-    buffer.AsSpan(0, count), tick, sequence++);
-
-SendToRelevantClients(snapshot);
-```
-
-### 为新加入客户端同步记忆快照
-
-新客户端需要完整的感知记忆状态：
-
-```csharp
-// 响应 full state request
-var memoryEntries = _sightSensor.GetMemoryEntries();
-int count = _bridge.WriteDetectionEntries(memoryEntries, _targets, buffer, tick);
-
-var memorySnapshot = _bridge.CreateSnapshot(
-    observerNetId, AIPerceptionNetworkSensorKind.Any,
-    buffer.AsSpan(0, count), tick, sequence);
-
-SendToClient(memorySnapshot); // 按协议使用 Reliable channel
-```
-
-## 性能与内存
-
-本包不执行文件 I/O，热路径不分配托管内存，不持有线程或原生容器。Profile 是纯运行时对象。Sync bridge 将条目写入调用方持有的 buffer；buffer 大小和复用由调用方管理。Profile 中的 payload limit 在序列化前限制 snapshot 大小。Transport encoding 和网络 I/O 位于外部。
+- Core codec path 使用 `Span<T>`/`ReadOnlySpan<T>`，零内部分配。
+- 内置 profile 属性返回缓存的不可变实例。
+- 所有 buffer、list 和 session state 都有显式外部 owner。
+- 不创建 lock、worker thread、queue 或全局 cache。
+- Span 和 `NetworkMessagePayload.Bytes` 不得超出约定调用生命周期保存。
 
 ## 故障排查
 
-| 现象 | 可能原因 | 解决方法 |
-| --- | --- | --- |
-| 客户端收不到 detection event | Target resolver 返回非法 network id | 验证 `IAIPerceptionNetworkTargetResolver` 映射；检查 network id 注册 |
-| Snapshot payload 被截断 | Buffer 小于 detection 数量 | 根据每帧最大检测数量确定调用方 buffer 大小 |
-| Protocol manifest 注册失败 | `SchemaHash` 不匹配或 ID 重叠 | 确保所有 peer 使用相同 contract identity；检查 `15000-15999` 范围 |
-| 客户端记忆快照过时 | 新客户端在服务端状态变更后加入 | 通过 `MSG_FULL_STATE_REQUEST` 请求全量重同步 |
-| Authority transfer 被拒绝 | Resolver 不识别 authority 变更 | 为自定义 ownership 规则实现 `IAIPerceptionNetworkAuthorityResolver` |
-
-## 验证
-
-```text
-Unity Test Runner > EditMode > CycloneGames.AIPerception.Networking.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.AIPerception.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
-```
+| 现象 | 检查项 |
+| --- | --- |
+| Handshake 被拒绝 | Profile hash、feature flags 和 supported/required feature 匹配 |
+| Snapshot decode 失败 | Payload length、entry count、canonical order、enum 范围和 float 有限性 |
+| Authority violation 日志 | 认证状态、server-to-client 方向、authority generation 和 replay state |
+| Entry 被静默截断 | `WriteDetectionEntries` loss count：unresolved、invalid、capacity-limited、duplicates |
+| Interest filtering 无 observer | Observer/candidate entity mapping、interest evaluator 配置 |
+| 热路径有分配 | 验证 span 和可复用 buffer；在目标 Player backend profile |
+| Profile 更改无效 | Profile 不可变 — 通过 handshake 创建并交换新 profile |

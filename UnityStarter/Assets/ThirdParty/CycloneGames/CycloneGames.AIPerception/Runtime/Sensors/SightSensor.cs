@@ -1,9 +1,9 @@
 using System;
+using CycloneGames.AIPerception.Runtime.Jobs;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
-using CycloneGames.AIPerception.Runtime.Jobs;
 
 namespace CycloneGames.AIPerception.Runtime
 {
@@ -15,18 +15,18 @@ namespace CycloneGames.AIPerception.Runtime
         [Range(0f, 5f)] public float UpdateInterval;
         public LayerMask ObstacleLayer;
         public bool UseLineOfSight;
-        
-        [Tooltip("Only detect targets of this type. Use PerceptibleTypes constants (0=Default, 1=Character, etc.)")]
+        [Min(0)] public int MaximumLineOfSightChecksPerUpdate;
+
+        [Tooltip("Only detect targets of this stable PerceptibleTypes ID.")]
         public int TargetTypeId;
-        
-        [Tooltip("If enabled, only targets matching TargetTypeId will be detected")]
         public bool FilterByType;
-        
+
         [Header("Memory")]
-        [Tooltip("Seconds to remember a target after it leaves sensor range. 0 disables memory.")]
-        [Range(0f, 60f)]
-        public float MemoryDuration;
-        
+        [Range(0f, 60f)] public float MemoryDuration;
+
+        [Header("Capacity")]
+        public PerceptionSensorCapacity Capacity;
+
         public static SightSensorConfig Default => new SightSensorConfig
         {
             HalfAngle = 60f,
@@ -34,387 +34,543 @@ namespace CycloneGames.AIPerception.Runtime
             UpdateInterval = 0.1f,
             ObstacleLayer = Physics.DefaultRaycastLayers,
             UseLineOfSight = true,
+            MaximumLineOfSightChecksPerUpdate = 64,
             TargetTypeId = PerceptibleTypes.Default,
             FilterByType = false,
-            MemoryDuration = 3f
+            MemoryDuration = 3f,
+            Capacity = PerceptionSensorCapacity.Default
         };
     }
-    
-    public class SightSensor : ISensor, IDisposable
+
+    /// <summary>
+    /// Main-thread-owned sight sensor. Burst performs the cone query; Unity Physics refinement and
+    /// result commit run on the owner thread using the pose and timestamp captured at schedule time.
+    /// </summary>
+    public sealed class SightSensor : ISensor, ISensorManagerOwned
     {
         private readonly int _sensorId;
+        private readonly SensorManager _owner;
         private readonly Transform _sensorTransform;
+        private PerceptibleHandle _ignoredTarget;
         private SightSensorConfig _config;
-        
-        // Detection results (stable for reading)
-        private NativeList<PerceptibleHandle> _detectedHandles;
-        private NativeList<DetectionResult> _detectionResults;
-        
-        // Staging buffer for deferred mode (write during job processing)
-        private NativeList<PerceptibleHandle> _stagingHandles;
-        private NativeList<DetectionResult> _stagingResults;
-        
-        // Stimulus memory — persists after target leaves sensor range
-        private NativeList<StimulusMemoryEntry> _memoryEntries;
-        
-        // Job data (reused each frame)
+        private PerceptionSensorCapacity _capacity;
+        private NativeList<int> _candidateIndices;
         private NativeArray<int> _jobPassedFilter;
-        private NativeArray<PerceptibleData> _jobTargetData;
+        private NativeArray<PerceptibleData> _queryTargets;
+        private SensorResultBuffer _resultBuffer;
         private JobHandle _currentJobHandle;
+        private float3 _queryOrigin;
+        private float3 _queryForward;
+        private double _queryTimestamp;
+        private int _queryTargetCount;
+        private int _lineOfSightCursor;
         private bool _jobScheduled;
-        private int _jobTargetCount;
         private bool _hasPendingResults;
-        
-        // Pre-allocated buffer for RaycastNonAlloc (0GC LOS checks)
-        private RaycastHit[] _losRaycastBuffer;
-        
-        private float _lastUpdateTime;
+        private bool _initialized;
         private bool _disposed;
-        
-        public int SensorId => _sensorId;
-        public SensorType Type => SensorType.Sight;
-        public bool IsEnabled { get; set; } = true;
-        public float UpdateInterval => _config.UpdateInterval;
-        public float LastUpdateTime => _lastUpdateTime;
-        public bool HasDetection => (_detectedHandles.IsCreated && _detectedHandles.Length > 0) || (_memoryEntries.IsCreated && _memoryEntries.Length > 0);
-        public int DetectedCount => (_detectedHandles.IsCreated ? _detectedHandles.Length : 0) + (_memoryEntries.IsCreated ? _memoryEntries.Length : 0);
-        
-        public float HalfAngle => _config.HalfAngle;
-        public float MaxDistance => _config.MaxDistance;
-        public float3 Position => _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
-        public float3 Forward => _sensorTransform != null ? (float3)_sensorTransform.forward : new float3(0, 0, 1);
-        
-        public SightSensor(Transform sensorTransform, SightSensorConfig config)
+        private bool _isEnabled = true;
+        private double _lastUpdateTime;
+
+        public SightSensor(
+            Transform sensorTransform,
+            SightSensorConfig config,
+            PerceptibleHandle ignoredTarget = default)
+            : this(sensorTransform, config, SensorManager.Instance, ignoredTarget)
         {
-            _sensorId = SensorManager.Instance?.GenerateSensorId() ?? 0;
+        }
+
+        public SightSensor(
+            Transform sensorTransform,
+            SightSensorConfig config,
+            SensorManager owner,
+            PerceptibleHandle ignoredTarget = default)
+        {
+            _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            _sensorId = _owner.GenerateSensorId();
             _sensorTransform = sensorTransform;
+            _ignoredTarget = ignoredTarget;
             _config = config;
-            
             Initialize();
         }
-        
+
+        public int SensorId => _sensorId;
+        public SensorType Type => SensorType.Sight;
+        public bool IsEnabled
+        {
+            get => _isEnabled;
+            set
+            {
+                _owner.EnsureOwnerThread();
+                ThrowIfDisposed();
+                if (_isEnabled == value)
+                {
+                    return;
+                }
+
+                CompleteAndCommitPending();
+                _isEnabled = value;
+                if (!value)
+                {
+                    _resultBuffer.ClearAll();
+                    LastUpdateStatus = SensorUpdateStatus.Ready;
+                }
+            }
+        }
+        public float UpdateInterval => _config.UpdateInterval;
+        public double LastUpdateTime => _lastUpdateTime;
+        public float3 Position
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
+            }
+        }
+        public float3 Forward
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _sensorTransform != null ? (float3)_sensorTransform.forward : new float3(0f, 0f, 1f);
+            }
+        }
+        public float HalfAngle => _config.HalfAngle;
+        public float MaxDistance => _config.MaxDistance;
+        public SightSensorConfig Config => _config;
+        public SensorUpdateStatus LastUpdateStatus { get; private set; }
+        public bool HasDetection
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer != null && _resultBuffer.HasResults;
+            }
+        }
+
+        public int DetectedCount
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer?.ResultCount ?? 0;
+            }
+        }
+
+        public int MemoryCount
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer?.MemoryCount ?? 0;
+            }
+        }
+        SensorManager ISensorManagerOwned.Owner => _owner;
+        bool ISensorManagerOwned.IsDisposed => _disposed;
+
         public void Initialize()
         {
-            _detectedHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
-            _detectionResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
-            _stagingHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
-            _stagingResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
-            _losRaycastBuffer = new RaycastHit[32];
-            _memoryEntries = new NativeList<StimulusMemoryEntry>(32, Allocator.Persistent);
+            _owner.EnsureOwnerThread();
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(SightSensor));
+            }
+
+            if (_initialized)
+            {
+                return;
+            }
+
+            _capacity = _config.Capacity.Normalize();
+            RecreateStorage(in _capacity);
+            _initialized = true;
+            LastUpdateStatus = SensorUpdateStatus.Ready;
         }
-        
+
+        public void ApplyConfig(in SightSensorConfig config)
+        {
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            PerceptionSensorCapacity normalized = config.Capacity.Normalize();
+            if (!_capacity.HasSameLimits(in normalized))
+            {
+                RecreateStorage(in normalized);
+            }
+
+            _config = config;
+        }
+
+        public void SetIgnoredTarget(PerceptibleHandle target)
+        {
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            _ignoredTarget = target;
+        }
+
         public void UpdateSensor(float deltaTime)
         {
-            if (_disposed || _sensorTransform == null) return;
-            
-            // Complete previous job if any
-            CompleteJob();
-            
-            var registry = PerceptibleRegistry.Instance;
-            if (registry == null || registry.IsDisposed)
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            double timestamp = Time.timeAsDouble;
+            if (_sensorTransform == null || !IsConfigurationValid())
             {
-                // Clear results if registry is gone
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                _lastUpdateTime = Time.time;
+                CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
                 return;
             }
-            
-            // RebuildData is called once per frame by SensorManager.Update
-            int targetCount = registry.GetDataCount();
-            
-            if (targetCount == 0)
+
+            PerceptibleRegistry registry = _owner.Registry;
+            if (registry.GetDataCount() == 0)
             {
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                _lastUpdateTime = Time.time;
+                CommitEmpty(timestamp, SensorUpdateStatus.NoTargets);
                 return;
             }
-            
-            // Create a spatially filtered copy for job processing
-            _jobTargetData = registry.CreateNativeDataCopyInRange(Position, _config.MaxDistance, Allocator.TempJob);
-            _jobTargetCount = _jobTargetData.Length;
-            
-            // Allocate job output
-            if (!_jobPassedFilter.IsCreated || _jobPassedFilter.Length < _jobTargetCount)
+
+            _queryOrigin = Position;
+            _queryForward = math.normalizesafe(Forward, new float3(0f, 0f, 1f));
+            _queryTimestamp = timestamp;
+            float queryRange = _config.MaxDistance + registry.MaximumDetectionRadius;
+            if (!math.isfinite(queryRange))
             {
-                if (_jobPassedFilter.IsCreated) _jobPassedFilter.Dispose();
-                _jobPassedFilter = new NativeArray<int>(_jobTargetCount, Allocator.Persistent);
+                CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
+                return;
             }
-            
-            // Schedule Burst job for pre-filtering
+
+            if (!registry.CollectCandidateIndices(
+                    _queryOrigin,
+                    queryRange,
+                    ref _candidateIndices,
+                    _capacity.MaximumCandidates))
+            {
+                CommitEmpty(timestamp, SensorUpdateStatus.CandidateCapacityExceeded);
+                return;
+            }
+
+            _queryTargetCount = _candidateIndices.Length;
+            if (_queryTargetCount == 0)
+            {
+                CommitEmpty(timestamp, SensorUpdateStatus.NoTargets);
+                return;
+            }
+
+            EnsureJobCapacity(_queryTargetCount);
+            _queryTargets = registry.NativeData;
             var job = new SightConeQueryJob
             {
-                Targets = _jobTargetData,
-                Origin = Position,
-                Forward = Forward,
-                MaxDistanceSq = _config.MaxDistance * _config.MaxDistance,
+                Targets = _queryTargets,
+                CandidateIndices = _candidateIndices.AsArray(),
+                Origin = _queryOrigin,
+                Forward = _queryForward,
+                MaxDistance = _config.MaxDistance,
                 CosHalfAngle = math.cos(math.radians(_config.HalfAngle)),
                 TargetTypeId = _config.TargetTypeId,
                 FilterByType = _config.FilterByType,
+                IgnoredTarget = _ignoredTarget,
                 PassedFilter = _jobPassedFilter
             };
-            
-            _currentJobHandle = job.Schedule(_jobTargetCount, 64);
+
+            _currentJobHandle = job.Schedule(_queryTargetCount, 64);
             _jobScheduled = true;
-            
-            var manager = SensorManager.Instance;
-            if (manager != null && manager.UseDeferredJobCompletion)
+            _hasPendingResults = true;
+            if (_owner.UseDeferredJobCompletion && _owner.IsRegistered(this))
             {
-                // Deferred mode: add to batch, process in LateUpdate
-                // Keep previous results visible until new ones are ready
-                manager.AddToBatch(_currentJobHandle);
-                _hasPendingResults = true;
+                _owner.AddToBatch(_currentJobHandle);
             }
             else
             {
-                // Immediate mode: complete now and process
-                _currentJobHandle.Complete();
-                _jobScheduled = false;
-                
-                // Clear and write directly to main buffers
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _detectedHandles, _detectionResults);
-                MergeMemory();
-                
-                // Dispose temp data
-                if (_jobTargetData.IsCreated)
-                {
-                    _jobTargetData.Dispose();
-                    _jobTargetData = default;
-                }
-                _jobTargetCount = 0;
+                CompleteAndCommitPending();
             }
-            
-            _lastUpdateTime = Time.time;
         }
-        
+
         public void ProcessJobResults()
         {
-            if (!_hasPendingResults) return;
-            if (!_jobTargetData.IsCreated || _jobTargetCount == 0)
+            _owner.EnsureOwnerThread();
+            if (!_disposed)
             {
-                _hasPendingResults = false;
+                CompleteAndCommitPending();
+            }
+        }
+
+        private void CompleteAndCommitPending()
+        {
+            if (!_hasPendingResults)
+            {
                 return;
             }
-            
-            // Complete job if not already done
+
             CompleteJob();
-            
-            // Write to staging buffer first
-            _stagingHandles.Clear();
-            _stagingResults.Clear();
-            ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _stagingHandles, _stagingResults);
-            
-            // Swap: copy staging to main (atomic from reader's perspective)
-            _detectedHandles.Clear();
-            _detectionResults.Clear();
-            for (int i = 0; i < _stagingHandles.Length; i++)
+            _resultBuffer.BeginUpdate();
+            SensorUpdateStatus status = SensorUpdateStatus.Ready;
+            float cosine = math.cos(math.radians(_config.HalfAngle));
+            float visibilityDenominator = 1f - cosine;
+            int maximumChecks = _config.MaximumLineOfSightChecksPerUpdate;
+            int lineOfSightChecks = 0;
+            int nextCursor = _lineOfSightCursor;
+
+            for (int offset = 0; offset < _queryTargetCount; offset++)
             {
-                _detectedHandles.Add(_stagingHandles[i]);
-                _detectionResults.Add(_stagingResults[i]);
-            }
-            MergeMemory();
-            
-            // Dispose temp data
-            if (_jobTargetData.IsCreated)
-            {
-                _jobTargetData.Dispose();
-                _jobTargetData = default;
-            }
-            _jobTargetCount = 0;
-            _hasPendingResults = false;
-        }
-        
-        private void ProcessJobResultsInternal(
-            NativeArray<PerceptibleData> targets, 
-            int count,
-            NativeList<PerceptibleHandle> outHandles,
-            NativeList<DetectionResult> outResults)
-        {
-            float3 origin = Position;
-            float3 forward = Forward;
-            float cosHalfAngle = math.cos(math.radians(_config.HalfAngle));
-            
-            for (int i = 0; i < count; i++)
-            {
-                if (_jobPassedFilter[i] == 0) continue;
-                
-                var target = targets[i];
-                
-                // LOS check on main thread (requires Physics)
+                int candidateIndex = (_lineOfSightCursor + offset) % _queryTargetCount;
+                int filterResult = _jobPassedFilter[candidateIndex];
+                if (filterResult < 0)
+                {
+                    if (status == SensorUpdateStatus.Ready)
+                    {
+                        status = SensorUpdateStatus.CoordinateRangeExceeded;
+                    }
+
+                    continue;
+                }
+
+                if (filterResult == 0)
+                {
+                    continue;
+                }
+
+                PerceptibleData target = _queryTargets[_candidateIndices[candidateIndex]];
                 if (_config.UseLineOfSight)
                 {
-                    Vector3 rayOrigin = origin;
-                    Vector3 rayDir = math.normalize(target.LOSPoint - origin);
-                    float rayDist = math.distance(origin, target.LOSPoint);
-                    
-                    int hitCount = Physics.RaycastNonAlloc(rayOrigin, rayDir, _losRaycastBuffer, rayDist, _config.ObstacleLayer);
-                    bool blocked = false;
-                    
-                    for (int j = 0; j < hitCount; j++)
+                    if (maximumChecks > 0 && lineOfSightChecks >= maximumChecks)
                     {
-                        var hit = _losRaycastBuffer[j];
-                        float distToTarget = math.distance(hit.point, (Vector3)target.LOSPoint);
-                        if (distToTarget > target.DetectionRadius + 0.1f)
-                        {
-                            blocked = true;
-                            break;
-                        }
+                        status = SensorUpdateStatus.LineOfSightBudgetExceeded;
+                        nextCursor = candidateIndex;
+                        break;
                     }
-                    
-                    if (blocked) continue;
+
+                    lineOfSightChecks++;
+                    if (!PerceptionNumerics.TryGetFiniteDirectionAndDistance(
+                            in _queryOrigin,
+                            in target.LOSPoint,
+                            out float3 rayDirection,
+                            out float rayDistance))
+                    {
+                        status = SensorUpdateStatus.CoordinateRangeExceeded;
+                        continue;
+                    }
+
+                    if (rayDistance > 0.0001f && Physics.Raycast(
+                            (Vector3)_queryOrigin,
+                            (Vector3)rayDirection,
+                            rayDistance,
+                            _config.ObstacleLayer,
+                            QueryTriggerInteraction.Ignore))
+                    {
+                        continue;
+                    }
                 }
-                
-                float3 toTarget = target.Position - origin;
-                float dist = math.length(toTarget);
-                float3 dir = toTarget / dist;
-                float dot = math.dot(forward, dir);
-                
-                outHandles.Add(target.ToHandle());
-                outResults.Add(new DetectionResult
+
+                if (!PerceptionNumerics.TryGetFiniteDirectionAndDistance(
+                        in _queryOrigin,
+                        in target.Position,
+                        out float3 directionToTarget,
+                        out float distance))
                 {
-                    Target = target.ToHandle(),
-                    Distance = dist,
-                    LastKnownPosition = target.Position,
-                    DetectionTime = Time.time,
-                    Visibility = (dot - cosHalfAngle) / (1f - cosHalfAngle),
-                    SensorType = 0
-                });
-            }
-        }
+                    status = SensorUpdateStatus.CoordinateRangeExceeded;
+                    continue;
+                }
 
-        private void MergeMemory()
-        {
-            if (_config.MemoryDuration <= 0f || !_memoryEntries.IsCreated) return;
-
-            float now = Time.time;
-
-            // Mark all existing memory entries as not refreshed yet
-            var refreshed = new NativeArray<bool>(_memoryEntries.Length, Allocator.Temp);
-            // Step 1: For each current detection, update or add memory entry
-            for (int i = 0; i < _detectionResults.Length; i++)
-            {
-                var dr = _detectionResults[i];
-                int memIdx = FindMemoryIndex(dr.Target);
-
-                if (memIdx >= 0)
+                float visibility;
+                if (distance <= 0.0001f || visibilityDenominator <= 0.000001f)
                 {
-                    // Refresh existing memory
-                    var entry = _memoryEntries[memIdx];
-                    entry.LastDetectedTime = now;
-                    entry.LastKnownPosition = dr.LastKnownPosition;
-                    entry.PeakVisibility = math.max(entry.PeakVisibility, dr.Visibility);
-                    entry.DistanceAtDetection = dr.Distance;
-                    _memoryEntries[memIdx] = entry;
-                    refreshed[memIdx] = true;
+                    visibility = 1f;
                 }
                 else
                 {
-                    // New memory entry
-                    _memoryEntries.Add(new StimulusMemoryEntry
+                    float dot = math.dot(_queryForward, directionToTarget);
+                    visibility = math.saturate((dot - cosine) / visibilityDenominator);
+                }
+
+                if (!_resultBuffer.TryAddLive(new DetectionResult
                     {
-                        Target = dr.Target,
-                        LastKnownPosition = dr.LastKnownPosition,
-                        LastDetectedTime = now,
-                        PeakVisibility = dr.Visibility,
-                        SensorType = (int)SensorType.Sight,
-                        DistanceAtDetection = dr.Distance
-                    });
+                        Target = target.ToHandle(),
+                        Distance = distance,
+                        LastKnownPosition = target.Position,
+                        DetectionTime = _queryTimestamp,
+                        Visibility = visibility,
+                        SensorType = SensorType.Sight,
+                        IsFromMemory = false
+                    }))
+                {
+                    status = SensorUpdateStatus.ResultCapacityExceeded;
+                    nextCursor = candidateIndex;
+                    break;
                 }
             }
 
-            // Step 2: Expire stale entries and emit them as memory-only results
-            for (int i = _memoryEntries.Length - 1; i >= 0; i--)
+            if (_queryTargetCount > 0)
             {
-                if (i < refreshed.Length && refreshed[i]) continue;
-
-                var entry = _memoryEntries[i];
-                float age = now - entry.LastDetectedTime;
-
-                if (age >= _config.MemoryDuration)
-                {
-                    _memoryEntries.RemoveAtSwapBack(i);
-                    continue;
-                }
-
-                float visibility = entry.PeakVisibility * (1f - age / _config.MemoryDuration);
-                if (visibility <= 0.01f)
-                {
-                    _memoryEntries.RemoveAtSwapBack(i);
-                    continue;
-                }
-
-                var memResult = new DetectionResult
-                {
-                    Target = entry.Target,
-                    Distance = entry.DistanceAtDetection,
-                    LastKnownPosition = entry.LastKnownPosition,
-                    DetectionTime = entry.LastDetectedTime,
-                    Visibility = visibility,
-                    SensorType = (int)SensorType.Sight,
-                    IsFromMemory = true
-                };
-
-                // Insert memory result in the right position relative to detection results
-                _detectionResults.Add(memResult);
-                _detectedHandles.Add(entry.Target);
+                _lineOfSightCursor = nextCursor % _queryTargetCount;
             }
 
-            if (refreshed.IsCreated) refreshed.Dispose();
+            LastUpdateStatus = _resultBuffer.Commit(
+                _queryTimestamp,
+                _config.MemoryDuration,
+                SensorType.Sight,
+                status);
+            _lastUpdateTime = _queryTimestamp;
+            _queryTargetCount = 0;
+            _queryTargets = default;
+            _hasPendingResults = false;
         }
 
-        private int FindMemoryIndex(PerceptibleHandle target)
+        private void CommitEmpty(double timestamp, SensorUpdateStatus status)
         {
-            for (int i = 0; i < _memoryEntries.Length; i++)
-            {
-                if (_memoryEntries[i].Target == target) return i;
-            }
-            return -1;
+            _resultBuffer.BeginUpdate();
+            LastUpdateStatus = _resultBuffer.Commit(
+                timestamp,
+                _config.MemoryDuration,
+                SensorType.Sight,
+                status);
+            _lastUpdateTime = timestamp;
         }
 
-        public int MemoryCount => _memoryEntries.IsCreated ? _memoryEntries.Length : 0;
-
-        public DetectionResult GetResult(int index)
+        private bool IsConfigurationValid()
         {
-            return index >= 0 && index < _detectionResults.Length 
-                ? _detectionResults[index] 
-                : default;
+            return math.isfinite(_config.HalfAngle) && _config.HalfAngle >= 0f && _config.HalfAngle <= 180f &&
+                   math.isfinite(_config.MaxDistance) && _config.MaxDistance >= 0f &&
+                   math.isfinite(_config.UpdateInterval) && _config.UpdateInterval >= 0f &&
+                   math.isfinite(_config.MemoryDuration) && _config.MemoryDuration >= 0f &&
+                   _config.MaximumLineOfSightChecksPerUpdate >= 0;
+        }
+
+        private void EnsureJobCapacity(int required)
+        {
+            if (_jobPassedFilter.IsCreated && _jobPassedFilter.Length >= required)
+            {
+                return;
+            }
+
+            int current = _jobPassedFilter.IsCreated ? _jobPassedFilter.Length : 0;
+            int doubled = current <= _capacity.MaximumCandidates / 2
+                ? current * 2
+                : _capacity.MaximumCandidates;
+            int capacity = math.min(_capacity.MaximumCandidates, math.max(required, math.max(1, doubled)));
+            var replacement = new NativeArray<int>(capacity, Allocator.Persistent);
+            if (_jobPassedFilter.IsCreated)
+            {
+                _jobPassedFilter.Dispose();
+            }
+
+            _jobPassedFilter = replacement;
+        }
+
+        private void RecreateStorage(in PerceptionSensorCapacity capacity)
+        {
+            NativeList<int> candidates = default;
+            NativeArray<int> output = default;
+            SensorResultBuffer resultBuffer = null;
+            try
+            {
+                candidates = new NativeList<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
+                output = new NativeArray<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
+                resultBuffer = new SensorResultBuffer(in capacity);
+            }
+            catch
+            {
+                if (candidates.IsCreated)
+                {
+                    candidates.Dispose();
+                }
+
+                if (output.IsCreated)
+                {
+                    output.Dispose();
+                }
+
+                resultBuffer?.Dispose();
+                throw;
+            }
+
+            if (_candidateIndices.IsCreated)
+            {
+                _candidateIndices.Dispose();
+            }
+
+            if (_jobPassedFilter.IsCreated)
+            {
+                _jobPassedFilter.Dispose();
+            }
+
+            _resultBuffer?.Dispose();
+            _capacity = capacity;
+            _candidateIndices = candidates;
+            _jobPassedFilter = output;
+            _resultBuffer = resultBuffer;
+            _lineOfSightCursor = 0;
+            LastUpdateStatus = SensorUpdateStatus.Ready;
         }
 
         private void CompleteJob()
         {
-            if (_jobScheduled)
+            if (!_jobScheduled)
             {
-                _currentJobHandle.Complete();
-                _jobScheduled = false;
+                return;
             }
+
+            _currentJobHandle.Complete();
+            _currentJobHandle = default;
+            _jobScheduled = false;
         }
-        
+
+        public bool TryGetResult(int index, out DetectionResult result)
+        {
+            _owner.EnsureOwnerThread();
+            if (_resultBuffer != null)
+            {
+                return _resultBuffer.TryGetResult(index, out result);
+            }
+
+            result = default;
+            return false;
+        }
+
+        public DetectionResult GetResult(int index) =>
+            TryGetResult(index, out DetectionResult result) ? result : default;
+
+        public void GetDetectionResults(ref NativeList<DetectionResult> results)
+        {
+            _owner.EnsureOwnerThread();
+            _resultBuffer.CopyResultsTo(ref results);
+        }
+
         public void GetDetectedHandles(ref NativeList<PerceptibleHandle> results)
         {
-            for (int i = 0; i < _detectedHandles.Length; i++)
+            _owner.EnsureOwnerThread();
+            _resultBuffer.CopyHandlesTo(ref results);
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
             {
-                results.Add(_detectedHandles[i]);
+                throw new ObjectDisposedException(nameof(SightSensor));
             }
         }
-        
+
         public void Dispose()
         {
-            if (_disposed) return;
+            _owner.EnsureOwnerThread();
+            if (_disposed)
+            {
+                return;
+            }
+
+            _owner.OnOwnedSensorDisposing(this);
+            CompleteAndCommitPending();
             _disposed = true;
-            
-            CompleteJob();
-            
-            if (_detectedHandles.IsCreated) _detectedHandles.Dispose();
-            if (_detectionResults.IsCreated) _detectionResults.Dispose();
-            if (_stagingHandles.IsCreated) _stagingHandles.Dispose();
-            if (_stagingResults.IsCreated) _stagingResults.Dispose();
-            if (_jobPassedFilter.IsCreated) _jobPassedFilter.Dispose();
-            if (_jobTargetData.IsCreated) _jobTargetData.Dispose();
-            if (_memoryEntries.IsCreated) _memoryEntries.Dispose();
-            _losRaycastBuffer = null;
+            LastUpdateStatus = SensorUpdateStatus.Disposed;
+            if (_candidateIndices.IsCreated)
+            {
+                _candidateIndices.Dispose();
+            }
+
+            if (_jobPassedFilter.IsCreated)
+            {
+                _jobPassedFilter.Dispose();
+            }
+
+            _resultBuffer?.Dispose();
+            _resultBuffer = null;
         }
     }
 }

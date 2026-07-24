@@ -4,6 +4,8 @@ A comprehensive guide to audio asset preparation, Unity import settings, and opt
 
 > **Scope**: This guide covers the **Unity built-in audio system** (AudioSource / AudioClip) workflow. If your project uses audio middleware such as **Wwise**, **FMOD**, or **CRIWARE (ADX2)**, the import pipeline, compression settings, load types, and latency characteristics discussed here **do not directly apply** — those tools replace Unity's audio engine with their own asset management, codec, and streaming systems. The [Audio Volume Normalizer tool](#workflow-with-audio-volume-normalizer) for source file loudness normalization is still useful regardless of which audio system you use, as it operates on source files before they enter any engine pipeline.
 
+> **Measurement note**: Memory and latency ranges in this guide are planning examples, not platform guarantees or verified project budgets. Codec implementation, Unity version, audio device, DSP buffer, hardware, concurrent I/O, and build target all affect the result. Confirm release decisions with the target Player, Unity Profiler, and representative hardware.
+
 <p align="left"><br> English | <a href="AudioBestPractices.SCH.md">简体中文</a></p>
 
 ## Related CycloneGames.Audio Docs
@@ -11,9 +13,29 @@ A comprehensive guide to audio asset preparation, Unity import settings, and opt
 - [Main plugin docs (English)](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md)
 - [Main plugin docs (简体中文)](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)
 
+## Runtime Residency with CycloneGames.Audio
+
+Unity import settings describe how an embedded `AudioClip` is stored and decoded. They do not define who owns an externally resolved clip. `CycloneGames.Audio` keeps these concerns separate:
+
+- An `AudioClipReference` stores location metadata; it does not make clip bytes resident by itself.
+- Loading an `AudioBank` registers event and parameter metadata. It does not implicitly retain every external clip in that bank.
+- A custom resolver returns a caller-owned `IAudioClipHandle`. The obsolete ABI-compatible `Register...` methods remain `void`; use the corresponding `Register...Scoped` method, retain its returned `IDisposable` lease, and dispose it only when the resolver is no longer available.
+- For predictable bank residency, acquire an `IAudioBankClipLease` through `IAudioBankClipLeaseProvider` before the playback phase and keep it for exactly as long as the clips must remain resident. Dispose it on the Unity main thread.
+- `PreloadBankClipsAsync` instead stores a manager-owned bank lease until `ReleasePreloadedBankClips`, bank unload, or manager cleanup.
+- With `AudioManager.ExternalClipMemoryBudgetBytes == 0` (the default), an unused external clip is released after its final handle. A positive budget enables bounded idle caching; validate the budget and `ExternalClipIdleTTL` on each target device.
+- The built-in external loader defaults to a 30-second request timeout, a 64 MiB encoded-download cap, and a 256 MiB decoded-PCM estimate cap. These are safety ceilings, not recommended asset sizes. Set lower product-specific limits where appropriate.
+- Bank leases default to a 512 MiB per-lease decoded estimate and a 1 GiB aggregate active-lease estimate. These are conservative post-decode estimates, not peak-allocation guarantees, and separately acquired leases may double-count a shared clip.
+
+All `CycloneGames.Audio` runtime APIs, resolver continuations, handle retention/release, and bank lease disposal have Unity main-thread affinity. Perform background file or network work behind an adapter, then marshal the Unity object creation and Audio API work back to the main thread.
+
+Authored immutable `AudioClipReference` assets reject mutation: `SetLocation` and `SetAssetLocation` throw `InvalidOperationException`, while `TrySetLocation` returns `false`. For control that outlives one playback frame, store `AudioHandle`; never retain the raw pooled `ActiveEvent` after playback stops or may have been recycled.
+
+Pause reasons are independent: manual, `Global`, `ApplicationPause`, `FocusLoss`, and `LifecycleHold` can overlap. `ResumeAll` clears only `Global`; an `AudioFocusMode.AutoPauseOnly` hold is released explicitly with `AudioManager.ResumeLifecyclePausedEvents()` or the optional `IAudioLifecyclePauseControl` service capability. Scheduled audio sources use Unity DSP scheduling, while scheduled snapshot transitions are applied on the first `Update` at or after the DSP start and are therefore frame-aligned. State-mix effects are one-shot writes; unloading their bank prevents future evaluation but does not roll back previously written parameter, mixer, or snapshot state.
+
 ## Table of Contents
 
 - [Audio Best Practices for Unity Game Development](#audio-best-practices-for-unity-game-development)
+  - [Runtime Residency with CycloneGames.Audio](#runtime-residency-with-cyclonegamesaudio)
   - [Table of Contents](#table-of-contents)
   - [Audio Pipeline Overview](#audio-pipeline-overview)
   - [Source File Format: WAV vs OGG](#source-file-format-wav-vs-ogg)
@@ -58,7 +80,7 @@ A comprehensive guide to audio asset preparation, Unity import settings, and opt
 
 ## Audio Pipeline Overview
 
-Understanding the full pipeline is critical — **the source file format has NO impact on runtime performance**.
+Understanding the full pipeline is critical. Unity normally re-encodes imported source audio, so runtime storage and decode behavior are governed primarily by the final `AudioImporter` settings rather than the source file extension.
 
 ```mermaid
 flowchart TD
@@ -74,7 +96,7 @@ flowchart TD
     style E fill:#2a6496,color:#fff
 ```
 
-**Key insight**: Unity discards your source format on import. Whether you feed it WAV or OGG, the final in-game audio is determined **solely** by the AudioClip Import Settings.
+**Key insight**: Unity produces the runtime representation during import. Source quality can affect the encoded result and source file size affects repository/import costs, while the final AudioClip Import Settings primarily determine runtime storage and decoding.
 
 ---
 

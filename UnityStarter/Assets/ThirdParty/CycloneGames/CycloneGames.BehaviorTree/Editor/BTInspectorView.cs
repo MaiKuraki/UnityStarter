@@ -14,6 +14,7 @@ namespace CycloneGames.BehaviorTree.Editor
         private IMGUIContainer _currentContainer;
         private ScrollView _scrollView;
         private Label _nodeTitleLabel;
+        private BTNodeView _selectedNodeView;
 
         public BTInspectorView()
         {
@@ -45,6 +46,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
         internal void UpdateSelection(BTNodeView nodeView)
         {
+            _selectedNodeView = null;
             if (_editor != null)
             {
                 UnityEngine.Object.DestroyImmediate(_editor);
@@ -72,6 +74,7 @@ namespace CycloneGames.BehaviorTree.Editor
             }
 
             string nodeName = BTNodeView.ConvertToReadableName(nodeView.Node.name);
+            _selectedNodeView = nodeView;
             if (_nodeTitleLabel != null)
             {
                 _nodeTitleLabel.text = nodeName;
@@ -93,7 +96,18 @@ namespace CycloneGames.BehaviorTree.Editor
                     using (new UnityEditor.EditorGUI.DisabledScope(
                                UnityEditor.EditorApplication.isPlayingOrWillChangePlaymode))
                     {
-                        _editor.OnInspectorGUI();
+                        UnityEditor.EditorGUI.BeginChangeCheck();
+                        try
+                        {
+                            _editor.OnInspectorGUI();
+                        }
+                        finally
+                        {
+                            if (UnityEditor.EditorGUI.EndChangeCheck())
+                            {
+                                _selectedNodeView?.RefreshAuthoringPresentation();
+                            }
+                        }
                     }
                 }
                 finally
@@ -108,6 +122,7 @@ namespace CycloneGames.BehaviorTree.Editor
 
         internal void ClearInspector()
         {
+            _selectedNodeView = null;
             if (_editor != null)
             {
                 UnityEngine.Object.DestroyImmediate(_editor);

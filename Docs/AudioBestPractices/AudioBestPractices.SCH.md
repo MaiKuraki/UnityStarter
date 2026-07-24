@@ -4,6 +4,8 @@
 
 > **适用范围**：本指南针对 **Unity 内置音频系统**（AudioSource / AudioClip）的开发流程。如果你的项目使用了 **Wwise**、**FMOD** 或 **CRIWARE (ADX2)** 等音频中间件，本文讨论的导入管线、压缩设置、加载类型和延迟特性**不直接适用** — 这些工具会用自己的资源管理、编解码器和流式加载系统替代 Unity 的音频引擎。[音频标准化工具](#音频标准化工具工作流)用于源文件响度归一化，无论使用哪种音频系统都仍然适用，因为它作用于进入任何引擎管线之前的源文件。
 
+> **测量说明**：本文中的内存与延迟范围仅用于方案估算，不是平台保证或已经验证的项目预算。Codec 实现、Unity 版本、音频设备、DSP buffer、硬件、并发 I/O 与构建目标都会改变结果。发布决策必须在目标 Player、Unity Profiler 和代表性真机上验证。
+
 <p align="left"><br> <a href="AudioBestPractices.md">English</a> | 简体中文</p>
 
 ## 关联 CycloneGames.Audio 主文档
@@ -11,24 +13,44 @@
 - [插件主文档（English）](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.md)
 - [插件主文档（简体中文）](../../UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Audio/README.SCH.md)
 
+## CycloneGames.Audio 的运行时驻留
+
+Unity 导入设置描述内嵌 `AudioClip` 的存储与解码方式，但不会定义外部解析所得音频的所有权。`CycloneGames.Audio` 将两类职责明确分离：
+
+- `AudioClipReference` 只保存位置元数据，本身不会让音频字节驻留内存。
+- 加载 `AudioBank` 只注册事件和参数元数据，不会隐式保留 Bank 中的全部外部音频。
+- 自定义 resolver 返回由调用方持有的 `IAudioClipHandle`。为保持 ABI 兼容，obsolete 的 `Register...` 方法仍返回 `void`；应使用对应的 `Register...Scoped` 方法，持有其返回的 `IDisposable` lease，并只在 resolver 不再可用时释放。
+- 若播放阶段要求 Bank 音频可预测地驻留，应通过 `IAudioBankClipLeaseProvider` 取得 `IAudioBankClipLease`，在需要驻留的完整生命周期内保留，并在 Unity 主线程释放。
+- `PreloadBankClipsAsync` 则保存 manager-owned bank lease，直到 `ReleasePreloadedBankClips`、bank unload 或 manager cleanup。
+- `AudioManager.ExternalClipMemoryBudgetBytes == 0` 时（默认值），外部音频会在最后一个 handle 释放后退出驻留。正数预算会启用有界闲置缓存；必须在各目标设备上验证预算与 `ExternalClipIdleTTL`。
+- 内置外部加载器的默认安全上限为：请求超时 30 秒、编码下载 64 MiB、解码 PCM 估算 256 MiB。这些数值是安全上限，不是推荐资源尺寸；产品应按实际平台配置更严格的限制。
+- Bank lease 默认采用单 lease 512 MiB decoded estimate 和 active lease 总计 1 GiB estimate。这些值是 conservative post-decode estimate，不是 peak-allocation guarantee；独立取得的 lease 共享 clip 时也可能重复计数。
+
+全部 `CycloneGames.Audio` Runtime API、resolver continuation、handle retain/release 和 Bank lease dispose 都具有 Unity 主线程亲和性。后台线程可在 adapter 后执行文件或网络工作，但 Unity 对象创建和 Audio API 操作必须切回主线程。
+
+不可变的创作 `AudioClipReference` 会拒绝修改：`SetLocation` 与 `SetAssetLocation` 抛出 `InvalidOperationException`，`TrySetLocation` 返回 `false`。需要让控制权跨越单次播放帧时，应保存 `AudioHandle`；播放停止或 pooled `ActiveEvent` 可能已经回收后，绝不能继续持有裸 `ActiveEvent`。
+
+暂停原因彼此独立：manual、`Global`、`ApplicationPause`、`FocusLoss` 与 `LifecycleHold` 可以重叠。`ResumeAll` 只清除 `Global`；`AudioFocusMode.AutoPauseOnly` 产生的 hold 应通过 `AudioManager.ResumeLifecyclePausedEvents()` 或可选的 `IAudioLifecyclePauseControl` service capability 显式释放。Scheduled source 使用 Unity DSP scheduling，而 scheduled snapshot transition 会在 DSP 开始时间到达后的首个 `Update` 应用，因此按帧对齐。State-mix effect 是一次性写入；卸载其 bank 只阻止后续评估，不会回滚此前写入的 parameter、mixer 或 snapshot state。
+
 ## 目录
 
-1. [音频管线概览](#音频管线概览)
-2. [源文件格式：WAV vs OGG](#源文件格式wav-vs-ogg)
-3. [PCM 基础与音频计算](#pcm-基础与音频计算)
-4. [Unity AudioClip 导入设置](#unity-audioclip-导入设置)
-5. [按音频类别的推荐设置](#按音频类别的推荐设置)
-6. [按游戏类型的推荐设置](#按游戏类型的推荐设置)
-7. [音频延迟深入分析](#音频延迟深入分析)
-8. [蓝牙音频延迟](#蓝牙音频延迟)
-9. [文件夹结构规范](#文件夹结构规范)
-10. [音频标准化工具工作流](#音频标准化工具工作流)
+1. [CycloneGames.Audio 的运行时驻留](#cyclonegamesaudio-的运行时驻留)
+2. [音频管线概览](#音频管线概览)
+3. [源文件格式：WAV vs OGG](#源文件格式wav-vs-ogg)
+4. [PCM 基础与音频计算](#pcm-基础与音频计算)
+5. [Unity AudioClip 导入设置](#unity-audioclip-导入设置)
+6. [按音频类别的推荐设置](#按音频类别的推荐设置)
+7. [按游戏类型的推荐设置](#按游戏类型的推荐设置)
+8. [音频延迟深入分析](#音频延迟深入分析)
+9. [蓝牙音频延迟](#蓝牙音频延迟)
+10. [文件夹结构规范](#文件夹结构规范)
+11. [音频标准化工具工作流](#音频标准化工具工作流)
 
 ---
 
 ## 音频管线概览
 
-理解完整管线至关重要 — **源文件格式对运行时性能没有任何影响**。
+理解完整管线至关重要。Unity 通常会重新编码导入的源音频，因此运行时存储与解码行为主要由最终 `AudioImporter` 设置决定，而不是由源文件扩展名决定。
 
 ```mermaid
 flowchart TD
@@ -44,7 +66,7 @@ flowchart TD
     style E fill:#2a6496,color:#fff
 ```
 
-**核心要点**：Unity 在导入时会丢弃你的源格式。无论你提供 WAV 还是 OGG，游戏内的最终音频**完全由** AudioClip Import Settings 决定。
+**核心要点**：Unity 会在导入阶段生成运行时表示。源音质会影响编码结果，源文件大小会影响仓库与导入成本；运行时存储和解码则主要由最终 AudioClip Import Settings 决定。
 
 ---
 

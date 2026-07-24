@@ -1,9 +1,9 @@
 using System;
+using CycloneGames.AIPerception.Runtime.Jobs;
 using Unity.Collections;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
-using CycloneGames.AIPerception.Runtime.Jobs;
 
 namespace CycloneGames.AIPerception.Runtime
 {
@@ -14,17 +14,19 @@ namespace CycloneGames.AIPerception.Runtime
         [Range(0f, 5f)] public float UpdateInterval;
         public int TargetTypeId;
         public bool FilterByType;
-        
+
         [Header("Sound Occlusion")]
         public bool UseOcclusion;
         public LayerMask OcclusionLayer;
         [Range(0f, 1f)] public float OcclusionAttenuation;
+        [Min(0)] public int MaximumOcclusionChecksPerUpdate;
 
         [Header("Memory")]
-        [Tooltip("Seconds to remember a target after it leaves sensor range. 0 disables memory.")]
-        [Range(0f, 60f)]
-        public float MemoryDuration;
-        
+        [Range(0f, 60f)] public float MemoryDuration;
+
+        [Header("Capacity")]
+        public PerceptionSensorCapacity Capacity;
+
         public static HearingSensorConfig Default => new HearingSensorConfig
         {
             Radius = 15f,
@@ -34,348 +36,509 @@ namespace CycloneGames.AIPerception.Runtime
             UseOcclusion = true,
             OcclusionLayer = Physics.DefaultRaycastLayers,
             OcclusionAttenuation = 0.5f,
-            MemoryDuration = 5f
+            MaximumOcclusionChecksPerUpdate = 64,
+            MemoryDuration = 5f,
+            Capacity = PerceptionSensorCapacity.Default
         };
     }
-    
-    public class HearingSensor : ISensor, IDisposable
+
+    /// <summary>
+    /// Main-thread-owned continuous-emission hearing sensor. Only perceptibles that explicitly
+    /// expose IsSoundSource participate; event-like sounds should use a dedicated product adapter.
+    /// </summary>
+    public sealed class HearingSensor : ISensor, ISensorManagerOwned
     {
         private readonly int _sensorId;
+        private readonly SensorManager _owner;
         private readonly Transform _sensorTransform;
+        private PerceptibleHandle _ignoredTarget;
         private HearingSensorConfig _config;
-        
-        // Detection results (stable for reading)
-        private NativeList<PerceptibleHandle> _detectedHandles;
-        private NativeList<DetectionResult> _detectionResults;
-        
-        // Staging buffer for deferred mode
-        private NativeList<PerceptibleHandle> _stagingHandles;
-        private NativeList<DetectionResult> _stagingResults;
-        
-        // Stimulus memory — persists after target leaves sensor range
-        private NativeList<StimulusMemoryEntry> _memoryEntries;
-        
-        // Job data (reused each frame)
+        private PerceptionSensorCapacity _capacity;
+        private NativeList<int> _candidateIndices;
         private NativeArray<float> _jobAudibility;
-        private NativeArray<PerceptibleData> _jobTargetData;
+        private NativeArray<PerceptibleData> _queryTargets;
+        private SensorResultBuffer _resultBuffer;
         private JobHandle _currentJobHandle;
+        private float3 _queryOrigin;
+        private double _queryTimestamp;
+        private int _queryTargetCount;
+        private int _occlusionCursor;
         private bool _jobScheduled;
-        private int _jobTargetCount;
         private bool _hasPendingResults;
-        
-        private float _lastUpdateTime;
+        private bool _initialized;
         private bool _disposed;
-        
-        public int SensorId => _sensorId;
-        public SensorType Type => SensorType.Hearing;
-        public bool IsEnabled { get; set; } = true;
-        public float UpdateInterval => _config.UpdateInterval;
-        public float LastUpdateTime => _lastUpdateTime;
-        public bool HasDetection => (_detectedHandles.IsCreated && _detectedHandles.Length > 0) || (_memoryEntries.IsCreated && _memoryEntries.Length > 0);
-        public int DetectedCount => (_detectedHandles.IsCreated ? _detectedHandles.Length : 0) + (_memoryEntries.IsCreated ? _memoryEntries.Length : 0);
-        
-        public float Radius => _config.Radius;
-        public float3 Position => _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
-        
-        public HearingSensor(Transform sensorTransform, HearingSensorConfig config)
+        private bool _isEnabled = true;
+        private double _lastUpdateTime;
+
+        public HearingSensor(
+            Transform sensorTransform,
+            HearingSensorConfig config,
+            PerceptibleHandle ignoredTarget = default)
+            : this(sensorTransform, config, SensorManager.Instance, ignoredTarget)
         {
-            _sensorId = SensorManager.Instance?.GenerateSensorId() ?? 0;
+        }
+
+        public HearingSensor(
+            Transform sensorTransform,
+            HearingSensorConfig config,
+            SensorManager owner,
+            PerceptibleHandle ignoredTarget = default)
+        {
+            _owner = owner ?? throw new ArgumentNullException(nameof(owner));
+            _sensorId = _owner.GenerateSensorId();
             _sensorTransform = sensorTransform;
+            _ignoredTarget = ignoredTarget;
             _config = config;
-            
             Initialize();
         }
-        
+
+        public int SensorId => _sensorId;
+        public SensorType Type => SensorType.Hearing;
+        public bool IsEnabled
+        {
+            get => _isEnabled;
+            set
+            {
+                _owner.EnsureOwnerThread();
+                ThrowIfDisposed();
+                if (_isEnabled == value)
+                {
+                    return;
+                }
+
+                CompleteAndCommitPending();
+                _isEnabled = value;
+                if (!value)
+                {
+                    _resultBuffer.ClearAll();
+                    LastUpdateStatus = SensorUpdateStatus.Ready;
+                }
+            }
+        }
+        public float UpdateInterval => _config.UpdateInterval;
+        public double LastUpdateTime => _lastUpdateTime;
+        public float Radius => _config.Radius;
+        public float3 Position
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _sensorTransform != null ? (float3)_sensorTransform.position : float3.zero;
+            }
+        }
+        public HearingSensorConfig Config => _config;
+        public SensorUpdateStatus LastUpdateStatus { get; private set; }
+        public bool HasDetection
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer != null && _resultBuffer.HasResults;
+            }
+        }
+
+        public int DetectedCount
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer?.ResultCount ?? 0;
+            }
+        }
+
+        public int MemoryCount
+        {
+            get
+            {
+                _owner.EnsureOwnerThread();
+                return _resultBuffer?.MemoryCount ?? 0;
+            }
+        }
+        SensorManager ISensorManagerOwned.Owner => _owner;
+        bool ISensorManagerOwned.IsDisposed => _disposed;
+
         public void Initialize()
         {
-            _detectedHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
-            _detectionResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
-            _stagingHandles = new NativeList<PerceptibleHandle>(32, Allocator.Persistent);
-            _stagingResults = new NativeList<DetectionResult>(32, Allocator.Persistent);
-            _memoryEntries = new NativeList<StimulusMemoryEntry>(32, Allocator.Persistent);
+            _owner.EnsureOwnerThread();
+            if (_disposed)
+            {
+                throw new ObjectDisposedException(nameof(HearingSensor));
+            }
+
+            if (_initialized)
+            {
+                return;
+            }
+
+            _capacity = _config.Capacity.Normalize();
+            RecreateStorage(in _capacity);
+            _initialized = true;
+            LastUpdateStatus = SensorUpdateStatus.Ready;
         }
-        
+
+        public void ApplyConfig(in HearingSensorConfig config)
+        {
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            PerceptionSensorCapacity normalized = config.Capacity.Normalize();
+            if (!_capacity.HasSameLimits(in normalized))
+            {
+                RecreateStorage(in normalized);
+            }
+
+            _config = config;
+        }
+
+        public void SetIgnoredTarget(PerceptibleHandle target)
+        {
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            _ignoredTarget = target;
+        }
+
         public void UpdateSensor(float deltaTime)
         {
-            if (_disposed || _sensorTransform == null) return;
-            
-            // Complete previous job if any
-            CompleteJob();
-            
-            var registry = PerceptibleRegistry.Instance;
-            if (registry == null || registry.IsDisposed)
+            _owner.EnsureOwnerThread();
+            ThrowIfDisposed();
+            CompleteAndCommitPending();
+            double timestamp = Time.timeAsDouble;
+            if (_sensorTransform == null || !IsConfigurationValid())
             {
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                _lastUpdateTime = Time.time;
+                CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
                 return;
             }
-            
-            // RebuildData is called once per frame by SensorManager.Update
-            int targetCount = registry.GetDataCount();
-            
-            if (targetCount == 0)
+
+            PerceptibleRegistry registry = _owner.Registry;
+            if (registry.GetDataCount() == 0)
             {
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                _lastUpdateTime = Time.time;
+                CommitEmpty(timestamp, SensorUpdateStatus.NoTargets);
                 return;
             }
-            
-            // Create a spatially filtered copy for job processing
-            _jobTargetData = registry.CreateNativeDataCopyInRange(Position, _config.Radius, Allocator.TempJob);
-            _jobTargetCount = _jobTargetData.Length;
-            
-            // Allocate job output
-            if (!_jobAudibility.IsCreated || _jobAudibility.Length < _jobTargetCount)
+
+            _queryOrigin = Position;
+            _queryTimestamp = timestamp;
+            float queryRange = (_config.Radius * registry.MaximumLoudness) + registry.MaximumDetectionRadius;
+            if (!math.isfinite(queryRange))
             {
-                if (_jobAudibility.IsCreated) _jobAudibility.Dispose();
-                _jobAudibility = new NativeArray<float>(_jobTargetCount, Allocator.Persistent);
+                CommitEmpty(timestamp, SensorUpdateStatus.InvalidConfiguration);
+                return;
             }
-            
-            // Schedule Burst job for sphere query
+
+            if (!registry.CollectCandidateIndices(
+                    _queryOrigin,
+                    queryRange,
+                    ref _candidateIndices,
+                    _capacity.MaximumCandidates))
+            {
+                CommitEmpty(timestamp, SensorUpdateStatus.CandidateCapacityExceeded);
+                return;
+            }
+
+            _queryTargetCount = _candidateIndices.Length;
+            if (_queryTargetCount == 0)
+            {
+                CommitEmpty(timestamp, SensorUpdateStatus.NoTargets);
+                return;
+            }
+
+            EnsureJobCapacity(_queryTargetCount);
+            _queryTargets = registry.NativeData;
             var job = new SphereQueryJob
             {
-                Targets = _jobTargetData,
-                Origin = Position,
+                Targets = _queryTargets,
+                CandidateIndices = _candidateIndices.AsArray(),
+                Origin = _queryOrigin,
                 Radius = _config.Radius,
                 TargetTypeId = _config.TargetTypeId,
                 FilterByType = _config.FilterByType,
+                IgnoredTarget = _ignoredTarget,
                 Audibility = _jobAudibility
             };
-            
-            _currentJobHandle = job.Schedule(_jobTargetCount, 64);
+
+            _currentJobHandle = job.Schedule(_queryTargetCount, 64);
             _jobScheduled = true;
-            
-            var manager = SensorManager.Instance;
-            if (manager != null && manager.UseDeferredJobCompletion)
+            _hasPendingResults = true;
+            if (_owner.UseDeferredJobCompletion && _owner.IsRegistered(this))
             {
-                // Deferred mode: add to batch, process in LateUpdate
-                manager.AddToBatch(_currentJobHandle);
-                _hasPendingResults = true;
+                _owner.AddToBatch(_currentJobHandle);
             }
             else
             {
-                // Immediate mode: complete now and process
-                _currentJobHandle.Complete();
-                _jobScheduled = false;
-                
-                _detectedHandles.Clear();
-                _detectionResults.Clear();
-                ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _detectedHandles, _detectionResults);
-                MergeMemory();
-                
-                if (_jobTargetData.IsCreated)
-                {
-                    _jobTargetData.Dispose();
-                    _jobTargetData = default;
-                }
-                _jobTargetCount = 0;
+                CompleteAndCommitPending();
             }
-            
-            _lastUpdateTime = Time.time;
         }
-        
+
         public void ProcessJobResults()
         {
-            if (!_hasPendingResults) return;
-            if (!_jobTargetData.IsCreated || _jobTargetCount == 0)
+            _owner.EnsureOwnerThread();
+            if (!_disposed)
             {
-                _hasPendingResults = false;
+                CompleteAndCommitPending();
+            }
+        }
+
+        private void CompleteAndCommitPending()
+        {
+            if (!_hasPendingResults)
+            {
                 return;
             }
-            
-            // Complete job if not already done
+
             CompleteJob();
-            
-            // Write to staging buffer first
-            _stagingHandles.Clear();
-            _stagingResults.Clear();
-            ProcessJobResultsInternal(_jobTargetData, _jobTargetCount, _stagingHandles, _stagingResults);
-            
-            // Swap: copy staging to main
-            _detectedHandles.Clear();
-            _detectionResults.Clear();
-            for (int i = 0; i < _stagingHandles.Length; i++)
+            _resultBuffer.BeginUpdate();
+            SensorUpdateStatus status = SensorUpdateStatus.Ready;
+            int maximumChecks = _config.MaximumOcclusionChecksPerUpdate;
+            int occlusionChecks = 0;
+            int nextCursor = _occlusionCursor;
+            for (int offset = 0; offset < _queryTargetCount; offset++)
             {
-                _detectedHandles.Add(_stagingHandles[i]);
-                _detectionResults.Add(_stagingResults[i]);
-            }
-            MergeMemory();
-            
-            if (_jobTargetData.IsCreated)
-            {
-                _jobTargetData.Dispose();
-                _jobTargetData = default;
-            }
-            _jobTargetCount = 0;
-            _hasPendingResults = false;
-        }
-        
-        private void ProcessJobResultsInternal(
-            NativeArray<PerceptibleData> targets, 
-            int count,
-            NativeList<PerceptibleHandle> outHandles,
-            NativeList<DetectionResult> outResults)
-        {
-            float3 origin = Position;
-            
-            for (int i = 0; i < count; i++)
-            {
+                int i = (_occlusionCursor + offset) % _queryTargetCount;
                 float audibility = _jobAudibility[i];
-                if (audibility < 0.01f) continue;
-                
-                var target = targets[i];
-                
-                // Occlusion check on main thread
+                if (audibility < 0f)
+                {
+                    if (status == SensorUpdateStatus.Ready)
+                    {
+                        status = SensorUpdateStatus.CoordinateRangeExceeded;
+                    }
+
+                    continue;
+                }
+
+                if (audibility < 0.01f)
+                {
+                    continue;
+                }
+
+                PerceptibleData target = _queryTargets[_candidateIndices[i]];
                 if (_config.UseOcclusion)
                 {
-                    if (Physics.Linecast(origin, target.Position, _config.OcclusionLayer))
+                    if (maximumChecks > 0 && occlusionChecks >= maximumChecks)
+                    {
+                        status = SensorUpdateStatus.OcclusionBudgetExceeded;
+                        nextCursor = i;
+                        break;
+                    }
+
+                    occlusionChecks++;
+                    if (Physics.Linecast(
+                            (Vector3)_queryOrigin,
+                            (Vector3)target.Position,
+                            _config.OcclusionLayer,
+                            QueryTriggerInteraction.Ignore))
                     {
                         audibility *= _config.OcclusionAttenuation;
                     }
                 }
-                
-                if (audibility < 0.01f) continue;
-                
-                float dist = math.distance(origin, target.Position);
-                
-                outHandles.Add(target.ToHandle());
-                outResults.Add(new DetectionResult
+
+                if (audibility < 0.01f)
                 {
-                    Target = target.ToHandle(),
-                    Distance = dist,
-                    LastKnownPosition = target.Position,
-                    DetectionTime = Time.time,
-                    Visibility = audibility,
-                    SensorType = 1
-                });
-            }
-        }
-
-        private void MergeMemory()
-        {
-            if (_config.MemoryDuration <= 0f || !_memoryEntries.IsCreated) return;
-
-            float now = Time.time;
-            var refreshed = new NativeArray<bool>(_memoryEntries.Length, Allocator.Temp);
-
-            for (int i = 0; i < _detectionResults.Length; i++)
-            {
-                var dr = _detectionResults[i];
-                int memIdx = FindMemoryIndex(dr.Target);
-
-                if (memIdx >= 0)
-                {
-                    var entry = _memoryEntries[memIdx];
-                    entry.LastDetectedTime = now;
-                    entry.LastKnownPosition = dr.LastKnownPosition;
-                    entry.PeakVisibility = math.max(entry.PeakVisibility, dr.Visibility);
-                    entry.DistanceAtDetection = dr.Distance;
-                    _memoryEntries[memIdx] = entry;
-                    refreshed[memIdx] = true;
+                    continue;
                 }
-                else
+
+                if (!PerceptionNumerics.TryGetFiniteDistance(
+                        in _queryOrigin,
+                        in target.Position,
+                        out _,
+                        out float distance))
                 {
-                    _memoryEntries.Add(new StimulusMemoryEntry
+                    status = SensorUpdateStatus.CoordinateRangeExceeded;
+                    continue;
+                }
+
+                if (!_resultBuffer.TryAddLive(new DetectionResult
                     {
-                        Target = dr.Target,
-                        LastKnownPosition = dr.LastKnownPosition,
-                        LastDetectedTime = now,
-                        PeakVisibility = dr.Visibility,
-                        SensorType = (int)SensorType.Hearing,
-                        DistanceAtDetection = dr.Distance
-                    });
+                        Target = target.ToHandle(),
+                        Distance = distance,
+                        LastKnownPosition = target.Position,
+                        DetectionTime = _queryTimestamp,
+                        Visibility = audibility,
+                        SensorType = SensorType.Hearing,
+                        IsFromMemory = false
+                    }))
+                {
+                    status = SensorUpdateStatus.ResultCapacityExceeded;
+                    nextCursor = i;
+                    break;
                 }
             }
 
-            for (int i = _memoryEntries.Length - 1; i >= 0; i--)
+            if (_queryTargetCount > 0)
             {
-                if (i < refreshed.Length && refreshed[i]) continue;
-
-                var entry = _memoryEntries[i];
-                float age = now - entry.LastDetectedTime;
-
-                if (age >= _config.MemoryDuration)
-                {
-                    _memoryEntries.RemoveAtSwapBack(i);
-                    continue;
-                }
-
-                float visibility = entry.PeakVisibility * (1f - age / _config.MemoryDuration);
-                if (visibility <= 0.01f)
-                {
-                    _memoryEntries.RemoveAtSwapBack(i);
-                    continue;
-                }
-
-                var memResult = new DetectionResult
-                {
-                    Target = entry.Target,
-                    Distance = entry.DistanceAtDetection,
-                    LastKnownPosition = entry.LastKnownPosition,
-                    DetectionTime = entry.LastDetectedTime,
-                    Visibility = visibility,
-                    SensorType = (int)SensorType.Hearing,
-                    IsFromMemory = true
-                };
-
-                _detectionResults.Add(memResult);
-                _detectedHandles.Add(entry.Target);
+                _occlusionCursor = nextCursor % _queryTargetCount;
             }
 
-            if (refreshed.IsCreated) refreshed.Dispose();
+            LastUpdateStatus = _resultBuffer.Commit(
+                _queryTimestamp,
+                _config.MemoryDuration,
+                SensorType.Hearing,
+                status);
+            _lastUpdateTime = _queryTimestamp;
+            _queryTargetCount = 0;
+            _queryTargets = default;
+            _hasPendingResults = false;
         }
 
-        private int FindMemoryIndex(PerceptibleHandle target)
+        private void CommitEmpty(double timestamp, SensorUpdateStatus status)
         {
-            for (int i = 0; i < _memoryEntries.Length; i++)
-            {
-                if (_memoryEntries[i].Target == target) return i;
-            }
-            return -1;
+            _resultBuffer.BeginUpdate();
+            LastUpdateStatus = _resultBuffer.Commit(
+                timestamp,
+                _config.MemoryDuration,
+                SensorType.Hearing,
+                status);
+            _lastUpdateTime = timestamp;
         }
 
-        public int MemoryCount => _memoryEntries.IsCreated ? _memoryEntries.Length : 0;
+        private bool IsConfigurationValid()
+        {
+            return math.isfinite(_config.Radius) && _config.Radius >= 0f &&
+                   math.isfinite(_config.UpdateInterval) && _config.UpdateInterval >= 0f &&
+                   math.isfinite(_config.OcclusionAttenuation) &&
+                   _config.OcclusionAttenuation >= 0f && _config.OcclusionAttenuation <= 1f &&
+                   _config.MaximumOcclusionChecksPerUpdate >= 0 &&
+                   math.isfinite(_config.MemoryDuration) && _config.MemoryDuration >= 0f;
+        }
+
+        private void EnsureJobCapacity(int required)
+        {
+            if (_jobAudibility.IsCreated && _jobAudibility.Length >= required)
+            {
+                return;
+            }
+
+            int current = _jobAudibility.IsCreated ? _jobAudibility.Length : 0;
+            int doubled = current <= _capacity.MaximumCandidates / 2
+                ? current * 2
+                : _capacity.MaximumCandidates;
+            int capacity = math.min(_capacity.MaximumCandidates, math.max(required, math.max(1, doubled)));
+            var replacement = new NativeArray<float>(capacity, Allocator.Persistent);
+            if (_jobAudibility.IsCreated)
+            {
+                _jobAudibility.Dispose();
+            }
+
+            _jobAudibility = replacement;
+        }
+
+        private void RecreateStorage(in PerceptionSensorCapacity capacity)
+        {
+            NativeList<int> candidates = default;
+            NativeArray<float> output = default;
+            SensorResultBuffer resultBuffer = null;
+            try
+            {
+                candidates = new NativeList<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
+                output = new NativeArray<float>(capacity.InitialCandidateCapacity, Allocator.Persistent);
+                resultBuffer = new SensorResultBuffer(in capacity);
+            }
+            catch
+            {
+                if (candidates.IsCreated)
+                {
+                    candidates.Dispose();
+                }
+
+                if (output.IsCreated)
+                {
+                    output.Dispose();
+                }
+
+                resultBuffer?.Dispose();
+                throw;
+            }
+
+            if (_candidateIndices.IsCreated)
+            {
+                _candidateIndices.Dispose();
+            }
+
+            if (_jobAudibility.IsCreated)
+            {
+                _jobAudibility.Dispose();
+            }
+
+            _resultBuffer?.Dispose();
+            _capacity = capacity;
+            _candidateIndices = candidates;
+            _jobAudibility = output;
+            _resultBuffer = resultBuffer;
+            _occlusionCursor = 0;
+            LastUpdateStatus = SensorUpdateStatus.Ready;
+        }
 
         private void CompleteJob()
         {
-            if (_jobScheduled)
+            if (!_jobScheduled)
             {
-                _currentJobHandle.Complete();
-                _jobScheduled = false;
+                return;
             }
+
+            _currentJobHandle.Complete();
+            _currentJobHandle = default;
+            _jobScheduled = false;
         }
-        
+
+        public bool TryGetResult(int index, out DetectionResult result)
+        {
+            _owner.EnsureOwnerThread();
+            if (_resultBuffer != null)
+            {
+                return _resultBuffer.TryGetResult(index, out result);
+            }
+
+            result = default;
+            return false;
+        }
+
+        public DetectionResult GetResult(int index) =>
+            TryGetResult(index, out DetectionResult result) ? result : default;
+
+        public void GetDetectionResults(ref NativeList<DetectionResult> results)
+        {
+            _owner.EnsureOwnerThread();
+            _resultBuffer.CopyResultsTo(ref results);
+        }
+
         public void GetDetectedHandles(ref NativeList<PerceptibleHandle> results)
         {
-            for (int i = 0; i < _detectedHandles.Length; i++)
+            _owner.EnsureOwnerThread();
+            _resultBuffer.CopyHandlesTo(ref results);
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_disposed)
             {
-                results.Add(_detectedHandles[i]);
+                throw new ObjectDisposedException(nameof(HearingSensor));
             }
         }
-        
-        public DetectionResult GetResult(int index)
-        {
-            return index >= 0 && index < _detectionResults.Length 
-                ? _detectionResults[index] 
-                : default;
-        }
-        
+
         public void Dispose()
         {
-            if (_disposed) return;
+            _owner.EnsureOwnerThread();
+            if (_disposed)
+            {
+                return;
+            }
+
+            _owner.OnOwnedSensorDisposing(this);
+            CompleteAndCommitPending();
             _disposed = true;
-            
-            CompleteJob();
-            
-            if (_detectedHandles.IsCreated) _detectedHandles.Dispose();
-            if (_detectionResults.IsCreated) _detectionResults.Dispose();
-            if (_stagingHandles.IsCreated) _stagingHandles.Dispose();
-            if (_stagingResults.IsCreated) _stagingResults.Dispose();
-            if (_jobAudibility.IsCreated) _jobAudibility.Dispose();
-            if (_jobTargetData.IsCreated) _jobTargetData.Dispose();
-            if (_memoryEntries.IsCreated) _memoryEntries.Dispose();
+            LastUpdateStatus = SensorUpdateStatus.Disposed;
+            if (_candidateIndices.IsCreated)
+            {
+                _candidateIndices.Dispose();
+            }
+
+            if (_jobAudibility.IsCreated)
+            {
+                _jobAudibility.Dispose();
+            }
+
+            _resultBuffer?.Dispose();
+            _resultBuffer = null;
         }
     }
 }

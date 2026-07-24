@@ -65,7 +65,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 throw new BehaviorTreeCompileException($"Root node {source.Root.GetType().Name} returned null runtime node.");
             }
 
-            var blackboard = new RuntimeBlackboard
+            if (!source.TryGetRuntimeBlackboardSchema(
+                    out RuntimeBlackboardSchema runtimeSchema,
+                    out string schemaError))
+            {
+                throw new BehaviorTreeCompileException(
+                    $"Behavior tree runtime schema creation failed for '{source.name}': {schemaError}");
+            }
+
+            var blackboard = new RuntimeBlackboard(schema: runtimeSchema)
             {
                 Context = context
             };
@@ -191,11 +199,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 return errors;
             }
 
+            RuntimeBlackboardSchema rootSchema = null;
+            bool rootSchemaEnabled = source.BlackboardSchemaEnabled;
+            if (rootSchemaEnabled &&
+                !source.TryGetRuntimeBlackboardSchema(out rootSchema, out string schemaError))
+            {
+                errors.Add($"Blackboard schema: {schemaError}");
+            }
+
             nodeCount = ValidateGraphIterative(
                 source,
                 maxNodeCount,
                 maxDepth,
                 emitters ?? BehaviorTreeNodeEmitterRegistry.BuiltIn,
+                rootSchemaEnabled,
+                rootSchema,
                 errors);
             return errors;
         }
@@ -224,6 +242,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             int maxNodeCount,
             int maxDepth,
             BehaviorTreeNodeEmitterRegistry emitters,
+            bool rootSchemaEnabled,
+            RuntimeBlackboardSchema rootSchema,
             List<string> errors)
         {
             var statesByOccurrence = new Dictionary<int, Dictionary<BTNode, byte>>
@@ -237,6 +257,14 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             var guidPrefixesByOccurrence = new Dictionary<int, string>
             {
                 [0] = null
+            };
+            var schemasByOccurrence = new Dictionary<int, RuntimeBlackboardSchema>
+            {
+                [0] = rootSchema
+            };
+            var strictSchemasByOccurrence = new Dictionary<int, bool>
+            {
+                [0] = rootSchemaEnabled
             };
             var runtimeGuids = new HashSet<string>(StringComparer.Ordinal);
             var activeAssets = new HashSet<BehaviorTree>(ReferenceComparer<BehaviorTree>.Instance)
@@ -266,6 +294,15 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                         continue;
                     }
 
+                    ResolveSubTreeValidationSchema(
+                        asset,
+                        strictSchemasByOccurrence[frame.OccurrenceId],
+                        schemasByOccurrence[frame.OccurrenceId],
+                        frame.Path,
+                        errors,
+                        out bool childStrictSchema,
+                        out RuntimeBlackboardSchema childSchema);
+
                     if (!activeAssets.Add(asset))
                     {
                         errors.Add($"{frame.Path}: recursive subtree asset cycle detected at '{asset.name}'.");
@@ -279,6 +316,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                     guidsByOccurrence.Add(
                         occurrenceId,
                         new HashSet<string>(StringComparer.Ordinal));
+                    strictSchemasByOccurrence.Add(occurrenceId, childStrictSchema);
+                    schemasByOccurrence.Add(occurrenceId, childSchema);
                     string parentPrefix = guidPrefixesByOccurrence[frame.OccurrenceId];
                     string occurrenceSegment = "bt-subtree-" +
                         occurrenceId.ToString(CultureInfo.InvariantCulture);
@@ -353,7 +392,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                     }
                 }
 
-                ValidateNodeSemantics(node, frame.Path, errors);
+                ValidateNodeSemantics(
+                    node,
+                    frame.Path,
+                    schemasByOccurrence[frame.OccurrenceId],
+                    errors);
                 if (!emitters.CanEmit(node.GetType()))
                 {
                     errors.Add(
@@ -373,7 +416,56 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             return nodeCount;
         }
 
-        private static void ValidateNodeSemantics(BTNode node, string path, List<string> errors)
+        private static void ResolveSubTreeValidationSchema(
+            BehaviorTree asset,
+            bool parentStrictSchema,
+            RuntimeBlackboardSchema parentSchema,
+            string path,
+            List<string> errors,
+            out bool childStrictSchema,
+            out RuntimeBlackboardSchema childSchema)
+        {
+            if (asset == null || !asset.BlackboardSchemaEnabled)
+            {
+                childStrictSchema = parentStrictSchema;
+                childSchema = parentSchema;
+                return;
+            }
+
+            childStrictSchema = true;
+            if (!asset.TryGetRuntimeBlackboardSchema(
+                    out childSchema,
+                    out string childSchemaError))
+            {
+                errors.Add($"{path}: subtree blackboard schema is invalid: {childSchemaError}");
+                return;
+            }
+
+            if (!parentStrictSchema)
+            {
+                errors.Add(
+                    $"{path}: strict subtree '{asset.name}' cannot be embedded in a legacy-open root; " +
+                    "enable a compatible strict root schema or make the subtree legacy-open.");
+                return;
+            }
+
+            // Each strict subtree validates its own reusable authoring contract. Runtime storage
+            // still uses the compiled root schema as the only externally visible authority.
+            if (parentSchema != null &&
+                !BehaviorTreeBlackboardSchemaCompiler.IsExactSubset(
+                    childSchema,
+                    parentSchema,
+                    out string compatibilityError))
+            {
+                errors.Add($"{path}: subtree blackboard schema is incompatible: {compatibilityError}");
+            }
+        }
+
+        private static void ValidateNodeSemantics(
+            BTNode node,
+            string path,
+            RuntimeBlackboardSchema activeSchema,
+            List<string> errors)
         {
             if (node is BTRootNode root && root.Child == null)
             {
@@ -420,6 +512,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                 {
                     errors.Add($"{path}: BBComparison requires a blackboard key.");
                 }
+                else if (RuntimeBlackboard.DefaultStringHashFunc(key) == 0)
+                {
+                    errors.Add($"{path}: BBComparison key hashes to the reserved zero value.");
+                }
                 if ((uint)(int)comparisonOperator > (uint)BBComparisonOp.IsNotSet)
                 {
                     errors.Add($"{path}: BBComparison operator value {(int)comparisonOperator} is invalid.");
@@ -458,6 +554,33 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                     && string.IsNullOrWhiteSpace(comparison.ReferenceKey))
                 {
                     errors.Add($"{path}: BBComparison reference key cannot contain only whitespace.");
+                }
+
+                bool isExistenceCheck =
+                    comparisonOperator == BBComparisonOp.IsSet ||
+                    comparisonOperator == BBComparisonOp.IsNotSet;
+                if (!string.IsNullOrWhiteSpace(key) &&
+                    RuntimeBlackboard.DefaultStringHashFunc(key) != 0)
+                {
+                    ValidateSchemaKey(
+                        activeSchema,
+                        key,
+                        path,
+                        "BBComparison key",
+                        isExistenceCheck ? (RuntimeBlackboardValueType?)null : ToRuntimeValueType(valueType),
+                        errors);
+                }
+
+                if (!isExistenceCheck &&
+                    !string.IsNullOrWhiteSpace(comparison.ReferenceKey))
+                {
+                    ValidateSchemaKey(
+                        activeSchema,
+                        comparison.ReferenceKey,
+                        path,
+                        "BBComparison reference key",
+                        ToRuntimeValueType(valueType),
+                        errors);
                 }
             }
 
@@ -517,15 +640,42 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
 
             if (node is MessagePassNode messagePass)
             {
-                ValidateAuthoringKey(messagePass.Key, path, "MessagePass", errors);
+                if (ValidateAuthoringKey(messagePass.Key, path, "MessagePass", errors))
+                {
+                    ValidateSchemaKey(
+                        activeSchema,
+                        messagePass.Key,
+                        path,
+                        "MessagePass key",
+                        RuntimeBlackboardValueType.Object,
+                        errors);
+                }
             }
             else if (node is MessageRemoveNode messageRemove)
             {
-                ValidateAuthoringKey(messageRemove.Key, path, "MessageRemove", errors);
+                if (ValidateAuthoringKey(messageRemove.Key, path, "MessageRemove", errors))
+                {
+                    ValidateSchemaKey(
+                        activeSchema,
+                        messageRemove.Key,
+                        path,
+                        "MessageRemove key",
+                        null,
+                        errors);
+                }
             }
             else if (node is MessageReceiveNode messageReceive)
             {
-                ValidateAuthoringKey(messageReceive.Key, path, "MessageReceive", errors);
+                if (ValidateAuthoringKey(messageReceive.Key, path, "MessageReceive", errors))
+                {
+                    ValidateSchemaKey(
+                        activeSchema,
+                        messageReceive.Key,
+                        path,
+                        "MessageReceive key",
+                        RuntimeBlackboardValueType.Object,
+                        errors);
+                }
             }
 
             if (!(node is CompositeNode composite))
@@ -560,7 +710,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
 
             if (node is SwitchNode switchNode)
             {
-                ValidateAuthoringKey(switchNode.VariableKey, path, "Switch", errors);
+                if (ValidateAuthoringKey(switchNode.VariableKey, path, "Switch", errors))
+                {
+                    ValidateSchemaKey(
+                        activeSchema,
+                        switchNode.VariableKey,
+                        path,
+                        "Switch key",
+                        RuntimeBlackboardValueType.Int,
+                        errors);
+                }
             }
 
             if (node is UtilitySelectorNode utility)
@@ -582,6 +741,16 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
                     else if (RuntimeBlackboard.DefaultStringHashFunc(scoreKeys[i]) == 0)
                     {
                         errors.Add($"{path}: UtilitySelector score key[{i}] hashes to the reserved zero value.");
+                    }
+                    else
+                    {
+                        ValidateSchemaKey(
+                            activeSchema,
+                            scoreKeys[i],
+                            path,
+                            $"UtilitySelector score key[{i}]",
+                            RuntimeBlackboardValueType.Float,
+                            errors);
                     }
                 }
             }
@@ -680,7 +849,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             }
         }
 
-        private static void ValidateAuthoringKey(
+        private static bool ValidateAuthoringKey(
             string key,
             string path,
             string nodeName,
@@ -689,6 +858,66 @@ namespace CycloneGames.BehaviorTree.Runtime.Compilation
             if (string.IsNullOrWhiteSpace(key))
             {
                 errors.Add($"{path}: {nodeName} requires a blackboard key.");
+                return false;
+            }
+
+            if (RuntimeBlackboard.DefaultStringHashFunc(key) == 0)
+            {
+                errors.Add($"{path}: {nodeName} key hashes to the reserved zero value.");
+                return false;
+            }
+
+            return true;
+        }
+
+        private static void ValidateSchemaKey(
+            RuntimeBlackboardSchema schema,
+            string key,
+            string path,
+            string label,
+            RuntimeBlackboardValueType? expectedType,
+            List<string> errors)
+        {
+            if (schema == null)
+            {
+                return;
+            }
+
+            int keyHash = RuntimeBlackboard.DefaultStringHashFunc(key);
+            if (!schema.TryGetDefinition(keyHash, out RuntimeBlackboardKeyDefinition definition))
+            {
+                errors.Add($"{path}: {label} '{key}' is not declared by the active strict schema.");
+                return;
+            }
+
+            if (!string.Equals(definition.Name, key, StringComparison.Ordinal))
+            {
+                errors.Add(
+                    $"{path}: {label} '{key}' collides with declared key '{definition.Name}' at hash {keyHash}.");
+                return;
+            }
+
+            if (expectedType.HasValue && definition.ValueType != expectedType.Value)
+            {
+                errors.Add(
+                    $"{path}: {label} '{key}' requires {expectedType.Value}, but the schema declares {definition.ValueType}.");
+            }
+        }
+
+        private static RuntimeBlackboardValueType? ToRuntimeValueType(BBValueType valueType)
+        {
+            switch (valueType)
+            {
+                case BBValueType.Int:
+                    return RuntimeBlackboardValueType.Int;
+                case BBValueType.Float:
+                    return RuntimeBlackboardValueType.Float;
+                case BBValueType.Bool:
+                    return RuntimeBlackboardValueType.Bool;
+                case BBValueType.Object:
+                    return RuntimeBlackboardValueType.Object;
+                default:
+                    return null;
             }
         }
 

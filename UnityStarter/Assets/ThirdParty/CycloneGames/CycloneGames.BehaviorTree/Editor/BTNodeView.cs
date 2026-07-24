@@ -395,6 +395,14 @@ namespace CycloneGames.BehaviorTree.Editor
             UpdateProgressBar();
         }
 
+        internal void RefreshAuthoringPresentation()
+        {
+            _lastInfoUpdateTime = double.NegativeInfinity;
+            _cachedInfoText = string.Empty;
+            UpdateInfoLabel();
+            MarkDirtyRepaint();
+        }
+
         /// <summary>
         /// Updates the progress bar fill and label for WaitNode during runtime.
         /// </summary>

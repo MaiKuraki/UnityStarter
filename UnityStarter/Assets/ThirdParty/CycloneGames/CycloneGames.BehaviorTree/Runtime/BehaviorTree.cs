@@ -16,11 +16,62 @@ using UnityEngine;
 namespace CycloneGames.BehaviorTree.Runtime
 {
     [CreateAssetMenu(fileName = "BehaviorTree", menuName = "CycloneGames/AI/BehaviorTree")]
-    public class BehaviorTree : ScriptableObject
+    public class BehaviorTree : ScriptableObject, ISerializationCallbackReceiver
     {
+        public const int CurrentBlackboardSchemaFormatVersion = 1;
+
         public GameObject Owner { get; private set; } = null;
         public BTNode Root;
         public List<BTNode> Nodes = new List<BTNode>();
+
+        [SerializeField] private bool _blackboardSchemaEnabled;
+        [SerializeField] private int _blackboardSchemaFormatVersion = CurrentBlackboardSchemaFormatVersion;
+        [SerializeField, Min(1)] private int _blackboardContractVersion = RuntimeBlackboardSchema.DefaultContractVersion;
+        [SerializeField] private List<BehaviorTreeBlackboardKey> _blackboardKeys =
+            new List<BehaviorTreeBlackboardKey>();
+
+        [NonSerialized] private bool _blackboardSchemaCacheInitialized;
+        [NonSerialized] private RuntimeBlackboardSchema _cachedBlackboardSchema;
+        [NonSerialized] private string _cachedBlackboardSchemaError;
+
+        public bool BlackboardSchemaEnabled => _blackboardSchemaEnabled;
+        public int BlackboardSchemaFormatVersion => _blackboardSchemaFormatVersion;
+        public int BlackboardContractVersion => _blackboardContractVersion;
+
+        /// <summary>
+        /// Returns the cached immutable runtime schema for this asset. A successful open-mode result
+        /// returns a null schema. Unity authoring assets and this cache are main-thread owned.
+        /// </summary>
+        public bool TryGetRuntimeBlackboardSchema(
+            out RuntimeBlackboardSchema schema,
+            out string error)
+        {
+            if (!_blackboardSchemaEnabled)
+            {
+                schema = null;
+                error = null;
+                return true;
+            }
+
+            if (!_blackboardSchemaCacheInitialized)
+            {
+                bool success = BehaviorTreeBlackboardSchemaCompiler.TryCompile(
+                    _blackboardSchemaFormatVersion,
+                    _blackboardContractVersion,
+                    _blackboardKeys,
+                    out _cachedBlackboardSchema,
+                    out _cachedBlackboardSchemaError);
+                _blackboardSchemaCacheInitialized = true;
+                if (!success)
+                {
+                    _cachedBlackboardSchema = null;
+                }
+            }
+
+            schema = _cachedBlackboardSchema;
+            error = _cachedBlackboardSchemaError;
+            return schema != null;
+        }
 
         /// <summary>
         /// Unity validation callback. Structural validation is exposed by BehaviorTreeCompiler;
@@ -28,6 +79,7 @@ namespace CycloneGames.BehaviorTree.Runtime
         /// </summary>
         public void OnValidate()
         {
+            InvalidateBlackboardSchemaCache();
 #if UNITY_EDITOR
             if (EditorApplication.isPlayingOrWillChangePlaymode)
             {
@@ -35,6 +87,22 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
 #endif
 
+        }
+
+        void ISerializationCallbackReceiver.OnBeforeSerialize()
+        {
+        }
+
+        void ISerializationCallbackReceiver.OnAfterDeserialize()
+        {
+            InvalidateBlackboardSchemaCache();
+        }
+
+        private void InvalidateBlackboardSchemaCache()
+        {
+            _blackboardSchemaCacheInitialized = false;
+            _cachedBlackboardSchema = null;
+            _cachedBlackboardSchemaError = null;
         }
 
         /// <summary>

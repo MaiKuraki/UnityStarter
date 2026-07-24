@@ -1,3 +1,4 @@
+using System;
 using CycloneGames.Networking;
 
 namespace CycloneGames.AIPerception.Networking
@@ -18,10 +19,11 @@ namespace CycloneGames.AIPerception.Networking
         Updated = 2,
         Lost = 3,
         Memory = 4,
+        /// <summary>Clears the single target carried by the event entry.</summary>
         Cleared = 5
     }
 
-    [System.Flags]
+    [Flags]
     public enum AIPerceptionDetectionFlags : byte
     {
         None = 0,
@@ -31,26 +33,41 @@ namespace CycloneGames.AIPerception.Networking
         AuthoritySnapshot = 1 << 3
     }
 
-    public struct AIPerceptionManifestHandshakeMessage : INetworkProtocolHandshakeMessage
+    public enum AIPerceptionNetworkHandshakeResult : byte
     {
-        public ulong ProtocolFingerprint;
-        public byte MinimumSupportedProtocolVersion;
-        public byte CurrentProtocolVersion;
-        public AIPerceptionNetworkFeatureFlags RequiredFeatures;
-        public ulong PerceptionProfileHash;
+        Invalid = 0,
+        Compatible = 1,
+        Malformed = 2,
+        FingerprintMismatch = 3,
+        VersionIncompatible = 4,
+        ProfileMismatch = 5,
+        RemoteRequirementsUnsupported = 6,
+        LocalRequirementsUnsupported = 7
+    }
+
+    public readonly struct AIPerceptionManifestHandshakeMessage : INetworkProtocolHandshakeMessage
+    {
+        public readonly ulong ProtocolFingerprint;
+        public readonly ulong PerceptionProfileHash;
+        public readonly AIPerceptionNetworkFeatureFlags SupportedFeatures;
+        public readonly AIPerceptionNetworkFeatureFlags RequiredFeatures;
+        public readonly byte MinimumSupportedProtocolVersion;
+        public readonly byte CurrentProtocolVersion;
 
         public AIPerceptionManifestHandshakeMessage(
             ulong protocolFingerprint,
-            byte minimumSupportedProtocolVersion,
-            byte currentProtocolVersion,
+            ulong perceptionProfileHash,
+            AIPerceptionNetworkFeatureFlags supportedFeatures,
             AIPerceptionNetworkFeatureFlags requiredFeatures,
-            ulong perceptionProfileHash)
+            byte minimumSupportedProtocolVersion,
+            byte currentProtocolVersion)
         {
             ProtocolFingerprint = protocolFingerprint;
+            PerceptionProfileHash = perceptionProfileHash;
+            SupportedFeatures = supportedFeatures;
+            RequiredFeatures = requiredFeatures;
             MinimumSupportedProtocolVersion = minimumSupportedProtocolVersion;
             CurrentProtocolVersion = currentProtocolVersion;
-            RequiredFeatures = requiredFeatures;
-            PerceptionProfileHash = perceptionProfileHash;
         }
 
         ulong INetworkProtocolHandshakeMessage.ProtocolFingerprint => ProtocolFingerprint;
@@ -58,35 +75,86 @@ namespace CycloneGames.AIPerception.Networking
         byte INetworkProtocolHandshakeMessage.MinimumSupportedProtocolVersion => MinimumSupportedProtocolVersion;
         ulong INetworkProtocolHandshakeMessage.DomainStateHash => PerceptionProfileHash;
 
-        public bool IsCompatibleWithLocalProtocol()
+        public bool IsWellFormed => AIPerceptionNetworkMessageValidator.Validate(in this) ==
+                                    AIPerceptionNetworkMessageValidationResult.Valid;
+
+        public AIPerceptionNetworkHandshakeResult Negotiate(AIPerceptionNetworkProfile localProfile)
         {
-            return NetworkProtocolHandshake.IsCompatible(this, AIPerceptionNetworkProtocol.Module);
+            if (localProfile == null)
+            {
+                throw new ArgumentNullException(nameof(localProfile));
+            }
+
+            if (!IsWellFormed)
+            {
+                return AIPerceptionNetworkHandshakeResult.Malformed;
+            }
+
+            NetworkHandshakeResult commonResult = NetworkProtocolHandshake.Negotiate(
+                in this,
+                AIPerceptionNetworkProtocol.Module);
+            switch (commonResult)
+            {
+                case NetworkHandshakeResult.FingerprintMismatch:
+                    return AIPerceptionNetworkHandshakeResult.FingerprintMismatch;
+                case NetworkHandshakeResult.VersionIncompatible:
+                    return AIPerceptionNetworkHandshakeResult.VersionIncompatible;
+                case NetworkHandshakeResult.Malformed:
+                    return AIPerceptionNetworkHandshakeResult.Malformed;
+                case NetworkHandshakeResult.Compatible:
+                    break;
+                default:
+                    return AIPerceptionNetworkHandshakeResult.Invalid;
+            }
+
+            if ((RequiredFeatures & ~localProfile.Features) != 0)
+            {
+                return AIPerceptionNetworkHandshakeResult.RemoteRequirementsUnsupported;
+            }
+
+            if ((localProfile.RequiredFeatures & ~SupportedFeatures) != 0)
+            {
+                return AIPerceptionNetworkHandshakeResult.LocalRequirementsUnsupported;
+            }
+
+            return PerceptionProfileHash == localProfile.ProfileHash
+                ? AIPerceptionNetworkHandshakeResult.Compatible
+                : AIPerceptionNetworkHandshakeResult.ProfileMismatch;
         }
 
-        public static AIPerceptionManifestHandshakeMessage CreateLocal(
-            AIPerceptionNetworkFeatureFlags requiredFeatures = AIPerceptionNetworkFeatureFlags.None,
-            ulong perceptionProfileHash = 0UL)
+        public bool IsCompatibleWith(AIPerceptionNetworkProfile localProfile)
         {
+            return Negotiate(localProfile) == AIPerceptionNetworkHandshakeResult.Compatible;
+        }
+
+        public static AIPerceptionManifestHandshakeMessage CreateLocal(AIPerceptionNetworkProfile profile)
+        {
+            if (profile == null)
+            {
+                throw new ArgumentNullException(nameof(profile));
+            }
+
             return new AIPerceptionManifestHandshakeMessage(
                 AIPerceptionNetworkProtocol.ProtocolFingerprint,
+                profile.ProfileHash,
+                profile.Features,
+                profile.RequiredFeatures,
                 AIPerceptionNetworkProtocol.MIN_SUPPORTED_PROTOCOL_VERSION,
-                AIPerceptionNetworkProtocol.PROTOCOL_VERSION,
-                requiredFeatures,
-                perceptionProfileHash);
+                AIPerceptionNetworkProtocol.PROTOCOL_VERSION);
         }
     }
 
-    public struct AIPerceptionDetectionEntry
+    public readonly struct AIPerceptionDetectionEntry
     {
-        public uint TargetNetworkId;
-        public int PerceptibleTypeId;
-        public AIPerceptionNetworkSensorKind SensorKind;
-        public AIPerceptionDetectionFlags Flags;
-        public NetworkVector3 LastKnownPosition;
-        public float Distance;
-        public float Visibility;
-        public int DetectionTick;
-        public int SourceSensorId;
+        public readonly uint TargetNetworkId;
+        public readonly int PerceptibleTypeId;
+        public readonly AIPerceptionNetworkSensorKind SensorKind;
+        public readonly AIPerceptionDetectionFlags Flags;
+        public readonly NetworkVector3 LastKnownPosition;
+        public readonly float Distance;
+        public readonly float Visibility;
+        public readonly int DetectionTick;
+        public readonly int SourceSensorId;
 
         public AIPerceptionDetectionEntry(
             uint targetNetworkId,
@@ -110,103 +178,98 @@ namespace CycloneGames.AIPerception.Networking
             SourceSensorId = sourceSensorId;
         }
 
-        public bool IsValid => TargetNetworkId != 0u && LastKnownPosition.IsFinite();
+        public bool IsValid => AIPerceptionNetworkMessageValidator.Validate(in this) ==
+                               AIPerceptionNetworkMessageValidationResult.Valid;
     }
 
-    public struct AIPerceptionDetectionEventMessage
+    public readonly struct AIPerceptionDetectionEventMessage
     {
-        public uint ObserverNetworkId;
-        public ushort Sequence;
-        public int Tick;
-        public AIPerceptionNetworkEventKind EventKind;
-        public byte ProtocolVersion;
-        public ulong StateHash;
-        public AIPerceptionDetectionEntry Entry;
+        public readonly byte ProtocolVersion;
+        public readonly uint ObserverNetworkId;
+        public readonly ushort Sequence;
+        public readonly int Tick;
+        public readonly AIPerceptionNetworkEventKind EventKind;
+        public readonly uint AuthorityGeneration;
+        public readonly ulong StateHash;
+        public readonly AIPerceptionDetectionEntry Entry;
 
         public AIPerceptionDetectionEventMessage(
+            byte protocolVersion,
             uint observerNetworkId,
             ushort sequence,
             int tick,
             AIPerceptionNetworkEventKind eventKind,
-            byte protocolVersion,
+            uint authorityGeneration,
             ulong stateHash,
             in AIPerceptionDetectionEntry entry)
         {
+            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             Sequence = sequence;
             Tick = tick;
             EventKind = eventKind;
-            ProtocolVersion = protocolVersion;
+            AuthorityGeneration = authorityGeneration;
             StateHash = stateHash;
             Entry = entry;
         }
 
-        public bool IsValid
-        {
-            get
-            {
-                return ObserverNetworkId != 0u &&
-                       EventKind != AIPerceptionNetworkEventKind.Unknown &&
-                       AIPerceptionNetworkProtocol.IsSupportedProtocolVersion(ProtocolVersion) &&
-                       Entry.IsValid;
-            }
-        }
+        public bool IsValid => AIPerceptionNetworkMessageValidator.Validate(in this) ==
+                               AIPerceptionNetworkMessageValidationResult.Valid;
     }
 
-    public struct AIPerceptionDetectionSnapshotMessage
+    /// <summary>
+    /// Snapshot metadata. Entry storage is always caller-owned and is passed separately to the codec.
+    /// </summary>
+    public readonly struct AIPerceptionDetectionSnapshotMessage
     {
-        public uint ObserverNetworkId;
-        public ushort Sequence;
-        public int Tick;
-        public AIPerceptionNetworkSensorKind SensorKind;
-        public byte ProtocolVersion;
-        public ulong StateHash;
-        public AIPerceptionDetectionEntry[] Entries;
+        public readonly byte ProtocolVersion;
+        public readonly uint ObserverNetworkId;
+        public readonly ushort Sequence;
+        public readonly int Tick;
+        public readonly AIPerceptionNetworkSensorKind SensorKind;
+        public readonly uint AuthorityGeneration;
+        public readonly ushort EntryCount;
+        public readonly ulong StateHash;
 
         public AIPerceptionDetectionSnapshotMessage(
+            byte protocolVersion,
             uint observerNetworkId,
             ushort sequence,
             int tick,
             AIPerceptionNetworkSensorKind sensorKind,
-            byte protocolVersion,
-            ulong stateHash,
-            AIPerceptionDetectionEntry[] entries)
+            uint authorityGeneration,
+            ushort entryCount,
+            ulong stateHash)
         {
+            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             Sequence = sequence;
             Tick = tick;
             SensorKind = sensorKind;
-            ProtocolVersion = protocolVersion;
+            AuthorityGeneration = authorityGeneration;
+            EntryCount = entryCount;
             StateHash = stateHash;
-            Entries = entries;
         }
 
-        public int EntryCount => Entries != null ? Entries.Length : 0;
-
-        public bool IsValid
-        {
-            get
-            {
-                return ObserverNetworkId != 0u &&
-                       AIPerceptionNetworkProtocol.IsSupportedProtocolVersion(ProtocolVersion) &&
-                       Entries != null;
-            }
-        }
+        public bool IsHeaderValid => AIPerceptionNetworkMessageValidator.ValidateHeader(in this) ==
+                                     AIPerceptionNetworkMessageValidationResult.Valid;
     }
 
-    public struct AIPerceptionAuthorityTransferMessage
+    public readonly struct AIPerceptionAuthorityTransferMessage
     {
-        public uint ObserverNetworkId;
-        public int PreviousOwnerConnectionId;
-        public int NewOwnerConnectionId;
-        public ulong PreviousOwnerPlayerId;
-        public ulong NewOwnerPlayerId;
-        public uint AuthorityGeneration;
-        public ushort SnapshotSequence;
-        public int SnapshotTick;
-        public ulong SnapshotStateHash;
+        public readonly byte ProtocolVersion;
+        public readonly uint ObserverNetworkId;
+        public readonly int PreviousOwnerConnectionId;
+        public readonly int NewOwnerConnectionId;
+        public readonly ulong PreviousOwnerPlayerId;
+        public readonly ulong NewOwnerPlayerId;
+        public readonly uint AuthorityGeneration;
+        public readonly ushort SnapshotSequence;
+        public readonly int SnapshotTick;
+        public readonly ulong SnapshotStateHash;
 
         public AIPerceptionAuthorityTransferMessage(
+            byte protocolVersion,
             uint observerNetworkId,
             int previousOwnerConnectionId,
             int newOwnerConnectionId,
@@ -217,6 +280,7 @@ namespace CycloneGames.AIPerception.Networking
             int snapshotTick,
             ulong snapshotStateHash)
         {
+            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             PreviousOwnerConnectionId = previousOwnerConnectionId;
             NewOwnerConnectionId = newOwnerConnectionId;
@@ -228,42 +292,39 @@ namespace CycloneGames.AIPerception.Networking
             SnapshotStateHash = snapshotStateHash;
         }
 
-        public bool IsValid => ObserverNetworkId != 0u && NewOwnerConnectionId >= 0;
+        public bool IsValid => AIPerceptionNetworkMessageValidator.Validate(in this) ==
+                               AIPerceptionNetworkMessageValidationResult.Valid;
     }
 
-    public struct AIPerceptionFullStateRequestMessage
+    public readonly struct AIPerceptionFullStateRequestMessage
     {
-        public uint ObserverNetworkId;
-        public ushort Sequence;
-        public int Tick;
-        public AIPerceptionNetworkSensorKind SensorKind;
-        public byte ProtocolVersion;
-        public ulong LastKnownStateHash;
+        public readonly byte ProtocolVersion;
+        public readonly uint ObserverNetworkId;
+        public readonly ushort Sequence;
+        public readonly int Tick;
+        public readonly AIPerceptionNetworkSensorKind SensorKind;
+        public readonly uint ExpectedAuthorityGeneration;
+        public readonly ulong LastKnownStateHash;
 
         public AIPerceptionFullStateRequestMessage(
+            byte protocolVersion,
             uint observerNetworkId,
             ushort sequence,
             int tick,
             AIPerceptionNetworkSensorKind sensorKind,
-            byte protocolVersion,
+            uint expectedAuthorityGeneration,
             ulong lastKnownStateHash)
         {
+            ProtocolVersion = protocolVersion;
             ObserverNetworkId = observerNetworkId;
             Sequence = sequence;
             Tick = tick;
             SensorKind = sensorKind;
-            ProtocolVersion = protocolVersion;
+            ExpectedAuthorityGeneration = expectedAuthorityGeneration;
             LastKnownStateHash = lastKnownStateHash;
         }
 
-        public bool IsValid
-        {
-            get
-            {
-                return ObserverNetworkId != 0u &&
-                       AIPerceptionNetworkProtocol.IsSupportedProtocolVersion(ProtocolVersion);
-            }
-        }
+        public bool IsValid => AIPerceptionNetworkMessageValidator.Validate(in this) ==
+                               AIPerceptionNetworkMessageValidationResult.Valid;
     }
 }
-

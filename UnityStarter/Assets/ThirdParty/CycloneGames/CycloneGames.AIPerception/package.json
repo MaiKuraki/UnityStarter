@@ -2,7 +2,7 @@
   "name": "com.cyclone-games.ai-perception",
   "version": "1.0.0",
   "displayName": "CycloneGames.AIPerception",
-  "description": "High-performance AI perception system with 0GC design, Jobs/Burst optimization, and cross-platform support.",
+  "description": "Configurable AI perception with bounded sensor storage, spatial broadphase, Burst/Jobs queries, stimulus memory, LOD scheduling, and Unity authoring tools.",
   "unity": "2022.3",
   "unityRelease": "0f1",
   "author": {
