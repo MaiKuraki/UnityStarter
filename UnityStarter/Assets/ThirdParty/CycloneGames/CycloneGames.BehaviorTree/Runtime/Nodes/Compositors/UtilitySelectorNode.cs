@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CycloneGames.BehaviorTree.Runtime.Attributes;
+using CycloneGames.BehaviorTree.Runtime.Core;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
@@ -8,6 +9,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes.Compositors
     public class UtilitySelectorNode : CompositeNode
     {
         [SerializeField, Tooltip("BB key names for child scores. scoreKeys[i] scores Children[i].")]
+        [BehaviorTreeBlackboardKey(RuntimeBlackboardValueType.Float)]
         private List<string> _scoreKeys = new List<string>();
 #if UNITY_EDITOR
         [System.NonSerialized] private Dictionary<BTNode, string> _scoreKeyByChild;

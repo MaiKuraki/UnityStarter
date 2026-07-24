@@ -15,6 +15,7 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
         {
             public static readonly GUIStyle HeaderStyle;
             public static readonly GUIStyle BoxStyle;
+            public static readonly GUIStyle StatusLabelStyle;
             public static readonly Color SeparatorColor = new Color(0.3f, 0.3f, 0.3f, 1f);
 
             static Styles()
@@ -30,6 +31,11 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
                     padding = new RectOffset(10, 10, 8, 8),
                     margin = new RectOffset(0, 0, 4, 4)
                 };
+
+                StatusLabelStyle = new GUIStyle(EditorStyles.boldLabel)
+                {
+                    alignment = TextAnchor.MiddleLeft
+                };
             }
         }
 
@@ -42,6 +48,10 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
         private bool _showBlackboard = true;
         private readonly List<RuntimeBlackboardDebugEntry> _debugEntries =
             new List<RuntimeBlackboardDebugEntry>(16);
+        private readonly List<string> _debugLabels = new List<string>(16);
+        private RuntimeBlackboard _debugBlackboard;
+        private double _nextDebugRefreshTime;
+        private const double DEBUG_REFRESH_INTERVAL = 0.2;
 
         protected virtual void OnEnable()
         {
@@ -61,10 +71,22 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
 
             if (Application.isPlaying)
             {
-                DrawRuntimeControlsSection();
+                if (targets.Length == 1)
+                {
+                    DrawRuntimeControlsSection();
+                }
+                else
+                {
+                    EditorGUILayout.HelpBox(
+                        "Runtime controls are available when one BTRunnerComponent is selected.",
+                        MessageType.Info);
+                }
             }
 
-            DrawBlackboardSection();
+            if (targets.Length == 1)
+            {
+                DrawBlackboardSection();
+            }
             DrawChildClassFields();
 
             serializedObject.ApplyModifiedProperties();
@@ -163,25 +185,21 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
 
             Color statusColor;
             string statusText;
-            string statusIcon;
 
             if (_runner.IsStopped)
             {
                 statusColor = isDarkTheme ? new Color(0.6f, 0.6f, 0.6f) : new Color(0.4f, 0.4f, 0.4f);
-                statusText = "STOPPED";
-                statusIcon = "●";
+                statusText = "● STOPPED";
             }
             else if (_runner.IsPaused)
             {
                 statusColor = isDarkTheme ? new Color(1f, 0.8f, 0.2f) : new Color(0.8f, 0.6f, 0f);
-                statusText = "PAUSED";
-                statusIcon = "◐";
+                statusText = "◐ PAUSED";
             }
             else
             {
                 statusColor = isDarkTheme ? new Color(0.3f, 0.9f, 0.3f) : new Color(0.1f, 0.7f, 0.1f);
-                statusText = "RUNNING";
-                statusIcon = "◉";
+                statusText = "◉ RUNNING";
             }
 
             var rect = EditorGUILayout.GetControlRect(false, 22);
@@ -195,13 +213,9 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             EditorGUI.DrawRect(indicatorRect, statusColor);
 
             // Draw status text
-            var labelStyle = new GUIStyle(EditorStyles.boldLabel)
-            {
-                alignment = TextAnchor.MiddleLeft,
-                normal = { textColor = statusColor }
-            };
+            Styles.StatusLabelStyle.normal.textColor = statusColor;
             var labelRect = new Rect(rect.x + 28, rect.y, rect.width - 28, rect.height);
-            EditorGUI.LabelField(labelRect, $"{statusIcon} {statusText}", labelStyle);
+            EditorGUI.LabelField(labelRect, statusText, Styles.StatusLabelStyle);
         }
 
         protected virtual void DrawBlackboardSection()
@@ -218,12 +232,12 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             }
             else
             {
-                bb.CopyDebugEntries(_debugEntries);
+                RefreshDebugSnapshot(bb);
                 EditorGUI.BeginDisabledGroup(true);
                 for (int i = 0; i < _debugEntries.Count; i++)
                 {
                     RuntimeBlackboardDebugEntry entry = _debugEntries[i];
-                    string label = $"[{entry.ValueType}] {entry.Key}";
+                    string label = _debugLabels[i];
                     switch (entry.ValueType)
                     {
                         case RuntimeBlackboardValueType.Int:
@@ -260,6 +274,45 @@ namespace CycloneGames.BehaviorTree.Editor.CustomEditors
             }
 
             EditorGUILayout.EndVertical();
+        }
+
+        private void RefreshDebugSnapshot(RuntimeBlackboard blackboard)
+        {
+            double now = EditorApplication.timeSinceStartup;
+            bool blackboardChanged = !ReferenceEquals(_debugBlackboard, blackboard);
+            if (!blackboardChanged &&
+                (Event.current == null || Event.current.type != EventType.Layout || now < _nextDebugRefreshTime))
+            {
+                return;
+            }
+
+            _debugBlackboard = blackboard;
+            _nextDebugRefreshTime = now + DEBUG_REFRESH_INTERVAL;
+            _debugEntries.Clear();
+            _debugLabels.Clear();
+            try
+            {
+                blackboard.CopyDebugEntries(_debugEntries);
+            }
+            catch (ObjectDisposedException)
+            {
+                _debugBlackboard = null;
+                return;
+            }
+
+            RuntimeBlackboardSchema schema = blackboard.Schema;
+            for (int i = 0; i < _debugEntries.Count; i++)
+            {
+                RuntimeBlackboardDebugEntry entry = _debugEntries[i];
+                string keyLabel = entry.Key.ToString();
+                if (schema != null &&
+                    schema.TryGetDefinition(entry.Key, out RuntimeBlackboardKeyDefinition definition))
+                {
+                    keyLabel = definition.Name;
+                }
+
+                _debugLabels.Add($"[{entry.ValueType}] {keyLabel}");
+            }
         }
 
         /// <summary>

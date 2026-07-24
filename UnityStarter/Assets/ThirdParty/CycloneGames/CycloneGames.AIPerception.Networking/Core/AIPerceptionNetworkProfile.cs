@@ -1,5 +1,5 @@
 using System;
-using System.Collections.Generic;
+using CycloneGames.Hash.Core;
 using CycloneGames.Networking;
 
 namespace CycloneGames.AIPerception.Networking
@@ -27,10 +27,10 @@ namespace CycloneGames.AIPerception.Networking
         HostMigrationSnapshot = 1u << 7
     }
 
+    /// <summary>Immutable, typed synchronization policy included in peer compatibility checks.</summary>
     public sealed class AIPerceptionNetworkProfile
     {
-        private readonly Dictionary<string, int> _intSettings;
-        private readonly Dictionary<string, string> _stringSettings;
+        public const int MaxProfileIdLength = 64;
 
         internal AIPerceptionNetworkProfile(AIPerceptionNetworkProfileBuilder builder)
         {
@@ -39,72 +39,143 @@ namespace CycloneGames.AIPerception.Networking
                 throw new ArgumentNullException(nameof(builder));
             }
 
-            ProfileId = string.IsNullOrEmpty(builder.ProfileId) ? "ai-perception.default" : builder.ProfileId;
-            SyncModel = builder.SyncModel;
-            Features = builder.Features;
-            EventChannel = builder.EventChannel;
-            SnapshotChannel = builder.SnapshotChannel;
-            ControlChannel = builder.ControlChannel;
+            ProfileId = ValidateProfileId(builder.ProfileId);
+            SyncModel = ValidateSyncModel(builder.SyncModel);
+            Features = ValidateFeatures(builder.Features, nameof(builder.Features));
+            RequiredFeatures = ValidateFeatures(builder.RequiredFeatures, nameof(builder.RequiredFeatures));
+            if ((RequiredFeatures & ~Features) != 0)
+            {
+                throw new ArgumentException("Required features must be a subset of supported features.", nameof(builder));
+            }
+
+            EventChannel = ValidateChannel(builder.EventChannel, nameof(builder.EventChannel));
+            SnapshotChannel = ValidateChannel(builder.SnapshotChannel, nameof(builder.SnapshotChannel));
+            MemorySnapshotChannel = ValidateChannel(
+                builder.MemorySnapshotChannel,
+                nameof(builder.MemorySnapshotChannel));
+            ControlChannel = ValidateChannel(builder.ControlChannel, nameof(builder.ControlChannel));
             EventIntervalTicks = ValidatePositive(builder.EventIntervalTicks, nameof(builder.EventIntervalTicks));
             SnapshotIntervalTicks = ValidatePositive(builder.SnapshotIntervalTicks, nameof(builder.SnapshotIntervalTicks));
-            MemorySnapshotIntervalTicks = ValidatePositive(builder.MemorySnapshotIntervalTicks, nameof(builder.MemorySnapshotIntervalTicks));
+            MemorySnapshotIntervalTicks = ValidatePositive(
+                builder.MemorySnapshotIntervalTicks,
+                nameof(builder.MemorySnapshotIntervalTicks));
+            MaxSnapshotPayloadBytes = ValidateSnapshotPayloadBytes(builder.MaxSnapshotPayloadBytes);
             MaxSnapshotEntries = ValidatePositive(builder.MaxSnapshotEntries, nameof(builder.MaxSnapshotEntries));
-            MaxEventPayloadBytes = ValidatePositive(builder.MaxEventPayloadBytes, nameof(builder.MaxEventPayloadBytes));
-            MaxSnapshotPayloadBytes = ValidatePositive(builder.MaxSnapshotPayloadBytes, nameof(builder.MaxSnapshotPayloadBytes));
-            MaxFullStateRequestsPerWindow = ValidateNonNegative(builder.MaxFullStateRequestsPerWindow, nameof(builder.MaxFullStateRequestsPerWindow));
+            int payloadEntryLimit = AIPerceptionNetworkWireCodec.GetMaxSnapshotEntries(MaxSnapshotPayloadBytes);
+            if (MaxSnapshotEntries > AIPerceptionNetworkProtocol.MAX_SNAPSHOT_ENTRIES ||
+                MaxSnapshotEntries > payloadEntryLimit)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(builder.MaxSnapshotEntries),
+                    "Snapshot entry count exceeds the protocol or configured payload budget.");
+            }
+
             SendMemoryEntries = builder.SendMemoryEntries;
             SendLostEvents = builder.SendLostEvents;
             ForceFullSnapshotOnAuthorityTransfer = builder.ForceFullSnapshotOnAuthorityTransfer;
-
-            _intSettings = new Dictionary<string, int>(builder.IntSettings, StringComparer.Ordinal);
-            _stringSettings = new Dictionary<string, string>(builder.StringSettings, StringComparer.Ordinal);
+            ProfileHash = ComputeProfileHash(this);
         }
 
         public string ProfileId { get; }
         public AIPerceptionNetworkSyncModel SyncModel { get; }
         public AIPerceptionNetworkFeatureFlags Features { get; }
+        public AIPerceptionNetworkFeatureFlags RequiredFeatures { get; }
         public NetworkChannel EventChannel { get; }
         public NetworkChannel SnapshotChannel { get; }
+        public NetworkChannel MemorySnapshotChannel { get; }
         public NetworkChannel ControlChannel { get; }
         public int EventIntervalTicks { get; }
         public int SnapshotIntervalTicks { get; }
         public int MemorySnapshotIntervalTicks { get; }
         public int MaxSnapshotEntries { get; }
-        public int MaxEventPayloadBytes { get; }
         public int MaxSnapshotPayloadBytes { get; }
-        public int MaxFullStateRequestsPerWindow { get; }
         public bool SendMemoryEntries { get; }
         public bool SendLostEvents { get; }
         public bool ForceFullSnapshotOnAuthorityTransfer { get; }
-
-        public IReadOnlyDictionary<string, int> IntSettings => _intSettings;
-        public IReadOnlyDictionary<string, string> StringSettings => _stringSettings;
+        public ulong ProfileHash { get; }
 
         public bool HasFeature(AIPerceptionNetworkFeatureFlags feature)
         {
             return (Features & feature) == feature;
         }
 
-        public bool TryGetInt(string key, out int value)
+        private static ulong ComputeProfileHash(AIPerceptionNetworkProfile profile)
         {
-            if (!string.IsNullOrEmpty(key) && _intSettings.TryGetValue(key, out value))
+            ulong hash = Fnv1a64.OffsetBasis;
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.ProfileId.Length);
+            for (int i = 0; i < profile.ProfileId.Length; i++)
             {
-                return true;
+                hash = CombineByte(hash, (byte)profile.ProfileId[i]);
             }
 
-            value = 0;
-            return false;
+            hash = CombineByte(hash, AIPerceptionNetworkProtocol.PROTOCOL_VERSION);
+            hash = CombineByte(hash, (byte)profile.SyncModel);
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.Features);
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.RequiredFeatures);
+            hash = CombineByte(hash, (byte)profile.EventChannel);
+            hash = CombineByte(hash, (byte)profile.SnapshotChannel);
+            hash = CombineByte(hash, (byte)profile.MemorySnapshotChannel);
+            hash = CombineByte(hash, (byte)profile.ControlChannel);
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.EventIntervalTicks);
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.SnapshotIntervalTicks);
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.MemorySnapshotIntervalTicks);
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.MaxSnapshotEntries);
+            hash = Fnv1a64.CombineUInt32LittleEndian(hash, (uint)profile.MaxSnapshotPayloadBytes);
+            hash = CombineByte(hash, profile.SendMemoryEntries ? (byte)1 : (byte)0);
+            hash = CombineByte(hash, profile.SendLostEvents ? (byte)1 : (byte)0);
+            hash = CombineByte(hash, profile.ForceFullSnapshotOnAuthorityTransfer ? (byte)1 : (byte)0);
+            return hash == 0UL ? Fnv1a64.OffsetBasis : hash;
         }
 
-        public bool TryGetString(string key, out string value)
+        private static string ValidateProfileId(string value)
         {
-            if (!string.IsNullOrEmpty(key) && _stringSettings.TryGetValue(key, out value))
+            if (string.IsNullOrEmpty(value) || value.Length > MaxProfileIdLength)
             {
-                return true;
+                throw new ArgumentException("Profile ID must contain 1-64 printable ASCII characters.", nameof(value));
             }
 
-            value = string.Empty;
-            return false;
+            for (int i = 0; i < value.Length; i++)
+            {
+                if (value[i] < 0x21 || value[i] > 0x7E)
+                {
+                    throw new ArgumentException("Profile ID must contain printable ASCII without spaces.", nameof(value));
+                }
+            }
+
+            return value;
+        }
+
+        private static AIPerceptionNetworkSyncModel ValidateSyncModel(AIPerceptionNetworkSyncModel value)
+        {
+            if (value < AIPerceptionNetworkSyncModel.Manual ||
+                value > AIPerceptionNetworkSyncModel.HostMigrationSnapshot)
+            {
+                throw new ArgumentOutOfRangeException(nameof(value));
+            }
+
+            return value;
+        }
+
+        private static AIPerceptionNetworkFeatureFlags ValidateFeatures(
+            AIPerceptionNetworkFeatureFlags value,
+            string name)
+        {
+            if (!AIPerceptionNetworkProtocol.AreKnownFeatures(value))
+            {
+                throw new ArgumentOutOfRangeException(name);
+            }
+
+            return value;
+        }
+
+        private static NetworkChannel ValidateChannel(NetworkChannel value, string name)
+        {
+            if (value < NetworkChannel.Reliable || value > NetworkChannel.UnreliableSequenced)
+            {
+                throw new ArgumentOutOfRangeException(name);
+            }
+
+            return value;
         }
 
         private static int ValidatePositive(int value, string name)
@@ -117,77 +188,74 @@ namespace CycloneGames.AIPerception.Networking
             return value;
         }
 
-        private static int ValidateNonNegative(int value, string name)
+        private static int ValidateSnapshotPayloadBytes(int value)
         {
-            if (value < 0)
+            if (value < AIPerceptionNetworkWireCodec.DetectionSnapshotHeaderBytes ||
+                value > AIPerceptionNetworkProtocol.DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE)
             {
-                throw new ArgumentOutOfRangeException(name);
+                throw new ArgumentOutOfRangeException(nameof(value));
             }
 
             return value;
+        }
+
+        private static ulong CombineByte(ulong hash, byte value)
+        {
+            unchecked
+            {
+                hash ^= value;
+                return hash * Fnv1a64.Prime;
+            }
         }
     }
 
     public sealed class AIPerceptionNetworkProfileBuilder
     {
-        internal readonly Dictionary<string, int> IntSettings = new Dictionary<string, int>(StringComparer.Ordinal);
-        internal readonly Dictionary<string, string> StringSettings = new Dictionary<string, string>(StringComparer.Ordinal);
-
         public string ProfileId { get; set; } = "ai-perception.default";
-        public AIPerceptionNetworkSyncModel SyncModel { get; set; } = AIPerceptionNetworkSyncModel.ServerAuthoritative;
+        public AIPerceptionNetworkSyncModel SyncModel { get; set; } =
+            AIPerceptionNetworkSyncModel.ServerAuthoritative;
         public AIPerceptionNetworkFeatureFlags Features { get; set; } =
             AIPerceptionNetworkFeatureFlags.DetectionEvents |
             AIPerceptionNetworkFeatureFlags.DetectionSnapshots |
             AIPerceptionNetworkFeatureFlags.MemorySnapshots |
             AIPerceptionNetworkFeatureFlags.AuthorityTransfer |
             AIPerceptionNetworkFeatureFlags.InterestFiltered;
+        public AIPerceptionNetworkFeatureFlags RequiredFeatures { get; set; } =
+            AIPerceptionNetworkFeatureFlags.DetectionSnapshots |
+            AIPerceptionNetworkFeatureFlags.InterestFiltered;
         public NetworkChannel EventChannel { get; set; } = NetworkChannel.UnreliableSequenced;
         public NetworkChannel SnapshotChannel { get; set; } = NetworkChannel.UnreliableSequenced;
+        public NetworkChannel MemorySnapshotChannel { get; set; } = NetworkChannel.Reliable;
         public NetworkChannel ControlChannel { get; set; } = NetworkChannel.Reliable;
         public int EventIntervalTicks { get; set; } = 1;
         public int SnapshotIntervalTicks { get; set; } = 10;
         public int MemorySnapshotIntervalTicks { get; set; } = 30;
-        public int MaxSnapshotEntries { get; set; } = 32;
-        public int MaxEventPayloadBytes { get; set; } = AIPerceptionNetworkProtocol.DEFAULT_MAX_EVENT_PAYLOAD_SIZE;
-        public int MaxSnapshotPayloadBytes { get; set; } = AIPerceptionNetworkProtocol.DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE;
-        public int MaxFullStateRequestsPerWindow { get; set; } = 4;
+        public int MaxSnapshotEntries { get; set; } =
+            (NetworkConstants.DefaultMaxPayloadSize - AIPerceptionNetworkWireCodec.DetectionSnapshotHeaderBytes) /
+            AIPerceptionNetworkWireCodec.DetectionEntryBytes;
+        public int MaxSnapshotPayloadBytes { get; set; } = NetworkConstants.DefaultMaxPayloadSize;
         public bool SendMemoryEntries { get; set; } = true;
         public bool SendLostEvents { get; set; } = true;
         public bool ForceFullSnapshotOnAuthorityTransfer { get; set; } = true;
-
-        public AIPerceptionNetworkProfileBuilder SetInt(string key, int value)
-        {
-            ValidateKey(key);
-            IntSettings[key] = value;
-            return this;
-        }
-
-        public AIPerceptionNetworkProfileBuilder SetString(string key, string value)
-        {
-            ValidateKey(key);
-            StringSettings[key] = value ?? string.Empty;
-            return this;
-        }
 
         public AIPerceptionNetworkProfile Build()
         {
             return new AIPerceptionNetworkProfile(this);
         }
-
-        private static void ValidateKey(string key)
-        {
-            if (string.IsNullOrEmpty(key))
-            {
-                throw new ArgumentException("Profile setting key must not be null or empty.", nameof(key));
-            }
-        }
     }
 
     public static class AIPerceptionNetworkProfiles
     {
-        public static AIPerceptionNetworkProfile ServerAuthoritative => CreateServerAuthoritativeBuilder().Build();
-        public static AIPerceptionNetworkProfile SharedTeamAwareness => CreateSharedTeamAwarenessBuilder().Build();
-        public static AIPerceptionNetworkProfile DebugSpectator => CreateDebugSpectatorBuilder().Build();
+        private static readonly AIPerceptionNetworkProfile ServerAuthoritativeProfile =
+            CreateServerAuthoritativeBuilder().Build();
+        private static readonly AIPerceptionNetworkProfile SharedTeamAwarenessProfile =
+            CreateSharedTeamAwarenessBuilder().Build();
+        private static readonly AIPerceptionNetworkProfile DebugSpectatorProfile =
+            CreateDebugSpectatorBuilder().Build();
+
+        public static AIPerceptionNetworkProfile ServerAuthoritative => ServerAuthoritativeProfile;
+        public static AIPerceptionNetworkProfile SharedTeamAwareness => SharedTeamAwarenessProfile;
+        public static AIPerceptionNetworkProfile DebugSpectator => DebugSpectatorProfile;
 
         public static AIPerceptionNetworkProfileBuilder CreateServerAuthoritativeBuilder()
         {
@@ -201,6 +269,8 @@ namespace CycloneGames.AIPerception.Networking
                            AIPerceptionNetworkFeatureFlags.AuthorityTransfer |
                            AIPerceptionNetworkFeatureFlags.InterestFiltered |
                            AIPerceptionNetworkFeatureFlags.HostMigrationSnapshot,
+                RequiredFeatures = AIPerceptionNetworkFeatureFlags.DetectionSnapshots |
+                                   AIPerceptionNetworkFeatureFlags.InterestFiltered,
                 EventIntervalTicks = 1,
                 SnapshotIntervalTicks = 10,
                 MemorySnapshotIntervalTicks = 30
@@ -217,6 +287,8 @@ namespace CycloneGames.AIPerception.Networking
                            AIPerceptionNetworkFeatureFlags.MemorySnapshots |
                            AIPerceptionNetworkFeatureFlags.TeamShared |
                            AIPerceptionNetworkFeatureFlags.InterestFiltered,
+                RequiredFeatures = AIPerceptionNetworkFeatureFlags.MemorySnapshots |
+                                   AIPerceptionNetworkFeatureFlags.TeamShared,
                 EventIntervalTicks = 2,
                 SnapshotIntervalTicks = 20,
                 MemorySnapshotIntervalTicks = 20,
@@ -233,13 +305,16 @@ namespace CycloneGames.AIPerception.Networking
                 Features = AIPerceptionNetworkFeatureFlags.DetectionSnapshots |
                            AIPerceptionNetworkFeatureFlags.MemorySnapshots |
                            AIPerceptionNetworkFeatureFlags.DebugSpectator,
+                RequiredFeatures = AIPerceptionNetworkFeatureFlags.DetectionSnapshots |
+                                   AIPerceptionNetworkFeatureFlags.DebugSpectator,
                 SnapshotChannel = NetworkChannel.Reliable,
+                MemorySnapshotChannel = NetworkChannel.Reliable,
                 EventIntervalTicks = 1,
                 SnapshotIntervalTicks = 5,
                 MemorySnapshotIntervalTicks = 10,
-                MaxSnapshotEntries = 128
+                MaxSnapshotPayloadBytes = AIPerceptionNetworkProtocol.DEFAULT_MAX_SNAPSHOT_PAYLOAD_SIZE,
+                MaxSnapshotEntries = AIPerceptionNetworkProtocol.MAX_SNAPSHOT_ENTRIES
             };
         }
     }
 }
-

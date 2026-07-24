@@ -756,6 +756,111 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
             }
         }
 
+        /// <summary>
+        /// Atomically replaces all local values with this blackboard's schema defaults. An
+        /// unbound schema resets to an empty local blackboard. Observers run after commit and see
+        /// only the final state; each changed key is published once in stable hash order.
+        /// </summary>
+        public void ResetToSchemaDefaults()
+        {
+            ThrowIfDisposed();
+            int[] changedKeys = null;
+            int changedCount = 0;
+
+            try
+            {
+                if (_lock != null) _lock.EnterWriteLock();
+                try
+                {
+                    RuntimeBlackboardSchema schema = _schema;
+                    int schemaCount = schema != null ? schema.Count : 0;
+                    int candidateCapacity = checked(_typeByKey.Count + schemaCount);
+                    _sortedKeyScratch.Clear();
+                    foreach (int key in _typeByKey.Keys)
+                    {
+                        _sortedKeyScratch.Add(key);
+                    }
+
+                    for (int i = 0; i < schemaCount; i++)
+                    {
+                        RuntimeBlackboardKeyDefinition entry = schema.GetEntry(i);
+                        if (!entry.HasDefaultValue)
+                        {
+                            continue;
+                        }
+
+                        _sortedKeyScratch.Add(entry.KeyHash);
+                    }
+
+                    _sortedKeyScratch.Sort();
+                    int previousKey = 0;
+                    bool hasPreviousKey = false;
+                    for (int i = 0; i < _sortedKeyScratch.Count; i++)
+                    {
+                        int key = _sortedKeyScratch[i];
+                        if (hasPreviousKey && key == previousKey)
+                        {
+                            continue;
+                        }
+
+                        previousKey = key;
+                        hasPreviousKey = true;
+                        bool hasExistingValue = _typeByKey.ContainsKey(key);
+                        RuntimeBlackboardKeyDefinition definition = default;
+                        bool hasDefault =
+                            schema != null &&
+                            schema.TryGetDefinition(key, out definition) &&
+                            definition.HasDefaultValue;
+                        bool changed = hasDefault
+                            ? !MatchesSchemaDefault(definition)
+                            : hasExistingValue;
+                        if (!changed)
+                        {
+                            continue;
+                        }
+
+                        changedKeys ??= ArrayPool<int>.Shared.Rent(candidateCapacity);
+                        changedKeys[changedCount++] = key;
+                    }
+
+                    EnsureSequenceCapacity(changedCount);
+                    for (int i = 0; i < changedCount; i++)
+                    {
+                        int key = changedKeys[i];
+                        if (schema != null &&
+                            schema.TryGetDefinition(key, out RuntimeBlackboardKeyDefinition definition) &&
+                            definition.HasDefaultValue)
+                        {
+                            ApplySchemaDefault(definition);
+                            continue;
+                        }
+
+                        if (_typeByKey.TryGetValue(key, out byte oldType))
+                        {
+                            NextSequence();
+                            RemoveTypedValue(key, oldType);
+                            _typeByKey.Remove(key);
+                            _stamps.Remove(key);
+                        }
+                    }
+                }
+                finally
+                {
+                    _sortedKeyScratch.Clear();
+                    if (_lock != null) _lock.ExitWriteLock();
+                }
+
+                NotifyObserversAfterCommit(changedKeys, changedCount);
+            }
+            finally
+            {
+                if (changedKeys != null)
+                {
+                    ArrayPool<int>.Shared.Return(changedKeys, clearArray: true);
+                }
+            }
+        }
+
         #region Serialization (Network Sync)
         /// <summary>
         /// Serialize all primitive blackboard data to a byte buffer for network transmission.
@@ -1711,6 +1816,52 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 case RuntimeBlackboardValueType.Object:
                     SetObjectCore(entry.KeyHash, entry.DefaultValue.ObjectValue);
                     break;
+            }
+        }
+
+        private bool MatchesSchemaDefault(RuntimeBlackboardKeyDefinition entry)
+        {
+            if (!_typeByKey.TryGetValue(entry.KeyHash, out byte currentType))
+            {
+                return false;
+            }
+
+            switch (entry.ValueType)
+            {
+                case RuntimeBlackboardValueType.Int:
+                    return currentType == TYPE_INT &&
+                           _intData.TryGetValue(entry.KeyHash, out int intValue) &&
+                           intValue == entry.DefaultValue.IntValue;
+                case RuntimeBlackboardValueType.Float:
+                    return currentType == TYPE_FLOAT &&
+                           _floatData.TryGetValue(entry.KeyHash, out float floatValue) &&
+                           FloatBitsEqual(floatValue, entry.DefaultValue.FloatValue);
+                case RuntimeBlackboardValueType.Bool:
+                    return currentType == TYPE_BOOL &&
+                           _boolData.TryGetValue(entry.KeyHash, out bool boolValue) &&
+                           boolValue == entry.DefaultValue.BoolValue;
+                case RuntimeBlackboardValueType.Vector3:
+                    return currentType == TYPE_VECTOR3 &&
+                           _vectorData.TryGetValue(entry.KeyHash, out Vector3 vectorValue) &&
+                           VectorBitsEqual(vectorValue, entry.DefaultValue.Vector3Value);
+                case RuntimeBlackboardValueType.Object:
+                    return currentType == TYPE_OBJECT &&
+                           _objectData.TryGetValue(entry.KeyHash, out object objectValue) &&
+                           ReferenceEquals(objectValue, entry.DefaultValue.ObjectValue);
+                case RuntimeBlackboardValueType.Long:
+                    return currentType == TYPE_LONG &&
+                           _longData.TryGetValue(entry.KeyHash, out long longValue) &&
+                           longValue == entry.DefaultValue.LongValue;
+                case RuntimeBlackboardValueType.Long2:
+                    return currentType == TYPE_LONG2 &&
+                           _long2Data.TryGetValue(entry.KeyHash, out RuntimeBlackboardLong2 long2Value) &&
+                           long2Value.Equals(entry.DefaultValue.Long2Value);
+                case RuntimeBlackboardValueType.Long3:
+                    return currentType == TYPE_LONG3 &&
+                           _long3Data.TryGetValue(entry.KeyHash, out RuntimeBlackboardLong3 long3Value) &&
+                           long3Value.Equals(entry.DefaultValue.Long3Value);
+                default:
+                    return false;
             }
         }
 

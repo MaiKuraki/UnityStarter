@@ -3,6 +3,7 @@ using UnityEngine;
 using UnityEngine.Serialization;
 using Object = UnityEngine.Object;
 
+using CycloneGames.BehaviorTree.Runtime.Attributes;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 
@@ -30,6 +31,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private class BlackBoardPassObject
         {
             [FormerlySerializedAs("Key")]
+            [BehaviorTreeBlackboardKey(RuntimeBlackboardValueType.Object, allowEmpty: true)]
             [SerializeField] private string KeyField;
             [FormerlySerializedAs("Value")]
             [SerializeField] private Object ValueField;
@@ -210,7 +212,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
                 if (initializeStopped)
                 {
-                    compiledTree.Blackboard.Clear();
+                    compiledTree.Blackboard.ResetToSchemaDefaults();
                 }
 
                 ApplyInitialBlackboardObjects(compiledTree);
@@ -452,7 +454,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                     _runtimeTree.Stop();
                 }
 
-                _runtimeTree.Blackboard.Clear();
+                _runtimeTree.Blackboard.ResetToSchemaDefaults();
                 ApplyInitialBlackboardObjects();
             }
 

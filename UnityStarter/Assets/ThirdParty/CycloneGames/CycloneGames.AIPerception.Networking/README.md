@@ -1,258 +1,303 @@
 # CycloneGames.AIPerception.Networking
 
-English | [简体中文](./README.SCH.md)
+[English | 简体中文](README.SCH.md)
 
-`CycloneGames.AIPerception.Networking` bridges `CycloneGames.AIPerception` to `CycloneGames.Networking`. It provides protocol metadata, detection event and snapshot DTOs, memory snapshot DTOs, full-state request DTOs, authority transfer DTOs, profile configuration, and a runtime sync bridge. The base AIPerception package is usable without `CycloneGames.Networking`; this bridge is only required when AI perception data crosses a Cyclone network boundary.
+`CycloneGames.AIPerception.Networking` bridges `CycloneGames.AIPerception` results into `CycloneGames.Networking`. It converts detection results into stable network identities, defines the fixed v1 wire schema, validates untrusted payloads, applies server-authority rules, and adapts perception relevance to the shared interest evaluator.
 
 ## Table of Contents
 
 - [Overview](#overview)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
-- [Core Concepts](#core-concepts)
-- [Usage Guide](#usage-guide)
-- [Advanced Topics](#advanced-topics)
-- [Common Scenarios](#common-scenarios)
-- [Performance and Memory](#performance-and-memory)
+- [Core Rules](#core-rules)
+- [Protocol Reference](#protocol-reference)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-This bridge adapter converts `DetectionResult` values from the perception runtime into protocol-defined network messages. It maps `PerceptibleHandle` to stable network ids via `IAIPerceptionNetworkTargetResolver`, supports event-based, snapshot, and memory snapshot replication, and validates payloads against an `AIPerceptionNetworkProfile`.
+This module connects local perception to the network. A game composition root owns the transport, endpoint, serializer, and session, and connects them to this bridge explicitly.
 
-### Key Features
+| Assembly | Responsibility | References |
+| --- | --- | --- |
+| `CycloneGames.AIPerception.Networking.Core` | Protocol manifest, immutable DTO headers, profile fingerprint, validation, canonical hashing, fixed little-endian codec | `CycloneGames.Networking.Core`, `CycloneGames.Hash.Core` |
+| `CycloneGames.AIPerception.Networking.Runtime` | `DetectionResult` mapping, bounded canonical selection, authority checks, shared interest-evaluator adapter | Core, `CycloneGames.AIPerception`, `CycloneGames.Networking.Core`, `Unity.Mathematics` |
+| `CycloneGames.AIPerception.Networking.Tests.Editor` | Golden-byte, round-trip, malformed-input, authority, interest, and allocation contracts | Core and Runtime |
 
-- **Protocol manifest** with StableHash contract identity and message IDs `15000-15999`.
-- **Detection event messages** for per-target push notifications.
-- **Snapshot messages** for batched detection and memory state replication.
-- **Full-state request and authority transfer** message support.
-- **Target resolver contract** for mapping perception handles to network ids.
-- **Pure C# Core assembly** with no UnityEngine dependency.
+The Core assembly has no `UnityEngine` dependency. The Runtime assembly bridges local perception without exposing Unity object identity on the wire.
 
 ## Architecture
 
-| Assembly | Role | Unity dependency |
-| --- | --- | --- |
-| `CycloneGames.AIPerception.Networking.Core` | Protocol manifest, message DTOs, profile configuration, stable hash helpers | No UnityEngine |
-| `CycloneGames.AIPerception.Networking.Runtime` | Sync bridge, target resolver contract, authority resolver, observer resolver | No UnityEngine; references `Unity.Mathematics` via AIPerception |
-| `CycloneGames.AIPerception.Networking.Tests.Editor` | EditMode coverage | No UnityEngine |
-
-All assemblies use `autoReferenced: false`. Consumer asmdefs must reference Core explicitly, and Runtime when using the bridge.
-
 ```mermaid
-graph TD
-    Detection["DetectionResult"]
-    TargetResolver["IAIPerceptionNetworkTargetResolver"]
-    Entry["AIPerceptionDetectionEntry"]
-    Bridge["AIPerceptionNetworkSyncBridge"]
-    Event["AIPerceptionDetectionEventMessage"]
-    Snapshot["AIPerceptionDetectionSnapshotMessage"]
-    Request["AIPerceptionFullStateRequestMessage"]
-    Transfer["AIPerceptionAuthorityTransferMessage"]
-    Endpoint["INetworkMessageEndpoint"]
+flowchart LR
+    P["AIPerception DetectionResults"] --> B["SyncBridge"]
+    B -->|resolve handles| R["TargetResolver"]
+    R --> N["Network entity IDs"]
+    N --> E["Canonical entries"]
+    E --> C["WireCodec"]
+    C --> W["Wire bytes"]
+    W --> EP["Network endpoint"]
+    EP -->|validate| A["Authority resolver"]
+    A -->|apply| S["Remote state"]
+    I["InterestEvaluator"] -->|filter| O["Observer selection"]
 
-    Detection --> Bridge
-    TargetResolver --> Bridge
-    Bridge --> Entry
-    Entry --> Event
-    Entry --> Snapshot
-    Bridge --> Request
-    Bridge --> Transfer
-    Event --> Endpoint
-    Snapshot --> Endpoint
-    Request --> Endpoint
-    Transfer --> Endpoint
+    classDef source fill:#2f6f9f,color:#fff,stroke:#183d58;
+    classDef bridge fill:#2d7d57,color:#fff,stroke:#17442f;
+    classDef codec fill:#9a6b1f,color:#fff,stroke:#594012;
+    classDef output fill:#7b4d9c,color:#fff,stroke:#432957;
+    class P source;
+    class B,R bridge;
+    class N,E,C bridge;
+    class W codec;
+    class EP,A,S,O output;
+    class I output;
 ```
 
 ## Quick Start
 
-Register the protocol in a composition root:
+### 1. Choose and exchange a profile
+
+Profiles are immutable. Built-in profiles are cached instances:
 
 ```csharp
 using CycloneGames.AIPerception.Networking;
-using CycloneGames.Networking;
 
-public static class AIPerceptionNetworkInstaller
-{
-    public static void Configure(INetworkMessageCatalog catalog)
-    {
-        AIPerceptionNetworkProtocol.RegisterMessageCatalog(catalog);
-    }
-}
+AIPerceptionNetworkProfile profile =
+    AIPerceptionNetworkProfiles.ServerAuthoritative;
+
+AIPerceptionManifestHandshakeMessage localHandshake =
+    AIPerceptionManifestHandshakeMessage.CreateLocal(profile);
 ```
 
-Create a detection event endpoint:
+Encode and send through the project endpoint:
 
 ```csharp
-using CycloneGames.AIPerception.Networking;
-using CycloneGames.AIPerception.Runtime;
+Span<byte> handshakeBytes =
+    stackalloc byte[AIPerceptionNetworkWireCodec.HandshakePayloadBytes];
 
-public sealed class DetectionEventEndpoint
+if (AIPerceptionNetworkWireCodec.TryWriteHandshake(
+        in localHandshake,
+        handshakeBytes,
+        out int handshakeLength) != AIPerceptionNetworkWireCodecResult.Success)
 {
-    private readonly AIPerceptionNetworkSyncBridge _bridge;
-    private readonly IAIPerceptionNetworkTargetResolver _targets;
+    throw new InvalidOperationException("The local AIPerception handshake is invalid.");
+}
 
-    public DetectionEventEndpoint(IAIPerceptionNetworkTargetResolver targets)
-    {
-        _bridge = new AIPerceptionNetworkSyncBridge(AIPerceptionNetworkProfiles.ServerAuthoritative);
-        _targets = targets;
-    }
+NetworkSendResult sendResult = endpoint.SendToServer(
+    AIPerceptionNetworkProtocol.MSG_MANIFEST_HANDSHAKE,
+    handshakeBytes.Slice(0, handshakeLength),
+    NetworkChannel.Reliable);
+```
 
-    public bool TryCreateEvent(
-        uint observerNetworkId, DetectionResult detection,
-        int tick, ushort sequence,
-        out AIPerceptionDetectionEventMessage message)
-    {
-        return _bridge.TryCreateDetectionEvent(
-            observerNetworkId, detection, _targets,
-            tick, sequence, AIPerceptionNetworkEventKind.Detected,
-            out message);
-    }
+On receive, decode first and negotiate before enabling perception traffic:
+
+```csharp
+if (AIPerceptionNetworkWireCodec.TryReadHandshake(
+        payload.Bytes,
+        out AIPerceptionManifestHandshakeMessage remote) !=
+    AIPerceptionNetworkWireCodecResult.Success)
+{
+    return;
+}
+
+AIPerceptionNetworkHandshakeResult negotiation = remote.Negotiate(profile);
+if (negotiation != AIPerceptionNetworkHandshakeResult.Compatible)
+{
+    return;
 }
 ```
 
-## Core Concepts
+### 2. Map detections into a reusable entry buffer
 
-| Type | Purpose |
+The resolver connects local perception handles to stable network entity IDs:
+
+```csharp
+var bridge = new AIPerceptionNetworkSyncBridge(profile);
+
+// Allocate once per observer/session owner and reuse.
+var entryBuffer = new AIPerceptionDetectionEntry[profile.MaxSnapshotEntries];
+
+AIPerceptionDetectionEntryWriteResult write = bridge.WriteDetectionEntries(
+    detections,
+    targetResolver,
+    entryBuffer,
+    tick,
+    sourceSensorId);
+
+ReadOnlySpan<AIPerceptionDetectionEntry> entries =
+    entryBuffer.AsSpan(0, write.WrittenCount);
+
+if (!write.IsComplete)
+{
+    telemetry.RecordPerceptionSnapshotLoss(
+        write.UnresolvedCount,
+        write.InvalidCount,
+        write.CapacityLimitedCount,
+        write.DuplicateCount);
+}
+```
+
+The bridge keeps the canonical smallest entries when capacity is limited. Capacity loss is always explicit.
+
+### 3. Create, encode, and send a snapshot
+
+```csharp
+AIPerceptionNetworkMessageValidationResult createResult = bridge.TryCreateSnapshot(
+    observerNetworkId,
+    AIPerceptionNetworkSensorKind.Any,
+    entries,
+    tick,
+    sequence,
+    authorityGeneration,
+    out AIPerceptionDetectionSnapshotMessage snapshot);
+
+if (createResult != AIPerceptionNetworkMessageValidationResult.Valid)
+{
+    return;
+}
+
+int payloadLength = AIPerceptionNetworkWireCodec.GetSnapshotPayloadBytes(entries.Length);
+Span<byte> snapshotBytes = reusablePayloadBuffer.AsSpan(0, payloadLength);
+
+if (AIPerceptionNetworkWireCodec.TryWriteDetectionSnapshot(
+        in snapshot,
+        entries,
+        snapshotBytes,
+        out int bytesWritten) != AIPerceptionNetworkWireCodecResult.Success)
+{
+    return;
+}
+
+if (endpoint.GetMaxPayloadSize(
+        AIPerceptionNetworkProtocol.MSG_DETECTION_SNAPSHOT,
+        profile.SnapshotChannel) < bytesWritten)
+{
+    return;
+}
+
+endpoint.SendToClient(
+    connection,
+    AIPerceptionNetworkProtocol.MSG_DETECTION_SNAPSHOT,
+    snapshotBytes.Slice(0, bytesWritten),
+    profile.SnapshotChannel);
+```
+
+For memory snapshots, use `MSG_MEMORY_SNAPSHOT` with `profile.MemorySnapshotChannel`. An empty snapshot (zero entries) represents an authoritative empty set.
+
+### 4. Receive snapshots safely
+
+Decode into a reusable destination before applying any state:
+
+```csharp
+Span<AIPerceptionDetectionEntry> decodedEntries = receiveEntryBuffer;
+
+AIPerceptionNetworkWireCodecResult decodeResult =
+    AIPerceptionNetworkWireCodec.TryReadDetectionSnapshot(
+        payload.Bytes,
+        decodedEntries,
+        out AIPerceptionDetectionSnapshotMessage snapshot,
+        out int decodedCount);
+
+if (decodeResult != AIPerceptionNetworkWireCodecResult.Success)
+{
+    return;
+}
+
+var inbound = new AIPerceptionRemoteSnapshotContext(
+    senderConnectionId: payload.Connection.ConnectionId,
+    authoritativeServerConnectionId: session.AuthoritativeServerConnectionId,
+    isSenderAuthenticated: payload.Connection.IsAuthenticated,
+    isServerToClient: payload.Direction == NetworkMessageDirection.ServerToClient,
+    authorityGeneration: session.AuthorityGeneration,
+    hasAppliedSnapshot: state.HasSnapshot,
+    lastAppliedSequence: state.LastSequence,
+    lastAppliedTick: state.LastTick);
+
+AIPerceptionRemoteSnapshotResult authorityResult = authorityResolver.ValidateRemotePerception(
+    in localAuthority,
+    in inbound,
+    in observer,
+    in snapshot,
+    decodedEntries.Slice(0, decodedCount));
+
+if (authorityResult != AIPerceptionRemoteSnapshotResult.Allowed)
+{
+    return;
+}
+
+// Commit state first, then publish any observer notification.
+state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
+```
+
+## Core Rules
+
+- `PerceptibleHandle` is never serialized as a network identity. A `IAIPerceptionNetworkTargetResolver` supplies stable `TargetNetworkId` values.
+- `TargetNetworkId` must be non-zero and `PerceptibleTypeId` must be non-negative.
+- All multibyte wire fields use explicit little-endian encoding. No raw-struct copy, reflection, or generic serializer.
+- Snapshot entries live in caller-owned spans. A snapshot message is metadata plus `EntryCount`.
+- Entries must be strictly ordered by `AIPerceptionNetworkHash.CompareCanonical`. Unordered or duplicate payloads are rejected.
+- A header with `SensorKind.Any` may contain mixed sensor kinds; a concrete kind requires every entry to match.
+- Positions, distance, and visibility must be finite. Distance is non-negative, visibility in `[0, 1]`.
+- State hash is FNV-1a64 over exact canonical entry fields for drift detection.
+- Profile hash covers every typed synchronization setting. Peers negotiate supported and required feature flags.
+- Remote snapshots are accepted only after payload validation, authenticated server-to-client direction validation, authoritative-sender validation, generation matching, and replay checks.
+- Interest filtering delegates to `INetworkInterestEvaluator`.
+
+## Protocol Reference
+
+### Wire v1 contract
+
+| Message | ID | Payload bytes | Default channel |
+| --- | ---: | ---: | --- |
+| Manifest handshake | 15000 | 26 | Reliable |
+| Detection event | 15001 | 62 | UnreliableSequenced |
+| Detection snapshot | 15002 | `26 + EntryCount * 38`, max 4800 | UnreliableSequenced |
+| Memory snapshot | 15003 | `26 + EntryCount * 38`, max 4800 | Reliable |
+| Authority transfer | 15004 | 47 | Reliable |
+| Full-state request | 15005 | 24 | Reliable |
+
+The protocol ceiling allows up to 125 entries. Adding, removing, reordering, or changing a field requires a new wire contract.
+
+### Canonical ordering and bounded selection
+
+`WriteDetectionEntries` maintains a sorted, bounded destination while scanning. For N detections and capacity K (protocol-bounded to 125), the algorithm uses `O(N log K + N * K)` worst-case work with no internal heap storage. Selection is deterministic under input reordering.
+
+### Interest filtering
+
+`AIPerceptionNetworkObserverResolver` converts candidates to `NetworkReplicationObserver` and observers to `NetworkReplicatedObject`, then calls `INetworkInterestEvaluator`. This gives AIPerception the same semantics as Networking: ownership by connection/player ID, authentication and interest layers, team relevance, area relevance, and `IncludeOwner` support.
+
+### Profiles and scheduling
+
+A profile defines supported/required features, channels, intervals, snapshot budgets, and authority-transfer behavior. Its `ProfileHash` is deterministic over typed values. Intervals are policy values — the network session or replication loop owns tick scheduling, congestion response, and send retries.
+
+### Security and failure handling
+
+| Failure | Required response |
 | --- | --- |
-| `AIPerceptionNetworkProfile` | Immutable runtime profile: channels, intervals, feature flags, payload limits |
-| `AIPerceptionNetworkProfiles` | Built-in profile factories (server-authoritative, shared team awareness, debug spectator) |
-| `AIPerceptionNetworkProtocol` | Owns message range `15000-15999` and default protocol manifest |
-| `AIPerceptionDetectionEntry` | Network representation of one perceived target: sensor kind, flags, position, distance, visibility, tick, source sensor id |
-| `AIPerceptionDetectionEventMessage` | Single detection event payload |
-| `AIPerceptionDetectionSnapshotMessage` | Snapshot payload with multiple detection entries |
-| `AIPerceptionNetworkSyncBridge` | Converts `DetectionResult` into event and snapshot DTOs |
-| `IAIPerceptionNetworkTargetResolver` | Maps `PerceptibleHandle` to network ids and perceptible type ids |
-| `IAIPerceptionNetworkAuthorityResolver` | Resolves read/write authority for networked perception observers |
+| Invalid length, enum, flags, float, order, count, or hash | Drop the payload; increment bounded telemetry; apply the session abuse policy |
+| Profile, fingerprint, version, or feature mismatch | Disable this module's traffic or reject the peer |
+| Unauthenticated, wrong-direction, or non-authoritative sender | Drop and report as an authority violation |
+| Generation mismatch, stale tick, replay, or out-of-order sequence | Drop without changing replay state |
+| Destination capacity too small | Use a configured bounded buffer or reject |
+| Local entry selection is partial | Record each loss category |
 
-### Protocol Messages
+FNV state hashes are synchronization checksums, not authentication codes. Transport authentication and cryptographic integrity belong to `CycloneGames.Networking`.
 
-| Message | ID | Channel | Payload |
-| --- | ---: | --- | --- |
-| `MSG_MANIFEST_HANDSHAKE` | `15000` | Reliable | `AIPerceptionManifestHandshakeMessage` |
-| `MSG_DETECTION_EVENT` | `15001` | UnreliableSequenced | `AIPerceptionDetectionEventMessage` |
-| `MSG_DETECTION_SNAPSHOT` | `15002` | UnreliableSequenced | `AIPerceptionDetectionSnapshotMessage` |
-| `MSG_MEMORY_SNAPSHOT` | `15003` | Reliable | `AIPerceptionDetectionSnapshotMessage` |
-| `MSG_AUTHORITY_TRANSFER` | `15004` | Reliable | `AIPerceptionAuthorityTransferMessage` |
-| `MSG_FULL_STATE_REQUEST` | `15005` | Reliable | `AIPerceptionFullStateRequestMessage` |
+### Memory and threading
 
-## Usage Guide
-
-### Creating Detection Snapshots
-
-Write entries into caller-owned buffers, then create a snapshot from the written span:
-
-```csharp
-using System;
-using CycloneGames.AIPerception.Networking;
-using CycloneGames.AIPerception.Runtime;
-
-public sealed class DetectionSnapshotEndpoint
-{
-    private readonly AIPerceptionNetworkSyncBridge _bridge = new();
-
-    public AIPerceptionDetectionSnapshotMessage CreateSnapshot(
-        uint observerNetworkId,
-        ReadOnlySpan<DetectionResult> detections,
-        IAIPerceptionNetworkTargetResolver targets,
-        Span<AIPerceptionDetectionEntry> buffer,
-        int tick, ushort sequence)
-    {
-        int count = _bridge.WriteDetectionEntries(detections, targets, buffer, tick);
-        return _bridge.CreateSnapshot(
-            observerNetworkId,
-            AIPerceptionNetworkSensorKind.Any,
-            buffer.Slice(0, count),
-            tick, sequence);
-    }
-}
-```
-
-### Profile Configuration
-
-```csharp
-using CycloneGames.AIPerception.Networking;
-
-public static class AIPerceptionProfileFactory
-{
-    public static AIPerceptionNetworkProfile Create()
-    {
-        return AIPerceptionNetworkProfiles
-            .CreateServerAuthoritativeBuilder()
-            .SetInt("project.max_debug_entries", 16)
-            .Build();
-    }
-}
-```
-
-## Advanced Topics
-
-### Protocol Identity
-
-`AIPerceptionNetworkProtocol.CreateProtocolManifest` builds the complete manifest. Registration commits the full range and all descriptors atomically. Every descriptor has an explicit `ContractId` (e.g., `AIPerceptionDetectionEventMessage:v1`) with FNV-1a 64-bit `SchemaHash`. Payload layout changes require a new contract identity.
-
-### Extension Points
-
-- Implement `IAIPerceptionNetworkTargetResolver` for the project's entity id system.
-- Implement `IAIPerceptionNetworkAuthorityResolver` for custom authority ownership.
-- Implement `IAIPerceptionNetworkObserverSource` when observer data is owned by a gameplay, zone, or backend system.
-- Project-specific perception messages belong in a separate project-owned manifest using `NetworkMessageRanges.User`.
-
-## Common Scenarios
-
-### Server-Authoritative Detection Sync
-
-Server queries sensors, converts results to network entries, and broadcasts:
-
-```csharp
-// Server tick
-var detections = perception.GetAllSightDetections();
-var buffer = _entryBuffer; // pre-allocated AIPerceptionDetectionEntry[]
-int count = _bridge.WriteDetectionEntries(detections, _targets, buffer, tick);
-
-var snapshot = _bridge.CreateSnapshot(
-    observerNetId, AIPerceptionNetworkSensorKind.Sight,
-    buffer.AsSpan(0, count), tick, sequence++);
-
-SendToRelevantClients(snapshot);
-```
-
-### Memory Snapshot for Late Joiners
-
-New clients need the full perception memory state:
-
-```csharp
-// On full state request
-var memoryEntries = _sightSensor.GetMemoryEntries();
-int count = _bridge.WriteDetectionEntries(memoryEntries, _targets, buffer, tick);
-
-var memorySnapshot = _bridge.CreateSnapshot(
-    observerNetId, AIPerceptionNetworkSensorKind.Any,
-    buffer.AsSpan(0, count), tick, sequence);
-
-SendToClient(memorySnapshot); // Reliable channel per protocol
-```
-
-## Performance and Memory
-
-This package performs no file I/O, allocates no managed memory on hot paths, and does not own threads or native containers. Profiles are runtime objects only. The sync bridge writes entries into caller-owned buffers; buffer sizing and reuse are caller responsibilities.
-
-Payload limits in the profile bound snapshots before serialization. Transport encoding and network I/O are external concerns.
+- Core codec paths operate on `Span<T>`/`ReadOnlySpan<T>` with zero internal allocations.
+- Built-in profile properties return cached immutable instances.
+- All buffers, lists, and session state have explicit external owners.
+- No lock, worker thread, queue, or global cache is created.
+- Spans and `NetworkMessagePayload.Bytes` must not be retained beyond their documented call lifetime.
 
 ## Troubleshooting
 
-| Symptom | Likely cause | Resolution |
-| --- | --- | --- |
-| Detection events not received by clients | Target resolver returns invalid network id | Verify `IAIPerceptionNetworkTargetResolver` mapping; check network id registration |
-| Snapshot payload truncated | Buffer too small for detection count | Size caller-owned buffer based on measured maximum detections per frame |
-| Protocol manifest registration fails | `SchemaHash` mismatch or overlapping IDs | Ensure all peers use the same contract identity; check `15000-15999` range |
-| Memory snapshot outdated on client | Late-joining client after server state changed | Request full-state resync via `MSG_FULL_STATE_REQUEST` |
-| Authority transfer rejected | Resolver does not recognize authority change | Implement `IAIPerceptionNetworkAuthorityResolver` for custom ownership rules |
-
-## Validation
-
-```text
-Unity Test Runner > EditMode > CycloneGames.AIPerception.Networking.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.AIPerception.Tests.Editor
-Unity Test Runner > EditMode > CycloneGames.Networking.Tests.Editor
-```
+| Symptom | Check |
+| --- | --- |
+| Handshake rejected | Profile hash, feature flags, and supported/required feature match |
+| Snapshot decode fails | Payload length, entry count, canonical order, enum ranges, and float finite-ness |
+| Authority violation logged | Authenticated state, server-to-client direction, authority generation, and replay state |
+| Entries silently truncated | `WriteDetectionEntries` loss counts: unresolved, invalid, capacity-limited, duplicates |
+| Interest filtering produces no observers | Observer/candidate entity mapping, interest evaluator configuration |
+| Allocation in hot path | Verify spans and reusable buffers; profile the target Player backend |
+| Profile change has no effect | Profiles are immutable — create and exchange a new profile through the handshake |
