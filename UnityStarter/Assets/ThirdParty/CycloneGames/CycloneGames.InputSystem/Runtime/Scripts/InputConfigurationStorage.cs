@@ -398,42 +398,6 @@ namespace CycloneGames.InputSystem.Runtime
 #endif
         }
 
-        internal InputConfigurationStoreResult TryDeleteSynchronously(string key)
-        {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            return InputConfigurationStoreResult.Failure(
-                InputConfigurationStorageStatus.Unsupported,
-                "WebGL persistence requires an explicit browser storage adapter.");
-#else
-            if (!TryResolveKey(key, out string path, out string error))
-            {
-                return InputConfigurationStoreResult.Failure(
-                    InputConfigurationStorageStatus.InvalidKey,
-                    error);
-            }
-
-            if (!TryAcquirePathOperation(path, out PathOperationLease operation))
-            {
-                return InputConfigurationStoreResult.Failure(
-                    InputConfigurationStorageStatus.IoError,
-                    "The configuration path is busy; retry through the asynchronous storage API.");
-            }
-
-            using (operation)
-            {
-                string backupPath = path + ".bak";
-                if (ContainsReparsePoint(path) || ContainsReparsePoint(backupPath))
-                {
-                    return InputConfigurationStoreResult.Failure(
-                        InputConfigurationStorageStatus.InvalidKey,
-                        "Symbolic links and reparse points are not valid configuration storage paths.");
-                }
-
-                return DeleteResolvedPath(path, backupPath);
-            }
-#endif
-        }
-
         private static InputConfigurationStoreResult DeleteResolvedPath(
             string path,
             string backupPath)
@@ -701,41 +665,6 @@ namespace CycloneGames.InputSystem.Runtime
                 await gate.Semaphore.WaitAsync(cancellationToken);
                 entered = true;
                 return new PathOperationLease(gateKey, gate);
-            }
-            finally
-            {
-                if (!entered)
-                {
-                    ReturnPathOperationGate(gateKey, gate);
-                }
-            }
-        }
-
-        private static bool TryAcquirePathOperation(string path, out PathOperationLease lease)
-        {
-            lease = null;
-            string gateKey = path.IsNormalized(NormalizationForm.FormC)
-                ? path
-                : path.Normalize(NormalizationForm.FormC);
-            PathOperationGate gate;
-            lock (OperationGatesSync)
-            {
-                if (!OperationGates.TryGetValue(gateKey, out gate))
-                {
-                    gate = new PathOperationGate();
-                    OperationGates.Add(gateKey, gate);
-                }
-
-                gate.ReferenceCount++;
-            }
-
-            bool entered = false;
-            try
-            {
-                entered = gate.Semaphore.Wait(0);
-                if (!entered) return false;
-                lease = new PathOperationLease(gateKey, gate);
-                return true;
             }
             finally
             {

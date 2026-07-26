@@ -1,12 +1,15 @@
 {
-    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement",
-    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement",
+    "name": "CycloneGames.GameplayFramework.Integrations.AssetManagement.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Integrations.AssetManagement.Tests.Editor",
     "references": [
-        "UniTask",
         "CycloneGames.GameplayFramework.Runtime",
-        "CycloneGames.AssetManagement.Runtime"
+        "CycloneGames.GameplayFramework.Runtime.Integrations.AssetManagement",
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
     ],
-    "includePlatforms": [],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
@@ -22,5 +25,8 @@
             "define": "CYCLONEGAMES_HAS_ASSET_MANAGEMENT"
         }
     ],
-    "noEngineReferences": false
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
 }

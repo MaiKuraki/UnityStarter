@@ -115,7 +115,7 @@ namespace CycloneGames.Logger
                 MaintenanceIntervalMs = settings.maintenanceIntervalMs,
                 SinkFailureThreshold = settings.sinkFailureThreshold,
                 OverflowPolicy = overflowPolicy,
-                CriticalLevel = settings.guaranteedLevel
+                CriticalLevel = settings.criticalLevel
             });
         }
 

@@ -205,7 +205,7 @@ public static class GamePerceptibleTypes
 }
 ```
 
-`RegisterType(string)` allocates in process registration order — suitable only for non-persistent, non-networked extensions.
+Custom IDs must be at least 100, are owned by product code, and must remain unchanged after they enter a save or wire contract. Re-registering the same ID and name is idempotent; reusing an ID for a different name fails.
 
 ### Detection results
 

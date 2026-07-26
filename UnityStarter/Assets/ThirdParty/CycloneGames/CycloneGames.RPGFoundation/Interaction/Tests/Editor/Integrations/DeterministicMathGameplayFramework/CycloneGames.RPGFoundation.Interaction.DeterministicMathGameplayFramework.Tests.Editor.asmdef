@@ -24,12 +24,12 @@
     "versionDefines": [
         {
             "name": "com.cyclone-games.deterministic-math",
-            "expression": "",
+            "expression": "[1.0.0,2.0.0)",
             "define": "CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH"
         },
         {
             "name": "com.cyclone-games.gameplay-framework",
-            "expression": "",
+            "expression": "[1.0.0,2.0.0)",
             "define": "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_FRAMEWORK"
         }
     ],

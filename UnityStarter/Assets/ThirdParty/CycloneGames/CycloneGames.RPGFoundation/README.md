@@ -110,6 +110,8 @@ Unity Physics is not a deterministic lockstep source of truth across all support
 
 Optional integrations are isolated in their own assemblies so the base package compiles without optional packages installed. Cyclone networking bridges are provided by separate optional packages.
 
+All DeterministicMath integration and test asmdefs require UPM-resolved `com.cyclone-games.deterministic-math` in the supported `1.x` range. They derive `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` through `versionDefines`, consume it through `defineConstraints`, and use `autoReferenced: false`; consumers must add explicit references only to the integrations they use. Do not add the symbol to PlayerSettings. When the package is absent or outside the supported range, these assemblies are excluded and the base RPGFoundation package continues to compile.
+
 | Integration Assembly | Dependency |
 | --- | --- |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath` | `CycloneGames.DeterministicMath.Core` |
@@ -134,7 +136,7 @@ Optional networking packages:
 
 ## Defines
 
-These symbols are generated or consumed by integration asmdefs through `versionDefines` or define constraints. They are diagnostics and integration-local compile switches, not project-wide requirements.
+These symbols are generated and consumed by integration asmdefs through `versionDefines` and `defineConstraints`. They are integration-local compile switches, not project-wide requirements, and must not be duplicated in PlayerSettings.
 
 | Symbol | Enables |
 | --- | --- |

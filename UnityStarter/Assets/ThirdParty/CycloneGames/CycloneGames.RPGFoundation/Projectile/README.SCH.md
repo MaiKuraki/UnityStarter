@@ -151,7 +151,9 @@ Core 不直接拥有 collider filtering。应在项目专用 adapter 中添加 t
 
 ### DeterministicMath 集成
 
-由 `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` 启用。Integration 在 projectile 边界显式选择 zero-vector fallback：zero spawn direction 产生 zero initial velocity，homing target 与 projectile 重合时保留当前方向。
+仅当 UPM 解析到 `com.cyclone-games.deterministic-math` `1.x` 时启用。Integration asmdef 生成并消费 `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`，使用 `autoReferenced: false`，且必须由 consumer 显式引用。不要在 PlayerSettings 中添加 capability symbol。没有受支持 package 时，只排除该 integration 及其 test assembly。
+
+Integration 在 projectile 边界显式选择 zero-vector fallback：zero spawn direction 产生 zero initial velocity，homing target 与 projectile 重合时保留当前方向。
 
 适用于 lockstep/rollback simulation、replay verification、seed-based bullet pattern reconstruction，或跨平台 bit-identical fixed-point homing。
 

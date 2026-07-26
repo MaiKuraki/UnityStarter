@@ -97,7 +97,6 @@ namespace CycloneGames.Audio.Runtime
     {
         private CancellationTokenSource source = new CancellationTokenSource();
         private int ownerCount = 1;
-        private bool tokenEscapedWithoutOwner;
 
         internal CancellationToken Token
         {
@@ -113,11 +112,6 @@ namespace CycloneGames.Audio.Runtime
             if (source == null || ownerCount <= 0)
                 throw new ObjectDisposedException(nameof(AudioEventCancellationContext));
             ownerCount++;
-        }
-
-        internal void MarkTokenEscapedWithoutOwner()
-        {
-            tokenEscapedWithoutOwner = true;
         }
 
         internal void Cancel()
@@ -143,7 +137,7 @@ namespace CycloneGames.Audio.Runtime
 
             CancellationTokenSource current = source;
             source = null;
-            if (current == null || tokenEscapedWithoutOwner) return;
+            if (current == null) return;
 
             try
             {
@@ -327,7 +321,6 @@ namespace CycloneGames.Audio.Runtime
         private Vector3 lastEmitterPos;
         internal Vector3 LastEmitterPosition => lastEmitterPos;
         internal float initialDelay;
-        internal bool isAsync;
         internal bool hasSnapshotTransition;
         private float snapshotTransitionLifetime;
         internal double scheduledDspTime = -1;
@@ -462,7 +455,7 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            if (sourceCount == 0 && !hasSnapshotTransition && pendingAsyncLoadCount == 0 && !isAsync)
+            if (sourceCount == 0 && !hasSnapshotTransition && pendingAsyncLoadCount == 0)
             {
                 status = EventStatus.Error;
                 return;
@@ -791,28 +784,6 @@ namespace CycloneGames.Audio.Runtime
             return cancellationContext;
         }
 
-        [Obsolete("Use BeginAsyncPreparation() and AudioEventPreparation.CancellationToken from an AudioNode implementation.")]
-        public CancellationToken GetCancellationToken()
-        {
-            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".GetCancellationToken");
-            AudioEventCancellationContext context = GetOrCreateCancellationContext(generation);
-            if (context == null)
-                return new CancellationToken(true);
-
-            // The legacy API has no matching release boundary. Avoid disposing its source after
-            // Stop so an already-returned token remains safe to observe or register against.
-            context.MarkTokenEscapedWithoutOwner();
-            return context.Token;
-        }
-
-        [Obsolete("Use AudioEventPreparation.Complete() or Dispose() for the scope returned by BeginAsyncPreparation().")]
-        public void OnAsyncLoadCompleted()
-        {
-            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".OnAsyncLoadCompleted");
-            isAsync = false;
-            TryFinalizePreparation();
-        }
-
         internal bool TryAddAsyncEventSource(
             int expectedGeneration,
             AudioClip clip,
@@ -859,7 +830,7 @@ namespace CycloneGames.Audio.Runtime
 
         private void TryFinalizePreparation()
         {
-            if (graphPreparationOpen || pendingAsyncLoadCount > 0 || isAsync || playbackFinalized)
+            if (graphPreparationOpen || pendingAsyncLoadCount > 0 || playbackFinalized)
                 return;
             if (status == EventStatus.Stopped || status == EventStatus.Error || rootEvent == null)
                 return;
@@ -1441,19 +1412,6 @@ namespace CycloneGames.Audio.Runtime
             ApplyParameters();
         }
 
-        [Obsolete("Active events are reset by AudioManager. Stop the event instead of resetting it directly.")]
-        public void Reset()
-        {
-            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".Reset");
-            if (managerOwned || isInPool || rootEvent != null || handleSlot >= 0)
-            {
-                throw new InvalidOperationException(
-                    "A managed ActiveEvent cannot be reset directly. Call StopImmediate instead.");
-            }
-
-            ResetForPool();
-        }
-
         internal void ResetForPool()
         {
             name = "";
@@ -1488,7 +1446,6 @@ namespace CycloneGames.Audio.Runtime
             fadeOriginVolume = 0;
             fadeStopQueued = false;
             hasPlayed = false;
-            isAsync = false;
             pauseReasons = AudioPauseReason.None;
             updateSkipCounter = 0;
             updateInterval = 1;

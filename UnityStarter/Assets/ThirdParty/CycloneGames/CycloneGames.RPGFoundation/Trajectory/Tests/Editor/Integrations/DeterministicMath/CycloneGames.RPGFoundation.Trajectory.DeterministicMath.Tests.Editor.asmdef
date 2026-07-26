@@ -13,10 +13,19 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [
         "CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH"
     ],
-    "versionDefines": [],
-    "noEngineReferences": false
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.deterministic-math",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
 }

@@ -32,7 +32,7 @@ namespace CycloneGames.Logger.Editor
         private SerializedProperty _maintenanceIntervalMs;
         private SerializedProperty _sinkFailureThreshold;
         private SerializedProperty _overflowPolicy;
-        private SerializedProperty _guaranteedLevel;
+        private SerializedProperty _criticalLevel;
         private SerializedProperty _registerUnityLogger;
         private SerializedProperty _registerConsoleLogger;
         private SerializedProperty _registerFileLogger;
@@ -71,7 +71,7 @@ namespace CycloneGames.Logger.Editor
             _maintenanceIntervalMs = Find("maintenanceIntervalMs");
             _sinkFailureThreshold = Find("sinkFailureThreshold");
             _overflowPolicy = Find("overflowPolicy");
-            _guaranteedLevel = Find("guaranteedLevel");
+            _criticalLevel = Find("criticalLevel");
             _registerUnityLogger = Find("registerUnityLogger");
             _registerConsoleLogger = Find("registerConsoleLogger");
             _registerFileLogger = Find("registerFileLogger");
@@ -118,7 +118,7 @@ namespace CycloneGames.Logger.Editor
             Draw(_maintenanceIntervalMs);
             Draw(_sinkFailureThreshold);
             Draw(_overflowPolicy);
-            Draw(_guaranteedLevel);
+            Draw(_criticalLevel);
 
             if (!_overflowPolicy.hasMultipleDifferentValues
                 && (LogQueueOverflowPolicy)_overflowPolicy.enumValueIndex == LogQueueOverflowPolicy.Block)

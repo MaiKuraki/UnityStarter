@@ -81,8 +81,6 @@ namespace CycloneGames.Audio.Runtime
         public readonly int ActiveDuckingRuleCount;
         public readonly int ScopedParameterOverrides;
         public readonly int PendingRemovals;
-        [Obsolete("Worker command dispatch was removed; this value is always zero.")]
-        public readonly int QueuedCommands;
         public readonly int ExternalCacheEntries;
         public readonly int ExternalLoadingCount;
         public readonly int ExternalLoadedCount;
@@ -125,7 +123,6 @@ namespace CycloneGames.Audio.Runtime
             int activeDuckingRuleCount,
             int scopedParameterOverrides,
             int pendingRemovals,
-            int queuedCommands,
             ExternalAudioClipCacheStats externalCache,
             long totalEventsPlayed,
             int peakActiveEvents
@@ -156,9 +153,6 @@ namespace CycloneGames.Audio.Runtime
             ActiveDuckingRuleCount = activeDuckingRuleCount;
             ScopedParameterOverrides = scopedParameterOverrides;
             PendingRemovals = pendingRemovals;
-#pragma warning disable CS0618
-            QueuedCommands = 0;
-#pragma warning restore CS0618
             ExternalCacheEntries = externalCache.EntryCount;
             ExternalLoadingCount = externalCache.LoadingCount;
             ExternalLoadedCount = externalCache.LoadedCount;
@@ -842,7 +836,6 @@ namespace CycloneGames.Audio.Runtime
                 activeDuckingRuleCount,
                 scopedParameterOverrides.Count,
                 pendingRemovals.Count,
-                0,
                 externalCache,
                 totalPlayed,
                 peakEvents

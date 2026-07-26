@@ -14,8 +14,16 @@
     "overrideReferences": false,
     "precompiledReferences": [],
     "autoReferenced": false,
-    "defineConstraints": [],
-    "versionDefines": [],
+    "defineConstraints": [
+        "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.cyclone-games.deterministic-math",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_DETERMINISTIC_MATH"
+        }
+    ],
     "noEngineReferences": false,
     "optionalUnityReferences": [
         "TestAssemblies"

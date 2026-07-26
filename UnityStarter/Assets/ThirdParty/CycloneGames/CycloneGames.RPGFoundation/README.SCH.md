@@ -110,6 +110,8 @@ Unity Physics 不是所有支持平台上的确定性 lockstep 真相来源。Un
 
 可选集成隔离在独立程序集中，因此基础包在未安装可选包时也能编译。Cyclone 网络桥接由独立可选包提供。
 
+所有 DeterministicMath integration 与 test asmdef 都要求 UPM 解析到受支持的 `com.cyclone-games.deterministic-math` `1.x` 版本。它们通过 `versionDefines` 生成 `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`，通过 `defineConstraints` 消费该 capability，并使用 `autoReferenced: false`；consumer 只应显式引用实际使用的 integration。不要在 PlayerSettings 中添加该 symbol。Package 缺失或版本超出支持范围时，这些 assembly 被排除，RPGFoundation 基础包继续编译。
+
 | Integration Assembly | 依赖 |
 | --- | --- |
 | `CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath` | `CycloneGames.DeterministicMath.Core` |
@@ -134,7 +136,7 @@ Unity Physics 不是所有支持平台上的确定性 lockstep 真相来源。Un
 
 ## Define 符号
 
-以下符号由 integration asmdef 通过 `versionDefines` 或 define constraints 生成或消费。它们用于诊断和 integration-local 条件编译，不作为项目级全局要求。
+以下符号由 integration asmdef 通过 `versionDefines` 与 `defineConstraints` 生成并消费。它们用于 integration-local 条件编译，不作为项目级全局要求，也不得在 PlayerSettings 中重复定义。
 
 | Symbol | 启用内容 |
 | --- | --- |

@@ -6,7 +6,7 @@ using UnityEngine;
 namespace CycloneGames.AIPerception.Runtime
 {
     /// <summary>
-    /// Extensible perceptible type system. Developers can register custom types at runtime.
+    /// Stable perceptible type catalog. Product code registers project-owned custom type IDs.
     /// </summary>
     public static class PerceptibleTypes
     {
@@ -21,33 +21,17 @@ namespace CycloneGames.AIPerception.Runtime
 
         private static readonly Dictionary<int, string> _typeNames = new Dictionary<int, string>();
 
-        private static int _nextCustomType = 100;
-
         static PerceptibleTypes()
         {
             ResetCatalog();
         }
 
         /// <summary>
-        /// Registers a custom type and returns its ID.
+        /// Registers a stable, project-owned custom type ID. Re-registering the same ID and name is
+        /// idempotent; reusing an ID for a different name fails.
         /// </summary>
-        [Obsolete("Process-order type IDs are not stable across saves or peers. Use RegisterType(int, string).")]
-        public static int RegisterType(string name)
-        {
-            if (string.IsNullOrWhiteSpace(name))
-            {
-                throw new ArgumentException("Perceptible type name must not be empty.", nameof(name));
-            }
-
-            int id = _nextCustomType++;
-            _typeNames[id] = name;
-            return id;
-        }
-
-        /// <summary>
-        /// Registers a stable project-owned type ID. Save and wire contracts must use this form,
-        /// never the process-order-dependent <see cref="RegisterType(string)"/> overload.
-        /// </summary>
+        /// <param name="id">The persistent custom type ID. Values below 100 are reserved.</param>
+        /// <param name="name">The non-empty diagnostic name associated with the ID.</param>
         public static void RegisterType(int id, string name)
         {
             if (id < 100)
@@ -71,10 +55,6 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             _typeNames.Add(id, name);
-            if (id >= _nextCustomType)
-            {
-                _nextCustomType = id + 1;
-            }
         }
 
         /// <summary>
@@ -102,7 +82,6 @@ namespace CycloneGames.AIPerception.Runtime
             _typeNames.Add(Neutral, "Neutral");
             _typeNames.Add(Interactable, "Interactable");
             _typeNames.Add(SoundSource, "SoundSource");
-            _nextCustomType = 100;
         }
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
