@@ -1,14 +1,23 @@
+using System;
 using System.Collections.Generic;
 
 namespace CycloneGames.RPGFoundation.Interaction.Core
 {
     public sealed class InteractionAuthorityService
     {
+        /// <summary>Implementation safety ceiling for targets retained by one authority owner.</summary>
+        public const int MaximumRegisteredTargetCount = 65_536;
+
+        /// <summary>Implementation safety ceiling for target-owned request queues.</summary>
+        public const int MaximumQueueOwnerCount = 65_536;
+
         private readonly Dictionary<ulong, InteractionTargetSnapshot> _targets = new Dictionary<ulong, InteractionTargetSnapshot>();
         private readonly Dictionary<ulong, InteractionQueue> _queuesByTarget = new Dictionary<ulong, InteractionQueue>();
         private readonly InteractionRateLimiter _rateLimiter = new InteractionRateLimiter();
         private readonly InteractionRequestHistory _requestHistory = new InteractionRequestHistory();
         private readonly InteractionMetrics _metrics = new InteractionMetrics();
+        private long _rejectedTargetAdmissionCount;
+        private long _rejectedQueueOwnerAdmissionCount;
 
         public InteractionAuthorityService(InteractionAuthorityOptions options)
         {
@@ -18,6 +27,24 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
         public InteractionAuthorityOptions Options { get; private set; }
         public InteractionMetrics Metrics => _metrics;
         public int RegisteredTargetCount => _targets.Count;
+
+        /// <summary>Returns an allocation-free O(1) view of retained authority state.</summary>
+        public InteractionAuthorityMemorySnapshot GetMemorySnapshot()
+        {
+            return new InteractionAuthorityMemorySnapshot(
+                _targets.Count,
+                _queuesByTarget.Count,
+                _requestHistory.Count,
+                _rateLimiter.Count,
+                MaximumRegisteredTargetCount,
+                MaximumQueueOwnerCount,
+                InteractionRateLimiter.MaximumWindowCount,
+                _rejectedTargetAdmissionCount,
+                _rejectedQueueOwnerAdmissionCount,
+                _rateLimiter.RejectedWindowAdmissionCount,
+                Options,
+                _metrics.GetSnapshot());
+        }
 
         public void Configure(InteractionAuthorityOptions options)
         {
@@ -32,6 +59,17 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
                 return false;
             }
 
+            if (!_targets.ContainsKey(snapshot.TargetStableId) &&
+                _targets.Count >= MaximumRegisteredTargetCount)
+            {
+                if (_rejectedTargetAdmissionCount < long.MaxValue)
+                {
+                    _rejectedTargetAdmissionCount++;
+                }
+
+                return false;
+            }
+
             _targets[snapshot.TargetStableId] = snapshot;
             return true;
         }
@@ -40,6 +78,12 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
         {
             _queuesByTarget.Remove(targetStableId);
             return _targets.Remove(targetStableId);
+        }
+
+        /// <summary>Releases rate-limit state after an authenticated instigator disconnects.</summary>
+        public bool RemoveInstigatorRateLimitWindow(ulong instigatorStableId)
+        {
+            return _rateLimiter.Remove(instigatorStableId);
         }
 
         public bool TryGetTarget(ulong targetStableId, out InteractionTargetSnapshot snapshot)
@@ -76,7 +120,13 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
                 return result;
             }
 
-            InteractionQueue queue = GetOrCreateQueue(request.TargetStableId);
+            if (!TryGetOrCreateQueue(request.TargetStableId, out InteractionQueue queue))
+            {
+                result = InteractionValidationResult.Reject(request, InteractionValidationFailure.QueueFull);
+                _metrics.RecordValidation(result);
+                return result;
+            }
+
             if (Options.MaxQueuedRequestsPerInstigator > 0 &&
                 queue.CountQueuedForInstigator(request.InstigatorStableId) >= Options.MaxQueuedRequestsPerInstigator)
             {
@@ -112,13 +162,40 @@ namespace CycloneGames.RPGFoundation.Interaction.Core
 
         public InteractionQueue GetOrCreateQueue(ulong targetStableId)
         {
-            if (!_queuesByTarget.TryGetValue(targetStableId, out InteractionQueue queue))
+            if (!TryGetOrCreateQueue(targetStableId, out InteractionQueue queue))
             {
-                queue = new InteractionQueue(Options.QueueCapacityPerTarget);
-                _queuesByTarget.Add(targetStableId, queue);
+                throw new InvalidOperationException(
+                    $"Interaction queue-owner capacity reached the implementation ceiling of {MaximumQueueOwnerCount}.");
             }
 
             return queue;
+        }
+
+        /// <summary>
+        /// Attempts to resolve or create a target-owned queue. Returns false only when a new
+        /// queue owner would exceed the implementation ceiling.
+        /// </summary>
+        public bool TryGetOrCreateQueue(ulong targetStableId, out InteractionQueue queue)
+        {
+            if (_queuesByTarget.TryGetValue(targetStableId, out queue))
+            {
+                return true;
+            }
+
+            if (_queuesByTarget.Count >= MaximumQueueOwnerCount)
+            {
+                if (_rejectedQueueOwnerAdmissionCount < long.MaxValue)
+                {
+                    _rejectedQueueOwnerAdmissionCount++;
+                }
+
+                queue = null;
+                return false;
+            }
+
+            queue = new InteractionQueue(Options.QueueCapacityPerTarget);
+            _queuesByTarget.Add(targetStableId, queue);
+            return true;
         }
 
         public void Clear()

@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Persistence is a serializer-neutral, Unity-free foundation for one bounded, versioned record. It coordinates a codec and a storage adapter, enforces a strict byte format, detects accidental corruption before deserialization, and returns structured runtime results.
+CycloneGames.Persistence provides serializer-neutral, Unity-free primitives for one bounded versioned record. It pairs a codec with a storage adapter, enforces a strict byte format, detects corruption before deserialization, and returns structured results.
 
 ## Table of Contents
 
@@ -18,9 +18,9 @@ CycloneGames.Persistence is a serializer-neutral, Unity-free foundation for one 
 
 Persistence coordinates two external adapters — a serializer codec and a file/database storage provider — into a safe single-record pipeline. It wraps every payload with a versioned header, a stable codec identifier, and an xxHash64 checksum, then rejects records whose header, length, or integrity probe does not match before deserialization.
 
-Runtime failures are returned as structured result types with explicit `PersistenceErrorCode` values. Invalid arguments and concurrent overlap throw immediately. Fatal runtime exceptions (`OutOfMemoryException`) are not converted into results.
+Runtime failures are returned as structured result types with explicit `PersistenceErrorCode` values. Invalid arguments and concurrent overlap throw immediately. Fatal runtime exceptions (`OutOfMemoryException`) propagate.
 
-The core assembly references only `CycloneGames.Hash.Core`. It has no Unity, System.IO, Settings, VYaml, MessagePack, DI, reflection discovery, or background-worker dependency.
+The core assembly's only dependency is `CycloneGames.Hash.Core`.
 
 ### Key Features
 
@@ -238,3 +238,9 @@ The Store never guesses old formats. Prototype records, raw YAML, and unknown ma
 | `InvalidOperationException` on concurrent calls | Overlapping Save/Load/Delete on one Store | Serialize calls; one Store = one active operation. |
 | `OperationCanceledException` not caught | Catching only `Exception` in the composition root | Catch or check `result.ErrorCode == PersistenceErrorCode.Cancelled`. |
 | Tests fail on IL2CPP Player | Reflection fallback used instead of generated resolver | Replace all reflection-based formatters with source-generated or registered ones. |
+
+## Memory Diagnostics and Storage Boundaries
+
+`PersistenceStore<T>.GetMemorySnapshot()` reports operation activity, configured payload/record limits, started load/save/delete counts, overlap rejections, and last/peak record bytes without inspecting application values, storage paths, or serialized content. These counters do not change Persistence Record V1.
+
+`PersistenceStore.GetMemorySnapshot()` exposes owner-local operation, rejection, and retained-record counters without owning external telemetry or report storage. Codecs and storage adapters remain responsible for their input bounds, transient buffers, atomic writes, quotas, and failure isolation.

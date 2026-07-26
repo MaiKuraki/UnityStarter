@@ -4,7 +4,6 @@
 using UnityEngine;
 using UnityEngine.Audio;
 using System.Buffers;
-using System.Globalization;
 using System.Collections.Generic;
 using System.Collections.Concurrent;
 using System;
@@ -93,6 +92,10 @@ namespace CycloneGames.Audio.Runtime
         public readonly int ExternalCacheHits;
         public readonly int ExternalCacheMisses;
         public readonly int ExternalTotalFailures;
+        public readonly long ExternalEvictionScanCount;
+        public readonly long ExternalEvictionCount;
+        public readonly int ExternalCacheMaximumEntryCount;
+        public readonly int ExternalCacheAdmissionRejections;
         public readonly long TotalEventsPlayed;
         public readonly int PeakActiveEvents;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -165,6 +168,10 @@ namespace CycloneGames.Audio.Runtime
             ExternalCacheHits = externalCache.CacheHitCount;
             ExternalCacheMisses = externalCache.CacheMissCount;
             ExternalTotalFailures = externalCache.TotalFailureCount;
+            ExternalEvictionScanCount = externalCache.EvictionScanCount;
+            ExternalEvictionCount = externalCache.EvictionCount;
+            ExternalCacheMaximumEntryCount = externalCache.MaximumEntryCount;
+            ExternalCacheAdmissionRejections = externalCache.AdmissionRejectionCount;
             TotalEventsPlayed = totalEventsPlayed;
             PeakActiveEvents = peakActiveEvents;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -390,8 +397,10 @@ namespace CycloneGames.Audio.Runtime
     /// <summary>
     /// Unity main-thread audio event playback manager.
     /// </summary>
-    public class AudioManager : MonoBehaviour, IAudioService, IAudioLifecyclePauseControl, IAudioBankClipLeaseProvider
+    public partial class AudioManager : MonoBehaviour, IAudioService, IAudioLifecyclePauseControl, IAudioBankClipLeaseProvider
     {
+        public const int MaximumIdleTrimItemsPerCall = 1024;
+
         public static AudioManager Instance { get; private set; }
 
         private static bool AllowCreateInstance = true;
@@ -527,9 +536,8 @@ namespace CycloneGames.Audio.Runtime
                 previousEventsWriteIndex = 0;
                 previousEventsCount = 0;
                 cachedPreviousEventsVersion = -1;
-                CurrentLanguage = 0;
-                Languages = null;
                 ExternalClipMemoryBudgetBytes = 0;
+                ExternalClipMaximumCacheEntryCount = DefaultExternalClipMaximumCacheEntryCount;
                 ExternalClipMaxDownloadBytes = DefaultExternalClipMaxDownloadBytes;
                 ExternalClipMaxDecodedBytes = DefaultExternalClipMaxDecodedBytes;
                 ExternalClipRequestTimeoutSeconds = DefaultExternalClipRequestTimeoutSeconds;
@@ -616,9 +624,6 @@ namespace CycloneGames.Audio.Runtime
         private static int previousEventsWriteIndex;
         private static int previousEventsCount;
 
-        public static int CurrentLanguage { get; private set; }
-        public static string[] Languages;
-
         [Header("Focus & Pause")]
         [Tooltip("Controls which Unity lifecycle events automatically pause/resume audio.\nSet to None if your game manages audio pause/resume manually.")]
         [SerializeField] private AudioFocusMode focusMode = AudioFocusMode.All;
@@ -652,6 +657,7 @@ namespace CycloneGames.Audio.Runtime
         private static AudioPlatformProfile.PlatformRuntimeSettings activePlatformSettings;
         private static int initialPoolSize;
         private static int currentPoolSize;
+        private bool trimExternalCacheFirst = true;
         private static int maxPoolSize;
         private static float lastPoolExpansionTime;
         private static float lastHighUsageTime;
@@ -844,6 +850,106 @@ namespace CycloneGames.Audio.Runtime
                 , totalMemory
 #endif
             );
+        }
+
+        /// <summary>
+        /// Captures memory-relevant runtime state for this active manager instance.
+        /// The caller must remain on the Unity main thread.
+        /// </summary>
+        public AudioMemoryStats GetMemoryStats()
+        {
+            EnsureActiveMemoryOwner(nameof(GetMemoryStats));
+            return new AudioMemoryStats(
+                GetRuntimeStats(),
+                GetExternalClipCacheMemoryBytes(),
+                ExternalClipMemoryBudgetBytes,
+                ActiveBankClipLeaseMemoryBytes,
+                ActiveBankClipLeaseMemoryBudgetBytes,
+                preloadedBankClipLeases.Count,
+                preloadBankRequests.Count);
+        }
+
+        /// <summary>
+        /// Performs at most <paramref name="maximumItems"/> maintenance work units while scanning
+        /// zero-reference external clips and trimming idle AudioSources above the configured initial
+        /// pool size. Active playback and bank clip leases are never changed.
+        /// </summary>
+        public AudioIdleTrimResult TrimIdleMemory(int maximumItems)
+        {
+            EnsureActiveMemoryOwner(nameof(TrimIdleMemory));
+            if (maximumItems < 0 || maximumItems > MaximumIdleTrimItemsPerCall)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumItems));
+            }
+
+            if (maximumItems == 0)
+            {
+                return default;
+            }
+
+            ExternalAudioClipEvictionResult externalResult = default;
+            int idleSourceScanCount = 0;
+            int idleSources = 0;
+
+            if (maximumItems == 1 && !trimExternalCacheFirst)
+            {
+                idleSources = TrimExcessIdleSourcesBounded(
+                    forceTrimToMax: false,
+                    maximumSourcesToInspect: 1,
+                    out idleSourceScanCount);
+                int remainingWork = maximumItems - idleSourceScanCount;
+                if (remainingWork > 0)
+                {
+                    externalResult = ExternalAudioClipHandle.EvictExpiredEntriesBounded(
+                        maxIdleSeconds: 0f,
+                        memoryBudgetBytes: 0L,
+                        maximumEntriesToScan: remainingWork,
+                        maximumEntriesToEvict: remainingWork);
+                }
+
+                trimExternalCacheFirst = true;
+            }
+            else
+            {
+                int externalScanBudget = maximumItems == 1
+                    ? 1
+                    : (maximumItems + 1) / 2;
+                externalResult = ExternalAudioClipHandle.EvictExpiredEntriesBounded(
+                    maxIdleSeconds: 0f,
+                    memoryBudgetBytes: 0L,
+                    maximumEntriesToScan: externalScanBudget,
+                    maximumEntriesToEvict: externalScanBudget);
+
+                int remainingWork = maximumItems - externalResult.EntriesScanned;
+                if (remainingWork > 0)
+                {
+                    idleSources = TrimExcessIdleSourcesBounded(
+                        forceTrimToMax: false,
+                        maximumSourcesToInspect: remainingWork,
+                        out idleSourceScanCount);
+                }
+
+                if (maximumItems == 1)
+                {
+                    trimExternalCacheFirst = false;
+                }
+            }
+
+            return new AudioIdleTrimResult(
+                externalResult.EntriesScanned,
+                externalResult.EntriesEvicted,
+                idleSourceScanCount,
+                idleSources);
+        }
+
+        private void EnsureActiveMemoryOwner(string operation)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(operation);
+            if (!ReferenceEquals(Instance, this))
+            {
+                throw new InvalidOperationException(
+                    "Memory diagnostics require the active AudioManager owner instance.");
+            }
         }
 
         public static void GetCategoryVoiceStats(List<AudioCategoryVoiceStats> results)
@@ -1795,20 +1901,10 @@ namespace CycloneGames.Audio.Runtime
             activeEvent.handleSlot = -1;
         }
 
-        public static void UpdateLanguages()
-        {
-            AudioRuntimeThreadGuard.EnsureMainThread(nameof(UpdateLanguages));
-            CultureInfo[] cultures = CultureInfo.GetCultures(CultureTypes.AllCultures);
-            Languages = new string[cultures.Length];
-            for (int i = 0; i < cultures.Length; i++)
-                Languages[i] = cultures[i].Name;
-        }
-
         public static void SetDebugMode(bool toggle)
         {
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(SetDebugMode));
             debugMode = toggle;
-            ClearSourceText();
         }
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -2220,7 +2316,6 @@ namespace CycloneGames.Audio.Runtime
 
         private void Initialize()
         {
-            CurrentLanguage = 0;
             staticMainMixer = mainMixer;
             ActiveEvents = new List<ActiveEvent>(64);
             ClearActiveEventCategoryCounts();
@@ -2496,30 +2591,53 @@ namespace CycloneGames.Audio.Runtime
                 sourcePool.Add(tempSource);
                 availableSources.Enqueue(tempSource);
 
-#if UNITY_EDITOR
-                var newText = sourceGO.AddComponent<TextMesh>();
-                newText.characterSize = 0.2f;
-#endif
             }
 
             currentPoolSize += count;
         }
 
-        private void TrimExcessIdleSources(bool forceTrimToMax)
+        private int TrimExcessIdleSources(
+            bool forceTrimToMax,
+            int maximumSourcesToRemove = int.MaxValue)
         {
-            if (availableSources.Count == 0 || currentPoolSize <= 0) return;
+            return TrimExcessIdleSourcesBounded(
+                forceTrimToMax,
+                maximumSourcesToRemove,
+                out _);
+        }
+
+        private int TrimExcessIdleSourcesBounded(
+            bool forceTrimToMax,
+            int maximumSourcesToInspect,
+            out int inspectedSourceCount)
+        {
+            inspectedSourceCount = 0;
+            if (availableSources.Count == 0 || currentPoolSize <= 0 || maximumSourcesToInspect <= 0)
+            {
+                return 0;
+            }
 
             int targetPoolSize = forceTrimToMax
                 ? Mathf.Clamp(maxPoolSize, 0, currentPoolSize)
                 : initialPoolSize;
 
-            if (currentPoolSize <= targetPoolSize) return;
+            if (currentPoolSize <= targetPoolSize)
+            {
+                return 0;
+            }
 
-            int trimCount = Mathf.Min(currentPoolSize - targetPoolSize, availableSources.Count);
-            if (trimCount <= 0) return;
+            int trimCount = Mathf.Min(
+                Mathf.Min(currentPoolSize - targetPoolSize, availableSources.Count),
+                maximumSourcesToInspect);
+            if (trimCount <= 0)
+            {
+                return 0;
+            }
 
+            int removedSourceCount = 0;
             for (int i = 0; i < trimCount; i++)
             {
+                inspectedSourceCount++;
                 AudioSource sourceToRemove = availableSources.Dequeue();
                 if (sourceToRemove == null)
                 {
@@ -2530,11 +2648,14 @@ namespace CycloneGames.Audio.Runtime
 
                 sourcePool.Remove(sourceToRemove);
                 Destroy(sourceToRemove.gameObject);
+                removedSourceCount++;
                 currentPoolSize = sourcePool.Count;
             }
 
             if (peakPoolUsage > currentPoolSize)
                 peakPoolUsage = currentPoolSize;
+
+            return removedSourceCount;
         }
 
         /// <summary>
@@ -2894,21 +3015,6 @@ namespace CycloneGames.Audio.Runtime
                 }
 #endif
             }
-        }
-
-        private static void ClearSourceText()
-        {
-#if UNITY_EDITOR
-            for (int i = 0; i < sourcePool.Count; i++)
-            {
-                AudioSource source = sourcePool[i];
-                if (source != null)
-                {
-                    var tempText = source.GetComponent<TextMesh>();
-                    if (tempText != null) tempText.text = string.Empty;
-                }
-            }
-#endif
         }
 
         #endregion
@@ -4294,6 +4400,8 @@ namespace CycloneGames.Audio.Runtime
         #region Clip Preload & Memory Budget
 
         private const int MaxExternalClipReferencesPerBank = 1024;
+        private const int DefaultExternalClipMaximumCacheEntryCount = 1024;
+        private const int HardMaximumExternalClipCacheEntryCount = 16384;
         private const ulong DefaultExternalClipMaxDownloadBytes = 64UL * 1024UL * 1024UL;
         private const long DefaultExternalClipMaxDecodedBytes = 256L * 1024L * 1024L;
         private const long DefaultBankClipLeaseMaxDecodedBytes = 512L * 1024L * 1024L;
@@ -4301,6 +4409,7 @@ namespace CycloneGames.Audio.Runtime
         private const int DefaultExternalClipRequestTimeoutSeconds = 30;
         private const float DefaultExternalClipIdleTtlSeconds = 30f;
         private static long externalClipMemoryBudgetBytes;
+        private static int externalClipMaximumCacheEntryCount = DefaultExternalClipMaximumCacheEntryCount;
         private static ulong externalClipMaxDownloadBytes = DefaultExternalClipMaxDownloadBytes;
         private static long externalClipMaxDecodedBytes = DefaultExternalClipMaxDecodedBytes;
         private static int externalClipRequestTimeoutSeconds = DefaultExternalClipRequestTimeoutSeconds;
@@ -4324,6 +4433,27 @@ namespace CycloneGames.Audio.Runtime
             {
                 AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMemoryBudgetBytes));
                 externalClipMemoryBudgetBytes = Math.Max(0L, value);
+            }
+        }
+
+        /// <summary>
+        /// Maximum number of in-flight and resident entries owned by the built-in external clip cache.
+        /// Lowering the limit never invalidates active leases; new misses are rejected until the cache is below it.
+        /// </summary>
+        public static int ExternalClipMaximumCacheEntryCount
+        {
+            get
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaximumCacheEntryCount));
+                return externalClipMaximumCacheEntryCount;
+            }
+            set
+            {
+                AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalClipMaximumCacheEntryCount));
+                externalClipMaximumCacheEntryCount = Mathf.Clamp(
+                    value,
+                    1,
+                    HardMaximumExternalClipCacheEntryCount);
             }
         }
 
@@ -4847,7 +4977,10 @@ namespace CycloneGames.Audio.Runtime
             if (now - lastEvictionCheckTime < 5f) return; // Check every 5 seconds max
             lastEvictionCheckTime = now;
 
-            int evicted = ExternalAudioClipHandle.EvictExpiredEntries(ExternalClipIdleTTL, ExternalClipMemoryBudgetBytes);
+            int evicted = ExternalAudioClipHandle.EvictExpiredEntries(
+                ExternalClipIdleTTL,
+                ExternalClipMemoryBudgetBytes,
+                ExternalAudioClipHandle.DefaultMaximumEntriesToScanPerCall);
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (evicted > 0)

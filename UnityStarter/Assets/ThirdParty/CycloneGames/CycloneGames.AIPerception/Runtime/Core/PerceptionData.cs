@@ -120,6 +120,10 @@ namespace CycloneGames.AIPerception.Runtime
     [Serializable]
     public struct PerceptionSensorCapacity
     {
+        public const int HardMaximumCandidates = 1_048_576;
+        public const int HardMaximumResults = 65_536;
+        public const int HardMaximumMemoryEntries = 65_536;
+
         [Min(1)] public int InitialCandidateCapacity;
         [Min(1)] public int MaximumCandidates;
         [Min(1)] public int InitialResultCapacity;
@@ -140,15 +144,18 @@ namespace CycloneGames.AIPerception.Runtime
         internal PerceptionSensorCapacity Normalize()
         {
             PerceptionSensorCapacity defaults = Default;
-            int maximumCandidates = MaximumCandidates > 0
-                ? MaximumCandidates
-                : defaults.MaximumCandidates;
-            int maximumResults = MaximumResults > 0
-                ? MaximumResults
-                : defaults.MaximumResults;
-            int maximumMemory = MaximumMemoryEntries > 0
-                ? MaximumMemoryEntries
-                : defaults.MaximumMemoryEntries;
+            int maximumCandidates = math.clamp(
+                MaximumCandidates > 0 ? MaximumCandidates : defaults.MaximumCandidates,
+                1,
+                HardMaximumCandidates);
+            int maximumResults = math.clamp(
+                MaximumResults > 0 ? MaximumResults : defaults.MaximumResults,
+                1,
+                HardMaximumResults);
+            int maximumMemory = math.clamp(
+                MaximumMemoryEntries > 0 ? MaximumMemoryEntries : defaults.MaximumMemoryEntries,
+                1,
+                HardMaximumMemoryEntries);
 
             return new PerceptionSensorCapacity
             {

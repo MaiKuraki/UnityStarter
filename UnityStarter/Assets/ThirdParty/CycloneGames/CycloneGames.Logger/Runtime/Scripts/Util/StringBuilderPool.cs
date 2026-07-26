@@ -108,6 +108,23 @@ namespace CycloneGames.Logger.Util
             }
         }
 
+        internal static int TrimStep(int targetCount, int maxWork)
+        {
+            lock (SyncRoot)
+            {
+                int releaseCount = Math.Min(Math.Max(_count - targetCount, 0), maxWork);
+                if (releaseCount == 0)
+                {
+                    return 0;
+                }
+
+                int firstReleasedIndex = _count - releaseCount;
+                Array.Clear(Items, firstReleasedIndex, releaseCount);
+                _count = firstReleasedIndex;
+                return releaseCount;
+            }
+        }
+
         internal static PoolStatistics GetStatistics()
         {
             int count;

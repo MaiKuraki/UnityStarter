@@ -1,5 +1,15 @@
 # CycloneGames GameplayFramework
 
+## 有界 Actor 准入
+
+一个 `World` 最多保留 `World.MaximumActorCount`（`65,536`）个 actor。该值是 implementation safety ceiling，不是建议的产品预算。达到容量后，已有 actor 的更新、注销与 shutdown 仍然可用；framework 不会自动 trim 存活 actor。
+
+新代码应使用 `TrySpawnActor`、`TrySpawnActorDeferred` 或 `TryRegisterActor`，并将 `false` 作为容量拒绝处理。`SpawnActor`、`SpawnActorDeferred` 与 `RegisterActor` 保持成功路径行为，但在 ceiling 处以 `InvalidOperationException` fail-fast。`GetActorAdmissionSnapshot()` 以 O(1) 暴露 count、capacity 与单调 rejection counter。
+
+迁移是 additive 的：将依赖异常的准入调用改为对应 `Try*` API，并由产品的 spawn/admission policy 处理拒绝。若调用方明确需要 fail-fast，可回退到旧 API。确实需要超过单个 implementation ceiling 的项目应把 actor 分片到多个受管 World；修改常量需要经过审查的 framework build 与对应负载验证。
+
+此契约不新增 serialized field，不重命名类型或字段，不改变 prefab、scene 或 `ScriptableObject` 数据，也不持久化状态；无需资产迁移或数据回滚。
+
 [English](README.md)
 
 以虚幻引擎的 Gameplay Framework 为蓝本，本模块将 UE 开发者熟悉的 `GameInstance → World → GameMode → Controller → Pawn → PlayerState → GameState` 管线带入 Unity。如果你有 UE 的客户端-服务端游戏流、玩家准入、possession 和相机系统经验，这里的架构会让你很亲切——容器所有权、Authority 模式和显式运行时生命周期是第一等概念，不是后来拼凑的模式。

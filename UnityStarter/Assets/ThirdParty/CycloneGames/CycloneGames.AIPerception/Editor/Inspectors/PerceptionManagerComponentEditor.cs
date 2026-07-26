@@ -52,10 +52,10 @@ namespace CycloneGames.AIPerception.Editor
             "Reference transform used for sensor distance. Null disables distance LOD.");
         private static readonly GUIContent LodLevelsLabel = new GUIContent(
             "LOD Levels",
-            "Each frequency multiplier applies up to its maximum distance. Beyond the last tier, the last multiplier remains active. Effective interval equals base interval divided by the multiplier.");
+            "Up to 64 levels are supported. Each frequency multiplier applies up to its maximum distance. Beyond the last tier, the last multiplier remains active. Effective interval equals base interval divided by the multiplier.");
         private static readonly GUIContent MaximumPerceptiblesLabel = new GUIContent(
             "Maximum Perceptibles",
-            "Hard registry capacity. Zero allows unbounded safe-point growth and should be used only with an external world budget.");
+            "Hard registry capacity. Legacy zero maps to the package hard ceiling of 1,048,576 perceptibles.");
         private static readonly GUIContent SpatialCellSizeLabel = new GUIContent(
             "Spatial Cell Size",
             "World-space cell width used by broad-phase candidate queries.");
@@ -80,6 +80,7 @@ namespace CycloneGames.AIPerception.Editor
         private float[] _cachedLodFrequencies;
         private GUIContent[] _lodBandLabels;
         private GUIContent[] _lodThresholdLabels;
+        private int _cachedLodArraySize = -1;
         private bool _lodModelInitialized;
         private bool _lodValuesMixed;
         private bool _lodPreviewAvailable;
@@ -251,15 +252,13 @@ namespace CycloneGames.AIPerception.Editor
         {
             string badge = _maximumPerceptibles.hasMultipleDifferentValues
                 ? "MIXED"
-                : _maximumPerceptibles.intValue == 0 ? "UNBOUNDED" : "BOUNDED";
+                : _maximumPerceptibles.intValue == 0 ? "PACKAGE MAX" : "BOUNDED";
             InspectorUiUtility.DrawSectionHeader(
                 ref _showCapacity,
                 CapacityTitle,
                 CapacityColor,
                 badge: badge,
-                badgeColor: !_maximumPerceptibles.hasMultipleDifferentValues && _maximumPerceptibles.intValue == 0
-                    ? InspectorUiUtility.WarningColor
-                    : InspectorUiUtility.SuccessColor);
+                badgeColor: InspectorUiUtility.SuccessColor);
             if (!_showCapacity)
             {
                 return;
@@ -274,8 +273,8 @@ namespace CycloneGames.AIPerception.Editor
                 if (!_maximumPerceptibles.hasMultipleDifferentValues && _maximumPerceptibles.intValue == 0)
                 {
                     EditorGUILayout.HelpBox(
-                        "Unbounded registry growth is enabled. Establish and profile an external world population budget before using this setting in production.",
-                        MessageType.Warning);
+                        "Legacy zero maps to the package hard ceiling of 1,048,576 perceptibles. Configure a lower measured product budget when possible.",
+                        MessageType.Info);
                 }
             }
             InspectorUiUtility.EndPanel();
@@ -346,8 +345,21 @@ namespace CycloneGames.AIPerception.Editor
         private void EnsureLodPropertyCache()
         {
             int count = _lodLevels.arraySize;
-            if (_lodDistanceProperties != null && _lodDistanceProperties.Length == count)
+            if (_cachedLodArraySize == count)
             {
+                return;
+            }
+
+            _cachedLodArraySize = count;
+            if (count > SensorManager.HardMaximumLODLevelCount)
+            {
+                _lodDistanceProperties = System.Array.Empty<SerializedProperty>();
+                _lodFrequencyProperties = System.Array.Empty<SerializedProperty>();
+                _cachedLodDistances = System.Array.Empty<float>();
+                _cachedLodFrequencies = System.Array.Empty<float>();
+                _lodBandLabels = System.Array.Empty<GUIContent>();
+                _lodThresholdLabels = System.Array.Empty<GUIContent>();
+                _lodModelInitialized = false;
                 return;
             }
 
@@ -376,6 +388,15 @@ namespace CycloneGames.AIPerception.Editor
 
         private void RefreshLodModel()
         {
+            if (_lodLevels.arraySize > SensorManager.HardMaximumLODLevelCount)
+            {
+                _lodValidationMessage =
+                    $"LOD level count exceeds the package hard ceiling of {SensorManager.HardMaximumLODLevelCount}. Runtime LOD configuration is rejected.";
+                _lodValidationType = MessageType.Error;
+                _lodPreviewAvailable = false;
+                return;
+            }
+
             int count = _lodDistanceProperties.Length;
             bool mixed = _lodLevels.hasMultipleDifferentValues;
             bool changed = !_lodModelInitialized || mixed != _lodValuesMixed;
@@ -537,10 +558,8 @@ namespace CycloneGames.AIPerception.Editor
             InspectorUiUtility.DrawStatusRow(PerceptiblesLabel.text, _runtimePerceptibleCount.ToString(), LodColor);
             InspectorUiUtility.DrawStatusRow(
                 MaximumCapacityLabel.text,
-                _runtimeMaximumCapacity == 0 ? "Unbounded" : _runtimeMaximumCapacity.ToString(),
-                _runtimeMaximumCapacity == 0
-                    ? InspectorUiUtility.WarningColor
-                    : CapacityColor);
+                _runtimeMaximumCapacity.ToString(),
+                CapacityColor);
 
             if (atCapacity)
             {

@@ -404,7 +404,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             long totalArea = (long)_pages.Count * _config.pageSize * _config.pageSize;
             return new DynamicAtlasStats(
                 _pages.Count,
+                _config.maxPages,
                 _entries.Count,
+                _config.maxEntries,
                 activeEntries,
                 retainedEntries,
                 activeReferences,

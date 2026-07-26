@@ -64,11 +64,11 @@ flowchart LR
 
 ## 快速上手
 
-### 1. 添加 assembly 引用
+### 添加 assembly 引用
 
 三个 assembly 均使用 `autoReferenced: false`。协议注册和 DTO 使用需引用 `CycloneGames.BehaviorTree.Networking.Core`；bridge 和 runtime 辅助类型需引用 `CycloneGames.BehaviorTree.Networking.Runtime`。
 
-### 2. 注册协议
+### 注册协议
 
 ```csharp
 using CycloneGames.BehaviorTree.Networking;
@@ -85,7 +85,7 @@ public static class BehaviorTreeNetworkInstaller
 
 `RegisterMessageCatalog` 会注册完整保留范围和全部内置 descriptor。如果当前持有 `INetworkMessageEndpoint`，可以调用 `TryRegisterMessageCatalog` 并根据返回值判断注册是否成功。
 
-### 3. 创建 bridge 和接收 cursor
+### 创建 bridge 和接收 cursor
 
 必须在 managed tree 的 owner thread 创建、使用并释放 bridge。每个 `(TargetNetworkId, TreeTemplateHash, AuthorityGeneration)` stream 保留一个接收 cursor：
 
@@ -150,7 +150,7 @@ public sealed class BehaviorTreeReplicationSession : IDisposable
 
 Transport adapter 负责序列化 DTO、选择 profile channel、发送数据、在接收端解码，并把接收操作调度到 tree owner thread。
 
-### 4. 连接 transport 边界
+### 连接 transport 边界
 
 1. 检查 authority、身份认证、速率、target identity 和已启用的 profile feature。
 2. 在 tree owner thread capture snapshot、delta 或 hash-only message。
@@ -251,7 +251,7 @@ Delta byte 使用版本化 `BTDP1` frame。接收时，bridge 会 clone `Network
 
 调用 `Create...Builder` 或 `ToBuilder()` 在 `Build()` 前自定义。构建后的 profile 不可变。
 
-Bridge 会直接执行 snapshot/delta byte limit、通过 `MaxTrackedBlackboardKeys` 执行传入 entry limit，以及 `WakeTreeOnRemoteDelta`。默认 transport payload 预算为 `1200` byte；state DTO 为固定字段保留 `43` byte，因此默认内层 payload 预算为 `1157` byte。
+Bridge 会直接执行 snapshot/delta byte limit、通过 `MaxTrackedBlackboardKeys` 执行传入 entry limit，以及 `WakeTreeOnRemoteDelta`。默认 transport payload 预算为 `1200` byte；state DTO 为固定字段保留 `43` byte，因此默认内层 payload 预算为 `1157` byte。`MaxTrackedBlackboardKeys` 限制在 `1..4096`，与 delta patch protocol 上限一致。
 
 ## 线程与失败行为
 
@@ -281,6 +281,8 @@ Bridge 会直接执行 snapshot/delta byte limit、通过 `MaxTrackedBlackboardK
 - Profile 构造会分配 setting dictionary 副本。
 
 应限制 snapshot 和 delta 大小、预先确定 tracked-key capacity、限制更新频率。按最大生产 blackboard 测量 candidate-state 内存。
+
+`BehaviorTreeNetworkSyncBridge.GetMemoryStats()` 提供 allocation-free 的 owner-thread counter 与保留的 snapshot scratch capacity。capture 返回的 payload array 会转交调用方，bridge 不继续保留；receive progress 是调用方持有的标量 cursor，不是 history collection。Caller-owned diagnostics 可以发布这些值，但 bridge 不拥有 tree state 或 transport buffer。
 
 ### 数据所有权
 

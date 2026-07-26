@@ -522,6 +522,8 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 
 窗口会话 Service 不池化窗口 GameObject，也不保留已关闭窗口缓存。Provider 可以共享底层资产，但每次成功获取都会返回由会话持有的 Lease。Binding 清理和窗口销毁后会 Dispose Lease。动态图集 Retention 是独立且显式有界的 Cache，具有自己的 Sprite Lease 与 Trim Policy。只有 Profiling 证明实例 churn 是主要成本，并且产品可以定义容量、Reset、耗尽、陈旧引用、Scene 与 Shutdown policy 时，才应增加池。
 
+`DynamicAtlasStats` 会在当前 page、entry、reference、retained entry、estimated bytes、pending-destruction bytes 与压力 counter 之外，报告配置的 `PageCapacity`、`EntryCapacity` 和 `MemoryBudgetBytes`。达到 page、entry 或 byte ceiling 时，admission 继续通过显式 `DynamicAtlasInsertStatus` 失败；active sprite lease 永不被驱逐。`TrimUnused(maximumEntriesToRemove)` 是安全的 owner-local mitigation，只移除零引用 retained entry。参数小于等于零时 no-op。legacy 无参数调用保持源码兼容，并可能清空全部 eligible entry，但总 work 仍受已校验的 `maxEntries` 限制（hard maximum 为 65,535）；pressure orchestration 应始终传入更小的单 pump work budget。
+
 ### 线程、AOT 与 Stripping
 
 `UIService` 与 `DynamicAtlasService` 捕获 Unity Owner Thread，并拒绝其他线程调用。Binder、Presenter、生命周期回调、过渡、Hierarchy 修改、Locale Layout 应用、Texture Copy 与 Lease 消费也在该线程运行。Asset Provider 可以按自身 policy 执行后端 I/O 或解压；完成的 Unity Object 会在校验与实例化前切回主线程。不要用 Lock 包围 Unity Object 访问；应把工作调度到 Owner Thread。
@@ -567,6 +569,8 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 ```
 
 打开 `Samples/SampleScene.unity`，在 Play Mode 中观察打开、过渡与干净 Shutdown。Sample Assembly 不 Auto Reference。具体 Scene 设置与运行步骤见 [Samples/README.SCH.md](Samples/README.SCH.md)。不得把 EditMode 通过扩大为 Player、IL2CPP、WebGL、移动端、主机、长期稳定或全局零 GC 结论。
+
+验证 dynamic-atlas governance 时，配置较小的 page/entry/byte budget，保留一个 active lease，释放另外若干 lease，并以单条 entry budget 调用 `TrimUnused`。确认只移除一个 eligible entry、active lease 仍有效、capacity 字段与配置一致，且 rejection/eviction counter 与操作相符。
 
 ## API Reference
 

@@ -28,6 +28,8 @@ namespace CycloneGames.RPGFoundation.Projectile.Networking
             }
         }
 
+        public long OverwriteCount => _history.OverwriteCount;
+
         public void Record(in ProjectileSnapshotMessage snapshot)
         {
             _history.Record(

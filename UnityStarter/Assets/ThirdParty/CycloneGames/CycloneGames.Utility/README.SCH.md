@@ -18,7 +18,7 @@ CycloneGames.Utility 是一组紧凑、具体的 Unity 工具，覆盖集合操�
 
 ## 概述
 
-本包覆盖几乎每个 Unity 项目都会出现的小型重复任务：带边界检查的集合工具、固定区域 string 与 span 格式化、带 WCAG contrast 的命名颜色、向量工具、安全区域 fitting、FPS 诊断、经 authoring 的 Transform 查找，以及窄范围 singleton 便利能力。Runtime 程序集引用 `CycloneGames.Hash.Core` 与 `UnityEngine.UI`；一个物理隔离的 `SplashScreenModifier` 子模块负责自动停止 Player splash screen。
+本包覆盖几乎每个 Unity 项目都会出现的重复任务：带边界检查的集合工具、固定区域 string 与 span 格式化、带 WCAG contrast 的命名颜色、向量工具、安全区域 fitting、FPS 诊断、经 authoring 的 Transform 查找，以及窄范围 singleton 便利能力。Runtime 程序集引用 `CycloneGames.Hash.Core` 与 `UnityEngine.UI`；一个物理隔离的 `SplashScreenModifier` 子模块负责自动停止 Player splash screen。
 
 `Singleton<T>` 与 `MonoSingleton<T>` 是面向小型无参对象或 main-thread Unity 组件的窄范围便利类型，不能替代显式构造、dependency injection、domain-owned shutdown 或 scene/world-scoped ownership。Service Locator、DI 容器、持久化、网络、安全、确定性模拟和 Inspector 框架由各自的模块负责。
 
@@ -212,7 +212,7 @@ Registry 存储 authoring string key，不是 network ID、save ID、Unity insta
 
 把 `FPSCounter` 挂到 owner 明确的诊断 GameObject。它不会发现、创建或暴露全局 instance。通过直接引用调用 `SetVisible`，或设置 `IsVisible`。
 
-Moving average 使用固定、有界 sample ring。仅 instant 或仅 average 模式会惰性缓存观察到的数字 string；combined 模式在显示更新时可能分配组合 string。IMGUI 自身也有 engine-owned 成本，因此该组件不是生产 HUD，也不构成 universal zero-allocation 声明。`Persist Across Scenes` 会对整个 GameObject 调用 `DontDestroyOnLoad`——应使用不含无关组件的专用 owner。
+Moving average 使用固定、有界 sample ring。仅 instant 或仅 average 模式会惰性缓存观察到的数字 string；combined 模式在显示更新时可能分配组合 string。IMGUI 自身也有 engine-owned 成本；该组件是开发诊断工具，不是生产 HUD。`Persist Across Scenes` 会对整个 GameObject 调用 `DontDestroyOnLoad`——应使用不含无关组件的专用 owner。
 
 ### 字符串常量 selector
 
@@ -414,3 +414,7 @@ string flavor = TelemetryNames.Instance.BuildFlavor;
 7. 在关闭 Domain Reload 和 Scene Reload 时进入 Play Mode，确认 `MonoSingleton<T>` 只解析一次、拒绝 duplicate 但不删除 sibling，并在下一次 session 重置 registration。
 
 发布前，在每个选定 target 上运行 disposable Player 启动 smoke。确认在 license 允许时 Unity splash stop request 生效、首个 Scene 仍能启动、`UNITY_SERVER` 不受影响，并且没有把原生 OS/browser/平台启动 UI 错认成 Unity managed splash。使用产品的 IL2CPP、stripping、XR 与 license 配置重复验证。不得把 Editor 测试结果扩大为 Player、IL2CPP、移动端、WebGL、server、主机、长时间运行或全局 zero-allocation 证据。
+
+## 内存所有权
+
+Utility 拥有 per-component `TransformKeyRegistry` buffer 与 AppDomain/Unity lifecycle singleton state，但由于不存在独立且安全的 trim 操作，因此不提供 process-global responder。外部 diagnostics 绝不能因压力而重置 static singleton、销毁 component、清空 authored registry state 或修改业务数据。聚合 diagnostics 必须先具有显式 public owner snapshot。

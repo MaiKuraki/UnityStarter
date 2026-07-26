@@ -93,6 +93,20 @@ namespace CycloneGames.BehaviorTree.Networking
         private readonly BehaviorTreeNetworkProfile _profile;
         private readonly BTStateSnapshotBuffer _snapshotBuffer = new BTStateSnapshotBuffer();
         private readonly int _ownerThreadId;
+        private long _capturedSnapshotCount;
+        private long _capturedDeltaCount;
+        private long _capturedHashOnlyCount;
+        private long _suppressedDeltaCount;
+        private long _outgoingPayloadBytes;
+        private int _peakOutgoingPayloadBytes;
+        private long _receivedPayloadCount;
+        private long _acceptedPayloadCount;
+        private long _rejectedPayloadCount;
+        private long _incomingPayloadBytes;
+        private int _peakIncomingPayloadBytes;
+        private long _acceptedSnapshotCount;
+        private long _acceptedDeltaCount;
+        private long _acceptedHashOnlyCount;
         private bool _disposed;
 
         public BehaviorTreeNetworkSyncBridge(BehaviorTreeNetworkProfile profile = null)
@@ -104,6 +118,39 @@ namespace CycloneGames.BehaviorTree.Networking
         public BehaviorTreeNetworkProfile Profile => _profile;
         public int EffectiveMaxSnapshotPayloadBytes => GetEffectivePayloadBudget(_profile.MaxSnapshotPayloadBytes);
         public int EffectiveMaxDeltaPayloadBytes => GetEffectivePayloadBudget(_profile.MaxDeltaPayloadBytes);
+
+        public BehaviorTreeNetworkMemoryStats GetMemoryStats()
+        {
+            EnsureUsable();
+            BTStateSnapshotBufferMemoryStats bufferStats = _snapshotBuffer.GetMemoryStats();
+            return new BehaviorTreeNetworkMemoryStats(
+                EffectiveMaxSnapshotPayloadBytes,
+                EffectiveMaxDeltaPayloadBytes,
+                _profile.MaxTrackedBlackboardKeys,
+                retainedPayloadBytes: 0,
+                bufferStats.NodeStateCapacity,
+                bufferStats.NodeAuxiliaryCapacity,
+                bufferStats.TraversalNodeCapacity,
+                bufferStats.TraversalStackCapacity,
+                bufferStats.BlackboardStreamCapacityBytes,
+                bufferStats.SnapshotStreamCapacityBytes,
+                _capturedSnapshotCount,
+                _capturedDeltaCount,
+                _capturedHashOnlyCount,
+                _suppressedDeltaCount,
+                _outgoingPayloadBytes,
+                _peakOutgoingPayloadBytes,
+                _receivedPayloadCount,
+                _acceptedPayloadCount,
+                _rejectedPayloadCount,
+                _incomingPayloadBytes,
+                _peakIncomingPayloadBytes,
+                _acceptedSnapshotCount,
+                _acceptedDeltaCount,
+                _acceptedHashOnlyCount,
+                retainedHistoryEntryCount: 0,
+                maximumRetainedHistoryEntryCount: 0);
+        }
 
         public BehaviorTreeStatePayloadMessage CaptureSnapshot(
             uint targetNetworkId,
@@ -130,6 +177,7 @@ namespace CycloneGames.BehaviorTree.Networking
 
             var payload = new byte[segment.Count];
             Buffer.BlockCopy(segment.Array, segment.Offset, payload, 0, segment.Count);
+            RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind.FullSnapshot, payload.Length);
 
             return new BehaviorTreeStatePayloadMessage(
                 targetNetworkId,
@@ -157,6 +205,7 @@ namespace CycloneGames.BehaviorTree.Networking
             message = default;
             if (targetNetworkId == 0u || tree?.Blackboard == null || deltaTracker == null)
             {
+                _suppressedDeltaCount++;
                 return false;
             }
 
@@ -165,11 +214,13 @@ namespace CycloneGames.BehaviorTree.Networking
                     EffectiveMaxDeltaPayloadBytes,
                     out ArraySegment<byte> segment))
             {
+                _suppressedDeltaCount++;
                 return false;
             }
 
             var payload = new byte[segment.Count];
             Buffer.BlockCopy(segment.Array, segment.Offset, payload, 0, segment.Count);
+            RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind.BlackboardDelta, payload.Length);
 
             ulong blackboardHash = tree.Blackboard.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
             ulong treeStateHash = ComputeLiveTreeStateHash(tree, blackboardHash);
@@ -209,6 +260,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 ? tree.Blackboard.ComputeHash(RuntimeBlackboardNetworkScope.Networked)
                 : 0UL;
             ulong treeStateHash = ComputeLiveTreeStateHash(tree, blackboardHash);
+            RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind.HashOnly, payloadBytes: 0);
             return new BehaviorTreeStatePayloadMessage(
                 targetNetworkId,
                 sequence,
@@ -227,14 +279,15 @@ namespace CycloneGames.BehaviorTree.Networking
             ref BehaviorTreePayloadReceiveState receiveState)
         {
             EnsureUsable();
+            RecordIncomingPayload(message.Payload != null ? message.Payload.Length : 0);
             if (tree == null || tree.Blackboard == null || !message.IsValid || !receiveState.CanAccept(message))
             {
-                return false;
+                return RejectIncomingPayload();
             }
 
             if (!ValidateIncomingPayload(message))
             {
-                return false;
+                return RejectIncomingPayload();
             }
 
             if (message.PayloadKind == BehaviorTreeNetworkPayloadKind.FullSnapshot)
@@ -252,33 +305,33 @@ namespace CycloneGames.BehaviorTree.Networking
                         !BTNetworkSync.DoesExecutionStateMatch(tree, snapshot, _snapshotBuffer, limits) ||
                         ComputeSnapshotBlackboardHash(snapshot, tree.Blackboard, limits) != message.BlackboardHash)
                     {
-                        return false;
+                        return RejectIncomingPayload();
                     }
 
                 }
                 catch (InvalidDataException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (IOException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (KeyNotFoundException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (InvalidOperationException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (ArgumentException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (OverflowException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
 
                 // The payload is now fully parsed and validated. Commit outside the
@@ -297,7 +350,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 }
 
                 receiveState.RecordAccepted(message);
-                return true;
+                return AcceptIncomingPayload(BehaviorTreeNetworkPayloadKind.FullSnapshot);
             }
 
             if (message.PayloadKind == BehaviorTreeNetworkPayloadKind.BlackboardDelta)
@@ -319,33 +372,33 @@ namespace CycloneGames.BehaviorTree.Networking
                         if (candidateHash != message.BlackboardHash ||
                             ComputeLiveTreeStateHash(tree, candidateHash) != message.TreeStateHash)
                         {
-                            return false;
+                            return RejectIncomingPayload();
                         }
                     }
                 }
                 catch (InvalidDataException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (IOException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (KeyNotFoundException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (InvalidOperationException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (ArgumentException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 catch (OverflowException)
                 {
-                    return false;
+                    return RejectIncomingPayload();
                 }
 
                 // Payload parsing, schema validation, and post-state hash validation have
@@ -363,7 +416,7 @@ namespace CycloneGames.BehaviorTree.Networking
                 {
                     // Candidate validation cannot observe target-local object slots.
                     // A primitive/object collision is still rejected before mutation.
-                    return false;
+                    return RejectIncomingPayload();
                 }
                 ulong committedHash = tree.Blackboard.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
                 if (committedHash != message.BlackboardHash ||
@@ -379,23 +432,23 @@ namespace CycloneGames.BehaviorTree.Networking
                 }
 
                 receiveState.RecordAccepted(message);
-                return true;
+                return AcceptIncomingPayload(BehaviorTreeNetworkPayloadKind.BlackboardDelta);
             }
 
             if (message.PayloadKind != BehaviorTreeNetworkPayloadKind.HashOnly)
             {
-                return false;
+                return RejectIncomingPayload();
             }
 
             ulong localBlackboardHash = tree.Blackboard.ComputeHash(RuntimeBlackboardNetworkScope.Networked);
             if (localBlackboardHash != message.BlackboardHash ||
                 ComputeLiveTreeStateHash(tree, localBlackboardHash) != message.TreeStateHash)
             {
-                return false;
+                return RejectIncomingPayload();
             }
 
             receiveState.RecordAccepted(message);
-            return true;
+            return AcceptIncomingPayload(BehaviorTreeNetworkPayloadKind.HashOnly);
         }
 
         public bool IsDesynced(RuntimeBehaviorTree tree, in BehaviorTreeStatePayloadMessage remoteState)
@@ -478,6 +531,63 @@ namespace CycloneGames.BehaviorTree.Networking
             {
                 tree.WakeUp(message.WakeUpTickBudget);
             }
+        }
+
+        private void RecordOutgoingPayload(BehaviorTreeNetworkPayloadKind kind, int payloadBytes)
+        {
+            switch (kind)
+            {
+                case BehaviorTreeNetworkPayloadKind.FullSnapshot:
+                    _capturedSnapshotCount++;
+                    break;
+                case BehaviorTreeNetworkPayloadKind.BlackboardDelta:
+                    _capturedDeltaCount++;
+                    break;
+                case BehaviorTreeNetworkPayloadKind.HashOnly:
+                    _capturedHashOnlyCount++;
+                    break;
+            }
+
+            _outgoingPayloadBytes += payloadBytes;
+            if (payloadBytes > _peakOutgoingPayloadBytes)
+            {
+                _peakOutgoingPayloadBytes = payloadBytes;
+            }
+        }
+
+        private void RecordIncomingPayload(int payloadBytes)
+        {
+            _receivedPayloadCount++;
+            _incomingPayloadBytes += payloadBytes;
+            if (payloadBytes > _peakIncomingPayloadBytes)
+            {
+                _peakIncomingPayloadBytes = payloadBytes;
+            }
+        }
+
+        private bool RejectIncomingPayload()
+        {
+            _rejectedPayloadCount++;
+            return false;
+        }
+
+        private bool AcceptIncomingPayload(BehaviorTreeNetworkPayloadKind kind)
+        {
+            _acceptedPayloadCount++;
+            switch (kind)
+            {
+                case BehaviorTreeNetworkPayloadKind.FullSnapshot:
+                    _acceptedSnapshotCount++;
+                    break;
+                case BehaviorTreeNetworkPayloadKind.BlackboardDelta:
+                    _acceptedDeltaCount++;
+                    break;
+                case BehaviorTreeNetworkPayloadKind.HashOnly:
+                    _acceptedHashOnlyCount++;
+                    break;
+            }
+
+            return true;
         }
 
         private bool ValidateIncomingPayload(in BehaviorTreeStatePayloadMessage message)

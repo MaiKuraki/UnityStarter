@@ -131,6 +131,7 @@ namespace CycloneGames.Networking.Tests.Editor
             history.Record(1UL, new NetworkTickId(3), 3, new TestSnapshot(30));
 
             Assert.That(history.Count, Is.EqualTo(2));
+            Assert.That(history.OverwriteCount, Is.EqualTo(1));
             Assert.That(history.TryGet(1UL, new NetworkTickId(1), out _), Is.False);
             Assert.That(history.TryGetLatest(1UL, out NetworkActionHistoryEntry<TestSnapshot> latest), Is.True);
             Assert.That(latest.Tick, Is.EqualTo(new NetworkTickId(3)));

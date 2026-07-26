@@ -238,6 +238,125 @@ namespace CycloneGames.RPGFoundation.Interaction.Tests.Editor
             Assert.That(second.QueuePosition, Is.EqualTo(2));
         }
 
+        [Test]
+        public void RateLimiter_PrunesExpiredIdentitiesBeforeCapacityAdmission()
+        {
+            var limiter = new InteractionRateLimiter(maximumWindowCount: 2);
+            Assert.That(limiter.TryConsume(1UL, tick: 0, maxRequests: 1, windowTicks: 10), Is.True);
+            Assert.That(limiter.TryConsume(2UL, tick: 0, maxRequests: 1, windowTicks: 10), Is.True);
+
+            Assert.That(limiter.TryConsume(3UL, tick: 11, maxRequests: 1, windowTicks: 10), Is.True);
+
+            InteractionRateLimiterMemorySnapshot snapshot = limiter.GetMemorySnapshot();
+            Assert.That(snapshot.WindowCount, Is.EqualTo(1));
+            Assert.That(snapshot.WindowCapacity, Is.EqualTo(2));
+            Assert.That(snapshot.ExpiredWindowRemovalCount, Is.EqualTo(2));
+            Assert.That(snapshot.RejectedAdmissionCount, Is.Zero);
+        }
+
+        [Test]
+        public void RateLimiter_UsesExpiryOrderAndPreservesLiveWindows()
+        {
+            var limiter = new InteractionRateLimiter(maximumWindowCount: 3);
+            Assert.That(limiter.TryConsume(1UL, tick: 0, maxRequests: 2, windowTicks: 100), Is.True);
+            Assert.That(limiter.TryConsume(2UL, tick: 0, maxRequests: 2, windowTicks: 10), Is.True);
+
+            Assert.That(limiter.TryConsume(3UL, tick: 11, maxRequests: 2, windowTicks: 10), Is.True);
+            Assert.That(limiter.TryConsume(1UL, tick: 11, maxRequests: 2, windowTicks: 100), Is.True);
+
+            InteractionRateLimiterMemorySnapshot snapshot = limiter.GetMemorySnapshot();
+            Assert.That(snapshot.WindowCount, Is.EqualTo(2));
+            Assert.That(snapshot.ExpiredWindowRemovalCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void RateLimiter_BackwardsTickDoesNotClearOrBypassOtherWindows()
+        {
+            var limiter = new InteractionRateLimiter(maximumWindowCount: 2);
+            Assert.That(limiter.TryConsume(1UL, tick: 100, maxRequests: 1, windowTicks: 100), Is.True);
+            Assert.That(limiter.TryConsume(2UL, tick: 100, maxRequests: 1, windowTicks: 100), Is.True);
+
+            Assert.That(limiter.TryConsume(1UL, tick: 99, maxRequests: 1, windowTicks: 100), Is.False);
+            Assert.That(limiter.TryConsume(3UL, tick: 99, maxRequests: 1, windowTicks: 100), Is.False);
+
+            InteractionRateLimiterMemorySnapshot snapshot = limiter.GetMemorySnapshot();
+            Assert.That(snapshot.WindowCount, Is.EqualTo(2));
+            Assert.That(snapshot.ExpiredWindowRemovalCount, Is.Zero);
+            Assert.That(snapshot.RejectedAdmissionCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void RateLimiter_IntTickWrapAdvancesTheMonotonicTimeline()
+        {
+            var limiter = new InteractionRateLimiter(maximumWindowCount: 1);
+            Assert.That(
+                limiter.TryConsume(1UL, int.MaxValue - 1, maxRequests: 1, windowTicks: 3),
+                Is.True);
+
+            Assert.That(
+                limiter.TryConsume(1UL, int.MinValue, maxRequests: 1, windowTicks: 3),
+                Is.False);
+            Assert.That(
+                limiter.TryConsume(1UL, int.MinValue + 1, maxRequests: 1, windowTicks: 3),
+                Is.True);
+            Assert.That(limiter.GetMemorySnapshot().ExpiredWindowRemovalCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void RateLimiter_ExplicitRemovalRestoresAdmissionCapacity()
+        {
+            var limiter = new InteractionRateLimiter(maximumWindowCount: 1);
+            Assert.That(limiter.TryConsume(1UL, tick: 0, maxRequests: 1, windowTicks: 100), Is.True);
+            Assert.That(limiter.TryConsume(2UL, tick: 1, maxRequests: 1, windowTicks: 100), Is.False);
+            Assert.That(limiter.Remove(1UL), Is.True);
+            Assert.That(limiter.TryConsume(2UL, tick: 1, maxRequests: 1, windowTicks: 100), Is.True);
+
+            InteractionRateLimiterMemorySnapshot snapshot = limiter.GetMemorySnapshot();
+            Assert.That(snapshot.WindowCount, Is.EqualTo(1));
+            Assert.That(snapshot.RejectedAdmissionCount, Is.EqualTo(1));
+            Assert.That(snapshot.ExplicitWindowRemovalCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Authority_ExposesAuthenticatedDisconnectWindowRemoval()
+        {
+            var service = CreateService();
+            Assert.That(service.TryRegisterTarget(CreateTarget()), Is.True);
+            var request = new InteractionRequest(
+                1,
+                INSTIGATOR_ID,
+                TARGET_ID,
+                "open",
+                tick: 100,
+                worldId: WORLD_ID);
+            Assert.That(
+                service.ValidateRequest(request, InteractionVector3.Zero, serverTick: 100).IsAccepted,
+                Is.True);
+            Assert.That(service.GetMemorySnapshot().RateLimitWindowCount, Is.EqualTo(1));
+
+            Assert.That(service.RemoveInstigatorRateLimitWindow(INSTIGATOR_ID), Is.True);
+            Assert.That(service.GetMemorySnapshot().RateLimitWindowCount, Is.Zero);
+        }
+
+        [Test]
+        public void RateLimiter_PruneWorkIsBoundedPerRequest()
+        {
+            int capacity = InteractionRateLimiter.MaximumExpiredWindowsToPrunePerCall + 4;
+            var limiter = new InteractionRateLimiter(capacity);
+            for (ulong key = 1UL; key <= (ulong)capacity; key++)
+            {
+                Assert.That(limiter.TryConsume(key, tick: 0, maxRequests: 1, windowTicks: 1), Is.True);
+            }
+
+            Assert.That(limiter.TryConsume((ulong)capacity + 1UL, tick: 2, maxRequests: 1, windowTicks: 1), Is.True);
+
+            InteractionRateLimiterMemorySnapshot snapshot = limiter.GetMemorySnapshot();
+            Assert.That(
+                snapshot.ExpiredWindowRemovalCount,
+                Is.EqualTo(InteractionRateLimiter.MaximumExpiredWindowsToPrunePerCall));
+            Assert.That(snapshot.WindowCount, Is.EqualTo(5));
+        }
+
         private static InteractionAuthorityService CreateService()
         {
             return new InteractionAuthorityService(new InteractionAuthorityOptions(worldId: WORLD_ID));

@@ -1,6 +1,6 @@
 # CycloneGames.Foundation2D
 
-CycloneGames.Foundation2D provides production-oriented sprite-sequence playback for `SpriteRenderer` and Unity UI `Image`. It keeps playback ownership explicit, supports MonoBehaviour-driven and optional Burst-batched updates, and supplies authoring tools for validating renderer and material combinations before entering Play Mode.
+CycloneGames.Foundation2D provides sprite-sequence playback for `SpriteRenderer` and Unity UI `Image`. Playback ownership is explicit. Updates run on MonoBehaviour or optional Burst-batched paths. Authoring tools validate renderer and material combinations before Play Mode.
 
 ## Table of Contents
 
@@ -12,11 +12,12 @@ CycloneGames.Foundation2D provides production-oriented sprite-sequence playback 
 - [Advanced Topics](#advanced-topics)
 - [Common Scenarios](#common-scenarios)
 - [Performance and Memory](#performance-and-memory)
+- [Runtime Memory Diagnostics](#runtime-memory-diagnostics)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
 
-The module handles visual animation: effects, world-space props, UI indicators, portraits, and lightweight crowds. Authoritative gameplay simulation, animation graphs, skeletal animation, 2D physics, tilemaps, networking protocols, and save formats live in their own modules. Gameplay code that requires deterministic rollback or server authority should store its own versioned state and drive presentation from committed gameplay state.
+Use this module for visual animation: effects, world-space props, UI indicators, portraits, and lightweight crowds. Gameplay code that needs deterministic rollback or server authority drives presentation from its own versioned state.
 
 ## Quick Start
 
@@ -211,7 +212,7 @@ All Unity object reads, result commits, renderer calls, and events remain on the
 - The Burst integration copies state into persistent native buffers. It is not automatically faster; use the included benchmark and a Release Player on target hardware.
 - Editor static caches contain only bounded immutable UI data. Scratch collections clear asset references after each cold-path operation.
 
-No project-wide "zero GC" or capacity number is promised. A zero-allocation warmed playback path, instance limit, or batching claim is valid only when reproduced with the target backend, content, renderer hierarchy, and profiler configuration.
+A zero-allocation or capacity claim is valid only when reproduced with the target backend, content, renderer hierarchy, and profiler configuration.
 
 ### Platform notes
 
@@ -226,7 +227,7 @@ The base implementation uses Unity APIs available in the project's supported Uni
 | Dedicated Server | Presentation module can be omitted; it is not an authoritative simulation dependency | Headless composition and stripping check if the assembly is included |
 | Future consoles | No platform SDK assumptions are embedded in the core API | Platform-holder SDK build, shader compiler, memory, suspend/resume and certification checks |
 
-Passing one Editor test run does not establish Player, IL2CPP, Burst, mobile, WebGL, console, or long-duration stability.
+Verify Player, IL2CPP, Burst, mobile, WebGL, console, and long-duration stability on each target.
 
 ## Common Scenarios
 
@@ -259,6 +260,12 @@ For a useful result:
 7. Repeat after atlas, material, Canvas, render-pipeline, or target-platform changes.
 
 The sample is a measurement harness, not a universal hardware threshold.
+
+## Runtime Memory Diagnostics
+
+`SpriteSequenceBurstManager` implements the stable `ISpriteSequenceBurstMemoryOwner` snapshot contract and enforces `maxControllerCapacity` for runtime admission. Diagnostics operate only on an explicitly supplied manager; the package does not scan a Scene or register a process-global pressure responder.
+
+The snapshot exposes controller and registration counts, native buffer capacity and limit, lifetime peaks, rejection/failure counters, and job/update state. Disable/destroy remains the safe lifecycle release path: outstanding work is completed before all persistent native arrays are disposed.
 
 ## Validation
 
@@ -299,14 +306,3 @@ Minimum manual checks:
 | Material remains changed after editing | Use the Inspector's explicit material action and Undo. Runtime restores only the material it owns; another script assigning the same renderer must coordinate ownership. |
 | Large hitch causes skipped animation | Increase the catch-up budget only after profiling, or accept the presentation-time backlog drop. Do not use this module as deterministic gameplay time. |
 | Benchmark capacity is unstable | Run a Release Player, isolate the scene, prewarm, repeat samples, and inspect Profiler/trace p95 and p99 rather than relying on one average. |
-
-## Source and serialization migration
-
-This design-stage revision deliberately reduces the public surface:
-
-- raw mutable `SpriteSequencePlaybackState`, the public batch job, and job apply hooks are internal implementation details;
-- `ISpriteSequenceRenderer.SetAlpha` and `SetScale` are removed because the controller never used them and their implementations had inconsistent ownership;
-- `SpriteSequenceBurstManager` moves from `CycloneGames.Foundation2D.Runtime` assembly to `CycloneGames.Foundation2D.Integrations.Burst` while retaining its namespace, class name, MonoScript GUID, and migration metadata;
-- Controller serialized field names and nested enum numeric values remain stable.
-
-Repository consumers are updated in the same change. External source consumers that manipulated raw state must use controller commands and read-only diagnostics. External asmdefs that reference `SpriteSequenceBurstManager` must add the optional Burst integration assembly reference and matching package activation condition. Existing Prefabs and Scenes should be validated through a clean reimport before release even when the preserved script GUID resolves automatically.

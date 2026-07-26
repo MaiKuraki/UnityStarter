@@ -28,7 +28,7 @@ Use this module when:
 - The same logical value must produce the same digest across machines, processes, and Unity backends.
 - You want span-based, allocation-free hashing on hot paths.
 
-Do not use this module for cryptographic authentication, tamper resistance, password storage, or guaranteed-unique identifiers. Those concerns belong to a security-owned layer with a cryptographic digest plus a signature or MAC.
+Do not use this module for cryptographic authentication, tamper resistance, password storage, or guaranteed-unique identifiers. Those belong to a security-owned layer with a cryptographic digest plus signature or MAC.
 
 ### Key features
 
@@ -511,3 +511,7 @@ When `com.unity.test-framework.performance` is installed, also run `CycloneGames
 
 - [xxHash reference implementation](https://github.com/Cyan4973/xxHash)
 - [IETF FNV draft](https://datatracker.ietf.org/doc/draft-eastlake-fnv/)
+
+## Memory Ownership
+
+Hash consumes caller-owned input, retains no payload, and keeps streaming state inline in a caller-owned value. The package therefore owns no process-global metric source or pressure responder. Any future process-global mutable reference state requires a new ownership and capacity review.

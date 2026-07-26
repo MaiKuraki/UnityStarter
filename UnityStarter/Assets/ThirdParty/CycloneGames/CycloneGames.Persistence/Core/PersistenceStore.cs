@@ -12,6 +12,12 @@ namespace CycloneGames.Persistence
         private readonly IPersistenceStorage _storage;
         private readonly PersistenceProfile<T> _profile;
         private int _operationActive;
+        private long _startedLoadCount;
+        private long _startedSaveCount;
+        private long _startedDeleteCount;
+        private long _concurrentOperationRejectionCount;
+        private long _lastRecordBytes;
+        private long _peakRecordBytes;
 
         public PersistenceStore(
             IPersistenceStorage storage,
@@ -25,6 +31,22 @@ namespace CycloneGames.Persistence
 
         public PersistenceProfile<T> Profile => _profile;
 
+        /// <summary>Returns an allocation-free snapshot without inspecting persisted content.</summary>
+        public PersistenceStoreMemorySnapshot GetMemorySnapshot()
+        {
+            PersistenceLimits limits = _profile.Limits;
+            return new PersistenceStoreMemorySnapshot(
+                Volatile.Read(ref _operationActive) != 0,
+                limits.MaximumPayloadBytes,
+                limits.MaximumRecordBytes,
+                Interlocked.Read(ref _startedLoadCount),
+                Interlocked.Read(ref _startedSaveCount),
+                Interlocked.Read(ref _startedDeleteCount),
+                Interlocked.Read(ref _concurrentOperationRejectionCount),
+                Interlocked.Read(ref _lastRecordBytes),
+                Interlocked.Read(ref _peakRecordBytes));
+        }
+
         public Task<PersistenceLoadResult<T>> LoadAsync(
             int maximumSupportedContentVersion,
             CancellationToken cancellationToken = default)
@@ -35,6 +57,7 @@ namespace CycloneGames.Persistence
             }
 
             BeginOperation();
+            Interlocked.Increment(ref _startedLoadCount);
             try
             {
                 return LoadCoreAsync(maximumSupportedContentVersion, cancellationToken);
@@ -57,6 +80,7 @@ namespace CycloneGames.Persistence
             }
 
             BeginOperation();
+            Interlocked.Increment(ref _startedSaveCount);
             byte[] record = null;
             try
             {
@@ -77,6 +101,7 @@ namespace CycloneGames.Persistence
                         contentVersion,
                         _profile.CodecId,
                         limits);
+                    ObserveRecordBytes(record.Length);
                 }
 
                 cancellationToken.ThrowIfCancellationRequested();
@@ -119,6 +144,7 @@ namespace CycloneGames.Persistence
             CancellationToken cancellationToken = default)
         {
             BeginOperation();
+            Interlocked.Increment(ref _startedDeleteCount);
             try
             {
                 return DeleteCoreAsync(cancellationToken);
@@ -155,6 +181,8 @@ namespace CycloneGames.Persistence
                         new InvalidOperationException(
                             "The storage returned a found result without transferring a buffer."));
                 }
+
+                ObserveRecordBytes(record.Length);
 
                 if (record.Length > _profile.Limits.MaximumRecordBytes)
                 {
@@ -293,6 +321,7 @@ namespace CycloneGames.Persistence
         {
             if (Interlocked.CompareExchange(ref _operationActive, 1, 0) != 0)
             {
+                Interlocked.Increment(ref _concurrentOperationRejectionCount);
                 throw new InvalidOperationException(
                     "A PersistenceStore instance permits only one active operation.");
             }
@@ -301,6 +330,25 @@ namespace CycloneGames.Persistence
         private void EndOperation()
         {
             Volatile.Write(ref _operationActive, 0);
+        }
+
+        private void ObserveRecordBytes(int recordBytes)
+        {
+            Interlocked.Exchange(ref _lastRecordBytes, recordBytes);
+            long currentPeak = Interlocked.Read(ref _peakRecordBytes);
+            while (recordBytes > currentPeak)
+            {
+                long observed = Interlocked.CompareExchange(
+                    ref _peakRecordBytes,
+                    recordBytes,
+                    currentPeak);
+                if (observed == currentPeak)
+                {
+                    return;
+                }
+
+                currentPeak = observed;
+            }
         }
 
         private static void Clear(byte[] content)

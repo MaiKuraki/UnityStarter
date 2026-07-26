@@ -22,7 +22,7 @@ A factory answers one question: who constructs this object, and under what contr
 
 The module is split into three runtime assemblies. The pure-C# core has no `UnityEngine` reference and is safe for tests, tools, and servers. The Unity adapter wraps `Object.Instantiate`, prefab factories, and `Component` pools behind main-thread-only types. The optional DOD assembly provides `NativeArray`-backed dense pools with slot-plus-generation handles for Burst/Jobs workloads.
 
-Use this module when creation policy must be injected, when a hot path needs bounded reuse, or when Unity object creation must pass through a verifiable boundary. Do not use it as a DI container, service registry, global pool registry, ECS lifecycle, or persistence format — the composition root owns every factory and pool instance.
+Use this module when creation policy must be injected, when a hot path needs bounded reuse, or when Unity object creation must pass through a verifiable boundary. The composition root owns every factory and pool instance.
 
 ### Key Features
 
@@ -475,3 +475,9 @@ For a performance claim, measure a declared workload in the target Player build 
 
 - [Unity Collections package](https://docs.unity3d.com/Packages/com.unity.collections@latest) — required for DOD pool support.
 - [UniTask](https://github.com/Cysharp/UniTask)
+
+## Pool Memory Limits and Maintenance
+
+Managed pool implementations expose `IBoundedPoolMaintenance.TrimInactiveStep(targetInactiveCount, maxWork)`. One call inspects and releases no more than `maxWork` inactive entries, preserves all active leases, and keeps legacy full-trim behavior available to explicit lifecycle owners.
+
+Pool owners expose fixed counts, capacities, limits, admissions, and trim outcomes through package-local APIs. Caller-driven maintenance may trim only inactive entries and must never destroy active or borrowed objects. The pool remains authoritative for ownership and lifetime.

@@ -72,7 +72,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             IAssetPackage package,
             string defaultConfigLocation,
             bool useTextAsset = false,
-            int maximumBytes = FileInputConfigurationStore.DefaultMaximumBytes)
+            int maximumBytes = FileInputConfigurationStore.DefaultMaximumBytes,
+            InputSystemAssetManagementDiagnostics diagnostics = null)
         {
             ValidateMaximumBytes(maximumBytes);
             if (package == null)
@@ -83,11 +84,12 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
             ValidateConfigurationLocation(defaultConfigLocation, nameof(defaultConfigLocation));
 
-            return cancellationToken => LoadConfigWithFallback(
+            return cancellationToken => LoadConfigWithDiagnostics(
                 package,
                 defaultConfigLocation,
                 useTextAsset,
                 maximumBytes,
+                diagnostics,
                 cancellationToken);
         }
 
@@ -95,9 +97,11 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             IAssetPackage package,
             string location,
             int maximumBytes,
+            InputSystemAssetManagementDiagnostics diagnostics,
             CancellationToken cancellationToken)
         {
             IAssetHandle<UnityEngine.TextAsset> handle = null;
+            bool ownsLease = false;
             try
             {
                 await SwitchToUnityMainThreadAsync(cancellationToken);
@@ -105,6 +109,11 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 handle = package.LoadAssetAsync<UnityEngine.TextAsset>(
                     location,
                     cancellationToken: cancellationToken);
+                if (handle != null)
+                {
+                    diagnostics?.BeginLease();
+                    ownsLease = true;
+                }
                 await handle.Task;
                 cancellationToken.ThrowIfCancellationRequested();
                 await SwitchToUnityMainThreadAsync(cancellationToken);
@@ -150,6 +159,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             finally
             {
                 await DisposeOnUnityMainThreadAsync(handle);
+                if (ownsLease) diagnostics?.EndLease();
             }
         }
 
@@ -168,7 +178,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             IAssetPackage package,
             string configLocation,
             bool useTextAsset = false,
-            int maximumBytes = FileInputConfigurationStore.DefaultMaximumBytes)
+            int maximumBytes = FileInputConfigurationStore.DefaultMaximumBytes,
+            InputSystemAssetManagementDiagnostics diagnostics = null)
         {
             ValidateMaximumBytes(maximumBytes);
             if (package == null)
@@ -179,12 +190,46 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
             ValidateConfigurationLocation(configLocation, nameof(configLocation));
 
-            return cancellationToken => LoadConfigWithFallback(
+            return cancellationToken => LoadConfigWithDiagnostics(
                 package,
                 configLocation,
                 useTextAsset,
                 maximumBytes,
+                diagnostics,
                 cancellationToken);
+        }
+
+        private static async UniTask<string> LoadConfigWithDiagnostics(
+            IAssetPackage package,
+            string location,
+            bool useTextAsset,
+            int maximumBytes,
+            InputSystemAssetManagementDiagnostics diagnostics,
+            CancellationToken cancellationToken)
+        {
+            diagnostics?.BeginRequest();
+            try
+            {
+                string content = await LoadConfigWithFallback(
+                    package,
+                    location,
+                    useTextAsset,
+                    maximumBytes,
+                    diagnostics,
+                    cancellationToken);
+                diagnostics?.EndRequest(content != null, cancelled: false);
+                return content;
+            }
+            catch (OperationCanceledException)
+            {
+                diagnostics?.EndRequest(succeeded: false, cancelled: true);
+                throw;
+            }
+            catch
+            {
+                diagnostics?.EndRequest(succeeded: false, cancelled: false);
+                throw;
+            }
         }
 
         private static async UniTask<string> LoadConfigWithFallback(
@@ -192,6 +237,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             string location,
             bool useTextAsset,
             int maximumBytes,
+            InputSystemAssetManagementDiagnostics diagnostics,
             CancellationToken cancellationToken)
         {
             if (useTextAsset)
@@ -200,6 +246,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     package,
                     location,
                     maximumBytes,
+                    diagnostics,
                     cancellationToken);
             }
 
@@ -210,6 +257,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     rawFileLoader,
                     location,
                     maximumBytes,
+                    diagnostics,
                     cancellationToken);
             }
             else
@@ -227,12 +275,14 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     return rawAttempt.Content;
 
                 case ConfigurationLoadAttemptStatus.CapabilityUnavailable:
+                    diagnostics?.RecordRawCapabilityFallback();
                     CycloneGames.Logger.CLogger.LogInfo(
                         "[InputSystemAssetManagementHelper] Bounded RawFile capability is unavailable; trying TextAsset.");
                     return await LoadConfigAsTextAsset(
                         package,
                         location,
                         maximumBytes,
+                        diagnostics,
                         cancellationToken);
 
                 case ConfigurationLoadAttemptStatus.ProviderLoadFailed:
@@ -241,6 +291,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     return null;
 
                 case ConfigurationLoadAttemptStatus.PolicyRejected:
+                    diagnostics?.RecordPolicyRejection();
                     CycloneGames.Logger.CLogger.LogError(
                         "[InputSystemAssetManagementHelper] RawFile content was rejected by bounded-read policy; TextAsset fallback was not attempted.");
                     return null;
@@ -254,6 +305,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             IAssetRawFileLoader rawFileLoader,
             string location,
             int maximumBytes,
+            InputSystemAssetManagementDiagnostics diagnostics,
             CancellationToken cancellationToken)
         {
             IRawFileHandle rawFileHandle = null;
@@ -269,6 +321,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     return ConfigurationLoadAttempt.Failure(
                         ConfigurationLoadAttemptStatus.ProviderLoadFailed);
                 }
+
+                diagnostics?.BeginLease();
 
                 await rawFileHandle.Task;
                 cancellationToken.ThrowIfCancellationRequested();
@@ -296,6 +350,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             finally
             {
                 await DisposeOnUnityMainThreadAsync(rawFileHandle);
+                if (rawFileHandle != null) diagnostics?.EndLease();
             }
         }
 

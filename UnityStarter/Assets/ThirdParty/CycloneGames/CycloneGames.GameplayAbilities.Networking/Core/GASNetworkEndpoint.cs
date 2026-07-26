@@ -359,6 +359,7 @@ namespace CycloneGames.GameplayAbilities.Networking
 
         public GASNetworkEndpointRole Role { get; }
         public GASNetworkHandshake LocalHandshake { get; }
+        public int MaximumAuthorityPeerCount => maximumAuthorityPeers;
         public bool IsDisposed => disposed;
 
         public bool IsAuthorityHandshakeComplete

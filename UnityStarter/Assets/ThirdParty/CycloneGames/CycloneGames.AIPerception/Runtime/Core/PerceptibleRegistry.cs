@@ -15,9 +15,12 @@ namespace CycloneGames.AIPerception.Runtime
     public sealed class PerceptibleRegistry : IDisposable
     {
         private const int InitialCapacity = 64;
-        private const int DefaultMaximumCapacity = 16384;
         private const float WarningThreshold = 0.75f;
         private const float DefaultCellSize = 20f;
+
+        public const int DefaultMaximumPerceptibleCount = 16_384;
+        public const int HardMaximumPerceptibleCount = 1_048_576;
+        public const int HardMaximumSensorManagerCount = 1_024;
 
         private static PerceptibleRegistry _instance;
         private static int _nextRegistryId;
@@ -38,6 +41,8 @@ namespace CycloneGames.AIPerception.Runtime
         private int _nextUnusedSlot;
         private int _freeListHead = -1;
         private int _maximumCapacity;
+        private int _peakCount;
+        private long _rejectedRegistrationCount;
         private int _dataCount;
         private int _snapshotVersion;
         private float _maximumDetectionRadius;
@@ -61,22 +66,25 @@ namespace CycloneGames.AIPerception.Runtime
 
         public PerceptibleRegistry(
             int initialCapacity = InitialCapacity,
-            int maximumCapacity = DefaultMaximumCapacity,
+            int maximumCapacity = DefaultMaximumPerceptibleCount,
             float cellSize = DefaultCellSize)
         {
-            if (initialCapacity <= 0)
+            if (initialCapacity <= 0 || initialCapacity > HardMaximumPerceptibleCount)
             {
                 throw new ArgumentOutOfRangeException(nameof(initialCapacity));
             }
 
-            if (maximumCapacity < 0 || (maximumCapacity > 0 && maximumCapacity < initialCapacity))
+            int effectiveMaximum = maximumCapacity == 0
+                ? HardMaximumPerceptibleCount
+                : maximumCapacity;
+            if (effectiveMaximum < initialCapacity || effectiveMaximum > HardMaximumPerceptibleCount)
             {
                 throw new ArgumentOutOfRangeException(nameof(maximumCapacity));
             }
 
             _registryId = NextRegistryId();
             _ownerThreadId = Environment.CurrentManagedThreadId;
-            _maximumCapacity = maximumCapacity;
+            _maximumCapacity = effectiveMaximum;
             _perceptibles = new IPerceptible[initialCapacity];
             _slotData = new PerceptibleData[initialCapacity];
             _generations = new int[initialCapacity];
@@ -90,8 +98,8 @@ namespace CycloneGames.AIPerception.Runtime
         }
 
         /// <summary>
-        /// Sets the hard world capacity. Zero means unbounded safe-point growth. The limit cannot
-        /// be lowered below the current active count.
+        /// Sets the hard world capacity. Legacy zero maps to the package hard ceiling. The limit
+        /// cannot be lowered below the current active count.
         /// </summary>
         public void SetMaxCapacity(int maximumCapacity)
         {
@@ -105,12 +113,15 @@ namespace CycloneGames.AIPerception.Runtime
         {
             EnsureOwnerThread();
             ThrowIfDisposed();
-            if (maximumCapacity < 0 || (maximumCapacity > 0 && maximumCapacity < _count))
+            int effectiveMaximum = maximumCapacity == 0
+                ? HardMaximumPerceptibleCount
+                : maximumCapacity;
+            if (effectiveMaximum < _count || effectiveMaximum > HardMaximumPerceptibleCount)
             {
                 return false;
             }
 
-            _maximumCapacity = maximumCapacity;
+            _maximumCapacity = effectiveMaximum;
             _warningEmitted = false;
             return true;
         }
@@ -147,6 +158,7 @@ namespace CycloneGames.AIPerception.Runtime
 
             if (_maximumCapacity > 0 && _count >= _maximumCapacity)
             {
+                _rejectedRegistrationCount = SaturatingIncrement(_rejectedRegistrationCount);
                 Debug.LogError($"[AIPerception] Registry capacity exhausted ({_maximumCapacity}).");
                 return PerceptibleHandle.Invalid;
             }
@@ -173,6 +185,7 @@ namespace CycloneGames.AIPerception.Runtime
             _activeIndexBySlot[index] = _count;
             _activeIds[_count] = index;
             _count++;
+            _peakCount = math.max(_peakCount, _count);
             _isDirty = true;
             CheckCapacityWarning();
             return new PerceptibleHandle(_registryId, index, _generations[index]);
@@ -266,6 +279,12 @@ namespace CycloneGames.AIPerception.Runtime
 
             if (!_sensorManagers.Contains(manager))
             {
+                if (_sensorManagers.Count >= HardMaximumSensorManagerCount)
+                {
+                    throw new InvalidOperationException(
+                        $"A perception registry cannot own more than {HardMaximumSensorManagerCount} sensor managers.");
+                }
+
                 _sensorManagers.Add(manager);
             }
         }
@@ -423,6 +442,24 @@ namespace CycloneGames.AIPerception.Runtime
 
         public int GetDataCount() => _dataCount;
 
+        /// <summary>Returns an allocation-free snapshot of registry-owned storage.</summary>
+        public PerceptibleRegistryMemoryStats GetMemoryStats()
+        {
+            EnsureOwnerThread();
+            ThrowIfDisposed();
+            return new PerceptibleRegistryMemoryStats(
+                _count,
+                _maximumCapacity,
+                _peakCount,
+                _rejectedRegistrationCount,
+                _perceptibles.Length,
+                _dataCount,
+                _managedData.Length,
+                _nativeData.IsCreated ? _nativeData.Length : 0,
+                _spatialGrid.CellCount,
+                _sensorManagers.Count);
+        }
+
         public void MarkDirty()
         {
             EnsureOwnerThread();
@@ -494,8 +531,10 @@ namespace CycloneGames.AIPerception.Runtime
         private void Grow()
         {
             int current = _perceptibles.Length;
-            int proposed = current <= int.MaxValue / 2 ? current * 2 : int.MaxValue;
-            int newCapacity = _maximumCapacity > 0 ? math.min(proposed, _maximumCapacity) : proposed;
+            int proposed = current <= HardMaximumPerceptibleCount / 2
+                ? current * 2
+                : HardMaximumPerceptibleCount;
+            int newCapacity = math.min(proposed, _maximumCapacity);
             if (newCapacity <= current)
             {
                 throw new InvalidOperationException("Perceptible registry cannot grow beyond its configured capacity.");
@@ -516,10 +555,10 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
 
-            int doubled = _managedData.Length <= int.MaxValue / 2
+            int doubled = _managedData.Length <= HardMaximumPerceptibleCount / 2
                 ? _managedData.Length * 2
-                : int.MaxValue;
-            int capacity = math.max(required, doubled);
+                : HardMaximumPerceptibleCount;
+            int capacity = math.min(_maximumCapacity, math.max(required, doubled));
             Array.Resize(ref _managedData, capacity);
         }
 
@@ -531,8 +570,12 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             int current = _nativeData.IsCreated ? _nativeData.Length : 0;
-            int doubled = current <= int.MaxValue / 2 ? current * 2 : int.MaxValue;
-            int capacity = math.max(1, math.max(required, current > 0 ? doubled : InitialCapacity));
+            int doubled = current <= HardMaximumPerceptibleCount / 2
+                ? current * 2
+                : HardMaximumPerceptibleCount;
+            int capacity = math.min(
+                _maximumCapacity,
+                math.max(1, math.max(required, current > 0 ? doubled : InitialCapacity)));
             var replacement = new NativeArray<PerceptibleData>(capacity, Allocator.Persistent);
             if (_nativeData.IsCreated)
             {
@@ -557,6 +600,11 @@ namespace CycloneGames.AIPerception.Runtime
         {
             int next = unchecked(generation + 1);
             return next <= 0 ? 1 : next;
+        }
+
+        private static long SaturatingIncrement(long value)
+        {
+            return value == long.MaxValue ? long.MaxValue : value + 1L;
         }
 
         private static void Fill(int[] values, int value)

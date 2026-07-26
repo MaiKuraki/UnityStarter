@@ -10,21 +10,32 @@ namespace CycloneGames.DeviceFeedback.Runtime
     {
         private readonly IGamepadRumbleBackend _backend;
         private readonly bool _ownsBackend;
+        private readonly DeviceFeedbackLimits _limits;
         private bool _isActive = true;
         private bool _disposed;
 
         public GamepadRumbleService()
-            : this(NoopGamepadRumbleBackend.Instance, false)
+            : this(NoopGamepadRumbleBackend.Instance, DeviceFeedbackLimits.Default, false)
         {
         }
 
         public GamepadRumbleService(IGamepadRumbleBackend backend, bool ownsBackend = true)
+            : this(backend, DeviceFeedbackLimits.Default, ownsBackend)
+        {
+        }
+
+        public GamepadRumbleService(
+            IGamepadRumbleBackend backend,
+            DeviceFeedbackLimits limits,
+            bool ownsBackend = true)
         {
             _backend = backend ?? NoopGamepadRumbleBackend.Instance;
             _ownsBackend = ownsBackend && !ReferenceEquals(_backend, NoopGamepadRumbleBackend.Instance);
+            _limits = limits.Normalize();
         }
 
         public bool IsAvailable => !_disposed && _backend.IsAvailable;
+        public DeviceFeedbackLimits Limits => _limits;
 
         public bool IsActive
         {
@@ -84,7 +95,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
 
         public void Play(float normalizedIntensity, float durationSeconds, float sharpness = 0.5f)
         {
-            if (!CanOperate() || durationSeconds <= 0f)
+            if (!CanOperate())
             {
                 return;
             }
@@ -97,6 +108,22 @@ namespace CycloneGames.DeviceFeedback.Runtime
                 return;
             }
 
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.ValidateDurationSeconds(
+                durationSeconds,
+                in _limits,
+                out long durationMilliseconds);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(durationMilliseconds);
+            PlayCore(normalizedIntensity, durationSeconds, sharpness);
+        }
+
+        private void PlayCore(float normalizedIntensity, float durationSeconds, float sharpness)
+        {
             CalculateMotorSpeeds(normalizedIntensity, sharpness, out float lowFrequency, out float highFrequency);
             _backend.Rumble(lowFrequency, highFrequency, durationSeconds);
         }
@@ -104,13 +131,24 @@ namespace CycloneGames.DeviceFeedback.Runtime
         public void PlayCurve(AnimationCurve intensityCurve, float durationSeconds,
                               AnimationCurve sharpnessCurve = null, int sampleIntervalMs = 20)
         {
-            if (intensityCurve == null || durationSeconds <= 0f || !CanOperate())
+            if (intensityCurve == null || !CanOperate())
             {
                 return;
             }
 
             sampleIntervalMs = Mathf.Max(sampleIntervalMs, 10);
-            int sampleCount = Mathf.Max(1, Mathf.CeilToInt(durationSeconds * 1000f / sampleIntervalMs));
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.CalculateSampleCount(
+                durationSeconds,
+                sampleIntervalMs,
+                in _limits,
+                out long durationMilliseconds,
+                out int sampleCount);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
             float peakIntensity = 0f;
             float sharpnessAtPeak = 0.5f;
 
@@ -125,7 +163,13 @@ namespace CycloneGames.DeviceFeedback.Runtime
                 }
             }
 
-            Play(peakIntensity, durationSeconds, sharpnessAtPeak);
+            DeviceFeedbackDiagnostics.RecordAccepted(
+                durationMilliseconds,
+                waveformSampleCount: sampleCount);
+            if (peakIntensity > 0f)
+            {
+                PlayCore(peakIntensity, durationSeconds, sharpnessAtPeak);
+            }
         }
 
         public void PlayClip(HapticClip clip)
@@ -142,6 +186,17 @@ namespace CycloneGames.DeviceFeedback.Runtime
             }
 
             HapticEvent[] events = clip.events;
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.ValidateEvents(
+                events,
+                in _limits,
+                requireWaveformCapacity: false,
+                out long durationMilliseconds);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
             float peakIntensity = 0f;
             float sharpnessAtPeak = 0.5f;
             float durationAtPeak = 0.03f;
@@ -159,7 +214,13 @@ namespace CycloneGames.DeviceFeedback.Runtime
                 }
             }
 
-            Play(peakIntensity, durationAtPeak, sharpnessAtPeak);
+            DeviceFeedbackDiagnostics.RecordAccepted(
+                durationMilliseconds,
+                hapticEventCount: events.Length);
+            if (peakIntensity > 0f)
+            {
+                PlayCore(peakIntensity, durationAtPeak, sharpnessAtPeak);
+            }
         }
 
         public void Cancel()
@@ -192,7 +253,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
 
         public void Rumble(float lowFrequency, float highFrequency, float durationSeconds)
         {
-            if (!CanOperate() || durationSeconds <= 0f)
+            if (!CanOperate())
             {
                 return;
             }
@@ -205,7 +266,23 @@ namespace CycloneGames.DeviceFeedback.Runtime
                 return;
             }
 
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.ValidateDurationSeconds(
+                durationSeconds,
+                in _limits,
+                out long durationMilliseconds);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(durationMilliseconds);
             _backend.Rumble(lowFrequency, highFrequency, durationSeconds);
+        }
+
+        public DeviceFeedbackMemoryStats GetMemoryStats()
+        {
+            return DeviceFeedbackDiagnostics.GetMemoryStats();
         }
 
         public void Dispose()

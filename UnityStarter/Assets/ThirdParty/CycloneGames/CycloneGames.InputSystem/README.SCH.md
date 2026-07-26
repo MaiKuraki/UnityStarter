@@ -18,9 +18,9 @@ CycloneGames.InputSystem 是基于 Unity Input System 的 YAML 驱动输入层�
 
 ## 概述
 
-本模块将 authoring（在 Input System Editor 中编辑 YAML 配置）与 runtime dispatch（`InputManager` 验证并提交不可变快照）以及 per-player delivery（`IInputPlayer` 持有 `InputUser`、action asset、active context 与 R3 stream）三者分离。Owner 在 YAML 中定义 context、action、binding、composite、interaction、processor 与 control scheme；manager 在提交前根据当前 Unity Input System registry 验证这些定义；每个 joined player 获得一份独立构建的 action asset。
+本模块将 authoring（在 Input System Editor 中编辑 YAML 配置）与 runtime dispatch（`InputManager` 提交不可变快照）以及 per-player delivery（`IInputPlayer` 持有 `InputUser`、action asset、active context 与 R3 stream）分离。在 YAML 中定义 context、action、binding、composite、interaction、processor 与 control scheme；manager 提交前根据当前 Unity Input System registry 验证；每个 joined player 获得独立构建的 action asset。
 
-适用于需要可审阅的 YAML authoring、有界验证、per-player `InputUser` 与设备所有权（本地多人）、优先级 context（Gameplay、Vehicle、Menu、Modal）、事件驱动和轮询读取、长按进度和和 chord、具有版本化模块自有 JSON profile 的运行时 rebind、以及显式配置 source 和 store 的产品。
+适用于需要可审阅的 YAML authoring、有界验证、per-player `InputUser` 与设备所有权（本地多人）、优先级 context（Gameplay、Vehicle、Menu、Modal）、事件驱动和轮询读取、长按和 chord、具有版本化模块自有 JSON profile 的运行时 rebind、以及显式配置 source 和 store 的产品。
 
 ### 核心特性
 
@@ -571,7 +571,7 @@ if (loadError != null)
 | Context 变更 | Dispose active command subscription、禁用 map、排序 active context、启用选定 map、重建 command subscription。 | 在状态转场时变更 context，不每帧变更。 |
 | Rebind/profile 操作 | Export、import、conflict check、report 时遍历 binding 并分配数组/JSON。Manager import 为每个 staged player 构建并 dispose 临时 action graph。 | 在 settings/save flow 中执行，不在 gameplay hot path。 |
 | 设备活动 | 使用 action activity 和 Input System device/user notification；`ActiveDeviceKind` 是展示提示。 | 如果 noisy hardware 导致快速 glyph change，debounce 产品 UI。 |
-| Tools recording | 录制时固定容量 list；snapshot 创建时拷贝 sample。 | 检查 `WasTruncated`/`DroppedSampleCount`；不无意间保持 diagnostics enabled。 |
+| Tools recording | 录制时固定容量 list；snapshot 创建时拷贝 sample。`CancelRecording(maximumSamplesToDiscard)` 会停止 subscription，并在调用方限定的批次内释放 sample 引用而不导出 snapshot。 | 检查 `WasTruncated`/`DroppedSampleCount`；不无意间保持 diagnostics enabled。取消会丢弃诊断证据，因此必须由产品策略显式授权。 |
 
 使用 Unity Profiler marker `CycloneGames.Input.Initialize`、`CycloneGames.Input.JoinPlayer` 和 `CycloneGames.Input.BuildAsset` 分析初始化和 player 构造。
 
@@ -584,6 +584,10 @@ if (loadError != null)
 - 产品状态持有 `InputContext` 实例和 capture/block scope；dispose context 会将其从所有使用它的 player 中移除。
 - Subscription owner dispose 未通过 active `InputContext` 管理的 direct R3 subscription。
 - Storage owner 选择 root、key、retention、encryption、backup 和 format-update policy。
+
+`InputManager.GetMemoryStats()` 与 `InputPlayer.GetMemoryStats()` 提供 main-thread、allocation-free 的 count snapshot，recorder count/capacity/drop property 也是标量读取。Caller-owned adapter 可以使用这些 API；基础模块不注册全局 telemetry 或 pressure callback。
+
+可配置的 `InputConfigurationLimits` 还具有公开的绝对上限，避免调用方用 `int.MaxValue` allocation/iteration budget 替代实际产品预算。重复 capture scope 另受 `InputPlayer.MaximumContextCaptureDepth`（`1024`）限制；泄漏的 scope 会 fail closed，而不是让 capture stack 无限增长。
 
 ### 线程
 

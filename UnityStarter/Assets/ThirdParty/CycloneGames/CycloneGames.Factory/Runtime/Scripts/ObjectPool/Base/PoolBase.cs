@@ -9,7 +9,7 @@ namespace CycloneGames.Factory.Runtime
     /// Single-owner base for bounded managed object pools.
     /// Structural operations and lifecycle callbacks must run on the owning execution context.
     /// </summary>
-    public abstract class PoolBase<TValue> : IDespawnableMemoryPool<TValue>, IDisposable where TValue : class
+    public abstract class PoolBase<TValue> : IDespawnableMemoryPool<TValue>, IBoundedPoolMaintenance, IDisposable where TValue : class
     {
         private readonly List<TValue> _inactiveItems;
         private readonly List<TValue> _activeItems;
@@ -215,20 +215,30 @@ namespace CycloneGames.Factory.Runtime
             }
 
             List<Exception> failures = null;
-            while (_inactiveItems.Count > targetInactiveCount)
-            {
-                TValue item = PopInactive();
-                if (!TryValidateItem(item, out Exception validationFailure))
-                {
-                    _invalidatedInactiveItems++;
-                    AddFailure(ref failures, validationFailure);
-                    continue;
-                }
-
-                AddFailure(ref failures, TryDestroyOwnedItem(item));
-            }
+            TrimInactiveCore(targetInactiveCount, int.MaxValue, ref failures);
 
             ThrowFailures("One or more inactive pool items could not be destroyed.", failures);
+        }
+
+        public int TrimInactiveStep(int targetInactiveCount, int maxWork)
+        {
+            ThrowIfNotReady();
+            ThrowIfLifecycleCallbackIsRunning();
+
+            if (targetInactiveCount < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(targetInactiveCount));
+            }
+
+            if (maxWork <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxWork));
+            }
+
+            List<Exception> failures = null;
+            int processed = TrimInactiveCore(targetInactiveCount, maxWork, ref failures);
+            ThrowFailures("One or more inactive pool items could not be destroyed.", failures);
+            return processed;
         }
 
         public void DespawnAll()
@@ -693,6 +703,29 @@ namespace CycloneGames.Factory.Runtime
             }
 
             return Math.Min(requested, Math.Max(0, _capacitySettings.HardCapacity - CountAll));
+        }
+
+        private int TrimInactiveCore(
+            int targetInactiveCount,
+            int maxWork,
+            ref List<Exception> failures)
+        {
+            int processed = 0;
+            while (processed < maxWork && _inactiveItems.Count > targetInactiveCount)
+            {
+                TValue item = PopInactive();
+                processed++;
+                if (!TryValidateItem(item, out Exception validationFailure))
+                {
+                    _invalidatedInactiveItems++;
+                    AddFailure(ref failures, validationFailure);
+                    continue;
+                }
+
+                AddFailure(ref failures, TryDestroyOwnedItem(item));
+            }
+
+            return processed;
         }
 
         private bool ShouldTrimReturnedItem()

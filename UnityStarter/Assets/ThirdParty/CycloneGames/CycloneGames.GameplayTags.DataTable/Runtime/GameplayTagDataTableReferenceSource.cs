@@ -19,6 +19,12 @@ namespace CycloneGames.GameplayTags.Integrations.DataTable
 
         public string Name { get; }
 
+        /// <summary>Number of retained rows attributed to this source.</summary>
+        public int RowCount => _rows.Count;
+
+        /// <summary>Number of retained tag-collection accessors.</summary>
+        public int TagCollectionAccessorCount => _getTagNameCollections.Length;
+
         public GameplayTagDataTableReferenceSource(
             string sourceName,
             IDataTableRows<TRow> table,

@@ -208,11 +208,6 @@ namespace CycloneGames.Audio.Editor
         {
             UpdatePreviewLifecycle();
 
-            if (AudioManager.Languages == null || AudioManager.Languages.Length == 0)
-            {
-                AudioManager.UpdateLanguages();
-            }
-
             if (Application.isPlaying && EditorApplication.timeSinceStartup >= this.nextRepaintTime)
             {
                 this.nextRepaintTime = EditorApplication.timeSinceStartup + PlayingRepaintInterval;
@@ -2039,7 +2034,11 @@ namespace CycloneGames.Audio.Editor
             newNodeMenu.AddItem(new GUIContent("Add Voice File"), false, AddNodeAtPosition<AudioVoiceFile>, position);
             newNodeMenu.AddItem(new GUIContent("Add Random Selector"), false, AddNodeAtPosition<AudioRandomSelector>, position);
             newNodeMenu.AddItem(new GUIContent("Add Sequence Selector"), false, AddNodeAtPosition<AudioSequenceSelector>, position);
-            newNodeMenu.AddItem(new GUIContent("Add Language Selector"), false, AddNodeAtPosition<AudioLanguageSelector>, position);
+            newNodeMenu.AddItem(
+                new GUIContent("Add Voice Locale Selector"),
+                false,
+                AddNodeAtPosition<AudioVoiceLocaleSelector>,
+                position);
             newNodeMenu.AddItem(new GUIContent("Add Switch Selector"), false, AddNodeAtPosition<AudioSwitchSelector>, position);
             newNodeMenu.AddItem(new GUIContent("Add Blend Container"), false, AddNodeAtPosition<AudioBlendContainer>, position);
             newNodeMenu.AddItem(new GUIContent("Add Blend File"), false, AddNodeAtPosition<AudioBlendFile>, position);

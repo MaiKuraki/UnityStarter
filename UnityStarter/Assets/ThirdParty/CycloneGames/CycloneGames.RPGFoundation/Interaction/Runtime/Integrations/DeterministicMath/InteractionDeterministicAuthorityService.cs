@@ -44,6 +44,12 @@ namespace CycloneGames.RPGFoundation.Interaction.Integrations.DeterministicMath
             return _targets.Remove(targetStableId);
         }
 
+        /// <summary>Releases rate-limit state after an authenticated instigator disconnects.</summary>
+        public bool RemoveInstigatorRateLimitWindow(ulong instigatorStableId)
+        {
+            return _rateLimiter.Remove(instigatorStableId);
+        }
+
         public bool TryGetTarget(ulong targetStableId, out InteractionDeterministicTargetSnapshot snapshot)
         {
             return _targets.TryGetValue(targetStableId, out snapshot);

@@ -1,9 +1,11 @@
 using System;
 using System.Reflection;
+using CycloneGames.BehaviorTree.Runtime.Components;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.TestTools;
 
 namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 {
@@ -67,6 +69,133 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
         public void PriorityTickManager_RejectsNegativeBudget()
         {
             Assert.Throws<ArgumentOutOfRangeException>(() => new BTPriorityTickManager(new[] { -1 }));
+        }
+
+        [Test]
+        public void TickManagerComponent_LegacyRegisterReportsOnlyFirstCapacityRejection()
+        {
+            var owner = new GameObject("Legacy Tick Manager Owner");
+            BTTickManagerComponent component = owner.AddComponent<BTTickManagerComponent>();
+            var boundedManager = new BTTickManager(1, 1, 1);
+            SetPrivateField(component, "_manager", boundedManager);
+            using RuntimeBehaviorTree accepted = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree tryRejected = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree firstLegacyRejected = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree repeatedLegacyRejected = CreateTree(new CallbackNode(null));
+            try
+            {
+                Assert.That(component.TryRegister(accepted), Is.True);
+
+                // TryRegister is the explicit result channel and must remain silent.
+                Assert.That(component.TryRegister(tryRejected), Is.False);
+
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[BTTickManagerComponent] Legacy Register was rejected because managed tree or " +
+                    "deferred-mutation capacity was exhausted on 'Legacy Tick Manager Owner'. " +
+                    "Use TryRegister to handle admission failure.");
+                component.Register(firstLegacyRejected);
+
+                component.Register(repeatedLegacyRejected);
+                component.Register(null);
+                component.Register(accepted);
+
+                BTTickManagerMemoryStats stats = component.GetMemoryStats();
+                Assert.That(stats.TreeCount, Is.EqualTo(1));
+                Assert.That(stats.CapacityRejectedTreeCount, Is.EqualTo(3L));
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
+        }
+
+        [Test]
+        public void PriorityTickManagerComponent_LegacyRegisterReportsOnlyFirstCapacityRejection()
+        {
+            var owner = new GameObject("Legacy Priority Manager Owner");
+            owner.SetActive(false);
+            BTPriorityTickManagerComponent component = owner.AddComponent<BTPriorityTickManagerComponent>();
+            BTDistanceLODProvider lodProvider = owner.AddComponent<BTDistanceLODProvider>();
+            lodProvider.MaximumTreeCount = 4;
+            var boundedManager = new BTPriorityTickManager(
+                budgets: null,
+                initialBucketCapacity: 1,
+                maximumTreeCount: 1,
+                maximumPendingMutationCount: 1);
+            SetPrivateField(component, "_manager", boundedManager);
+            SetPrivateField(component, "_lodProvider", lodProvider);
+            SetPrivateField(component, "_initialized", true);
+            using RuntimeBehaviorTree accepted = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree tryRejected = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree firstLegacyRejected = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree repeatedLegacyRejected = CreateTree(new CallbackNode(null));
+            try
+            {
+                Assert.That(component.TryRegister(accepted, owner.transform), Is.True);
+
+                // The failed Try* call increments diagnostics but does not log.
+                Assert.That(component.TryRegister(tryRejected, owner.transform), Is.False);
+
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[BTPriorityTickManagerComponent] Legacy Register was rejected because managed tree, " +
+                    "LOD, or deferred-mutation capacity was exhausted on 'Legacy Priority Manager Owner'. " +
+                    "Use TryRegister to handle admission failure.");
+                component.Register(firstLegacyRejected, owner.transform);
+
+                component.Register(repeatedLegacyRejected, owner.transform);
+                component.Register(null, owner.transform);
+                component.Register(accepted, owner.transform);
+
+                BTPriorityTickManagerMemoryStats stats = component.GetMemoryStats();
+                Assert.That(stats.RegisteredTreeCount, Is.EqualTo(1));
+                Assert.That(stats.Core.CapacityRejectedTreeCount, Is.EqualTo(3L));
+                Assert.That(stats.LOD.CapacityRejectedTreeCount, Is.Zero);
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
+        }
+
+        [Test]
+        public void DistanceLodProvider_LegacyRegisterReportsOnlyFirstCapacityRejection()
+        {
+            var owner = new GameObject("Legacy LOD Owner");
+            BTDistanceLODProvider provider = owner.AddComponent<BTDistanceLODProvider>();
+            provider.MaximumTreeCount = 1;
+            using RuntimeBehaviorTree accepted = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree tryRejected = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree firstLegacyRejected = CreateTree(new CallbackNode(null));
+            using RuntimeBehaviorTree repeatedLegacyRejected = CreateTree(new CallbackNode(null));
+            try
+            {
+                Assert.That(provider.TryRegisterTree(accepted, owner.transform), Is.True);
+
+                Assert.That(provider.TryRegisterTree(tryRejected, owner.transform), Is.False);
+
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[BTDistanceLODProvider] Legacy RegisterTree was rejected because LOD tree capacity " +
+                    "was exhausted on 'Legacy LOD Owner'. Use TryRegisterTree to handle admission failure.");
+                provider.RegisterTree(firstLegacyRejected, owner.transform);
+
+                provider.RegisterTree(repeatedLegacyRejected, owner.transform);
+                provider.RegisterTree(null, owner.transform);
+                provider.RegisterTree(accepted, owner.transform);
+
+                BTDistanceLODProviderMemoryStats stats = provider.GetMemoryStats();
+                Assert.That(stats.TreeCount, Is.EqualTo(1));
+                Assert.That(stats.CapacityRejectedTreeCount, Is.EqualTo(3L));
+                LogAssert.NoUnexpectedReceived();
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(owner);
+            }
         }
 
         [Test]
@@ -142,6 +271,15 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 new RuntimeRootNode { Child = child },
                 new RuntimeBlackboard(),
                 new RuntimeBTContext());
+        }
+
+        private static void SetPrivateField(object target, string fieldName, object value)
+        {
+            FieldInfo field = target.GetType().GetField(
+                fieldName,
+                BindingFlags.Instance | BindingFlags.NonPublic);
+            Assert.That(field, Is.Not.Null, $"Missing private field '{fieldName}'.");
+            field.SetValue(target, value);
         }
 
         private sealed class CallbackNode : RuntimeNode

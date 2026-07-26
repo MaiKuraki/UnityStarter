@@ -62,6 +62,8 @@ namespace CycloneGames.GameplayFramework.Networking
         public INetworkMessageEndpoint MessageEndpoint => messageEndpoint;
         public int StagedConnectionCount => stagedConnections.Count;
         public int MaxStagedConnections => maxStagedConnections;
+        public int BoundConnectionCount => playerConnections.Count;
+        public int BannedAddressCount => bannedAddresses.Count;
 
         public virtual void SetMessageEndpoint(INetworkMessageEndpoint endpoint)
         {

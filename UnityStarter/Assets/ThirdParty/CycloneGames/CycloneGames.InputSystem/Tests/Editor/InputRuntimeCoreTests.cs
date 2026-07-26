@@ -320,6 +320,21 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         }
 
         [Test]
+        public void ConfigurationLimits_RejectValuesAboveAbsoluteAllocationCeilings()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new InputConfigurationLimits(
+                    maxPlayers: InputConfigurationLimits.AbsoluteMaxPlayers + 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new InputConfigurationLimits(
+                    maxTotalActionsPerPlayer:
+                    InputConfigurationLimits.AbsoluteMaxTotalActionsPerPlayer + 1));
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new InputConfigurationLimits(
+                    maxStringLength: InputConfigurationLimits.AbsoluteMaxStringLength + 1));
+        }
+
+        [Test]
         public void ValidateAndPrepare_RejectsNullListsAndConfiguredLimits()
         {
             InputConfiguration source = CreateValidConfiguration();

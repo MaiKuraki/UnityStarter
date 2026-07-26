@@ -629,6 +629,10 @@ The module contains steady-state low-allocation paths. Dictionary growth, first-
 
 The embedded authoring schema has a hard limit of 4,096 entries. Default snapshot/delta limits remain 4,096 entries per value type and 16,384 total entries. These are safety ceilings, not sizing targets: keep each tree contract narrow, pre-hash hot keys, and measure representative Player builds.
 
+Managed scheduling is also capacity-governed. `BTTickManager`, `BTPriorityTickManager`, and `BTDistanceLODProvider` default to 65,536 trees and reject configuration above the hard 1,048,576-tree ceiling. Their `TryRegister*` APIs return `false` when tree or deferred-mutation capacity is unavailable and increment exact rejection counters; existing `void Register`/`Unregister`/`UpdatePriority` methods remain source-compatible and delegate to the `Try*` path, so a rejected legacy registration is a fail-closed no-op. The pure C# managers remain free of Unity logging dependencies. Their Unity-facing component wrappers compare O(1) counter snapshots and emit one error per component only when a legacy registration actually increases a tree, LOD, or deferred-mutation capacity-rejection counter. Direct `Try*` calls, null or stopped trees, duplicate registration, and ordinary failed removal remain silent. Deferred mutations are coalesced by tree and bounded independently. `BTPriorityTickManagerComponent` additionally coalesces duplicate cross-thread wake-ups in a queue that defaults to 4,096 and cannot be configured above 65,536; a full queue rejects the new wake-up without canceling or unregistering the tree. `BTRunnerComponent` records registration only after admission succeeds and can retry later.
+
+The DOD scheduler has the same default and hard agent ceilings, further reduced when the flattened tree/Blackboard layout cannot represent that many slots. Prefer `TryAddAgent`; the legacy `AddAgent` remains source-compatible but throws `InvalidOperationException` at effective capacity instead of growing without limit. All governed owners expose current, maximum, peak, and capacity-rejection snapshots; managed and DOD metrics are separate because the DOD assembly remains optional.
+
 `BehaviorTree` authoring data and its schema cache are Unity main-thread owned. `TryGetRuntimeBlackboardSchema`, Inspector editing, graph validation, and asset compilation must remain on the main thread. The compiled managed runtime retains its existing single-owner-thread affinity; strict mode adds no background worker and no new lock. The DOD flat-tree path has its own fixed-slot Blackboard contract and does not consume this embedded authoring schema.
 
 ### Tuning sequence
@@ -689,6 +693,7 @@ EditMode  CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
 9. Enter Play Mode with `Self`, `Managed`, `PriorityManaged`, and `Manual` ownership as used by the product.
 10. Confirm natural completion unregisters the runner, `Play` creates a new activation, and disable/enable does not double-register.
 11. For synchronized keys, validate matching client/server manifests and an intentional mismatch before sending state. Confirm the integration rejects or migrates the mismatch.
+12. Set small tree, pending-mutation, wake-up, LOD, and DOD agent capacities in focused fixtures. Confirm each `Try*` admission fails at its ceiling, legacy wrappers follow the documented no-op/throw behavior, duplicate wake-ups coalesce, active trees keep running, and current/peak/rejected snapshots match the fixture.
 12. Run a bounded benchmark case before any matrix or soak run.
 
 ## References

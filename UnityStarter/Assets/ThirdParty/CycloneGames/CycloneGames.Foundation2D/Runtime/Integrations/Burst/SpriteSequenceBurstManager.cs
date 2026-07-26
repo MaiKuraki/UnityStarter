@@ -36,7 +36,7 @@ namespace CycloneGames.Foundation2D.Runtime
         sourceNamespace: "CycloneGames.Foundation2D.Runtime",
         sourceAssembly: "CycloneGames.Foundation2D.Runtime",
         sourceClassName: "SpriteSequenceBurstManager")]
-    public sealed class SpriteSequenceBurstManager : MonoBehaviour
+    public sealed class SpriteSequenceBurstManager : MonoBehaviour, ISpriteSequenceBurstMemoryOwner
     {
         [Header("Controller Sources")]
         [Tooltip("Explicit controllers owned by this manager. Duplicate entries are ignored.")]
@@ -81,9 +81,31 @@ namespace CycloneGames.Foundation2D.Runtime
         private bool _shutdownComplete;
         private bool _capacityLimitWarningIssued;
         private bool _allocationWarningIssued;
+        private int _peakOwnedControllerCount;
+        private int _peakBufferCapacity;
+        private long _capacityRejectionCount;
+        private long _ownershipConflictRejectionCount;
+        private long _allocationFailureCount;
 
         public int OwnedControllerCount => _ownedControllers.Count;
         public int BufferCapacity => _capacity;
+
+        /// <summary>Returns an allocation-free snapshot of this manager's owned Burst memory state.</summary>
+        public SpriteSequenceBurstMemorySnapshot GetMemorySnapshot()
+        {
+            return new SpriteSequenceBurstMemorySnapshot(
+                _ownedControllers.Count,
+                _runtimeControllers.Count,
+                _capacity,
+                ResolveMaxControllerCapacity(),
+                _peakOwnedControllerCount,
+                _peakBufferCapacity,
+                _capacityRejectionCount,
+                _ownershipConflictRejectionCount,
+                _allocationFailureCount,
+                _isUpdating,
+                _jobScheduled);
+        }
 
         private void OnEnable()
         {
@@ -200,6 +222,12 @@ namespace CycloneGames.Foundation2D.Runtime
             if (_ownedControllerSet.Contains(controller))
             {
                 return true;
+            }
+
+            if (!isRuntimeRegistered && _runtimeControllers.Count >= ResolveMaxControllerCapacity())
+            {
+                RecordCapacityRejection();
+                return false;
             }
 
             if (_isUpdating)
@@ -480,15 +508,7 @@ namespace CycloneGames.Foundation2D.Runtime
 
             if (_ownedControllers.Count >= ResolveMaxControllerCapacity())
             {
-                if (!_capacityLimitWarningIssued)
-                {
-                    Debug.LogWarning(
-                        $"SpriteSequenceBurstManager '{name}' reached maxControllerCapacity=" +
-                        $"{ResolveMaxControllerCapacity()}. Additional controllers remain unclaimed and use their fallback policy.",
-                        this);
-                    _capacityLimitWarningIssued = true;
-                }
-
+                RecordCapacityRejection();
                 return false;
             }
 
@@ -496,9 +516,11 @@ namespace CycloneGames.Foundation2D.Runtime
             {
                 _ownedControllerSet.Add(controller);
                 _ownedControllers.Add(controller);
+                _peakOwnedControllerCount = Math.Max(_peakOwnedControllerCount, _ownedControllers.Count);
                 return true;
             }
 
+            IncrementSaturating(ref _ownershipConflictRejectionCount);
             Debug.LogError(
                 $"SpriteSequenceController '{controller.name}' is already owned by another active " +
                 $"SpriteSequenceBurstManager. Manager '{name}' will not update it.",
@@ -597,6 +619,7 @@ namespace CycloneGames.Foundation2D.Runtime
             _maxFrameAdvances = newMaxFrameAdvances;
             _tokens = newTokens;
             _capacity = newCapacity;
+            _peakBufferCapacity = Math.Max(_peakBufferCapacity, _capacity);
             return true;
         }
 
@@ -607,6 +630,7 @@ namespace CycloneGames.Foundation2D.Runtime
 
         private void LogAllocationFailure(int requestedCapacity, Exception exception)
         {
+            IncrementSaturating(ref _allocationFailureCount);
             if (_allocationWarningIssued)
             {
                 return;
@@ -617,6 +641,29 @@ namespace CycloneGames.Foundation2D.Runtime
                 $"{requestedCapacity} controllers. Claimed controllers will be released. Exception={exception}",
                 this);
             _allocationWarningIssued = true;
+        }
+
+        private void RecordCapacityRejection()
+        {
+            IncrementSaturating(ref _capacityRejectionCount);
+            if (_capacityLimitWarningIssued)
+            {
+                return;
+            }
+
+            Debug.LogWarning(
+                $"SpriteSequenceBurstManager '{name}' reached maxControllerCapacity=" +
+                $"{ResolveMaxControllerCapacity()}. Additional controllers remain unclaimed and use their fallback policy.",
+                this);
+            _capacityLimitWarningIssued = true;
+        }
+
+        private static void IncrementSaturating(ref long value)
+        {
+            if (value < long.MaxValue)
+            {
+                value++;
+            }
         }
 
         private static void DisposeTemporaryBuffers(

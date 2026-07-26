@@ -259,10 +259,43 @@ namespace CycloneGames.Settings.Persistence.Tests
 
             var firstLoad = persistent.LoadAsync();
             Assert.Throws<InvalidOperationException>(() => persistent.SaveAsync());
+
+            PersistentSettingsMemorySnapshot active = persistent.GetMemorySnapshot();
+            Assert.That(active.IsOperationActive, Is.True);
+            Assert.That(active.PersistenceOperationActive, Is.True);
+            Assert.That(active.StartedLoadCount, Is.EqualTo(1));
+            Assert.That(active.StartedSaveCount, Is.Zero);
+            Assert.That(active.ConcurrentOperationRejectionCount, Is.EqualTo(1));
             storage.CompleteMissing();
 
             var result = await firstLoad;
             Assert.That(result.IsMissing, Is.True);
+
+            PersistentSettingsMemorySnapshot completed = persistent.GetMemorySnapshot();
+            Assert.That(completed.IsOperationActive, Is.False);
+            Assert.That(completed.PersistenceOperationActive, Is.False);
+        }
+
+        [Test]
+        public async Task MemorySnapshot_TracksOperationCountsLimitsAndRecordBytes()
+        {
+            var storage = new MemoryStorage();
+            var state = new SettingsState<TestSettings>(new TestSchema(2));
+            var persistent = CreatePersistentSettings(state, storage);
+
+            await persistent.SaveAsync();
+            await persistent.LoadAsync();
+            await persistent.DeleteStoredValueAsync();
+
+            PersistentSettingsMemorySnapshot snapshot = persistent.GetMemorySnapshot();
+            Assert.That(snapshot.StateRevision, Is.EqualTo(state.Revision));
+            Assert.That(snapshot.MaximumPayloadBytes, Is.EqualTo(PersistenceLimits.Default.MaximumPayloadBytes));
+            Assert.That(snapshot.MaximumRecordBytes, Is.EqualTo(PersistenceLimits.Default.MaximumRecordBytes));
+            Assert.That(snapshot.StartedLoadCount, Is.EqualTo(1));
+            Assert.That(snapshot.StartedSaveCount, Is.EqualTo(1));
+            Assert.That(snapshot.StartedDeleteCount, Is.EqualTo(1));
+            Assert.That(snapshot.LastRecordBytes, Is.GreaterThan(0));
+            Assert.That(snapshot.PeakRecordBytes, Is.GreaterThanOrEqualTo(snapshot.LastRecordBytes));
         }
 
         [Test]

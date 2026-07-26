@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-以虚幻引擎的 GameplayTags 系统为蓝本，本模块提供分层标签（`State.CrowdControl.Stunned`）、自动父标签解析的标签容器和编译后的标签查询——UE 开发者用标签连接技能、效果、AI 和 UI 而不引入硬引用的那套方法，在 Unity 里同样可用。
+CycloneGames.GameplayTags 提供分层标签（`State.CrowdControl.Stunned`）、自动父标签解析的标签容器和编译后的标签查询。标签是共享词汇：技能、效果、AI 和 UI 可以引用同一套定义而不引入硬引用。
 
 ## 目录
 
@@ -341,6 +341,8 @@ GameplayTagQuery playerContentQuery = new()
 - Compiled query data 由所属 `GameplayTagQuery` 持有。Mutation 后调用 `InvalidateCompiledCache()`。
 - Compiled query match 使用固定 1 KiB 栈临时空间；调用之间不保留 shared pool。
 - 单标签 count mutation 使用栈缓冲区；多标签 mutation 使用 container 独占的懒创建临时存储。
+
+`GameplayTagManager.GetMemorySnapshot()` 以 allocation-free、O(1) 方式返回 registry count、limit、generation、epoch、manifest hash、redirect 与 query limit 的聚合值，并且不暴露 registry storage。
 
 Registry read 捕获不可变 snapshot，不获取 writer lock。
 

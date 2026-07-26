@@ -26,4 +26,25 @@ namespace CycloneGames.Choreography.Core
         /// </summary>
         int CollectResourceReferences(List<ChoreographyResourceReference> results);
     }
+
+    /// <summary>
+    /// Optional capability for choreography assets that can collect preload references while enforcing caller-owned
+    /// capacity and traversal budgets. Implementations must check the supplied result ceiling before each append and
+    /// stop scanning before exceeding the supplied node ceiling. Returning <c>false</c> rejects the whole collection;
+    /// callers may discard references appended before the rejection.
+    /// </summary>
+    public interface IBoundedChoreographyResourceCollector
+    {
+        /// <summary>
+        /// Appends distinct resource references without exceeding either supplied limit. Implementations must not
+        /// clear <paramref name="results"/>. <paramref name="scannedNodeCount"/> reports the logical asset or
+        /// precomputed-index nodes inspected by this call.
+        /// </summary>
+        bool TryCollectResourceReferences(
+            List<ChoreographyResourceReference> results,
+            int maximumResultCount,
+            int maximumNodeScanCount,
+            out int addedCount,
+            out int scannedNodeCount);
+    }
 }

@@ -74,7 +74,7 @@ namespace CycloneGames.AIPerception.Tests.Editor
         }
 
         [Test]
-        public void Registry_ZeroMaximum_AllowsGrowthPastInitialCapacity()
+        public void Registry_LegacyZeroMaximum_MapsToPackageHardCeiling()
         {
             using var registry = new PerceptibleRegistry(initialCapacity: 1, maximumCapacity: 0);
             var handles = new PerceptibleHandle[129];
@@ -84,7 +84,9 @@ namespace CycloneGames.AIPerception.Tests.Editor
                 handles[i] = registry.Register(new TestPerceptible(i));
             }
 
-            Assert.That(registry.MaximumCapacity, Is.Zero);
+            Assert.That(
+                registry.MaximumCapacity,
+                Is.EqualTo(PerceptibleRegistry.HardMaximumPerceptibleCount));
             Assert.That(registry.Count, Is.EqualTo(handles.Length));
             for (int i = 0; i < handles.Length; i++)
             {
@@ -109,6 +111,253 @@ namespace CycloneGames.AIPerception.Tests.Editor
             Assert.That(accepted.IsValid, Is.True);
             Assert.That(rejected, Is.EqualTo(PerceptibleHandle.Invalid));
             Assert.That(registry.Count, Is.EqualTo(1));
+            PerceptibleRegistryMemoryStats stats = registry.GetMemoryStats();
+            Assert.That(stats.PeakPerceptibleCount, Is.EqualTo(1));
+            Assert.That(stats.RejectedRegistrationCount, Is.EqualTo(1L));
+            Assert.That(stats.MaximumPerceptibleCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void Registry_RejectsConfigurationBeyondPackageHardCeiling()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new PerceptibleRegistry(
+                    initialCapacity: 1,
+                    maximumCapacity: PerceptibleRegistry.HardMaximumPerceptibleCount + 1));
+            using var registry = new PerceptibleRegistry(initialCapacity: 1, maximumCapacity: 1);
+            Assert.That(
+                registry.TrySetMaxCapacity(PerceptibleRegistry.HardMaximumPerceptibleCount + 1),
+                Is.False);
+        }
+
+        [Test]
+        public void SensorManager_TryRegisterReportsCapacityRejection()
+        {
+            using var registry = new PerceptibleRegistry();
+            using var manager = new SensorManager(registry, maximumSensorCount: 1);
+            var accepted = new TestSensor(1001);
+            var rejected = new TestSensor(1002);
+
+            Assert.That(manager.TryRegister(accepted), Is.True);
+            Assert.That(manager.TryRegister(rejected), Is.False);
+
+            AIPerceptionMemoryStats stats = manager.GetMemoryStats();
+            Assert.That(stats.SensorCount, Is.EqualTo(1));
+            Assert.That(stats.MaximumSensorCount, Is.EqualTo(1));
+            Assert.That(stats.PeakSensorCount, Is.EqualTo(1));
+            Assert.That(stats.RejectedSensorRegistrationCount, Is.EqualTo(1L));
+            Assert.That(stats.CustomSensorCount, Is.EqualTo(1));
+            rejected.Dispose();
+        }
+
+        [Test]
+        public void SensorManager_LegacyRegisterReportsOnlyFirstCapacityRejection()
+        {
+            using var registry = new PerceptibleRegistry();
+            using var manager = new SensorManager(registry, maximumSensorCount: 1);
+            var accepted = new TestSensor(1101);
+            var tryRejected = new TestSensor(1102);
+            var firstLegacyRejected = new TestSensor(1103);
+            var repeatedLegacyRejected = new TestSensor(1104);
+            try
+            {
+                Assert.That(manager.TryRegister(accepted), Is.True);
+
+                // TryRegister is the explicit result channel and must remain silent.
+                Assert.That(manager.TryRegister(tryRejected), Is.False);
+
+                LogAssert.Expect(
+                    LogType.Error,
+                    "[AIPerception] SensorManager capacity exhausted (1). " +
+                    "Legacy Register was ignored; use TryRegister to handle admission failure.");
+                manager.Register(firstLegacyRejected);
+
+                // Further capacity failures and ordinary false outcomes do not create a log storm.
+                manager.Register(repeatedLegacyRejected);
+                manager.Register(null);
+                manager.Register(accepted);
+
+                AIPerceptionMemoryStats stats = manager.GetMemoryStats();
+                Assert.That(stats.SensorCount, Is.EqualTo(1));
+                Assert.That(stats.RejectedSensorRegistrationCount, Is.EqualTo(3L));
+            }
+            finally
+            {
+                tryRejected.Dispose();
+                firstLegacyRejected.Dispose();
+                repeatedLegacyRejected.Dispose();
+            }
+        }
+
+        [Test]
+        public void SensorManager_RejectsLodTablesAbovePackageHardCeiling()
+        {
+            using var registry = new PerceptibleRegistry();
+            using var manager = new SensorManager(registry);
+            Transform reference = CreateGameObject("LOD Reference").transform;
+            var levels = new SensorLODLevel[SensorManager.HardMaximumLODLevelCount + 1];
+
+            Assert.That(manager.ConfigureLOD(reference, levels), Is.False);
+            Assert.That(manager.GetMemoryStats().LodLevelCount, Is.Zero);
+        }
+
+        [Test]
+        public void BuiltInSensor_CapacityNormalizesToAbsoluteCeilingsAndReportsNativeStorage()
+        {
+            using var registry = new PerceptibleRegistry();
+            using var manager = new SensorManager(registry);
+            Transform sensorTransform = CreateGameObject("Bounded Proximity Sensor").transform;
+            ProximitySensorConfig config = ProximitySensorConfig.Default;
+            config.Capacity = new PerceptionSensorCapacity
+            {
+                InitialCandidateCapacity = 1,
+                MaximumCandidates = int.MaxValue,
+                InitialResultCapacity = 1,
+                MaximumResults = int.MaxValue,
+                InitialMemoryCapacity = 1,
+                MaximumMemoryEntries = int.MaxValue
+            };
+            var sensor = new ProximitySensor(sensorTransform, config, manager);
+            Assert.That(manager.TryRegister(sensor), Is.True);
+
+            AIPerceptionMemoryStats stats = manager.GetMemoryStats();
+            Assert.That(stats.MaximumCandidateCount, Is.EqualTo(PerceptionSensorCapacity.HardMaximumCandidates));
+            Assert.That(stats.MaximumResultCount, Is.EqualTo(PerceptionSensorCapacity.HardMaximumResults));
+            Assert.That(stats.MaximumMemoryCount, Is.EqualTo(PerceptionSensorCapacity.HardMaximumMemoryEntries));
+            Assert.That(stats.NativeBufferCount, Is.EqualTo(5));
+            Assert.That(stats.NativeBufferCapacity, Is.GreaterThan(0));
+        }
+
+        [Test]
+        public void SensorManager_WarmedUpdateAggregatesWorkloadWithoutManagedAllocations()
+        {
+            const int iterations = 16;
+            using var registry = new PerceptibleRegistry();
+            using var manager = new SensorManager(registry);
+            registry.Register(new TestPerceptible(1)
+            {
+                Position = new float3(1f, 0f, 0f),
+                LineOfSightPoint = new float3(1f, 0f, 0f),
+                DetectionRadius = 0f
+            });
+
+            ProximitySensorConfig config = ProximitySensorConfig.Default;
+            config.Radius = 5f;
+            config.UpdateInterval = 0f;
+            config.MemoryDuration = 0f;
+            var first = new ProximitySensor(
+                CreateGameObject("First Workload Sensor").transform,
+                config,
+                manager);
+            var second = new ProximitySensor(
+                CreateGameObject("Second Workload Sensor").transform,
+                config,
+                manager);
+            try
+            {
+                Assert.That(manager.TryRegister(first), Is.True);
+                Assert.That(manager.TryRegister(second), Is.True);
+
+                manager.Update(0f);
+                manager.Update(0f);
+                _ = manager.GetMemoryStats();
+                _ = GC.GetAllocatedBytesForCurrentThread();
+                long before = GC.GetAllocatedBytesForCurrentThread();
+                AIPerceptionMemoryStats stats = default;
+                for (int i = 0; i < iterations; i++)
+                {
+                    manager.Update(0f);
+                    stats = manager.GetMemoryStats();
+                }
+
+                long allocatedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+
+                TestContext.Progress.WriteLine(
+                    $"AIPerception warmed SensorManager update/stats path: sensors=2, iterations={iterations}, managedAllocatedBytes={allocatedBytes}.");
+                Assert.That(allocatedBytes, Is.Zero);
+                Assert.That(stats.BuiltInSensorCount, Is.EqualTo(2));
+                Assert.That(stats.CustomSensorCount, Is.Zero);
+                Assert.That(stats.LastUpdateWorkload, Is.EqualTo(2));
+                Assert.That(stats.PeakUpdateWorkload, Is.EqualTo(2));
+                Assert.That(stats.SensorUpdateCount, Is.EqualTo(2L * (iterations + 2)));
+            }
+            finally
+            {
+                manager.Unregister(first);
+                manager.Unregister(second);
+                first.Dispose();
+                second.Dispose();
+            }
+        }
+
+        [Test]
+        public void SensorManager_WorkloadIncludesOnlySensorsUpdatedInCurrentFrame()
+        {
+            using var registry = new PerceptibleRegistry();
+            using var manager = new SensorManager(registry);
+            registry.Register(new TestPerceptible(1)
+            {
+                Position = new float3(1f, 0f, 0f),
+                LineOfSightPoint = new float3(1f, 0f, 0f),
+                DetectionRadius = 0f
+            });
+
+            ProximitySensorConfig activeConfig = ProximitySensorConfig.Default;
+            activeConfig.Radius = 5f;
+            activeConfig.UpdateInterval = 0f;
+            activeConfig.MemoryDuration = 0f;
+            ProximitySensorConfig skippedConfig = activeConfig;
+            skippedConfig.UpdateInterval = 3_600f;
+
+            var first = new ProximitySensor(
+                CreateGameObject("Alternating Workload Sensor A").transform,
+                activeConfig,
+                manager);
+            var second = new ProximitySensor(
+                CreateGameObject("Alternating Workload Sensor B").transform,
+                skippedConfig,
+                manager);
+            try
+            {
+                Assert.That(manager.TryRegister(first), Is.True);
+                Assert.That(manager.TryRegister(second), Is.True);
+
+                second.UpdateSensor(0f);
+                manager.LateUpdate();
+                AIPerceptionMemoryStats beforeManagerFrame = manager.GetMemoryStats();
+                Assert.That(beforeManagerFrame.LastUpdateWorkload, Is.Zero);
+                Assert.That(beforeManagerFrame.PeakUpdateWorkload, Is.Zero);
+                Assert.That(manager.GetMemoryStats().PeakUpdateWorkload, Is.Zero);
+
+                manager.Update(0f);
+                manager.LateUpdate();
+                AIPerceptionMemoryStats firstFrame = manager.GetMemoryStats();
+                Assert.That(firstFrame.LastUpdateWorkload, Is.EqualTo(1));
+                Assert.That(firstFrame.PeakUpdateWorkload, Is.EqualTo(1));
+
+                first.ApplyConfig(in skippedConfig);
+                second.ApplyConfig(in activeConfig);
+                manager.Update(0f);
+                manager.LateUpdate();
+                AIPerceptionMemoryStats secondFrame = manager.GetMemoryStats();
+                Assert.That(secondFrame.LastUpdateWorkload, Is.EqualTo(1));
+                Assert.That(secondFrame.PeakUpdateWorkload, Is.EqualTo(1));
+                Assert.That(manager.GetMemoryStats().PeakUpdateWorkload, Is.EqualTo(1));
+
+                second.IsEnabled = false;
+                manager.Update(0f);
+                AIPerceptionMemoryStats skippedFrame = manager.GetMemoryStats();
+                Assert.That(skippedFrame.LastUpdateWorkload, Is.Zero);
+                Assert.That(skippedFrame.PeakUpdateWorkload, Is.EqualTo(1));
+                Assert.That(manager.GetMemoryStats().LastUpdateWorkload, Is.Zero);
+            }
+            finally
+            {
+                manager.Unregister(first);
+                manager.Unregister(second);
+                first.Dispose();
+                second.Dispose();
+            }
         }
 
         [Test]
@@ -1090,7 +1339,14 @@ namespace CycloneGames.AIPerception.Tests.Editor
 
         private sealed class TestSensor : ISensor
         {
-            public int SensorId => 1001;
+            private readonly int _sensorId;
+
+            public TestSensor(int sensorId = 1001)
+            {
+                _sensorId = sensorId;
+            }
+
+            public int SensorId => _sensorId;
             public SensorType Type => SensorType.Custom;
             public bool IsEnabled { get; set; } = true;
             public float UpdateInterval => UpdateIntervalValue;

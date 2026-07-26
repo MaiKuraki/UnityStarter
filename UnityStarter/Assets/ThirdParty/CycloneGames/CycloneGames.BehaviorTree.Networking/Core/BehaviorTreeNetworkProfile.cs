@@ -29,6 +29,9 @@ namespace CycloneGames.BehaviorTree.Networking
 
     public sealed class BehaviorTreeNetworkProfile
     {
+        public const int MaximumTrackedBlackboardKeyCount =
+            BehaviorTreeNetworkProtocol.ABSOLUTE_MAX_TRACKED_BLACKBOARD_KEYS;
+
         private readonly Dictionary<string, int> _intSettings;
         private readonly Dictionary<string, string> _stringSettings;
         private readonly ReadOnlyDictionary<string, int> _readOnlyIntSettings;
@@ -50,7 +53,11 @@ namespace CycloneGames.BehaviorTree.Networking
             SnapshotIntervalTicks = ValidatePositive(builder.SnapshotIntervalTicks, nameof(builder.SnapshotIntervalTicks));
             DeltaIntervalTicks = ValidatePositive(builder.DeltaIntervalTicks, nameof(builder.DeltaIntervalTicks));
             HashIntervalTicks = ValidatePositive(builder.HashIntervalTicks, nameof(builder.HashIntervalTicks));
-            MaxTrackedBlackboardKeys = ValidatePositive(builder.MaxTrackedBlackboardKeys, nameof(builder.MaxTrackedBlackboardKeys));
+            MaxTrackedBlackboardKeys = ValidateRange(
+                builder.MaxTrackedBlackboardKeys,
+                1,
+                MaximumTrackedBlackboardKeyCount,
+                nameof(builder.MaxTrackedBlackboardKeys));
             MaxSnapshotPayloadBytes = ValidatePositive(builder.MaxSnapshotPayloadBytes, nameof(builder.MaxSnapshotPayloadBytes));
             MaxDeltaPayloadBytes = ValidatePositive(builder.MaxDeltaPayloadBytes, nameof(builder.MaxDeltaPayloadBytes));
             MaxDesyncReportsPerWindow = ValidateNonNegative(builder.MaxDesyncReportsPerWindow, nameof(builder.MaxDesyncReportsPerWindow));
@@ -159,6 +166,16 @@ namespace CycloneGames.BehaviorTree.Networking
         private static int ValidateNonNegative(int value, string name)
         {
             if (value < 0)
+            {
+                throw new ArgumentOutOfRangeException(name);
+            }
+
+            return value;
+        }
+
+        private static int ValidateRange(int value, int minimum, int maximum, string name)
+        {
+            if (value < minimum || value > maximum)
             {
                 throw new ArgumentOutOfRangeException(name);
             }

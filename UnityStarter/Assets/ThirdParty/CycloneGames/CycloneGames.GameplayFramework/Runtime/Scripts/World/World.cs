@@ -33,6 +33,12 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public sealed class World : IDisposable
     {
+        /// <summary>
+        /// Implementation safety ceiling for actors retained by one World. Product admission
+        /// budgets should normally be lower than this value.
+        /// </summary>
+        public const int MaximumActorCount = 65_536;
+
         private struct ActorEntry
         {
             public Actor Actor;
@@ -73,6 +79,7 @@ namespace CycloneGames.GameplayFramework.Runtime
         private GameMode gameMode;
         private GameState gameState;
         private int ownedActorCount;
+        private long rejectedActorAdmissionCount;
         private ReadOnlyCollection<PlayerController> playerControllerView;
         private ReadOnlyCollection<PlayerStart> playerStartView;
         private bool tickDispatchReady;
@@ -111,6 +118,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             playerStartView ??= playerStarts.AsReadOnly();
         public int ActorCount => actors.Count;
         public int OwnedActorCount => ownedActorCount;
+        public int PlayerControllerCount => playerControllers.Count;
+        public int PlayerStartCount => playerStarts.Count;
+        public long RejectedActorAdmissionCount => rejectedActorAdmissionCount;
         public CancellationToken LifetimeToken => lifetimeCancellation.Token;
         public ISceneTransitionHandler SceneTransitionHandler => sceneTransitionHandler;
         public bool IsDispatchingActorTick => isDispatchingActorTick;
@@ -241,7 +251,21 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public T SpawnActor<T>(T prefab) where T : Actor
         {
-            return SpawnActorInternal(prefab, beginIfPlaying: true);
+            if (!TrySpawnActor(prefab, out T actor))
+            {
+                throw CreateActorCapacityException();
+            }
+
+            return actor;
+        }
+
+        /// <summary>
+        /// Attempts to spawn and world-own an Actor. Returns false only when the World actor
+        /// implementation ceiling rejects a new Actor.
+        /// </summary>
+        public bool TrySpawnActor<T>(T prefab, out T actor) where T : Actor
+        {
+            return TrySpawnActorInternal(prefab, beginIfPlaying: true, out actor);
         }
 
         /// <summary>
@@ -250,7 +274,21 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public T SpawnActorDeferred<T>(T prefab) where T : Actor
         {
-            return SpawnActorInternal(prefab, beginIfPlaying: false);
+            if (!TrySpawnActorDeferred(prefab, out T actor))
+            {
+                throw CreateActorCapacityException();
+            }
+
+            return actor;
+        }
+
+        /// <summary>
+        /// Attempts a deferred spawn. Returns false only when the World actor implementation
+        /// ceiling rejects a new Actor.
+        /// </summary>
+        public bool TrySpawnActorDeferred<T>(T prefab, out T actor) where T : Actor
+        {
+            return TrySpawnActorInternal(prefab, beginIfPlaying: false, out actor);
         }
 
         public void FinishSpawningActor(Actor actor)
@@ -278,7 +316,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        private T SpawnActorInternal<T>(T prefab, bool beginIfPlaying) where T : Actor
+        private bool TrySpawnActorInternal<T>(T prefab, bool beginIfPlaying, out T actor) where T : Actor
         {
             EnsureOwnerThread();
             EnsureAcceptingActors();
@@ -286,6 +324,13 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (prefab == null)
             {
                 throw new ArgumentNullException(nameof(prefab));
+            }
+
+            if (actors.Count >= MaximumActorCount)
+            {
+                IncrementRejectedActorAdmissionCount();
+                actor = null;
+                return false;
             }
 
             T instance = objectSpawner.Create(prefab);
@@ -303,13 +348,20 @@ namespace CycloneGames.GameplayFramework.Runtime
                     instance.gameObject.SetActive(false);
                 }
 
-                RegisterActorInternal(
-                    instance,
-                    owned: true,
-                    beginIfPlaying,
-                    deferred,
-                    activateOnFinish);
-                return instance;
+                if (!TryRegisterActorInternal(
+                        instance,
+                        owned: true,
+                        beginIfPlaying,
+                        deferred,
+                        activateOnFinish))
+                {
+                    DestroyUnityObject(instance.gameObject);
+                    actor = null;
+                    return false;
+                }
+
+                actor = instance;
+                return true;
             }
             catch
             {
@@ -324,9 +376,36 @@ namespace CycloneGames.GameplayFramework.Runtime
         /// </summary>
         public void RegisterActor(Actor actor)
         {
+            if (!TryRegisterActor(actor))
+            {
+                throw CreateActorCapacityException();
+            }
+        }
+
+        /// <summary>
+        /// Attempts to register a scene- or externally-created Actor. Returns false only when
+        /// the World actor implementation ceiling rejects a new Actor.
+        /// </summary>
+        public bool TryRegisterActor(Actor actor)
+        {
             EnsureOwnerThread();
             EnsureAcceptingActors();
-            RegisterActorInternal(actor, owned: false, beginIfPlaying: true, deferred: false, activateOnFinish: false);
+            return TryRegisterActorInternal(
+                actor,
+                owned: false,
+                beginIfPlaying: true,
+                deferred: false,
+                activateOnFinish: false);
+        }
+
+        /// <summary>Returns an allocation-free O(1) actor admission snapshot.</summary>
+        public WorldActorAdmissionSnapshot GetActorAdmissionSnapshot()
+        {
+            EnsureOwnerThread();
+            return new WorldActorAdmissionSnapshot(
+                actors.Count,
+                MaximumActorCount,
+                rejectedActorAdmissionCount);
         }
 
         public bool IsActorRegistered(Actor actor)
@@ -740,6 +819,19 @@ namespace CycloneGames.GameplayFramework.Runtime
             bool deferred,
             bool activateOnFinish)
         {
+            if (!TryRegisterActorInternal(actor, owned, beginIfPlaying, deferred, activateOnFinish))
+            {
+                throw CreateActorCapacityException();
+            }
+        }
+
+        private bool TryRegisterActorInternal(
+            Actor actor,
+            bool owned,
+            bool beginIfPlaying,
+            bool deferred,
+            bool activateOnFinish)
+        {
             if (actor == null)
             {
                 throw new ArgumentNullException(nameof(actor));
@@ -756,12 +848,18 @@ namespace CycloneGames.GameplayFramework.Runtime
                     ownedActorCount++;
                 }
 
-                return;
+                return true;
             }
 
             if (actor.World != null && !ReferenceEquals(actor.World, this))
             {
                 throw new InvalidOperationException($"Actor '{actor.name}' already belongs to another World.");
+            }
+
+            if (actors.Count >= MaximumActorCount)
+            {
+                IncrementRejectedActorAdmissionCount();
+                return false;
             }
 
             int index = actors.Count;
@@ -798,6 +896,22 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (beginIfPlaying && lifecycleState == WorldLifecycleState.Playing && actor.isActiveAndEnabled)
             {
                 actor.NotifyWorldBeginPlay();
+            }
+
+            return true;
+        }
+
+        private static InvalidOperationException CreateActorCapacityException()
+        {
+            return new InvalidOperationException(
+                $"World actor capacity reached the implementation ceiling of {MaximumActorCount}.");
+        }
+
+        private void IncrementRejectedActorAdmissionCount()
+        {
+            if (rejectedActorAdmissionCount < long.MaxValue)
+            {
+                rejectedActorAdmissionCount++;
             }
         }
 

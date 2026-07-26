@@ -52,6 +52,16 @@ namespace CycloneGames.DeterministicMath
         // CORDIC rotation starts pre-scaled by K to cancel the iterative gain.
         private const long CORDIC_K_RAW = 2608131496L;
 
+        /// <summary>
+        /// Returns the fixed process-global lookup-table footprint without exposing or copying table data.
+        /// </summary>
+        public static DeterministicMathMemorySnapshot GetMemorySnapshot()
+        {
+            return new DeterministicMathMemorySnapshot(
+                AtanTable.Length,
+                checked((long)AtanTable.Length * sizeof(long)));
+        }
+
         // ---- Public Trig API ----
 
         /// <summary>Sine.</summary>

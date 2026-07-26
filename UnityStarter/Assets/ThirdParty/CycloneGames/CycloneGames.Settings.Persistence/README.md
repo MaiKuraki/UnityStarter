@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Settings.Persistence bridges validated settings state (`CycloneGames.Settings`) with bounded persistence records (`CycloneGames.Persistence`). Its only runtime service, `PersistentSettings<T>`, coordinates load, migration, commit, save, and delete. Each responsibility stays in its owning package.
+CycloneGames.Settings.Persistence coordinates validated settings state (`CycloneGames.Settings`) with bounded persistence records (`CycloneGames.Persistence`). `PersistentSettings<T>` handles load, migration, commit, save, and delete.
 
 ## Table of Contents
 
@@ -24,7 +24,7 @@ CycloneGames.Settings.Persistence bridges validated settings state (`CycloneGame
 - `SettingsMigrationPipeline<T>` — forward migration from any supported version.
 - `PersistenceStore<T>` — versioned storage with byte budgets and atomic write behavior.
 
-It does not own any of the three. It owns no disposable resource.
+The caller retains ownership of all three.
 
 ### Key features
 
@@ -251,3 +251,9 @@ Run integration tests:
 ```
 
 Tests cover: missing/default behavior, current and migrated loads, explicit `RequiresSave` without implicit write, future-version rejection, pre/mid-load cancellation, validation failure preservation, stale revision protection, post-commit observer warnings, save with current-version metadata, delete without reset, and operation overlap/constructor mismatch rejection.
+
+## Memory Diagnostics
+
+`PersistentSettings<T>.GetMemorySnapshot()` reports the bridge operation state, settings revision, underlying persistence operation/limits, started load/save/delete counts, overlap rejections, and last/peak record bytes. The O(1) snapshot never clones or inspects the settings value and does not expose storage content.
+
+`PersistentSettings<T>.GetMemorySnapshot()` exposes owner-local operation and retained-record counters. This type coordinates operations but owns neither the authoritative settings value nor persistence buffers after an operation. The Persistence record schema and migration behavior are unchanged.

@@ -32,6 +32,7 @@ namespace CycloneGames.Localization.Runtime
             _lookup = takeOwnership
                 ? lookup
                 : new Dictionary<string, string>(lookup.Count, StringComparer.Ordinal);
+            long retainedCharacters = tableId.Length + localeId.Code.Length;
             foreach (var pair in lookup)
             {
                 if (string.IsNullOrEmpty(pair.Key))
@@ -40,12 +41,18 @@ namespace CycloneGames.Localization.Runtime
                     _lookup.Add(pair.Key, pair.Value ?? string.Empty);
                 else if (pair.Value == null)
                     throw new ArgumentException("Owned compiled string values must not be null.", nameof(lookup));
+
+                retainedCharacters += pair.Key.Length + (pair.Value != null ? pair.Value.Length : 0);
             }
+            RetainedCharacterCount = retainedCharacters;
         }
 
         public string TableId { get; }
         public LocaleId LocaleId { get; }
         public int Count => _lookup.Count;
+
+        /// <summary>Exact retained key/value/identity UTF-16 character count, excluding object overhead.</summary>
+        public long RetainedCharacterCount { get; }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue(string key, out string value)
