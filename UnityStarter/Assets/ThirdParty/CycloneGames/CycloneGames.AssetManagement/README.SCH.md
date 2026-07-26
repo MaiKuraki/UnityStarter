@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-CycloneGames.AssetManagement 是一个 provider-neutral 的 Unity 资产运行时，提供显式 package 组合、调用方持有的 handle、有界内存缓存、内容校验、诊断，以及可选的 provider 桥接。它适用于在长期会话和持续负载下需要可预测所有权与失败行为、且不希望把应用代码绑定到某个资产 SDK 或 DI 容器的项目。
+CycloneGames.AssetManagement 是一个 provider-neutral 的 Unity 资产运行时，提供显式 package 组合、调用方持有的 handle、有界内存缓存、内容校验、诊断，以及可选的 provider 桥接。长期会话和持续负载下所有权与失败行为保持可预测。应用代码不绑定到某个资产 SDK 或 DI 容器。
 
 ## 目录
 
@@ -18,9 +18,9 @@ CycloneGames.AssetManagement 是一个 provider-neutral 的 Unity 资产运行�
 
 ## 概述
 
-模块持有 module 和 package 生命周期、asset/sub-asset/raw-file/instance/scene handle、调用方 lease 所有权、package 本地的 active 和 idle 内存缓存、逻辑 bucket/tag/owner metadata、窄而专一的 provider 维护与 downloader 原语、存储容量预检、有界且带版本的内容信任 manifest 与校验、有界运行时 telemetry，以及可选的 Addressables、YooAsset、Navigathena 与 VContainer 桥接。
+模块处理 module 和 package 生命周期；asset/sub-asset/raw-file/instance/scene handle；调用方 lease 所有权；package 本地 active 和 idle 内存缓存；逻辑 bucket/tag/owner metadata；窄而专一的 provider 维护与 downloader 原语；存储容量预检；有界且带版本的内容信任 manifest 与校验；有界运行时 telemetry；以及可选的 Addressables、YooAsset、Navigathena 与 VContainer 桥接。
 
-Provider adapter 在通用契约上归一化，只在能力可用时暴露可选能力。资产导入规则、bundle 布局、Addressables group、YooAsset collection 规则、CDN 拓扑、认证、授权、DRM、存档、平台认证与发布运营仍由产品负责。
+Provider adapter 在共享契约上归一化并暴露可选能力。资产导入规则、bundle 布局、Addressables group、YooAsset collection 规则、CDN 拓扑、认证、授权、DRM、存档、平台认证与发布运营归产品层负责。
 
 ### 主要特性
 
@@ -78,7 +78,7 @@ flowchart TD
 
 核心 Runtime 直接依赖 UniTask、CycloneGames.Logger、CycloneGames.IO Core/SystemIO 与 CycloneGames.Hash Core。仅安装可选包不够：其 `versionDefines` 范围必须匹配，且 consumer asmdef 必须引用条件 Assembly。不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。
 
-YooAsset 3.0.5 是最低支持的稳定版。asmdef 范围会为低于 4.0.0 的版本启用 provider；activation test 会拒绝 prerelease 包，产品选择的确切稳定版 3.x 在发布前必须完成编译并通过 YooAsset provider test assembly。
+YooAsset 3.0.5 是最低稳定版。asmdef 范围会为低于 4.0.0 的版本启用 provider；activation test 会拒绝 prerelease 包。产品选择的确切稳定版 3.x 在发布前必须完成编译并通过 YooAsset provider test assembly。
 
 ## 快速上手
 
@@ -253,7 +253,7 @@ finally
 
 高级重载接受 Unity `LoadSceneParameters`，使 Addressables 与 YooAsset 可以请求 `None`、`Physics2D`、`Physics3D` 或合法的 `Physics2D | Physics3D` 组合。加载的 scene 持有其 local physics world，并在卸载时销毁。对 manual scene，直接调用并 await `ActivateAsync`；不要先 await `Task` 作为 readiness barrier，因为 YooAsset 在允许激活前会保持其 provider 操作 pending。
 
-手动激活是过渡门，不是可回滚的暂存。Unity 必须释放激活屏障，held scene 才能完成卸载，因此即使过渡被取消，startup callback 也可能短暂运行。把权威副作用放在产品的 transition-commit 决策之后。任何卡在 Unity 手动激活屏障的 scene 都会阻塞后续排队的异步 scene 操作；在开始新的 unload 阶段前，按创建顺序解决每个 manual scene。
+手动激活是过渡门，不是可回滚的暂存。Unity 必须释放激活屏障，held scene 才能完成卸载，因此即使过渡被取消，startup callback 也可能短暂运行。把权威副作用放在产品的 transition-commit 决策之后。任何卡在 Unity 手动激活屏障的 scene 都会阻塞后续排队的 async scene 操作；在开始新的 unload 前，按创建顺序解决每个 manual scene。
 
 ### Bucket、tag 与 owner
 
@@ -299,7 +299,7 @@ Active lease 绝不会被 bucket clear 失效。一个 key 每种 metadata 最�
 
 `AssetCacheTuning` 控制 `ProbationEntryLimit`、`ProtectedEntryLimit`、`IdleByteBudget` 与 `ClearIdleOnLowMemory`。显式限制允许每个 idle 段 1-131,072 个条目，`IdleByteBudget` 至少 1 MiB。这些是输入安全边界，不是推荐容量。
 
-内存估算在每次 Active 到 idle 转换时运行。它使用 `Profiler.GetRuntimeMemorySizeLong` 与 `Texture2D`、`Cubemap`、其他 `Texture`、`Mesh`、`AudioClip` 的无分配 fallback。如果无法建立正占用，handle 绕过 idle retention。大于完整 idle 字节预算的候选会在准入前被拒绝。估算仍排除传递性 AssetBundle 内存、重复 native 内存、GPU 常驻、streaming mip 状态、provider metadata、allocator overhead 与 driver 分配。使用 Memory Profiler 与平台工具设置产品预算。
+内存估算在每次 Active 到 idle 转换时使用 `Profiler.GetRuntimeMemorySizeLong` 与 `Texture2D`、`Cubemap`、其他 `Texture`、`Mesh`、`AudioClip` 的无分配 fallback。如果无法建立正占用，handle 绕过 idle retention。大于 idle 字节预算的候选会在准入前被拒绝。估算仍排除传递性 AssetBundle 内存、重复 native 内存、GPU 常驻、streaming mip 状态、provider metadata、allocator overhead 与 driver 分配。使用 Memory Profiler 与平台工具设置产品预算。
 
 Module 级默认通过 `AssetManagementOptions.DefaultCacheTuning` 配置。Package 可通过 `AssetPackageInitOptions.CacheTuningOverride` 覆盖。`SetCacheIdleMemoryBudget` 支持临时 runtime 覆盖并立即 trim idle 条目。
 
@@ -446,7 +446,7 @@ Headless server 应减少或禁用表现层内容。主机平台应使用通过 
 
 ### 性能工程
 
-Runtime 保持热路径内部缓存查询紧凑：value cache key 避免组合字符串缓存、Dictionary 查询平均 O(1)、链表 recency 更新常数时间、scratch collection 在缓存 trim 时复用。公共调用方 lease 刻意为每次 load 调用分配一个小型非池化对象，以防止 ABA 与陈旧引用复用。
+Runtime 保持热路径内部缓存查询紧凑：value cache key 避免组合字符串缓存、Dictionary 查询平均 O(1)、链表 recency 更新常数时间、scratch collection 在缓存 trim 时复用。公共调用方 lease 为每次 load 调用分配一个小型非池化对象，以防止 ABA 与陈旧引用复用。
 
 `AssetCachePerformanceTests` 包含两个测量 harness：active cache hit/retain/release（5 次 warmup、20 次测量、每次 50,000 迭代，带 GC 测量）与 10,000 条目的完整 idle trim。它们建立不变量，不是通用通过阈值。为代表性硬件与内容 trace 建立产品预算，在 CI 中保存基线，并在统计上有意义的回归时失败。测量主线程 median/p95/p99 时间、每条公共 load 路径的分配字节、provider load/download 并发、cache hit rate、总 native/GPU 内存，以及 Mono 与 IL2CPP Player 上 8-24 小时 soak 行为。
 
@@ -506,3 +506,9 @@ Editor 或 CLI assembly 结果不能证明 Player、IL2CPP、长期会话、存�
   -testFilter CycloneGames.AssetManagement \
   -testResults <result-path> -quit
 ```
+
+## 内存限制与有界维护
+
+实现 `IAssetCacheMaintenanceOwner` 的 asset package 会提供 allocation-free runtime snapshot 与 `TrimIdleCacheStep(maxWork)`。该有界步骤在 owner thread 上执行，最多移除 `maxWork` 个 idle cache handle，并且绝不会释放 active lease。释放 bytes 只能标记为近似值，因为此包无法拥有或精确测量 asset handle 背后的全部 engine/native allocation。
+
+`AssetCacheService` 暴露固定的 owner-local 指标与仅清理 idle entry 的有界维护。权威 hard cache/admission limit 仍属于 AssetManagement；外部 diagnostics 不得创建第二份缓存或改变 active asset ownership。请运行 AssetManagement EditMode suite，覆盖准入、所有权与维护行为。

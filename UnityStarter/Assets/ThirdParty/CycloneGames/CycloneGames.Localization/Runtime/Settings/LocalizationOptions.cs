@@ -155,6 +155,86 @@ namespace CycloneGames.Localization.Runtime
     }
 
     /// <summary>
+    /// Service-wide resident-content ceilings shared by manual tables and catalog owners.
+    /// Values are clamped to absolute safety ceilings when the configuration is constructed.
+    /// </summary>
+    public readonly struct LocalizationResidentLimits
+    {
+        public const int DefaultMaxOwners = 2048;
+        public const int DefaultMaxTables = 8192;
+        public const long DefaultMaxEntries = 2000000L;
+        public const long DefaultMaxRetainedCharacters = 64000000L;
+        public const long DefaultMaxCandidateNodes = 1048576L;
+
+        public const int AbsoluteMaxOwners = 65536;
+        public const int AbsoluteMaxTables = 131072;
+        public const long AbsoluteMaxEntries = 16000000L;
+        public const long AbsoluteMaxRetainedCharacters = 536870912L;
+        public const long AbsoluteMaxCandidateNodes = 1048576L;
+
+        private readonly byte _configured;
+
+        public LocalizationResidentLimits(
+            int maxOwners = DefaultMaxOwners,
+            int maxTables = DefaultMaxTables,
+            long maxEntries = DefaultMaxEntries,
+            long maxRetainedCharacters = DefaultMaxRetainedCharacters)
+            : this(
+                maxOwners,
+                maxTables,
+                maxEntries,
+                maxRetainedCharacters,
+                DefaultMaxCandidateNodes)
+        {
+        }
+
+        public LocalizationResidentLimits(
+            int maxOwners,
+            int maxTables,
+            long maxEntries,
+            long maxRetainedCharacters,
+            long maxCandidateNodes)
+        {
+            MaxOwners = Clamp(maxOwners, AbsoluteMaxOwners);
+            MaxTables = Clamp(maxTables, AbsoluteMaxTables);
+            MaxEntries = Clamp(maxEntries, AbsoluteMaxEntries);
+            MaxRetainedCharacters = Clamp(maxRetainedCharacters, AbsoluteMaxRetainedCharacters);
+            MaxCandidateNodes = Clamp(maxCandidateNodes, AbsoluteMaxCandidateNodes);
+            _configured = 1;
+        }
+
+        public int MaxOwners { get; }
+        public int MaxTables { get; }
+        public long MaxEntries { get; }
+        public long MaxRetainedCharacters { get; }
+        public long MaxCandidateNodes { get; }
+
+        public static LocalizationResidentLimits Default => new LocalizationResidentLimits(
+            DefaultMaxOwners,
+            DefaultMaxTables,
+            DefaultMaxEntries,
+            DefaultMaxRetainedCharacters,
+            DefaultMaxCandidateNodes);
+
+        internal LocalizationResidentLimits Normalized()
+        {
+            return _configured == 0 ? Default : this;
+        }
+
+        private static int Clamp(int value, int absoluteMaximum)
+        {
+            if (value < 1) return 1;
+            return value > absoluteMaximum ? absoluteMaximum : value;
+        }
+
+        private static long Clamp(long value, long absoluteMaximum)
+        {
+            if (value < 1L) return 1L;
+            return value > absoluteMaximum ? absoluteMaximum : value;
+        }
+    }
+
+    /// <summary>
     /// Immutable initialization configuration. Input collections are copied by the constructor.
     /// </summary>
     public readonly struct LocalizationOptions
@@ -171,6 +251,29 @@ namespace CycloneGames.Localization.Runtime
             Action<LocalizationDiagnostic> diagnosticSink = null,
             IFormatProvider formatProvider = null,
             LocalizationLimits limits = default)
+            : this(
+                defaultLocale,
+                availableLocales,
+                detectSystemLanguage,
+                localeSelectors,
+                pseudoMode,
+                diagnosticSink,
+                formatProvider,
+                limits,
+                LocalizationResidentLimits.Default)
+        {
+        }
+
+        public LocalizationOptions(
+            Locale defaultLocale,
+            IReadOnlyList<Locale> availableLocales,
+            bool detectSystemLanguage,
+            IReadOnlyList<ILocaleSelector> localeSelectors,
+            PseudoLocaleMode pseudoMode,
+            Action<LocalizationDiagnostic> diagnosticSink,
+            IFormatProvider formatProvider,
+            LocalizationLimits limits,
+            LocalizationResidentLimits residentLimits)
         {
             DefaultLocale = defaultLocale;
             _availableLocales = Copy(availableLocales);
@@ -180,6 +283,7 @@ namespace CycloneGames.Localization.Runtime
             DiagnosticSink = diagnosticSink;
             FormatProvider = formatProvider ?? CultureInfo.InvariantCulture;
             Limits = limits.Normalized();
+            ResidentLimits = residentLimits.Normalized();
         }
 
         public Locale DefaultLocale { get; }
@@ -191,6 +295,7 @@ namespace CycloneGames.Localization.Runtime
         public Action<LocalizationDiagnostic> DiagnosticSink { get; }
         public IFormatProvider FormatProvider { get; }
         public LocalizationLimits Limits { get; }
+        public LocalizationResidentLimits ResidentLimits { get; }
 
         private static ReadOnlyCollection<T> Copy<T>(IReadOnlyList<T> source)
         {

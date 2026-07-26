@@ -291,7 +291,7 @@ WebGL:   navigator.vibrate()
 
 ### Platform implementation matrix
 
-This table describes routes present in the source. It is not a hardware-validation result; browser policy, OS version, device capabilities, Player backend, and native plugin import settings can change effective behavior.
+This table describes routes present in the source. Browser policy, OS version, device capabilities, Player backend, and native plugin import settings can change effective behavior.
 
 | Feature | Android | iOS (< 13) | iOS (13+) | WebGL | Editor |
 | --- | --- | --- | --- | --- | --- |
@@ -449,6 +449,8 @@ s_intensityBuf, s_sharpnessBuf, s_typeBuf, s_durationBuf
 
 `EnsureBuffers(count)` reuses managed arrays for later calls with equal or smaller counts. The long-lived Android vibrator and `VibrationEffect` class handles are cached for the service lifetime. Individual effects, compositions, and some platform queries create disposable `AndroidJavaObject` or `AndroidJavaClass` wrappers per call. Enum names used for native marshaling are held in static readonly arrays rather than produced with `ToString()` on each call.
 
+Growth is admission-bounded. Default limits are 300,000 ms per effect, 4,096 waveform samples, 2,048 haptic events, and 4,096 pattern segments. Custom `DeviceFeedbackLimits` can lower or raise these values, but never above the hard ceilings of 3,600,000 ms, 65,536 waveform samples, 16,384 events, and 65,536 pattern segments. Invalid or over-capacity calls return before buffer growth or native dispatch. Existing public playback methods remain `void` for compatibility, so rejection is a fail-closed no-op; inspect `GetMemoryStats()`/`DeviceFeedbackDiagnostics.GetMemoryStats()` to distinguish accepted, invalid-rejected, and capacity-rejected operations and to read retained buffer bytes plus peak duration/sample/event/pattern counts.
+
 The gamepad rumble and device light services forward to an injected backend after guard checks. Allocation behavior depends on that backend. Native mobile plugins, JNI, IL2CPP marshaling, browser interop, and buffer growth must be profiled separately on each target.
 
 ### Threading
@@ -484,6 +486,8 @@ Run focused tests from Unity Test Runner:
 ```
 
 The Editor test suite covers guard and no-op behavior for `GamepadRumbleService` and `GamepadLightService`. Mobile hardware output, latency, GC behavior, WebGL browser policy, and console backends must be validated separately on each target device.
+
+Capacity fixtures must also exercise every boundary at `limit - 1`, `limit`, and `limit + 1`, confirming that the legacy `void` API emits no native call when rejected and that accepted/invalid/capacity counters and peak values advance exactly once.
 
 ## References
 

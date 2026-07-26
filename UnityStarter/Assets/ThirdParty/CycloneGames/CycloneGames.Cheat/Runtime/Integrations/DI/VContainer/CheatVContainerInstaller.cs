@@ -17,7 +17,7 @@ namespace CycloneGames.Cheat.Runtime.Integrations.VContainer
 
         public void Install(IContainerBuilder builder)
         {
-            builder.Register<ICheatCommandRuntime>(resolver =>
+            builder.Register<CheatCommandRuntime>(resolver =>
             {
                 ICheatLogger logger = _loggerFactory != null
                     ? _loggerFactory(resolver)
@@ -26,7 +26,8 @@ namespace CycloneGames.Cheat.Runtime.Integrations.VContainer
             }, Lifetime.Singleton)
                 .As<ICheatCommandRuntime>()
                 .As<ICheatCommandPublisher>()
-                .As<ICheatCommandControl>();
+                .As<ICheatCommandControl>()
+                .As<ICheatCommandAdmissionPublisher>();
 
             builder.RegisterDisposeCallback(resolver =>
             {

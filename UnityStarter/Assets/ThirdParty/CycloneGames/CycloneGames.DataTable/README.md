@@ -18,7 +18,7 @@ CycloneGames.DataTable loads typed configuration data — item definitions, game
 
 ## Overview
 
-The module exposes `DataTable<TKey, TRow>` for source-ordered rows, `DataTableCatalog` for grouping multiple typed tables into one snapshot, and `DataTableRegistry` for atomic process-wide publication. Mutable game state, save transactions, network replication, database queries, and schema-specific business rules live in their own systems.
+`DataTable<TKey, TRow>` stores source-ordered rows. `DataTableCatalog` groups typed tables into one snapshot. `DataTableRegistry` provides atomic process-wide publication. Mutable game state, save transactions, network replication, database queries, and schema-specific business rules live in their own systems.
 
 ### Key Features
 
@@ -303,7 +303,7 @@ manifest.ValidateBytes("Prices", payloadCache.GetBytes("Prices"));
 
 `ValidateRequiredTables` checks presence. `ValidateBytes` applies the configured byte limit and the entry's expected length and SHA-256 value. SHA-256 identifies content and detects corruption; content received from an untrusted source also needs an authenticated signature and a product-owned trust policy.
 
-An entry without `Sha256Hex` intentionally skips hash validation. `DataTableHashUtility.Sha256Matches` requires a non-empty expected hash and returns `false` when the expected value is absent.
+An entry without `Sha256Hex` skips hash validation. `DataTableHashUtility.Sha256Matches` requires a non-empty expected hash and returns `false` when the expected value is absent.
 
 ### Resource lifetime
 
@@ -474,7 +474,7 @@ public sealed class ItemService
 }
 ```
 
-This works with direct construction and with any DI composition root; Core has no container dependency. Use `DataTableRegistry` only when the application intentionally provides one process-wide catalog generation.
+This works with direct construction and with any DI composition root; Core has no container dependency. Use `DataTableRegistry` only when the application provides one process-wide catalog generation.
 
 ## Common Scenarios
 
@@ -710,3 +710,9 @@ For each supported build profile:
 - [Luban directory and generation tutorial](../../../../../DataTable/Luban/README.md)
 - [DataTable CodeGen tutorial](./Tools~/CodeGen/README.md)
 - [GameplayTags DataTable integration](../CycloneGames.GameplayTags.DataTable/README.md)
+
+## Bounded Cache Disposal
+
+`DataTableBytesCache.GetMemorySnapshot()` reports the explicitly owned payload count, total bytes, lifecycle flags, configured limits, and cumulative release counters without inspecting payload content. `BeginBoundedDispose()` closes admission, after which `ReleaseClosedPayloadsStep(maxWork)` clears at most `maxWork` closed payloads per call.
+
+Release is lifecycle-only: an open or merely sealed cache is not eligible, and bounded disposal never clears live table data. The owner remains responsible for starting disposal and continuing bounded steps until complete; external schedulers may observe progress but do not acquire cache ownership.

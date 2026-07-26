@@ -11,6 +11,7 @@
 - [快速上手](#快速上手)
 - [核心规则](#核心规则)
 - [协议参考](#协议参考)
+- [验证](#验证)
 - [故障排查](#故障排查)
 
 ## 概述
@@ -54,7 +55,7 @@ flowchart LR
 
 ## 快速上手
 
-### 1. 选择并交换 profile
+### 选择并交换 profile
 
 Profile 不可变，内置 profile 是可缓存的实例：
 
@@ -106,7 +107,7 @@ if (negotiation != AIPerceptionNetworkHandshakeResult.Compatible)
 }
 ```
 
-### 2. 把 detection 映射到可复用 entry buffer
+### 把 detection 映射到可复用 entry buffer
 
 Resolver 连接本地 perception handle 与稳定网络 entity ID：
 
@@ -138,7 +139,7 @@ if (!write.IsComplete)
 
 容量不足时，bridge 保留 canonical 顺序最小的 entries。容量损失总是显式报告。
 
-### 3. 创建、编码并发送 snapshot
+### 创建、编码并发送 snapshot
 
 ```csharp
 AIPerceptionNetworkMessageValidationResult createResult = bridge.TryCreateSnapshot(
@@ -183,7 +184,7 @@ endpoint.SendToClient(
 
 Memory snapshot 使用 `MSG_MEMORY_SNAPSHOT` 和 `profile.MemorySnapshotChannel`。Empty snapshot（零 entry）表示权威空集合。
 
-### 4. 安全接收 snapshot
+### 安全接收 snapshot
 
 在应用状态前先 decode 到可复用 destination：
 
@@ -259,7 +260,7 @@ state.Apply(snapshot, decodedEntries.Slice(0, decodedCount));
 
 ### Canonical ordering 与有界选择
 
-`WriteDetectionEntries` 扫描 detection 时维护有序、有界 destination。对于 N 个 detection 和容量 K（协议限 125），算法最坏需要 `O(N log K + N * K)` 工作，不使用内部 heap storage。输入重排后选择结果确定。
+`WriteDetectionEntries` 扫描 detection 时维护有序、有界 destination。单次调用最多接收 4,096 个 detection。更大输入会 fail closed 为 `Partial`，把所有输入计入 `CapacityLimitedCount`，不调用 resolver，也不写 entry。对已准入的 N 个 detection 和容量 K（协议限 125），算法最坏需要 `O(N log K + N * K)` 工作，不使用内部 heap storage；输入重排后选择结果确定。可能超过工作上限的调用方必须按 Gameplay priority 预过滤，或依据显式协议策略拆分；bridge 不会静默替产品选择 batch。
 
 ### Interest filtering
 
@@ -287,8 +288,18 @@ FNV state hash 只是同步 checksum，不是认证码。传输认证和密码�
 - Core codec path 使用 `Span<T>`/`ReadOnlySpan<T>`，零内部分配。
 - 内置 profile 属性返回缓存的不可变实例。
 - 所有 buffer、list 和 session state 都有显式外部 owner。
-- 不创建 lock、worker thread、queue 或全局 cache。
+- Bridge 不保留 entry、snapshot、payload、queue 或 history；只持有不可变 profile reference 与 lock-free scalar operation counter。
+- 不创建 worker thread 或全局 cache。
 - Span 和 `NetworkMessagePayload.Bytes` 不得超出约定调用生命周期保存。
+
+`AIPerceptionNetworkSyncBridge.GetMemoryStats()` 报告 profile limit、supplied/scanned/written entry、全部 loss category、accepted/rejected snapshot，以及最近和峰值 snapshot entry/payload。调用方可以通过自己的 diagnostics adapter 发布这些 counter。Bridge 不安装 pressure responder、不虚构 confirmation history，也不会重复统计 Networking 或 AIPerception 持有的 bytes。
+
+## 验证
+
+- 在 Unity Test Runner EditMode 运行 `AIPerceptionNetworkingIntegrationTests`，覆盖 oversized input、canonical selection、allocation、codec、authority 与 replay。
+- 运行 companion contract tests，确认每个输出指标都匹配对应 cold descriptor。
+- 在代表性 Player build 中验证 wire payload ceiling 与 warmed path 零分配。
+- 执行 transport-specific loss、reordering、authentication、reconnect 与 host-migration 测试；缺少产品 transport 时，本包不能证明这些属性。
 
 ## 故障排查
 
@@ -297,7 +308,7 @@ FNV state hash 只是同步 checksum，不是认证码。传输认证和密码�
 | Handshake 被拒绝 | Profile hash、feature flags 和 supported/required feature 匹配 |
 | Snapshot decode 失败 | Payload length、entry count、canonical order、enum 范围和 float 有限性 |
 | Authority violation 日志 | 认证状态、server-to-client 方向、authority generation 和 replay state |
-| Entry 被静默截断 | `WriteDetectionEntries` loss count：unresolved、invalid、capacity-limited、duplicates |
+| Entry 受到限制 | 检查 `WriteDetectionEntries` loss count 与 4,096 输入工作上限：unresolved、invalid、capacity-limited、duplicates |
 | Interest filtering 无 observer | Observer/candidate entity mapping、interest evaluator 配置 |
 | 热路径有分配 | 验证 span 和可复用 buffer；在目标 Player backend profile |
 | Profile 更改无效 | Profile 不可变 — 通过 handshake 创建并交换新 profile |

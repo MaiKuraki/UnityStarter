@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.Settings 提供经过校验的内存设置状态，支持显式克隆边界、提交后变更通知以及确定性前向迁移。它是纯 C# 核心，不依赖 `UnityEngine`。本包负责权威值、schema 与迁移路径；持久化交给可选的 `CycloneGames.Settings.Persistence` 适配模块。
+CycloneGames.Settings 管理经验证的内存设置状态，支持显式克隆边界、提交后变更通知与确定性前向迁移。纯 C# 核心，不依赖 `UnityEngine`。调用方提供 schema、迁移步骤与可选的持久化适配模块。
 
 ## 目录
 
@@ -38,8 +38,6 @@ CycloneGames.Settings 提供经过校验的内存设置状态，支持显式克�
 | --- | --- | --- |
 | `CycloneGames.Settings.Core` | `Core/` | 状态所有权、schema 契约、迁移管线、result type。`autoReferenced: false`，`noEngineReferences: true`。 |
 | `CycloneGames.Settings.Tests.Core` | `Tests/Core/` | EditMode 测试：状态隔离、迁移排序和失败路径。 |
-
-本模块不拥有文件、路径、序列化器或平台适配器。加载和保存通过 `CycloneGames.Persistence.Core` 中的 `PersistenceStore<T>` 契约进行。
 
 ```mermaid
 flowchart LR
@@ -313,3 +311,9 @@ Settings 变更属于冷路径。
 ```
 
 测试覆盖：无效默认值、class 与 struct 克隆隔离、callback/clone/validation 回滚、提交后 observer warning 与后续执行、reset、带 revision 检查的 loaded commit、过期候选值拒绝、重入拒绝、migration 排序、支持窗口、step 失败和最终 validation。
+
+## 产品拥有的内存限制
+
+Settings Core 不会猜测任意 model 的 retained size。需要内存限制的产品必须通过权威 `ISettingsSchema<T>` 实施 model-specific byte 与 logical-item bound，并在提交 candidate 前完成校验。
+
+companion metric source 只在 cold sampling path 调用 public `SettingsState<T>.Snapshot()`，测量隔离后的值且不保留它。由于 service 无法安全 trim 权威 settings value，因此不安装压力 responder。limit 与 measurement 语义由产品 model-specific measurer 负责。

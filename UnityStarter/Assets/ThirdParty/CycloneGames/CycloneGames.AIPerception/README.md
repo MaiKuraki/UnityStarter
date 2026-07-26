@@ -14,6 +14,7 @@ CycloneGames.AIPerception is a Unity runtime module for continuous world percept
 - [Advanced Topics](#advanced-topics)
 - [Common Scenarios](#common-scenarios)
 - [Performance and Memory](#performance-and-memory)
+- [Validation](#validation)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -78,13 +79,13 @@ Jobs borrow the registry snapshot and sensor-owned buffers. The manager complete
 
 ## Quick Start
 
-### 1. Add a manager
+### Add a manager
 
 Create a scene object and add `PerceptionManagerComponent`. An instance is created automatically when an `AIPerceptionComponent` initializes, but an explicit manager makes world capacity, spatial cell size, scheduling, and LOD visible.
 
 Keep `Deferred Job Completion` enabled unless gameplay needs results in the same `Update`. Start with a finite `Maximum Perceptibles`. Tune `Spatial Cell Size` from profiling data.
 
-### 2. Mark targets
+### Mark targets
 
 Add `PerceptibleComponent` to each detectable object:
 
@@ -106,11 +107,11 @@ target.SetLoudness(0.8f);
 
 `PerceptibleComponent` registers automatically in `OnEnable`. If finite world capacity rejected that attempt, release capacity and call `TryRegister()` once from a cold-path recovery workflow. Do not retry every frame.
 
-### 3. Add senses to an agent
+### Add senses to an agent
 
 Add `AIPerceptionComponent` to the AI object. Enable the required senses and configure them in the Inspector. When the same GameObject has `PerceptibleComponent`, its handle is excluded from all built-in sensor queries.
 
-### 4. Consume results
+### Consume results
 
 ```csharp
 using CycloneGames.AIPerception.Runtime;
@@ -379,8 +380,11 @@ if (sight != null)
 `PerceptionManagerComponent.Maximum Perceptibles` configures the registry hard limit:
 
 - a positive value rejects registrations after exhaustion;
-- `0` permits safe-point array growth without a module-level hard limit;
+- the default is 16,384 and the package hard ceiling is 1,048,576;
+- legacy `0` now maps to the package hard ceiling instead of unbounded growth;
 - a limit cannot be lowered below the active count.
+
+`SensorManager` defaults to 4,096 sensors and cannot exceed the package hard ceiling of 65,536. Use `TryRegister` when the caller must react to admission failure. The legacy `Register` method remains source-compatible and becomes a no-op when capacity is exhausted; the manager emits one error for the first legacy capacity rejection during its lifetime, while direct `TryRegister` calls remain silent and expose the result through their return value. Null input, duplicate registration, and other non-capacity outcomes do not emit that diagnostic. Contract misuse such as duplicate IDs or a wrong built-in owner still throws. `AIPerceptionComponent` disposes a newly constructed built-in sensor when admission fails and does not retry every frame; recover through an explicit cold-path rebuild or lifecycle re-enable after capacity is available. A registry can attach at most 1,024 sensor managers, and an LOD table can contain at most 64 levels.
 
 ### Per-sensor capacity
 
@@ -395,6 +399,8 @@ Each sensor config embeds `PerceptionSensorCapacity`:
 | `InitialMemoryCapacity` | 32 | Initial persistent memory storage |
 | `MaximumMemoryEntries` | 1024 | Hard remembered-target count |
 
+Serialized or runtime values above the absolute package ceilings are normalized to 1,048,576 candidates, 65,536 results, and 65,536 memory entries. Initial capacities are clamped to their effective maximum. These ceilings bound retained Native storage even when legacy data contains `int.MaxValue`.
+
 Capacity failure is explicit:
 
 - `CandidateCapacityExceeded`: rejects and clears the current live candidate query;
@@ -403,6 +409,8 @@ Capacity failure is explicit:
 - `OcclusionBudgetExceeded`: partial hearing refinement.
 
 Record these states in development telemetry. Do not treat them as silent normal truncation.
+
+`PerceptibleRegistry.GetMemoryStats()` and `SensorManager.GetMemoryStats()` return allocation-free owner-local snapshots. They cover current capacity, peaks, admission rejection, spatial cells, built-in Native buffers, update workload, result rejection, and stimulus-memory eviction. Custom `ISensor` implementations are counted separately because their storage contract remains owned by the implementation. These values are exposed for caller-owned diagnostics; the module installs no process-global telemetry or pressure callback and never deletes active perception state.
 
 ### LOD frequency
 
@@ -615,6 +623,9 @@ Runtime characteristics:
 - managed/native arrays, candidate lists, result lists, memory lists, and lookup storage are reused after reaching required capacity;
 - registration growth, first use, capacity growth, configuration rebuild, and spatial dictionary growth are allocation points;
 - snapshot capture is O(N) even when captured values do not change;
+- aggregate workload tracking is folded into the existing sensor scheduling traversal and counts only sensors actually updated in that manager frame; interval-, LOD-, or disabled-sensor skips cannot reuse stale per-sensor workload;
+- full per-sensor storage aggregation runs only when `SensorManager.GetMemoryStats()` is explicitly called;
+- `SensorManager.GetMemoryStats()` reads the cached last-frame and peak manager workload without mutating either value;
 - query bounds include maximum relevant target radius or loudness before per-target final tests;
 - a query spanning more than the grid cell-visit safety threshold falls back to a linear snapshot scan;
 - sight and hearing Physics refinement remains on the main thread;
@@ -654,6 +665,13 @@ During Play Mode, use `Tools > CycloneGames > AI Perception > Show All Runtime G
 | WebGL | Backend/package compatibility, actual Job execution model, memory ceiling, latency, and deferred behavior |
 | Dedicated Server | Headless lifecycle, 3D Physics, authority-owned LOD, and no camera assumptions |
 | Consoles | Licensed SDK build, Burst/Jobs support, memory limits, suspend/resume, and certification constraints |
+
+## Validation
+
+- Run `AIPerceptionCoreTests` in Unity Test Runner EditMode, including the hard-ceiling, `TryRegister`, warmed manager-update allocation, and Native-storage diagnostic contracts.
+- Verify both immediate and deferred completion with domain reload enabled and disabled.
+- Build at least one target Player with Burst; run an IL2CPP build for every shipping AOT platform.
+- Profile a representative dense scene and confirm configured peaks, rejection counters, and update workload stay within the product budget.
 
 ## Troubleshooting
 

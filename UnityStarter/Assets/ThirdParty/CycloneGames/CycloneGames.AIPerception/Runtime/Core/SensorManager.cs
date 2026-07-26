@@ -32,6 +32,10 @@ namespace CycloneGames.AIPerception.Runtime
     {
         private const int InitialCapacity = 64;
 
+        public const int DefaultMaximumSensorCount = 4_096;
+        public const int HardMaximumSensorCount = 65_536;
+        public const int HardMaximumLODLevelCount = 64;
+
         private static SensorManager _instance;
         private static bool _isQuitting;
 
@@ -39,10 +43,16 @@ namespace CycloneGames.AIPerception.Runtime
         private readonly PerceptibleRegistry _registry;
         private readonly List<ISensor> _sensors;
         private readonly Dictionary<int, ISensor> _sensorLookup;
+        private readonly int _maximumSensorCount;
         private JobHandle _batchedJobHandle;
         private Transform _lodReference;
         private SensorLODLevel[] _lodLevels;
         private int _nextSensorId;
+        private int _peakSensorCount;
+        private int _lastUpdateWorkload;
+        private int _peakUpdateWorkload;
+        private long _rejectedSensorRegistrationCount;
+        private bool _legacyRegistrationCapacityReported;
         private bool _hasScheduledJobs;
         private bool _lodEnabled;
         private bool _useDeferredJobCompletion;
@@ -66,16 +76,28 @@ namespace CycloneGames.AIPerception.Runtime
         internal static SensorManager ExistingInstance => HasInstance ? _instance : null;
 
         public SensorManager()
-            : this(PerceptibleRegistry.Instance)
+            : this(PerceptibleRegistry.Instance, DefaultMaximumSensorCount)
         {
         }
 
         public SensorManager(PerceptibleRegistry registry)
+            : this(registry, DefaultMaximumSensorCount)
+        {
+        }
+
+        public SensorManager(PerceptibleRegistry registry, int maximumSensorCount)
         {
             _registry = registry ?? throw new ArgumentNullException(nameof(registry));
+            if (maximumSensorCount <= 0 || maximumSensorCount > HardMaximumSensorCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumSensorCount));
+            }
+
             _ownerThreadId = Environment.CurrentManagedThreadId;
-            _sensors = new List<ISensor>(InitialCapacity);
-            _sensorLookup = new Dictionary<int, ISensor>(InitialCapacity);
+            _maximumSensorCount = maximumSensorCount;
+            int initialCapacity = Math.Min(InitialCapacity, maximumSensorCount);
+            _sensors = new List<ISensor>(initialCapacity);
+            _sensorLookup = new Dictionary<int, ISensor>(initialCapacity);
             _registry.AttachSensorManager(this);
         }
 
@@ -108,6 +130,7 @@ namespace CycloneGames.AIPerception.Runtime
             }
         }
         public bool IsDisposed { get; private set; }
+        public int MaximumSensorCount => _maximumSensorCount;
         internal PerceptibleRegistry Registry => _registry;
 
         public bool ConfigureLOD(Transform reference, SensorLODLevel[] levels)
@@ -120,6 +143,11 @@ namespace CycloneGames.AIPerception.Runtime
                 _lodLevels = null;
                 _lodEnabled = false;
                 return true;
+            }
+
+            if (levels.Length > HardMaximumLODLevelCount)
+            {
+                return false;
             }
 
             float previousDistance = -1f;
@@ -179,18 +207,38 @@ namespace CycloneGames.AIPerception.Runtime
 
         public void Register(ISensor sensor)
         {
+            long rejectedBefore = _rejectedSensorRegistrationCount;
+            if (TryRegister(sensor) ||
+                _legacyRegistrationCapacityReported ||
+                _rejectedSensorRegistrationCount <= rejectedBefore)
+            {
+                return;
+            }
+
+            _legacyRegistrationCapacityReported = true;
+            Debug.LogError(
+                $"[AIPerception] SensorManager capacity exhausted ({_maximumSensorCount}). " +
+                "Legacy Register was ignored; use TryRegister to handle admission failure.");
+        }
+
+        /// <summary>
+        /// Registers a sensor without exceeding the configured owner capacity. Contract misuse
+        /// still throws; capacity exhaustion is reported as false.
+        /// </summary>
+        public bool TryRegister(ISensor sensor)
+        {
             EnsureOwnerThread();
             EnsureNotIteratingSensors();
             if (sensor == null || IsDisposed)
             {
-                return;
+                return false;
             }
 
             if (_sensorLookup.TryGetValue(sensor.SensorId, out ISensor existing))
             {
                 if (ReferenceEquals(sensor, existing))
                 {
-                    return;
+                    return true;
                 }
 
                 throw new InvalidOperationException($"Sensor ID {sensor.SensorId} is already registered.");
@@ -206,8 +254,16 @@ namespace CycloneGames.AIPerception.Runtime
                 throw new ObjectDisposedException(sensor.GetType().Name);
             }
 
+            if (_sensors.Count >= _maximumSensorCount)
+            {
+                _rejectedSensorRegistrationCount = SaturatingIncrement(_rejectedSensorRegistrationCount);
+                return false;
+            }
+
             _sensors.Add(sensor);
             _sensorLookup.Add(sensor.SensorId, sensor);
+            _peakSensorCount = Math.Max(_peakSensorCount, _sensors.Count);
+            return true;
         }
 
         public void Unregister(ISensor sensor)
@@ -254,6 +310,7 @@ namespace CycloneGames.AIPerception.Runtime
 
             CompleteAndProcessPendingJobs();
             _registry.RebuildDataForSensorManager(this);
+            _lastUpdateWorkload = 0;
             int count = _sensors.Count;
             if (count == 0)
             {
@@ -261,31 +318,136 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             double currentTime = Time.timeAsDouble;
+            int updateWorkload = 0;
             _isIteratingSensors = true;
             try
             {
                 for (int index = 0; index < count; index++)
                 {
                     ISensor sensor = _sensors[index];
-                    if (sensor == null || !sensor.IsEnabled)
+                    if (sensor == null)
                     {
                         continue;
                     }
 
-                    float frequencyMultiplier = GetLODFrequencyMultiplier(sensor.Position);
-                    double effectiveInterval = sensor.UpdateInterval <= 0f
-                        ? 0d
-                        : sensor.UpdateInterval / frequencyMultiplier;
-                    if (currentTime - sensor.LastUpdateTime >= effectiveInterval)
+                    if (sensor.IsEnabled)
                     {
-                        sensor.UpdateSensor(deltaTime);
+                        float frequencyMultiplier = GetLODFrequencyMultiplier(sensor.Position);
+                        double effectiveInterval = sensor.UpdateInterval <= 0f
+                            ? 0d
+                            : sensor.UpdateInterval / frequencyMultiplier;
+                        if (currentTime - sensor.LastUpdateTime >= effectiveInterval)
+                        {
+                            sensor.UpdateSensor(deltaTime);
+                            if (sensor is IAIPerceptionSensorMemoryOwner memoryOwner)
+                            {
+                                updateWorkload = SaturatingAdd(updateWorkload, memoryOwner.LastUpdateWorkload);
+                            }
+                        }
                     }
                 }
             }
             finally
             {
                 _isIteratingSensors = false;
+                _lastUpdateWorkload = updateWorkload;
+                _peakUpdateWorkload = Math.Max(_peakUpdateWorkload, updateWorkload);
             }
+        }
+
+        /// <summary>Returns an allocation-free aggregate of manager- and sensor-owned storage.</summary>
+        public AIPerceptionMemoryStats GetMemoryStats()
+        {
+            EnsureOwnerThread();
+            if (IsDisposed)
+            {
+                throw new ObjectDisposedException(nameof(SensorManager));
+            }
+
+            int builtInSensorCount = 0;
+            int customSensorCount = 0;
+            int candidateCount = 0;
+            int candidateCapacity = 0;
+            int maximumCandidateCount = 0;
+            int peakCandidateCount = 0;
+            int resultCount = 0;
+            int resultCapacity = 0;
+            int maximumResultCount = 0;
+            int peakResultCount = 0;
+            int memoryCount = 0;
+            int memoryCapacity = 0;
+            int maximumMemoryCount = 0;
+            int peakMemoryCount = 0;
+            int nativeBufferCount = 0;
+            int nativeBufferCapacity = 0;
+            long sensorUpdateCount = 0L;
+            long candidateCapacityRejectedCount = 0L;
+            long resultCapacityRejectedCount = 0L;
+            long memoryEvictionCount = 0L;
+
+            for (int i = 0; i < _sensors.Count; i++)
+            {
+                if (!(_sensors[i] is IAIPerceptionSensorMemoryOwner owner))
+                {
+                    customSensorCount++;
+                    continue;
+                }
+
+                builtInSensorCount++;
+                AIPerceptionSensorMemoryStats sensor = owner.GetMemoryStats();
+                candidateCount = SaturatingAdd(candidateCount, sensor.CandidateCount);
+                candidateCapacity = SaturatingAdd(candidateCapacity, sensor.CandidateCapacity);
+                maximumCandidateCount = SaturatingAdd(maximumCandidateCount, sensor.MaximumCandidateCount);
+                peakCandidateCount = SaturatingAdd(peakCandidateCount, sensor.PeakCandidateCount);
+                resultCount = SaturatingAdd(resultCount, sensor.ResultCount);
+                resultCapacity = SaturatingAdd(resultCapacity, sensor.ResultCapacity);
+                maximumResultCount = SaturatingAdd(maximumResultCount, sensor.MaximumResultCount);
+                peakResultCount = SaturatingAdd(peakResultCount, sensor.PeakResultCount);
+                memoryCount = SaturatingAdd(memoryCount, sensor.MemoryCount);
+                memoryCapacity = SaturatingAdd(memoryCapacity, sensor.MemoryCapacity);
+                maximumMemoryCount = SaturatingAdd(maximumMemoryCount, sensor.MaximumMemoryCount);
+                peakMemoryCount = SaturatingAdd(peakMemoryCount, sensor.PeakMemoryCount);
+                nativeBufferCount = SaturatingAdd(nativeBufferCount, sensor.NativeBufferCount);
+                nativeBufferCapacity = SaturatingAdd(nativeBufferCapacity, sensor.NativeBufferCapacity);
+                sensorUpdateCount = SaturatingAdd(sensorUpdateCount, sensor.UpdateCount);
+                candidateCapacityRejectedCount = SaturatingAdd(
+                    candidateCapacityRejectedCount,
+                    sensor.CandidateCapacityRejectedCount);
+                resultCapacityRejectedCount = SaturatingAdd(
+                    resultCapacityRejectedCount,
+                    sensor.ResultCapacityRejectedCount);
+                memoryEvictionCount = SaturatingAdd(memoryEvictionCount, sensor.MemoryEvictionCount);
+            }
+
+            return new AIPerceptionMemoryStats(
+                _registry.GetMemoryStats(),
+                _sensors.Count,
+                _maximumSensorCount,
+                _peakSensorCount,
+                _rejectedSensorRegistrationCount,
+                _lodLevels?.Length ?? 0,
+                builtInSensorCount,
+                customSensorCount,
+                candidateCount,
+                candidateCapacity,
+                maximumCandidateCount,
+                peakCandidateCount,
+                resultCount,
+                resultCapacity,
+                maximumResultCount,
+                peakResultCount,
+                memoryCount,
+                memoryCapacity,
+                maximumMemoryCount,
+                peakMemoryCount,
+                nativeBufferCount,
+                nativeBufferCapacity,
+                sensorUpdateCount,
+                _lastUpdateWorkload,
+                _peakUpdateWorkload,
+                candidateCapacityRejectedCount,
+                resultCapacityRejectedCount,
+                memoryEvictionCount);
         }
 
         public void LateUpdate()
@@ -379,6 +541,21 @@ namespace CycloneGames.AIPerception.Runtime
                 _isProcessingResults = false;
                 _isIteratingSensors = false;
             }
+        }
+
+        private static int SaturatingAdd(int left, int right)
+        {
+            return right > 0 && left > int.MaxValue - right ? int.MaxValue : left + right;
+        }
+
+        private static long SaturatingAdd(long left, long right)
+        {
+            return right > 0L && left > long.MaxValue - right ? long.MaxValue : left + right;
+        }
+
+        private static long SaturatingIncrement(long value)
+        {
+            return value == long.MaxValue ? long.MaxValue : value + 1L;
         }
 
         private float GetLODFrequencyMultiplier(float3 sensorPosition)

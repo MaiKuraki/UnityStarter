@@ -6,9 +6,11 @@ namespace CycloneGames.Choreography.Tests
     /// <summary>
     /// Minimal in-memory <see cref="IChoreographyAsset"/> for engine-free Core tests (no ScriptableObject needed).
     /// </summary>
-    internal sealed class TestChoreographyAsset : IChoreographyAsset
+    internal sealed class TestChoreographyAsset : IChoreographyAsset, IBoundedChoreographyResourceCollector
     {
         private readonly List<ChoreographySection> _sections;
+        private readonly HashSet<ChoreographyResourceReference> _dedupeScratch =
+            new HashSet<ChoreographyResourceReference>();
 
         public TestChoreographyAsset(string id, params ChoreographySection[] sections)
         {
@@ -30,24 +32,105 @@ namespace CycloneGames.Choreography.Tests
 
         public int CollectResourceReferences(List<ChoreographyResourceReference> results)
         {
-            int added = 0;
+            if (results == null)
+            {
+                return 0;
+            }
+
+            TryCollectResourceReferences(
+                results,
+                int.MaxValue,
+                int.MaxValue,
+                out int addedCount,
+                out _);
+            return addedCount;
+        }
+
+        public bool TryCollectResourceReferences(
+            List<ChoreographyResourceReference> results,
+            int maximumResultCount,
+            int maximumNodeScanCount,
+            out int addedCount,
+            out int scannedNodeCount)
+        {
+            addedCount = 0;
+            scannedNodeCount = 0;
+            if (results == null || maximumResultCount < 0 || maximumNodeScanCount < 0
+                || results.Count > maximumResultCount)
+            {
+                return false;
+            }
+
+            _dedupeScratch.Clear();
+            for (int i = 0; i < results.Count; i++)
+            {
+                _dedupeScratch.Add(results[i]);
+            }
+
             for (int s = 0; s < _sections.Count; s++)
             {
-                ChoreographyTrack[] tracks = _sections[s].Tracks;
+                if (!TryConsumeNodeBudget(maximumNodeScanCount, ref scannedNodeCount))
+                {
+                    return false;
+                }
+
+                ChoreographySection section = _sections[s];
+                if (section == null)
+                {
+                    continue;
+                }
+
+                ChoreographyTrack[] tracks = section.Tracks;
                 for (int t = 0; t < tracks.Length; t++)
                 {
-                    ChoreographyClip[] clips = tracks[t].Clips;
+                    if (!TryConsumeNodeBudget(maximumNodeScanCount, ref scannedNodeCount))
+                    {
+                        return false;
+                    }
+
+                    ChoreographyTrack track = tracks[t];
+                    if (track == null)
+                    {
+                        continue;
+                    }
+
+                    ChoreographyClip[] clips = track.Clips;
                     for (int c = 0; c < clips.Length; c++)
                     {
-                        if (clips[c].Resource.IsValid)
+                        if (!TryConsumeNodeBudget(maximumNodeScanCount, ref scannedNodeCount))
                         {
-                            results.Add(clips[c].Resource);
-                            added++;
+                            return false;
                         }
+
+                        ChoreographyClip clip = clips[c];
+                        if (clip == null || !clip.Resource.IsValid || !_dedupeScratch.Add(clip.Resource))
+                        {
+                            continue;
+                        }
+
+                        if (results.Count >= maximumResultCount)
+                        {
+                            return false;
+                        }
+
+                        results.Add(clip.Resource);
+                        addedCount++;
                     }
                 }
             }
-            return added;
+
+            return true;
+        }
+
+        private static bool TryConsumeNodeBudget(int maximumNodeScanCount, ref int scannedNodeCount)
+        {
+            if (scannedNodeCount >= maximumNodeScanCount)
+            {
+                return false;
+            }
+
+            scannedNodeCount++;
+            return true;
         }
     }
 

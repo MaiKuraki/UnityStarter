@@ -17,6 +17,7 @@ namespace CycloneGames.Choreography.Core
     public sealed class ChoreographyScheduler : IChoreographyPlaybackSink
     {
         public const int InvalidInstanceId = 0;
+        public const int AbsoluteMaximumBufferedSampleCount = 1_048_576;
 
         private sealed class Instance
         {
@@ -69,6 +70,7 @@ namespace CycloneGames.Choreography.Core
 
         private readonly IChoreographyProviderSet _providers;
         private readonly IChoreographyDiagnostics _diagnostics;
+        private readonly ChoreographySchedulerOptions _options;
         private readonly IPlaybackStrategy[] _strategies = new IPlaybackStrategy[5];
 
         private readonly List<Instance> _instances = new List<Instance>(16);
@@ -81,6 +83,14 @@ namespace CycloneGames.Choreography.Core
         private Instance _currentTickInstance;
         private ProviderDispatch.ThrottleState _dispatchThrottle;
         private int _nextId = 1;
+        private int _peakActiveCount;
+        private int _peakQueuedCount;
+        private int _peakSampleCount;
+        private long _rejectedActiveCount;
+        private long _rejectedQueuedCount;
+        private long _strategyRejectedCount;
+        private long _trimmedPoolItemCount;
+        private long _droppedSampleCount;
 
         /// <summary>Raised for every timeline event crossed by any instance during <see cref="Tick"/>.</summary>
         public event Action<ChoreographyEventInvocation> EventRaised;
@@ -92,9 +102,18 @@ namespace CycloneGames.Choreography.Core
         public event Action<int> InstanceEnded;
 
         public ChoreographyScheduler(IChoreographyProviderSet providers, IChoreographyDiagnostics diagnostics = null)
+            : this(providers, ChoreographySchedulerOptions.Default, diagnostics)
+        {
+        }
+
+        public ChoreographyScheduler(
+            IChoreographyProviderSet providers,
+            ChoreographySchedulerOptions options,
+            IChoreographyDiagnostics diagnostics = null)
         {
             _providers = providers ?? throw new ArgumentNullException(nameof(providers));
             _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _options = options.MaximumActiveCount == 0 ? ChoreographySchedulerOptions.Default : options;
 
             RegisterStrategy(PriorityPlaybackStrategy.Instance);
             RegisterStrategy(BlendPlaybackStrategy.Instance);
@@ -106,6 +125,52 @@ namespace CycloneGames.Choreography.Core
         public int ActiveCount => _instances.Count;
 
         public int QueuedCount => _queue.Count;
+
+        public ChoreographySchedulerMemoryStats GetMemoryStats()
+        {
+            return new ChoreographySchedulerMemoryStats(
+                _instances.Count,
+                _options.MaximumActiveCount,
+                _peakActiveCount,
+                _queue.Count,
+                _options.MaximumQueuedCount,
+                _peakQueuedCount,
+                _instancePool.Count,
+                _playerPool.Count,
+                _options.MaximumRetainedPoolCount,
+                _sampleBuffer.Length,
+                AbsoluteMaximumBufferedSampleCount,
+                _peakSampleCount,
+                _rejectedActiveCount,
+                _rejectedQueuedCount,
+                _strategyRejectedCount,
+                _trimmedPoolItemCount,
+                _droppedSampleCount);
+        }
+
+        /// <summary>Releases only scheduler-owned idle pool entries. Active and queued work is never changed.</summary>
+        public int TrimIdlePools(int maximumItems)
+        {
+            if (maximumItems <= 0)
+            {
+                return 0;
+            }
+
+            int removed = 0;
+            while (removed < maximumItems && _playerPool.Count > 0)
+            {
+                _playerPool.Pop();
+                removed++;
+            }
+            while (removed < maximumItems && _instancePool.Count > 0)
+            {
+                _instancePool.Pop();
+                removed++;
+            }
+
+            _trimmedPoolItemCount += removed;
+            return removed;
+        }
 
         /// <summary>Registers (or replaces) the strategy handling its <see cref="IPlaybackStrategy.Mode"/>.</summary>
         public void RegisterStrategy(IPlaybackStrategy strategy)
@@ -152,15 +217,31 @@ namespace CycloneGames.Choreography.Core
             switch (admission)
             {
                 case ChoreographyAdmission.Admit:
+                    if (_instances.Count >= _options.MaximumActiveCount)
+                    {
+                        _rejectedActiveCount++;
+                        return InvalidInstanceId;
+                    }
                     StartInstance(id, asset, request.Channel, request.Priority, request.Mode, request.Speed, request.Loop, request.ClockDriver);
                     return id;
 
                 case ChoreographyAdmission.Replace:
                     StopChannelInternal(request.Channel, false);
+                    RemovePending();
+                    if (_instances.Count >= _options.MaximumActiveCount)
+                    {
+                        _rejectedActiveCount++;
+                        return InvalidInstanceId;
+                    }
                     StartInstance(id, asset, request.Channel, request.Priority, request.Mode, request.Speed, request.Loop, request.ClockDriver);
                     return id;
 
                 case ChoreographyAdmission.Queue:
+                    if (_queue.Count >= _options.MaximumQueuedCount)
+                    {
+                        _rejectedQueuedCount++;
+                        return InvalidInstanceId;
+                    }
                     _queue.Add(new QueuedRequest
                     {
                         Id = id,
@@ -172,9 +253,14 @@ namespace CycloneGames.Choreography.Core
                         Loop = request.Loop,
                         ClockDriver = request.ClockDriver
                     });
+                    if (_queue.Count > _peakQueuedCount)
+                    {
+                        _peakQueuedCount = _queue.Count;
+                    }
                     return id;
 
                 default:
+                    _strategyRejectedCount++;
                     if (_diagnostics.IsEnabled(ChoreographyLogLevel.Info))
                     {
                         _diagnostics.Log(ChoreographyLogLevel.Info, "Choreography",
@@ -381,6 +467,10 @@ namespace CycloneGames.Choreography.Core
             instance.ClockDriver.Reset(player.ClockState);
             player.Play();
             _instances.Add(instance);
+            if (_instances.Count > _peakActiveCount)
+            {
+                _peakActiveCount = _instances.Count;
+            }
         }
 
         private void StopChannelInternal(int channel, bool completed)
@@ -410,9 +500,15 @@ namespace CycloneGames.Choreography.Core
 
                 int id = instance.Id;
                 _instances.RemoveAt(i);
-                _playerPool.Push(instance.Player);
+                if (_playerPool.Count < _options.MaximumRetainedPoolCount)
+                {
+                    _playerPool.Push(instance.Player);
+                }
                 instance.Player = null;
-                _instancePool.Push(instance);
+                if (_instancePool.Count < _options.MaximumRetainedPoolCount)
+                {
+                    _instancePool.Push(instance);
+                }
                 InstanceEnded?.Invoke(id);
             }
         }
@@ -442,8 +538,10 @@ namespace CycloneGames.Choreography.Core
                     continue;
                 }
 
-                _queue.RemoveAt(i);
-                i--;
+                if (admission != ChoreographyAdmission.Replace && _instances.Count >= _options.MaximumActiveCount)
+                {
+                    continue;
+                }
 
                 if (admission == ChoreographyAdmission.Replace)
                 {
@@ -451,6 +549,13 @@ namespace CycloneGames.Choreography.Core
                     RemovePending();
                 }
 
+                if (_instances.Count >= _options.MaximumActiveCount)
+                {
+                    continue;
+                }
+
+                _queue.RemoveAt(i);
+                i--;
                 StartInstance(queued.Id, queued.Asset, queued.Channel, queued.Priority, queued.Mode, queued.Speed, queued.Loop, queued.ClockDriver);
             }
         }
@@ -507,12 +612,25 @@ namespace CycloneGames.Choreography.Core
             return PriorityPlaybackStrategy.Instance;
         }
 
-        private void EnsureSampleCapacity()
+        private bool EnsureSampleCapacity()
         {
-            if (_sampleCount >= _sampleBuffer.Length)
+            if (_sampleCount < _sampleBuffer.Length)
             {
-                Array.Resize(ref _sampleBuffer, _sampleBuffer.Length << 1);
+                return true;
             }
+
+            if (_sampleBuffer.Length >= AbsoluteMaximumBufferedSampleCount)
+            {
+                return false;
+            }
+
+            int next = _sampleBuffer.Length << 1;
+            if (next > AbsoluteMaximumBufferedSampleCount)
+            {
+                next = AbsoluteMaximumBufferedSampleCount;
+            }
+            Array.Resize(ref _sampleBuffer, next);
+            return true;
         }
 
         // --- IChoreographyPlaybackSink (explicitly implemented; players call these while ticking) ---
@@ -541,7 +659,11 @@ namespace CycloneGames.Choreography.Core
 
         private void BufferSample(in ChoreographyPlaybackSample sample, bool isStart)
         {
-            EnsureSampleCapacity();
+            if (!EnsureSampleCapacity())
+            {
+                _droppedSampleCount++;
+                return;
+            }
             _sampleBuffer[_sampleCount].Sample = sample;
             _sampleBuffer[_sampleCount].Priority = _currentTickInstance != null ? _currentTickInstance.Priority : 0;
             _sampleBuffer[_sampleCount].Mode = _currentTickInstance != null
@@ -549,6 +671,10 @@ namespace CycloneGames.Choreography.Core
                 : ChoreographyPlaybackMode.Priority;
             _sampleBuffer[_sampleCount].IsStart = isStart;
             _sampleCount++;
+            if (_sampleCount > _peakSampleCount)
+            {
+                _peakSampleCount = _sampleCount;
+            }
         }
     }
 }

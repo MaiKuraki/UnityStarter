@@ -40,6 +40,8 @@ namespace CycloneGames.Localization.Runtime
 
         public int Count => entries.Count;
 
+        internal IReadOnlyList<AssetEntry> AuthoringEntries => entries;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue(string key, out AssetRef value)
         {
@@ -61,6 +63,24 @@ namespace CycloneGames.Localization.Runtime
         {
             if (_compiled != null) return _compiled;
 
+            _compiled = CompileCore();
+            return _compiled;
+        }
+
+        internal CompiledAssetTable CompileForRegistration()
+        {
+            return _compiled ?? CompileCore();
+        }
+
+        internal void RetainCompiled(CompiledAssetTable compiled)
+        {
+            if (_compiled == null)
+                _compiled = compiled;
+        }
+
+        private CompiledAssetTable CompileCore()
+        {
+
             if (string.IsNullOrEmpty(tableId))
                 throw new InvalidOperationException("Asset table ID is required.");
             if (!LocaleId.IsValid)
@@ -77,8 +97,7 @@ namespace CycloneGames.Localization.Runtime
                 lookup.Add(e.Key, e.Asset);
             }
 
-            _compiled = new CompiledAssetTable(tableId, LocaleId, lookup, true);
-            return _compiled;
+            return new CompiledAssetTable(tableId, LocaleId, lookup, true);
         }
 
         private void OnEnable()

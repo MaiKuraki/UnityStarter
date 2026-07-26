@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Settings provides validated in-memory settings state with explicit clone boundaries, post-commit change notifications, and deterministic forward migration. It is a pure C# core with no `UnityEngine` dependency. The package owns the authoritative value, its schema, and its migration path; it delegates persistence to the optional `CycloneGames.Settings.Persistence` adapter.
+CycloneGames.Settings manages validated in-memory settings state with explicit clone boundaries, post-commit change notifications, and deterministic forward migration. Pure C# core with no `UnityEngine` dependency. Callers supply a schema, migration steps, and an optional persistence adapter.
 
 ## Table of Contents
 
@@ -38,8 +38,6 @@ Each operation — update, reset, or load — clones the current value, applies 
 | --- | --- | --- |
 | `CycloneGames.Settings.Core` | `Core/` | State ownership, schema contract, migration pipeline, result types. `autoReferenced: false`, `noEngineReferences: true`. |
 | `CycloneGames.Settings.Tests.Core` | `Tests/Core/` | EditMode tests for state isolation, migration ordering, and failure paths. |
-
-The module owns no files, paths, serializers, or platform adapters. Loading and saving happen through the `PersistenceStore<T>` contract in `CycloneGames.Persistence.Core`.
 
 ```mermaid
 flowchart LR
@@ -313,3 +311,9 @@ Run EditMode tests:
 ```
 
 Tests cover: invalid defaults, class and struct clone isolation, callback/clone/validation rollback, post-commit observer warnings and continuation, reset, revision-checked loaded commits, stale-candidate rejection, reentrancy rejection, migration ordering, supported windows, step failure, and final validation.
+
+## Product-Owned Memory Limits
+
+Settings Core does not guess the retained size of arbitrary models. Products that require memory limits must enforce model-specific byte and logical-item bounds through their authoritative `ISettingsSchema<T>` before committing a candidate.
+
+The companion metric source calls the public `SettingsState<T>.Snapshot()` only on the cold sampling path, measures the isolated value, and does not retain it. It installs no pressure responder because the service cannot safely trim an authoritative settings value. Limits and measurement semantics belong to the product's model-specific measurer.

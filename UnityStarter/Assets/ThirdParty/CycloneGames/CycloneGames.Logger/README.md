@@ -22,7 +22,7 @@ When an application needs more control than direct `Debug.Log` calls provide, Cy
 
 The core assembly has `noEngineReferences: true` and exposes no `UnityEngine` types. Unity-specific behavior (`LoggerBootstrap`, `LoggerSettings`, `UnityLogger`) lives in a separate adapter assembly, so the same logging contract runs in Editor, Runtime, headless players, Dedicated Server, CLI tools, tests, and pure C# services.
 
-Bounded queues are overload protection, not guaranteed delivery. The module does not provide automatic redaction, encryption, remote upload, server acknowledgement, transactional audit storage, or platform-console SDK integrations. Payments, accounts, anti-cheat, compliance, and security audit records require a separately reviewed durable pipeline. Never log credentials, tokens, personal data, or unredacted user content without a product-owned data policy.
+Bounded queues are overload protection, not guaranteed delivery. Never log credentials, tokens, personal data, or unredacted user content without a product-owned data policy.
 
 ### Key Features
 
@@ -733,3 +733,9 @@ Passing tests in one Editor environment proves only those tested contracts. It d
 ## Samples
 
 `Samples/README.md` and `Samples/README.SCH.md` explain the isolated sample scene, minimal logging component, finite load generator, queue/cache monitor, and local benchmark harness. Samples are teaching and diagnostic aids; they are not production bootstrap code or shipping performance targets.
+
+## Memory Diagnostics and Idle Maintenance
+
+`CLogger.TrimMemoryPoolsStep(targetIdleCount, maxWork)` performs bounded maintenance over logger-owned idle pooled objects. It does not drop queued log events, mutate routing, clear history owned by a sink, or interfere with an active writer. The result reports consumed work and remaining idle capacity so lifecycle code can continue over later frames.
+
+`Logger.GetMemoryStatistics()` samples bounded queue/cache/pool diagnostics, and `TrimMemoryPoolsStep` performs caller-budgeted idle-only maintenance. External diagnostic sinks must be recursion- and rate-safe and must not amplify normal logging traffic.

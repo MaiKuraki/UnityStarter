@@ -92,6 +92,50 @@ namespace CycloneGames.Foundation2D.Runtime.Tests
         }
 
         [UnityTest]
+        public IEnumerator Snapshot_ReportsBoundedAdmissionAndDisableDisposesBuffers()
+        {
+            var managerObject = new GameObject("Foundation2D.Memory.Manager");
+            managerObject.SetActive(false);
+            SpriteSequenceBurstManager manager = managerObject.AddComponent<SpriteSequenceBurstManager>();
+            SetPrivateField(manager, "autoCollectChildren", false);
+            SetPrivateField(manager, "prewarmCapacity", 1);
+            SetPrivateField(manager, "maxControllerCapacity", 1);
+            managerObject.SetActive(true);
+
+            var firstObject = new GameObject("Foundation2D.Memory.First");
+            firstObject.SetActive(false);
+            SpriteSequenceController first = firstObject.AddComponent<SpriteSequenceController>();
+            var rejectedObject = new GameObject("Foundation2D.Memory.Rejected");
+            rejectedObject.SetActive(false);
+            SpriteSequenceController rejected = rejectedObject.AddComponent<SpriteSequenceController>();
+
+            Assert.That(manager.RegisterController(first), Is.True);
+            LogAssert.Expect(LogType.Warning, new System.Text.RegularExpressions.Regex("reached maxControllerCapacity=1"));
+            Assert.That(manager.RegisterController(rejected), Is.False);
+
+            SpriteSequenceBurstMemorySnapshot snapshot = manager.GetMemorySnapshot();
+            Assert.That(snapshot.OwnedControllerCount, Is.EqualTo(1));
+            Assert.That(snapshot.RuntimeRegistrationCount, Is.EqualTo(1));
+            Assert.That(snapshot.BufferCapacity, Is.EqualTo(1));
+            Assert.That(snapshot.MaximumControllerCapacity, Is.EqualTo(1));
+            Assert.That(snapshot.PeakOwnedControllerCount, Is.EqualTo(1));
+            Assert.That(snapshot.PeakBufferCapacity, Is.EqualTo(1));
+            Assert.That(snapshot.CapacityRejectionCount, Is.EqualTo(1));
+            Assert.That(snapshot.IsJobScheduled, Is.False);
+
+            managerObject.SetActive(false);
+            snapshot = manager.GetMemorySnapshot();
+            Assert.That(snapshot.OwnedControllerCount, Is.Zero);
+            Assert.That(snapshot.BufferCapacity, Is.Zero);
+            Assert.That(snapshot.IsJobScheduled, Is.False);
+
+            Object.Destroy(managerObject);
+            Object.Destroy(firstObject);
+            Object.Destroy(rejectedObject);
+            yield return null;
+        }
+
+        [UnityTest]
         public IEnumerator ScheduledBatch_AdvancesControllerAndCommitsRenderer()
         {
             var managerObject = new GameObject("Foundation2D.Batch.Manager");

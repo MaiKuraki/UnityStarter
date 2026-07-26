@@ -1,5 +1,15 @@
 # CycloneGames.GameplayFramework.Networking
 
+## Bounded Observer Admission
+
+One `GameplayNetworkObserverRegistry` retains at most `MaximumObserverCount` (`65,536`) observers. The constructor rejects a larger initial capacity. This is an implementation safety ceiling, not an interest-management budget. Updates and removal of existing observers remain available at capacity.
+
+New code should use either `TrySetObserver` overload and handle `false` as a new-observer capacity rejection. Existing `SetObserver` overloads preserve successful behavior but fail fast with `InvalidOperationException` at the ceiling. `GetAdmissionSnapshot()` exposes count, capacity, and the monotonic rejection counter in O(1). No observer is automatically evicted.
+
+Migration is additive: replace capacity-sensitive `SetObserver` calls with `TrySetObserver`, then apply the product's disconnect, relevance, or retry policy outside this registry. To roll back a call site, use `SetObserver` only when fail-fast behavior is intended. Workloads beyond one ceiling should shard registries by explicit World/session ownership; raising the constant requires a reviewed build and load validation.
+
+Staged connections remain hard-bounded but do not gain inferred expiry: there is no explicit monotonic timestamp and timeout owner in the current contract. Their lifecycle/protocol owner remains responsible for removal after authentication completion, rejection, disconnect, or shutdown; pressure handling must not prune them. This change adds no serialized field, renames no wire or Unity-serialized type, changes no prefab/scene/asset data, and persists no state. No asset or protocol migration is required.
+
 English | [Simplified Chinese](./README.SCH.md)
 
 `CycloneGames.GameplayFramework.Networking` connects `CycloneGames.GameplayFramework` to `CycloneGames.Networking`. It supplies the authoritative session adapter, GameplayFramework message catalog, actor migration wire contract, server-authoritative damage messages, authority role helpers, and observer selection for owner, team, area, and always-relevant replication.

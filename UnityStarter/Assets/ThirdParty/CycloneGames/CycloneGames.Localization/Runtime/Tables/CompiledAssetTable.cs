@@ -33,18 +33,26 @@ namespace CycloneGames.Localization.Runtime
             _lookup = takeOwnership
                 ? lookup
                 : new Dictionary<string, AssetRef>(lookup.Count, StringComparer.Ordinal);
+            long retainedReferenceCharacters = tableId.Length + localeId.Code.Length;
             foreach (var pair in lookup)
             {
                 if (string.IsNullOrEmpty(pair.Key))
                     throw new ArgumentException("Compiled asset keys must not be empty.", nameof(lookup));
                 if (!takeOwnership)
                     _lookup.Add(pair.Key, pair.Value);
+                retainedReferenceCharacters += pair.Key.Length +
+                    (pair.Value.Location != null ? pair.Value.Location.Length : 0) +
+                    (pair.Value.Guid != null ? pair.Value.Guid.Length : 0);
             }
+            RetainedReferenceCharacterCount = retainedReferenceCharacters;
         }
 
         public string TableId { get; }
         public LocaleId LocaleId { get; }
         public int Count => _lookup.Count;
+
+        /// <summary>Exact retained key/location/GUID/identity character count, excluding object overhead.</summary>
+        public long RetainedReferenceCharacterCount { get; }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue(string key, out AssetRef value)

@@ -41,15 +41,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
         }
 
-        private readonly Core.BTTickManager _manager = new Core.BTTickManager();
+        [Header("Capacity")]
+        [SerializeField, Min(1)] private int _maximumTreeCount = Core.BTTickManager.DefaultMaximumTreeCount;
+
+        private Core.BTTickManager _manager;
+        private bool _legacyRegistrationCapacityReported;
 
         public int TickBudget
         {
-            get => _manager.TickBudget;
-            set => _manager.TickBudget = value;
+            get => GetOrCreateManager().TickBudget;
+            set => GetOrCreateManager().TickBudget = value;
         }
 
-        public int TreeCount => _manager.Count;
+        public int TreeCount => GetOrCreateManager().Count;
 
         private void Awake()
         {
@@ -68,6 +72,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
             _instance = this;
+            GetOrCreateManager();
         }
 
         private void OnApplicationQuit()
@@ -77,16 +82,75 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void Update()
         {
-            _manager.Tick();
+            _manager?.Tick();
         }
 
         private void OnDestroy()
         {
-            _manager.Clear();
+            _manager?.Clear();
             if (_instance == this) _instance = null;
         }
 
-        public void Register(Core.RuntimeBehaviorTree tree) => _manager.Register(tree);
-        public void Unregister(Core.RuntimeBehaviorTree tree) => _manager.Unregister(tree);
+        public void Register(Core.RuntimeBehaviorTree tree)
+        {
+            Core.BTTickManager manager = GetOrCreateManager();
+            Core.BTTickManagerMemoryStats before = manager.GetMemoryStats();
+            if (manager.TryRegister(tree) || _legacyRegistrationCapacityReported)
+            {
+                return;
+            }
+
+            Core.BTTickManagerMemoryStats after = manager.GetMemoryStats();
+            if (after.CapacityRejectedTreeCount <= before.CapacityRejectedTreeCount &&
+                after.CapacityRejectedMutationCount <= before.CapacityRejectedMutationCount)
+            {
+                return;
+            }
+
+            _legacyRegistrationCapacityReported = true;
+            Debug.LogError(
+                $"[BTTickManagerComponent] Legacy Register was rejected because managed tree or " +
+                $"deferred-mutation capacity was exhausted on '{gameObject.name}'. " +
+                "Use TryRegister to handle admission failure.",
+                this);
+        }
+
+        public bool TryRegister(Core.RuntimeBehaviorTree tree) => GetOrCreateManager().TryRegister(tree);
+        public void Unregister(Core.RuntimeBehaviorTree tree) => _manager?.Unregister(tree);
+
+        public Core.BTTickManagerMemoryStats GetMemoryStats()
+        {
+            return GetOrCreateManager().GetMemoryStats();
+        }
+
+        private Core.BTTickManager GetOrCreateManager()
+        {
+            if (_manager == null)
+            {
+                int maximumTreeCount = Mathf.Clamp(
+                    _maximumTreeCount,
+                    1,
+                    Core.BTTickManager.HardMaximumTreeCount);
+                int initialCapacity = Mathf.Min(
+                    Core.BTTickManager.DefaultInitialCapacity,
+                    maximumTreeCount);
+                _manager = new Core.BTTickManager(
+                    initialCapacity,
+                    maximumTreeCount,
+                    maximumTreeCount);
+            }
+
+            return _manager;
+        }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            _maximumTreeCount = Mathf.Clamp(
+                _maximumTreeCount,
+                1,
+                Core.BTTickManager.HardMaximumTreeCount);
+        }
+#endif
     }
 }

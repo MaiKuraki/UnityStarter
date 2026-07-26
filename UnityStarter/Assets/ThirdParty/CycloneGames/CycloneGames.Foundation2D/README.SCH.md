@@ -1,6 +1,6 @@
 # CycloneGames.Foundation2D
 
-CycloneGames.Foundation2D 为 `SpriteRenderer` 和 Unity UI `Image` 提供生产级序列帧播放能力。模块具有明确的播放所有权，支持 MonoBehaviour 驱动和可选的 Burst 批处理更新，并提供 authoring 工具，用于在进入 Play Mode 前验证 renderer、材质与序列帧组合。
+CycloneGames.Foundation2D 为 `SpriteRenderer` 和 Unity UI `Image` 提供生产级序列帧播放能力。播放所有权显式可控。更新支持 MonoBehaviour 驱动和可选的 Burst 批处理路径。Authoring 工具在 Play Mode 前验证 renderer、材质与序列帧组合。
 
 ## 目录
 
@@ -12,11 +12,12 @@ CycloneGames.Foundation2D 为 `SpriteRenderer` 和 Unity UI `Image` 提供生产
 - [进阶主题](#进阶主题)
 - [常见场景](#常见场景)
 - [性能与内存](#性能与内存)
+- [运行时内存诊断](#运行时内存诊断)
 - [故障排查](#故障排查)
 
 ## 概述
 
-模块处理视觉动画：特效、世界空间装饰物、UI 指示器、角色头像和轻量级群体。权威玩法模拟、动画图、骨骼动画、2D 物理、Tilemap、网络协议和存档格式由各自的模块负责。需要确定性回滚或服务器权威的玩法代码应维护独立的版本化状态，并以已提交的玩法状态驱动表现层。
+本模块处理视觉动画：特效、世界空间装饰物、UI 指示器、角色头像和轻量级群体。需要确定性回滚或服务器权威的玩法代码，以自身维护的版本化状态驱动表现层。
 
 ## 快速上手
 
@@ -104,7 +105,7 @@ Burst integration 的 `autoReferenced` 为 `false`。`Assembly-CSharp` 等预定
 
 - `Once` 让每个 Sprite 保持一个完整帧时长，并在终止帧停止。
 - `Loop` 到达 wrap 边界时完成一个 cycle。有限循环会在完成指定 cycle 数量后停留在终止帧。
-- `PingPong` 把“从起始边到对侧边，再返回起始边”的完整往返定义为一个 cycle。因此有限计数为 1 时会停在起始边。
+- `PingPong` 把"从起始边到对侧边，再返回起始边"的完整往返定义为一个 cycle。因此有限计数为 1 时会停在起始边。
 - 单帧序列仍然具有帧时长。`Once` 会在该时长后完成；循环模式会产生有界 cycle 通知，不会永久卡在无法完成的播放状态。
 - Loop interval 只发生在已完成的 cycle 之间。`Last`、`First` 和 `Blank` 只控制 interval 期间的视觉状态。
 - 一次 Tick 可以跨越多个帧或 cycle 边界。帧通知会合并到本次 Tick 最终提交的帧；loop 通知依据 controller 事件契约表示已完成一个或多个 cycle。
@@ -211,7 +212,7 @@ Controller 通过显式注册或 manager 子级范围收集。默认不存在 wh
 - Burst integration 会把状态复制到 persistent native buffer。它不保证自动更快；必须通过自带 benchmark 和目标硬件上的 Release Player 决策。
 - Editor 静态缓存只保存有界、不可变的 UI 数据。冷路径操作结束后，scratch collection 会清除资源引用。
 
-模块不承诺跨项目统一的“零 GC”或容量数字。只有在目标 backend、内容、renderer 层级和 Profiler 配置下可复现时，才能声称 warmed 播放路径无分配、实例上限或 batching 结果成立。
+零分配或容量声明只有在目标 backend、内容、renderer 层级和 Profiler 配置下可复现时才成立。
 
 ### 平台说明
 
@@ -226,7 +227,7 @@ Controller 通过显式注册或 manager 子级范围收集。默认不存在 wh
 | Dedicated Server | 可以不包含表现模块；权威模拟不依赖本模块 | 如果仍包含 assembly，检查 headless composition 与 stripping |
 | 未来主机 | Core API 不嵌入平台 SDK 假设 | 平台 SDK build、Shader compiler、内存、suspend/resume 与认证检查 |
 
-一次 Editor 测试通过不能证明 Player、IL2CPP、Burst、移动端、WebGL、主机或长时间稳定性。
+在每个目标上验证 Player、IL2CPP、Burst、移动端、WebGL、主机和长时间稳定性。
 
 ## 常见场景
 
@@ -259,6 +260,12 @@ Application.persistentDataPath/Logs/SpriteSequenceBenchmark.log
 7. Atlas、材质、Canvas、渲染管线或目标平台变化后重新测量。
 
 Sample 是测量工具，不是通用硬件阈值。
+
+## 运行时内存诊断
+
+`SpriteSequenceBurstManager` 实现稳定的 `ISpriteSequenceBurstMemoryOwner` snapshot contract，并用 `maxControllerCapacity` 约束 runtime admission。Diagnostics 只作用于显式传入的 manager；本包不扫描 Scene，也不注册 process-global pressure responder。
+
+Snapshot 提供 controller/registration count、native buffer capacity/limit、生命周期 peak、rejection/failure counter，以及 job/update state。Disable/destroy 仍是安全生命周期释放路径：所有 outstanding work 完成后才 dispose 全部 persistent native array。
 
 ## 验证
 
@@ -299,14 +306,3 @@ Sample 是测量工具，不是通用硬件阈值。
 | 编辑后材质仍然改变 | 使用 Inspector 显式材质操作和 Undo。Runtime 只恢复自己拥有的材质；另一个脚本修改同一 renderer 时必须协调所有权。 |
 | 大 hitch 后动画跳帧 | 只有在 Profiler 证明可接受后才提高 catch-up 预算，或接受表现时间 backlog 丢弃。不要把本模块作为确定性玩法时钟。 |
 | Benchmark 容量不稳定 | 使用 Release Player、隔离场景、预热、重复采样，并检查 Profiler/trace 的 p95 与 p99，而不是依赖单次平均值。 |
-
-## 源码与序列化迁移
-
-本次设计阶段调整有意缩小 public surface：
-
-- 可变的 raw `SpriteSequencePlaybackState`、public batch job 和 job apply hook 变为 internal implementation detail；
-- 移除 `ISpriteSequenceRenderer.SetAlpha` 与 `SetScale`，因为 controller 从未调用它们，且不同实现的所有权语义不一致；
-- `SpriteSequenceBurstManager` 从 `CycloneGames.Foundation2D.Runtime` assembly 移至 `CycloneGames.Foundation2D.Integrations.Burst`，同时保留 namespace、class name、MonoScript GUID 和迁移 metadata；
-- Controller 序列化字段名与 nested enum 数值保持稳定。
-
-仓库内消费者会在同一变更中更新。直接操作 raw state 的仓库外源码应改用 controller command 和只读诊断。引用 `SpriteSequenceBurstManager` 的仓库外 asmdef 必须增加可选 Burst integration assembly 引用及匹配的 package 激活条件。即使保留的 script GUID 能自动解析，已有 Prefab 和 Scene 仍应在发版前执行 clean reimport 验证。

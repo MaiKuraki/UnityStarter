@@ -7,14 +7,21 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     [DisallowMultipleComponent]
     public class BTDistanceLODProvider : MonoBehaviour, IBTLODProvider
     {
+        public const int DefaultMaximumTreeCount = 65_536;
+        public const int HardMaximumTreeCount = 1_048_576;
+
         [SerializeField] private BTLODConfig _config;
         [SerializeField] private Transform _referencePoint;
+        [SerializeField, Min(1)] private int _maximumTreeCount = DefaultMaximumTreeCount;
 
         // Parallel arrays for 0GC iteration (avoids Dictionary enumerator allocation)
         private RuntimeBehaviorTree[] _keys;
         private TreeLODData[] _values;
         private int _count;
         private int _capacity;
+        private int _peakTreeCount;
+        private long _capacityRejectedTreeCount;
+        private bool _legacyRegistrationCapacityReported;
 
         // O(1) lookup index
         private readonly Dictionary<RuntimeBehaviorTree, int> _indexMap = new Dictionary<RuntimeBehaviorTree, int>();
@@ -49,6 +56,32 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             set => _referencePoint = value;
         }
 
+        public int MaximumTreeCount
+        {
+            get => _maximumTreeCount;
+            set
+            {
+                if (value < 1 || value > HardMaximumTreeCount)
+                {
+                    throw new System.ArgumentOutOfRangeException(nameof(value));
+                }
+
+                if (_count != 0)
+                {
+                    throw new System.InvalidOperationException(
+                        "LOD provider capacity cannot change while trees are registered.");
+                }
+
+                _maximumTreeCount = value;
+                if (_keys != null && _capacity > value)
+                {
+                    _keys = new RuntimeBehaviorTree[value];
+                    _values = new TreeLODData[value];
+                    _capacity = value;
+                }
+            }
+        }
+
         private void Awake()
         {
             EnsureInitialized();
@@ -61,8 +94,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 return;
             }
 
+            _maximumTreeCount = Mathf.Clamp(_maximumTreeCount, 1, HardMaximumTreeCount);
             const int INITIAL_CAPACITY = 64;
-            _capacity = INITIAL_CAPACITY;
+            _capacity = Mathf.Min(INITIAL_CAPACITY, _maximumTreeCount);
             _keys = new RuntimeBehaviorTree[_capacity];
             _values = new TreeLODData[_capacity];
             _count = 0;
@@ -72,13 +106,39 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void RegisterTree(RuntimeBehaviorTree tree, Transform treeTransform)
         {
-            if (tree == null || _indexMap.ContainsKey(tree)) return;
+            long rejectedBefore = _capacityRejectedTreeCount;
+            if (TryRegisterTree(tree, treeTransform) ||
+                _legacyRegistrationCapacityReported ||
+                _capacityRejectedTreeCount <= rejectedBefore)
+            {
+                return;
+            }
+
+            _legacyRegistrationCapacityReported = true;
+            Debug.LogError(
+                $"[BTDistanceLODProvider] Legacy RegisterTree was rejected because LOD tree capacity " +
+                $"was exhausted on '{gameObject.name}'. Use TryRegisterTree to handle admission failure.",
+                this);
+        }
+
+        public bool TryRegisterTree(RuntimeBehaviorTree tree, Transform treeTransform)
+        {
+            if (tree == null) return false;
+            if (_indexMap.ContainsKey(tree)) return true;
 
             EnsureInitialized();
 
+            if (_count >= _maximumTreeCount)
+            {
+                _capacityRejectedTreeCount++;
+                return false;
+            }
+
             if (_count >= _capacity)
             {
-                int newCap = _capacity * 2;
+                int newCap = Mathf.Min(
+                    _maximumTreeCount,
+                    _capacity <= _maximumTreeCount / 2 ? _capacity * 2 : _maximumTreeCount);
                 var newKeys = new RuntimeBehaviorTree[newCap];
                 var newValues = new TreeLODData[newCap];
                 System.Array.Copy(_keys, newKeys, _count);
@@ -122,6 +182,12 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _values[idx] = data;
             _indexMap[tree] = idx;
             _count++;
+            if (_count > _peakTreeCount)
+            {
+                _peakTreeCount = _count;
+            }
+
+            return true;
         }
 
         public void UnregisterTree(RuntimeBehaviorTree tree)
@@ -247,5 +313,23 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         }
 
         public int Count => _count;
+
+        public BTDistanceLODProviderMemoryStats GetMemoryStats()
+        {
+            EnsureInitialized();
+            return new BTDistanceLODProviderMemoryStats(
+                _count,
+                _capacity,
+                _maximumTreeCount,
+                _peakTreeCount,
+                _capacityRejectedTreeCount);
+        }
+
+#if UNITY_EDITOR
+        private void OnValidate()
+        {
+            _maximumTreeCount = Mathf.Clamp(_maximumTreeCount, 1, HardMaximumTreeCount);
+        }
+#endif
     }
 }

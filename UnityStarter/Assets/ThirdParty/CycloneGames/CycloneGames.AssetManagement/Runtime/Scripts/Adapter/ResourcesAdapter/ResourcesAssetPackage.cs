@@ -10,7 +10,7 @@ using CycloneGames.Logger;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetRuntimeDiagnostics
+    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetCacheMaintenanceOwner
     {
         private readonly string _packageName;
 
@@ -226,6 +226,13 @@ namespace CycloneGames.AssetManagement.Runtime
             AssetRuntimeGuard.EnsureMainThread();
             ThrowIfDestroyed();
             return _cacheService.TrimIdle(policy);
+        }
+
+        public AssetCacheTrimResult TrimIdleCacheStep(int maxWork)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            return _cacheService.TrimIdleStep(maxWork);
         }
 
         public void ClearBucket(string bucket)

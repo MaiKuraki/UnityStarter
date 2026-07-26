@@ -1,4 +1,6 @@
-using System.Collections.Concurrent;
+using System;
+using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEngine;
 using CycloneGames.BehaviorTree.Runtime.Core;
@@ -8,6 +10,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     [DisallowMultipleComponent]
     public class BTPriorityTickManagerComponent : MonoBehaviour
     {
+        public const int DefaultPendingWakeUpCapacity = 4096;
+        public const int MaximumPendingWakeUpCapacity = 65536;
+
         private static BTPriorityTickManagerComponent _instance;
         private static bool _isQuitting;
 
@@ -49,6 +54,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         [Header("Configuration")]
         [SerializeField] private BTLODConfig _config;
         [SerializeField] private float _lodUpdateInterval = 0.5f;
+        [SerializeField, Min(1)] private int _maximumTreeCount = BTPriorityTickManager.DefaultMaximumTreeCount;
+        [SerializeField, Min(1)] private int _pendingWakeUpCapacity = DefaultPendingWakeUpCapacity;
 
         [Header("Reference Point")]
         [SerializeField] private Transform _referencePoint;
@@ -57,11 +64,19 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private BTPriorityTickManager _manager;
         private BTDistanceLODProvider _lodProvider;
-        private readonly ConcurrentQueue<RuntimeBehaviorTree> _pendingWakeUps = new ConcurrentQueue<RuntimeBehaviorTree>();
+        private readonly object _pendingWakeUpGate = new object();
+        private readonly Queue<RuntimeBehaviorTree> _pendingWakeUps = new Queue<RuntimeBehaviorTree>(64);
+        private readonly HashSet<RuntimeBehaviorTree> _pendingWakeUpSet =
+            new HashSet<RuntimeBehaviorTree>(RuntimeBehaviorTreeReferenceComparer.Instance);
         private double _lastLODUpdateTime;
         private bool _initialized;
         private int _acceptWakeUps;
+        private int _pendingWakeUpPeak;
+        private long _acceptedWakeUpCount;
+        private long _coalescedWakeUpCount;
+        private long _capacityRejectedWakeUpCount;
         private string _lastConfigError;
+        private bool _legacyRegistrationCapacityReported;
 
 #if UNITY_EDITOR
         [Header("Debug Stats (Editor Only)")]
@@ -86,6 +101,31 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         }
 
         public int TotalTreeCount => _manager?.GetTotalCount() ?? 0;
+        public int PendingWakeUpCapacity
+        {
+            get
+            {
+                lock (_pendingWakeUpGate)
+                {
+                    return _pendingWakeUpCapacity;
+                }
+            }
+            set
+            {
+                ValidatePendingWakeUpCapacity(value);
+                lock (_pendingWakeUpGate)
+                {
+                    if (_pendingWakeUps.Count != 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Pending wake-up capacity cannot change while wake-ups are queued.");
+                    }
+
+                    _pendingWakeUpCapacity = value;
+                }
+            }
+        }
+
         public float LODUpdateInterval
         {
             get => _lodUpdateInterval;
@@ -121,16 +161,34 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (_initialized) return;
 
+            if (_pendingWakeUpCapacity < 1 || _pendingWakeUpCapacity > MaximumPendingWakeUpCapacity)
+            {
+                _pendingWakeUpCapacity = DefaultPendingWakeUpCapacity;
+            }
+
+            _maximumTreeCount = Mathf.Clamp(
+                _maximumTreeCount,
+                1,
+                BTPriorityTickManager.HardMaximumTreeCount);
+
             int[] budgets = _config != null && _config.TryValidate(out _)
                 ? _config.PriorityBudgets
                 : null;
-            _manager = new BTPriorityTickManager(budgets);
+            int initialBucketCapacity = Mathf.Min(
+                BTPriorityTickManager.DefaultInitialBucketCapacity,
+                _maximumTreeCount);
+            _manager = new BTPriorityTickManager(
+                budgets,
+                initialBucketCapacity,
+                _maximumTreeCount,
+                _maximumTreeCount);
 
             if (!TryGetComponent(out _lodProvider))
             {
                 _lodProvider = gameObject.AddComponent<BTDistanceLODProvider>();
             }
             _lodProvider.EnsureInitialized();
+            _lodProvider.MaximumTreeCount = _maximumTreeCount;
             ApplyConfig();
 
             if (_autoFindPlayer && _referencePoint == null)
@@ -242,8 +300,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 }
             }
 
-            while (_pendingWakeUps.TryDequeue(out _))
+            lock (_pendingWakeUpGate)
             {
+                _pendingWakeUps.Clear();
+                _pendingWakeUpSet.Clear();
             }
 
             _manager?.Clear();
@@ -252,18 +312,55 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         public void Register(RuntimeBehaviorTree tree, Transform treeTransform)
         {
-            if (tree == null) return;
-            if (!_initialized) Initialize();
-            if (_lodProvider.ContainsTree(tree)) return;
+            BTPriorityTickManagerMemoryStats before = GetMemoryStats();
+            if (TryRegister(tree, treeTransform) || _legacyRegistrationCapacityReported)
+            {
+                return;
+            }
 
-            _lodProvider.RegisterTree(tree, treeTransform);
+            BTPriorityTickManagerMemoryStats after = GetMemoryStats();
+            bool coreCapacityRejected =
+                after.Core.CapacityRejectedTreeCount > before.Core.CapacityRejectedTreeCount ||
+                after.Core.CapacityRejectedMutationCount > before.Core.CapacityRejectedMutationCount;
+            bool lodCapacityRejected =
+                after.LOD.CapacityRejectedTreeCount > before.LOD.CapacityRejectedTreeCount;
+            if (!coreCapacityRejected && !lodCapacityRejected)
+            {
+                return;
+            }
+
+            _legacyRegistrationCapacityReported = true;
+            Debug.LogError(
+                $"[BTPriorityTickManagerComponent] Legacy Register was rejected because managed tree, " +
+                $"LOD, or deferred-mutation capacity was exhausted on '{gameObject.name}'. " +
+                "Use TryRegister to handle admission failure.",
+                this);
+        }
+
+        public bool TryRegister(RuntimeBehaviorTree tree, Transform treeTransform)
+        {
+            if (tree == null) return false;
+            if (!_initialized) PrepareForUse();
+            if (_lodProvider.ContainsTree(tree)) return true;
+
+            if (!_lodProvider.TryRegisterTree(tree, treeTransform))
+            {
+                return false;
+            }
             tree.WakeUpRequested += EnqueueWakeUp;
             _lodProvider.UpdateLOD(tree);
 
             int priority = _lodProvider.GetPriority(tree);
             tree.TickInterval = _lodProvider.GetTickInterval(tree);
 
-            _manager.Register(tree, priority);
+            if (_manager.TryRegister(tree, priority))
+            {
+                return true;
+            }
+
+            tree.WakeUpRequested -= EnqueueWakeUp;
+            _lodProvider.UnregisterTree(tree);
+            return false;
         }
 
         public void Unregister(RuntimeBehaviorTree tree)
@@ -313,15 +410,44 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
         private void EnqueueWakeUp(RuntimeBehaviorTree tree)
         {
-            if (tree != null && Volatile.Read(ref _acceptWakeUps) != 0)
+            if (tree == null || Volatile.Read(ref _acceptWakeUps) == 0)
             {
+                return;
+            }
+
+            lock (_pendingWakeUpGate)
+            {
+                if (Volatile.Read(ref _acceptWakeUps) == 0)
+                {
+                    return;
+                }
+
+                if (_pendingWakeUpSet.Contains(tree))
+                {
+                    Interlocked.Increment(ref _coalescedWakeUpCount);
+                    return;
+                }
+
+                if (_pendingWakeUps.Count >= _pendingWakeUpCapacity)
+                {
+                    Interlocked.Increment(ref _capacityRejectedWakeUpCount);
+                    return;
+                }
+
+                _pendingWakeUpSet.Add(tree);
                 _pendingWakeUps.Enqueue(tree);
+                if (_pendingWakeUps.Count > _pendingWakeUpPeak)
+                {
+                    _pendingWakeUpPeak = _pendingWakeUps.Count;
+                }
+
+                Interlocked.Increment(ref _acceptedWakeUpCount);
             }
         }
 
         private void PromoteWakeUpTrees()
         {
-            while (_pendingWakeUps.TryDequeue(out RuntimeBehaviorTree tree))
+            while (TryDequeueWakeUp(out RuntimeBehaviorTree tree))
             {
                 if (tree == null ||
                     tree.IsDisposed ||
@@ -336,6 +462,44 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
                 _manager.UpdatePriority(tree, _config.BoostedPriority);
                 tree.TickInterval = _config.BoostedTickInterval;
+            }
+        }
+
+        private bool TryDequeueWakeUp(out RuntimeBehaviorTree tree)
+        {
+            lock (_pendingWakeUpGate)
+            {
+                if (_pendingWakeUps.Count == 0)
+                {
+                    tree = null;
+                    return false;
+                }
+
+                tree = _pendingWakeUps.Dequeue();
+                _pendingWakeUpSet.Remove(tree);
+                return true;
+            }
+        }
+
+        public BTPriorityTickManagerMemoryStats GetMemoryStats()
+        {
+            BTPriorityTickManagerCoreMemoryStats core = _manager?.GetMemoryStats() ?? default;
+            BTDistanceLODProviderMemoryStats lod = _lodProvider != null
+                ? _lodProvider.GetMemoryStats()
+                : default;
+            int registeredTreeCount = core.TreeCount;
+            lock (_pendingWakeUpGate)
+            {
+                return new BTPriorityTickManagerMemoryStats(
+                    registeredTreeCount,
+                    _pendingWakeUps.Count,
+                    _pendingWakeUpCapacity,
+                    _pendingWakeUpPeak,
+                    Interlocked.Read(ref _acceptedWakeUpCount),
+                    Interlocked.Read(ref _coalescedWakeUpCount),
+                    Interlocked.Read(ref _capacityRejectedWakeUpCount),
+                    core,
+                    lod);
             }
         }
 
@@ -357,7 +521,42 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private void OnValidate()
         {
             _lodUpdateInterval = Mathf.Max(0.1f, _lodUpdateInterval);
+            _pendingWakeUpCapacity = Mathf.Clamp(
+                _pendingWakeUpCapacity,
+                1,
+                MaximumPendingWakeUpCapacity);
+            _maximumTreeCount = Mathf.Clamp(
+                _maximumTreeCount,
+                1,
+                BTPriorityTickManager.HardMaximumTreeCount);
         }
 #endif
+
+        private static void ValidatePendingWakeUpCapacity(int value)
+        {
+            if (value < 1 || value > MaximumPendingWakeUpCapacity)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(value),
+                    value,
+                    $"Pending wake-up capacity must be between 1 and {MaximumPendingWakeUpCapacity}.");
+            }
+        }
+
+        private sealed class RuntimeBehaviorTreeReferenceComparer : IEqualityComparer<RuntimeBehaviorTree>
+        {
+            public static readonly RuntimeBehaviorTreeReferenceComparer Instance =
+                new RuntimeBehaviorTreeReferenceComparer();
+
+            public bool Equals(RuntimeBehaviorTree x, RuntimeBehaviorTree y)
+            {
+                return ReferenceEquals(x, y);
+            }
+
+            public int GetHashCode(RuntimeBehaviorTree obj)
+            {
+                return RuntimeHelpers.GetHashCode(obj);
+            }
+        }
     }
 }

@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.Audio.Tests.Editor",
     "references": [
         "CycloneGames.Audio.Runtime",
+        "CycloneGames.Audio.Editor",
         "UniTask"
     ],
     "includePlatforms": [

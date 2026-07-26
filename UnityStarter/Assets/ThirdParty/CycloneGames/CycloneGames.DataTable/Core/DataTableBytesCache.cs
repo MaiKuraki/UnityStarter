@@ -10,11 +10,13 @@ namespace CycloneGames.DataTable
     /// </summary>
     public sealed class DataTableBytesCache : IDataTableBytesProvider, IDisposable
     {
-        private readonly Dictionary<string, byte[]> _bytesByTableName;
+        private Dictionary<string, byte[]> _bytesByTableName;
         private readonly string _dataExtension;
         private readonly DataTableLoadLimits _limits;
         private readonly bool _clearBytesOnDispose;
         private long _totalBytes;
+        private long _releasedPayloadCount;
+        private long _releasedBytes;
         private bool _sealed;
         private bool _disposed;
 
@@ -69,6 +71,22 @@ namespace CycloneGames.DataTable
         public bool IsDisposed => _disposed;
 
         public DataTableLoadLimits Limits => _limits;
+
+        /// <summary>
+        /// Captures bounded owner diagnostics without enumerating payloads. This remains available
+        /// after closure so a release responder can report its remaining work.
+        /// </summary>
+        public DataTableBytesCacheMemorySnapshot GetMemorySnapshot()
+        {
+            return new DataTableBytesCacheMemorySnapshot(
+                _bytesByTableName?.Count ?? 0,
+                _totalBytes,
+                _sealed,
+                _disposed,
+                _limits,
+                _releasedPayloadCount,
+                _releasedBytes);
+        }
 
         /// <summary>Copies the supplied memory so later caller mutation cannot affect the cache.</summary>
         public void Add(string tableName, ReadOnlyMemory<byte> bytes)
@@ -194,13 +212,79 @@ namespace CycloneGames.DataTable
 
         public void Dispose()
         {
-            if (_disposed)
+            BeginBoundedDispose();
+            ReleaseClosedPayloadsStep(int.MaxValue);
+        }
+
+        /// <summary>
+        /// Closes the cache to all reads and mutations without releasing every payload in one call.
+        /// The owner must subsequently call <see cref="ReleaseClosedPayloadsStep"/> until complete,
+        /// or call <see cref="Dispose"/> for the synchronous fallback.
+        /// </summary>
+        public void BeginBoundedDispose()
+        {
+            _disposed = true;
+        }
+
+        /// <summary>
+        /// Releases at most <paramref name="maxWork"/> payload arrays from an already closed cache.
+        /// Calling this method before <see cref="BeginBoundedDispose"/> is rejected so live data
+        /// cannot be removed by a pressure responder.
+        /// </summary>
+        public DataTableBytesCacheReleaseResult ReleaseClosedPayloadsStep(int maxWork)
+        {
+            if (maxWork < 0)
             {
-                return;
+                throw new ArgumentOutOfRangeException(nameof(maxWork));
             }
 
-            _disposed = true;
-            ClearOwnedBytes();
+            if (!_disposed)
+            {
+                throw new InvalidOperationException(
+                    "Bounded payload release is available only after the cache has been closed.");
+            }
+
+            int releasedCount = 0;
+            long releasedBytes = 0;
+            while (releasedCount < maxWork && _bytesByTableName != null && _bytesByTableName.Count > 0)
+            {
+                KeyValuePair<string, byte[]> entry;
+                using (Dictionary<string, byte[]>.Enumerator enumerator = _bytesByTableName.GetEnumerator())
+                {
+                    if (!enumerator.MoveNext())
+                    {
+                        break;
+                    }
+
+                    entry = enumerator.Current;
+                }
+
+                byte[] bytes = entry.Value;
+                if (_clearBytesOnDispose)
+                {
+                    Array.Clear(bytes, 0, bytes.Length);
+                }
+
+                _bytesByTableName.Remove(entry.Key);
+                _totalBytes = checked(_totalBytes - bytes.Length);
+                releasedBytes = checked(releasedBytes + bytes.Length);
+                releasedCount++;
+            }
+
+            _releasedPayloadCount = checked(_releasedPayloadCount + releasedCount);
+            _releasedBytes = checked(_releasedBytes + releasedBytes);
+            int remainingCount = _bytesByTableName?.Count ?? 0;
+            if (remainingCount == 0)
+            {
+                _bytesByTableName = null;
+                _totalBytes = 0;
+            }
+
+            return new DataTableBytesCacheReleaseResult(
+                releasedCount,
+                releasedBytes,
+                remainingCount,
+                _totalBytes);
         }
 
         private string ValidateMutationAndName(string tableName)
@@ -282,6 +366,12 @@ namespace CycloneGames.DataTable
 
         private void ClearOwnedBytes()
         {
+            if (_bytesByTableName == null)
+            {
+                _totalBytes = 0;
+                return;
+            }
+
             if (_clearBytesOnDispose)
             {
                 foreach (byte[] bytes in _bytesByTableName.Values)

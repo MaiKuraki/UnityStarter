@@ -20,7 +20,7 @@ namespace CycloneGames.GameplayTags.Core
    /// Process-wide gameplay tag registry. Writers build a complete candidate registry and publish one
    /// immutable snapshot; readers capture that snapshot and never take the writer lock.
    /// </summary>
-   public static class GameplayTagManager
+   public static partial class GameplayTagManager
    {
       private readonly struct PendingRegistration
       {

@@ -18,7 +18,7 @@ CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag
 
 ## 概述
 
-模块暴露 `DataTable<TKey, TRow>`（保持源顺序）、`DataTableCatalog`（把多张强类型表组成一个快照）和 `DataTableRegistry`（进程级原子发布入口）。可变游戏状态、存档事务、网络同步、数据库查询和特定 schema 的业务规则，各自归各自的系统管。
+`DataTable<TKey, TRow>` 保存按源排序的行数据。`DataTableCatalog` 把强类型表组合成一个快照。`DataTableRegistry` 提供进程级原子发布入口。可变游戏状态、存档事务、网络同步、数据库查询和特定 schema 的业务规则，各自归各自的系统管。
 
 ### 主要特性
 
@@ -303,7 +303,7 @@ manifest.ValidateBytes("Prices", payloadCache.GetBytes("Prices"));
 
 `ValidateRequiredTables` 检查必需项是否存在。`ValidateBytes` 应用已配置的字节限制，并校验 entry 的预期长度和 SHA-256。SHA-256 用于标识内容和检测损坏；来自不可信来源的内容还需要经过认证的签名和由产品负责的信任策略。
 
-Entry 未设置 `Sha256Hex` 时会有意跳过 Hash 校验。`DataTableHashUtility.Sha256Matches` 要求预期 Hash 非空；预期值缺失时返回 `false`。
+Entry 未设置 `Sha256Hex` 时跳过 Hash 校验。`DataTableHashUtility.Sha256Matches` 要求预期 Hash 非空；预期值缺失时返回 `false`。
 
 ### 资源生命周期
 
@@ -571,7 +571,7 @@ DataTableCatalog catalog =
 
 | 操作 | 运行时特征 |
 | --- | --- |
-| 构造完成后的成功 `Get`、`GetOrDefault`、`TryGet` | 期望 `O(1)` Dictionary 查询，无有意的托管分配。 |
+| 构造完成后的成功 `Get`、`GetOrDefault`、`TryGet` | 期望 `O(1)` Dictionary 查询，无托管分配。 |
 | Key 缺失时调用 `Get` | 创建并抛出 `KeyNotFoundException`；不应作为常规热路径控制流。 |
 | `All[index]` | 通过只读 view 进行 `O(1)` 访问。 |
 | Table 构造 | 冷路径；除非转移所有权，否则复制数组，并分配 row view 和 key index。 |
@@ -710,3 +710,9 @@ Core 不写文件，也不使用 `EditorPrefs` 或 `PlayerPrefs`。
 - [Luban 目录与生成教程](../../../../../DataTable/Luban/README.SCH.md)
 - [DataTable CodeGen 教程](./Tools~/CodeGen/README.SCH.md)
 - [GameplayTags DataTable 集成](../CycloneGames.GameplayTags.DataTable/README.SCH.md)
+
+## 有界缓存释放
+
+`DataTableBytesCache.GetMemorySnapshot()` 在不检查 payload 内容的前提下，报告显式 owner 的 payload count、total bytes、lifecycle flag、配置 limit 与累计 release counter。`BeginBoundedDispose()` 会关闭 admission，之后 `ReleaseClosedPayloadsStep(maxWork)` 每次最多清除 `maxWork` 个 closed payload。
+
+释放严格限定为 lifecycle-only：open 或仅 sealed 的 cache 都不符合条件，有界 dispose 绝不会清空 live table data。Owner 仍负责启动 dispose，并持续执行有界步骤直至完成；外部 scheduler 可以观测进度，但不会取得 cache ownership。

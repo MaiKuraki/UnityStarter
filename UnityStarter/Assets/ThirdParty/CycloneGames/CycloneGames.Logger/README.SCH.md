@@ -18,11 +18,11 @@ CycloneGames.Logger 是面向 Unity 应用、Headless Player、命令行工具�
 
 ## 概述
 
-当应用需要比直接调用 `Debug.Log` 更强的控制能力时，CycloneGames.Logger 为生产者提供单一的有界管线：在构造延迟消息前执行 severity 与 category 过滤，同时受消息数与保留字符数限制的队列，按 sink 隔离失败的同步 sink，以及会主动报告丢弃、sink 失败与未完成 shutdown 的生命周期结果。
+当应用需要比 `Debug.Log` 更强的控制时，CycloneGames.Logger 提供单一有界管线：在构造延迟消息前执行 severity 与 category 过滤，同时受消息数与保留字符数限制的队列，按 sink 隔离失败的同步 sink，以及会主动报告丢弃、sink 失败与未完成 shutdown 的生命周期结果。
 
 核心程序集设置了 `noEngineReferences: true`，且不暴露任何 `UnityEngine` 类型。Unity 专属行为（`LoggerBootstrap`、`LoggerSettings`、`UnityLogger`）位于独立的 adapter 程序集，使同一套日志契约能在 Editor、Runtime、Headless Player、Dedicated Server、CLI 工具、测试和纯 C# 服务中运行。
 
-有限队列是过载保护，不是消息必达。本模块不提供自动脱敏、加密、远程上传、服务端确认、事务审计存储或主机平台 SDK 集成。支付、账号、反作弊、合规和安全审计记录需要单独评审的持久化管线。没有产品负责的数据政策时，禁止记录 credential、token、个人数据或未经脱敏的用户内容。
+有限队列是过载保护，不是消息必达。没有产品负责的数据政策时，禁止记录 credential、token、个人数据或未经脱敏的用户内容。
 
 ### 主要特性
 
@@ -436,7 +436,7 @@ CLogAssert.IsNotNull(playerState, "Player state must exist before simulation.");
 
 支持 `That`、`IsTrue`、`IsFalse`、`IsNull`、`IsNotNull`、`AreEqual`、`AreNotEqual` 与 `Fail`。Builder overload 在条件成立时跳过消息构造。`LogOnly` 只记录，`Throw` 只抛异常，`LogAndThrow` 同时执行两者。同时记录并抛出时，默认先请求一次 best-effort buffered flush。阻塞 sink 可能使实际 throw 晚于 `FlushTimeoutMs`，因为同步工作无法被抢占。Flush 失败不会抑制 `CLogAssertionException`。
 
-断言不能替代输入校验、可恢复错误处理、authority check 或安全强制。
+断言补充输入校验、可恢复错误处理、authority check 与安全强制。
 
 ### 可观测性
 
@@ -733,3 +733,9 @@ Performance test assembly 对四条具体 warm 路径提供 current-thread 稳�
 ## 示例
 
 `Samples/README.md` 和 `Samples/README.SCH.md` 介绍隔离的 sample scene、最小日志 component、有限负载生成器、queue/cache monitor 和本地 benchmark harness。Sample 是教学与诊断辅助，不是生产 bootstrap code 或 shipping 性能目标。
+
+## 内存诊断与 idle 维护
+
+`CLogger.TrimMemoryPoolsStep(targetIdleCount, maxWork)` 对 logger-owned idle pooled object 执行有界维护。它不会丢弃 queued log event、修改 routing、清空 sink 拥有的 history，也不会干扰 active writer。返回结果报告 consumed work 与 remaining idle capacity，便于 lifecycle code 在后续 frame 继续处理。
+
+`Logger.GetMemoryStatistics()` 采样有界 queue/cache/pool diagnostics，`TrimMemoryPoolsStep` 执行 caller-budgeted、仅处理 idle entry 的维护。外部 diagnostic sink 必须具备 recursion 与 rate 防护，不得递归放大普通日志流量。

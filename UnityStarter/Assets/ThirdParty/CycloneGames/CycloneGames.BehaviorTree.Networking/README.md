@@ -64,11 +64,11 @@ flowchart LR
 
 ## Quick Start
 
-### 1. Add assembly references
+### Add assembly references
 
 All three assemblies use `autoReferenced: false`. Reference `CycloneGames.BehaviorTree.Networking.Core` for protocol registration and DTOs; reference `CycloneGames.BehaviorTree.Networking.Runtime` for the bridge and runtime helpers.
 
-### 2. Register the protocol
+### Register the protocol
 
 ```csharp
 using CycloneGames.BehaviorTree.Networking;
@@ -85,7 +85,7 @@ public static class BehaviorTreeNetworkInstaller
 
 `RegisterMessageCatalog` registers the complete reserved range and all built-in descriptors. When an `INetworkMessageEndpoint` is available, `TryRegisterMessageCatalog` returns whether registration succeeded.
 
-### 3. Create a bridge and receive cursor
+### Create a bridge and receive cursor
 
 Create, use, and dispose the bridge on the managed tree's owner thread. Keep one receive cursor per `(TargetNetworkId, TreeTemplateHash, AuthorityGeneration)` stream:
 
@@ -150,7 +150,7 @@ public sealed class BehaviorTreeReplicationSession : IDisposable
 
 The transport adapter serializes the DTO, selects the profile channel, sends it, decodes it on the receiver, and dispatches the receive operation to the tree owner thread.
 
-### 4. Connect the transport boundary
+### Connect the transport boundary
 
 1. Check authority, authentication, rate, target identity, and enabled profile features.
 2. Capture a snapshot, delta, or hash-only message on the tree owner thread.
@@ -251,7 +251,7 @@ Built-in profiles from `BehaviorTreeNetworkProfiles`:
 
 Call `Create...Builder` or `ToBuilder()` to customize before `Build()`. Built profiles are immutable.
 
-The bridge enforces snapshot/delta byte limits, inbound entry limits through `MaxTrackedBlackboardKeys`, and `WakeTreeOnRemoteDelta`. The default transport payload budget is `1200` bytes; a state DTO reserves `43` bytes for fixed fields, so the default inner-payload budget is `1157` bytes.
+The bridge enforces snapshot/delta byte limits, inbound entry limits through `MaxTrackedBlackboardKeys`, and `WakeTreeOnRemoteDelta`. The default transport payload budget is `1200` bytes; a state DTO reserves `43` bytes for fixed fields, so the default inner-payload budget is `1157` bytes. `MaxTrackedBlackboardKeys` is constrained to `1..4096`, matching the delta patch protocol ceiling.
 
 ## Threading and Failure Behavior
 
@@ -281,6 +281,8 @@ The end-to-end bridge is not zero-allocation:
 - Profile construction allocates cloned setting dictionaries.
 
 Bound snapshot and delta sizes, pre-size tracked-key capacity, and limit update frequency. Measure candidate-state memory against the largest production blackboard.
+
+`BehaviorTreeNetworkSyncBridge.GetMemoryStats()` exposes allocation-free owner-thread counters and the retained snapshot scratch capacities. Payload arrays returned by capture transfer to the caller and are not retained by the bridge; receive progress is a caller-owned scalar cursor rather than a history collection. Caller-owned diagnostics may publish these values, but the bridge owns neither tree state nor transport buffers.
 
 ### Data ownership
 

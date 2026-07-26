@@ -14,6 +14,7 @@ CycloneGames.FontAssets 为 Unity 项目中的中文（简体与繁体）、日�
 - [进阶主题](#进阶主题)
 - [常见场景](#常见场景)
 - [性能与内存](#性能与内存)
+- [运行时内存所有权](#运行时内存所有权)
 - [故障排查](#故障排查)
 
 ## 概述
@@ -22,7 +23,7 @@ CycloneGames.FontAssets 为 Unity 项目中的中文（简体与繁体）、日�
 
 本包是纯数据：没有 `Runtime/` 源码、没有 asmdef、没有脚本、没有编译输出。使用方式是把文本文件导入项目，在 TextMeshPro font asset creator 中打开，或在运行时从 build 位置读取。文件使用 UTF-8 无 BOM 编码，只包含字符（必要时只有一个尾随换行），可以按行读取，也可以作为单个字符串读取。
 
-适用场景：项目需要为发布字体提供可预测、按语言界定的字形覆盖。不要用作字体二进制文件的替代——源 OTF/TTF 仍在项目中，字符集只控制 TextMeshPro atlas 光栅化哪些字形。
+适用场景：项目需要为发布字体提供可预测、按语言界定的字形覆盖。源 OTF/TTF 仍在项目中，字符集只控制 TextMeshPro atlas 光栅化哪些字形。
 
 ### 主要特性
 
@@ -406,6 +407,10 @@ Atlas 大小随字符数大致平方增长。4,096×4,096 RGBA8 atlas 未压缩�
 | Build 失败提示 `Character is not in the font asset` | 字符表包含静态 atlas 之外的字符 | 运行 build 时覆盖校验，扩展字符集或切换到动态模式 |
 | Build 后字符乱码 | 文件被以 BOM 或其他编码重新保存 | 重新导出为 UTF-8 无 BOM；包内文件已是此格式 |
 | 同一字符在 atlas 中出现多次 | 字符集文件有重复 | 包内文件已去重；检查项目本地副本是否引入重复 |
+
+## 运行时内存所有权
+
+FontAssets 是纯数据包，不持有 runtime loader、生成后的 atlas、texture 或 cache。生成资产必须由实际执行导入、加载或缓存的 owner 负责测量和限制；源文本长度不能作为生成后 atlas bytes 的有效估算。
 
 ## 参考
 

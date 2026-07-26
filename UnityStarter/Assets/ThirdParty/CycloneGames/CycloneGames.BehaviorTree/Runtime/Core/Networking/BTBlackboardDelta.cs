@@ -51,9 +51,11 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
 
         public BTBlackboardDelta(int maxTrackedKeys = 64)
         {
-            if (maxTrackedKeys <= 0)
+            if (maxTrackedKeys <= 0 || maxTrackedKeys > DEFAULT_MAX_PATCH_ENTRIES)
             {
-                throw new ArgumentOutOfRangeException(nameof(maxTrackedKeys), "Delta tracker capacity must be greater than zero.");
+                throw new ArgumentOutOfRangeException(
+                    nameof(maxTrackedKeys),
+                    $"Delta tracker capacity must be between 1 and {DEFAULT_MAX_PATCH_ENTRIES}.");
             }
 
             _maxKeys = maxTrackedKeys;

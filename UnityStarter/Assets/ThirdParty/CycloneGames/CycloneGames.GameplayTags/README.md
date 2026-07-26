@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-Inspired by Unreal Engine's GameplayTags system, this module provides hierarchical tags (`State.CrowdControl.Stunned`), tag containers with automatic parent resolution, and compiled tag queries — the same vocabulary-driven approach UE developers use to connect abilities, effects, AI, and UI without hard references.
+CycloneGames.GameplayTags provides hierarchical tags (`State.CrowdControl.Stunned`), tag containers with automatic parent resolution, and compiled tag queries. Tags are shareable labels: abilities, effects, AI, and UI can reference the same vocabulary without hard references.
 
 ## Table of Contents
 
@@ -341,6 +341,8 @@ GameplayTagQuery playerContentQuery = new()
 - Compiled query data belongs to its `GameplayTagQuery`. Call `InvalidateCompiledCache()` after mutation.
 - Compiled query matching uses a fixed 1 KiB stack scratch; no shared pool is retained between calls.
 - Single-tag count mutation uses a stack buffer; multi-tag mutation uses lazily-created scratch owned by the container.
+
+`GameplayTagManager.GetMemorySnapshot()` returns an allocation-free O(1) aggregate of registry counts, limits, generation, epoch, manifest hash, redirects, and query limits without exposing registry storage.
 
 Registry reads capture an immutable snapshot and do not take the writer lock.
 
