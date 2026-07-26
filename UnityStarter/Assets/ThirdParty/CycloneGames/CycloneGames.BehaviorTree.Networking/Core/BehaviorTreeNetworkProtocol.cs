@@ -24,6 +24,7 @@ namespace CycloneGames.BehaviorTree.Networking
         public const int DEFAULT_MAX_DELTA_PAYLOAD_SIZE =
             DEFAULT_MAX_STATE_MESSAGE_SIZE - STATE_PAYLOAD_FIXED_ENVELOPE_SIZE;
         public const int DEFAULT_MAX_CONTROL_PAYLOAD_SIZE = 128;
+        public const int ABSOLUTE_MAX_TRACKED_BLACKBOARD_KEYS = 4096;
 
         // Frozen FNV-1a64 identities of the versioned wire contracts.
         private const ulong MANIFEST_HANDSHAKE_SCHEMA_V1 = 0x059263302E9505CDUL;

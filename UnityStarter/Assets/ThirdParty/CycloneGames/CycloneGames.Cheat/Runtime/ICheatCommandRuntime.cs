@@ -5,6 +5,15 @@ using VitalRouter;
 
 namespace CycloneGames.Cheat.Runtime
 {
+    public enum CheatCommandPublishResult
+    {
+        Disabled = 0,
+        Published = 1,
+        InvalidCommand = 2,
+        DuplicateRejected = 3,
+        CapacityRejected = 4
+    }
+
     public interface ICheatCommandPublisher
     {
         bool IsEnabled { get; }
@@ -41,6 +50,20 @@ namespace CycloneGames.Cheat.Runtime
         void CancelCommand(string commandId, Router router);
 
         void ClearAll();
+    }
+
+    /// <summary>
+    /// Optional admission capability for callers that must distinguish an accepted publish
+    /// from duplicate, capacity, build-gate, or validation rejection.
+    /// </summary>
+    public interface ICheatCommandAdmissionPublisher
+    {
+        int MaximumConcurrentCommandCount { get; }
+
+        UniTask<CheatCommandPublishResult> TryPublishAsync<TCommand>(
+            TCommand command,
+            CheatCommandExecutionOptions options = default)
+            where TCommand : ICheatCommand;
     }
 
     public interface ICheatCommandRuntime : ICheatCommandPublisher, ICheatCommandControl, IDisposable

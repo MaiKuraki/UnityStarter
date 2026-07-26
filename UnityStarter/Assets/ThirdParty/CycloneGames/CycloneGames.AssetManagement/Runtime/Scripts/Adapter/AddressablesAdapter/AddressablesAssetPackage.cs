@@ -20,7 +20,7 @@ using CycloneGames.Logger;
 namespace CycloneGames.AssetManagement.Runtime
 {
     internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetBulkLoader, IAssetSceneLoader,
-        IAddressablesCatalogMaintenance, IAssetCatalogQuery, IAssetRuntimeDiagnostics, IAssetStoragePreflight
+        IAddressablesCatalogMaintenance, IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetStoragePreflight
     {
         private const int MAX_VERSION_FILE_BYTES = 1024 * 1024;
         private const int MAX_TRACKED_PROVIDER_OPERATION_TAILS = 16_384;
@@ -1023,6 +1023,13 @@ namespace CycloneGames.AssetManagement.Runtime
             AssetRuntimeGuard.EnsureMainThread();
             ThrowIfDestroyed();
             return _cacheService.TrimIdle(policy);
+        }
+
+        public AssetCacheTrimResult TrimIdleCacheStep(int maxWork)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            return _cacheService.TrimIdleStep(maxWork);
         }
 
         public void ClearBucket(string bucket)

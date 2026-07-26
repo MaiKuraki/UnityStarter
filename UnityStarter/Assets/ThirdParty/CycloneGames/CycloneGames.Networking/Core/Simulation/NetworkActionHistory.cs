@@ -31,6 +31,7 @@ namespace CycloneGames.Networking.Simulation
         private readonly NetworkActionHistoryEntry<TSnapshot>[] _entries;
         private int _nextIndex;
         private int _count;
+        private long _overwriteCount;
 
         public NetworkActionHistory(int capacity)
         {
@@ -60,11 +61,24 @@ namespace CycloneGames.Networking.Simulation
             }
         }
 
+        /// <summary>
+        /// Lifetime number of valid entries replaced by ring advancement. Clearing retained
+        /// entries does not reset this diagnostic counter.
+        /// </summary>
+        public long OverwriteCount => _overwriteCount;
+
         public void Record(ulong entityId, NetworkTickId tick, ushort sequence, in TSnapshot snapshot)
         {
             ValidateEntityAndTick(entityId, tick);
 
-            if (!_entries[_nextIndex].IsValid)
+            if (_entries[_nextIndex].IsValid)
+            {
+                if (_overwriteCount < long.MaxValue)
+                {
+                    _overwriteCount++;
+                }
+            }
+            else
             {
                 _count++;
             }

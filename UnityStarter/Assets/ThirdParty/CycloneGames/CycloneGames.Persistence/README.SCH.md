@@ -2,7 +2,7 @@
 
 [English](README.md) | 简体中文
 
-CycloneGames.Persistence 是与 serializer 无关、无 Unity 依赖的单条有界 versioned record 底座。它组合 codec 与 storage adapter，强制执行严格字节格式，在反序列化前检测偶发损坏，并以结构化结果返回运行时失败。
+CycloneGames.Persistence 是 serializer-neutral、无 Unity 依赖的单条有界 versioned record 底座。它将 codec 与 storage adapter 配对，强制执行严格字节格式，在反序列化前检测损坏，并以结构化结果返回运行时失败。
 
 ## 目录
 
@@ -18,9 +18,9 @@ CycloneGames.Persistence 是与 serializer 无关、无 Unity 依赖的单条有
 
 Persistence 将两个外部 adapter——serializer codec 与文件/数据库 storage provider——协调为安全的单条 Record pipeline。它把每条 Payload 用 versioned header、稳定 codec identifier 和 xxHash64 checksum 包装起来，并在反序列化前拒绝 header、长度或 integrity probe 不匹配的 Record。
 
-运行时失败通过带显式 `PersistenceErrorCode` 值的结果类型返回。无效参数和并发 overlap 会立即抛异常。致命运行时异常（`OutOfMemoryException`）不会转换为结果。
+运行时失败通过带显式 `PersistenceErrorCode` 值的结果类型返回。无效参数和并发 overlap 会立即抛异常。致命运行时异常（`OutOfMemoryException`）直接传播。
 
-Core assembly 仅引用 `CycloneGames.Hash.Core`。它不依赖 Unity、System.IO、Settings、VYaml、MessagePack、DI、reflection discovery 或后台 worker。
+Core assembly 的唯一依赖是 `CycloneGames.Hash.Core`。
 
 ### 关键特性
 
@@ -238,3 +238,9 @@ Store 不猜测旧格式。Prototype record、raw YAML 和未知 magic 返回 `R
 | 并发调用抛 `InvalidOperationException` | 同一 Store 的重叠操作 | 串行化调用；一个 Store = 一个 active operation。 |
 | 未捕获到 `OperationCanceledException` | Composition root 中仅 catch `Exception` | Catch 或检查 `result.ErrorCode == PersistenceErrorCode.Cancelled`。 |
 | IL2CPP Player 测试失败 | 使用 reflection fallback 而非 generated resolver | 将所有 reflection-based formatter 替换为 source-generated 或显式注册。 |
+
+## 内存诊断与存储边界
+
+`PersistenceStore<T>.GetMemorySnapshot()` 在不检查 application value、storage path 或 serialized content 的前提下，报告 operation activity、配置的 payload/record limit、已启动 load/save/delete 次数、overlap rejection，以及最近/峰值 record bytes。这些计数不会改变 Persistence Record V1。
+
+`PersistenceStore.GetMemorySnapshot()` 暴露 owner-local operation、rejection 与 retained-record counter，但不拥有外部 telemetry 或 report storage。Codec 与 storage adapter 仍负责 input bound、transient buffer、atomic write、quota 和 failure isolation。

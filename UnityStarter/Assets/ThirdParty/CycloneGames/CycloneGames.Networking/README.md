@@ -20,7 +20,7 @@ CycloneGames.Networking is a transport-neutral foundation for versioned message 
 
 The module provides transport, connection, runtime-context, serializer, and canonical message-endpoint contracts. Protocol registration is manifest-only, with explicit ID ranges, contract identities, payload budgets, channels, version windows, and fingerprints. Bounded buffers, queues, rate-limit state, sequence windows, reconnection reservations, and simulation histories are owned explicitly by the product composition root or its subsystems. Replication, interest, prediction, lockstep, rollback, session, and host-handoff primitives are building blocks for explicit product composition. Unity runtime bridges, LAN-host permission guidance, Editor diagnostics, and optional backend/serializer integrations complete the package.
 
-The module does not include an RPC framework, a generic Service Locator, or automatic state-variable replication. Request, response, command, and notification semantics are product-owned versioned messages. Composition is explicit and instance-owned.
+There is no RPC framework, generic Service Locator, or automatic state-variable replication. Request, response, command, and notification semantics are product-owned versioned messages. Composition is explicit and instance-owned.
 
 ### Key Features
 
@@ -350,3 +350,9 @@ Run the following checks for every shipping configuration:
 - `CycloneGames.RPGFoundation.Interaction.Networking`
 - `CycloneGames.RPGFoundation.Movement.Networking`
 - `CycloneGames.RPGFoundation.Projectile.Networking`
+
+## Memory Diagnostics and Bounded Maintenance
+
+`NetworkBufferPool.GetMemorySnapshot()` exposes fixed pool counts, capacities, admissions, and reuse counters; `TrimIdleStep(targetIdleCount, maxWork)` releases only idle buffers and performs bounded work. `RateLimiter.GetMemorySnapshot()` exposes current/capacity counts plus expiry and rejection statistics without enumerating client keys.
+
+Networking owners expose local snapshots and bounded idle-buffer or expired-rate-entry maintenance. Component-local maintenance is explicit and never acts as a universal package responder. Replication and acknowledgement retention remain owned by protocol-specific integrations, which must supply a confirmed watermark before expiry; generic diagnostics must not infer those values.

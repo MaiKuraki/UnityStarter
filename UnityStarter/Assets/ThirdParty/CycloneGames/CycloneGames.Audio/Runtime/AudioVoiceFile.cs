@@ -35,15 +35,44 @@ namespace CycloneGames.Audio.Runtime
         [SerializeField, Range(-3, 3)]
         private float pitchOffset = 0;
 
-        /// <summary>Language index this voice line belongs to.</summary>
+        /// <summary>Stable voice-locale code used by voice-locale selectors.</summary>
         [SerializeField]
-        private int language = 0;
+        private string voiceLocaleCode = string.Empty;
 
-        /// <summary>Subtitle / caption text associated with this voice clip.</summary>
-        [SerializeField]
-        private string text = null;
+        [NonSerialized] private string cachedLocaleCode;
+        [NonSerialized] private VoiceLocaleId cachedVoiceLocale;
+        [NonSerialized] private bool cachedVoiceLocaleIsValid;
+        [NonSerialized] private bool voiceLocaleCacheInitialized;
 
-        public int Language => this.language;
+        public string VoiceLocaleCode => this.voiceLocaleCode ?? string.Empty;
+
+        internal bool TryGetVoiceLocale(out VoiceLocaleId locale)
+        {
+            if (!this.voiceLocaleCacheInitialized ||
+                !string.Equals(
+                    this.cachedLocaleCode,
+                    this.voiceLocaleCode,
+                    StringComparison.Ordinal))
+            {
+                this.cachedLocaleCode = this.voiceLocaleCode;
+                this.cachedVoiceLocaleIsValid =
+                    VoiceLocaleId.TryCreate(
+                        this.voiceLocaleCode,
+                        out this.cachedVoiceLocale);
+                this.voiceLocaleCacheInitialized = true;
+            }
+
+            locale = this.cachedVoiceLocale;
+            return this.cachedVoiceLocaleIsValid;
+        }
+
+        private void InvalidateVoiceLocaleCache()
+        {
+            this.cachedLocaleCode = null;
+            this.cachedVoiceLocale = VoiceLocaleId.Invalid;
+            this.cachedVoiceLocaleIsValid = false;
+            this.voiceLocaleCacheInitialized = false;
+        }
 
         // ---- Source mode helpers ----
         public AudioFile.AudioFileSourceMode SourceMode
@@ -84,7 +113,6 @@ namespace CycloneGames.Audio.Runtime
         {
             activeEvent.ModulateVolume(this.volumeOffset);
             activeEvent.ModulatePitch(this.pitchOffset);
-            activeEvent.text = this.text;
 
             AudioFile.AudioFileSourceMode effectiveMode = GetEffectiveSourceMode();
 
@@ -179,9 +207,17 @@ namespace CycloneGames.Audio.Runtime
         private float CalcHeight()
         {
             float R(int n) => n * (RowH + RowGap);
-            // Source dropdown + clip/ref field + volume + pitch + text + language
-            float h = TitleBarH + R(6);
-            // External mode may show 1–2 extra info label rows
+            // Source dropdown + clip/ref field + volume + pitch + voice locale.
+            float h = TitleBarH + R(5);
+            if (string.IsNullOrEmpty(this.voiceLocaleCode))
+            {
+                h += R(2);
+            }
+            else if (!TryGetVoiceLocale(out _))
+            {
+                h += R(2);
+            }
+            // External mode may show two extra info label rows.
             if (GetEffectiveSourceMode() == AudioFile.AudioFileSourceMode.ExternalReference && externalReference != null)
                 h += R(2);
             return h + BottomPad;
@@ -197,33 +233,109 @@ namespace CycloneGames.Audio.Runtime
         {
             EditorGUI.BeginChangeCheck();
 
-            // Source mode selector
-            var newMode = (AudioFile.AudioFileSourceMode)EditorGUILayout.EnumPopup("Source", GetEffectiveSourceMode());
-            if (newMode != this.sourceMode) SourceMode = newMode;
+            var newMode = (AudioFile.AudioFileSourceMode)EditorGUILayout.EnumPopup(
+                "Source",
+                GetEffectiveSourceMode());
+            AudioClip newFile = this.file;
+            AudioClipReference newExternalReference = this.externalReference;
 
-            if (GetEffectiveSourceMode() == AudioFile.AudioFileSourceMode.EmbeddedClip)
+            if (newMode == AudioFile.AudioFileSourceMode.EmbeddedClip)
             {
-                this.file = EditorGUILayout.ObjectField("Audio Clip", this.file, typeof(AudioClip), false) as AudioClip;
-                this.externalReference = null;
+                newFile = EditorGUILayout.ObjectField(
+                    "Audio Clip",
+                    this.file,
+                    typeof(AudioClip),
+                    false) as AudioClip;
+                newExternalReference = null;
             }
             else
             {
-                this.externalReference = EditorGUILayout.ObjectField("Audio Reference", this.externalReference, typeof(AudioClipReference), false) as AudioClipReference;
-                this.file = null;
-                if (this.externalReference != null)
+                newExternalReference = EditorGUILayout.ObjectField(
+                    "Audio Reference",
+                    this.externalReference,
+                    typeof(AudioClipReference),
+                    false) as AudioClipReference;
+                newFile = null;
+                if (newExternalReference != null)
                 {
-                    EditorGUILayout.LabelField("Kind",     this.externalReference.LocationKind.ToString(), EditorStyles.miniLabel);
-                    EditorGUILayout.LabelField("Location", this.externalReference.GetDisplayLocation(),   EditorStyles.wordWrappedMiniLabel);
+                    EditorGUILayout.LabelField(
+                        "Kind",
+                        newExternalReference.LocationKind.ToString(),
+                        EditorStyles.miniLabel);
+                    EditorGUILayout.LabelField(
+                        "Location",
+                        newExternalReference.GetDisplayLocation(),
+                        EditorStyles.wordWrappedMiniLabel);
                 }
             }
 
-            this.volumeOffset = EditorGUILayout.Slider("Volume Offset", this.volumeOffset, -1f, 1f);
-            this.pitchOffset  = EditorGUILayout.Slider("Pitch Offset",  this.pitchOffset,  -3f, 3f);
-            this.text         = EditorGUILayout.TextField("Text",        this.text);
-            this.language     = EditorGUILayout.Popup("Language",        this.language, AudioManager.Languages);
+            float newVolumeOffset = EditorGUILayout.Slider(
+                "Volume Offset",
+                this.volumeOffset,
+                -1f,
+                1f);
+            float newPitchOffset = EditorGUILayout.Slider(
+                "Pitch Offset",
+                this.pitchOffset,
+                -3f,
+                3f);
 
-            if (EditorGUI.EndChangeCheck())
+            bool sourceNeedsNormalization = newMode != this.sourceMode;
+            if (EditorGUI.EndChangeCheck() || sourceNeedsNormalization)
+            {
+                Undo.RecordObject(this, "Edit Voice File");
+                this.sourceMode = newMode;
+                this.file = newFile;
+                this.externalReference = newExternalReference;
+                this.volumeOffset = newVolumeOffset;
+                this.pitchOffset = newPitchOffset;
                 EditorUtility.SetDirty(this);
+            }
+
+            string enteredLocale = EditorGUILayout.TextField(
+                "Voice Locale",
+                VoiceLocaleCode);
+            if (!string.Equals(
+                    enteredLocale,
+                    VoiceLocaleCode,
+                    StringComparison.Ordinal))
+            {
+                Undo.RecordObject(this, "Set Voice Locale");
+                if (string.IsNullOrEmpty(enteredLocale))
+                {
+                    this.voiceLocaleCode = string.Empty;
+                    InvalidateVoiceLocaleCache();
+                }
+                else if (VoiceLocaleId.TryCreate(enteredLocale, out VoiceLocaleId canonicalLocale))
+                {
+                    this.voiceLocaleCode = canonicalLocale.Code;
+                    this.cachedLocaleCode = this.voiceLocaleCode;
+                    this.cachedVoiceLocale = canonicalLocale;
+                    this.cachedVoiceLocaleIsValid = true;
+                    this.voiceLocaleCacheInitialized = true;
+                }
+                else
+                {
+                    // Preserve invalid authoring input so validation can report and locate it.
+                    this.voiceLocaleCode = enteredLocale;
+                    InvalidateVoiceLocaleCache();
+                }
+
+                EditorUtility.SetDirty(this);
+            }
+
+            if (string.IsNullOrEmpty(this.voiceLocaleCode))
+            {
+                EditorGUILayout.HelpBox(
+                    "Voice Locale is required when this node is connected to a Voice Locale Selector.",
+                    MessageType.Info);
+            }
+            else if (!TryGetVoiceLocale(out _))
+            {
+                EditorGUILayout.HelpBox(
+                    "Voice Locale must be a bounded BCP 47-style code such as en or pt-BR.",
+                    MessageType.Error);
+            }
         }
 #endif
     }

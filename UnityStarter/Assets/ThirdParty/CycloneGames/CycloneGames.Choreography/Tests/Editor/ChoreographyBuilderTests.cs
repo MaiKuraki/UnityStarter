@@ -67,6 +67,82 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
+        public void BoundedCollection_AppendsLargePreDeduplicatedListIntoEmptyResultsInOrder()
+        {
+            const int ResourceCount = 1024;
+            var clips = new ChoreographyClip[ResourceCount];
+            for (int i = 0; i < clips.Length; i++)
+            {
+                clips[i] = new ChoreographyClip(
+                    "clip-" + i,
+                    new ChoreographyResourceReference(
+                        "resource-" + i,
+                        ChoreographyResourceKind.Generic),
+                    0d,
+                    0d);
+            }
+
+            var asset = new BuiltChoreographyAsset(
+                "Large",
+                new[]
+                {
+                    new ChoreographySection(
+                        "Main",
+                        0d,
+                        new[]
+                        {
+                            new ChoreographyTrack(
+                                "Resources",
+                                ChoreographyTrackKind.Custom,
+                                clips)
+                        })
+                });
+            var results = new List<ChoreographyResourceReference>(ResourceCount);
+
+            bool completed = asset.TryCollectResourceReferences(
+                results,
+                maximumResultCount: ResourceCount,
+                maximumNodeScanCount: ResourceCount,
+                out int addedCount,
+                out int scannedNodeCount);
+
+            Assert.True(completed);
+            Assert.AreEqual(ResourceCount, addedCount);
+            Assert.AreEqual(ResourceCount, scannedNodeCount);
+            Assert.AreEqual(ResourceCount, results.Count);
+            for (int i = 0; i < results.Count; i++)
+            {
+                Assert.AreEqual("resource-" + i, results[i].Address);
+            }
+
+            var capacityLimitedResults = new List<ChoreographyResourceReference>(ResourceCount - 1);
+            bool capacityCompleted = asset.TryCollectResourceReferences(
+                capacityLimitedResults,
+                maximumResultCount: ResourceCount - 1,
+                maximumNodeScanCount: ResourceCount,
+                out int capacityAddedCount,
+                out int capacityScannedNodeCount);
+
+            Assert.False(capacityCompleted);
+            Assert.AreEqual(ResourceCount - 1, capacityAddedCount);
+            Assert.AreEqual(ResourceCount, capacityScannedNodeCount);
+            Assert.AreEqual(ResourceCount - 1, capacityLimitedResults.Count);
+
+            var scanLimitedResults = new List<ChoreographyResourceReference>(ResourceCount - 1);
+            bool scanCompleted = asset.TryCollectResourceReferences(
+                scanLimitedResults,
+                maximumResultCount: ResourceCount,
+                maximumNodeScanCount: ResourceCount - 1,
+                out int scanAddedCount,
+                out int limitedScannedNodeCount);
+
+            Assert.False(scanCompleted);
+            Assert.AreEqual(ResourceCount - 1, scanAddedCount);
+            Assert.AreEqual(ResourceCount - 1, limitedScannedNodeCount);
+            Assert.AreEqual(ResourceCount - 1, scanLimitedResults.Count);
+        }
+
+        [Test]
         public void Constructors_CopyInputArrays()
         {
             ChoreographyClip clip = new ChoreographyClip(

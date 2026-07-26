@@ -1,5 +1,15 @@
 # CycloneGames.GameplayFramework.Networking
 
+## 有界 Observer 准入
+
+一个 `GameplayNetworkObserverRegistry` 最多保留 `MaximumObserverCount`（`65,536`）个 observer，constructor 会拒绝更大的初始 capacity。该值是 implementation safety ceiling，不是 interest-management 预算。达到容量后，已有 observer 的更新与移除仍然可用。
+
+新代码应使用任一 `TrySetObserver` overload，并将 `false` 作为新增 observer 的容量拒绝。现有 `SetObserver` overload 保持成功路径行为，但在 ceiling 处以 `InvalidOperationException` fail-fast。`GetAdmissionSnapshot()` 以 O(1) 暴露 count、capacity 与单调 rejection counter。registry 不会自动驱逐 observer。
+
+迁移是 additive 的：将容量敏感的 `SetObserver` 调用替换为 `TrySetObserver`，再由产品在 registry 外执行 disconnect、relevance 或 retry policy。若调用方明确需要 fail-fast，可回退到 `SetObserver`。超过单个 ceiling 的负载应按显式 World/session owner 分片 registry；提高常量需要经过审查的 build 与负载验证。
+
+staged connection 仍有 hard bound，但不会获得推断出来的 expiry：当前契约没有显式 monotonic timestamp 与 timeout owner。其 lifecycle/protocol owner 仍负责在 authentication 完成、拒绝、disconnect 或 shutdown 后移除记录；pressure handling 不得 prune 它们。此改动不新增 serialized field，不重命名 wire 或 Unity serialized type，不改变 prefab、scene 或 asset 数据，也不持久化状态；无需资产或协议迁移。
+
 [English](./README.md) | 简体中文
 
 `CycloneGames.GameplayFramework.Networking` 将 `CycloneGames.GameplayFramework` 接入 `CycloneGames.Networking`。它提供 authoritative session adapter、GameplayFramework 消息 catalog、actor migration wire contract、server-authoritative damage 消息、authority role helper，以及 owner、team、area、always-relevant replication 的 observer 选择能力。

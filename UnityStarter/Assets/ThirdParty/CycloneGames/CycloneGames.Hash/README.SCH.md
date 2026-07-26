@@ -511,3 +511,7 @@ Runtime 程序集在所有 Unity 平台启用，不引用 `UnityEngine` 或平�
 
 - [xxHash 参考实现](https://github.com/Cyan4973/xxHash)
 - [IETF FNV 草案](https://datatracker.ietf.org/doc/draft-eastlake-fnv/)
+
+## 内存所有权
+
+Hash 消费 caller-owned input、不保留 payload，并把 streaming state 内联保存在 caller-owned value 中。因此本包不拥有 process-global metric source 或 pressure responder。未来若引入 process-global mutable reference state，必须重新审查 ownership 与容量。

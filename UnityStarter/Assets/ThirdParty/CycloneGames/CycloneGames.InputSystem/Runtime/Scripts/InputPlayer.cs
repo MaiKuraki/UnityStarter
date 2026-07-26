@@ -22,6 +22,7 @@ namespace CycloneGames.InputSystem.Runtime
         private const int MaxBindingOverrideRecordCount = 128;
         private const int MaxBindingOverrideFieldLength = 1024;
         private const int MaxContextRefreshPasses = 16;
+        public const int MaximumContextCaptureDepth = 1024;
         private static readonly ProfilerMarker BuildAssetMarker = new ProfilerMarker("CycloneGames.Input.BuildAsset");
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
@@ -177,6 +178,25 @@ namespace CycloneGames.InputSystem.Runtime
         public event Action<InputPlayerDeviceStatus> OnDeviceStatusChanged;
 
         public int PlayerId { get; }
+
+        public InputPlayerMemoryStats GetMemoryStats()
+        {
+            EnsureMainThread();
+            return new InputPlayerMemoryStats(
+                _actionsByKey.Count,
+                _contextDefinitions.Count,
+                _activeContexts.Count,
+                _buttonSubjects.Count +
+                    _longPressSubjects.Count +
+                    _longPressProgressSubjects.Count +
+                    _pressStateSubjects.Count +
+                    _vector2Subjects.Count +
+                    _scalarSubjects.Count,
+                _pollingActions.Count,
+                _holdStates.Count,
+                _contextStack.Count,
+                _captureStack.Count);
+        }
         public InputUser User { get; }
         internal bool IsDisposed => _isDisposed;
 
@@ -353,6 +373,12 @@ namespace CycloneGames.InputSystem.Runtime
             EnsureUsable();
             if (context == null) return new InputContextCapture(null, null);
             ValidateContextForActivation(context);
+
+            if (_captureStack.Count >= MaximumContextCaptureDepth)
+            {
+                throw new InvalidOperationException(
+                    $"Context capture depth cannot exceed {MaximumContextCaptureDepth}.");
+            }
 
             var entry = new CaptureEntry(context);
             _captureStack.Push(entry);

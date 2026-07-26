@@ -445,3 +445,9 @@ Runtime 包在未被调用时不会创建文件。
 3. 安装 performance test package 时运行 `CycloneGames.IO.Tests.Performance`。
 4. 在 Android/WebGL Player build 中验证 StreamingAssets URI。
 5. 在每个发布平台上验证 atomic replace、quota 行为与进程突然终止后的恢复。
+
+## 内存所有权
+
+IO abstraction 有意不拥有 shared cache 或 process-global pressure responder。产品若需要有界 admission 或 operation metrics，必须在 composition boundary 添加显式 decorator，并保持底层 file-store ownership 不变。
+
+直接使用 legacy IO API 是产品 composition root 的职责。请在实际发布 filesystem implementation 上验证每个 decorated store 的 limit 与 failure path。

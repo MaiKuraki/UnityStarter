@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.Settings.Persistence 在经验证的设置状态（`CycloneGames.Settings`）与有界持久化记录（`CycloneGames.Persistence`）之间搭建桥梁。它唯一的运行时服务 `PersistentSettings<T>` 负责协调加载、迁移、提交、保存和删除。每项职责仍归属其所属包。
+CycloneGames.Settings.Persistence 在经验证的设置状态（`CycloneGames.Settings`）与有界持久化记录（`CycloneGames.Persistence`）之间协调。`PersistentSettings<T>` 处理加载、迁移、提交、保存与删除。
 
 ## 目录
 
@@ -24,7 +24,7 @@ CycloneGames.Settings.Persistence 在经验证的设置状态（`CycloneGames.Se
 - `SettingsMigrationPipeline<T>` —— 从任意受支持版本的前向迁移。
 - `PersistenceStore<T>` —— 带字节预算与原子写入行为的版本化存储。
 
-它不拥有这三者中的任何一个，也不拥有任何可释放资源。
+调用方保留所有三者的所有权。
 
 ### 主要特性
 
@@ -251,3 +251,9 @@ Load 和 save 属于冷路径。
 ```
 
 测试覆盖：missing/default 行为、当前版本与迁移后的 load、不隐式写盘的显式 `RequiresSave`、future-version 拒绝、load 前/中取消、validation failure 的状态保护、过期 revision 保护、提交后 observer warning、使用当前版本 metadata 保存、delete 不 reset、operation overlap 与构造 schema/version 不一致拒绝。
+
+## 内存诊断
+
+`PersistentSettings<T>.GetMemorySnapshot()` 报告 bridge operation state、settings revision、底层 persistence operation/limit、已启动 load/save/delete 次数、overlap rejection 与最近/峰值 record bytes。这个 O(1) snapshot 不会 clone 或检查 settings value，也不会公开 storage content。
+
+`PersistentSettings<T>.GetMemorySnapshot()` 暴露 owner-local operation 与 retained-record counter。该类型负责协调 operation，但在 operation 结束后既不拥有权威 settings value，也不拥有 persistence buffer。Persistence record schema 与 migration 行为保持不变。

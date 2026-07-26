@@ -1,6 +1,7 @@
 using System;
 using CycloneGames.AIPerception.Runtime;
 using CycloneGames.Networking;
+using System.Threading;
 using Unity.Mathematics;
 
 namespace CycloneGames.AIPerception.Networking
@@ -63,7 +64,26 @@ namespace CycloneGames.AIPerception.Networking
 
     public sealed class AIPerceptionNetworkSyncBridge
     {
+        public const int MaximumDetectionInputsPerWrite = 4_096;
+
         private readonly AIPerceptionNetworkProfile _profile;
+        private long _writeOperationCount;
+        private long _suppliedDetectionCount;
+        private int _peakSuppliedDetectionCount;
+        private long _scannedDetectionCount;
+        private int _peakScannedDetectionCount;
+        private long _writtenEntryCount;
+        private long _unresolvedCount;
+        private long _invalidCount;
+        private long _capacityLimitedCount;
+        private long _duplicateCount;
+        private long _snapshotOperationCount;
+        private long _acceptedSnapshotCount;
+        private long _rejectedSnapshotCount;
+        private int _lastSnapshotEntryCount;
+        private int _peakSnapshotEntryCount;
+        private int _lastSnapshotPayloadBytes;
+        private int _peakSnapshotPayloadBytes;
 
         public AIPerceptionNetworkSyncBridge(AIPerceptionNetworkProfile profile = null)
         {
@@ -137,13 +157,28 @@ namespace CycloneGames.AIPerception.Networking
             if (targetResolver == null || tick < 0 || sourceSensorId < 0 ||
                 (extraFlags & ~AIPerceptionNetworkMessageValidator.KnownDetectionFlags) != 0)
             {
-                return new AIPerceptionDetectionEntryWriteResult(
+                var invalidResult = new AIPerceptionDetectionEntryWriteResult(
                     AIPerceptionDetectionEntryWriteStatus.InvalidArguments,
                     0,
                     0,
                     detections.Length,
                     0,
                     0);
+                RecordWriteResult(detections.Length, 0, in invalidResult);
+                return invalidResult;
+            }
+
+            if (detections.Length > MaximumDetectionInputsPerWrite)
+            {
+                var boundedResult = new AIPerceptionDetectionEntryWriteResult(
+                    AIPerceptionDetectionEntryWriteStatus.Partial,
+                    0,
+                    0,
+                    0,
+                    detections.Length,
+                    0);
+                RecordWriteResult(detections.Length, 0, in boundedResult);
+                return boundedResult;
             }
 
             int capacity = Math.Min(entries.Length, _profile.MaxSnapshotEntries);
@@ -190,7 +225,7 @@ namespace CycloneGames.AIPerception.Networking
             }
 
             bool complete = unresolved == 0 && invalid == 0 && capacityLimited == 0 && duplicates == 0;
-            return new AIPerceptionDetectionEntryWriteResult(
+            var result = new AIPerceptionDetectionEntryWriteResult(
                 complete
                     ? AIPerceptionDetectionEntryWriteStatus.Success
                     : AIPerceptionDetectionEntryWriteStatus.Partial,
@@ -199,6 +234,8 @@ namespace CycloneGames.AIPerception.Networking
                 invalid,
                 capacityLimited,
                 duplicates);
+            RecordWriteResult(detections.Length, detections.Length, in result);
+            return result;
         }
 
         public AIPerceptionNetworkMessageValidationResult TryCreateSnapshot(
@@ -213,14 +250,18 @@ namespace CycloneGames.AIPerception.Networking
             message = default;
             if (!_profile.HasFeature(AIPerceptionNetworkFeatureFlags.DetectionSnapshots))
             {
-                return AIPerceptionNetworkMessageValidationResult.UnsupportedFeature;
+                return RecordSnapshotResult(
+                    AIPerceptionNetworkMessageValidationResult.UnsupportedFeature,
+                    entries.Length);
             }
 
             if (entries.Length > _profile.MaxSnapshotEntries ||
                 AIPerceptionNetworkWireCodec.GetSnapshotPayloadBytes(entries.Length) >
                 _profile.MaxSnapshotPayloadBytes)
             {
-                return AIPerceptionNetworkMessageValidationResult.EntryCountOutOfRange;
+                return RecordSnapshotResult(
+                    AIPerceptionNetworkMessageValidationResult.EntryCountOutOfRange,
+                    entries.Length);
             }
 
             message = new AIPerceptionDetectionSnapshotMessage(
@@ -239,7 +280,33 @@ namespace CycloneGames.AIPerception.Networking
                 message = default;
             }
 
-            return result;
+            return RecordSnapshotResult(result, entries.Length);
+        }
+
+        /// <summary>Returns lock-free counters without retaining any message or entry data.</summary>
+        public AIPerceptionNetworkMemoryStats GetMemoryStats()
+        {
+            return new AIPerceptionNetworkMemoryStats(
+                _profile.MaxSnapshotEntries,
+                _profile.MaxSnapshotPayloadBytes,
+                MaximumDetectionInputsPerWrite,
+                Interlocked.Read(ref _writeOperationCount),
+                Interlocked.Read(ref _suppliedDetectionCount),
+                Volatile.Read(ref _peakSuppliedDetectionCount),
+                Interlocked.Read(ref _scannedDetectionCount),
+                Volatile.Read(ref _peakScannedDetectionCount),
+                Interlocked.Read(ref _writtenEntryCount),
+                Interlocked.Read(ref _unresolvedCount),
+                Interlocked.Read(ref _invalidCount),
+                Interlocked.Read(ref _capacityLimitedCount),
+                Interlocked.Read(ref _duplicateCount),
+                Interlocked.Read(ref _snapshotOperationCount),
+                Interlocked.Read(ref _acceptedSnapshotCount),
+                Interlocked.Read(ref _rejectedSnapshotCount),
+                Volatile.Read(ref _lastSnapshotEntryCount),
+                Volatile.Read(ref _peakSnapshotEntryCount),
+                Volatile.Read(ref _lastSnapshotPayloadBytes),
+                Volatile.Read(ref _peakSnapshotPayloadBytes));
         }
 
         public AIPerceptionFullStateRequestMessage CreateFullStateRequest(
@@ -314,6 +381,88 @@ namespace CycloneGames.AIPerception.Networking
                 CanonicalizeZero(value.x),
                 CanonicalizeZero(value.y),
                 CanonicalizeZero(value.z));
+        }
+
+        private void RecordWriteResult(
+            int suppliedCount,
+            int scannedCount,
+            in AIPerceptionDetectionEntryWriteResult result)
+        {
+            SaturatingIncrement(ref _writeOperationCount);
+            SaturatingAdd(ref _suppliedDetectionCount, suppliedCount);
+            UpdatePeak(ref _peakSuppliedDetectionCount, suppliedCount);
+            SaturatingAdd(ref _scannedDetectionCount, scannedCount);
+            UpdatePeak(ref _peakScannedDetectionCount, scannedCount);
+            SaturatingAdd(ref _writtenEntryCount, result.WrittenCount);
+            SaturatingAdd(ref _unresolvedCount, result.UnresolvedCount);
+            SaturatingAdd(ref _invalidCount, result.InvalidCount);
+            SaturatingAdd(ref _capacityLimitedCount, result.CapacityLimitedCount);
+            SaturatingAdd(ref _duplicateCount, result.DuplicateCount);
+        }
+
+        private AIPerceptionNetworkMessageValidationResult RecordSnapshotResult(
+            AIPerceptionNetworkMessageValidationResult result,
+            int entryCount)
+        {
+            int payloadBytes = entryCount <= AIPerceptionNetworkProtocol.MAX_SNAPSHOT_ENTRIES
+                ? Math.Max(0, AIPerceptionNetworkWireCodec.GetSnapshotPayloadBytes(entryCount))
+                : 0;
+            SaturatingIncrement(ref _snapshotOperationCount);
+            if (result == AIPerceptionNetworkMessageValidationResult.Valid)
+            {
+                SaturatingIncrement(ref _acceptedSnapshotCount);
+            }
+            else
+            {
+                SaturatingIncrement(ref _rejectedSnapshotCount);
+            }
+
+            Volatile.Write(ref _lastSnapshotEntryCount, entryCount);
+            Volatile.Write(ref _lastSnapshotPayloadBytes, payloadBytes);
+            UpdatePeak(ref _peakSnapshotEntryCount, entryCount);
+            UpdatePeak(ref _peakSnapshotPayloadBytes, payloadBytes);
+            return result;
+        }
+
+        private static void SaturatingIncrement(ref long target)
+        {
+            SaturatingAdd(ref target, 1L);
+        }
+
+        private static void SaturatingAdd(ref long target, long value)
+        {
+            if (value <= 0L)
+            {
+                return;
+            }
+
+            long current = Interlocked.Read(ref target);
+            while (current != long.MaxValue)
+            {
+                long next = current > long.MaxValue - value ? long.MaxValue : current + value;
+                long observed = Interlocked.CompareExchange(ref target, next, current);
+                if (observed == current)
+                {
+                    return;
+                }
+
+                current = observed;
+            }
+        }
+
+        private static void UpdatePeak(ref int target, int candidate)
+        {
+            int current = Volatile.Read(ref target);
+            while (candidate > current)
+            {
+                int observed = Interlocked.CompareExchange(ref target, candidate, current);
+                if (observed == current)
+                {
+                    return;
+                }
+
+                current = observed;
+            }
         }
 
         private static EntryInsertionResult InsertCanonical(

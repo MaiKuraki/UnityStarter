@@ -681,6 +681,18 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Networking
             SnapshotWriter = new BinaryWriter(SnapshotStream, Encoding.UTF8, true);
         }
 
+        public BTStateSnapshotBufferMemoryStats GetMemoryStats()
+        {
+            EnsureNotDisposed();
+            return new BTStateSnapshotBufferMemoryStats(
+                NodeStates.Length,
+                NodeAuxInts.Length,
+                TraversalNodes.Capacity,
+                _traversalStack.Capacity,
+                BlackboardStream.Capacity,
+                SnapshotStream.Capacity);
+        }
+
         internal void EnsureNodeCapacity(int nodeCount)
         {
             EnsureNotDisposed();

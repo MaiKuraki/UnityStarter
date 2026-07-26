@@ -1,0 +1,24 @@
+{
+    "name": "CycloneGames.Choreography.AssetManagement.Tests.Editor",
+    "rootNamespace": "CycloneGames.Choreography.AssetManagement.Tests",
+    "references": [
+        "CycloneGames.Choreography.AssetManagement",
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.AssetManagement.Runtime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

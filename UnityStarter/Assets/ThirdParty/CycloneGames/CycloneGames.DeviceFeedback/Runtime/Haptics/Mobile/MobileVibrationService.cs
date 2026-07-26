@@ -69,6 +69,11 @@ namespace CycloneGames.DeviceFeedback.Runtime
 
         private static void EnsureBuffers(int count)
         {
+            if (count < 1 || count > DeviceFeedbackLimits.HardMaximumWaveformSampleCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(count));
+            }
+
             if (s_timingBuf.Length >= count) return;
             int capacity = Math.Max(count, 64);
             s_timingBuf = new long[capacity];
@@ -78,6 +83,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
             s_sharpnessBuf = new float[capacity];
             s_typeBuf = new int[capacity];
             s_durationBuf = new float[capacity];
+            UpdateRetainedBufferElementBytes();
         }
 
         // ── Preset patterns (static, never re-allocated) ──
@@ -87,6 +93,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
         private static readonly long[] ErrorPattern = { 0, 50, 40, 50, 40, 50 };
 
         private bool? _hasVibrator;
+        private readonly DeviceFeedbackLimits _limits;
         private bool _initialized;
         private bool _disposed;
 #if UNITY_IOS
@@ -101,6 +108,22 @@ namespace CycloneGames.DeviceFeedback.Runtime
 
         public bool IsAvailable => HasVibrator;
         public bool IsActive { get; set; } = true;
+        public DeviceFeedbackLimits Limits => _limits;
+
+        public DeviceFeedbackMemoryStats GetMemoryStats()
+        {
+            return DeviceFeedbackDiagnostics.GetMemoryStats();
+        }
+
+        public MobileVibrationService()
+            : this(DeviceFeedbackLimits.Default)
+        {
+        }
+
+        public MobileVibrationService(DeviceFeedbackLimits limits)
+        {
+            _limits = limits.Normalize();
+        }
 
         public void Initialize()
         {
@@ -160,8 +183,17 @@ namespace CycloneGames.DeviceFeedback.Runtime
             sharpness = Mathf.Clamp01(sharpness);
             if (normalizedIntensity <= 0f) return;
 
-            long ms = (long)(durationSeconds * 1000f);
-            if (ms <= 0) return;
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.ValidateDurationSeconds(
+                durationSeconds,
+                in _limits,
+                out long ms);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(ms);
 
 #if UNITY_ANDROID
             int amplitude = Mathf.Clamp((int)(normalizedIntensity * 255), 1, 255);
@@ -183,11 +215,25 @@ namespace CycloneGames.DeviceFeedback.Runtime
         public void PlayCurve(AnimationCurve intensityCurve, float durationSeconds,
                               AnimationCurve sharpnessCurve = null, int sampleIntervalMs = 20)
         {
-            if (intensityCurve == null || durationSeconds <= 0f || !CanOperate()) return;
+            if (intensityCurve == null || !CanOperate()) return;
             sampleIntervalMs = Mathf.Max(sampleIntervalMs, 5);
 
-            int sampleCount = Mathf.Max(1, Mathf.CeilToInt(durationSeconds * 1000f / sampleIntervalMs));
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.CalculateSampleCount(
+                durationSeconds,
+                sampleIntervalMs,
+                in _limits,
+                out long durationMilliseconds,
+                out int sampleCount);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
             EnsureBuffers(sampleCount);
+            DeviceFeedbackDiagnostics.RecordAccepted(
+                durationMilliseconds,
+                waveformSampleCount: sampleCount);
 
             // Sample both curves into pre-allocated buffers
             for (int i = 0; i < sampleCount; i++)
@@ -273,6 +319,16 @@ namespace CycloneGames.DeviceFeedback.Runtime
         public void Vibrate(long milliseconds)
         {
             if (!CanOperate()) return;
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.ValidateDurationMilliseconds(
+                milliseconds,
+                in _limits);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(milliseconds);
 #if UNITY_ANDROID
             VibrateAndroid(milliseconds);
 #elif UNITY_IOS
@@ -288,6 +344,19 @@ namespace CycloneGames.DeviceFeedback.Runtime
         public void Vibrate(long[] pattern, int repeat = -1)
         {
             if (pattern == null || !CanOperate()) return;
+            DeviceFeedbackAdmissionFailure failure = ValidatePattern(
+                pattern,
+                repeat,
+                out long totalDurationMilliseconds);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(
+                totalDurationMilliseconds,
+                patternSegmentCount: pattern.Length);
 #if UNITY_ANDROID
             VibrateAndroidPattern(pattern, repeat);
 #elif UNITY_IOS
@@ -512,6 +581,7 @@ namespace CycloneGames.DeviceFeedback.Runtime
                 {
                     s_jniTimings = new long[sampleCount];
                     s_jniAmplitudes = new int[sampleCount];
+                    UpdateRetainedBufferElementBytes();
                 }
                 Array.Copy(s_timingBuf, s_jniTimings, sampleCount);
                 Array.Copy(s_amplitudeBuf, s_jniAmplitudes, sampleCount);
@@ -533,7 +603,10 @@ namespace CycloneGames.DeviceFeedback.Runtime
             int worstCase = sampleCount * 2 + 1;
 
             if (s_buildBuf.Length < worstCase)
+            {
                 s_buildBuf = new long[worstCase];
+                UpdateRetainedBufferElementBytes();
+            }
 
             int idx = 0;
             long pauseAccum = 0;
@@ -569,7 +642,10 @@ namespace CycloneGames.DeviceFeedback.Runtime
             if (idx == 0)
             {
                 if (s_onOffPatternBuf.Length < 2)
+                {
                     s_onOffPatternBuf = new long[2];
+                    UpdateRetainedBufferElementBytes();
+                }
                 s_onOffPatternBuf[0] = 0;
                 s_onOffPatternBuf[1] = 1;
                 onOffPattern = s_onOffPatternBuf;
@@ -577,7 +653,10 @@ namespace CycloneGames.DeviceFeedback.Runtime
             }
 
             if (s_onOffPatternBuf.Length < idx)
+            {
                 s_onOffPatternBuf = new long[idx];
+                UpdateRetainedBufferElementBytes();
+            }
             Array.Copy(s_buildBuf, s_onOffPatternBuf, idx);
             onOffPattern = s_onOffPatternBuf;
         }
@@ -705,7 +784,22 @@ namespace CycloneGames.DeviceFeedback.Runtime
         {
             var events = clip.events;
             int count = events.Length;
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.ValidateEvents(
+                events,
+                in _limits,
+                requireWaveformCapacity: true,
+                out long durationMilliseconds);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
             EnsureBuffers(count);
+            DeviceFeedbackDiagnostics.RecordAccepted(
+                durationMilliseconds,
+                waveformSampleCount: count,
+                hapticEventCount: count);
 
             for (int i = 0; i < count; i++)
             {
@@ -746,6 +840,63 @@ namespace CycloneGames.DeviceFeedback.Runtime
         }
 
         private static int ClampToInt(long value) => (int)Math.Min(value, int.MaxValue);
+
+        private DeviceFeedbackAdmissionFailure ValidatePattern(
+            long[] pattern,
+            int repeat,
+            out long totalDurationMilliseconds)
+        {
+            totalDurationMilliseconds = 0L;
+            if (pattern.Length == 0 || repeat < -1 || repeat >= pattern.Length)
+            {
+                return DeviceFeedbackAdmissionFailure.Invalid;
+            }
+
+            if (pattern.Length > _limits.MaximumPatternSegmentCount)
+            {
+                return DeviceFeedbackAdmissionFailure.Capacity;
+            }
+
+            for (int index = 0; index < pattern.Length; index++)
+            {
+                long segment = pattern[index];
+                if (segment < 0L)
+                {
+                    return DeviceFeedbackAdmissionFailure.Invalid;
+                }
+
+                if (segment > _limits.MaximumDurationMilliseconds - totalDurationMilliseconds)
+                {
+                    return DeviceFeedbackAdmissionFailure.Capacity;
+                }
+
+                totalDurationMilliseconds += segment;
+            }
+
+            return totalDurationMilliseconds > 0L
+                ? DeviceFeedbackAdmissionFailure.None
+                : DeviceFeedbackAdmissionFailure.Invalid;
+        }
+
+        private static void UpdateRetainedBufferElementBytes()
+        {
+            long bytes =
+                s_timingBuf.LongLength * sizeof(long) +
+                s_amplitudeBuf.LongLength * sizeof(int) +
+                s_floatTimeBuf.LongLength * sizeof(float) +
+                s_intensityBuf.LongLength * sizeof(float) +
+                s_sharpnessBuf.LongLength * sizeof(float) +
+                s_typeBuf.LongLength * sizeof(int) +
+                s_durationBuf.LongLength * sizeof(float) +
+                s_buildBuf.LongLength * sizeof(long) +
+                s_onOffPatternBuf.LongLength * sizeof(long);
+#if UNITY_ANDROID
+            bytes +=
+                s_jniTimings.LongLength * sizeof(long) +
+                s_jniAmplitudes.LongLength * sizeof(int);
+#endif
+            DeviceFeedbackDiagnostics.SetRetainedBufferElementBytes(bytes);
+        }
 
         #endregion
     }

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace CycloneGames.Networking.Security
 {
@@ -16,6 +17,8 @@ namespace CycloneGames.Networking.Security
 
         private readonly ConcurrentDictionary<int, ConnectionBucket> _buckets = new ConcurrentDictionary<int, ConnectionBucket>();
         private readonly object _creationLock = new object();
+        private long _capacityRejectionCount;
+        private long _expiredConnectionPruneCount;
 
         public RateLimiter(
             int maxMessagesPerSecond = 60,
@@ -48,6 +51,18 @@ namespace CycloneGames.Networking.Security
         public int MaxTrackedConnections { get; }
         public double IdleTimeoutSeconds { get; }
         public int TrackedConnectionCount => _buckets.Count;
+
+        public RateLimiterMemorySnapshot GetMemorySnapshot()
+        {
+            return new RateLimiterMemorySnapshot(
+                _buckets.Count,
+                MaxTrackedConnections,
+                MaxMessagesPerSecond,
+                MaxBytesPerSecond,
+                BurstLimit,
+                Interlocked.Read(ref _capacityRejectionCount),
+                Interlocked.Read(ref _expiredConnectionPruneCount));
+        }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryConsume(int connectionId, int payloadBytes, double currentTime)
@@ -104,6 +119,11 @@ namespace CycloneGames.Networking.Security
                 }
             }
 
+            if (removed > 0)
+            {
+                Interlocked.Add(ref _expiredConnectionPruneCount, removed);
+            }
+
             return removed;
         }
 
@@ -145,7 +165,10 @@ namespace CycloneGames.Networking.Security
                 if (_buckets.Count >= MaxTrackedConnections)
                     PruneExpired(currentTime, Math.Max(1, MaxTrackedConnections / 16));
                 if (_buckets.Count >= MaxTrackedConnections)
+                {
+                    Interlocked.Increment(ref _capacityRejectionCount);
                     return null;
+                }
 
                 var created = new ConnectionBucket(this, currentTime);
                 return _buckets.TryAdd(connectionId, created)

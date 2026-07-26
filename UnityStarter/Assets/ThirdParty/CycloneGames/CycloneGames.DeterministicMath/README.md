@@ -711,3 +711,9 @@ Before using the module as an authoritative cross-process contract:
 - profile the actual Player/backend with production-scale data.
 
 The release claim should name the exact platforms, runtimes, test corpus, raw contracts, and performance budgets that were verified.
+
+## Table Memory Ownership
+
+The current checkout retains one fixed process-global 32-element `long[]` CORDIC atan table. `FPMath.GetMemorySnapshot()` reports the exact element count and a derived element-payload byte count (`Length * sizeof(long)`) without exposing or copying table data. Payload bytes exclude the managed array header, length field, alignment, runtime bookkeeping, and allocator overhead.
+
+The deterministic lookup table is process-scoped and immutable after type initialization. It is required for deterministic trigonometry and deliberately has no clear or trim semantics. Diagnostics may read its fixed characteristics, but no external adapter may replace it with another cache.

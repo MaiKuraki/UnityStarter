@@ -142,6 +142,52 @@ namespace CycloneGames.InputSystem.Runtime
             get { EnsureMainThread(); return _registeredPlayers.Count; }
         }
 
+        public InputManagerMemoryStats GetMemoryStats()
+        {
+            EnsureMainThread();
+            int actionCount = 0;
+            int contextDefinitionCount = 0;
+            int activeContextCount = 0;
+            int subjectCount = 0;
+            int pollingActionCount = 0;
+            int holdStateCount = 0;
+            int contextStackCount = 0;
+            int captureStackCount = 0;
+            foreach (KeyValuePair<int, IInputPlayer> pair in _registeredPlayers)
+            {
+                if (!(pair.Value is InputPlayer player))
+                {
+                    continue;
+                }
+
+                InputPlayerMemoryStats playerStats = player.GetMemoryStats();
+                actionCount += playerStats.ActionCount;
+                contextDefinitionCount += playerStats.ContextDefinitionCount;
+                activeContextCount += playerStats.ActiveContextCount;
+                subjectCount += playerStats.SubjectCount;
+                pollingActionCount += playerStats.PollingActionCount;
+                holdStateCount += playerStats.HoldStateCount;
+                contextStackCount += playerStats.ContextStackCount;
+                captureStackCount += playerStats.CaptureStackCount;
+            }
+
+            return new InputManagerMemoryStats(
+                _registeredPlayers.Count,
+                _limits.MaxPlayers,
+                _joinsInProgress.Count,
+                _reservedDeviceIds.Count,
+                _bindingOverridesByPlayer.Count,
+                actionCount,
+                contextDefinitionCount,
+                activeContextCount,
+                subjectCount,
+                pollingActionCount,
+                holdStateCount,
+                contextStackCount,
+                captureStackCount,
+                _limits.MaxPlayers * InputPlayer.MaximumContextCaptureDepth);
+        }
+
         private InputManagerInitializationResult _lastInitializationResult;
         public InputManagerInitializationResult LastInitializationResult
         {

@@ -10,21 +10,32 @@ namespace CycloneGames.DeviceFeedback.Runtime
     {
         private readonly IDeviceLightBackend _backend;
         private readonly bool _ownsBackend;
+        private readonly DeviceFeedbackLimits _limits;
         private bool _isActive = true;
         private bool _disposed;
 
         public GamepadLightService()
-            : this(NoopDeviceLightBackend.Instance, false)
+            : this(NoopDeviceLightBackend.Instance, DeviceFeedbackLimits.Default, false)
         {
         }
 
         public GamepadLightService(IDeviceLightBackend backend, bool ownsBackend = true)
+            : this(backend, DeviceFeedbackLimits.Default, ownsBackend)
+        {
+        }
+
+        public GamepadLightService(
+            IDeviceLightBackend backend,
+            DeviceFeedbackLimits limits,
+            bool ownsBackend = true)
         {
             _backend = backend ?? NoopDeviceLightBackend.Instance;
             _ownsBackend = ownsBackend && !ReferenceEquals(_backend, NoopDeviceLightBackend.Instance);
+            _limits = limits.Normalize();
         }
 
         public bool IsAvailable => !_disposed && _backend.IsAvailable;
+        public DeviceFeedbackLimits Limits => _limits;
 
         public bool IsActive
         {
@@ -66,32 +77,94 @@ namespace CycloneGames.DeviceFeedback.Runtime
 
         public void Flash(Color onColor, Color offColor, float onDurationSeconds, float offDurationSeconds)
         {
-            if (!CanOperate() || onDurationSeconds <= 0f || offDurationSeconds <= 0f)
+            if (!CanOperate())
             {
                 return;
             }
 
+            DeviceFeedbackAdmissionFailure onFailure = DeviceFeedbackAdmission.ValidateDurationSeconds(
+                onDurationSeconds,
+                in _limits,
+                out long onDurationMilliseconds);
+            DeviceFeedbackAdmissionFailure offFailure = DeviceFeedbackAdmission.ValidateDurationSeconds(
+                offDurationSeconds,
+                in _limits,
+                out long offDurationMilliseconds);
+            DeviceFeedbackAdmissionFailure failure = onFailure != DeviceFeedbackAdmissionFailure.None
+                ? onFailure
+                : offFailure;
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            long totalDurationMilliseconds = onDurationMilliseconds + offDurationMilliseconds;
+            if (totalDurationMilliseconds > _limits.MaximumDurationMilliseconds)
+            {
+                DeviceFeedbackDiagnostics.RecordCapacityRejected();
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(totalDurationMilliseconds);
             _backend.Flash(ClampColor(onColor), ClampColor(offColor), onDurationSeconds, offDurationSeconds);
         }
 
         public void PlayGradient(Gradient gradient, float durationSeconds, int sampleIntervalMs = 50)
         {
-            if (gradient == null || !CanOperate() || durationSeconds <= 0f)
+            if (gradient == null || !CanOperate())
             {
                 return;
             }
 
-            _backend.PlayGradient(gradient, durationSeconds, SanitizeSampleInterval(sampleIntervalMs));
+            int sanitizedInterval = SanitizeSampleInterval(sampleIntervalMs);
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.CalculateSampleCount(
+                durationSeconds,
+                sanitizedInterval,
+                in _limits,
+                out long durationMilliseconds,
+                out int sampleCount);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(
+                durationMilliseconds,
+                waveformSampleCount: sampleCount);
+            _backend.PlayGradient(gradient, durationSeconds, sanitizedInterval);
         }
 
         public void PlayIntensityCurve(Color baseColor, AnimationCurve intensityCurve, float durationSeconds, int sampleIntervalMs = 50)
         {
-            if (intensityCurve == null || !CanOperate() || durationSeconds <= 0f)
+            if (intensityCurve == null || !CanOperate())
             {
                 return;
             }
 
-            _backend.PlayIntensityCurve(ClampColor(baseColor), intensityCurve, durationSeconds, SanitizeSampleInterval(sampleIntervalMs));
+            int sanitizedInterval = SanitizeSampleInterval(sampleIntervalMs);
+            DeviceFeedbackAdmissionFailure failure = DeviceFeedbackAdmission.CalculateSampleCount(
+                durationSeconds,
+                sanitizedInterval,
+                in _limits,
+                out long durationMilliseconds,
+                out int sampleCount);
+            if (failure != DeviceFeedbackAdmissionFailure.None)
+            {
+                DeviceFeedbackAdmission.RecordRejected(failure);
+                return;
+            }
+
+            DeviceFeedbackDiagnostics.RecordAccepted(
+                durationMilliseconds,
+                waveformSampleCount: sampleCount);
+            _backend.PlayIntensityCurve(ClampColor(baseColor), intensityCurve, durationSeconds, sanitizedInterval);
+        }
+
+        public DeviceFeedbackMemoryStats GetMemoryStats()
+        {
+            return DeviceFeedbackDiagnostics.GetMemoryStats();
         }
 
         public void CancelAnimation()

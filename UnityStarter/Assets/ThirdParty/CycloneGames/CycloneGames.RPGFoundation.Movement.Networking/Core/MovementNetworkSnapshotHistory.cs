@@ -28,6 +28,8 @@ namespace CycloneGames.RPGFoundation.Movement.Networking
             }
         }
 
+        public long OverwriteCount => _history.OverwriteCount;
+
         public void Record(in MovementNetworkSnapshotMessage snapshot)
         {
             _history.Record(

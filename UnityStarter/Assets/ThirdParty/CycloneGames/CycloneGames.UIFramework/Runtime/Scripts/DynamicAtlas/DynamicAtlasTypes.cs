@@ -56,7 +56,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
     public readonly struct DynamicAtlasStats
     {
         public readonly int PageCount;
+        public readonly int PageCapacity;
         public readonly int EntryCount;
+        public readonly int EntryCapacity;
         public readonly int ActiveEntryCount;
         public readonly int RetainedEntryCount;
         public readonly int ActiveReferenceCount;
@@ -80,7 +82,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 
         internal DynamicAtlasStats(
             int pageCount,
+            int pageCapacity,
             int entryCount,
+            int entryCapacity,
             int activeEntryCount,
             int retainedEntryCount,
             int activeReferenceCount,
@@ -100,7 +104,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             long synchronousReadbackCount)
         {
             PageCount = pageCount;
+            PageCapacity = pageCapacity;
             EntryCount = entryCount;
+            EntryCapacity = entryCapacity;
             ActiveEntryCount = activeEntryCount;
             RetainedEntryCount = retainedEntryCount;
             ActiveReferenceCount = activeReferenceCount;

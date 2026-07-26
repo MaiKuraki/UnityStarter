@@ -1,0 +1,26 @@
+{
+  "name": "com.cyclone-games.audio.localization",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Audio.Localization",
+  "description": "Optional locale synchronization between CycloneGames.Localization and CycloneGames.Audio voice-locale control.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cysharp.unitask": "2.5.11",
+    "com.cyclone-games.asset-management": "1.0.0",
+    "com.cyclone-games.audio": "1.0.0",
+    "com.cyclone-games.localization": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Audio",
+    "Localization",
+    "Voice"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": []
+}

@@ -19,6 +19,7 @@ namespace CycloneGames.Networking.Buffers
         private static int _invalidReturnCount;
         private static int _maxPoolSize = DefaultMaxPoolSize;
         private static int _clearBuffersOnReturn;
+        private static long _pressureTrimmedBufferCount;
 
         public static int Count => Volatile.Read(ref _count);
 
@@ -31,6 +32,17 @@ namespace CycloneGames.Networking.Buffers
         public static int MaxPoolSize => Volatile.Read(ref _maxPoolSize);
 
         public static bool ClearBuffersOnReturn => Volatile.Read(ref _clearBuffersOnReturn) != 0;
+
+        public static NetworkBufferPoolMemorySnapshot GetMemorySnapshot()
+        {
+            return new NetworkBufferPoolMemorySnapshot(
+                Count,
+                OutstandingCount,
+                MaxPoolSize,
+                InvalidReturnCount,
+                Interlocked.Read(ref _pressureTrimmedBufferCount),
+                ClearBuffersOnReturn);
+        }
 
         public static void Configure(int maxPoolSize, bool clearBuffersOnReturn = false)
         {
@@ -136,6 +148,36 @@ namespace CycloneGames.Networking.Buffers
                 Interlocked.Decrement(ref _count);
                 storage.ReleaseBuffer(clearBuffer);
             }
+        }
+
+        /// <summary>Releases at most <paramref name="maxWork"/> idle buffers and never touches active leases.</summary>
+        public static NetworkBufferPoolTrimResult TrimIdleStep(int targetIdleCount, int maxWork)
+        {
+            if (targetIdleCount < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(targetIdleCount));
+            }
+
+            if (maxWork < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxWork));
+            }
+
+            int released = 0;
+            bool clearBuffer = ClearBuffersOnReturn;
+            while (released < maxWork && Count > targetIdleCount && Pool.TryDequeue(out NetworkBufferStorage storage))
+            {
+                Interlocked.Decrement(ref _count);
+                storage.ReleaseBuffer(clearBuffer);
+                released++;
+            }
+
+            if (released > 0)
+            {
+                Interlocked.Add(ref _pressureTrimmedBufferCount, released);
+            }
+
+            return new NetworkBufferPoolTrimResult(released, Count);
         }
 
         private static bool TryReservePoolSlot()

@@ -108,6 +108,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             Capacity,
             MemoryBudget,
             Retention,
+            Pressure,
             Explicit
         }
 
@@ -258,6 +259,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         private long _capacityEvictionCount;
         private long _memoryBudgetEvictionCount;
         private long _retentionEvictionCount;
+        private long _pressureEvictionCount;
         private long _explicitEvictionCount;
         private long _evictedBytesApprox;
         private long _providerReleaseFailureCount;
@@ -847,6 +849,58 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             return evicted;
         }
 
+        /// <summary>
+        /// Removes at most <paramref name="maxWork"/> idle handles from owner cache storage.
+        /// Active handles are never inspected or released. Main-thread only.
+        /// </summary>
+        public AssetCacheTrimResult TrimIdleStep(int maxWork)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfEvaluatingRetentionRules();
+            if (maxWork <= 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxWork));
+            }
+
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return default;
+            }
+
+            List<Exception> failures = null;
+            AssetCacheTrimResult result;
+            lock (_gate)
+            {
+                long beforeBytes = _idleBytes;
+                int processed = 0;
+                while (processed < maxWork && (_trialTail != null || _mainTail != null))
+                {
+                    EvictNodeBestEffort(
+                        _trialTail ?? _mainTail,
+                        EvictionReason.Pressure,
+                        ref failures);
+                    processed++;
+                }
+
+                long releasedBytes = beforeBytes - _idleBytes;
+                if (releasedBytes < 0L)
+                {
+                    releasedBytes = 0L;
+                }
+
+                result = new AssetCacheTrimResult(
+                    processed,
+                    processed,
+                    releasedBytes,
+                    _trialCount + _mainCount);
+            }
+
+            ThrowReleaseFailures(
+                failures,
+                "One or more idle provider handles failed to release during bounded cache maintenance.");
+            return result;
+        }
+
         private void ThrowIfEvaluatingRetentionRules()
         {
             if (_evaluatingRetentionRules != 0)
@@ -1057,6 +1111,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     break;
                 case EvictionReason.Retention:
                     _retentionEvictionCount++;
+                    break;
+                case EvictionReason.Pressure:
+                    _pressureEvictionCount++;
                     break;
                 default:
                     _explicitEvictionCount++;
@@ -1303,6 +1360,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     _capacityEvictionCount,
                     _memoryBudgetEvictionCount,
                     _retentionEvictionCount,
+                    _pressureEvictionCount,
                     _explicitEvictionCount,
                     _evictedBytesApprox,
                     _providerReleaseFailureCount,

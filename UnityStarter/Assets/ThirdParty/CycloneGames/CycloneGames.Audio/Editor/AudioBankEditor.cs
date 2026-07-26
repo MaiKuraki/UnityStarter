@@ -727,6 +727,7 @@ namespace CycloneGames.Audio.Editor
         private static readonly Dictionary<string, int> StateNameCounts = new Dictionary<string, int>(16);
         private static readonly HashSet<AudioNode> VisitedNodes = new HashSet<AudioNode>();
         private static readonly HashSet<AudioNode> StackNodes = new HashSet<AudioNode>();
+        private static readonly HashSet<string> VoiceLocaleCodes = new HashSet<string>(System.StringComparer.Ordinal);
         private static readonly AudioBankValidationReport BatchReport = new AudioBankValidationReport();
         private static readonly AudioBankValidationSummary BatchSummary = new AudioBankValidationSummary();
 
@@ -985,6 +986,13 @@ namespace CycloneGames.Audio.Editor
             {
                 ValidateBlendFileNode(audioEvent, blendFile, report);
             }
+            else if (node is AudioVoiceLocaleSelector voiceLocaleSelector)
+            {
+                ValidateVoiceLocaleSelectorNode(
+                    audioEvent,
+                    voiceLocaleSelector,
+                    report);
+            }
 
             if (node.Input == null) return;
 
@@ -1025,6 +1033,29 @@ namespace CycloneGames.Audio.Editor
 
         private static void ValidateVoiceFileNode(AudioEvent audioEvent, AudioVoiceFile node, AudioBankValidationReport report)
         {
+            if (!string.IsNullOrEmpty(node.VoiceLocaleCode))
+            {
+                if (!VoiceLocaleId.TryCreate(
+                        node.VoiceLocaleCode,
+                        out VoiceLocaleId locale))
+                {
+                    report.Add(
+                        AudioBankValidationSeverity.Error,
+                        $"AudioEvent '{audioEvent.name}' voice file node '{node.name}' has invalid Voice Locale '{node.VoiceLocaleCode}'.",
+                        node);
+                }
+                else if (!string.Equals(
+                             node.VoiceLocaleCode,
+                             locale.Code,
+                             System.StringComparison.Ordinal))
+                {
+                    report.Add(
+                        AudioBankValidationSeverity.Error,
+                        $"AudioEvent '{audioEvent.name}' voice file node '{node.name}' must use canonical Voice Locale '{locale.Code}'.",
+                        node);
+                }
+            }
+
             if (node.SourceMode == AudioFile.AudioFileSourceMode.EmbeddedClip)
             {
                 if (node.File == null)
@@ -1043,6 +1074,113 @@ namespace CycloneGames.Audio.Editor
             }
 
             ValidateAudioClipReference(reference, report);
+        }
+
+        private static void ValidateVoiceLocaleSelectorNode(
+            AudioEvent audioEvent,
+            AudioVoiceLocaleSelector selector,
+            AudioBankValidationReport report)
+        {
+            AudioNodeOutput[] connectedNodes = selector.Input != null
+                ? selector.Input.ConnectedNodes
+                : null;
+
+            if (connectedNodes == null || connectedNodes.Length == 0)
+            {
+                report.Add(
+                    AudioBankValidationSeverity.Error,
+                    $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' has no connected Voice File branches.",
+                    selector);
+                return;
+            }
+
+            VoiceLocaleCodes.Clear();
+            int embeddedVoiceCount = 0;
+            bool fallbackIsConnected = selector.FallbackVoice == null;
+
+            for (int i = 0; i < connectedNodes.Length; i++)
+            {
+                AudioNodeOutput output = connectedNodes[i];
+                AudioVoiceFile voice = output != null ? output.ParentNode as AudioVoiceFile : null;
+                if (voice == null)
+                {
+                    report.Add(
+                        AudioBankValidationSeverity.Error,
+                        $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' branch {i} must connect directly to a Voice File.",
+                        selector);
+                    continue;
+                }
+
+                if (voice == selector.FallbackVoice)
+                    fallbackIsConnected = true;
+
+                if (voice.SourceMode == AudioFile.AudioFileSourceMode.EmbeddedClip)
+                    embeddedVoiceCount++;
+
+                if (string.IsNullOrEmpty(voice.VoiceLocaleCode))
+                {
+                    report.Add(
+                        AudioBankValidationSeverity.Error,
+                        $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' branch {i} has no Voice Locale.",
+                        voice);
+                    continue;
+                }
+
+                if (!VoiceLocaleId.TryCreate(
+                        voice.VoiceLocaleCode,
+                        out VoiceLocaleId locale))
+                {
+                    report.Add(
+                        AudioBankValidationSeverity.Error,
+                        $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' branch {i} has invalid Voice Locale '{voice.VoiceLocaleCode}'.",
+                        voice);
+                    continue;
+                }
+
+                if (!string.Equals(
+                        voice.VoiceLocaleCode,
+                        locale.Code,
+                        System.StringComparison.Ordinal))
+                {
+                    report.Add(
+                        AudioBankValidationSeverity.Error,
+                        $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' branch {i} must use canonical Voice Locale '{locale.Code}'.",
+                        voice);
+                }
+
+                if (!VoiceLocaleCodes.Add(locale.Code))
+                {
+                    report.Add(
+                        AudioBankValidationSeverity.Error,
+                        $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' has duplicate Voice Locale '{locale.Code}'.",
+                        selector);
+                }
+            }
+
+            VoiceLocaleCodes.Clear();
+
+            if (!fallbackIsConnected)
+            {
+                report.Add(
+                    AudioBankValidationSeverity.Error,
+                    $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' references a Fallback Voice that is not connected.",
+                    selector);
+            }
+            else if (selector.FallbackVoice == null)
+            {
+                report.Add(
+                    AudioBankValidationSeverity.Info,
+                    $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' intentionally skips playback when no locale matches.",
+                    selector);
+            }
+
+            if (embeddedVoiceCount > 1)
+            {
+                report.Add(
+                    AudioBankValidationSeverity.Warning,
+                    $"AudioEvent '{audioEvent.name}' voice locale selector '{selector.name}' references multiple embedded voice clips; all remain bank dependencies regardless of the active locale.",
+                    selector);
+            }
         }
 
         private static void ValidateBlendFileNode(AudioEvent audioEvent, AudioBlendFile node, AudioBankValidationReport report)

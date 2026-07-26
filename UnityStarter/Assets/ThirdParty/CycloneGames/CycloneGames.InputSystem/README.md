@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.InputSystem is a YAML-authored input layer over Unity Input System. It validates configuration before committing it, creates an independent input service for each local player, routes actions through prioritized mapping contexts, and exposes R3 streams, synchronous reads, and explicit boundaries for configuration and binding-profile persistence.
+CycloneGames.InputSystem is a YAML-authored input layer over Unity Input System. It validates configuration before commit, creates an independent input service per local player, routes actions through prioritized mapping contexts, and exposes R3 streams, synchronous reads, and explicit boundaries for configuration and binding-profile persistence.
 
 ## Table of Contents
 
@@ -18,9 +18,9 @@ CycloneGames.InputSystem is a YAML-authored input layer over Unity Input System.
 
 ## Overview
 
-The module separates authoring (YAML configuration edited in the Input System Editor) from runtime dispatch (`InputManager` validating and committing an immutable snapshot) and from per-player delivery (`IInputPlayer` owning an `InputUser`, an action asset, active contexts, and R3 streams). The owner authors contexts, actions, bindings, composites, interactions, processors, and control schemes in YAML; the manager validates them against the current Unity Input System registry before commit; each joined player receives an independently constructed action asset.
+Authoring (YAML configuration in the Input System Editor) runs separately from runtime dispatch (`InputManager` commits an immutable snapshot) and per-player delivery (`IInputPlayer` owns an `InputUser`, action asset, active contexts, and R3 streams). Configure contexts, actions, bindings, composites, interactions, processors, and control schemes in YAML; the manager validates against the current Unity Input System registry; each joined player receives an independently constructed action asset.
 
-It targets products that need reviewable YAML authoring with bounded validation, per-player `InputUser` and device ownership for local multiplayer, prioritized contexts (Gameplay, Vehicle, Menu, Modal), event-driven and polling value reads, long-press progress and chords, runtime rebinding with a versioned module-owned JSON profile, and explicit configuration sources and stores.
+Use for reviewable YAML authoring with bounded validation, per-player `InputUser` and device ownership for local multiplayer, prioritized contexts (Gameplay, Vehicle, Menu, Modal), event-driven and polling value reads, long-press and chords, runtime rebinding with a versioned module-owned JSON profile, and explicit configuration sources and stores.
 
 ### Key Features
 
@@ -571,7 +571,7 @@ Keep the configured defaults active when loading fails. Missing data is a normal
 | Context changes | Disposes active command subscriptions, disables maps, sorts active contexts, enables selected maps, recreates command subscriptions. | Change contexts on state transitions, not every frame. |
 | Rebinding/profile operations | Enumerates bindings and allocates arrays/JSON during export, import, conflict checks, reporting. Manager import builds and disposes a temporary action graph for each staged player. | Keep these operations in settings/save flows, not gameplay hot paths. |
 | Device activity | Uses action activity and Input System device/user notifications; `ActiveDeviceKind` is a presentation hint. | Debounce product UI if noisy hardware causes rapid glyph changes. |
-| Tools recording | Fixed-capacity list while recording; snapshot creation copies samples. | Inspect `WasTruncated`/`DroppedSampleCount`; do not leave diagnostics enabled unintentionally. |
+| Tools recording | Fixed-capacity list while recording; snapshot creation copies samples. `CancelRecording(maximumSamplesToDiscard)` stops subscriptions and releases sample references in caller-bounded chunks without exporting a snapshot. | Inspect `WasTruncated`/`DroppedSampleCount`; do not leave diagnostics enabled unintentionally. Cancellation discards diagnostic evidence and therefore requires an explicit product policy. |
 
 Profile initialization and player construction with Unity Profiler markers `CycloneGames.Input.Initialize`, `CycloneGames.Input.JoinPlayer`, and `CycloneGames.Input.BuildAsset`.
 
@@ -584,6 +584,10 @@ Profile initialization and player construction with Unity Profiler markers `Cycl
 - Product state owns `InputContext` instances and capture/block scopes; disposing a context removes it from every player using it.
 - Subscription owners dispose direct R3 subscriptions not managed through an active `InputContext`.
 - Storage owners choose roots, keys, retention, encryption, backup, and format-update policy.
+
+`InputManager.GetMemoryStats()` and `InputPlayer.GetMemoryStats()` expose main-thread, allocation-free count snapshots for explicit diagnostics. Recorder count/capacity/drop properties are also scalar reads. Caller-owned adapters may consume these APIs; the base module does not register global telemetry or pressure callbacks.
+
+Configurable `InputConfigurationLimits` values also have public absolute ceilings, preventing a caller from replacing a practical product budget with an `int.MaxValue` allocation/iteration budget. Repeated capture scopes are independently capped at `InputPlayer.MaximumContextCaptureDepth` (`1024`); a leaked scope fails closed instead of growing the capture stack indefinitely.
 
 ### Threading
 

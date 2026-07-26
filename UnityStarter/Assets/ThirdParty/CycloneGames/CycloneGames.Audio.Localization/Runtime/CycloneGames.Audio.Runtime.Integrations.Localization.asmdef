@@ -1,0 +1,20 @@
+{
+  "name": "CycloneGames.Audio.Runtime.Integrations.Localization",
+  "rootNamespace": "CycloneGames.Audio.Runtime.Integrations.Localization",
+  "references": [
+    "CycloneGames.AssetManagement.Runtime",
+    "CycloneGames.Audio.Runtime",
+    "CycloneGames.Localization.Core",
+    "CycloneGames.Localization.Runtime",
+    "UniTask"
+  ],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}

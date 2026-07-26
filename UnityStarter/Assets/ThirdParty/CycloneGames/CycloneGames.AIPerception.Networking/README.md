@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-`CycloneGames.AIPerception.Networking` bridges `CycloneGames.AIPerception` results into `CycloneGames.Networking`. It converts detection results into stable network identities, defines the fixed v1 wire schema, validates untrusted payloads, applies server-authority rules, and adapts perception relevance to the shared interest evaluator.
+`CycloneGames.AIPerception.Networking` bridges `CycloneGames.AIPerception` results into `CycloneGames.Networking`. It converts detection results to stable network identities, defines the fixed v1 wire schema, validates untrusted payloads, applies server-authority rules, and adapts perception relevance to the shared interest evaluator.
 
 ## Table of Contents
 
@@ -11,6 +11,7 @@
 - [Quick Start](#quick-start)
 - [Core Rules](#core-rules)
 - [Protocol Reference](#protocol-reference)
+- [Validation](#validation)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -54,7 +55,7 @@ flowchart LR
 
 ## Quick Start
 
-### 1. Choose and exchange a profile
+### Choose and exchange a profile
 
 Profiles are immutable. Built-in profiles are cached instances:
 
@@ -106,7 +107,7 @@ if (negotiation != AIPerceptionNetworkHandshakeResult.Compatible)
 }
 ```
 
-### 2. Map detections into a reusable entry buffer
+### Map detections into a reusable entry buffer
 
 The resolver connects local perception handles to stable network entity IDs:
 
@@ -138,7 +139,7 @@ if (!write.IsComplete)
 
 The bridge keeps the canonical smallest entries when capacity is limited. Capacity loss is always explicit.
 
-### 3. Create, encode, and send a snapshot
+### Create, encode, and send a snapshot
 
 ```csharp
 AIPerceptionNetworkMessageValidationResult createResult = bridge.TryCreateSnapshot(
@@ -183,7 +184,7 @@ endpoint.SendToClient(
 
 For memory snapshots, use `MSG_MEMORY_SNAPSHOT` with `profile.MemorySnapshotChannel`. An empty snapshot (zero entries) represents an authoritative empty set.
 
-### 4. Receive snapshots safely
+### Receive snapshots safely
 
 Decode into a reusable destination before applying any state:
 
@@ -259,7 +260,7 @@ The protocol ceiling allows up to 125 entries. Adding, removing, reordering, or 
 
 ### Canonical ordering and bounded selection
 
-`WriteDetectionEntries` maintains a sorted, bounded destination while scanning. For N detections and capacity K (protocol-bounded to 125), the algorithm uses `O(N log K + N * K)` worst-case work with no internal heap storage. Selection is deterministic under input reordering.
+`WriteDetectionEntries` maintains a sorted, bounded destination while scanning. A call accepts at most 4,096 detections. Larger input fails closed as `Partial`, reports every supplied item in `CapacityLimitedCount`, performs no resolver calls, and writes no entries. For accepted N and destination capacity K (protocol-bounded to 125), the algorithm uses `O(N log K + N * K)` worst-case work with no internal heap storage. Selection is deterministic under input reordering. Callers that can exceed the work ceiling must prefilter by gameplay priority or split work according to their explicit protocol policy; the bridge does not silently choose a batch.
 
 ### Interest filtering
 
@@ -287,8 +288,18 @@ FNV state hashes are synchronization checksums, not authentication codes. Transp
 - Core codec paths operate on `Span<T>`/`ReadOnlySpan<T>` with zero internal allocations.
 - Built-in profile properties return cached immutable instances.
 - All buffers, lists, and session state have explicit external owners.
-- No lock, worker thread, queue, or global cache is created.
+- The bridge retains no entry, snapshot, payload, queue, or history. It owns only immutable profile references and lock-free scalar operation counters.
+- No worker thread or global cache is created.
 - Spans and `NetworkMessagePayload.Bytes` must not be retained beyond their documented call lifetime.
+
+`AIPerceptionNetworkSyncBridge.GetMemoryStats()` reports profile limits, supplied/scanned/written entries, all loss categories, accepted/rejected snapshots, and last/peak snapshot entry and payload sizes. Callers may publish these counters through their own diagnostics adapter. The bridge installs no pressure responder, invents no confirmation history, and does not duplicate bytes owned by Networking or AIPerception.
+
+## Validation
+
+- Run `AIPerceptionNetworkingIntegrationTests` in Unity Test Runner EditMode, including oversized input, canonical selection, allocation, codec, authority, and replay tests.
+- Run the companion contract tests and verify every emitted metric matches its cold descriptor.
+- Validate wire payload ceilings and zero-allocation warmed paths in a representative Player build.
+- Run transport-specific loss, reordering, authentication, reconnect, and host-migration tests; this package does not prove those properties without the product transport.
 
 ## Troubleshooting
 
@@ -297,7 +308,7 @@ FNV state hashes are synchronization checksums, not authentication codes. Transp
 | Handshake rejected | Profile hash, feature flags, and supported/required feature match |
 | Snapshot decode fails | Payload length, entry count, canonical order, enum ranges, and float finite-ness |
 | Authority violation logged | Authenticated state, server-to-client direction, authority generation, and replay state |
-| Entries silently truncated | `WriteDetectionEntries` loss counts: unresolved, invalid, capacity-limited, duplicates |
+| Entries are limited | `WriteDetectionEntries` loss counts and the 4,096-input work ceiling: unresolved, invalid, capacity-limited, duplicates |
 | Interest filtering produces no observers | Observer/candidate entity mapping, interest evaluator configuration |
 | Allocation in hot path | Verify spans and reusable buffers; profile the target Player backend |
 | Profile change has no effect | Profiles are immutable — create and exchange a new profile through the handshake |

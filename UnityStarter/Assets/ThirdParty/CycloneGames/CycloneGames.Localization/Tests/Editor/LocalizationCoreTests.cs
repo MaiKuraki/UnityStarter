@@ -523,6 +523,359 @@ namespace CycloneGames.Localization.Tests.Editor
         }
 
         [Test]
+        public void ResidentOwnerBudgetIsSharedAndUnregisterRestoresCapacityBeforeCompile()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            service.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(maxOwners: 2, maxTables: 8, maxEntries: 32, maxRetainedCharacters: 1024)));
+
+            StringTable manualString = CreateStringTable("ui", "en", Entry("title", "Start"));
+            LocalizationCatalog catalog = CreateCatalog(
+                new List<CatalogStringTable>
+                {
+                    new CatalogStringTable("dialog", "en", new List<CatalogStringEntry>
+                    {
+                        new CatalogStringEntry("line", "Hello"),
+                    }),
+                },
+                new List<CatalogAssetTable>());
+            AssetTable rejectedAsset = CreateAssetTable("icons", "en", AssetEntry("flag", "Assets/Flag.png"));
+
+            Assert.That(service.RegisterStringTable(manualString), Is.True);
+            Assert.That(service.TryRegisterCatalog("base", catalog), Is.True);
+            Assert.That(service.RegisterAssetTable(rejectedAsset), Is.False);
+            Assert.That(GetCompiledCache(rejectedAsset), Is.Null);
+            Assert.That(service.GetMemorySnapshot().ResidentOwnerCount, Is.EqualTo(2));
+
+            Assert.That(service.UnregisterStringTable("ui", en.Id), Is.True);
+            Assert.That(service.RegisterAssetTable(rejectedAsset), Is.True);
+            Assert.That(GetCompiledCache(rejectedAsset), Is.Not.Null);
+            Assert.That(service.GetMemorySnapshot().ResidentOwnerCount, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ResidentEntryAndCharacterBudgetsSpanManualAndCatalogContent()
+        {
+            var en = CreateLocale("en");
+            var entryLimited = new LocalizationService();
+            entryLimited.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(maxOwners: 8, maxTables: 8, maxEntries: 2, maxRetainedCharacters: 1024)));
+
+            Assert.That(entryLimited.RegisterStringTable(CreateStringTable("a", "en", Entry("k", "v"))), Is.True);
+            Assert.That(entryLimited.TryRegisterCatalog(
+                "pack",
+                CreateCatalog(
+                    new List<CatalogStringTable>
+                    {
+                        new CatalogStringTable("b", "en", new List<CatalogStringEntry>
+                        {
+                            new CatalogStringEntry("k", "v"),
+                        }),
+                    },
+                    new List<CatalogAssetTable>())), Is.True);
+            AssetTable entryRejected = CreateAssetTable("c", "en", AssetEntry("k", "p"));
+            Assert.That(entryLimited.RegisterAssetTable(entryRejected), Is.False);
+            Assert.That(GetCompiledCache(entryRejected), Is.Null);
+            Assert.That(entryLimited.GetMemorySnapshot().ResidentEntryCount, Is.EqualTo(2));
+
+            var characterLimited = new LocalizationService();
+            characterLimited.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(maxOwners: 8, maxTables: 8, maxEntries: 8, maxRetainedCharacters: 10)));
+            Assert.That(characterLimited.RegisterStringTable(
+                CreateStringTable("a", "en", Entry("k", "v"))), Is.True);
+            Assert.That(characterLimited.TryRegisterCatalog(
+                "pack",
+                CreateCatalog(
+                    new List<CatalogStringTable>
+                    {
+                        new CatalogStringTable("b", "en", new List<CatalogStringEntry>
+                        {
+                            new CatalogStringEntry("k", "v"),
+                        }),
+                    },
+                    new List<CatalogAssetTable>())), Is.True);
+            Assert.That(characterLimited.RegisterAssetTable(
+                CreateAssetTable("c", "en", AssetEntry("k", "p"))), Is.False);
+            Assert.That(characterLimited.GetMemorySnapshot().RetainedCharacterCount, Is.EqualTo(10));
+        }
+
+        [Test]
+        public void ResidentTableBudgetRejectsWholeCatalogAndRecoversAfterUnregister()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            service.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(maxOwners: 8, maxTables: 2, maxEntries: 32, maxRetainedCharacters: 1024)));
+            Assert.That(service.RegisterStringTable(CreateStringTable("manual", "en", Entry("k", "v"))), Is.True);
+
+            LocalizationCatalog twoTableCatalog = CreateCatalog(
+                new List<CatalogStringTable>
+                {
+                    new CatalogStringTable("catalog-text", "en", new List<CatalogStringEntry>
+                    {
+                        new CatalogStringEntry("k", "v"),
+                    }),
+                },
+                new List<CatalogAssetTable>
+                {
+                    new CatalogAssetTable("catalog-asset", "en", new List<CatalogAssetEntry>
+                    {
+                        new CatalogAssetEntry("k", new AssetRef("p")),
+                    }),
+                });
+
+            Assert.That(service.TryRegisterCatalog("pack", twoTableCatalog), Is.False);
+            Assert.That(service.GetMemorySnapshot().ResidentTableCount, Is.EqualTo(1));
+            Assert.That(service.UnregisterStringTable("manual", en.Id), Is.True);
+            Assert.That(service.TryRegisterCatalog("pack", twoTableCatalog), Is.True);
+            Assert.That(service.GetMemorySnapshot().ResidentTableCount, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void CandidateNodeBudgetBoundsWhitespaceOnlyManualTableBeforeCompile()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            service.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(8, 8, 8, 1024, maxCandidateNodes: 2)));
+            StringTable table = CreateStringTable(
+                "ui",
+                "en",
+                Entry("first", " "),
+                Entry("second", "\t"));
+
+            Assert.That(service.RegisterStringTable(table), Is.False);
+            Assert.That(GetCompiledCache(table), Is.Null);
+            Assert.That(service.GetMemorySnapshot().ResidentTableCount, Is.Zero);
+        }
+
+        [Test]
+        public void OversizedWhitespaceValueIsRejectedBeforeWhitespaceClassification()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            service.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                limits: new LocalizationLimits(maxStringValueLength: 4)));
+            StringTable table = CreateStringTable("ui", "en", Entry("blank", new string(' ', 5)));
+
+            Assert.That(service.RegisterStringTable(table), Is.False);
+            Assert.That(GetCompiledCache(table), Is.Null);
+            Assert.That(service.GetMemorySnapshot().ResidentTableCount, Is.Zero);
+        }
+
+        [Test]
+        public void ReentrantQueuedManualRegistrationRemeasuresMutableAuthoringData()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            service.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(8, 8, 8, 1024, maxCandidateNodes: 2)));
+            StringTable queued = CreateStringTable("queued", "en", Entry("first", "value"));
+            bool attempted = false;
+            service.Changed += _ =>
+            {
+                if (attempted) return;
+                attempted = true;
+                Assert.That(service.RegisterStringTable(queued), Is.True);
+
+                var serialized = new SerializedObject(queued);
+                SerializedProperty entries = serialized.FindProperty("entries");
+                entries.arraySize = 2;
+                SerializedProperty second = entries.GetArrayElementAtIndex(1);
+                second.FindPropertyRelative("Key").stringValue = "second";
+                second.FindPropertyRelative("Value").stringValue = " ";
+                serialized.ApplyModifiedPropertiesWithoutUndo();
+            };
+
+            Assert.That(
+                service.RegisterStringTable(CreateStringTable("trigger", "en", Entry("key", "value"))),
+                Is.True);
+            Assert.That(attempted, Is.True);
+            Assert.That(GetCompiledCache(queued), Is.Null);
+            Assert.That(service.TryGetString("queued", "first", out _), Is.False);
+            Assert.That(service.GetMemorySnapshot().ResidentTableCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void CandidateNodeBudgetRejectsCatalogDuringCountPreflight()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            service.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(8, 8, 8, 1024, maxCandidateNodes: 2)));
+            var catalog = ScriptableObject.CreateInstance<LocalizationCatalog>();
+            catalog.SetData(
+                "1.0.0",
+                new string('0', 64),
+                new List<CatalogStringTable>
+                {
+                    new CatalogStringTable("ui", "en", new List<CatalogStringEntry>
+                    {
+                        new CatalogStringEntry("first", " "),
+                        new CatalogStringEntry("second", "\t"),
+                    }),
+                },
+                new List<CatalogAssetTable>());
+
+            Assert.That(service.TryRegisterCatalog("pack", catalog), Is.False);
+            Assert.That(service.GetMemorySnapshot().CatalogOwnerCount, Is.Zero);
+        }
+
+        [Test]
+        public void ReentrantQueuedCatalogRegistrationRemeasuresMutableEntryLists()
+        {
+            var service = new LocalizationService();
+            var en = CreateLocale("en");
+            service.Initialize(new LocalizationOptions(
+                en,
+                new[] { en },
+                false,
+                null,
+                PseudoLocaleMode.None,
+                null,
+                null,
+                default,
+                new LocalizationResidentLimits(8, 8, 8, 1024, maxCandidateNodes: 2)));
+            var entries = new List<CatalogStringEntry>
+            {
+                new CatalogStringEntry("first", "value"),
+            };
+            LocalizationCatalog queued = CreateCatalog(
+                new List<CatalogStringTable>
+                {
+                    new CatalogStringTable("queued", "en", entries),
+                },
+                new List<CatalogAssetTable>());
+            bool attempted = false;
+            service.Changed += _ =>
+            {
+                if (attempted) return;
+                attempted = true;
+                Assert.That(service.TryRegisterCatalog("queued-owner", queued), Is.True);
+                entries.Add(new CatalogStringEntry("second", " "));
+            };
+
+            Assert.That(
+                service.RegisterStringTable(CreateStringTable("trigger", "en", Entry("key", "value"))),
+                Is.True);
+            Assert.That(attempted, Is.True);
+            Assert.That(service.GetMemorySnapshot().CatalogOwnerCount, Is.Zero);
+            Assert.That(service.TryGetString("queued", "first", out _), Is.False);
+        }
+
+        [Test]
+        public void ResidentLimitsClampAndLegacyConstructorsRemainDiscoverable()
+        {
+            var clamped = new LocalizationResidentLimits(
+                int.MaxValue,
+                int.MaxValue,
+                long.MaxValue,
+                long.MaxValue,
+                long.MaxValue);
+            Assert.That(clamped.MaxOwners, Is.EqualTo(LocalizationResidentLimits.AbsoluteMaxOwners));
+            Assert.That(clamped.MaxTables, Is.EqualTo(LocalizationResidentLimits.AbsoluteMaxTables));
+            Assert.That(clamped.MaxEntries, Is.EqualTo(LocalizationResidentLimits.AbsoluteMaxEntries));
+            Assert.That(
+                clamped.MaxRetainedCharacters,
+                Is.EqualTo(LocalizationResidentLimits.AbsoluteMaxRetainedCharacters));
+            Assert.That(
+                clamped.MaxCandidateNodes,
+                Is.EqualTo(LocalizationResidentLimits.AbsoluteMaxCandidateNodes));
+
+            Assert.That(typeof(LocalizationResidentLimits).GetConstructor(new[]
+            {
+                typeof(int), typeof(int), typeof(long), typeof(long),
+            }), Is.Not.Null);
+            Assert.That(typeof(LocalizationResidentLimits).GetConstructor(new[]
+            {
+                typeof(int), typeof(int), typeof(long), typeof(long), typeof(long),
+            }), Is.Not.Null);
+
+            Assert.That(typeof(LocalizationLimits).GetConstructor(new[]
+            {
+                typeof(int), typeof(int), typeof(int), typeof(int), typeof(int), typeof(int), typeof(int),
+                typeof(int), typeof(int), typeof(int), typeof(int), typeof(int), typeof(long), typeof(long),
+            }), Is.Not.Null);
+            Assert.That(typeof(LocalizationOptions).GetConstructor(new[]
+            {
+                typeof(Locale),
+                typeof(IReadOnlyList<Locale>),
+                typeof(bool),
+                typeof(IReadOnlyList<ILocaleSelector>),
+                typeof(PseudoLocaleMode),
+                typeof(Action<LocalizationDiagnostic>),
+                typeof(IFormatProvider),
+                typeof(LocalizationLimits),
+            }), Is.Not.Null);
+            Assert.That(typeof(LocalizationMemorySnapshot).GetConstructor(new[]
+            {
+                typeof(bool), typeof(long), typeof(int), typeof(int), typeof(int), typeof(int), typeof(int),
+                typeof(int), typeof(long), typeof(long), typeof(int), typeof(long), typeof(long), typeof(int),
+                typeof(long), typeof(int), typeof(int), typeof(LocalizationLimits),
+            }), Is.Not.Null);
+        }
+
+        [Test]
         public void CatalogAggregateTextBudgetIsCheckedBeforeCommit()
         {
             var service = new LocalizationService();
@@ -905,6 +1258,12 @@ namespace CycloneGames.Localization.Tests.Editor
                 propertyName,
                 BindingFlags.Instance | BindingFlags.Public);
             return property.GetValue(snapshot);
+        }
+
+        private static object GetCompiledCache(object table)
+        {
+            FieldInfo field = table.GetType().GetField("_compiled", BindingFlags.Instance | BindingFlags.NonPublic);
+            return field.GetValue(table);
         }
 
         private static TestStringEntry Entry(string key, string value)

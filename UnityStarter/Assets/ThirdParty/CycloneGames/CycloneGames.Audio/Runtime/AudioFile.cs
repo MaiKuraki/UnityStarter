@@ -47,6 +47,10 @@ namespace CycloneGames.Audio.Runtime
         public readonly int CacheHitCount;
         public readonly int CacheMissCount;
         public readonly int TotalFailureCount;
+        public readonly long EvictionScanCount;
+        public readonly long EvictionCount;
+        public readonly int MaximumEntryCount;
+        public readonly int AdmissionRejectionCount;
 
         public ExternalAudioClipCacheStats(
             int entryCount,
@@ -58,6 +62,64 @@ namespace CycloneGames.Audio.Runtime
             int cacheHitCount,
             int cacheMissCount,
             int totalFailureCount)
+            : this(
+                entryCount,
+                loadingCount,
+                loadedCount,
+                failedCount,
+                totalRefCount,
+                totalLoadRequests,
+                cacheHitCount,
+                cacheMissCount,
+                totalFailureCount,
+                0L,
+                0L)
+        {
+        }
+
+        public ExternalAudioClipCacheStats(
+            int entryCount,
+            int loadingCount,
+            int loadedCount,
+            int failedCount,
+            int totalRefCount,
+            int totalLoadRequests,
+            int cacheHitCount,
+            int cacheMissCount,
+            int totalFailureCount,
+            long evictionScanCount,
+            long evictionCount)
+            : this(
+                entryCount,
+                loadingCount,
+                loadedCount,
+                failedCount,
+                totalRefCount,
+                totalLoadRequests,
+                cacheHitCount,
+                cacheMissCount,
+                totalFailureCount,
+                evictionScanCount,
+                evictionCount,
+                0,
+                0)
+        {
+        }
+
+        public ExternalAudioClipCacheStats(
+            int entryCount,
+            int loadingCount,
+            int loadedCount,
+            int failedCount,
+            int totalRefCount,
+            int totalLoadRequests,
+            int cacheHitCount,
+            int cacheMissCount,
+            int totalFailureCount,
+            long evictionScanCount,
+            long evictionCount,
+            int maximumEntryCount,
+            int admissionRejectionCount)
         {
             EntryCount = entryCount;
             LoadingCount = loadingCount;
@@ -68,6 +130,10 @@ namespace CycloneGames.Audio.Runtime
             CacheHitCount = cacheHitCount;
             CacheMissCount = cacheMissCount;
             TotalFailureCount = totalFailureCount;
+            EvictionScanCount = evictionScanCount;
+            EvictionCount = evictionCount;
+            MaximumEntryCount = maximumEntryCount;
+            AdmissionRejectionCount = admissionRejectionCount;
         }
     }
 
@@ -775,8 +841,24 @@ namespace CycloneGames.Audio.Runtime
         }
     }
 
+    internal readonly struct ExternalAudioClipEvictionResult
+    {
+        public ExternalAudioClipEvictionResult(int entriesScanned, int entriesEvicted)
+        {
+            EntriesScanned = entriesScanned;
+            EntriesEvicted = entriesEvicted;
+        }
+
+        public int EntriesScanned { get; }
+
+        public int EntriesEvicted { get; }
+    }
+
     internal sealed class ExternalAudioClipHandle : IAudioClipHandle
     {
+        internal const int DefaultMaximumEntriesToScanPerCall = 256;
+        internal const int MaximumEntriesToScanPerCall = AudioManager.MaximumIdleTrimItemsPerCall;
+
         private sealed class CacheEntry
         {
             public readonly AudioClipCacheKey Key;
@@ -795,6 +877,8 @@ namespace CycloneGames.Audio.Runtime
             public int AccessCount;
             public float LastAccessTime;
             public long EstimatedMemoryBytes;
+            public bool IsMemoryAccounted;
+            public int CacheIndex = -1;
 
             public CacheEntry(AudioClipCacheKey key, string location)
             {
@@ -806,10 +890,20 @@ namespace CycloneGames.Audio.Runtime
 
         private static readonly object cacheLock = new object();
         private static readonly Dictionary<AudioClipCacheKey, CacheEntry> cache = new Dictionary<AudioClipCacheKey, CacheEntry>();
+        private static readonly List<CacheEntry> cacheEntries = new List<CacheEntry>(32);
+        private static int loadingEntryCount;
+        private static int loadedEntryCount;
+        private static int failedEntryCount;
+        private static int totalReferenceCount;
         private static int totalLoadRequests;
         private static int cacheHitCount;
         private static int cacheMissCount;
         private static int totalFailureCount;
+        private static int admissionRejectionCount;
+        private static int evictionScanCursor;
+        private static long totalCachedMemoryBytes;
+        private static long evictionScanCount;
+        private static long evictionCount;
 
         private CacheEntry entry;
         private int localRefCount;
@@ -836,6 +930,11 @@ namespace CycloneGames.Audio.Runtime
 
             AudioClipCacheKey key = new AudioClipCacheKey(reference);
             CacheEntry entry = AcquireEntry(key, location);
+            if (entry == null)
+            {
+                return null;
+            }
+
             var handle = new ExternalAudioClipHandle(entry);
 
             try
@@ -862,6 +961,7 @@ namespace CycloneGames.Audio.Runtime
                 if (localRefCount <= 0 || entry == null) return;
                 localRefCount++;
                 entry.RefCount++;
+                totalReferenceCount++;
             }
         }
 
@@ -876,6 +976,7 @@ namespace CycloneGames.Audio.Runtime
 
                 localRefCount--;
                 entry.RefCount = Mathf.Max(0, entry.RefCount - 1);
+                totalReferenceCount = Math.Max(0, totalReferenceCount - 1);
 
                 if (entry.RefCount == 0)
                 {
@@ -917,16 +1018,31 @@ namespace CycloneGames.Audio.Runtime
                 if (!cache.TryGetValue(key, out CacheEntry entry))
                 {
                     cacheMissCount++;
+                    if (cache.Count >= AudioManager.ExternalClipMaximumCacheEntryCount)
+                    {
+                        if (admissionRejectionCount < int.MaxValue)
+                        {
+                            admissionRejectionCount++;
+                        }
+
+                        return null;
+                    }
+
                     entry = new CacheEntry(key, location);
                     entry.RefCount = 1;
+                    entry.CacheIndex = cacheEntries.Count;
+                    cache.Add(key, entry);
+                    cacheEntries.Add(entry);
+                    loadingEntryCount++;
+                    totalReferenceCount++;
                     entry.LoadStarted = true;
                     entry.LoadTask = LoadEntryAsync(entry).Preserve();
-                    cache[key] = entry;
                     return entry;
                 }
 
                 cacheHitCount++;
                 entry.RefCount++;
+                totalReferenceCount++;
                 entry.AccessCount++;
                 entry.LastAccessTime = Time.realtimeSinceStartup;
                 if (!entry.LoadStarted)
@@ -980,8 +1096,7 @@ namespace CycloneGames.Audio.Runtime
                         lock (cacheLock)
                         {
                             entry.Error = $"External audio download exceeds the {downloadLimit}-byte limit.";
-                            entry.IsDone = true;
-                            entry.IsSuccess = false;
+                            MarkEntryFailed(entry);
                             entry.Request = null;
                             totalFailureCount++;
                             if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
@@ -994,8 +1109,7 @@ namespace CycloneGames.Audio.Runtime
                         lock (cacheLock)
                         {
                             entry.Error = $"External audio request failed ({www.result}).";
-                            entry.IsDone = true;
-                            entry.IsSuccess = false;
+                            MarkEntryFailed(entry);
                             entry.Request = null;
                             totalFailureCount++;
                             if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
@@ -1011,8 +1125,7 @@ namespace CycloneGames.Audio.Runtime
                         if (entry.Clip == null || entry.Clip.length <= 0f)
                         {
                             entry.Error = "Loaded AudioClip is invalid.";
-                            entry.IsDone = true;
-                            entry.IsSuccess = false;
+                            MarkEntryFailed(entry);
                             totalFailureCount++;
                             if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
                             return;
@@ -1027,15 +1140,15 @@ namespace CycloneGames.Audio.Runtime
                             entry.Error = $"Decoded AudioClip exceeds the {decodedLimit}-byte limit.";
                             UnityEngine.Object.Destroy(entry.Clip);
                             entry.Clip = null;
-                            entry.IsDone = true;
-                            entry.IsSuccess = false;
+                            MarkEntryFailed(entry);
                             totalFailureCount++;
                             if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
                             return;
                         }
 
-                        entry.IsSuccess = true;
-                        entry.IsDone = true;
+                        totalCachedMemoryBytes += entry.EstimatedMemoryBytes;
+                        entry.IsMemoryAccounted = true;
+                        MarkEntrySucceeded(entry);
 
                         if (entry.RefCount == 0)
                         {
@@ -1059,8 +1172,7 @@ namespace CycloneGames.Audio.Runtime
                     entry.Error = ex is OperationCanceledException
                         ? "Audio clip load cancelled."
                         : $"External audio load failed with {ex.GetType().Name}.";
-                    entry.IsDone = true;
-                    entry.IsSuccess = false;
+                    MarkEntryFailed(entry);
                     entry.Request = null;
                     totalFailureCount++;
                     if (entry.RefCount == 0) DestroyAndRemoveEntry(entry);
@@ -1078,9 +1190,117 @@ namespace CycloneGames.Audio.Runtime
                 entry.Clip = null;
             }
 
-            cache.Remove(entry.Key);
+            if (cache.Remove(entry.Key))
+            {
+                RemoveEntryFromIncrementalStats(entry);
+                if (entry.IsMemoryAccounted)
+                {
+                    totalCachedMemoryBytes = Math.Max(0L, totalCachedMemoryBytes - entry.EstimatedMemoryBytes);
+                    entry.IsMemoryAccounted = false;
+                }
+
+                RemoveCacheEntryIndex(entry);
+            }
             entry.IsDone = true;
             entry.IsSuccess = false;
+        }
+
+        private static void MarkEntrySucceeded(CacheEntry entry)
+        {
+            if (entry.IsDone)
+            {
+                if (entry.IsSuccess)
+                {
+                    return;
+                }
+
+                failedEntryCount = Math.Max(0, failedEntryCount - 1);
+            }
+            else
+            {
+                loadingEntryCount = Math.Max(0, loadingEntryCount - 1);
+            }
+
+            entry.IsDone = true;
+            entry.IsSuccess = true;
+            loadedEntryCount++;
+        }
+
+        private static void MarkEntryFailed(CacheEntry entry)
+        {
+            if (entry.IsDone)
+            {
+                if (!entry.IsSuccess)
+                {
+                    return;
+                }
+
+                loadedEntryCount = Math.Max(0, loadedEntryCount - 1);
+            }
+            else
+            {
+                loadingEntryCount = Math.Max(0, loadingEntryCount - 1);
+            }
+
+            entry.IsDone = true;
+            entry.IsSuccess = false;
+            failedEntryCount++;
+        }
+
+        private static void RemoveEntryFromIncrementalStats(CacheEntry entry)
+        {
+            if (!entry.IsDone)
+            {
+                loadingEntryCount = Math.Max(0, loadingEntryCount - 1);
+            }
+            else if (entry.IsSuccess)
+            {
+                loadedEntryCount = Math.Max(0, loadedEntryCount - 1);
+            }
+            else
+            {
+                failedEntryCount = Math.Max(0, failedEntryCount - 1);
+            }
+
+            totalReferenceCount = Math.Max(0, totalReferenceCount - Math.Max(0, entry.RefCount));
+        }
+
+        private static void RemoveCacheEntryIndex(CacheEntry entry)
+        {
+            int index = entry.CacheIndex;
+            int lastIndex = cacheEntries.Count - 1;
+            if ((uint)index > (uint)lastIndex || !ReferenceEquals(cacheEntries[index], entry))
+            {
+                entry.CacheIndex = -1;
+                return;
+            }
+
+            if (index != lastIndex)
+            {
+                CacheEntry moved = cacheEntries[lastIndex];
+                cacheEntries[index] = moved;
+                moved.CacheIndex = index;
+            }
+
+            cacheEntries.RemoveAt(lastIndex);
+            entry.CacheIndex = -1;
+
+            if (cacheEntries.Count == 0)
+            {
+                evictionScanCursor = 0;
+            }
+            else
+            {
+                if (index < evictionScanCursor)
+                {
+                    evictionScanCursor--;
+                }
+
+                if (evictionScanCursor >= cacheEntries.Count)
+                {
+                    evictionScanCursor = 0;
+                }
+            }
         }
 
         public static void ClearCache()
@@ -1088,16 +1308,15 @@ namespace CycloneGames.Audio.Runtime
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".ClearCache");
             lock (cacheLock)
             {
-                evictionCandidates.Clear();
-                foreach (var pair in cache)
+                for (int index = cacheEntries.Count - 1; index >= 0; index--)
                 {
-                    CacheEntry entry = pair.Value;
+                    CacheEntry entry = cacheEntries[index];
                     if (entry == null) continue;
 
                     entry.RemoveWhenUnused = true;
                     if (entry.RefCount == 0 && entry.IsDone)
                     {
-                        evictionCandidates.Add((entry, 0f));
+                        DestroyAndRemoveEntry(entry);
                     }
                     else if (entry.RefCount == 0)
                     {
@@ -1105,16 +1324,19 @@ namespace CycloneGames.Audio.Runtime
                     }
                 }
 
-                for (int i = 0; i < evictionCandidates.Count; i++)
-                    DestroyAndRemoveEntry(evictionCandidates[i].entry);
-                evictionCandidates.Clear();
-
                 if (cache.Count == 0)
                 {
+                    loadingEntryCount = 0;
+                    loadedEntryCount = 0;
+                    failedEntryCount = 0;
+                    totalReferenceCount = 0;
                     totalLoadRequests = 0;
                     cacheHitCount = 0;
                     cacheMissCount = 0;
                     totalFailureCount = 0;
+                    admissionRejectionCount = 0;
+                    evictionScanCount = 0L;
+                    evictionCount = 0L;
                 }
             }
         }
@@ -1151,22 +1373,15 @@ namespace CycloneGames.Audio.Runtime
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".GetTotalCachedMemoryBytes");
             lock (cacheLock)
             {
-                long total = 0;
-                var enumerator = cache.GetEnumerator();
-                while (enumerator.MoveNext())
-                {
-                    if (enumerator.Current.Value.IsSuccess)
-                        total += enumerator.Current.Value.EstimatedMemoryBytes;
-                }
-                enumerator.Dispose();
-                return total;
+                return totalCachedMemoryBytes;
             }
         }
 
         /// <summary>
-        /// Evicts unused (refCount == 0) external clips that exceed the specified TTL.
-        /// Uses frequency-weighted scoring: clips accessed more frequently are retained longer.
-        /// Returns the number of entries evicted.
+        /// Performs the legacy full-cache eviction pass over unused (refCount == 0) external clips.
+        /// Frequently accessed clips retain a proportionally longer effective TTL. This compatibility overload
+        /// preserves the original global score ordering and stops after an eviction restores a positive memory
+        /// budget. It can scan the entire cache; hot loops and governance responders must use a bounded overload.
         /// </summary>
         /// <param name="maxIdleSeconds">Base TTL in seconds. Clips idle longer than this are candidates.</param>
         /// <param name="memoryBudgetBytes">Unused residency budget. Zero disables unused cache residency.</param>
@@ -1175,71 +1390,163 @@ namespace CycloneGames.Audio.Runtime
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".EvictExpiredEntries");
             lock (cacheLock)
             {
-                if (cache.Count == 0) return 0;
+                if (cache.Count == 0)
+                {
+                    return 0;
+                }
 
                 float now = Time.realtimeSinceStartup;
                 bool cacheDisabled = memoryBudgetBytes <= 0;
-                bool overBudget = !cacheDisabled && GetTotalCachedMemoryBytesUnsafe() > memoryBudgetBytes;
+                bool overBudget = !cacheDisabled && totalCachedMemoryBytes > memoryBudgetBytes;
+                int entriesScanned = 0;
 
-                // Collect eviction candidates: refCount == 0, loaded successfully, past TTL
-                evictionCandidates.Clear();
+                legacyEvictionCandidates.Clear();
                 var enumerator = cache.GetEnumerator();
                 while (enumerator.MoveNext())
                 {
+                    entriesScanned++;
                     CacheEntry entry = enumerator.Current.Value;
-                    if (entry.RefCount > 0 || !entry.IsDone || !entry.IsSuccess) continue;
+                    if (entry.RefCount > 0 || !entry.IsDone || !entry.IsSuccess)
+                    {
+                        continue;
+                    }
 
                     float idleTime = now - entry.LastAccessTime;
-                    // Frequency-weighted TTL: more accessed clips get proportionally longer TTL
                     float effectiveTTL = maxIdleSeconds * Mathf.Max(1f, entry.AccessCount * 0.5f);
-
                     if (overBudget)
-                        effectiveTTL *= 0.25f; // Aggressively shorten TTL when over budget
+                    {
+                        effectiveTTL *= 0.25f;
+                    }
 
                     if (cacheDisabled || overBudget || idleTime >= effectiveTTL)
                     {
-                        // Score for prioritized eviction: lower = evict first
                         float score = entry.AccessCount / Mathf.Max(idleTime, 0.01f);
-                        evictionCandidates.Add((entry, score));
+                        legacyEvictionCandidates.Add((entry, score));
                     }
                 }
                 enumerator.Dispose();
+                evictionScanCount += entriesScanned;
 
-                if (evictionCandidates.Count == 0) return 0;
-
-                // Sort: lowest score (least valuable) first
-                evictionCandidates.Sort((a, b) => a.score.CompareTo(b.score));
-
-                int evictedCount = 0;
-                for (int i = 0; i < evictionCandidates.Count; i++)
+                if (legacyEvictionCandidates.Count == 0)
                 {
-                    DestroyAndRemoveEntry(evictionCandidates[i].entry);
-                    evictedCount++;
-
-                    // If we're under budget again, stop evicting
-                    if (memoryBudgetBytes > 0 && GetTotalCachedMemoryBytesUnsafe() <= memoryBudgetBytes)
-                        break;
+                    return 0;
                 }
 
-                evictionCandidates.Clear();
+                legacyEvictionCandidates.Sort((left, right) => left.score.CompareTo(right.score));
+
+                int evictedCount = 0;
+                for (int index = 0; index < legacyEvictionCandidates.Count; index++)
+                {
+                    DestroyAndRemoveEntry(legacyEvictionCandidates[index].entry);
+                    evictedCount++;
+
+                    if (memoryBudgetBytes > 0 && totalCachedMemoryBytes <= memoryBudgetBytes)
+                    {
+                        break;
+                    }
+                }
+
+                legacyEvictionCandidates.Clear();
+                evictionCount += evictedCount;
                 return evictedCount;
             }
         }
 
-        private static long GetTotalCachedMemoryBytesUnsafe()
+        private static readonly List<(CacheEntry entry, float score)> legacyEvictionCandidates =
+            new List<(CacheEntry, float)>(32);
+
+        /// <summary>
+        /// Performs bounded round-robin eviction work. Product update loops and governance responders
+        /// should use this overload so one call cannot scan or evict an unbounded number of entries.
+        /// </summary>
+        public static int EvictExpiredEntries(
+            float maxIdleSeconds,
+            long memoryBudgetBytes,
+            int maximumEntriesToEvict)
         {
-            long total = 0;
-            var enumerator = cache.GetEnumerator();
-            while (enumerator.MoveNext())
-            {
-                if (enumerator.Current.Value.IsSuccess)
-                    total += enumerator.Current.Value.EstimatedMemoryBytes;
-            }
-            enumerator.Dispose();
-            return total;
+            int boundedMaximum = Mathf.Clamp(
+                maximumEntriesToEvict,
+                0,
+                MaximumEntriesToScanPerCall);
+            return EvictExpiredEntriesBounded(
+                maxIdleSeconds,
+                memoryBudgetBytes,
+                boundedMaximum,
+                boundedMaximum).EntriesEvicted;
         }
 
-        private static readonly List<(CacheEntry entry, float score)> evictionCandidates = new List<(CacheEntry, float)>(32);
+        internal static ExternalAudioClipEvictionResult EvictExpiredEntriesBounded(
+            float maxIdleSeconds,
+            long memoryBudgetBytes,
+            int maximumEntriesToScan,
+            int maximumEntriesToEvict)
+        {
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExternalAudioClipHandle) + ".EvictExpiredEntries");
+            if (maximumEntriesToScan < 0 || maximumEntriesToScan > MaximumEntriesToScanPerCall)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumEntriesToScan));
+            }
+
+            if (maximumEntriesToEvict < 0 || maximumEntriesToEvict > maximumEntriesToScan)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumEntriesToEvict));
+            }
+
+            lock (cacheLock)
+            {
+                if (cacheEntries.Count == 0 || maximumEntriesToScan == 0)
+                {
+                    return default;
+                }
+
+                float now = Time.realtimeSinceStartup;
+                bool cacheDisabled = memoryBudgetBytes <= 0;
+                bool overBudget = !cacheDisabled && totalCachedMemoryBytes > memoryBudgetBytes;
+                int initialEntryCount = cacheEntries.Count;
+                int entriesScanned = 0;
+                int evictedCount = 0;
+                int scanLimit = Math.Min(maximumEntriesToScan, initialEntryCount);
+                while (entriesScanned < scanLimit && cacheEntries.Count > 0)
+                {
+                    if (evictionScanCursor >= cacheEntries.Count)
+                    {
+                        evictionScanCursor = 0;
+                    }
+
+                    CacheEntry entry = cacheEntries[evictionScanCursor];
+                    evictionScanCursor++;
+                    entriesScanned++;
+
+                    if (entry.RefCount > 0 || !entry.IsDone || !entry.IsSuccess)
+                    {
+                        continue;
+                    }
+
+                    float idleTime = now - entry.LastAccessTime;
+                    float effectiveTTL = maxIdleSeconds * Mathf.Max(1f, entry.AccessCount * 0.5f);
+                    if (overBudget)
+                    {
+                        effectiveTTL *= 0.25f;
+                    }
+
+                    if (evictedCount < maximumEntriesToEvict &&
+                        (cacheDisabled || overBudget || idleTime >= effectiveTTL))
+                    {
+                        DestroyAndRemoveEntry(entry);
+                        evictedCount++;
+                    }
+
+                    if (overBudget && totalCachedMemoryBytes <= memoryBudgetBytes)
+                    {
+                        overBudget = false;
+                    }
+                }
+
+                evictionScanCount += entriesScanned;
+                evictionCount += evictedCount;
+                return new ExternalAudioClipEvictionResult(entriesScanned, evictedCount);
+            }
+        }
 
         public static ExternalAudioClipCacheStats GetCacheStats()
         {
@@ -1247,32 +1554,20 @@ namespace CycloneGames.Audio.Runtime
             lock (cacheLock)
             {
                 int entryCount = cache.Count;
-                int loadingCount = 0;
-                int loadedCount = 0;
-                int failedCount = 0;
-                int totalRefCount = 0;
-
-                foreach (var pair in cache)
-                {
-                    CacheEntry entry = pair.Value;
-                    if (entry == null) continue;
-
-                    totalRefCount += entry.RefCount;
-                    if (!entry.IsDone) loadingCount++;
-                    else if (entry.IsSuccess) loadedCount++;
-                    else failedCount++;
-                }
-
                 return new ExternalAudioClipCacheStats(
                     entryCount,
-                    loadingCount,
-                    loadedCount,
-                    failedCount,
-                    totalRefCount,
+                    loadingEntryCount,
+                    loadedEntryCount,
+                    failedEntryCount,
+                    totalReferenceCount,
                     totalLoadRequests,
                     cacheHitCount,
                     cacheMissCount,
-                    totalFailureCount);
+                    totalFailureCount,
+                    evictionScanCount,
+                    evictionCount,
+                    AudioManager.ExternalClipMaximumCacheEntryCount,
+                    admissionRejectionCount);
             }
         }
 

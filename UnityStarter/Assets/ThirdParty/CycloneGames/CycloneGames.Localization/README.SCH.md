@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.Localization 是面向长期项目的 Unity 本地化模块，用于管理版本化文本与本地化资产内容。模块将 locale-aware runtime lookup、有界 catalog 安装、显式表现层绑定和适合长期项目分批翻译的 Editor 工作流组合在一起。它适用于桌面、移动端、WebGL、Headless Unity Player，以及提供兼容 asset backend 的主机平台集成，且不要求 DI 容器、全局 Service Locator、运行时反射或 worker thread。
+CycloneGames.Localization 管理版本化文本与本地化资产内容，面向长期 Unity 项目。它将 locale-aware runtime lookup、有界 catalog 安装、显式表现层绑定和适合长期项目分批翻译的 Editor 工作流组合在一起。支持桌面、移动端、WebGL、Headless Unity Player 和提供兼容 asset backend 的主机平台集成。无需 DI 容器、全局 Service Locator、运行时反射或 worker thread。
 
 ## 目录
 
@@ -20,9 +20,9 @@ CycloneGames.Localization 是面向长期项目的 Unity 本地化模块，用�
 
 本地化系统回答两个问题：玩家应该看到哪段文本或哪个资源，以及当前提交的是哪个 locale。CycloneGames.Localization 把创作（在 Editor 中编辑的 `LocalizationSettings`、`Locale`、`StringTable`、`AssetTable`、`StringTableMetadata`）、运行时分发（基于不可变 lookup snapshot 的 `LocalizationService` facade）与表现层（`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder`）解耦。所有者负责创作 table 与 catalog；service 把它们作为一个原子事务校验并安装；表现层组件订阅已提交的变更并按需刷新。
 
-本模块负责：经过校验的 locale identifier、显式 fallback graph、分区 string/asset table、plural selection、composite formatting、pseudo-localization、事务化 runtime catalog ownership、TMP 与 UGUI 绑定，以及多语言创作、validation、CSV 交换和 catalog build 的 Editor 工作流。字体 fallback、双向文字 shaping、远程翻译平台 API、下载/鉴权/补丁/CDN 策略，以及保存玩家语言偏好的应用级存档格式不由本模块负责 —— 它们留在各自的 owner adapter 中，使翻译数据不依赖产品专用网络、持久化和 UI composition。UI 导航和 locale-specific Prefab 布局在使用时由 `CycloneGames.UIFramework` 提供。
+模块处理：经过校验的 locale identifier、显式 fallback graph、分区 string/asset table、plural selection、composite formatting、pseudo-localization、事务化 runtime catalog ownership、TMP 与 UGUI 绑定，以及多语言创作、validation、CSV 交换和 catalog build 的 Editor 工作流。字体 fallback、双向文字 shaping、远程翻译平台 API、下载/鉴权/补丁/CDN 策略，以及保存玩家语言偏好的应用级存档格式归各自的 owner adapter 负责。UI 导航和 locale-specific Prefab 布局在使用时由 `CycloneGames.UIFramework` 提供。
 
-当项目需要版本化、分区、事务化的本地化能力，并需要在长 live-service 生命周期内支持增量翻译交付时使用本模块。不要将其作为字体/字形覆盖方案或翻译管理供应商桥接使用。
+适用于版本化、分区、事务化本地化场景，通过增量翻译交付支持长 live-service 生命周期。字体/字形覆盖和翻译管理供应商桥接是独立关注点。
 
 ### 主要特性
 
@@ -215,7 +215,7 @@ Regional table 可以是 sparse：缺少 `fr-CA` entry 时可从 `fr` 解析。C
 每个 `StringTable` 或 `AssetTable` 表示一个 locale 下的一个 table ID。这种布局支持独立 locale pack 和明确的内存所有权。
 
 - Table ID 和 entry key 使用 ordinal matching；编译时拒绝 duplicate key。
-- 空字符串或纯空格 string value 表示缺失内容（不阻断 fallback）；有意隐藏 label 应由 presentation state 表达，而不是通过 translation data。
+- 空字符串或纯空格 string value 表示缺失内容（不阻断 fallback）；隐藏 label 应由 presentation state 表达，而不是通过 translation data。
 - Compiled table 会将 authoring data 复制为 read-only lookup state。
 - Asset entry 将 Editor object GUID 与 provider-neutral runtime location 分开保存；runtime location 必须适用于所选 `IAssetPackage` provider。
 - 空或无效的 table ID、locale code、key、超长 value 与 asset location 会按照 `LocalizationLimits` 被拒绝。
@@ -242,7 +242,11 @@ Entry key 应视为稳定契约。使用 `menu.settings.audio` 这类语义 key�
 
 ### 内存与缓存策略
 
-Service 不使用全局 mutable lookup cache。每个 service instance 拥有：immutable compiled table snapshot；预计算 locale fallback chain；catalog ownership record；有界 missing-key diagnostic set；有界 reentrant mutation queue。`Shutdown` 释放 runtime registry 与 fallback data。`Dispose` 结束 service lifetime 并释放 event ownership。Pseudo-localized 与 formatted string 按需创建；频繁渲染不变值的调用方应缓存解析结果，并在 `Changed` 时失效。
+Service 不使用全局 mutable lookup cache。每个 service instance 拥有：immutable compiled table snapshot；预计算 locale fallback chain；catalog ownership record；有界 missing-key diagnostic set；有界 reentrant mutation queue。`LocalizationResidentLimits` 对所有 manual string table、manual asset table 与 catalog 使用同一组 owner/table/entry/retained-character 全局预算。一个 catalog ID 算一个 owner，每个 manual table 算一个 owner。替换时先扣除旧 owner footprint，再执行 admission；unregister/remove 会在同一 atomic publication 路径释放容量。
+
+Manual authoring table 会在 `CompileForRegistration` 构建或保留 lookup cache 前执行有界且 allocation-free 的 footprint 校验，因此全局容量拒绝不会让原本 cold 的 table 留下 cache。Catalog 会先执行只读取 table/entry 数量的 preflight，再进入详细内容遍历或构建 candidate dictionary 与 hash。Candidate scan 一旦达到 table、retained-entry、retained-character 或 raw-node work ceiling 就立即失败；只有空白字符的 entry 仍会消耗独立的 `MaxCandidateNodes` 工作预算。Admission 会在 owner-thread mutation 内、修改 committed dictionary 之前再次校验。由重入 `Changed` callback 排队的 registration 会在编译前，针对执行时的可变 authoring data 重新完成一次 measurement，从而封闭排队期间的数据变更边界。warm string/asset lookup 仍是 O(1) dictionary probe，不增加 admission scan。
+
+`Shutdown` 释放 runtime registry 与 fallback data。`Dispose` 结束 service lifetime 并释放 event ownership。Pseudo-localized 与 formatted string 按需创建；频繁渲染不变值的调用方应缓存解析结果，并在 `Changed` 时失效。
 
 ## 使用指南
 
@@ -530,7 +534,7 @@ Runtime lookup 是 event-driven，不包含 per-frame module loop。
 | Pseudo-localization | O(text) | 创建 transformed output；用于 QA |
 | TMP/image refresh | Event-driven | Image loading 遵循 provider allocation behavior |
 
-`LocalizationLimits` 为 locale count、fallback depth、table count、entry、key/value length、owner ID、diagnostic 和 reentrant mutation 提供保守默认值。应根据实测 content profile 设置产品值。在 live registration 前拒绝 oversized catalog 比依赖 out-of-memory failure 更安全。
+`LocalizationLimits` 为 locale count、fallback depth、单个 catalog 的 table/entry count、key/value length、owner ID、diagnostic 和 reentrant mutation 提供保守默认值。`LocalizationResidentLimits` 提供 service 全局 owner、table、retained entry、retained UTF-16 character 与单个 candidate raw-node work ceiling；构造参数会 clamp 到文档化的 absolute maximum。旧四参数 resident-limits 构造函数保留原默认行为；新增五参数 overload 可配置更低的 `MaxCandidateNodes`。应根据实测 content profile 设置更低的产品值。默认数量面向分区式大型项目，但不构成设备内存承诺。
 
 ### 线程
 
@@ -597,6 +601,7 @@ Localization configuration 或 production preference 不写入 `EditorPrefs`、`
 | `LocalizationSettings` | Default、authoring 与 available locale 配置 |
 | `LocalizationOptions` | Immutable service initialization snapshot |
 | `LocalizationLimits` | 不可信内容与内存容量边界 |
+| `LocalizationResidentLimits` | 带 absolute clamp 的共享 resident owner/table/entry/UTF-16 character 上限，以及单 candidate raw-node 工作上限 |
 | `ILocalizationService` / `LocalizationService` | Runtime lookup、locale state、content ownership、lifecycle facade |
 | `LocalizationChange` | 带 revision 的 post-commit change notification |
 | `StringTable` / `AssetTable` | Per-table、per-locale authoring 与 direct bootstrap data |
@@ -616,3 +621,9 @@ Localization configuration 或 production preference 不写入 `EditorPrefs`、`
 - [Unicode CLDR language plural rules](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html) —— `PluralRules.RuleSetVersion` subset 来源
 - [BCP 47](https://www.rfc-editor.org/rfc/rfc5646) —— `LocaleId` 参考的 language tag 结构
 - [RFC 4180](https://www.rfc-editor.org/rfc/rfc4180) —— import/export 使用的 CSV 格式
+
+## 有界诊断维护
+
+`LocalizationService.GetMemorySnapshot()` 以 O(1)、allocation-free 方式返回 locale/catalog/table owner、entry、保留 string/reference character、missing-key diagnostic、handler、per-input limit 与共享 resident limit 的聚合计数。character total 是精确 UTF-16 element count，排除 managed object header、index 与 allocator overhead。
+
+`ClearMissingDiagnosticsStep(Span<string> scratch)` 只清理可重建的 missing-key deduplication entry，执行工作量不超过 caller-supplied scratch capacity。它绝不会移除 compiled localization content、current locale state、catalog、handler 或 application data。调用方可以显式调度这项 diagnostic-only maintenance。

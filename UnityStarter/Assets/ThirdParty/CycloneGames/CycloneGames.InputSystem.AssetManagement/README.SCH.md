@@ -160,6 +160,8 @@ Live-service 游戏把输入配置存储在 AssetManagement package 中。配置
 
 helper 在把内容交给基础集成后不再保留配置 bytes。provider load、Unity object access 与 handle disposal 在 Unity main thread 执行；helper 不创建线程或同步原语。
 
+如需显式 telemetry，创建 `InputSystemAssetManagementDiagnostics` 实例，并通过 `CreateDefaultConfigLoader` 或 `CreateConfigLoader` 的可选 `diagnostics` 参数传入。`GetMemoryStats()` 只返回标量 request、failure、fallback 与临时 lease 计数。Caller-owned adapter 可以发布这些计数；asset bytes 与 eviction 仍由 AssetManagement 拥有。
+
 ## 故障排查
 
 | 现象 | 可能原因 | 解决方法 |

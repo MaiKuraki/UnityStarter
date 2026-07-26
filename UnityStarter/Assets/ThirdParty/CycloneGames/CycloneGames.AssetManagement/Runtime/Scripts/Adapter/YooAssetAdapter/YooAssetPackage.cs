@@ -16,7 +16,7 @@ namespace CycloneGames.AssetManagement.Runtime
 {
     internal sealed class YooAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetBulkLoader,
         IAssetRawFileLoader, IAssetSceneLoader, IYooAssetPackageMaintenance,
-        IAssetCatalogQuery, IAssetRuntimeDiagnostics, IAssetStoragePreflight
+        IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetStoragePreflight
     {
         private const int MAX_BUNDLE_LOADING_CONCURRENCY = 64;
         private const int MAX_DOWNLOAD_CONCURRENCY = 32;
@@ -1110,6 +1110,13 @@ namespace CycloneGames.AssetManagement.Runtime
             AssetRuntimeGuard.EnsureMainThread();
             ThrowIfDestroyed();
             return _cacheService.TrimIdle(policy);
+        }
+
+        public AssetCacheTrimResult TrimIdleCacheStep(int maxWork)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            ThrowIfDestroyed();
+            return _cacheService.TrimIdleStep(maxWork);
         }
 
         public void ClearBucket(string bucket)

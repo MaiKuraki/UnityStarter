@@ -449,6 +449,8 @@ s_intensityBuf, s_sharpnessBuf, s_typeBuf, s_durationBuf
 
 `EnsureBuffers(count)` 为后续等量或更小量的调用复用托管数组。长生命周期的 Android vibrator 与 `VibrationEffect` class handle 在 service 生命周期内缓存。单次 effect、composition 和部分平台查询会创建并释放 `AndroidJavaObject` 或 `AndroidJavaClass` wrapper。原生编组使用的枚举名称保存在静态 readonly 数组中，而不是每次调用 `ToString()` 生成。
 
+Buffer 增长受 admission 约束。默认限制为：单个 effect 300,000 ms、4,096 个 waveform sample、2,048 个 haptic event 与 4,096 个 pattern segment。自定义 `DeviceFeedbackLimits` 可以降低或提高这些值，但不得超过 3,600,000 ms、65,536 个 waveform sample、16,384 个 event 与 65,536 个 pattern segment 的 hard ceiling。无效或超容量调用会在 buffer 扩容与 native dispatch 前返回。现有 public playback 方法为保持兼容继续使用 `void`，因此 rejection 是 fail-closed no-op；通过 `GetMemoryStats()`/`DeviceFeedbackDiagnostics.GetMemoryStats()` 可以区分 accepted、invalid-rejected 与 capacity-rejected operation，并读取 retained buffer bytes 及 duration/sample/event/pattern peak。
+
 手柄震动和设备灯光 service 在 guard 检查后转发到注入的 backend，分配行为取决于该 backend。原生手机插件、JNI、IL2CPP 编组、浏览器交互和 buffer 扩容必须分别在目标平台上分析。
 
 ### 线程
@@ -484,6 +486,8 @@ Runtime assembly 目标 Unity 2019.3+，iOS 原生插件用 Objective-C（`Hapti
 ```
 
 Editor 测试套件覆盖 `GamepadRumbleService` 与 `GamepadLightService` 的 guard 与 no-op 行为。手机硬件输出、延迟、GC 行为、WebGL 浏览器策略与主机 backend 必须在目标设备上单独验证。
+
+容量 fixture 还必须在 `limit - 1`、`limit` 与 `limit + 1` 覆盖每个边界，确认 legacy `void` API 被拒绝时不会产生 native call，并且 accepted/invalid/capacity counter 与 peak 各自只准确推进一次。
 
 ## 参考
 

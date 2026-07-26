@@ -8,7 +8,7 @@ namespace CycloneGames.Choreography.Core
         /// <summary>How the runner reacts to an individual load failure.</summary>
         public readonly PreloadFailurePolicy FailurePolicy;
 
-        /// <summary>Maximum concurrent in-flight loads. 0 (or less) starts every reference immediately.</summary>
+        /// <summary>Maximum concurrent in-flight loads. 0 (or less) uses the runner's configured ceiling.</summary>
         public readonly int MaxConcurrent;
 
         public PreloadOptions(PreloadFailurePolicy failurePolicy = PreloadFailurePolicy.Continue, int maxConcurrent = 0)

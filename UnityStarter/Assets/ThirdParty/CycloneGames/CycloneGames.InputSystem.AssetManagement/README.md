@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.InputSystem.AssetManagement is the explicit optional integration boundary between `CycloneGames.InputSystem`, `CycloneGames.AssetManagement`, and VContainer. It is physically separate so installing InputSystem without AssetManagement never leaves an asmdef reference to a missing local module, and it is excluded from compilation entirely when VContainer is not installed.
+CycloneGames.InputSystem.AssetManagement bridges `CycloneGames.InputSystem`, `CycloneGames.AssetManagement`, and VContainer. The separate package leaves no dangling asmdef reference when AssetManagement is absent, and compilation is excluded entirely without VContainer.
 
 ## Table of Contents
 
@@ -18,7 +18,7 @@ CycloneGames.InputSystem.AssetManagement is the explicit optional integration bo
 
 ## Overview
 
-A product that loads input configuration from an asset package needs a bridge between three owners: the InputSystem runtime (which validates and commits configuration), the AssetManagement runtime (which loads bytes from a package), and the VContainer composition root (which owns the manager lifetime). This package provides that bridge as one assembly with one public adapter and one helper, so the base InputSystem VContainer integration never takes a direct dependency on AssetManagement.
+A product that loads input configuration from an asset package needs a bridge between three owners: the InputSystem runtime (validates and commits configuration), the AssetManagement runtime (loads bytes from a package), and the VContainer composition root (owns the manager lifetime). This package provides that bridge as one assembly with one public adapter and one helper, so the base InputSystem VContainer integration never takes a direct dependency on AssetManagement.
 
 The adapter owns no cache, Unity object, or global service. The caller owns the AssetManagement package and VContainer scope. User configuration persistence remains owned by `FileInputConfigurationStore` under `Application.persistentDataPath`; this integration introduces no additional files or preferences.
 
@@ -159,6 +159,8 @@ A product authors input configuration as `TextAsset` assets in the AssetManageme
 | Runtime commit | 0 bytes module-owned | Delegated to base InputSystem integration; helper releases its buffer after handoff. |
 
 The helper does not retain the configuration bytes after handing them to the base integration. Provider load, Unity-object access, and handle disposal run on the Unity main thread; the helper does not create threads or synchronization primitives.
+
+For explicit telemetry, create an `InputSystemAssetManagementDiagnostics` instance and pass it through the optional `diagnostics` parameter of `CreateDefaultConfigLoader` or `CreateConfigLoader`. `GetMemoryStats()` returns only scalar request, failure, fallback, and transient-lease counters. Caller-owned adapters may publish those counters; AssetManagement remains the owner of asset bytes and eviction.
 
 ## Troubleshooting
 

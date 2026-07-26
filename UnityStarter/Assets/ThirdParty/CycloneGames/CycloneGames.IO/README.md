@@ -446,3 +446,9 @@ Minimum verification:
 3. Run `CycloneGames.IO.Tests.Performance` when the performance-test package is available.
 4. Validate Android/WebGL StreamingAssets URI behavior in a Player build.
 5. Validate atomic replacement, quota behavior, and sudden-termination recovery on each shipping platform.
+
+## Memory Ownership
+
+The IO abstractions intentionally own no shared cache or process-global pressure responder. Products that need bounded admission or operation metrics must add an explicit decorator at their composition boundary without changing the underlying file-store ownership.
+
+Direct use of legacy IO APIs is the product composition root's responsibility. Validate each decorated store's limits and failure paths on the shipping filesystem implementation.

@@ -1108,6 +1108,45 @@ namespace CycloneGames.Logger
                 builders.TotalDiscards);
         }
 
+        /// <summary>
+        /// Releases at most <paramref name="maxWork"/> idle objects from the process-wide logger pools.
+        /// This operation never drains the processing queue or touches in-flight log messages.
+        /// </summary>
+        public static LoggerMemoryTrimResult TrimMemoryPoolsStep(
+            int targetRetainedLogMessages,
+            int targetRetainedStringBuilders,
+            int maxWork)
+        {
+            if (targetRetainedLogMessages < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(targetRetainedLogMessages));
+            }
+
+            if (targetRetainedStringBuilders < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(targetRetainedStringBuilders));
+            }
+
+            if (maxWork < 0)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maxWork));
+            }
+
+            int releasedMessages = LogMessagePool.TrimStep(targetRetainedLogMessages, maxWork);
+            int remainingWork = maxWork - releasedMessages;
+            int releasedBuilders = StringBuilderPool.TrimStep(targetRetainedStringBuilders, remainingWork);
+            LoggerMemoryStatistics statistics = GetMemoryStatistics();
+            bool hasMore = statistics.RetainedLogMessages > targetRetainedLogMessages ||
+                           statistics.RetainedStringBuilders > targetRetainedStringBuilders;
+            return new LoggerMemoryTrimResult(
+                releasedMessages + releasedBuilders,
+                releasedMessages,
+                releasedBuilders,
+                statistics.RetainedLogMessages,
+                statistics.RetainedStringBuilders,
+                hasMore);
+        }
+
         public LoggerShutdownResult ShutdownInstance(LogFlushMode flushMode = LogFlushMode.Buffered, int timeoutMs = -1)
         {
             lock (InstanceLock)

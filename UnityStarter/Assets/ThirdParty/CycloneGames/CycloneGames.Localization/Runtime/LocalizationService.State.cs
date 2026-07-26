@@ -51,16 +51,19 @@ namespace CycloneGames.Localization.Runtime
             public CatalogContent(
                 Dictionary<TableKey, CompiledStringTable> stringTables,
                 Dictionary<TableKey, CompiledAssetTable> assetTables,
-                string contentHash)
+                string contentHash,
+                ContentFootprint footprint)
             {
                 StringTables = stringTables;
                 AssetTables = assetTables;
                 ContentHash = contentHash;
+                Footprint = footprint;
             }
 
             public Dictionary<TableKey, CompiledStringTable> StringTables { get; }
             public Dictionary<TableKey, CompiledAssetTable> AssetTables { get; }
             public string ContentHash { get; }
+            public ContentFootprint Footprint { get; }
         }
 
         private sealed class Snapshot
@@ -84,9 +87,11 @@ namespace CycloneGames.Localization.Runtime
                 Dictionary<string, Dictionary<string, CompiledStringTable>> stringTables,
                 Dictionary<string, Dictionary<string, CompiledAssetTable>> assetTables,
                 Dictionary<string, Dictionary<string, int>> metadata,
+                ContentMemoryStats contentMemoryStats,
                 Action<LocalizationDiagnostic> diagnosticSink,
                 IFormatProvider formatProvider,
-                LocalizationLimits limits)
+                LocalizationLimits limits,
+                LocalizationResidentLimits residentLimits)
             {
                 IsInitialized = isInitialized;
                 CurrentLocale = currentLocale;
@@ -97,9 +102,11 @@ namespace CycloneGames.Localization.Runtime
                 StringTables = stringTables;
                 AssetTables = assetTables;
                 Metadata = metadata;
+                ContentMemoryStats = contentMemoryStats;
                 DiagnosticSink = diagnosticSink;
                 FormatProvider = formatProvider ?? CultureInfo.InvariantCulture;
                 Limits = limits.Normalized();
+                ResidentLimits = residentLimits.Normalized();
             }
 
             public bool IsInitialized { get; }
@@ -111,9 +118,11 @@ namespace CycloneGames.Localization.Runtime
             public Dictionary<string, Dictionary<string, CompiledStringTable>> StringTables { get; }
             public Dictionary<string, Dictionary<string, CompiledAssetTable>> AssetTables { get; }
             public Dictionary<string, Dictionary<string, int>> Metadata { get; }
+            public ContentMemoryStats ContentMemoryStats { get; }
             public Action<LocalizationDiagnostic> DiagnosticSink { get; }
             public IFormatProvider FormatProvider { get; }
             public LocalizationLimits Limits { get; }
+            public LocalizationResidentLimits ResidentLimits { get; }
 
             public static Snapshot CreateStopped(
                 long revision,
@@ -131,10 +140,77 @@ namespace CycloneGames.Localization.Runtime
                     new Dictionary<string, Dictionary<string, CompiledStringTable>>(StringComparer.Ordinal),
                     new Dictionary<string, Dictionary<string, CompiledAssetTable>>(StringComparer.Ordinal),
                     new Dictionary<string, Dictionary<string, int>>(StringComparer.Ordinal),
+                    default,
                     diagnosticSink,
                     formatProvider,
-                    limits);
+                    limits,
+                    LocalizationResidentLimits.Default);
             }
+        }
+
+        private readonly struct ContentFootprint
+        {
+            public ContentFootprint(
+                int ownerCount,
+                int tableCount,
+                long entryCount,
+                long retainedCharacterCount)
+            {
+                OwnerCount = ownerCount;
+                TableCount = tableCount;
+                EntryCount = entryCount;
+                RetainedCharacterCount = retainedCharacterCount;
+            }
+
+            public int OwnerCount { get; }
+            public int TableCount { get; }
+            public long EntryCount { get; }
+            public long RetainedCharacterCount { get; }
+        }
+
+        private readonly struct ContentMemoryStats
+        {
+            public ContentMemoryStats(
+                int catalogOwnerCount,
+                int manualStringTableCount,
+                int manualAssetTableCount,
+                int stringTableCount,
+                long stringEntryCount,
+                long stringCharacterCount,
+                int assetTableCount,
+                long assetEntryCount,
+                long assetReferenceCharacterCount,
+                int metadataTableCount,
+                long metadataEntryCount)
+            {
+                CatalogOwnerCount = catalogOwnerCount;
+                ManualStringTableCount = manualStringTableCount;
+                ManualAssetTableCount = manualAssetTableCount;
+                StringTableCount = stringTableCount;
+                StringEntryCount = stringEntryCount;
+                StringCharacterCount = stringCharacterCount;
+                AssetTableCount = assetTableCount;
+                AssetEntryCount = assetEntryCount;
+                AssetReferenceCharacterCount = assetReferenceCharacterCount;
+                MetadataTableCount = metadataTableCount;
+                MetadataEntryCount = metadataEntryCount;
+            }
+
+            public int CatalogOwnerCount { get; }
+            public int ManualStringTableCount { get; }
+            public int ManualAssetTableCount { get; }
+            public int StringTableCount { get; }
+            public long StringEntryCount { get; }
+            public long StringCharacterCount { get; }
+            public int AssetTableCount { get; }
+            public long AssetEntryCount { get; }
+            public long AssetReferenceCharacterCount { get; }
+            public int MetadataTableCount { get; }
+            public long MetadataEntryCount { get; }
+            public int ResidentOwnerCount => CatalogOwnerCount + ManualStringTableCount + ManualAssetTableCount;
+            public int ResidentTableCount => StringTableCount + AssetTableCount;
+            public long ResidentEntryCount => StringEntryCount + AssetEntryCount;
+            public long RetainedCharacterCount => StringCharacterCount + AssetReferenceCharacterCount;
         }
     }
 }
