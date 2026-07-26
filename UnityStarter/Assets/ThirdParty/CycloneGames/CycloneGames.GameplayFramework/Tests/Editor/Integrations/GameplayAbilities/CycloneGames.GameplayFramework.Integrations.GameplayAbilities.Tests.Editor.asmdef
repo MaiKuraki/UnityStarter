@@ -1,11 +1,14 @@
 {
-    "name": "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities",
-    "rootNamespace": "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities",
+    "name": "CycloneGames.GameplayFramework.Integrations.GameplayAbilities.Tests.Editor",
+    "rootNamespace": "CycloneGames.GameplayFramework.Integrations.GameplayAbilities.Tests.Editor",
     "references": [
         "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.GameplayFramework.Runtime.Integrations.GameplayAbilities",
         "CycloneGames.GameplayAbilities.Runtime"
     ],
-    "includePlatforms": [],
+    "includePlatforms": [
+        "Editor"
+    ],
     "excludePlatforms": [],
     "allowUnsafeCode": false,
     "overrideReferences": false,
@@ -21,5 +24,8 @@
             "define": "CYCLONEGAMES_HAS_GAMEPLAY_ABILITIES"
         }
     ],
-    "noEngineReferences": false
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
 }

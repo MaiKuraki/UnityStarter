@@ -493,7 +493,7 @@ Inspector 按用途对 serialized field 分组。新建资产使用以下默认�
 | Processing | `maintenanceIntervalMs` | 250 | Threaded maintenance 间隔；最小 10 ms |
 | Processing | `sinkFailureThreshold` | 3 | Sink 连续异常达到该数后 quarantine |
 | Processing | `overflowPolicy` | `DropNewest` | Core queue overflow policy |
-| Processing | `guaranteedLevel` | `Error` | 允许使用 reserved capacity 的 severity；不保证必达 |
+| Processing | `criticalLevel` | `Error` | 允许使用 reserved capacity 的 severity；不保证必达 |
 | Registration | `registerUnityLogger` | `true` | 注册 Unity Console adapter，`UNITY_SERVER` 除外 |
 | Registration | `registerConsoleLogger` | `false` | 注册 `System.Console` sink |
 | Registration | `registerFileLogger` | `false` | 在受支持位置注册 file sink |
@@ -511,7 +511,7 @@ Inspector 按用途对 serialized field 分组。新建资产使用以下默认�
 | Defaults | `defaultLevel` | `Info` | Sink 注册后的 runtime severity threshold |
 | Defaults | `defaultFilter` | `LogAll` | Sink 注册后的 runtime category policy |
 
-`LoggerSettings` 通过 serialized field `guaranteedLevel` 提供配置，`LoggerProcessingOptions` 则通过 `CriticalLevel` 提供 programmatic 配置。两者都表示 reserved capacity 的使用门槛，不代表消息必达。
+`LoggerSettings` 通过 serialized field `criticalLevel` 提供配置，`LoggerProcessingOptions` 则通过 `CriticalLevel` 提供 programmatic 配置。两者都表示 reserved capacity 的使用门槛，不代表消息必达。
 
 ### 构建期覆盖
 
@@ -534,7 +534,7 @@ Inspector 按用途对 serialized field 分组。新建资产使用以下默认�
 | `CG_LOGGER_UNITY_CONSOLE_MAX_QUEUED_MESSAGES` | `-loggerUnityConsoleMaxQueuedMessages` | 正整数 |
 | `CG_LOGGER_SHUTDOWN_DRAIN_TIMEOUT_MS` | `-loggerShutdownDrainTimeoutMs` | 非负整数 |
 | `CG_LOGGER_OVERFLOW_POLICY` | `-loggerOverflowPolicy` | Core `LogQueueOverflowPolicy` name |
-| `CG_LOGGER_GUARANTEED_LEVEL` | `-loggerGuaranteedLevel` | 允许使用 reserved capacity 的 severity |
+| `CG_LOGGER_CRITICAL_LEVEL` | `-loggerCriticalLevel` | 允许使用 reserved capacity 的 severity |
 
 Boolean 接受 `true/false`、`1/0`、`yes/no`、`on/off` 和 `enabled/disabled`。显式存在但无效的值会使构建失败。
 

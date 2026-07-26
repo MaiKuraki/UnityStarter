@@ -103,6 +103,8 @@ sequenceDiagram
 | **CycloneGames.GameplayFramework.Runtime** | Optional `Actor` / world adapter bridge                | Optional |
 | **CycloneGames.DeterministicMath.Core** | Optional `FPVector3` / `FPInt64` authority bridge        | Optional |
 
+The DeterministicMath assemblies support `com.cyclone-games.deterministic-math` `1.x`, are gated by package-derived `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`, and are not auto-referenced. The combined GameplayFramework bridge also requires `com.cyclone-games.gameplay-framework` `1.x`. Install the optional packages through UPM and add explicit integration asmdef references; do not define the capability symbols in PlayerSettings.
+
 ## Quick Start
 
 ### Step 1 — Add InteractionSystem

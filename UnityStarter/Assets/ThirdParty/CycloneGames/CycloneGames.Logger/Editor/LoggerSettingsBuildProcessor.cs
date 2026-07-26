@@ -716,15 +716,15 @@ namespace CycloneGames.Logger.Editor
             ValidateDefinedEnum(settings.processing, nameof(settings.processing));
             ValidateDefinedEnum(settings.overflowPolicy, nameof(settings.overflowPolicy));
             ValidateDefinedEnum(settings.unityConsoleOverflowPolicy, nameof(settings.unityConsoleOverflowPolicy));
-            ValidateDefinedEnum(settings.guaranteedLevel, nameof(settings.guaranteedLevel));
+            ValidateDefinedEnum(settings.criticalLevel, nameof(settings.criticalLevel));
             ValidateDefinedEnum(settings.defaultLevel, nameof(settings.defaultLevel));
             ValidateDefinedEnum(settings.defaultFilter, nameof(settings.defaultFilter));
             ValidateDefinedEnum(settings.fileMaintenanceMode, nameof(settings.fileMaintenanceMode));
             ValidateDefinedEnum(settings.fileSourcePathMode, nameof(settings.fileSourcePathMode));
 
-            if (settings.guaranteedLevel == LogLevel.None)
+            if (settings.criticalLevel == LogLevel.None)
             {
-                throw InvalidSettings(nameof(settings.guaranteedLevel), "must identify a logging severity");
+                throw InvalidSettings(nameof(settings.criticalLevel), "must identify a logging severity");
             }
 
             try
@@ -749,7 +749,7 @@ namespace CycloneGames.Logger.Editor
                     MaintenanceIntervalMs = settings.maintenanceIntervalMs,
                     SinkFailureThreshold = settings.sinkFailureThreshold,
                     OverflowPolicy = settings.overflowPolicy,
-                    CriticalLevel = settings.guaranteedLevel
+                    CriticalLevel = settings.criticalLevel
                 });
             }
             catch (Exception exception) when (exception is ArgumentException || exception is InvalidOperationException)
@@ -910,7 +910,7 @@ namespace CycloneGames.Logger.Editor
             private int? _unityConsoleMaxQueuedMessages;
             private int? _shutdownDrainTimeoutMs;
             private LogQueueOverflowPolicy? _overflowPolicy;
-            private LogLevel? _guaranteedLevel;
+            private LogLevel? _criticalLevel;
 
             public bool HasOverrides { get; private set; }
 
@@ -1016,9 +1016,9 @@ namespace CycloneGames.Logger.Editor
                     settings.overflowPolicy = _overflowPolicy.Value;
                 }
 
-                if (_guaranteedLevel.HasValue)
+                if (_criticalLevel.HasValue)
                 {
-                    settings.guaranteedLevel = _guaranteedLevel.Value;
+                    settings.criticalLevel = _criticalLevel.Value;
                 }
             }
 
@@ -1044,7 +1044,7 @@ namespace CycloneGames.Logger.Editor
                 ApplyEnvironmentValue(environmentReader, "CG_LOGGER_UNITY_CONSOLE_MAX_QUEUED_MESSAGES", value => TrySetPositiveInt(value, parsed => _unityConsoleMaxQueuedMessages = parsed));
                 ApplyEnvironmentValue(environmentReader, "CG_LOGGER_SHUTDOWN_DRAIN_TIMEOUT_MS", value => TrySetNonNegativeInt(value, parsed => _shutdownDrainTimeoutMs = parsed));
                 ApplyEnvironmentValue(environmentReader, "CG_LOGGER_OVERFLOW_POLICY", value => TrySetEnum<LogQueueOverflowPolicy>(value, parsed => _overflowPolicy = parsed));
-                ApplyEnvironmentValue(environmentReader, "CG_LOGGER_GUARANTEED_LEVEL", value => TrySetEnum<LogLevel>(value, parsed => _guaranteedLevel = parsed));
+                ApplyEnvironmentValue(environmentReader, "CG_LOGGER_CRITICAL_LEVEL", value => TrySetEnum<LogLevel>(value, parsed => _criticalLevel = parsed));
             }
 
             private void ApplyEnvironmentValue(Func<string, string> environmentReader, string key, Func<string, bool> parser)
@@ -1141,7 +1141,7 @@ namespace CycloneGames.Logger.Editor
                         continue;
                     }
 
-                    TryMatchValue(args, ref i, arg, "-loggerGuaranteedLevel", value => TrySetEnum<LogLevel>(value, parsed => _guaranteedLevel = parsed));
+                    TryMatchValue(args, ref i, arg, "-loggerCriticalLevel", value => TrySetEnum<LogLevel>(value, parsed => _criticalLevel = parsed));
                 }
             }
 

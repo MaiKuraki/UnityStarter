@@ -1,9 +1,7 @@
 using System;
-using System.IO;
 using System.Threading;
 using CycloneGames.Logger;
 using Cysharp.Threading.Tasks;
-using UnityEngine;
 
 namespace CycloneGames.InputSystem.Runtime
 {
@@ -168,45 +166,6 @@ namespace CycloneGames.InputSystem.Runtime
     {
         private const string LogPrefix = "[InputSystemLoader]";
 
-        public static UniTask InitializeAsync(string defaultConfigUri, string userConfigUri)
-        {
-            return InitializeAsync(defaultConfigUri, userConfigUri, default);
-        }
-
-        /// <summary>
-        /// Compatibility entry point. Default files must be inside StreamingAssets and user files must be inside
-        /// persistentDataPath. Use the source/store overload for WebGL or platform-specific persistence.
-        /// </summary>
-        public static async UniTask InitializeAsync(
-            string defaultConfigUri,
-            string userConfigUri,
-            CancellationToken cancellationToken)
-        {
-            if (!TryCreateCompatibilityStorage(
-                    userConfigUri,
-                    out IInputConfigurationStore userStore,
-                    out string userKey,
-                    out string storageError))
-            {
-                CLogger.LogWarning($"{LogPrefix} User configuration storage is unavailable: {storageError}");
-            }
-
-            InputSystemLoadResult result = await LoadAndInitializeCompatibilityAsync(
-                new UriInputConfigurationSource(),
-                defaultConfigUri,
-                userStore,
-                userKey,
-                InputManager.Instance,
-                userStore == null ? null : userConfigUri,
-                false,
-                cancellationToken);
-
-            if (!result.IsSuccess)
-            {
-                CLogger.LogError($"{LogPrefix} Initialization failed: {result.Status}. {result.Error}");
-            }
-        }
-
         public static UniTask<InputSystemLoadResult> LoadAndInitializeAsync(
             IInputConfigurationSource defaultSource,
             string defaultKey,
@@ -227,7 +186,6 @@ namespace CycloneGames.InputSystem.Runtime
                 userStore,
                 userKey,
                 manager,
-                null,
                 InputSystemBootstrapMode.Required,
                 true,
                 forceReinitialize,
@@ -251,32 +209,8 @@ namespace CycloneGames.InputSystem.Runtime
                 options.UserStore,
                 options.UserKey,
                 manager,
-                null,
                 options.Mode,
                 options.PersistDefaultToUser,
-                forceReinitialize,
-                cancellationToken);
-        }
-
-        internal static UniTask<InputSystemLoadResult> LoadAndInitializeCompatibilityAsync(
-            IInputConfigurationSource defaultSource,
-            string defaultKey,
-            IInputConfigurationStore userStore,
-            string userKey,
-            InputManager manager,
-            string managerUserConfigUri,
-            bool forceReinitialize = false,
-            CancellationToken cancellationToken = default)
-        {
-            return LoadAndInitializeCoreAsync(
-                defaultSource,
-                defaultKey,
-                userStore,
-                userKey,
-                manager,
-                managerUserConfigUri,
-                InputSystemBootstrapMode.Required,
-                true,
                 forceReinitialize,
                 cancellationToken);
         }
@@ -287,7 +221,6 @@ namespace CycloneGames.InputSystem.Runtime
             IInputConfigurationStore userStore,
             string userKey,
             InputManager manager,
-            string managerUserConfigUri,
             InputSystemBootstrapMode bootstrapMode,
             bool persistDefaultToUser,
             bool forceReinitialize,
@@ -368,8 +301,8 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             InputManagerInitializationResult initialization = forceReinitialize
-                ? manager.ReinitializeWithResult(selectedContent, managerUserConfigUri)
-                : manager.InitializeWithResult(selectedContent, managerUserConfigUri);
+                ? manager.ReinitializeWithResult(selectedContent)
+                : manager.InitializeWithResult(selectedContent);
             if (!initialization.IsSuccess &&
                 useUserConfiguration &&
                 IsConfigurationContentFailure(initialization.Status))
@@ -399,8 +332,8 @@ namespace CycloneGames.InputSystem.Runtime
                 selectedContent = defaultRead.Content;
                 useUserConfiguration = false;
                 initialization = forceReinitialize
-                    ? manager.ReinitializeWithResult(selectedContent, managerUserConfigUri)
-                    : manager.InitializeWithResult(selectedContent, managerUserConfigUri);
+                    ? manager.ReinitializeWithResult(selectedContent)
+                    : manager.InitializeWithResult(selectedContent);
             }
 
             if (!initialization.IsSuccess)
@@ -498,118 +431,6 @@ namespace CycloneGames.InputSystem.Runtime
                 userRead.Status);
         }
 
-        public static UniTask<bool> ResetToDefaultAsync(string defaultConfigUri, string userConfigUri)
-        {
-            return ResetToDefaultAsync(defaultConfigUri, userConfigUri, default);
-        }
-
-        /// <summary>
-        /// Validates and commits the default to the runtime, then atomically persists it as user configuration.
-        /// A persistence failure leaves the validated default active for the current session and retains the prior file.
-        /// </summary>
-        public static async UniTask<bool> ResetToDefaultAsync(
-            string defaultConfigUri,
-            string userConfigUri,
-            CancellationToken cancellationToken)
-        {
-            if (!TryCreateCompatibilityStorage(
-                    userConfigUri,
-                    out IInputConfigurationStore store,
-                    out string userKey,
-                    out string error))
-            {
-                CLogger.LogError($"{LogPrefix} Cannot reset user configuration: {error}");
-                return false;
-            }
-
-            var source = new UriInputConfigurationSource();
-            InputConfigurationReadResult defaultRead = await source.LoadAsync(defaultConfigUri, cancellationToken);
-            if (!defaultRead.IsSuccess)
-            {
-                CLogger.LogError(
-                    $"{LogPrefix} Cannot reset because the default configuration is unavailable. " +
-                    $"{defaultRead.Error}");
-                return false;
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            if (!PlayerLoopHelper.IsMainThread)
-            {
-                await UniTask.SwitchToMainThread(PlayerLoopTiming.Update, cancellationToken);
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-
-            InputManagerInitializationResult initialization =
-                InputManager.Instance.ReinitializeWithResult(defaultRead.Content, null);
-            if (!initialization.IsSuccess)
-            {
-                CLogger.LogError(
-                    $"{LogPrefix} Runtime reset was rejected before persistence: " +
-                    $"{initialization.Status}. {initialization.Message}");
-                return false;
-            }
-
-            string persistenceContent = defaultRead.Content;
-            if (initialization.Validation?.WasMigrated == true &&
-                !InputConfigurationYamlCodec.TrySerialize(
-                    initialization.Validation.Configuration,
-                    out persistenceContent,
-                    out string serializationError))
-            {
-                CLogger.LogError(
-                    $"{LogPrefix} The migrated default is active for this session, but serialization failed: " +
-                    serializationError);
-                return false;
-            }
-
-            InputConfigurationStoreResult save;
-            try
-            {
-                // Runtime commit is the final caller-cancellation point; see LoadAndInitializeAsync.
-                save = await store.SaveAsync(userKey, persistenceContent, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                CLogger.LogWarning(
-                    $"{LogPrefix} The default is active for this session, but persistence was canceled.");
-                return false;
-            }
-            catch (Exception exception) when (IsRecoverableException(exception))
-            {
-                CLogger.LogError(
-                    $"{LogPrefix} The default is active for this session, but the persistence provider failed " +
-                    $"({exception.GetType().Name}).");
-                return false;
-            }
-            if (!save.IsSuccess)
-            {
-                CLogger.LogError(
-                    $"{LogPrefix} The default is active for this session, but persistence failed: " +
-                    $"{save.Status}. {save.Error}");
-                return false;
-            }
-
-            return true;
-        }
-
-        [Obsolete("Use an explicit IInputConfigurationStore. This compatibility API is confined to persistentDataPath.")]
-        public static bool TryDeleteUserConfigFile(string userConfigUri)
-        {
-            if (!TryCreateCompatibilityStorage(
-                    userConfigUri,
-                    out IInputConfigurationStore store,
-                    out string userKey,
-                    out _))
-            {
-                return false;
-            }
-
-            // The obsolete synchronous facade must never queue work behind an async path gate: doing
-            // so can deadlock the Unity main thread or outlive a false return. Busy paths fail closed.
-            return store is FileInputConfigurationStore fileStore &&
-                   fileStore.TryDeleteSynchronously(userKey).IsSuccess;
-        }
-
         private static bool IsConfigurationContentFailure(InputManagerInitializationStatus status)
         {
             return status == InputManagerInitializationStatus.EmptyContent ||
@@ -625,238 +446,5 @@ namespace CycloneGames.InputSystem.Runtime
                    exception is not StackOverflowException;
         }
 
-        private static bool TryCreateCompatibilityStorage(
-            string userConfigUri,
-            out IInputConfigurationStore store,
-            out string key,
-            out string error)
-        {
-            store = null;
-            key = null;
-            error = null;
-
-#if UNITY_WEBGL && !UNITY_EDITOR
-            error = "WebGL requires an explicit IInputConfigurationStore backed by browser storage.";
-            return false;
-#else
-            if (string.IsNullOrWhiteSpace(userConfigUri))
-            {
-                error = "A user configuration path is required.";
-                return false;
-            }
-
-            if (!TryGetLocalPath(userConfigUri, out string candidate))
-            {
-                error = "User configuration must be a local path.";
-                return false;
-            }
-
-            string root;
-            try
-            {
-                root = Path.GetFullPath(Application.persistentDataPath);
-                candidate = Path.GetFullPath(candidate);
-            }
-            catch (Exception exception) when (
-                exception is ArgumentException ||
-                exception is NotSupportedException ||
-                exception is PathTooLongException)
-            {
-                error = $"The user configuration path is invalid ({exception.GetType().Name}).";
-                return false;
-            }
-
-            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
-                ? root
-                : root + Path.DirectorySeparatorChar;
-            StringComparison comparison =
-                Application.platform == RuntimePlatform.WindowsEditor ||
-                Application.platform == RuntimePlatform.WindowsPlayer
-                    ? StringComparison.OrdinalIgnoreCase
-                    : StringComparison.Ordinal;
-            if (!candidate.StartsWith(rootPrefix, comparison))
-            {
-                error = "User configuration must be inside persistentDataPath.";
-                return false;
-            }
-
-            key = candidate.Substring(rootPrefix.Length)
-                .Replace(Path.DirectorySeparatorChar, '/')
-                .Replace(Path.AltDirectorySeparatorChar, '/');
-            store = new FileInputConfigurationStore(root);
-            return true;
-#endif
-        }
-
-        private static bool TryGetLocalPath(string value, out string path)
-        {
-            path = null;
-            try
-            {
-                if (value.StartsWith("file://", StringComparison.OrdinalIgnoreCase))
-                {
-                    var parsed = new Uri(value);
-                    if (!parsed.IsFile)
-                    {
-                        return false;
-                    }
-
-                    path = parsed.LocalPath;
-                    return true;
-                }
-
-                if (Path.IsPathRooted(value))
-                {
-                    path = value;
-                    return true;
-                }
-            }
-            catch
-            {
-                return false;
-            }
-
-            return false;
-        }
-    }
-
-    /// <summary>
-    /// Restricted compatibility facade. Writes and deletes are accepted only inside persistentDataPath.
-    /// </summary>
-    [Obsolete("Use IInputConfigurationSource and IInputConfigurationStore with InputSystemLoader.LoadAndInitializeAsync.")]
-    public static class InputConfigurationFileLoader
-    {
-        public static async UniTask<(bool Success, string Content)> LoadTextFromUriAsync(
-            string uri,
-            string logPrefix,
-            CancellationToken cancellationToken = default)
-        {
-            InputConfigurationReadResult result;
-            if (TryCreatePersistentStore(uri, out IInputConfigurationStore store, out string key))
-            {
-                result = await store.LoadAsync(key, cancellationToken);
-            }
-            else
-            {
-                var source = new UriInputConfigurationSource();
-                result = await source.LoadAsync(uri, cancellationToken);
-            }
-
-            if (!result.IsSuccess && result.Status != InputConfigurationStorageStatus.NotFound)
-            {
-                CLogger.LogWarning($"{logPrefix} Configuration load failed: {result.Status}. {result.Error}");
-            }
-
-            return (result.IsSuccess, result.Content);
-        }
-
-        public static async UniTask<bool> SaveTextToUriAsync(
-            string uri,
-            string content,
-            string logPrefix,
-            CancellationToken cancellationToken = default)
-        {
-            if (!TryCreatePersistentStore(uri, out IInputConfigurationStore store, out string key))
-            {
-                CLogger.LogWarning($"{logPrefix} Write rejected because the path is outside persistentDataPath.");
-                return false;
-            }
-
-            InputConfigurationStoreResult result = await store.SaveAsync(key, content, cancellationToken);
-            if (!result.IsSuccess)
-            {
-                CLogger.LogWarning($"{logPrefix} Configuration save failed: {result.Status}. {result.Error}");
-            }
-
-            return result.IsSuccess;
-        }
-
-        public static async UniTask<bool> DeleteTextAtUriAsync(
-            string uri,
-            string logPrefix,
-            CancellationToken cancellationToken = default)
-        {
-            if (!TryCreatePersistentStore(uri, out IInputConfigurationStore store, out string key))
-            {
-                CLogger.LogWarning($"{logPrefix} Delete rejected because the path is outside persistentDataPath.");
-                return false;
-            }
-
-            InputConfigurationStoreResult result = await store.DeleteAsync(key, cancellationToken);
-            return result.IsSuccess;
-        }
-
-        public static bool TryDeleteTextAtUri(string uri, string logPrefix)
-        {
-            return DeleteTextAtUriAsync(uri, logPrefix).GetAwaiter().GetResult();
-        }
-
-        public static bool TryGetLocalFilePath(string uri, out string filePath)
-        {
-            filePath = null;
-            if (!TryCreatePersistentStore(uri, out _, out _))
-            {
-                return false;
-            }
-
-            try
-            {
-                filePath = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
-                    ? new Uri(uri).LocalPath
-                    : Path.GetFullPath(uri);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private static bool TryCreatePersistentStore(
-            string uri,
-            out IInputConfigurationStore store,
-            out string key)
-        {
-            store = null;
-            key = null;
-#if UNITY_WEBGL && !UNITY_EDITOR
-            return false;
-#else
-            if (string.IsNullOrWhiteSpace(uri))
-            {
-                return false;
-            }
-
-            string path;
-            try
-            {
-                path = uri.StartsWith("file://", StringComparison.OrdinalIgnoreCase)
-                    ? new Uri(uri).LocalPath
-                    : Path.GetFullPath(uri);
-            }
-            catch
-            {
-                return false;
-            }
-
-            string root = Path.GetFullPath(Application.persistentDataPath);
-            string rootPrefix = root.EndsWith(Path.DirectorySeparatorChar.ToString(), StringComparison.Ordinal)
-                ? root
-                : root + Path.DirectorySeparatorChar;
-            StringComparison comparison =
-                Application.platform == RuntimePlatform.WindowsEditor ||
-                Application.platform == RuntimePlatform.WindowsPlayer
-                    ? StringComparison.OrdinalIgnoreCase
-                    : StringComparison.Ordinal;
-            if (!path.StartsWith(rootPrefix, comparison))
-            {
-                return false;
-            }
-
-            key = path.Substring(rootPrefix.Length);
-            store = new FileInputConfigurationStore(root);
-            return true;
-#endif
-        }
     }
 }

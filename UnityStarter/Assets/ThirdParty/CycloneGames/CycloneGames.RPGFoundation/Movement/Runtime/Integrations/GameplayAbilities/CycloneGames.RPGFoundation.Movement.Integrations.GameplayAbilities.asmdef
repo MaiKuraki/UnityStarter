@@ -12,15 +12,21 @@
     "allowUnsafeCode": false,
     "overrideReferences": false,
     "precompiledReferences": [],
-    "autoReferenced": true,
+    "autoReferenced": false,
     "defineConstraints": [
-        "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES"
+        "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES",
+        "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_TAGS"
     ],
     "versionDefines": [
         {
             "name": "com.cyclone-games.gameplay-abilities",
-            "expression": "",
+            "expression": "[1.0.0,2.0.0)",
             "define": "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_ABILITIES"
+        },
+        {
+            "name": "com.cyclone-games.gameplay-tags",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONE_RPGFOUNDATION_HAS_GAMEPLAY_TAGS"
         }
     ],
     "noEngineReferences": false

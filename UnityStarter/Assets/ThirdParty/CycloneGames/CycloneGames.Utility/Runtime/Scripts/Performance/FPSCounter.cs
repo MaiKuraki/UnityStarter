@@ -161,28 +161,6 @@ namespace CycloneGames.Utility.Runtime
         public int CurrentFPS => _currentFps;
         public int AverageFPS => _averageFps;
 
-        [Obsolete("Use the Inspector safe-area settings or a dedicated presentation adapter.")]
-        public bool enforceVerticalSymmetry
-        {
-            get => _enforceVerticalSymmetry;
-            set
-            {
-                _enforceVerticalSymmetry = value;
-                InvalidateLayoutCache();
-            }
-        }
-
-        [Obsolete("Use the Inspector safe-area settings or a dedicated presentation adapter.")]
-        public bool enforceHorizontalSymmetry
-        {
-            get => _enforceHorizontalSymmetry;
-            set
-            {
-                _enforceHorizontalSymmetry = value;
-                InvalidateLayoutCache();
-            }
-        }
-
         private void Awake()
         {
             if (_persistAcrossScenes && Application.isPlaying)

@@ -41,7 +41,7 @@ namespace CycloneGames.Logger
         public LogQueueOverflowPolicy overflowPolicy = LogQueueOverflowPolicy.DropNewest;
 
         [Tooltip("Severity that may use reserved queue capacity. This is not an absolute delivery guarantee.")]
-        public LogLevel guaranteedLevel = LogLevel.Error;
+        public LogLevel criticalLevel = LogLevel.Error;
 
         [Header("Registration")]
         public bool registerUnityLogger = true;

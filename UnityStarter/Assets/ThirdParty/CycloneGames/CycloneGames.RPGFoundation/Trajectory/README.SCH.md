@@ -174,7 +174,7 @@ Lockstep 或 rollback 玩法使用 `DeterministicMath` integration（`FPVector3`
 
 ### DeterministicMath 集成
 
-由 `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` 启用。用 `FPVector3` 和 `FPInt64` 镜像 query、buffer、hit、segment 和 solver 模型。
+仅当 UPM 解析到 `com.cyclone-games.deterministic-math` `1.x` 时启用。Integration asmdef 生成并消费 `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`，使用 `autoReferenced: false`，且必须由 consumer 显式引用。不要在 PlayerSettings 中添加 capability symbol。没有受支持 package 时，只排除该 integration 及其 test assembly。该 integration 用 `FPVector3` 和 `FPInt64` 镜像 query、buffer、hit、segment 和 solver 模型。
 
 ### Editor 工具
 

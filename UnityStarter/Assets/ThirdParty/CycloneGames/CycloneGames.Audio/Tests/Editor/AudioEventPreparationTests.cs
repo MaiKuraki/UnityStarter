@@ -70,7 +70,7 @@ namespace CycloneGames.Audio.Tests.Editor
         }
 
         // This mirrors the API surface available to a third-party AudioNode assembly. Keeping
-        // the sample compiled prevents obsolete internal-only guidance from regressing.
+        // the sample compiled prevents the scope-owned preparation contract from regressing.
         private static void CompileExternalNodeUsage(
             ActiveEvent activeEvent,
             AudioClip clip,

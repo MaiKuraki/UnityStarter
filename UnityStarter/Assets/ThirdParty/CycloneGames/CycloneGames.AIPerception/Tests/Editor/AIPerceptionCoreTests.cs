@@ -74,6 +74,21 @@ namespace CycloneGames.AIPerception.Tests.Editor
         }
 
         [Test]
+        public void PerceptibleTypes_RegisterType_PreservesExplicitStableIdContract()
+        {
+            const int typeId = 1001;
+            const string typeName = "AlarmEmitter";
+
+            PerceptibleTypes.RegisterType(typeId, typeName);
+
+            Assert.That(PerceptibleTypes.IsRegistered(typeId), Is.True);
+            Assert.That(PerceptibleTypes.GetTypeName(typeId), Is.EqualTo(typeName));
+            Assert.DoesNotThrow(() => PerceptibleTypes.RegisterType(typeId, typeName));
+            Assert.Throws<InvalidOperationException>(() =>
+                PerceptibleTypes.RegisterType(typeId, "ConflictingType"));
+        }
+
+        [Test]
         public void Registry_LegacyZeroMaximum_MapsToPackageHardCeiling()
         {
             using var registry = new PerceptibleRegistry(initialCapacity: 1, maximumCapacity: 0);
