@@ -262,69 +262,6 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         [Test]
-        public void ObsoleteEditorShims_RoundTripCurrentSchemaFieldsWithoutLoss()
-        {
-#pragma warning disable 0618
-            InputConfiguration source = CreateExtendedConfiguration();
-            source.PlayerSlots[0].JoinAction = new ActionBindingConfig
-            {
-                Type = ActionValueType.Button,
-                ActionName = "Join",
-                DeviceBindings = new List<string> { "<Keyboard>/enter" },
-                CompositeBindings = new List<CompositeBindingConfig>(),
-                UpdateMode = InputUpdateMode.EventDriven,
-                LongPressValueThreshold = 0.5f
-            };
-            PlayerSlotSO shim = ScriptableObject.CreateInstance<PlayerSlotSO>();
-            try
-            {
-                shim.FromData(source.PlayerSlots[0]);
-                PlayerSlotConfig roundTripped = shim.ToData();
-
-                Assert.That(roundTripped.JoinAction.ActionName, Is.EqualTo("Join"));
-                Assert.That(roundTripped.DefaultControlScheme, Is.Null);
-                Assert.That(roundTripped.ControlSchemes, Has.Count.EqualTo(1));
-                Assert.That(roundTripped.ControlSchemes[0].Name, Is.EqualTo("KeyboardMouse"));
-                Assert.That(roundTripped.ControlSchemes[0].DeviceRequirements, Has.Count.EqualTo(2));
-                Assert.That(roundTripped.Contexts, Has.Count.EqualTo(1));
-                Assert.That(roundTripped.Contexts[0].Priority, Is.EqualTo(17));
-                Assert.That(roundTripped.Contexts[0].BlocksLowerPriority, Is.False);
-                Assert.That(roundTripped.Contexts[0].Bindings[0].CompositeBindings, Has.Count.EqualTo(1));
-            }
-            finally
-            {
-                if (shim.Contexts != null)
-                {
-                    for (int index = 0; index < shim.Contexts.Count; index++)
-                    {
-                        if (shim.Contexts[index] != null) UnityEngine.Object.DestroyImmediate(shim.Contexts[index]);
-                    }
-                }
-                UnityEngine.Object.DestroyImmediate(shim);
-            }
-#pragma warning restore 0618
-        }
-
-        [Test]
-        public void ObsoletePlayerSlotShim_FreshLegacyDefaultsRemainAbsent()
-        {
-#pragma warning disable 0618
-            PlayerSlotSO shim = ScriptableObject.CreateInstance<PlayerSlotSO>();
-            try
-            {
-                PlayerSlotConfig data = shim.ToData();
-                Assert.That(data.JoinAction, Is.Null);
-                Assert.That(data.DefaultControlScheme, Is.Null);
-                Assert.That(data.ControlSchemes, Is.Null);
-            }
-            finally
-            {
-                UnityEngine.Object.DestroyImmediate(shim);
-            }
-#pragma warning restore 0618
-        }
-
-        [Test]
         public void SchemaZeroInlineComposite_LoadsIntoMigratedWorkingCopyAndReloads()
         {
             InputConfiguration source = CreateExtendedConfiguration();

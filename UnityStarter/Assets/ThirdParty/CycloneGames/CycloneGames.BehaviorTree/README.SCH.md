@@ -65,9 +65,9 @@ flowchart LR
 | `CycloneGames.BehaviorTree.Editor` | 仅 Editor | Graph 编辑器、Inspector、校验和 benchmark 窗口 |
 | `CycloneGames.BehaviorTree.Benchmarks` | 否 | Benchmark 模型、session、场景 runner 和导出工具 |
 | `CycloneGames.BehaviorTree.Runtime.DOD` | 否 | Burst/Jobs 平面树调度器与 NativeArray 状态 |
-| `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | 否 | 两个本地模块之间的显式随机数 provider bridge |
+| `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | 否 | Fixed-point Blackboard/schema adapter 与支持保存/恢复的确定性随机数 provider |
 
-Runtime assembly 依赖 `com.cyclone-games.hash`。DOD assembly 只在 Burst、Collections 和 Mathematics 均存在时启用，使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Runtime.DOD`。DeterministicMath bridge 为 `autoReferenced: false`，并直接引用两个本地 assembly。
+Runtime assembly 依赖 `com.cyclone-games.hash`。DOD assembly 只在 Burst、Collections 和 Mathematics 均存在时启用，使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Runtime.DOD`。DeterministicMath bridge 及其测试只在 UPM 解析到受支持的 `com.cyclone-games.deterministic-math` `1.x` 版本时具备编译条件。它们的 asmdef 通过 `versionDefines` 生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`，再通过 `defineConstraints` 消费该 capability，并保持 `autoReferenced: false`。使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Integrations.DeterministicMath`。不要在 PlayerSettings 中手工添加 capability symbol；依赖缺失或版本不受支持时，integration 被排除，Core 与 Runtime 仍可编译。
 
 ### 所有权规则
 
@@ -665,6 +665,7 @@ Benchmark 代码隔离在 `CycloneGames.BehaviorTree.Benchmarks`。
 | Respawn 后 DOD handle 抛出异常 | Slot 已回收，handle 已 stale | 用最新 `AddAgent` 返回值替换保存的 handle |
 | DOD action completion 被拒绝 | Request 已 timeout、cancel/reset，或属于旧 generation | 丢弃 stale completion，使用下一次 request token |
 | DOD asmdef 无法解析 | 缺少可选 package 或显式 assembly reference | 确认 Burst/Collections/Mathematics，并在 consumer 中添加 DOD asmdef reference |
+| DeterministicMath integration assembly 不可用 | `com.cyclone-games.deterministic-math` 缺失、不在 `1.x` 范围，或 consumer asmdef 未引用 integration | 通过 UPM 解析受支持版本并添加显式 asmdef reference；不要手工添加 capability symbol |
 | Editor layout 不可用 | 无法解析 Editor-only asset GUID | Reimport package，并确认 Editor asset 及其 `.meta` 完整 |
 
 ## 验证
@@ -679,6 +680,8 @@ EditMode  CycloneGames.BehaviorTree.Runtime.DOD.Tests.Editor
 PlayMode  CycloneGames.BehaviorTree.Tests.PlayMode
 EditMode  CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
 ```
+
+仅当 UPM 已解析受支持的 `1.x` package 时运行 DeterministicMath 测试 assembly。还应验证一个干净的 BehaviorTree-only consumer：Core 与 Runtime 必须编译，而 integration 及其测试 assembly 必须不存在。`Assets/` 下相邻的 `package.json` 只是 metadata，不属于已安装 UPM package，因此不会激活该 gate。
 
 ### 最小编辑器手动检查
 

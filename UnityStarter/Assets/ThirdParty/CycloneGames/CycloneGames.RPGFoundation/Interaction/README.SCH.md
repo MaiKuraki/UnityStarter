@@ -103,6 +103,8 @@ sequenceDiagram
 | **CycloneGames.GameplayFramework.Runtime** | 可选 `Actor` / World adapter 桥                | 可选     |
 | **CycloneGames.DeterministicMath.Core** | 可选 `FPVector3` / `FPInt64` 权威校验桥         | 可选     |
 
+DeterministicMath assembly 支持 `com.cyclone-games.deterministic-math` `1.x`，由 package-derived `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` gate 控制，且不会被自动引用。组合 GameplayFramework bridge 还要求 `com.cyclone-games.gameplay-framework` `1.x`。请通过 UPM 安装可选 package，并显式添加 integration asmdef reference；不要在 PlayerSettings 中定义 capability symbol。
+
 ## 快速上手
 
 ### 第 1 步 — 添加 InteractionSystem

@@ -493,7 +493,7 @@ The Inspector groups serialized fields by purpose. A new asset uses the followin
 | Processing | `maintenanceIntervalMs` | 250 | Threaded maintenance interval; minimum 10 ms |
 | Processing | `sinkFailureThreshold` | 3 | Consecutive sink exceptions before quarantine |
 | Processing | `overflowPolicy` | `DropNewest` | Core queue overflow policy |
-| Processing | `guaranteedLevel` | `Error` | Severity allowed to use reserved capacity; not guaranteed delivery |
+| Processing | `criticalLevel` | `Error` | Severity allowed to use reserved capacity; not guaranteed delivery |
 | Registration | `registerUnityLogger` | `true` | Register Unity Console adapter except on `UNITY_SERVER` |
 | Registration | `registerConsoleLogger` | `false` | Register `System.Console` sink |
 | Registration | `registerFileLogger` | `false` | Register file sink where supported |
@@ -511,7 +511,7 @@ The Inspector groups serialized fields by purpose. A new asset uses the followin
 | Defaults | `defaultLevel` | `Info` | Runtime severity threshold after sink registration |
 | Defaults | `defaultFilter` | `LogAll` | Runtime category policy after sink registration |
 
-`LoggerSettings` exposes the serialized field `guaranteedLevel`, while `LoggerProcessingOptions` exposes `CriticalLevel` for programmatic configuration. Both describe access to reserved capacity, not guaranteed delivery.
+`LoggerSettings` exposes the serialized field `criticalLevel`, while `LoggerProcessingOptions` exposes `CriticalLevel` for programmatic configuration. Both describe access to reserved capacity, not guaranteed delivery.
 
 ### Build-time overrides
 
@@ -534,7 +534,7 @@ Build overrides create an isolated settings asset; they never edit the canonical
 | `CG_LOGGER_UNITY_CONSOLE_MAX_QUEUED_MESSAGES` | `-loggerUnityConsoleMaxQueuedMessages` | Positive integer |
 | `CG_LOGGER_SHUTDOWN_DRAIN_TIMEOUT_MS` | `-loggerShutdownDrainTimeoutMs` | Non-negative integer |
 | `CG_LOGGER_OVERFLOW_POLICY` | `-loggerOverflowPolicy` | Core `LogQueueOverflowPolicy` name |
-| `CG_LOGGER_GUARANTEED_LEVEL` | `-loggerGuaranteedLevel` | Severity allowed to use reserved capacity |
+| `CG_LOGGER_CRITICAL_LEVEL` | `-loggerCriticalLevel` | Severity allowed to use reserved capacity |
 
 Accepted booleans are `true/false`, `1/0`, `yes/no`, `on/off`, and `enabled/disabled`. An explicitly present invalid value fails the build.
 

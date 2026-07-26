@@ -1,5 +1,3 @@
-using System;
-
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -88,55 +86,6 @@ namespace CycloneGames.Utility.Runtime
                 _manualTopPadding = SanitizePadding(value.w);
                 RequestRefresh();
             }
-        }
-
-        [Obsolete("Use ExtendIntoBottomSafeArea.")]
-        public bool extendIntoBottomSafeArea
-        {
-            get => ExtendIntoBottomSafeArea;
-            set => ExtendIntoBottomSafeArea = value;
-        }
-
-        [Obsolete("Use EnforceVerticalSymmetry.")]
-        public bool enforceVerticalSymmetry
-        {
-            get => EnforceVerticalSymmetry;
-            set => EnforceVerticalSymmetry = value;
-        }
-
-        [Obsolete("Use EnforceHorizontalSymmetry.")]
-        public bool enforceHorizontalSymmetry
-        {
-            get => EnforceHorizontalSymmetry;
-            set => EnforceHorizontalSymmetry = value;
-        }
-
-        [Obsolete("Use PaddingPixels.w.")]
-        public float manualTopPadding
-        {
-            get => _manualTopPadding;
-            set => SetPaddingAndRefresh(ref _manualTopPadding, value);
-        }
-
-        [Obsolete("Use PaddingPixels.y.")]
-        public float manualBottomPadding
-        {
-            get => _manualBottomPadding;
-            set => SetPaddingAndRefresh(ref _manualBottomPadding, value);
-        }
-
-        [Obsolete("Use PaddingPixels.x.")]
-        public float manualLeftPadding
-        {
-            get => _manualLeftPadding;
-            set => SetPaddingAndRefresh(ref _manualLeftPadding, value);
-        }
-
-        [Obsolete("Use PaddingPixels.z.")]
-        public float manualRightPadding
-        {
-            get => _manualRightPadding;
-            set => SetPaddingAndRefresh(ref _manualRightPadding, value);
         }
 
         private void OnEnable()
@@ -303,18 +252,6 @@ namespace CycloneGames.Utility.Runtime
         private void SetAndRefresh(ref bool field, bool value)
         {
             if (field == value)
-            {
-                return;
-            }
-
-            field = value;
-            RequestRefresh();
-        }
-
-        private void SetPaddingAndRefresh(ref float field, float value)
-        {
-            value = SanitizePadding(value);
-            if (Mathf.Approximately(field, value))
             {
                 return;
             }

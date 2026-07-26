@@ -151,7 +151,9 @@ Core does not own Unity collider filtering. Add target ignore lists, owner filte
 
 ### DeterministicMath Integration
 
-Enabled by `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`. The integration chooses explicit zero-vector fallbacks at projectile boundaries: a zero spawn direction creates zero initial velocity, and a homing target at the projectile's position preserves travel direction.
+Enabled only when UPM resolves `com.cyclone-games.deterministic-math` `1.x`. The integration asmdef generates and consumes `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`, uses `autoReferenced: false`, and must be referenced explicitly by the consumer. Do not add the capability symbol to PlayerSettings. Without a supported package, only this integration and its test assembly are excluded.
+
+The integration chooses explicit zero-vector fallbacks at projectile boundaries: a zero spawn direction creates zero initial velocity, and a homing target at the projectile's position preserves travel direction.
 
 Use for lockstep/rollback simulation, replay verification, seed-based bullet pattern reconstruction, or bit-identical fixed-point homing across platforms.
 

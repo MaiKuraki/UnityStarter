@@ -408,6 +408,8 @@ if (!load.IsBootstrapComplete)
 
 `Disabled`：不执行读取。`Optional`：user 和 default content 都缺失时返回 `NotConfigured`。`Required`：无可用配置时报告 `DefaultConfigurationUnavailable`。User file 有效时直接使用。缺失时使用已验证的 default 并复制到 user store。存在但无效时保留并暂用有效 default。主文件缺失但 `.bak` 可读时 store 报告 backup recovery。只有在 schema validation 和 Input System preflight 都成功后配置才会被 commit。
 
+`InputManager` 只持有经过验证的 runtime state，不保留 URI、source 或 store。Composition root 持有配置持久化所有权，并通过显式 `IInputConfigurationSource` 与 `IInputConfigurationStore` 实例执行后续 load、save、reset 或 delete。
+
 更换配置需要生命周期决策。`ReinitializeWithResult` 在 player 活跃时拒绝替换。移除 player、释放 context、reinitialize，然后重建 player service 并重新应用已接受的 binding profile。Reinitialize 失败时保留当前已提交的配置。
 
 ## 进阶主题

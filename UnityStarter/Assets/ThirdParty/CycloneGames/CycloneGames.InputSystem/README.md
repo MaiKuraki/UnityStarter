@@ -408,6 +408,8 @@ if (!load.IsBootstrapComplete)
 
 `Disabled` performs no reads. `Optional` returns `NotConfigured` when both user and default content are absent. `Required` reports `DefaultConfigurationUnavailable` when no usable configuration exists. When the user file is valid, it is used. When it is missing, the validated default is used and copied into the user store. When it exists but is invalid, it is preserved and the valid default is used for that session. When the primary file is missing but its `.bak` is readable, the store reports backup recovery. A configuration is never committed until schema validation and Input System preflight both succeed.
 
+`InputManager` owns only validated runtime state; it does not retain a URI, source, or store. The composition root owns configuration persistence and performs later load, save, reset, or delete operations through its explicit `IInputConfigurationSource` and `IInputConfigurationStore` instances.
+
 Changing configuration requires a lifecycle decision. `ReinitializeWithResult` refuses replacement while players are active. Remove players, release contexts, reinitialize, then rebuild player services and reapply an accepted binding profile. A failed reinitialize leaves the committed configuration unchanged.
 
 ## Advanced Topics
