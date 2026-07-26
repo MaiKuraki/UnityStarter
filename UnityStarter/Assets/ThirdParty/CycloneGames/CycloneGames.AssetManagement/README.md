@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.AssetManagement is a provider-neutral Unity asset runtime with explicit package composition, caller-owned handles, bounded in-memory caching, content verification, diagnostics, and optional provider bridges. It provides predictable ownership and failure behavior under long sessions and sustained load without binding application code to one asset SDK or one DI container.
+CycloneGames.AssetManagement is a provider-neutral Unity asset runtime with explicit package composition, caller-owned handles, bounded in-memory caching, content verification, diagnostics, and optional provider bridges. Ownership and failure behavior stay predictable under long sessions and sustained load. Application code is not bound to one asset SDK or one DI container.
 
 ## Table of Contents
 
@@ -18,9 +18,9 @@ CycloneGames.AssetManagement is a provider-neutral Unity asset runtime with expl
 
 ## Overview
 
-The module owns module and package lifecycle, asset/sub-asset/raw-file/instance/scene handles, caller lease ownership, package-local active and idle memory caching, logical bucket/tag/owner metadata, narrow provider maintenance and downloader primitives, storage-capacity preflight, bounded versioned content-trust manifests and verification, bounded runtime telemetry, and optional Addressables, YooAsset, Navigathena, and VContainer bridges.
+The module handles module and package lifecycle; asset/sub-asset/raw-file/instance/scene handles; caller lease ownership; package-local active and idle memory caching; logical bucket/tag/owner metadata; narrow provider maintenance and downloader primitives; storage-capacity preflight; bounded, versioned content-trust manifests and verification; bounded runtime telemetry; and optional Addressables, YooAsset, Navigathena, and VContainer bridges.
 
-Provider adapters normalize the common contract while exposing optional capabilities only when available. Asset import rules, bundle layout, Addressables groups, YooAsset collection rules, CDN topology, authentication, entitlement, DRM, save games, platform certification, and release operations remain product responsibilities.
+Provider adapters normalize the shared contract and expose optional capabilities. Asset import rules, bundle layout, Addressables groups, YooAsset collection rules, CDN topology, authentication, entitlement, DRM, save games, platform certification, and release operations stay in the product layer.
 
 ### Key Features
 
@@ -78,7 +78,7 @@ Application composition selects a provider module and passes `IAssetPackage` to 
 
 The core runtime directly depends on UniTask, CycloneGames.Logger, CycloneGames.IO Core/SystemIO, and CycloneGames.Hash Core. Installing an optional package is not sufficient: its `versionDefines` range must match and the consumer asmdef must reference the conditional assembly. Never add the generated `CYCLONEGAMES_HAS_*` symbols manually in Player Settings.
 
-YooAsset 3.0.5 is the minimum supported stable release. The asmdef range enables the provider for versions below 4.0.0; the activation test rejects prerelease packages, and the product's exact stable 3.x version must compile and pass the YooAsset provider test assembly before release.
+YooAsset 3.0.5 is the minimum stable release. The asmdef range enables the provider for versions below 4.0.0; activation tests reject prerelease packages. The product's exact stable 3.x version must compile and pass the YooAsset provider test assembly before release.
 
 ## Quick Start
 
@@ -253,7 +253,7 @@ Negotiate `IAssetSceneLoader`; Resources has no scene capability. A scene handle
 
 The advanced overload accepts Unity `LoadSceneParameters`, so Addressables and YooAsset can request `None`, `Physics2D`, `Physics3D`, or the valid `Physics2D | Physics3D` combination. The loaded scene owns its local physics worlds and destroys them during unload. For a manual scene, call and await `ActivateAsync` directly; do not await `Task` first as a readiness barrier because YooAsset keeps its provider operation pending until activation is allowed.
 
-Manual activation is a transition gate, not rollback-safe staging. Unity must release the activation barrier before a held scene can finish unloading, so startup callbacks may run briefly even when a transition is cancelled. Gate authoritative side effects behind the product's transition-commit decision. Any scene held at Unity's manual activation barrier stalls subsequently queued asynchronous scene operations; resolve every manual scene in creation order before starting a new unload operation.
+Manual activation is a transition gate, not rollback-safe staging. Unity must release the activation barrier before a held scene can finish unloading, so startup callbacks may run briefly even when a transition is cancelled. Gate authoritative side effects behind the product's transition-commit decision. Any scene held at Unity's manual activation barrier stalls queued async scene operations; resolve every manual scene in creation order before starting a new unload.
 
 ### Buckets, tags, and owners
 
@@ -299,7 +299,7 @@ Lookup is a dictionary operation with average O(1) cost. A catalog or manifest g
 
 `AssetCacheTuning` controls `ProbationEntryLimit`, `ProtectedEntryLimit`, `IdleByteBudget`, and `ClearIdleOnLowMemory`. Explicit limits allow 1-131,072 entries per idle segment and require at least 1 MiB for `IdleByteBudget`. These are input safety bounds, not recommended capacities.
 
-Memory estimation runs on every Active-to-idle transition. It uses `Profiler.GetRuntimeMemorySizeLong` and allocation-free fallbacks for `Texture2D`, `Cubemap`, other `Texture`, `Mesh`, and `AudioClip`. If no positive footprint can be established, the handle bypasses idle retention. A candidate larger than the complete idle byte budget is rejected before admission. The estimate omits transitive AssetBundle memory, duplicated native memory, GPU residency, streaming mip state, provider metadata, allocator overhead, and driver allocation. Use Memory Profiler and platform tooling to set product budgets.
+Memory estimation runs on every Active-to-idle transition using `Profiler.GetRuntimeMemorySizeLong` and allocation-free fallbacks for `Texture2D`, `Cubemap`, other `Texture`, `Mesh`, and `AudioClip`. If no positive footprint is found, the handle bypasses idle retention. A candidate larger than the idle byte budget is rejected before admission. The estimate omits transitive AssetBundle memory, duplicated native memory, GPU residency, streaming mip state, provider metadata, allocator overhead, and driver allocation. Use Memory Profiler and platform tooling to set product budgets.
 
 The module-level default is configured through `AssetManagementOptions.DefaultCacheTuning`. A package can override it through `AssetPackageInitOptions.CacheTuningOverride`. `SetCacheIdleMemoryBudget` supports a temporary runtime override and immediately trims idle entries.
 
@@ -446,7 +446,7 @@ For a headless server, reduce or disable presentation content. For consoles, rep
 
 ### Performance engineering
 
-The runtime keeps hot internal cache lookup compact: value cache keys avoid composite-string caches, dictionary lookup is average O(1), linked-list recency updates are constant time, and scratch collections are reused for cache trimming. Public caller leases intentionally allocate one small, non-pooled object per load call to prevent ABA and stale-reference reuse.
+The runtime keeps hot internal cache lookup compact: value cache keys avoid composite-string caches, dictionary lookup is average O(1), linked-list recency updates are constant time, and scratch collections are reused for cache trimming. Public caller leases allocate one small, non-pooled object per load call to prevent ABA and stale-reference reuse.
 
 `AssetCachePerformanceTests` contains two measurement harnesses: active cache hit/retain/release (5 warmups, 20 measurements, 50,000 iterations, with GC measurement) and full idle trim of 10,000 entries. They establish invariants, not a universal pass threshold. Establish product budgets for representative hardware and content traces, store baselines in CI, and fail on statistically meaningful regressions. Measure main-thread median/p95/p99 time, allocation bytes per public load path, provider load/download concurrency, cache hit rate, total native/GPU memory, and 8-24 hour soak behavior on Mono and IL2CPP Players.
 
@@ -506,3 +506,9 @@ An Editor or CLI assembly result does not establish Player, IL2CPP, long-session
   -testFilter CycloneGames.AssetManagement \
   -testResults <result-path> -quit
 ```
+
+## Memory Limits and Bounded Maintenance
+
+Asset packages that expose `IAssetCacheMaintenanceOwner` provide an allocation-free runtime snapshot plus `TrimIdleCacheStep(maxWork)`. The bounded step runs on the owner thread, removes at most `maxWork` idle cache handles, and never releases an active lease. Reported released bytes are approximate because the package cannot own or measure all engine/native allocations behind an asset handle.
+
+`AssetCacheService` exposes fixed owner-local metrics plus bounded idle-only maintenance. Hard cache and admission limits remain authoritative in AssetManagement; external diagnostics must not create another cache or modify active asset ownership. Run the AssetManagement EditMode suite for admission, ownership, and maintenance coverage.

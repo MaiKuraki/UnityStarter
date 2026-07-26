@@ -14,6 +14,7 @@ CycloneGames.FontAssets ships curated character collection text files for Chines
 - [Advanced Topics](#advanced-topics)
 - [Common Scenarios](#common-scenarios)
 - [Performance and Memory](#performance-and-memory)
+- [Runtime Memory Ownership](#runtime-memory-ownership)
 - [Troubleshooting](#troubleshooting)
 
 ## Overview
@@ -22,7 +23,7 @@ A glyph atlas answers one question: which characters must be rasterized, and at 
 
 The package is data-only: it has no `Runtime/` source, no asmdef, no scripts, and no compiled output. It is consumed by importing the text files into the project, opening them in a TextMeshPro font asset creator, or reading them at runtime from a build location. The files use UTF-8 without BOM and contain only characters (no whitespace beyond a final newline where present), so they are safe to read line-by-line or as a single string.
 
-Use this package when a project needs predictable, language-scoped glyph coverage for shipped fonts. Do not use it as a substitute for the actual font binary files — the source OTF/TTF still ships in the project, and the character collection only controls which glyphs the TextMeshPro atlas rasterizes.
+Use this package when a project needs predictable, language-scoped glyph coverage for shipped fonts. The source OTF/TTF still ships in the project; the character collection only controls which glyphs the TextMeshPro atlas rasterizes.
 
 ### Key Features
 
@@ -406,6 +407,10 @@ Every file is UTF-8 without BOM. Reading the file with `File.ReadAllText` return
 | Build fails with `Character is not in the font asset` | A string table contains characters not in the static atlas | Run a build-time coverage validator and either expand the collection or switch to dynamic mode |
 | Characters appear garbled after a build | The file was re-saved with a BOM or different encoding | Re-export as UTF-8 without BOM; the package files are already in this format |
 | Same character appears multiple times in the atlas | The collection file has duplicates | The package files are deduplicated; check that a project-local copy has not introduced duplicates |
+
+## Runtime Memory Ownership
+
+FontAssets is data-only and owns no runtime loader, generated atlas, texture, or cache. Generated assets must be measured and bounded by the real importing, loading, or caching owner; source text length is not a valid estimate of generated atlas bytes.
 
 ## References
 

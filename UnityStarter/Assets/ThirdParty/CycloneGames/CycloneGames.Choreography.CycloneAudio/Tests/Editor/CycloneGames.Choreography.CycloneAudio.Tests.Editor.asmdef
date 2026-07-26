@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.Choreography.CycloneAudio.Tests.Editor",
+    "rootNamespace": "CycloneGames.Choreography.CycloneAudio.Tests",
+    "references": [
+        "CycloneGames.Choreography.CycloneAudio",
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.Audio.Runtime"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

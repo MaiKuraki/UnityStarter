@@ -63,6 +63,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         private bool _stopEventRaised;
         private BTTickManagerComponent _registeredTickManager;
         private BTPriorityTickManagerComponent _registeredPriorityManager;
+        private bool _managerRegistrationRejected;
         private BehaviorTree _nextTree;
         private RuntimeBTContext _context;
 
@@ -148,23 +149,45 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             if (_tickMode == TickMode.Managed)
             {
                 BTTickManagerComponent manager = BTTickManagerComponent.Instance;
-                if (manager != null)
+                if (manager != null && manager.TryRegister(_runtimeTree))
                 {
-                    manager.Register(_runtimeTree);
                     _registeredTickManager = manager;
                     _isRegistered = true;
+                    _managerRegistrationRejected = false;
+                }
+                else if (manager != null)
+                {
+                    ReportManagerRegistrationRejected();
                 }
             }
             else if (_tickMode == TickMode.PriorityManaged)
             {
                 BTPriorityTickManagerComponent manager = BTPriorityTickManagerComponent.Instance;
-                if (manager != null)
+                if (manager != null && manager.TryRegister(_runtimeTree, transform))
                 {
-                    manager.Register(_runtimeTree, transform);
                     _registeredPriorityManager = manager;
                     _isRegistered = true;
+                    _managerRegistrationRejected = false;
+                }
+                else if (manager != null)
+                {
+                    ReportManagerRegistrationRejected();
                 }
             }
+        }
+
+        private void ReportManagerRegistrationRejected()
+        {
+            if (_managerRegistrationRejected)
+            {
+                return;
+            }
+
+            _managerRegistrationRejected = true;
+            Debug.LogError(
+                $"[BTRunnerComponent] Tick manager registration was rejected for '{gameObject.name}'. " +
+                "Increase the manager's explicit capacity or reduce concurrently registered trees.",
+                this);
         }
 
         private void UnregisterFromManager()
@@ -186,6 +209,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             _registeredTickManager = null;
             _registeredPriorityManager = null;
             _isRegistered = false;
+            _managerRegistrationRejected = false;
         }
 
         private bool InitializeRuntimeTree(bool initializeStopped = false)

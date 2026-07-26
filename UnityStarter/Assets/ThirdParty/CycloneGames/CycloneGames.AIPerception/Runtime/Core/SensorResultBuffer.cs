@@ -48,14 +48,18 @@ namespace CycloneGames.AIPerception.Runtime
         private NativeParallelHashMap<PerceptibleHandle, int> _memoryLookup;
         private readonly int _maximumResults;
         private readonly int _maximumMemoryEntries;
+        private readonly SensorMemoryCounters _memoryCounters;
         private uint _refreshVersion;
         private bool _disposed;
 
-        public SensorResultBuffer(in PerceptionSensorCapacity capacity)
+        public SensorResultBuffer(
+            in PerceptionSensorCapacity capacity,
+            SensorMemoryCounters memoryCounters)
         {
             PerceptionSensorCapacity normalized = capacity.Normalize();
             _maximumResults = normalized.MaximumResults;
             _maximumMemoryEntries = normalized.MaximumMemoryEntries;
+            _memoryCounters = memoryCounters ?? throw new ArgumentNullException(nameof(memoryCounters));
             try
             {
                 _results = new NativeList<DetectionResult>(normalized.InitialResultCapacity, Allocator.Persistent);
@@ -88,7 +92,19 @@ namespace CycloneGames.AIPerception.Runtime
         }
 
         public int ResultCount => _results.IsCreated ? _results.Length : 0;
+        public int ResultCapacity => _results.IsCreated ? _results.Capacity : 0;
+        public int MaximumResultCount => _maximumResults;
         public int MemoryCount => _memoryEntries.IsCreated ? _memoryEntries.Length : 0;
+        public int MemoryCapacity => _memoryEntries.IsCreated ? _memoryEntries.Capacity : 0;
+        public int MaximumMemoryCount => _maximumMemoryEntries;
+        public int NativeBufferCount =>
+            (_results.IsCreated ? 1 : 0) +
+            (_memoryEntries.IsCreated ? 1 : 0) +
+            (_memoryLookup.IsCreated ? 1 : 0);
+        public int NativeBufferCapacity =>
+            ResultCapacity +
+            MemoryCapacity +
+            (_memoryLookup.IsCreated ? _memoryLookup.Capacity : 0);
         public bool HasResults => ResultCount > 0;
 
         public void BeginUpdate()
@@ -102,10 +118,12 @@ namespace CycloneGames.AIPerception.Runtime
             ThrowIfDisposed();
             if (_results.Length >= _maximumResults)
             {
+                _memoryCounters.RecordResultCapacityRejected();
                 return false;
             }
 
             _results.Add(result);
+            _memoryCounters.RecordResultCount(_results.Length);
             return true;
         }
 
@@ -160,6 +178,7 @@ namespace CycloneGames.AIPerception.Runtime
                 };
                 int newIndex = _memoryEntries.Length;
                 _memoryEntries.Add(newEntry);
+                _memoryCounters.RecordMemoryCount(_memoryEntries.Length);
                 if (!_memoryLookup.TryAdd(detection.Target, newIndex))
                 {
                     _memoryEntries.RemoveAt(newIndex);
@@ -193,6 +212,7 @@ namespace CycloneGames.AIPerception.Runtime
                 if (_results.Length >= _maximumResults)
                 {
                     resultCapacityExceeded = true;
+                    _memoryCounters.RecordResultCapacityRejected();
                     continue;
                 }
 
@@ -206,6 +226,7 @@ namespace CycloneGames.AIPerception.Runtime
                     SensorType = entry.SensorType,
                     IsFromMemory = true
                 });
+                _memoryCounters.RecordResultCount(_results.Length);
             }
 
             SortResults();
@@ -295,6 +316,7 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             RemoveMemoryAt(oldestIndex);
+            _memoryCounters.RecordMemoryEviction();
         }
 
         private void RemoveMemoryAt(int index)

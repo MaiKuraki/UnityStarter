@@ -100,6 +100,7 @@ namespace CycloneGames.InputSystem.Tools
 
         public bool IsRecording => _isRecording;
         public int SampleCapacity => _sampleBuffer.Capacity;
+        public int RecordedActionCount => _actionsToRecord.Count;
         public int RecordedSampleCount => _sampleBuffer.Count;
         public int DroppedSampleCount => _sampleBuffer.DroppedSampleCount;
         public bool HasOverflowed => _sampleBuffer.DroppedSampleCount > 0;
@@ -282,6 +283,37 @@ namespace CycloneGames.InputSystem.Tools
             return recording;
         }
 
+        /// <summary>
+        /// Stops the current recording and discards at most <paramref name="maximumSamplesToDiscard"/>
+        /// buffered samples without creating an <see cref="InputRecording"/>. Repeated calls may
+        /// continue bounded cleanup after recording has stopped. Callers must make the business
+        /// decision that the captured diagnostic data is no longer required.
+        /// </summary>
+        /// <returns>The number of buffered samples discarded by this call.</returns>
+        public int CancelRecording(int maximumSamplesToDiscard)
+        {
+            ThrowIfDisposed();
+
+            if (maximumSamplesToDiscard <= 0 || maximumSamplesToDiscard > MAX_SAMPLE_CAPACITY)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumSamplesToDiscard));
+            }
+
+            if (_isRecording || _sampleBuffer.Count > 0)
+            {
+                EnsureOwnerThread();
+            }
+
+            if (_isRecording)
+            {
+                _isRecording = false;
+                _subscriptions?.Dispose();
+                _subscriptions = null;
+            }
+
+            return _sampleBuffer.DiscardLast(maximumSamplesToDiscard);
+        }
+
         public void Dispose()
         {
             if (_isDisposed)
@@ -413,6 +445,23 @@ namespace CycloneGames.InputSystem.Tools
         {
             _samples.Clear();
             DroppedSampleCount = 0;
+        }
+
+        internal int DiscardLast(int maximumCount)
+        {
+            int count = Math.Min(maximumCount, _samples.Count);
+            if (count <= 0)
+            {
+                return 0;
+            }
+
+            _samples.RemoveRange(_samples.Count - count, count);
+            if (_samples.Count == 0)
+            {
+                DroppedSampleCount = 0;
+            }
+
+            return count;
         }
     }
 

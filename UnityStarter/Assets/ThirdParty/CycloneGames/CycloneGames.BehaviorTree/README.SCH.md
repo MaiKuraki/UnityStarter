@@ -629,6 +629,10 @@ Client、server、replay tool 以及 save/load consumer 必须在交换状态前
 
 内嵌创作 schema 的 hard limit 为 4,096 个条目。默认 snapshot/delta limit 仍为每种值类型 4,096 个条目，总计 16,384 个条目。这些是 safety ceiling，不是容量目标：每个 tree 的契约应保持精简，对热 key 预先 hash，并在具代表性的 Player build 中测量。
 
+Managed scheduling 同样受容量治理。`BTTickManager`、`BTPriorityTickManager` 与 `BTDistanceLODProvider` 默认最多容纳 65,536 棵 tree，并拒绝高于 1,048,576 棵的 hard ceiling 配置。当 tree 或 deferred mutation 容量不足时，其 `TryRegister*` API 返回 `false` 并增加精确 rejection counter；现有 `void Register`/`Unregister`/`UpdatePriority` 方法保持源码兼容并委托给 `Try*` 路径，因此 legacy registration 被拒绝时会 fail closed 且不产生副作用。纯 C# manager 不引入 Unity logging 依赖。其 Unity-facing component wrapper 会比较 O(1) counter snapshot，并且仅在 legacy registration 确实增加 tree、LOD 或 deferred-mutation capacity-rejection counter 时，每个 component 输出一次 error。直接调用 `Try*`、null 或 stopped tree、重复注册以及普通 removal failure 均保持静默。Deferred mutation 按 tree 合并并单独受限。`BTPriorityTickManagerComponent` 还会合并重复的跨线程 wake-up；其 queue 默认容量为 4,096，配置不得超过 65,536。queue 满时拒绝新的 wake-up，但不会取消或注销 tree。`BTRunnerComponent` 仅在 admission 成功后记录 registration，并可在之后重试。
+
+DOD scheduler 使用相同的默认与 hard agent ceiling；当 flattened tree/Blackboard layout 无法表示那么多 slot 时，effective maximum 会进一步降低。应优先使用 `TryAddAgent`；legacy `AddAgent` 保持源码兼容，但达到 effective capacity 时抛出 `InvalidOperationException`，不会无上限扩容。所有受治理 owner 都提供 current、maximum、peak 与 capacity rejection snapshot；managed 与 DOD metric 分离，因为 DOD assembly 仍是可选模块。
+
 `BehaviorTree` 创作数据及其 schema cache 归 Unity main thread 所有。`TryGetRuntimeBlackboardSchema`、Inspector 编辑、graph validation 和资产编译必须保持在 main thread。编译后的托管 runtime 保持现有 single-owner-thread affinity；strict 模式不会新增后台 worker 或 lock。DOD flat-tree 路径拥有自己的 fixed-slot Blackboard 契约，不消费这份内嵌创作 schema。
 
 ### 调优顺序
@@ -689,6 +693,7 @@ EditMode  CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
 9. 根据产品实际用法，分别以 `Self`、`Managed`、`PriorityManaged` 和 `Manual` ownership 进入 Play Mode。
 10. 确认自然完成会注销 runner，`Play` 会创建新 activation，disable/enable 不会重复注册。
 11. 对 synchronized key，在发送状态前校验匹配的 client/server manifest 和一个故意的 mismatch。确认 integration 会拒绝或迁移 mismatch。
+12. 在聚焦 fixture 中设置较小的 tree、pending mutation、wake-up、LOD 与 DOD agent capacity。确认每个 `Try*` admission 在 ceiling 处失败、legacy wrapper 符合所记录的 no-op/throw 行为、重复 wake-up 被合并、active tree 继续运行，并且 current/peak/rejected snapshot 与 fixture 一致。
 12. 在运行 matrix 或 soak 前先执行一个有界 benchmark case。
 
 ## 参考资料

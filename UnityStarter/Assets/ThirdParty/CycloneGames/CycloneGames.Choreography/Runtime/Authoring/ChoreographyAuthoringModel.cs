@@ -135,9 +135,14 @@ namespace CycloneGames.Choreography
 
         [SerializeField] private bool Loop;
 
+        internal ChoreographyResourceReference ToRuntimeResourceReference()
+        {
+            return Resource != null ? Resource.ToRuntime() : default;
+        }
+
         public ChoreographyClip ToRuntime()
         {
-            ChoreographyResourceReference reference = Resource != null ? Resource.ToRuntime() : default;
+            ChoreographyResourceReference reference = ToRuntimeResourceReference();
             return new ChoreographyClip(Id, reference, StartTime, Duration, Weight, Channel, Loop);
         }
     }
@@ -196,6 +201,13 @@ namespace CycloneGames.Choreography
         [SerializeField] private ChoreographyTrackKind Kind = ChoreographyTrackKind.Animation;
         [SerializeField] private List<ChoreographyClipAuthoring> Clips = new List<ChoreographyClipAuthoring>();
 
+        internal int ClipCount => Clips != null ? Clips.Count : 0;
+
+        internal ChoreographyClipAuthoring GetClip(int index)
+        {
+            return Clips[index];
+        }
+
         public ChoreographyTrack ToRuntime()
         {
             int count = Clips != null ? Clips.Count : 0;
@@ -227,6 +239,13 @@ namespace CycloneGames.Choreography
         [SerializeField] private List<ChoreographyTrackAuthoring> Tracks = new List<ChoreographyTrackAuthoring>();
         [SerializeField] private List<ChoreographyEventAuthoring> Events = new List<ChoreographyEventAuthoring>();
         [SerializeField] private List<ChoreographyEventStateAuthoring> EventStates = new List<ChoreographyEventStateAuthoring>();
+
+        internal int TrackCount => Tracks != null ? Tracks.Count : 0;
+
+        internal ChoreographyTrackAuthoring GetTrack(int index)
+        {
+            return Tracks[index];
+        }
 
         public ChoreographySection ToRuntime()
         {

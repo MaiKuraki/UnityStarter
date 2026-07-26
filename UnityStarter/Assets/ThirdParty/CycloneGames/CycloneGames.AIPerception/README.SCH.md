@@ -14,6 +14,7 @@ CycloneGames.AIPerception 是用于连续世界感知的 Unity Runtime 模块。
 - [高级主题](#高级主题)
 - [常见场景](#常见场景)
 - [性能与内存](#性能与内存)
+- [验证](#验证)
 - [故障排查](#故障排查)
 
 ## 概述
@@ -78,13 +79,13 @@ Job 借用 Registry 快照和传感器自有 buffer。Manager 发布新快照或
 
 ## 快速上手
 
-### 1. 添加 Manager
+### 添加 Manager
 
 在场景对象上添加 `PerceptionManagerComponent`。`AIPerceptionComponent` 初始化时会自动创建实例，但显式 Manager 能让世界容量、空间网格尺寸、调度与 LOD 可见。
 
 除非 Gameplay 需要在同一个 `Update` 取得结果，否则保持 `Deferred Job Completion` 开启。初始使用有限的 `Maximum Perceptibles`。仅从 profiling 数据调整 `Spatial Cell Size`。
 
-### 2. 标记目标
+### 标记目标
 
 为每个可检测对象添加 `PerceptibleComponent`：
 
@@ -106,11 +107,11 @@ target.SetLoudness(0.8f);
 
 `PerceptibleComponent` 在 `OnEnable` 自动注册。如果有限世界容量拒绝了这次尝试，应先释放容量，再从 cold-path 恢复流程调用一次 `TryRegister()`，不得逐帧重试。
 
-### 3. 为智能体添加感知
+### 为智能体添加感知
 
 为 AI 对象添加 `AIPerceptionComponent`，在 Inspector 中启用并配置所需感知。同一 GameObject 同时存在 `PerceptibleComponent` 时，其句柄会从所有内置查询中排除。
 
-### 4. 消费结果
+### 消费结果
 
 ```csharp
 using CycloneGames.AIPerception.Runtime;
@@ -379,8 +380,11 @@ if (sight != null)
 `PerceptionManagerComponent.Maximum Perceptibles` 配置 Registry 硬上限：
 
 - 正值在容量耗尽后拒绝新注册；
-- `0` 允许在 safe point 扩展数组，不提供模块级硬上限；
+- 默认值为 16,384，包级绝对硬上限为 1,048,576；
+- 旧数据中的 `0` 现在映射到包级绝对硬上限，不再表示无上限增长；
 - 不能把上限降低到当前 active count 以下。
+
+`SensorManager` 默认最多持有 4,096 个传感器，包级绝对硬上限为 65,536。调用方需要处理准入失败时应使用 `TryRegister`。旧的 `Register` 保持源码兼容，在容量耗尽时执行 no-op，并在该 manager 生命周期内仅为第一次 legacy capacity rejection 输出一条 error；直接调用 `TryRegister` 仍保持静默，并通过返回值暴露结果。Null input、重复注册和其他非容量结果不会触发该诊断。重复 ID、错误 built-in owner 等契约误用仍会抛出异常。`AIPerceptionComponent` 会 Dispose 准入失败的新建 built-in sensor，且不会逐帧重试；容量恢复后应通过显式 cold-path rebuild 或重新启用生命周期恢复。单个 Registry 最多关联 1,024 个 SensorManager，LOD 表最多包含 64 个 level。
 
 ### 每个传感器的容量
 
@@ -395,6 +399,8 @@ if (sight != null)
 | `InitialMemoryCapacity` | 32 | 初始持久化记忆存储 |
 | `MaximumMemoryEntries` | 1024 | 记忆目标硬上限 |
 
+序列化或运行时配置超过绝对上限时，会归一化为 1,048,576 个候选、65,536 个结果和 65,536 个记忆条目；Initial capacity 会被限制到对应有效上限。即使旧数据包含 `int.MaxValue`，这些约束也能限制持久 Native storage。
+
 容量失败是显式状态：
 
 - `CandidateCapacityExceeded`：拒绝并清空当前实时候选查询；
@@ -403,6 +409,8 @@ if (sight != null)
 - `OcclusionBudgetExceeded`：Hearing 精化结果不完整。
 
 在开发 telemetry 中记录这些状态，不得当成正常静默截断。
+
+`PerceptibleRegistry.GetMemoryStats()` 与 `SensorManager.GetMemoryStats()` 返回 allocation-free 的 owner-local snapshot，覆盖当前容量、峰值、准入拒绝、空间网格 cell、built-in Native buffer、更新 workload、结果拒绝与 stimulus-memory eviction。Custom `ISensor` 的 storage contract 仍由实现自身负责，因此单独计数。这些值供 caller-owned diagnostics 使用；模块不注册 process-global telemetry 或 pressure callback，也不会删除 active perception state。
 
 ### LOD 频率
 
@@ -615,6 +623,9 @@ Runtime 特征：
 - managed/native array、candidate list、result list、memory list 与 lookup storage 在达到所需容量后复用；
 - 注册增长、首次使用、容量增长、配置重建与空间 Dictionary 增长是分配点；
 - 快照捕获为 O(N)，即使捕获值未变化；
+- aggregate workload 统计合并在现有 sensor 调度遍历中，并且只计入该 Manager 帧实际更新的 sensor；interval、LOD 或 disabled skip 不会复用过期的单 sensor workload；
+- 只有显式调用 `SensorManager.GetMemoryStats()` 时才执行完整的逐 sensor storage 聚合；
+- `SensorManager.GetMemoryStats()` 只读取缓存的 Manager last-frame 与 peak workload，不会修改任一统计值；
 - 每目标最终测试前，查询范围会包含相关目标最大半径或响度；
 - 查询跨越的网格单元超过安全阈值时回退到线性快照扫描；
 - Sight 与 Hearing 的 Physics 精化仍在主线程；
@@ -654,6 +665,13 @@ Play Mode 中通过 `Tools > CycloneGames > AI Perception > Show All Runtime Giz
 | WebGL | Backend/Package 兼容、实际 Job 执行模型、内存上限、延迟与 Deferred 行为 |
 | Dedicated Server | Headless 生命周期、3D Physics、权威 LOD 和无 Camera 假设 |
 | 主机平台 | 授权 SDK build、Burst/Jobs 支持、内存限制、挂起/恢复和认证要求 |
+
+## 验证
+
+- 在 Unity Test Runner EditMode 运行 `AIPerceptionCoreTests`，包括绝对上限、`TryRegister`、warmed Manager update allocation 与 Native storage diagnostics 契约。
+- 在启用和禁用 domain reload 的情况下验证 Immediate 与 Deferred completion。
+- 至少构建一个启用 Burst 的目标 Player；每个发布 AOT 平台都应执行 IL2CPP build。
+- 对代表性高密度场景进行 profiling，确认配置峰值、拒绝计数和更新 workload 均在产品预算内。
 
 ## 故障排查
 

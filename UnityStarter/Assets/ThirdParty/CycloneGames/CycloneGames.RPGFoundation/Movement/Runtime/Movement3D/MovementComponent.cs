@@ -14,6 +14,9 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
     [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
     public class MovementComponent : MonoBehaviour, IMovementStateQuery3D, IMovementSnapshotProvider
     {
+        /// <summary>Implementation safety ceiling for explicit collision-ignore policy entries.</summary>
+        public const int MaximumIgnoredColliderCount = 65_536;
+
         #region Serialized Fields
 
         [SerializeField] private MovementConfig config;
@@ -167,6 +170,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         private readonly RaycastHit[] _hits = new RaycastHit[kMaxHitCount];
         private readonly Collider[] _overlaps = new Collider[kMaxOverlapCount];
         private readonly HashSet<Collider> _ignoredColliders = new HashSet<Collider>();
+        private long _rejectedIgnoredColliderAdmissionCount;
         private readonly CollisionResult[] _collisionResults = new CollisionResult[kMaxHitCount];
         private int _collisionCount;
 
@@ -1679,10 +1683,51 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
         public void IgnoreCollision(Collider other, bool ignore = true)
         {
-            if (ignore)
-                _ignoredColliders.Add(other);
-            else
+            if (!TryIgnoreCollision(other, ignore))
+            {
+                throw new InvalidOperationException(
+                    $"Ignored-collider capacity reached the implementation ceiling of {MaximumIgnoredColliderCount}.");
+            }
+        }
+
+        /// <summary>
+        /// Attempts to add or remove an explicit collision-ignore entry. Returns false only when
+        /// a new entry would exceed the implementation ceiling.
+        /// </summary>
+        public bool TryIgnoreCollision(Collider other, bool ignore = true)
+        {
+            if (!ignore)
+            {
                 _ignoredColliders.Remove(other);
+                return true;
+            }
+
+            if (_ignoredColliders.Contains(other))
+            {
+                return true;
+            }
+
+            if (_ignoredColliders.Count >= MaximumIgnoredColliderCount)
+            {
+                if (_rejectedIgnoredColliderAdmissionCount < long.MaxValue)
+                {
+                    _rejectedIgnoredColliderAdmissionCount++;
+                }
+
+                return false;
+            }
+
+            _ignoredColliders.Add(other);
+            return true;
+        }
+
+        /// <summary>Returns an allocation-free O(1) retained-policy snapshot.</summary>
+        public MovementComponentMemorySnapshot GetMemorySnapshot()
+        {
+            return new MovementComponentMemorySnapshot(
+                _ignoredColliders.Count,
+                MaximumIgnoredColliderCount,
+                _rejectedIgnoredColliderAdmissionCount);
         }
 
         #endregion

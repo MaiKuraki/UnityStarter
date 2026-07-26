@@ -882,6 +882,33 @@ namespace CycloneGames.BehaviorTree.Networking.Tests.Editor
         }
 
         [Test]
+        public void NetworkProfileAndDeltaTrackerRejectTrackedKeyCapacityAboveProtocolLimit()
+        {
+            var builder = BehaviorTreeNetworkProfiles.CreateServerAuthoritativeBuilder();
+            builder.MaxTrackedBlackboardKeys = BehaviorTreeNetworkProfile.MaximumTrackedBlackboardKeyCount + 1;
+
+            Assert.Throws<ArgumentOutOfRangeException>(() => builder.Build());
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new BTBlackboardDelta(BTBlackboardDelta.DEFAULT_MAX_PATCH_ENTRIES + 1));
+        }
+
+        [Test]
+        public void SyncBridgeMemoryStats_ReportBoundedScratchWithoutRetainedPayloadHistory()
+        {
+            using var bridge = new BehaviorTreeNetworkSyncBridge();
+
+            BehaviorTreeNetworkMemoryStats stats = bridge.GetMemoryStats();
+
+            Assert.That(stats.EffectiveMaxSnapshotPayloadBytes, Is.GreaterThan(0));
+            Assert.That(stats.MaxTrackedBlackboardKeys, Is.LessThanOrEqualTo(
+                BehaviorTreeNetworkProfile.MaximumTrackedBlackboardKeyCount));
+            Assert.That(stats.BlackboardScratchCapacityBytes, Is.GreaterThan(0));
+            Assert.That(stats.SnapshotScratchCapacityBytes, Is.GreaterThan(0));
+            Assert.That(stats.RetainedPayloadBytes, Is.Zero);
+            Assert.That(stats.RetainedHistoryEntryCount, Is.Zero);
+        }
+
+        [Test]
         public void SyncBridge_RejectsDuplicateSequenceAndOlderTick()
         {
             const int HealthKey = 101;

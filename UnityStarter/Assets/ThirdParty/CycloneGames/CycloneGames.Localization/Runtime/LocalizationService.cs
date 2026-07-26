@@ -38,6 +38,7 @@ namespace CycloneGames.Localization.Runtime
         private LocaleId _currentLocale;
         private LocaleId[] _currentChain = Array.Empty<LocaleId>();
         private LocalizationLimits _limits;
+        private LocalizationResidentLimits _residentLimits;
         private Action<LocalizationDiagnostic> _diagnosticSink;
         private IFormatProvider _formatProvider;
         private PseudoLocaleMode _pseudoMode;
@@ -50,6 +51,78 @@ namespace CycloneGames.Localization.Runtime
         public IReadOnlyList<LocaleId> AvailableLocales => ReadSnapshot().AvailableLocales;
         public bool IsInitialized => ReadSnapshot().IsInitialized;
         public long Revision => ReadSnapshot().Revision;
+
+        /// <summary>
+        /// Returns an allocation-free snapshot. Retained character counters exclude managed object overhead.
+        /// </summary>
+        public LocalizationMemorySnapshot GetMemorySnapshot()
+        {
+            Snapshot snapshot = ReadSnapshot();
+            ContentMemoryStats stats = snapshot.ContentMemoryStats;
+            int missingCount;
+            lock (_missingGate)
+            {
+                missingCount = _reportedMissing.Count;
+            }
+
+            return new LocalizationMemorySnapshot(
+                snapshot.IsInitialized,
+                snapshot.Revision,
+                snapshot.AvailableLocales.Count,
+                snapshot.CurrentChain.Length,
+                stats.CatalogOwnerCount,
+                stats.ManualStringTableCount,
+                stats.ManualAssetTableCount,
+                stats.StringTableCount,
+                stats.StringEntryCount,
+                stats.StringCharacterCount,
+                stats.AssetTableCount,
+                stats.AssetEntryCount,
+                stats.AssetReferenceCharacterCount,
+                stats.MetadataTableCount,
+                stats.MetadataEntryCount,
+                missingCount,
+                Volatile.Read(ref _changeHandlers).Length,
+                snapshot.Limits,
+                snapshot.ResidentLimits);
+        }
+
+        /// <summary>
+        /// Clears at most <paramref name="scratch"/> reconstructible missing-key dedupe entries. The caller owns
+        /// the scratch buffer; live localization content, locale state, and subscribers are never modified.
+        /// </summary>
+        public LocalizationDiagnosticTrimResult ClearMissingDiagnosticsStep(Span<string> scratch)
+        {
+            if (scratch.IsEmpty)
+            {
+                lock (_missingGate)
+                {
+                    return new LocalizationDiagnosticTrimResult(0, _reportedMissing.Count > 0);
+                }
+            }
+
+            int count = 0;
+            bool hasMore;
+            lock (_missingGate)
+            {
+                HashSet<string>.Enumerator enumerator = _reportedMissing.GetEnumerator();
+                while (count < scratch.Length && enumerator.MoveNext())
+                {
+                    scratch[count++] = enumerator.Current;
+                }
+
+                enumerator.Dispose();
+                for (int index = 0; index < count; index++)
+                {
+                    _reportedMissing.Remove(scratch[index]);
+                    scratch[index] = null;
+                }
+
+                hasMore = _reportedMissing.Count > 0;
+            }
+
+            return new LocalizationDiagnosticTrimResult(count, hasMore);
+        }
 
         public PseudoLocaleMode PseudoMode
         {
@@ -145,6 +218,7 @@ namespace CycloneGames.Localization.Runtime
 
             _ownerThreadId = Environment.CurrentManagedThreadId;
             _limits = limits;
+            _residentLimits = options.ResidentLimits.Normalized();
             _diagnosticSink = options.DiagnosticSink;
             _formatProvider = options.FormatProvider ?? CultureInfo.InvariantCulture;
             _localeMap = localeMap;
@@ -440,6 +514,7 @@ namespace CycloneGames.Localization.Runtime
             Dictionary<string, Dictionary<string, CompiledStringTable>> strings;
             Dictionary<string, Dictionary<string, CompiledAssetTable>> assets;
             Dictionary<string, Dictionary<string, int>> metadata;
+            ContentMemoryStats contentMemoryStats;
             bool rebuildContent = reason == LocalizationChangeReason.Initialized ||
                                   reason == LocalizationChangeReason.ContentChanged ||
                                   !previous.IsInitialized;
@@ -462,12 +537,14 @@ namespace CycloneGames.Localization.Runtime
                 }
 
                 metadata = new Dictionary<string, Dictionary<string, int>>(_metadata, StringComparer.Ordinal);
+                contentMemoryStats = MeasureContentMemory(strings, assets, metadata);
             }
             else
             {
                 strings = previous.StringTables;
                 assets = previous.AssetTables;
                 metadata = previous.Metadata;
+                contentMemoryStats = previous.ContentMemoryStats;
             }
             return new Snapshot(
                 true,
@@ -479,9 +556,62 @@ namespace CycloneGames.Localization.Runtime
                 strings,
                 assets,
                 metadata,
+                contentMemoryStats,
                 _diagnosticSink,
                 _formatProvider,
-                _limits);
+                _limits,
+                _residentLimits);
+        }
+
+        private ContentMemoryStats MeasureContentMemory(
+            Dictionary<string, Dictionary<string, CompiledStringTable>> strings,
+            Dictionary<string, Dictionary<string, CompiledAssetTable>> assets,
+            Dictionary<string, Dictionary<string, int>> metadata)
+        {
+            int stringTableCount = 0;
+            long stringEntryCount = 0L;
+            long stringCharacterCount = 0L;
+            foreach (Dictionary<string, CompiledStringTable> localeTables in strings.Values)
+            {
+                stringTableCount += localeTables.Count;
+                foreach (CompiledStringTable table in localeTables.Values)
+                {
+                    stringEntryCount += table.Count;
+                    stringCharacterCount += table.RetainedCharacterCount;
+                }
+            }
+
+            int assetTableCount = 0;
+            long assetEntryCount = 0L;
+            long assetReferenceCharacterCount = 0L;
+            foreach (Dictionary<string, CompiledAssetTable> localeTables in assets.Values)
+            {
+                assetTableCount += localeTables.Count;
+                foreach (CompiledAssetTable table in localeTables.Values)
+                {
+                    assetEntryCount += table.Count;
+                    assetReferenceCharacterCount += table.RetainedReferenceCharacterCount;
+                }
+            }
+
+            long metadataEntryCount = 0L;
+            foreach (Dictionary<string, int> entries in metadata.Values)
+            {
+                metadataEntryCount += entries.Count;
+            }
+
+            return new ContentMemoryStats(
+                _catalogs.Count,
+                _manualStringTables.Count,
+                _manualAssetTables.Count,
+                stringTableCount,
+                stringEntryCount,
+                stringCharacterCount,
+                assetTableCount,
+                assetEntryCount,
+                assetReferenceCharacterCount,
+                metadata.Count,
+                metadataEntryCount);
         }
 
         private static void AddTable<T>(Dictionary<string, Dictionary<string, T>> destination, TableKey key, T table)

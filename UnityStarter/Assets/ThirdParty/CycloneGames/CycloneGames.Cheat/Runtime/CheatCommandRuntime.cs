@@ -6,14 +6,13 @@ using Cysharp.Threading.Tasks;
 using VitalRouter;
 
 #if ENABLE_CHEAT
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 #endif
 
 namespace CycloneGames.Cheat.Runtime
 {
 #if ENABLE_CHEAT
-    public sealed class CheatCommandRuntime : ICheatCommandRuntime
+    public sealed class CheatCommandRuntime : ICheatCommandRuntime, ICheatCommandAdmissionPublisher
     {
         private readonly struct CommandStateKey : IEquatable<CommandStateKey>
         {
@@ -62,7 +61,11 @@ namespace CycloneGames.Cheat.Runtime
         private sealed class CommandExecutionState : IDisposable
         {
             private readonly CancellationTokenSource _cancellationTokenSource;
-            private int _disposed;
+            private readonly object _lifecycleLock = new object();
+            private bool _cancellationStarted;
+            private bool _cancellationCompleted;
+            private bool _disposeRequested;
+            private bool _disposed;
 
             public CommandExecutionState()
             {
@@ -71,42 +74,94 @@ namespace CycloneGames.Cheat.Runtime
 
             public CancellationToken Token => _cancellationTokenSource.Token;
 
-            public bool Cancel(ICheatLogger logger)
+            public bool TryBeginCancellation()
             {
-                if (Volatile.Read(ref _disposed) != 0)
+                lock (_lifecycleLock)
                 {
-                    return false;
-                }
+                    if (_disposed || _cancellationStarted)
+                    {
+                        return false;
+                    }
 
-                if (_cancellationTokenSource.IsCancellationRequested)
-                {
-                    return false;
+                    _cancellationStarted = true;
+                    return true;
                 }
+            }
 
+            public bool ExecuteCancellation(ICheatLogger logger)
+            {
+                bool cancelled = false;
                 try
                 {
+                    cancelled = true;
                     _cancellationTokenSource.Cancel();
-                    return true;
                 }
                 catch (ObjectDisposedException)
                 {
-                    return false;
+                    cancelled = false;
                 }
                 catch (Exception exception)
                 {
-                    logger?.LogException(exception);
-                    return false;
+                    try
+                    {
+                        logger?.LogException(exception);
+                    }
+                    catch
+                    {
+                        // Cancellation delivery must continue for the remaining bounded snapshot.
+                    }
                 }
+                finally
+                {
+                    CompleteCancellation();
+                }
+
+                return cancelled;
             }
 
             public void Dispose()
             {
-                if (Interlocked.Exchange(ref _disposed, 1) != 0)
+                bool disposeSource;
+                lock (_lifecycleLock)
                 {
-                    return;
+                    if (_disposed)
+                    {
+                        return;
+                    }
+
+                    if (_cancellationStarted && !_cancellationCompleted)
+                    {
+                        _disposeRequested = true;
+                        return;
+                    }
+
+                    _disposed = true;
+                    disposeSource = true;
                 }
 
-                _cancellationTokenSource.Dispose();
+                if (disposeSource)
+                {
+                    _cancellationTokenSource.Dispose();
+                }
+            }
+
+            private void CompleteCancellation()
+            {
+                bool disposeSource = false;
+                lock (_lifecycleLock)
+                {
+                    _cancellationCompleted = true;
+                    if (_disposeRequested && !_disposed)
+                    {
+                        _disposed = true;
+                        disposeSource = true;
+                    }
+                }
+
+                if (disposeSource)
+                {
+                    _cancellationTokenSource.Dispose();
+                }
             }
         }
 
@@ -114,14 +169,12 @@ namespace CycloneGames.Cheat.Runtime
         private const string ErrClassArgPrefix = "[CheatCommandRuntime] Argument for command '";
         private const string ErrClassArgSuffix = "' cannot be null.";
 
-#if UNITY_WEBGL
+        public const int DefaultMaximumConcurrentCommandCount = 256;
+        public const int AbsoluteMaximumConcurrentCommandCount = 4096;
+
         private readonly Dictionary<CommandStateKey, CommandExecutionState> _commandStates =
             new Dictionary<CommandStateKey, CommandExecutionState>();
-        private readonly object _stateLock = new object();
-#else
-        private readonly ConcurrentDictionary<CommandStateKey, CommandExecutionState> _commandStates =
-            new ConcurrentDictionary<CommandStateKey, CommandExecutionState>();
-#endif
+        private readonly object _admissionLock = new object();
 
         private ICheatLogger _logger;
         private long _publishedCommandCount;
@@ -129,12 +182,34 @@ namespace CycloneGames.Cheat.Runtime
         private long _droppedDuplicateCount;
         private long _cancelRequestedCount;
         private long _faultedCommandCount;
+        private long _capacityRejectedCommandCount;
         private long _parallelSequence;
+        private int _reservedCommandCount;
         private int _disposed;
+        private readonly int _maximumConcurrentCommandCount;
 
         public CheatCommandRuntime(ICheatLogger logger = null)
+            : this(logger, DefaultMaximumConcurrentCommandCount)
         {
+        }
+
+        public CheatCommandRuntime(int maximumConcurrentCommandCount)
+            : this(null, maximumConcurrentCommandCount)
+        {
+        }
+
+        public CheatCommandRuntime(
+            ICheatLogger logger,
+            int maximumConcurrentCommandCount)
+        {
+            if (maximumConcurrentCommandCount <= 0 ||
+                maximumConcurrentCommandCount > AbsoluteMaximumConcurrentCommandCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumConcurrentCommandCount));
+            }
+
             _logger = logger;
+            _maximumConcurrentCommandCount = maximumConcurrentCommandCount;
         }
 
         public bool IsEnabled => Volatile.Read(ref _disposed) == 0;
@@ -150,18 +225,10 @@ namespace CycloneGames.Cheat.Runtime
         public int RunningCommandCount
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get
-            {
-#if UNITY_WEBGL
-                lock (_stateLock)
-                {
-                    return _commandStates.Count;
-                }
-#else
-                return _commandStates.Count;
-#endif
-            }
+            get => Volatile.Read(ref _reservedCommandCount);
         }
+
+        public int MaximumConcurrentCommandCount => _maximumConcurrentCommandCount;
 
         public CheatRuntimeMetrics Metrics
         {
@@ -173,7 +240,9 @@ namespace CycloneGames.Cheat.Runtime
                     Interlocked.Read(ref _completedCommandCount),
                     Interlocked.Read(ref _droppedDuplicateCount),
                     Interlocked.Read(ref _cancelRequestedCount),
-                    Interlocked.Read(ref _faultedCommandCount));
+                    Interlocked.Read(ref _faultedCommandCount),
+                    Interlocked.Read(ref _capacityRejectedCommandCount),
+                    _maximumConcurrentCommandCount);
             }
         }
 
@@ -243,14 +312,23 @@ namespace CycloneGames.Cheat.Runtime
             return PublishAsync(new CheatCommandClass<T>(commandId, arg), new CheatCommandExecutionOptions(router));
         }
 
-        public async UniTask PublishAsync<TCommand>(TCommand command, CheatCommandExecutionOptions options = default)
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public UniTask PublishAsync<TCommand>(TCommand command, CheatCommandExecutionOptions options = default)
+            where TCommand : ICheatCommand
+        {
+            return TryPublishAsync(command, options).AsUniTask();
+        }
+
+        public async UniTask<CheatCommandPublishResult> TryPublishAsync<TCommand>(
+            TCommand command,
+            CheatCommandExecutionOptions options = default)
             where TCommand : ICheatCommand
         {
             ThrowIfDisposed();
 
             if (!ValidateCommandId(command.CommandId))
             {
-                return;
+                return CheatCommandPublishResult.InvalidCommand;
             }
 
             Router targetRouter = options.Router ?? Router.Default;
@@ -258,36 +336,36 @@ namespace CycloneGames.Cheat.Runtime
                 ? Interlocked.Increment(ref _parallelSequence)
                 : 0;
             var key = new CommandStateKey(command.CommandId, targetRouter, typeof(TCommand).TypeHandle, sequence);
-            var state = new CommandExecutionState();
-
-            if (!TryRegisterState(key, state))
+            CheatCommandPublishResult admissionResult = TryAdmitCommand(key, out CommandExecutionState state);
+            if (admissionResult != CheatCommandPublishResult.Published)
             {
-                state.Dispose();
-                Interlocked.Increment(ref _droppedDuplicateCount);
-                return;
+                return admissionResult;
             }
-
-            Interlocked.Increment(ref _publishedCommandCount);
 
             try
             {
-                await targetRouter.PublishAsync(command, state.Token);
-                Interlocked.Increment(ref _completedCommandCount);
-            }
-            catch (OperationCanceledException)
-            {
-                Interlocked.Increment(ref _completedCommandCount);
-            }
-            catch (Exception exception)
-            {
-                Interlocked.Increment(ref _faultedCommandCount);
-                Logger?.LogException(exception);
+                try
+                {
+                    await targetRouter.PublishAsync(command, state.Token);
+                    Interlocked.Increment(ref _completedCommandCount);
+                }
+                catch (OperationCanceledException)
+                {
+                    Interlocked.Increment(ref _completedCommandCount);
+                }
+                catch (Exception exception)
+                {
+                    Interlocked.Increment(ref _faultedCommandCount);
+                    Logger?.LogException(exception);
+                }
             }
             finally
             {
-                TryRemoveState(key, state);
+                ReleaseCommandState(key, state);
                 state.Dispose();
             }
+
+            return CheatCommandPublishResult.Published;
         }
 
         public bool IsCommandRunning(string commandId)
@@ -297,8 +375,7 @@ namespace CycloneGames.Cheat.Runtime
                 return false;
             }
 
-#if UNITY_WEBGL
-            lock (_stateLock)
+            lock (_admissionLock)
             {
                 foreach (var pair in _commandStates)
                 {
@@ -308,15 +385,6 @@ namespace CycloneGames.Cheat.Runtime
                     }
                 }
             }
-#else
-            foreach (var pair in _commandStates)
-            {
-                if (string.Equals(pair.Key.CommandId, commandId, StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-#endif
 
             return false;
         }
@@ -334,78 +402,63 @@ namespace CycloneGames.Cheat.Runtime
                 return;
             }
 
-#if UNITY_WEBGL
-            lock (_stateLock)
+            var cancellationRequests = new List<CommandExecutionState>();
+            lock (_admissionLock)
             {
                 foreach (var pair in _commandStates)
                 {
-                    if (ShouldCancel(pair.Key, commandId, router))
+                    if (ShouldCancel(pair.Key, commandId, router)
+                        && pair.Value.TryBeginCancellation())
                     {
-                        if (pair.Value.Cancel(Logger))
-                        {
-                            Interlocked.Increment(ref _cancelRequestedCount);
-                        }
+                        cancellationRequests.Add(pair.Value);
                     }
                 }
             }
-#else
-            foreach (var pair in _commandStates)
-            {
-                if (ShouldCancel(pair.Key, commandId, router))
-                {
-                    if (pair.Value.Cancel(Logger))
-                    {
-                        Interlocked.Increment(ref _cancelRequestedCount);
-                    }
-                }
-            }
-#endif
+
+            ExecuteCancellationRequests(cancellationRequests, countRequests: true);
         }
 
         public void ClearAll()
         {
-#if UNITY_WEBGL
-            lock (_stateLock)
+            var cancellationRequests = new List<CommandExecutionState>();
+            lock (_admissionLock)
             {
                 foreach (var pair in _commandStates)
                 {
-                    pair.Value.Cancel(Logger);
+                    if (pair.Value.TryBeginCancellation())
+                    {
+                        cancellationRequests.Add(pair.Value);
+                    }
                 }
             }
-#else
-            foreach (var pair in _commandStates)
-            {
-                pair.Value.Cancel(Logger);
-            }
-#endif
+
+            ExecuteCancellationRequests(cancellationRequests, countRequests: false);
         }
 
         public void Dispose()
         {
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            var cancellationRequests = new List<CommandExecutionState>();
+            lock (_admissionLock)
             {
-                return;
-            }
+                if (_disposed != 0)
+                {
+                    return;
+                }
 
-#if UNITY_WEBGL
-            lock (_stateLock)
-            {
+                Volatile.Write(ref _disposed, 1);
                 foreach (var pair in _commandStates)
                 {
-                    pair.Value.Cancel(Logger);
+                    if (pair.Value.TryBeginCancellation())
+                    {
+                        cancellationRequests.Add(pair.Value);
+                    }
                 }
 
                 _commandStates.Clear();
+                _reservedCommandCount = 0;
             }
-#else
-            foreach (var pair in _commandStates)
-            {
-                if (TryRemoveState(pair.Key, pair.Value))
-                {
-                    pair.Value.Cancel(Logger);
-                }
-            }
-#endif
+
+            ExecuteCancellationRequests(cancellationRequests, countRequests: false);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -436,51 +489,123 @@ namespace CycloneGames.Cheat.Runtime
             }
         }
 
-        private bool TryRegisterState(CommandStateKey key, CommandExecutionState state)
+        private CheatCommandPublishResult TryAdmitCommand(
+            CommandStateKey key,
+            out CommandExecutionState state)
         {
-#if UNITY_WEBGL
-            lock (_stateLock)
+            state = null;
+            try
             {
-                if (_commandStates.ContainsKey(key))
+                lock (_admissionLock)
                 {
-                    return false;
-                }
+                    ThrowIfDisposed();
 
-                _commandStates.Add(key, state);
-                return true;
+                    if (ContainsState(key))
+                    {
+                        Interlocked.Increment(ref _droppedDuplicateCount);
+                        return CheatCommandPublishResult.DuplicateRejected;
+                    }
+
+                    if (_reservedCommandCount >= _maximumConcurrentCommandCount)
+                    {
+                        Interlocked.Increment(ref _capacityRejectedCommandCount);
+                        return CheatCommandPublishResult.CapacityRejected;
+                    }
+
+                    state = new CommandExecutionState();
+                    RegisterState(key, state);
+                    _reservedCommandCount++;
+                    Interlocked.Increment(ref _publishedCommandCount);
+                    return CheatCommandPublishResult.Published;
+                }
             }
-#else
-            return _commandStates.TryAdd(key, state);
-#endif
+            catch
+            {
+                state?.Dispose();
+                state = null;
+                throw;
+            }
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private bool ContainsState(CommandStateKey key)
+        {
+            return _commandStates.ContainsKey(key);
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private void RegisterState(CommandStateKey key, CommandExecutionState state)
+        {
+            _commandStates.Add(key, state);
+        }
+
+        private void ReleaseCommandState(CommandStateKey key, CommandExecutionState state)
+        {
+            lock (_admissionLock)
+            {
+                if (TryRemoveState(key, state))
+                {
+                    _reservedCommandCount--;
+                }
+            }
         }
 
         private bool TryRemoveState(CommandStateKey key, CommandExecutionState state)
         {
-#if UNITY_WEBGL
-            lock (_stateLock)
+            if (_commandStates.TryGetValue(key, out var current) && ReferenceEquals(current, state))
             {
-                if (_commandStates.TryGetValue(key, out var current) && ReferenceEquals(current, state))
-                {
-                    _commandStates.Remove(key);
-                    return true;
-                }
+                _commandStates.Remove(key);
+                return true;
             }
 
             return false;
-#else
-            var pair = new KeyValuePair<CommandStateKey, CommandExecutionState>(key, state);
-            return ((ICollection<KeyValuePair<CommandStateKey, CommandExecutionState>>)_commandStates).Remove(pair);
-#endif
+        }
+
+        private void ExecuteCancellationRequests(
+            List<CommandExecutionState> cancellationRequests,
+            bool countRequests)
+        {
+            ICheatLogger logger = Logger;
+            for (int i = 0; i < cancellationRequests.Count; i++)
+            {
+                if (cancellationRequests[i].ExecuteCancellation(logger) && countRequests)
+                {
+                    Interlocked.Increment(ref _cancelRequestedCount);
+                }
+            }
         }
     }
 #else
-    public sealed class CheatCommandRuntime : ICheatCommandRuntime
+    public sealed class CheatCommandRuntime : ICheatCommandRuntime, ICheatCommandAdmissionPublisher
     {
         private ICheatLogger _logger;
+        private readonly int _maximumConcurrentCommandCount;
+
+        public const int DefaultMaximumConcurrentCommandCount = 256;
+        public const int AbsoluteMaximumConcurrentCommandCount = 4096;
 
         public CheatCommandRuntime(ICheatLogger logger = null)
+            : this(logger, DefaultMaximumConcurrentCommandCount)
         {
+        }
+
+        public CheatCommandRuntime(int maximumConcurrentCommandCount)
+            : this(null, maximumConcurrentCommandCount)
+        {
+        }
+
+        public CheatCommandRuntime(
+            ICheatLogger logger,
+            int maximumConcurrentCommandCount)
+        {
+            if (maximumConcurrentCommandCount <= 0 ||
+                maximumConcurrentCommandCount > AbsoluteMaximumConcurrentCommandCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumConcurrentCommandCount));
+            }
+
             _logger = logger;
+            _maximumConcurrentCommandCount = maximumConcurrentCommandCount;
         }
 
         public bool IsEnabled => false;
@@ -495,7 +620,17 @@ namespace CycloneGames.Cheat.Runtime
 
         public int RunningCommandCount => 0;
 
-        public CheatRuntimeMetrics Metrics => default;
+        public int MaximumConcurrentCommandCount => _maximumConcurrentCommandCount;
+
+        public CheatRuntimeMetrics Metrics => new CheatRuntimeMetrics(
+            0,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            0L,
+            _maximumConcurrentCommandCount);
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public UniTask PublishAsync(string commandId, Router router = null)
@@ -537,6 +672,15 @@ namespace CycloneGames.Cheat.Runtime
             where TCommand : ICheatCommand
         {
             return UniTask.CompletedTask;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public UniTask<CheatCommandPublishResult> TryPublishAsync<TCommand>(
+            TCommand command,
+            CheatCommandExecutionOptions options = default)
+            where TCommand : ICheatCommand
+        {
+            return UniTask.FromResult(CheatCommandPublishResult.Disabled);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

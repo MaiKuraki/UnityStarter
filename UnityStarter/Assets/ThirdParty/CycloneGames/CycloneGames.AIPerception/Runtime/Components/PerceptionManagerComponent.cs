@@ -99,10 +99,10 @@ namespace CycloneGames.AIPerception.Runtime
 
         private void OnValidate()
         {
-            if (_maximumPerceptibles < 0)
-            {
-                _maximumPerceptibles = 0;
-            }
+            _maximumPerceptibles = Mathf.Clamp(
+                _maximumPerceptibles,
+                0,
+                PerceptibleRegistry.HardMaximumPerceptibleCount);
 
             if (!float.IsFinite(_spatialCellSize) || _spatialCellSize < 0.001f)
             {
@@ -126,7 +126,7 @@ namespace CycloneGames.AIPerception.Runtime
             if (!registry.TrySetMaxCapacity(_maximumPerceptibles))
             {
                 Debug.LogError(
-                    $"[AIPerception] Maximum perceptibles ({_maximumPerceptibles}) cannot be lower than the active count ({registry.Count}). The previous limit remains active.",
+                    $"[AIPerception] Maximum perceptibles ({_maximumPerceptibles}) must map to a limit between the active count ({registry.Count}) and the package hard ceiling ({PerceptibleRegistry.HardMaximumPerceptibleCount}). The previous limit remains active.",
                     this);
             }
             registry.SetSpatialCellSize(_spatialCellSize);

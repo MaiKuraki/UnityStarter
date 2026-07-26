@@ -22,7 +22,7 @@ Factory 回答一个问题：谁在什么契约下构造这个对象？CycloneGa
 
 模块分为三个 runtime assembly。纯 C# 核心不引用 `UnityEngine`，可用于测试、工具和服务端。Unity adapter 在主线程专用类型背后封装 `Object.Instantiate`、Prefab factory 和 `Component` pool。可选的 DOD assembly 提供基于 `NativeArray` 的密集 pool，使用 slot + generation 句柄服务 Burst/Jobs workload。
 
-适用场景：创建策略需要注入、热路径需要有界复用、或 Unity 对象创建需要经过可验证边界。不要用作 DI container、service registry、全局 pool registry、ECS lifecycle 或持久化格式——composition root 拥有每个 factory 与 pool instance。
+适用场景：创建策略需要注入、热路径需要有界复用、或 Unity 对象创建需要经过可验证边界。Composition root 拥有每个 factory 与 pool instance。
 
 ### 主要特性
 
@@ -475,3 +475,9 @@ Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与主机目�
 
 - [Unity Collections 包](https://docs.unity3d.com/Packages/com.unity.collections@latest) —— DOD pool 支持的依赖。
 - [UniTask](https://github.com/Cysharp/UniTask)
+
+## 对象池内存限制与维护
+
+Managed pool 实现公开 `IBoundedPoolMaintenance.TrimInactiveStep(targetInactiveCount, maxWork)`。单次调用最多检查并释放 `maxWork` 个 inactive entry，保留全部 active lease，同时继续为显式 lifecycle owner 提供原有完整 trim 行为。
+
+Pool owner 通过包内 API 暴露固定的 count、capacity、limit、admission 与 trim result。Caller-driven maintenance 只能清理 inactive entry，绝不能销毁 active 或 borrowed object。对象池始终拥有权威 ownership 与生命周期。

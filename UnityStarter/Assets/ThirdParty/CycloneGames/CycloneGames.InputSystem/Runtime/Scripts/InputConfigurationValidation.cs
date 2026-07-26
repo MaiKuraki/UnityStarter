@@ -45,6 +45,17 @@ namespace CycloneGames.InputSystem.Runtime
     /// </summary>
     public sealed class InputConfigurationLimits
     {
+        public const int AbsoluteMaxPlayers = 64;
+        public const int AbsoluteMaxContextsPerPlayer = 512;
+        public const int AbsoluteMaxActionsPerContext = 2048;
+        public const int AbsoluteMaxBindingsPerAction = 256;
+        public const int AbsoluteMaxTotalActionsPerPlayer = 8192;
+        public const int AbsoluteMaxStringLength = 4096;
+        public const int AbsoluteMaxControlSchemesPerPlayer = 128;
+        public const int AbsoluteMaxDeviceRequirementsPerScheme = 64;
+        public const int AbsoluteMaxCompositesPerAction = 256;
+        public const int AbsoluteMaxPartsPerComposite = 256;
+
         public static InputConfigurationLimits Default { get; } = new InputConfigurationLimits();
 
         public InputConfigurationLimits(
@@ -74,6 +85,16 @@ namespace CycloneGames.InputSystem.Runtime
             if (maxDeviceRequirementsPerScheme <= 0) throw new ArgumentOutOfRangeException(nameof(maxDeviceRequirementsPerScheme));
             if (maxCompositesPerAction <= 0) throw new ArgumentOutOfRangeException(nameof(maxCompositesPerAction));
             if (maxPartsPerComposite <= 0) throw new ArgumentOutOfRangeException(nameof(maxPartsPerComposite));
+            ValidateAbsoluteMaximum(maxPlayers, AbsoluteMaxPlayers, nameof(maxPlayers));
+            ValidateAbsoluteMaximum(maxContextsPerPlayer, AbsoluteMaxContextsPerPlayer, nameof(maxContextsPerPlayer));
+            ValidateAbsoluteMaximum(maxActionsPerContext, AbsoluteMaxActionsPerContext, nameof(maxActionsPerContext));
+            ValidateAbsoluteMaximum(maxBindingsPerAction, AbsoluteMaxBindingsPerAction, nameof(maxBindingsPerAction));
+            ValidateAbsoluteMaximum(maxTotalActionsPerPlayer, AbsoluteMaxTotalActionsPerPlayer, nameof(maxTotalActionsPerPlayer));
+            ValidateAbsoluteMaximum(maxStringLength, AbsoluteMaxStringLength, nameof(maxStringLength));
+            ValidateAbsoluteMaximum(maxControlSchemesPerPlayer, AbsoluteMaxControlSchemesPerPlayer, nameof(maxControlSchemesPerPlayer));
+            ValidateAbsoluteMaximum(maxDeviceRequirementsPerScheme, AbsoluteMaxDeviceRequirementsPerScheme, nameof(maxDeviceRequirementsPerScheme));
+            ValidateAbsoluteMaximum(maxCompositesPerAction, AbsoluteMaxCompositesPerAction, nameof(maxCompositesPerAction));
+            ValidateAbsoluteMaximum(maxPartsPerComposite, AbsoluteMaxPartsPerComposite, nameof(maxPartsPerComposite));
 
             MaxPlayers = maxPlayers;
             MaxContextsPerPlayer = maxContextsPerPlayer;
@@ -103,6 +124,14 @@ namespace CycloneGames.InputSystem.Runtime
         public int MaxDeviceRequirementsPerScheme { get; }
         public int MaxCompositesPerAction { get; }
         public int MaxPartsPerComposite { get; }
+
+        private static void ValidateAbsoluteMaximum(int value, int maximum, string parameterName)
+        {
+            if (value > maximum)
+            {
+                throw new ArgumentOutOfRangeException(parameterName);
+            }
+        }
     }
 
     public sealed class InputConfigurationValidationResult

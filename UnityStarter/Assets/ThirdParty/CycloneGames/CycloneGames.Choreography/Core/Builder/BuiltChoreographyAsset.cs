@@ -6,7 +6,7 @@ namespace CycloneGames.Choreography.Core
     /// <summary>
     /// Engine-free immutable choreography asset produced by <see cref="ChoreographyBuilder"/>.
     /// </summary>
-    public sealed class BuiltChoreographyAsset : IChoreographyAsset
+    public sealed class BuiltChoreographyAsset : IChoreographyAsset, IBoundedChoreographyResourceCollector
     {
         private static readonly ChoreographySection[] EmptySections = new ChoreographySection[0];
         private static readonly ChoreographyResourceReference[] EmptyResources = new ChoreographyResourceReference[0];
@@ -35,18 +35,53 @@ namespace CycloneGames.Choreography.Core
                 return 0;
             }
 
-            int added = 0;
+            TryCollectResourceReferences(
+                results,
+                int.MaxValue,
+                int.MaxValue,
+                out int addedCount,
+                out _);
+            return addedCount;
+        }
+
+        /// <inheritdoc />
+        public bool TryCollectResourceReferences(
+            List<ChoreographyResourceReference> results,
+            int maximumResultCount,
+            int maximumNodeScanCount,
+            out int addedCount,
+            out int scannedNodeCount)
+        {
+            addedCount = 0;
+            scannedNodeCount = 0;
+            if (results == null || maximumResultCount < 0 || maximumNodeScanCount < 0
+                || results.Count > maximumResultCount)
+            {
+                return false;
+            }
+
+            bool appendPrecomputedResourcesDirectly = results.Count == 0;
             for (int i = 0; i < _resources.Length; i++)
             {
-                ChoreographyResourceReference reference = _resources[i];
-                if (!Contains(results, reference))
+                if (scannedNodeCount >= maximumNodeScanCount)
                 {
+                    return false;
+                }
+                scannedNodeCount++;
+
+                ChoreographyResourceReference reference = _resources[i];
+                if (appendPrecomputedResourcesDirectly || !Contains(results, reference))
+                {
+                    if (results.Count >= maximumResultCount)
+                    {
+                        return false;
+                    }
                     results.Add(reference);
-                    added++;
+                    addedCount++;
                 }
             }
 
-            return added;
+            return true;
         }
 
         private static double CalculateTotalDuration(ChoreographySection[] sections)

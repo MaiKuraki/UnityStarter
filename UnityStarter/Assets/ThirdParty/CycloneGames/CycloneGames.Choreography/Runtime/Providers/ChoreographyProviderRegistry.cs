@@ -17,6 +17,12 @@ namespace CycloneGames.Choreography
 
         public IResourceProvider Resources { get; private set; }
 
+        public int RegisteredProviderCount =>
+            (Animation != null ? 1 : 0) +
+            (Audio != null ? 1 : 0) +
+            (Vfx != null ? 1 : 0) +
+            (Resources != null ? 1 : 0);
+
         public void RegisterAnimation(IAnimationProvider provider) => Animation = provider;
 
         public void RegisterAudio(IAudioProvider provider) => Audio = provider;

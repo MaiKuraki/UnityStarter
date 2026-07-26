@@ -80,6 +80,7 @@ namespace CycloneGames.AIPerception.Runtime
         private float _cellSize;
 
         public float CellSize => _cellSize;
+        internal int CellCount => _cellRanges.Count;
 
         public SpatialGrid(float cellSize = 20f)
         {

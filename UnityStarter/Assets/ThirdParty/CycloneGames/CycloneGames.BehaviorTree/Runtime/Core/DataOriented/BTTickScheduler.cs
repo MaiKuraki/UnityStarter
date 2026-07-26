@@ -84,6 +84,8 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
     public sealed class BTTickScheduler : IDisposable
     {
         public const int MAX_SUPPORTED_TREE_DEPTH = 128;
+        public const int DefaultMaximumAgentCount = 65_536;
+        public const int HardMaximumAgentCount = 1_048_576;
 
         private readonly FlatBehaviorTree _tree;
         private readonly int _bbSlotCount;
@@ -106,6 +108,10 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
         private int _agentCount;
         private int _agentCapacity;
+        private readonly int _maximumAgentCount;
+        private int _activeAgentCount;
+        private int _peakActiveAgentCount;
+        private long _capacityRejectedAgentCount;
 
         private NativeArray<int> _freeList;
         private int _freeCount;
@@ -130,16 +136,7 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             get
             {
                 CompleteForAccess();
-                int count = 0;
-                for (int i = 0; i < _agentCount; i++)
-                {
-                    if (_activeFlags[i] != 0)
-                    {
-                        count++;
-                    }
-                }
-
-                return count;
+                return _activeAgentCount;
             }
         }
 
@@ -148,6 +145,21 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             int bbSlotCount,
             int actionSlotCount,
             int initialCapacity = 256)
+            : this(
+                tree,
+                bbSlotCount,
+                actionSlotCount,
+                initialCapacity,
+                DefaultMaximumAgentCount)
+        {
+        }
+
+        public BTTickScheduler(
+            FlatBehaviorTree tree,
+            int bbSlotCount,
+            int actionSlotCount,
+            int initialCapacity,
+            int maximumAgentCount)
         {
             _ownerThreadId = Environment.CurrentManagedThreadId;
             if (tree == null || !tree.IsCreated || tree.NodeCount <= 0)
@@ -170,7 +182,25 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
                 throw new ArgumentOutOfRangeException(nameof(initialCapacity));
             }
 
+            if (maximumAgentCount < 1 || maximumAgentCount > HardMaximumAgentCount)
+            {
+                throw new ArgumentOutOfRangeException(nameof(maximumAgentCount));
+            }
+
             ValidateTreeDefinition(tree, bbSlotCount, actionSlotCount);
+
+            int layoutMaximum = CalculateLayoutMaximumAgentCount(
+                tree.NodeCount,
+                bbSlotCount,
+                actionSlotCount);
+            _maximumAgentCount = Math.Min(maximumAgentCount, layoutMaximum);
+            if (initialCapacity > _maximumAgentCount)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(initialCapacity),
+                    initialCapacity,
+                    $"Initial capacity exceeds the effective layout maximum of {_maximumAgentCount} agents.");
+            }
 
             _tree = tree;
             _bbSlotCount = bbSlotCount;
@@ -192,6 +222,17 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
         public BTAgentHandle AddAgent(int tickInterval = 1)
         {
+            if (TryAddAgent(tickInterval, out BTAgentHandle agent))
+            {
+                return agent;
+            }
+
+            throw new InvalidOperationException(
+                $"Behavior tree scheduler reached its hard agent capacity of {_maximumAgentCount}.");
+        }
+
+        public bool TryAddAgent(int tickInterval, out BTAgentHandle agent)
+        {
             CompleteForAccess();
 
             int id;
@@ -201,9 +242,21 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             }
             else
             {
+                if (_agentCount >= _maximumAgentCount)
+                {
+                    _capacityRejectedAgentCount++;
+                    agent = default;
+                    return false;
+                }
+
                 if (_agentCount >= _agentCapacity)
                 {
-                    Grow(checked(_agentCapacity * 2));
+                    int newCapacity = Math.Min(
+                        _maximumAgentCount,
+                        _agentCapacity <= _maximumAgentCount / 2
+                            ? _agentCapacity * 2
+                            : _maximumAgentCount);
+                    Grow(newCapacity);
                 }
 
                 id = _agentCount++;
@@ -215,7 +268,14 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             _tickCountdowns[id] = 0;
             _activeFlags[id] = 1;
             ResetAgentStorage(id, invalidateActions: true);
-            return new BTAgentHandle(id, generation);
+            _activeAgentCount++;
+            if (_activeAgentCount > _peakActiveAgentCount)
+            {
+                _peakActiveAgentCount = _activeAgentCount;
+            }
+
+            agent = new BTAgentHandle(id, generation);
+            return true;
         }
 
         /// <summary>
@@ -235,7 +295,22 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             _tickIntervals[agent.Index] = 0;
             _accumulatedDeltaTimes[agent.Index] = 0f;
             _freeList[_freeCount++] = agent.Index;
+            _activeAgentCount--;
             return true;
+        }
+
+        public BTTickSchedulerMemoryStats GetMemoryStats()
+        {
+            EnsureOwnerThread();
+            EnsureNotDisposed();
+            return new BTTickSchedulerMemoryStats(
+                _agentCount,
+                _activeAgentCount,
+                _agentCapacity,
+                _maximumAgentCount,
+                _peakActiveAgentCount,
+                _capacityRejectedAgentCount,
+                CalculateRetainedNativeElementBytes(_agentCapacity));
         }
 
         /// <summary>
@@ -618,7 +693,7 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
 
         private void Grow(int newCapacity)
         {
-            if (newCapacity <= _agentCapacity)
+            if (newCapacity <= _agentCapacity || newCapacity > _maximumAgentCount)
             {
                 throw new InvalidOperationException("Scheduler capacity cannot grow further.");
             }
@@ -727,6 +802,44 @@ namespace CycloneGames.BehaviorTree.Runtime.DOD
             _agentGenerations = agentGenerations;
             _freeList = freeList;
             _agentCapacity = newCapacity;
+        }
+
+        private static int CalculateLayoutMaximumAgentCount(
+            int nodeCount,
+            int blackboardSlotCount,
+            int actionSlotCount)
+        {
+            int maximum = HardMaximumAgentCount;
+            maximum = Math.Min(maximum, int.MaxValue / nodeCount);
+            if (blackboardSlotCount > 0)
+            {
+                maximum = Math.Min(maximum, int.MaxValue / blackboardSlotCount);
+            }
+
+            if (actionSlotCount > 0)
+            {
+                maximum = Math.Min(maximum, int.MaxValue / actionSlotCount);
+            }
+
+            return Math.Max(1, maximum);
+        }
+
+        private long CalculateRetainedNativeElementBytes(int capacity)
+        {
+            long nodeElements = (long)capacity * _tree.NodeCount;
+            long actionElements = (long)capacity * _actionSlotCount;
+            long blackboardElements = (long)capacity * _bbSlotCount;
+            return
+                nodeElements * (sizeof(byte) + sizeof(int) + sizeof(float)) +
+                actionElements * (sizeof(byte) + sizeof(uint)) +
+                blackboardElements * (sizeof(int) + sizeof(float) + sizeof(byte)) +
+                (long)capacity * (
+                    sizeof(int) +
+                    sizeof(int) +
+                    sizeof(float) +
+                    sizeof(byte) +
+                    sizeof(uint) +
+                    sizeof(int));
         }
 
         private static void CopyIfNotEmpty<T>(NativeArray<T> source, NativeArray<T> destination, int length)

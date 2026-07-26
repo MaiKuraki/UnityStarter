@@ -1,8 +1,20 @@
 # RPG 交互模块
 
+## 有界 Authority 准入
+
+一个 `InteractionAuthorityService` 最多保留 `65,536` 个 registered target 与 `65,536` 个 queue owner；其拥有的 `InteractionRateLimiter` 最多保留 `65,536` 个 instigator window。这些常量是 implementation safety ceiling；产品可为独立 limiter 构造更低的 owner capacity。达到容量后，已有 entry 仍可更新、消费、移除或清空。
+
+新增 target 达到 ceiling 时，`TryRegisterTarget` 返回 `false`。新代码访问 queue 时应使用 `TryGetOrCreateQueue`；旧 `GetOrCreateQueue` 在容量处以 `InvalidOperationException` fail-fast。`TryQueueRequest` 将 queue-owner 容量拒绝转换为已有 `QueueFull` 结果。`InteractionRateLimiter.TryConsume` 返回 `false`，authority 将其映射为已有 `RateLimited` 结果。O(1) snapshot 暴露全部 count、capacity 与单调 rejection counter。
+
+rate window 使用有界 indexed expiry heap：每个保留身份只拥有一个 dictionary entry 和一个 heap key。准入前，单次调用最多移除 `MaximumExpiredWindowsToPrunePerCall`（`256`）个过期身份，因此身份 churn 不会永久耗尽容量，清理本身也不会形成无界请求尖峰。身份通过认证且断线时，可调用 `InteractionAuthorityService.RemoveInstigatorRateLimitWindow(instigatorId)`（独立 owner 使用 `InteractionRateLimiter.Remove`）显式释放。输入的 `int` tick 通过序列号差值规范化到 owner-local monotonic `long` 时间线，因此正常的 `int` wrap 会继续推进时间。向后或乱序 sample 不会回退或清空任何 window，而是按最近观测时间求值，所以不能重置其他身份的限制。Authority 有意进入不同时间域时，应在冷路径显式调用 `Clear`。相邻两次前向观测必须小于 `int` 序列空间的一半；更大的 discontinuity 需要执行该显式 reset。mutation 为 O(log N)，常见的“无过期项”检查为 O(1)，snapshot 保持 allocation-free O(1)。
+
+迁移是 additive 的：使用 `Try*` 路径，并由 authoritative gameplay/security policy 处理拒绝。只有明确需要 fail-fast 时才把调用方回退到 `GetOrCreateQueue`。若单个 authority owner 确实需要超过 ceiling，应按显式 World/authority ownership 分片；提高常量需要经过审查的 build、滥用场景分析与负载验证。治理逻辑不会在压力下清空 target、queue 或 rate-limit policy。
+
+此契约不新增 serialized field，不改变 command/wire enum value，不重命名 serialized type 或 field，不修改 prefab、scene 或 asset 数据，也不持久化状态；无需资产、存档或协议迁移。
+
 [English](README.md) | 简体中文
 
-一个支持 3D、2D 和空间哈希检测模式的 Unity 交互运行时。使用 R3 提供面向 UI 的数据流，使用 VitalRouter 进行命令路由，并使用 UniTask 执行异步交互。
+支持 3D、2D 和空间哈希检测的 Unity 交互运行时。基于 R3 响应式 UI、VitalRouter 命令路由和 UniTask 异步执行。
 
 ## 目录
 

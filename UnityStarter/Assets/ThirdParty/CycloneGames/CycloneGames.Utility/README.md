@@ -18,7 +18,7 @@ CycloneGames.Utility is a compact set of concrete Unity helpers for collection o
 
 ## Overview
 
-The package covers the small recurring jobs that show up in nearly every Unity project: bounds-checked collection helpers, invariant string and span formatting, named colors with WCAG contrast, vector helpers, safe-area fitting, FPS diagnostics, authored Transform lookup, and narrow singleton conveniences. The Runtime assembly references `CycloneGames.Hash.Core` and `UnityEngine.UI`; a physically isolated `SplashScreenModifier` submodule stops the Player splash screen automatically.
+The package covers recurring needs in nearly every Unity project: bounds-checked collection helpers, invariant string and span formatting, named colors with WCAG contrast, vector helpers, safe-area fitting, FPS diagnostics, authored Transform lookup, and narrow singleton conveniences. The Runtime assembly references `CycloneGames.Hash.Core` and `UnityEngine.UI`; a physically isolated `SplashScreenModifier` submodule stops the Player splash screen automatically.
 
 `Singleton<T>` and `MonoSingleton<T>` are narrow convenience types for small parameterless objects or main-thread Unity components. They do not replace explicit construction, dependency injection, domain-owned shutdown, or scene/world-scoped ownership. Service location, DI containers, persistence, networking, security, deterministic simulation, and Inspector frameworks live in their own modules.
 
@@ -212,7 +212,7 @@ The registry stores authored string keys, not network IDs, save IDs, Unity insta
 
 Attach `FPSCounter` to an explicitly owned diagnostic GameObject. It does not discover, create, or expose a global instance. Call `SetVisible` or assign `IsVisible` through a direct reference.
 
-The moving average uses a fixed, bounded sample ring. Instant-only and average-only modes lazily cache observed numeric strings; combined mode can allocate a composed string on display updates. IMGUI itself has engine-owned costs, so this component is not a production HUD or a universal zero-allocation claim. `Persist Across Scenes` applies `DontDestroyOnLoad` to the entire GameObject — use a dedicated owner with no unrelated components.
+The moving average uses a fixed, bounded sample ring. Instant-only and average-only modes lazily cache observed numeric strings; combined mode can allocate a composed string on display updates. IMGUI itself has engine-owned costs; this component is a diagnostic tool, not a production HUD. `Persist Across Scenes` applies `DontDestroyOnLoad` to the entire GameObject — use a dedicated owner with no unrelated components.
 
 ### String constant selector
 
@@ -414,3 +414,7 @@ Minimum manual Editor checks:
 7. Enter Play Mode with Domain Reload and Scene Reload disabled; verify a `MonoSingleton<T>` resolves once, rejects duplicates without deleting siblings, and resets registration on the next session.
 
 Before shipping, run a disposable Player startup smoke on every selected target. Confirm that the Unity splash request is stopped where licensing permits, the first Scene still starts, `UNITY_SERVER` remains unaffected, and native OS/browser/platform launch UI is not mistaken for Unity's managed splash. Repeat with the product's IL2CPP, stripping, XR, and license configuration. Do not promote an Editor test result to Player, IL2CPP, mobile, WebGL, server, console, long-duration, or global zero-allocation evidence.
+
+## Memory Ownership
+
+Utility owns per-component `TransformKeyRegistry` buffers and AppDomain/Unity lifecycle singleton state, but exposes no process-global responder because no independently safe trim operation exists. External diagnostics must never reset a static singleton, destroy a component, clear authored registry state, or mutate business data under pressure. Aggregate diagnostics require explicit public owner snapshots.

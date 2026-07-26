@@ -27,6 +27,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public readonly long CapacityEvictionCount;
         public readonly long MemoryBudgetEvictionCount;
         public readonly long RetentionEvictionCount;
+        public readonly long PressureEvictionCount;
         public readonly long ExplicitEvictionCount;
         public readonly long EvictedBytesApprox;
         public readonly long ProviderReleaseFailureCount;
@@ -71,6 +72,7 @@ namespace CycloneGames.AssetManagement.Runtime
             long capacityEvictionCount = 0L,
             long memoryBudgetEvictionCount = 0L,
             long retentionEvictionCount = 0L,
+            long pressureEvictionCount = 0L,
             long explicitEvictionCount = 0L,
             long evictedBytesApprox = 0L,
             long providerReleaseFailureCount = 0L,
@@ -98,6 +100,7 @@ namespace CycloneGames.AssetManagement.Runtime
             CapacityEvictionCount = capacityEvictionCount;
             MemoryBudgetEvictionCount = memoryBudgetEvictionCount;
             RetentionEvictionCount = retentionEvictionCount;
+            PressureEvictionCount = pressureEvictionCount;
             ExplicitEvictionCount = explicitEvictionCount;
             EvictedBytesApprox = evictedBytesApprox;
             ProviderReleaseFailureCount = providerReleaseFailureCount;

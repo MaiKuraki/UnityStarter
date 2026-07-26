@@ -14,6 +14,10 @@ namespace CycloneGames.Settings.Persistence
         private readonly SettingsMigrationPipeline<T> _migrations;
         private readonly PersistenceStore<T> _persistence;
         private int _operationState;
+        private long _startedLoadCount;
+        private long _startedSaveCount;
+        private long _startedDeleteCount;
+        private long _concurrentOperationRejectionCount;
 
         public PersistentSettings(
             SettingsState<T> state,
@@ -39,10 +43,28 @@ namespace CycloneGames.Settings.Persistence
             }
         }
 
+        public PersistentSettingsMemorySnapshot GetMemorySnapshot()
+        {
+            PersistenceStoreMemorySnapshot persistence = _persistence.GetMemorySnapshot();
+            return new PersistentSettingsMemorySnapshot(
+                Volatile.Read(ref _operationState) != 0,
+                _state.Revision,
+                persistence.IsOperationActive,
+                persistence.MaximumPayloadBytes,
+                persistence.MaximumRecordBytes,
+                Interlocked.Read(ref _startedLoadCount),
+                Interlocked.Read(ref _startedSaveCount),
+                Interlocked.Read(ref _startedDeleteCount),
+                Interlocked.Read(ref _concurrentOperationRejectionCount),
+                persistence.LastRecordBytes,
+                persistence.PeakRecordBytes);
+        }
+
         public Task<PersistentSettingsLoadResult> LoadAsync(
             CancellationToken cancellationToken = default)
         {
             BeginOperation();
+            Interlocked.Increment(ref _startedLoadCount);
             try
             {
                 return LoadCoreAsync(cancellationToken);
@@ -58,6 +80,7 @@ namespace CycloneGames.Settings.Persistence
             CancellationToken cancellationToken = default)
         {
             BeginOperation();
+            Interlocked.Increment(ref _startedSaveCount);
             try
             {
                 if (cancellationToken.IsCancellationRequested)
@@ -82,6 +105,7 @@ namespace CycloneGames.Settings.Persistence
             CancellationToken cancellationToken = default)
         {
             BeginOperation();
+            Interlocked.Increment(ref _startedDeleteCount);
             try
             {
                 return DeleteCoreAsync(cancellationToken);
@@ -192,6 +216,7 @@ namespace CycloneGames.Settings.Persistence
         {
             if (Interlocked.CompareExchange(ref _operationState, 1, 0) != 0)
             {
+                Interlocked.Increment(ref _concurrentOperationRejectionCount);
                 throw new InvalidOperationException(
                     "A PersistentSettings instance permits only one active operation.");
             }

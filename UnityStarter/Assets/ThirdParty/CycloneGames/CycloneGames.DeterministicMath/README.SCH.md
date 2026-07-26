@@ -711,3 +711,9 @@ foreach (Entity entity in _entities)
 - 使用生产规模数据 profile 实际 Player/backend。
 
 Release claim 应明确写出已验证的具体 platform、runtime、test corpus、raw contract 与 performance budget。
+
+## 查找表内存所有权
+
+当前 checkout 长期保留一个 process-global、含 32 个元素的固定 `long[]` CORDIC atan table。`FPMath.GetMemorySnapshot()` 在不公开或复制 table data 的前提下，报告精确 element count 与推导得到的 element-payload byte count（`Length * sizeof(long)`）。payload bytes 不包含 managed array header、长度字段、对齐、runtime bookkeeping 与 allocator overhead。
+
+确定性查找表是 process-scoped，并在类型初始化后保持不可变。它是确定性三角函数所需数据，刻意不提供 clear 或 trim 语义。Diagnostics 可以读取其固定特征，但外部 adapter 不得用另一份 cache 替代它。

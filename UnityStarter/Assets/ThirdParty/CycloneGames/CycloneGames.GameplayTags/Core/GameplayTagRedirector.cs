@@ -41,6 +41,8 @@ namespace CycloneGames.GameplayTags.Core
 
       internal static ulong CurrentManifestHash => Volatile.Read(ref s_Table).ManifestHash;
 
+      internal static int CurrentCount => Volatile.Read(ref s_Table).Entries.Count;
+
       public static void AddRedirect(string oldName, string newName)
       {
          GameplayTagUtility.ValidateName(oldName);

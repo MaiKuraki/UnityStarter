@@ -350,3 +350,9 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 - `CycloneGames.RPGFoundation.Interaction.Networking`
 - `CycloneGames.RPGFoundation.Movement.Networking`
 - `CycloneGames.RPGFoundation.Projectile.Networking`
+
+## 内存诊断与有界维护
+
+`NetworkBufferPool.GetMemorySnapshot()` 公开固定 pool count、capacity、admission 与 reuse counter；`TrimIdleStep(targetIdleCount, maxWork)` 只释放 idle buffer，并保证工作量有界。`RateLimiter.GetMemorySnapshot()` 公开当前/容量 count、expiry 与 rejection 统计，但不枚举 client key。
+
+Networking owner 暴露本地 snapshot，以及有界 idle-buffer 或 expired-rate-entry maintenance。Component-local maintenance 必须显式调用，不能充当通用 package responder。Replication 与 acknowledgement retention 仍由协议专用 integration 拥有，必须在提供 confirmed watermark 后才能执行 expiry；通用 diagnostics 不得推测这些数值。

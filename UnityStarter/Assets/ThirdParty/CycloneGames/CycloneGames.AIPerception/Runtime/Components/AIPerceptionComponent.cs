@@ -89,19 +89,31 @@ namespace CycloneGames.AIPerception.Runtime
             if (_enableSight)
             {
                 _sightSensor = new SightSensor(transform, _sightConfig, manager, ignoredTarget);
-                manager.Register(_sightSensor);
+                if (!manager.TryRegister(_sightSensor))
+                {
+                    _sightSensor.Dispose();
+                    _sightSensor = null;
+                }
             }
 
             if (_enableHearing)
             {
                 _hearingSensor = new HearingSensor(transform, _hearingConfig, manager, ignoredTarget);
-                manager.Register(_hearingSensor);
+                if (!manager.TryRegister(_hearingSensor))
+                {
+                    _hearingSensor.Dispose();
+                    _hearingSensor = null;
+                }
             }
 
             if (_enableProximity)
             {
                 _proximitySensor = new ProximitySensor(transform, _proximityConfig, manager, ignoredTarget);
-                manager.Register(_proximitySensor);
+                if (!manager.TryRegister(_proximitySensor))
+                {
+                    _proximitySensor.Dispose();
+                    _proximitySensor = null;
+                }
             }
 
             _initialized = true;

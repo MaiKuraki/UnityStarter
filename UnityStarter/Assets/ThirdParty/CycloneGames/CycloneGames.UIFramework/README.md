@@ -522,6 +522,8 @@ For recurring diagnostics and navigation queries, retain and reuse `List<T>` buf
 
 The window-session service does not pool window GameObjects and does not keep a closed-window cache. The provider may share underlying assets, but every successful acquisition returns a session-owned lease. Leases are disposed after binding cleanup and window destruction. Dynamic atlas retention is an independent, explicitly bounded cache with its own sprite leases and trimming policy. Do not add pooling until profiling shows instance churn is a material cost and the product can define capacity, reset, exhaustion, stale-reference, scene, and shutdown policies.
 
+`DynamicAtlasStats` reports configured `PageCapacity`, `EntryCapacity`, and `MemoryBudgetBytes` beside current pages, entries, references, retained entries, estimated bytes, pending-destruction bytes, and pressure counters. Admission continues to fail through explicit `DynamicAtlasInsertStatus` values when page, entry, or byte ceilings are reached; active sprite leases are never evicted. `TrimUnused(maximumEntriesToRemove)` is the safe owner-local mitigation and removes only zero-reference retained entries. Values at or below zero are a no-op. The legacy no-argument call remains source-compatible and may drain every eligible entry, but total work is still bounded by validated `maxEntries` (hard maximum 65,535); pressure orchestration should always supply its smaller per-pump work budget.
+
 ### Threading, AOT, and stripping
 
 `UIService` and `DynamicAtlasService` capture their Unity owner thread and reject use from another thread. Binders, presenters, lifecycle callbacks, transitions, hierarchy changes, locale layout application, texture copies, and lease consumption also run on that thread. An asset provider may perform backend I/O or decompression under its own policy; completed Unity objects are switched back to the main thread before validation and instantiation. Do not add locks around Unity object access; marshal work to the owner thread instead.
@@ -567,6 +569,8 @@ Run focused tests from Unity Test Runner:
 ```
 
 Open `Samples/SampleScene.unity` to observe open, transition, and clean shutdown in Play Mode. The sample assembly is not auto-referenced. See [Samples/README.md](Samples/README.md) for the exact scene setup and run steps. Do not generalize an EditMode pass to Player, IL2CPP, WebGL, mobile, console, long-session stability, or global zero-GC behavior.
+
+For dynamic-atlas governance, configure a small page/entry/byte budget, retain one active lease, release several others, and call `TrimUnused` with a one-entry budget. Confirm one eligible entry is removed, the active lease remains valid, the capacity fields match configuration, and rejection/eviction counters match the operations.
 
 ## API Reference
 

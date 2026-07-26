@@ -610,6 +610,40 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 Is.EqualTo(AIPerceptionNetworkMessageValidationResult.Valid));
             Assert.That(snapshot.EntryCount, Is.EqualTo(1));
             Assert.That(snapshot.StateHash, Is.EqualTo(AIPerceptionNetworkHash.Compute(entries)));
+            AIPerceptionNetworkMemoryStats stats = bridge.GetMemoryStats();
+            Assert.That(stats.WriteOperationCount, Is.EqualTo(1L));
+            Assert.That(stats.ScannedDetectionCount, Is.EqualTo(3L));
+            Assert.That(stats.WrittenEntryCount, Is.EqualTo(1L));
+            Assert.That(stats.UnresolvedCount, Is.EqualTo(1L));
+            Assert.That(stats.CapacityLimitedCount, Is.EqualTo(1L));
+            Assert.That(stats.AcceptedSnapshotCount, Is.EqualTo(1L));
+            Assert.That(stats.PeakSnapshotEntryCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void SyncBridge_RejectsOversizedWriteWithoutScanningOrRetainingInput()
+        {
+            var bridge = new AIPerceptionNetworkSyncBridge();
+            var resolver = new TestTargetResolver();
+            var detections = new DetectionResult[
+                AIPerceptionNetworkSyncBridge.MaximumDetectionInputsPerWrite + 1];
+            var entries = new AIPerceptionDetectionEntry[1];
+
+            AIPerceptionDetectionEntryWriteResult result = bridge.WriteDetectionEntries(
+                detections,
+                resolver,
+                entries,
+                tick: 1);
+
+            Assert.That(result.Status, Is.EqualTo(AIPerceptionDetectionEntryWriteStatus.Partial));
+            Assert.That(result.WrittenCount, Is.Zero);
+            Assert.That(result.CapacityLimitedCount, Is.EqualTo(detections.Length));
+            AIPerceptionNetworkMemoryStats stats = bridge.GetMemoryStats();
+            Assert.That(stats.SuppliedDetectionCount, Is.EqualTo(detections.Length));
+            Assert.That(stats.ScannedDetectionCount, Is.Zero);
+            Assert.That(stats.PeakScannedDetectionCount, Is.Zero);
+            Assert.That(stats.CapacityLimitedCount, Is.EqualTo(detections.Length));
+            Assert.That(resolver.ResolveAttemptCount, Is.Zero);
         }
 
         [Test]
@@ -631,6 +665,10 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
                 result,
                 Is.EqualTo(AIPerceptionNetworkMessageValidationResult.UnsupportedFeature));
             Assert.That(snapshot, Is.EqualTo(default(AIPerceptionDetectionSnapshotMessage)));
+            AIPerceptionNetworkMemoryStats stats = bridge.GetMemoryStats();
+            Assert.That(stats.SnapshotOperationCount, Is.EqualTo(1L));
+            Assert.That(stats.AcceptedSnapshotCount, Is.Zero);
+            Assert.That(stats.RejectedSnapshotCount, Is.EqualTo(1L));
         }
 
         [Test]
@@ -885,6 +923,8 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
             private readonly Dictionary<PerceptibleHandle, AIPerceptionNetworkTarget> _targets =
                 new Dictionary<PerceptibleHandle, AIPerceptionNetworkTarget>();
 
+            public int ResolveAttemptCount { get; private set; }
+
             public void Map(PerceptibleHandle handle, AIPerceptionNetworkTarget target)
             {
                 _targets[handle] = target;
@@ -892,6 +932,7 @@ namespace CycloneGames.AIPerception.Networking.Tests.Editor
 
             public bool TryResolveNetworkTarget(PerceptibleHandle handle, out AIPerceptionNetworkTarget target)
             {
+                ResolveAttemptCount++;
                 return _targets.TryGetValue(handle, out target);
             }
         }

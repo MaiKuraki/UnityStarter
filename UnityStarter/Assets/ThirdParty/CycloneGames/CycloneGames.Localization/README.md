@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Localization is a Unity localization module for versioned text and asset content in long-lived projects. It combines locale-aware runtime lookup, bounded catalog installation, explicit presentation binding, and editor workflows for teams that translate content incrementally over a long project lifetime. It targets desktop, mobile, WebGL, headless Unity players, and console integrations with a compatible asset backend, and does not require a DI container, a global service locator, runtime reflection, or worker threads.
+CycloneGames.Localization is a Unity localization module for versioned text and asset content. It combines locale-aware runtime lookup, bounded catalog installation, explicit presentation binding, and editor workflows for teams that translate content incrementally across a long project lifetime. It supports desktop, mobile, WebGL, headless Unity players, and console integrations with a compatible asset backend. No DI container, global service locator, runtime reflection, or worker threads required.
 
 ## Table of Contents
 
@@ -20,9 +20,9 @@ CycloneGames.Localization is a Unity localization module for versioned text and 
 
 A localization system answers two questions: which text or asset should the player see, and which locale is currently committed. CycloneGames.Localization separates authoring (`LocalizationSettings`, `Locale`, `StringTable`, `AssetTable`, `StringTableMetadata` edited in the Editor) from runtime dispatch (`LocalizationService` facade over an immutable lookup snapshot), and from presentation (`LocalizeTMPText`, `LocalizeImage`, `LocalizationWindowBinder`). The owner authors tables and catalogs; the service validates and installs them as one atomic transaction; presentation components subscribe to committed changes and refresh on demand.
 
-The module owns validated locale identifiers, explicit fallback graphs, partitioned string and asset tables, plural selection, composite formatting, pseudo-localization, transactional runtime catalog ownership, TMP and UGUI bindings, and the editor workflows for multi-language authoring, validation, CSV exchange, and catalog builds. Font fallback, bidirectional shaping, remote translation vendor APIs, download/auth/patch/CDN policy, and the application save format for the player's locale preference are not owned by this module — they stay in their owning adapters so translation data remains independent of product-specific networking, persistence, and UI composition. UI navigation and locale-specific prefab layout belong to `CycloneGames.UIFramework` when used.
+The module owns validated locale identifiers, explicit fallback graphs, partitioned string and asset tables, plural selection, composite formatting, pseudo-localization, transactional runtime catalog ownership, TMP and UGUI bindings, and editor workflows for multi-language authoring, validation, CSV exchange, and catalog builds. Font fallback, bidirectional shaping, remote translation vendor APIs, download/auth/patch/CDN policy, and the application save format for the player's locale preference live in their owning adapters. UI navigation and locale-specific prefab layout use `CycloneGames.UIFramework` when present.
 
-Use this module when the project needs versioned, partitioned, transactional localization that survives a long live-service lifetime with incremental translation deliveries. Do not use it as a font/glyph coverage solution or a translation-management vendor bridge.
+Use this module for versioned, partitioned, transactional localization through incremental translation deliveries across a long live-service lifetime. Font/glyph coverage and translation-management vendor bridges are separate concerns.
 
 ### Key Features
 
@@ -192,7 +192,7 @@ Locale equality is ordinal over the canonical code. The `Language` property is c
 
 ### Default, Authoring, and Current Locale
 
-Three locale roles are intentionally separate:
+Three locale roles are separate:
 
 - **Default locale** — final runtime fallback when no requested variant is available.
 - **Authoring locale** — language in which developers create and revise source text; defaults to the default locale when unset.
@@ -215,7 +215,7 @@ Regional tables may be sparse: a missing `fr-CA` entry can resolve from `fr`. Cy
 A `StringTable` or `AssetTable` represents one table ID for one locale. This layout supports independent locale packs and predictable memory ownership.
 
 - Table IDs and entry keys use ordinal matching; duplicate keys are rejected at compile time.
-- Empty or whitespace-only string values are missing content (do not block fallback); an intentionally hidden label belongs to presentation state, not translation data.
+- Empty or whitespace-only string values are missing content (do not block fallback); a hidden label belongs to presentation state, not translation data.
 - Compiled tables copy authoring data into read-only lookup state.
 - Asset entries store an Editor object GUID separately from the provider-neutral runtime location; the runtime location must be valid for the selected `IAssetPackage` provider.
 - Empty/invalid table IDs, locale codes, keys, oversized values, and asset locations are rejected according to `LocalizationLimits`.
@@ -242,7 +242,11 @@ Treat entry keys as stable contracts. Use semantic keys such as `menu.settings.a
 
 ### Memory and Cache Policy
 
-The service has no global mutable lookup cache. A service instance owns: immutable compiled table snapshots; precomputed locale fallback chains; catalog ownership records; a bounded missing-key diagnostic set; and a bounded reentrant mutation queue. `Shutdown` releases the runtime registries and fallback data. `Dispose` ends the service lifetime and releases event ownership. Pseudo-localized and formatted strings are created on demand; callers that render unchanged values frequently should cache the resolved result and invalidate it on `Changed`.
+The service has no global mutable lookup cache. A service instance owns: immutable compiled table snapshots; precomputed locale fallback chains; catalog ownership records; a bounded missing-key diagnostic set; and a bounded reentrant mutation queue. `LocalizationResidentLimits` applies one shared owner/table/entry/retained-character budget to every manual string table, manual asset table, and catalog. One catalog ID is one owner; each manual table is one owner. Replacements subtract the previous owner's footprint before admission, and unregister/remove releases capacity on the same atomic publication path.
+
+Manual authoring tables are scanned with bounded, allocation-free footprint validation before `CompileForRegistration` can build or retain a lookup cache. A global-capacity rejection therefore leaves a previously cold table cold. Catalogs receive a count-only table/entry preflight before detailed content traversal, candidate dictionaries, or hashes are built. Candidate scans fail as soon as their table, retained-entry, retained-character, or raw-node work ceiling is reached; whitespace-only entries still consume the independent `MaxCandidateNodes` work budget. Admission is rechecked inside the owner-thread mutation immediately before the committed dictionaries are changed. A registration queued by a reentrant `Changed` callback repeats the complete measurement against the then-current mutable authoring data before compilation, closing the queue-time mutation boundary. Warm string/asset lookup remains an O(1) dictionary probe with no admission scan.
+
+`Shutdown` releases the runtime registries and fallback data. `Dispose` ends the service lifetime and releases event ownership. Pseudo-localized and formatted strings are created on demand; callers that render unchanged values frequently should cache the resolved result and invalidate it on `Changed`.
 
 ## Usage Guide
 
@@ -530,7 +534,7 @@ Runtime lookup is event-driven and has no per-frame module loop.
 | Pseudo-localization | O(text) | Creates transformed output; intended for QA |
 | TMP/image refresh | Event-driven | Image loading follows provider allocation behavior |
 
-`LocalizationLimits` supplies conservative defaults for locale counts, fallback depth, table counts, entries, key/value lengths, owner IDs, diagnostics, and reentrant mutations. Set product-specific values from measured content profiles. Rejecting an oversized catalog before live registration is safer than relying on an out-of-memory failure.
+`LocalizationLimits` supplies per-input conservative defaults for locale counts, fallback depth, catalog table/entry counts, key/value lengths, owner IDs, diagnostics, and reentrant mutations. `LocalizationResidentLimits` supplies service-wide owner, table, retained-entry, retained UTF-16 character, and per-candidate raw-node work ceilings; constructor values are clamped to documented absolute maxima. The legacy four-argument resident-limits constructor keeps its original defaults, while the additive five-argument overload permits a lower `MaxCandidateNodes`. Set lower product-specific values from measured content profiles. The default counts support partitioned large projects but are not a device-memory claim.
 
 ### Threading
 
@@ -597,6 +601,7 @@ Minimum module verification for a change: compile Core, Runtime, Components, Edi
 | `LocalizationSettings` | Default, authoring, and available locale configuration |
 | `LocalizationOptions` | Immutable service initialization snapshot |
 | `LocalizationLimits` | Untrusted-content and memory capacity bounds |
+| `LocalizationResidentLimits` | Shared resident owner/table/entry/UTF-16 character ceilings plus a per-candidate raw-node work ceiling, all with absolute clamps |
 | `ILocalizationService` / `LocalizationService` | Runtime lookup, locale state, content ownership, lifecycle facade |
 | `LocalizationChange` | Revisioned post-commit change notification |
 | `StringTable` / `AssetTable` | Per-table, per-locale authoring and direct bootstrap data |
@@ -616,3 +621,9 @@ Use `Try...` APIs at untrusted or optional boundaries. Treat authoring validatio
 - [Unicode CLDR language plural rules](https://www.unicode.org/cldr/charts/48/supplemental/language_plural_rules.html) — `PluralRules.RuleSetVersion` subset source
 - [BCP 47](https://www.rfc-editor.org/rfc/rfc5646) — language tag structure referenced by `LocaleId`
 - [RFC 4180](https://www.rfc-editor.org/rfc/rfc4180) — CSV format used by import/export
+
+## Bounded Diagnostic Maintenance
+
+`LocalizationService.GetMemorySnapshot()` returns O(1), allocation-free aggregate counts for locale/catalog/table owners, entries, retained string/reference characters, missing-key diagnostics, handlers, per-input limits, and shared resident limits. Character totals are exact UTF-16 element counts and deliberately exclude managed object headers, indexes, and allocator overhead.
+
+`ClearMissingDiagnosticsStep(Span<string> scratch)` clears only reconstructible missing-key deduplication entries and performs no more work than the caller-supplied scratch capacity. It never removes compiled localization content, current locale state, catalogs, handlers, or application data. Callers may schedule this diagnostic-only maintenance explicitly.

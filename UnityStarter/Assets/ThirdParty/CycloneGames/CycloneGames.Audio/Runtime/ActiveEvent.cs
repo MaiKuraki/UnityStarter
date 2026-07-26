@@ -349,7 +349,6 @@ namespace CycloneGames.Audio.Runtime
 
         // ---- Cold path fields (rarely accessed) ----
         private Transform gazeReference;
-        internal string text = "";
         private bool useGaze;
         /// <summary>
         /// Minimum time in seconds after PlayAllSources before we consider the event
@@ -1479,7 +1478,6 @@ namespace CycloneGames.Audio.Runtime
             gazeReference = null;
             emitterTransform = null;
             lastEmitterPos = Vector3.zero;
-            text = "";
             initialDelay = 0;
             eventVolume = 0;
             targetVolume = 1;

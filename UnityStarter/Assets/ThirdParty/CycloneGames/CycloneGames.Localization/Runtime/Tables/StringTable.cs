@@ -34,6 +34,8 @@ namespace CycloneGames.Localization.Runtime
 
         public int Count => entries.Count;
 
+        internal IReadOnlyList<StringEntry> AuthoringEntries => entries;
+
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool TryGetValue(string key, out string value)
         {
@@ -48,6 +50,24 @@ namespace CycloneGames.Localization.Runtime
         public CompiledStringTable Compile()
         {
             if (_compiled != null) return _compiled;
+
+            _compiled = CompileCore();
+            return _compiled;
+        }
+
+        internal CompiledStringTable CompileForRegistration()
+        {
+            return _compiled ?? CompileCore();
+        }
+
+        internal void RetainCompiled(CompiledStringTable compiled)
+        {
+            if (_compiled == null)
+                _compiled = compiled;
+        }
+
+        private CompiledStringTable CompileCore()
+        {
 
             if (string.IsNullOrEmpty(tableId))
                 throw new InvalidOperationException("String table ID is required.");
@@ -68,8 +88,7 @@ namespace CycloneGames.Localization.Runtime
                 lookup.Add(e.Key, e.Value ?? string.Empty);
             }
 
-            _compiled = new CompiledStringTable(tableId, LocaleId, lookup, true);
-            return _compiled;
+            return new CompiledStringTable(tableId, LocaleId, lookup, true);
         }
 
         private void OnEnable()

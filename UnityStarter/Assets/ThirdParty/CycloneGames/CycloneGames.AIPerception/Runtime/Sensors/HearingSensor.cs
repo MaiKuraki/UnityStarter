@@ -46,11 +46,12 @@ namespace CycloneGames.AIPerception.Runtime
     /// Main-thread-owned continuous-emission hearing sensor. Only perceptibles that explicitly
     /// expose IsSoundSource participate; event-like sounds should use a dedicated product adapter.
     /// </summary>
-    public sealed class HearingSensor : ISensor, ISensorManagerOwned
+    public sealed class HearingSensor : ISensor, ISensorManagerOwned, IAIPerceptionSensorMemoryOwner
     {
         private readonly int _sensorId;
         private readonly SensorManager _owner;
         private readonly Transform _sensorTransform;
+        private readonly SensorMemoryCounters _memoryCounters = new SensorMemoryCounters();
         private PerceptibleHandle _ignoredTarget;
         private HearingSensorConfig _config;
         private PerceptionSensorCapacity _capacity;
@@ -203,6 +204,7 @@ namespace CycloneGames.AIPerception.Runtime
             _owner.EnsureOwnerThread();
             ThrowIfDisposed();
             CompleteAndCommitPending();
+            _memoryCounters.BeginUpdate();
             double timestamp = Time.timeAsDouble;
             if (_sensorTransform == null || !IsConfigurationValid())
             {
@@ -232,11 +234,13 @@ namespace CycloneGames.AIPerception.Runtime
                     ref _candidateIndices,
                     _capacity.MaximumCandidates))
             {
+                _memoryCounters.RecordCandidateCapacityRejected(_capacity.MaximumCandidates);
                 CommitEmpty(timestamp, SensorUpdateStatus.CandidateCapacityExceeded);
                 return;
             }
 
             _queryTargetCount = _candidateIndices.Length;
+            _memoryCounters.RecordCandidates(_queryTargetCount);
             if (_queryTargetCount == 0)
             {
                 CommitEmpty(timestamp, SensorUpdateStatus.NoTargets);
@@ -431,7 +435,7 @@ namespace CycloneGames.AIPerception.Runtime
             {
                 candidates = new NativeList<int>(capacity.InitialCandidateCapacity, Allocator.Persistent);
                 output = new NativeArray<float>(capacity.InitialCandidateCapacity, Allocator.Persistent);
-                resultBuffer = new SensorResultBuffer(in capacity);
+                resultBuffer = new SensorResultBuffer(in capacity, _memoryCounters);
             }
             catch
             {
@@ -490,6 +494,39 @@ namespace CycloneGames.AIPerception.Runtime
 
             result = default;
             return false;
+        }
+
+        int IAIPerceptionSensorMemoryOwner.LastUpdateWorkload => _memoryCounters.LastUpdateWorkload;
+
+        AIPerceptionSensorMemoryStats IAIPerceptionSensorMemoryOwner.GetMemoryStats()
+        {
+            _owner.EnsureOwnerThread();
+            SensorResultBuffer results = _resultBuffer;
+            int candidateCapacity = _candidateIndices.IsCreated ? _candidateIndices.Capacity : 0;
+            int outputCapacity = _jobAudibility.IsCreated ? _jobAudibility.Length : 0;
+            return new AIPerceptionSensorMemoryStats(
+                SensorType.Hearing,
+                _candidateIndices.IsCreated ? _candidateIndices.Length : 0,
+                candidateCapacity,
+                _capacity.MaximumCandidates,
+                _memoryCounters.PeakCandidateCount,
+                results?.ResultCount ?? 0,
+                results?.ResultCapacity ?? 0,
+                results?.MaximumResultCount ?? _capacity.MaximumResults,
+                _memoryCounters.PeakResultCount,
+                results?.MemoryCount ?? 0,
+                results?.MemoryCapacity ?? 0,
+                results?.MaximumMemoryCount ?? _capacity.MaximumMemoryEntries,
+                _memoryCounters.PeakMemoryCount,
+                (_candidateIndices.IsCreated ? 1 : 0) + (_jobAudibility.IsCreated ? 1 : 0) +
+                (results?.NativeBufferCount ?? 0),
+                candidateCapacity + outputCapacity + (results?.NativeBufferCapacity ?? 0),
+                _memoryCounters.UpdateCount,
+                _memoryCounters.LastUpdateWorkload,
+                _memoryCounters.PeakUpdateWorkload,
+                _memoryCounters.CandidateCapacityRejectedCount,
+                _memoryCounters.ResultCapacityRejectedCount,
+                _memoryCounters.MemoryEvictionCount);
         }
 
         public DetectionResult GetResult(int index) =>

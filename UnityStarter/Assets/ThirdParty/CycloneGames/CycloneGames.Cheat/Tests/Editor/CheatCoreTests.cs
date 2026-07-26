@@ -32,6 +32,18 @@ namespace CycloneGames.Cheat.Tests.Editor
             Assert.AreEqual(4, metrics.DroppedDuplicateCount);
             Assert.AreEqual(5, metrics.CancelRequestedCount);
             Assert.AreEqual(6, metrics.FaultedCommandCount);
+            Assert.AreEqual(0, metrics.CapacityRejectedCommandCount);
+            Assert.AreEqual(0, metrics.MaximumConcurrentCommandCount);
+
+            Assert.NotNull(typeof(CheatRuntimeMetrics).GetConstructor(new[]
+            {
+                typeof(int),
+                typeof(long),
+                typeof(long),
+                typeof(long),
+                typeof(long),
+                typeof(long)
+            }));
         }
 
         private readonly struct TestPayload
