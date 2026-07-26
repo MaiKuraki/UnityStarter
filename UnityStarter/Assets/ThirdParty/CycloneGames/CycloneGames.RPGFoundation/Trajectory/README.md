@@ -174,7 +174,7 @@ For lockstep or rollback, use the `DeterministicMath` integration with `FPVector
 
 ### DeterministicMath Integration
 
-Enabled by `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`. Mirrors the query, buffer, hit, segment, and solver model with `FPVector3` and `FPInt64`.
+Enabled only when UPM resolves `com.cyclone-games.deterministic-math` `1.x`. The integration asmdef generates and consumes `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`, uses `autoReferenced: false`, and must be referenced explicitly by the consumer. Do not add the capability symbol to PlayerSettings. Without a supported package, only this integration and its test assembly are excluded. It mirrors the query, buffer, hit, segment, and solver model with `FPVector3` and `FPInt64`.
 
 ### Editor Tooling
 

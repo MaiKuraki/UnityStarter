@@ -257,12 +257,6 @@ namespace CycloneGames.Audio.Runtime
             ExternalAudioClipHandle.ClearCache();
         }
 
-        [Obsolete("Use RegisterReferenceLoaderScoped and dispose the returned registration lease.")]
-        public static void RegisterReferenceLoader(AudioClipReference reference, AudioClipReferenceLoader loader)
-        {
-            RegisterReferenceLoaderScoped(reference, loader);
-        }
-
         public static IDisposable RegisterReferenceLoaderScoped(
             AudioClipReference reference,
             AudioClipReferenceLoader loader)
@@ -286,14 +280,6 @@ namespace CycloneGames.Audio.Runtime
             return new ResolverRegistration(() => UnregisterReferenceLoader(referenceId, registrationId));
         }
 
-        [Obsolete("Use RegisterManagedReferenceLoaderScoped and dispose the returned registration lease.")]
-        public static void RegisterManagedReferenceLoader(
-            AudioClipReference reference,
-            ManagedAudioClipReferenceLoader loader)
-        {
-            RegisterManagedReferenceLoaderScoped(reference, loader);
-        }
-
         public static IDisposable RegisterManagedReferenceLoaderScoped(
             AudioClipReference reference,
             ManagedAudioClipReferenceLoader loader)
@@ -309,12 +295,6 @@ namespace CycloneGames.Audio.Runtime
 
                 return CreateManaged(result.Clip, result.ReleaseAction);
             });
-        }
-
-        [Obsolete("Use RegisterLocationKindLoaderScoped and dispose the returned registration lease.")]
-        public static void RegisterLocationKindLoader(AudioLocationKind locationKind, AudioClipReferenceLoader loader)
-        {
-            RegisterLocationKindLoaderScoped(locationKind, loader);
         }
 
         public static IDisposable RegisterLocationKindLoaderScoped(
@@ -337,14 +317,6 @@ namespace CycloneGames.Audio.Runtime
             }
 
             return new ResolverRegistration(() => UnregisterLocationKindLoader(locationKind, registrationId));
-        }
-
-        [Obsolete("Use RegisterManagedLocationKindLoaderScoped and dispose the returned registration lease.")]
-        public static void RegisterManagedLocationKindLoader(
-            AudioLocationKind locationKind,
-            ManagedAudioClipReferenceLoader loader)
-        {
-            RegisterManagedLocationKindLoaderScoped(locationKind, loader);
         }
 
         public static IDisposable RegisterManagedLocationKindLoaderScoped(
@@ -392,12 +364,6 @@ namespace CycloneGames.Audio.Runtime
                 runtimeReferenceLoaders.Clear();
                 runtimeLocationKindLoaders.Clear();
             }
-        }
-
-        [Obsolete("Use RegisterProviderScoped and dispose the returned registration lease.")]
-        public static void RegisterProvider(IAudioClipProvider provider)
-        {
-            RegisterProviderScoped(provider);
         }
 
         public static IDisposable RegisterProviderScoped(IAudioClipProvider provider)

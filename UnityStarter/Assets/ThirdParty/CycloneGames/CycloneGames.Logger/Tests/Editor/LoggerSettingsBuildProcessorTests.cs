@@ -141,6 +141,42 @@ namespace CycloneGames.Logger.Tests.Editor
         }
 
         [Test]
+        public void CriticalLevelEnvironmentOverride_IsApplied()
+        {
+            var environment = new Dictionary<string, string>
+            {
+                ["CG_LOGGER_CRITICAL_LEVEL"] = "Fatal"
+            };
+            LoggerSettings settings = CreateSettings();
+            settings.criticalLevel = LogLevel.Warning;
+
+            bool hasOverrides = LoggerSettingsBuildProcessor.ApplyOptionsForTests(
+                settings,
+                key => ReadEnvironment(environment, key),
+                Array.Empty<string>());
+
+            Assert.IsTrue(hasOverrides);
+            Assert.AreEqual(LogLevel.Fatal, settings.criticalLevel);
+        }
+
+        [Test]
+        public void CriticalLevelCommandLineOverride_WinsOverEnvironment()
+        {
+            var environment = new Dictionary<string, string>
+            {
+                ["CG_LOGGER_CRITICAL_LEVEL"] = "Warning"
+            };
+            LoggerSettings settings = CreateSettings();
+
+            LoggerSettingsBuildProcessor.ApplyOptionsForTests(
+                settings,
+                key => ReadEnvironment(environment, key),
+                new[] { "-loggerCriticalLevel", "Error" });
+
+            Assert.AreEqual(LogLevel.Error, settings.criticalLevel);
+        }
+
+        [Test]
         public void NoOverrides_StillValidateSettings()
         {
             LoggerSettings settings = CreateSettings();
@@ -158,6 +194,15 @@ namespace CycloneGames.Logger.Tests.Editor
         {
             LoggerSettings settings = CreateSettings();
             settings.unityConsoleOverflowPolicy = LogQueueOverflowPolicy.Block;
+
+            Assert.Throws<BuildFailedException>(() => LoggerSettingsBuildProcessor.ValidateSettings(settings));
+        }
+
+        [Test]
+        public void CriticalLevelNone_FailsBuildValidation()
+        {
+            LoggerSettings settings = CreateSettings();
+            settings.criticalLevel = LogLevel.None;
 
             Assert.Throws<BuildFailedException>(() => LoggerSettingsBuildProcessor.ValidateSettings(settings));
         }

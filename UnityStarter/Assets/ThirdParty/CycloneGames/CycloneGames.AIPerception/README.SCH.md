@@ -205,7 +205,7 @@ public static class GamePerceptibleTypes
 }
 ```
 
-`RegisterType(string)` 按进程内注册顺序分配 ID，仅适用于不持久化、不联网的扩展。
+自定义 ID 必须至少为 100，由产品代码负责分配；一旦进入存档或网络契约，就不得改变。以相同名称重复注册同一 ID 是幂等操作；用不同名称复用已有 ID 会失败。
 
 ### 检测结果
 

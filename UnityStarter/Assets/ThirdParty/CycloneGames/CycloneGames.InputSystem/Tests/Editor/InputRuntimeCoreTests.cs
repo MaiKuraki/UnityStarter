@@ -1582,31 +1582,6 @@ namespace CycloneGames.InputSystem.Runtime.Tests
         }
 
         [Test]
-        public async Task Loader_CompatibilityCompositionPreservesLegacyManagerUserUri()
-        {
-            const string ManagerUserUri = "compatibility-user-config-uri";
-            var userStore = new MemoryConfigurationStore(Serialize(CreateValidConfiguration()));
-            var defaultSource = new MemoryConfigurationSource(Serialize(CreateValidConfiguration()));
-            using var manager = new InputManager();
-
-            InputSystemLoadResult result =
-                await InputSystemLoader.LoadAndInitializeCompatibilityAsync(
-                    defaultSource,
-                    "default",
-                    userStore,
-                    "user",
-                    manager,
-                    ManagerUserUri);
-
-            FieldInfo field = typeof(InputManager).GetField(
-                "_userConfigUri",
-                BindingFlags.Instance | BindingFlags.NonPublic);
-            Assert.That(result.IsSuccess, Is.True);
-            Assert.That(field, Is.Not.Null);
-            Assert.That(field.GetValue(manager), Is.EqualTo(ManagerUserUri));
-        }
-
-        [Test]
         public async Task Loader_PersistsPreparedSchemaOneWhenCreatingUserConfigFromLegacyDefault()
         {
             const string InlineBinding =

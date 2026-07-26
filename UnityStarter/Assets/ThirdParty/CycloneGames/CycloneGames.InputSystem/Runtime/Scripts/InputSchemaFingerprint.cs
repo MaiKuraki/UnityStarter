@@ -19,12 +19,6 @@ namespace CycloneGames.InputSystem.Runtime
 #endif
 
         /// <summary>
-        /// Compatibility shim for the Editor-only diagnostic fingerprint.
-        /// </summary>
-        [Obsolete("Use EditorDiagnosticCurrent for Editor diagnostics. Runtime compatibility uses InputConfiguration.SchemaVersion.")]
-        public static string Current => EditorDiagnosticCurrent;
-
-        /// <summary>
         /// Reflection-based Editor diagnostic only. Player builds return an empty string.
         /// </summary>
         public static string EditorDiagnosticCurrent

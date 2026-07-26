@@ -181,34 +181,6 @@ namespace CycloneGames.InputSystem.Tests.Editor
         }
 
         [Test]
-        public void CompatibilityDelete_NormalizesNestedKeyAndRemovesRecoveryState()
-        {
-            string directory = Path.Combine(
-                UnityEngine.Application.persistentDataPath,
-                "CycloneGames.InputSystem.Tests",
-                Guid.NewGuid().ToString("N"));
-            string path = Path.Combine(directory, "input.yaml");
-            try
-            {
-                Directory.CreateDirectory(directory);
-                File.WriteAllText(path, "current", new UTF8Encoding(false));
-                File.WriteAllText(path + ".bak", "previous", new UTF8Encoding(false));
-
-#pragma warning disable CS0618 // Verifies the retained synchronous compatibility contract.
-                bool deleted = InputSystemLoader.TryDeleteUserConfigFile(path);
-#pragma warning restore CS0618
-
-                Assert.That(deleted, Is.True);
-                Assert.That(File.Exists(path), Is.False);
-                Assert.That(File.Exists(path + ".bak"), Is.False);
-            }
-            finally
-            {
-                if (Directory.Exists(directory)) Directory.Delete(directory, true);
-            }
-        }
-
-        [Test]
         public void Constructor_RejectsUnboundedAllocationBudget()
         {
             Assert.Throws<ArgumentOutOfRangeException>(() =>

@@ -53,16 +53,6 @@ namespace CycloneGames.Logger
         /// </summary>
         public LogLevel CriticalLevel = LogLevel.Error;
 
-        /// <summary>
-        /// Compatibility alias for <see cref="CriticalLevel"/>.
-        /// </summary>
-        [Obsolete("GuaranteedLevel never provided an absolute delivery guarantee. Use CriticalLevel.")]
-        public LogLevel GuaranteedLevel
-        {
-            get => CriticalLevel;
-            set => CriticalLevel = value;
-        }
-
         public static LoggerProcessingOptions Default => new LoggerProcessingOptions();
 
         public LoggerProcessingOptions()

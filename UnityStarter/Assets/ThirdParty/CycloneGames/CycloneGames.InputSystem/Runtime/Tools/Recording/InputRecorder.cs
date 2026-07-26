@@ -476,8 +476,6 @@ namespace CycloneGames.InputSystem.Tools
 
         public int SampleCount => _samples.Length;
         public int TickCount { get; }
-        [Obsolete("Use TickCount. Input recordings count Input System update ticks, not rendered frames.")]
-        public int FrameCount => TickCount;
         public int Capacity { get; }
         public int DroppedSampleCount { get; }
         public bool WasTruncated => DroppedSampleCount > 0;

@@ -13,13 +13,19 @@
     "precompiledReferences": [],
     "autoReferenced": false,
     "defineConstraints": [
-        "CYCLONEGAMES_HAS_GAMEPLAY_ABILITIES"
+        "CYCLONEGAMES_HAS_GAMEPLAY_ABILITIES",
+        "CYCLONEGAMES_HAS_GAMEPLAY_TAGS"
     ],
     "versionDefines": [
         {
             "name": "com.cyclone-games.gameplay-abilities",
-            "expression": "",
+            "expression": "[1.0.0,2.0.0)",
             "define": "CYCLONEGAMES_HAS_GAMEPLAY_ABILITIES"
+        },
+        {
+            "name": "com.cyclone-games.gameplay-tags",
+            "expression": "[1.0.0,2.0.0)",
+            "define": "CYCLONEGAMES_HAS_GAMEPLAY_TAGS"
         }
     ],
     "noEngineReferences": false

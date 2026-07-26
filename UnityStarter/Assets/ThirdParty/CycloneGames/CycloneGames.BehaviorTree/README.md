@@ -65,9 +65,9 @@ flowchart LR
 | `CycloneGames.BehaviorTree.Editor` | Editor only | Graph editor, inspectors, validation, and benchmark window |
 | `CycloneGames.BehaviorTree.Benchmarks` | No | Benchmark models, sessions, scene runners, and export utilities |
 | `CycloneGames.BehaviorTree.Runtime.DOD` | No | Burst/Jobs flat-tree scheduler and NativeArray state |
-| `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | No | Explicit random-provider bridge between the two local modules |
+| `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | No | Fixed-point Blackboard/schema adapters and a save/restore deterministic random provider |
 
-The runtime assembly requires `com.cyclone-games.hash`. The DOD assembly is enabled only when Burst, Collections, and Mathematics are present, and a consumer asmdef must reference `CycloneGames.BehaviorTree.Runtime.DOD` explicitly. The DeterministicMath bridge is `autoReferenced: false` and has direct references to both local assemblies.
+The runtime assembly requires `com.cyclone-games.hash`. The DOD assembly is enabled only when Burst, Collections, and Mathematics are present, and a consumer asmdef must reference `CycloneGames.BehaviorTree.Runtime.DOD` explicitly. The DeterministicMath bridge and its tests are eligible only when UPM resolves `com.cyclone-games.deterministic-math` in the supported `1.x` range. Their asmdefs derive `CYCLONEGAMES_HAS_DETERMINISTIC_MATH` with `versionDefines`, consume it with `defineConstraints`, and remain `autoReferenced: false`. A consumer asmdef must reference `CycloneGames.BehaviorTree.Integrations.DeterministicMath` explicitly. Do not add the capability symbol to PlayerSettings; a missing or unsupported package excludes the integration while Core and Runtime continue to compile.
 
 ### Ownership rules
 
@@ -665,6 +665,7 @@ Benchmark code is isolated in `CycloneGames.BehaviorTree.Benchmarks`.
 | DOD handle throws after respawn | The slot was recycled and the handle is stale | Replace stored handles with the value returned by the latest `AddAgent` |
 | DOD action completion is rejected | Request timed out, was canceled/reset, or belongs to an old generation | Drop the stale completion and use the next request token |
 | DOD asmdef cannot resolve | Optional packages or explicit assembly reference are missing | Confirm Burst/Collections/Mathematics and add the DOD asmdef reference in the consumer |
+| DeterministicMath integration assembly is unavailable | `com.cyclone-games.deterministic-math` is absent, outside `1.x`, or the consumer asmdef does not reference the integration | Resolve a supported package through UPM and add the explicit asmdef reference; do not add the capability symbol manually |
 | Editor layout is unavailable | An Editor-only asset GUID cannot be resolved | Reimport the package and verify Editor assets and their `.meta` files are intact |
 
 ## Validation
@@ -679,6 +680,8 @@ EditMode  CycloneGames.BehaviorTree.Runtime.DOD.Tests.Editor
 PlayMode  CycloneGames.BehaviorTree.Tests.PlayMode
 EditMode  CycloneGames.BehaviorTree.Integrations.DeterministicMath.Tests.Editor
 ```
+
+Run the DeterministicMath test assembly only when UPM has resolved a supported `1.x` package. Also verify a clean BehaviorTree-only consumer: Core and Runtime must compile, while the integration and its test assembly must be absent. Sibling `package.json` files below `Assets/` are metadata rather than installed UPM packages and do not activate the gate.
 
 ### Minimum manual Editor checks
 

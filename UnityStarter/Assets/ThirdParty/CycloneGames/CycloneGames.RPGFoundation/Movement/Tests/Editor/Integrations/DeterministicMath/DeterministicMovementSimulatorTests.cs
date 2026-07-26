@@ -1,4 +1,5 @@
 using CycloneGames.DeterministicMath;
+using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Integrations.DeterministicMath;
 using NUnit.Framework;
 

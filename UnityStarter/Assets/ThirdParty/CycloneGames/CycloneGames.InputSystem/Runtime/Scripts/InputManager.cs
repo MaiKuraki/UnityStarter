@@ -14,7 +14,7 @@ using VYaml.Serialization;
 namespace CycloneGames.InputSystem.Runtime
 {
     /// <summary>
-    /// Explicitly owned, main-thread-confined input session. The static Instance is a compatibility facade.
+    /// Explicitly owned, main-thread-confined input session.
     /// </summary>
     public sealed class InputManager : IDisposable
     {
@@ -100,12 +100,10 @@ namespace CycloneGames.InputSystem.Runtime
         private RuntimeInputConfiguration _runtimeConfiguration;
         private InputAction _joinAction;
         private CancellationTokenSource _shutdown = new CancellationTokenSource();
-        private string _userConfigUri;
         private bool _isInitialized;
         private bool _isDisposed;
         private bool _isListening;
         private bool _isConfigurationTransitioning;
-        private int _configurationOperationInProgress;
         private bool _isDeviceLockingOnJoinEnabled;
         private bool _deviceChangeSubscribed;
         private long _deviceRevision;
@@ -195,17 +193,15 @@ namespace CycloneGames.InputSystem.Runtime
             private set { _lastInitializationResult = value; }
         }
 
-        public void Initialize(string yamlContent, string userConfigUri)
+        public void Initialize(string yamlContent)
         {
             if (!ValidateMainThread(nameof(Initialize))) return;
             if (_isInitialized) return;
-            InputManagerInitializationResult result = InitializeWithResult(yamlContent, userConfigUri);
+            InputManagerInitializationResult result = InitializeWithResult(yamlContent);
             if (!result.IsSuccess) CLogger.LogError($"{DEBUG_FLAG} {result.Message}");
         }
 
-        public InputManagerInitializationResult InitializeWithResult(
-            string yamlContent,
-            string userConfigUri = null)
+        public InputManagerInitializationResult InitializeWithResult(string yamlContent)
         {
             if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
                 return new InputManagerInitializationResult(
@@ -221,18 +217,16 @@ namespace CycloneGames.InputSystem.Runtime
                 return LastInitializationResult;
             }
 
-            return PrepareAndCommit(yamlContent, userConfigUri, notifyReload: false);
+            return PrepareAndCommit(yamlContent, notifyReload: false);
         }
 
-        public void Reinitialize(string yamlContent, string userConfigUri)
+        public void Reinitialize(string yamlContent)
         {
-            InputManagerInitializationResult result = ReinitializeWithResult(yamlContent, userConfigUri);
+            InputManagerInitializationResult result = ReinitializeWithResult(yamlContent);
             if (!result.IsSuccess) CLogger.LogError($"{DEBUG_FLAG} {result.Message}");
         }
 
-        public InputManagerInitializationResult ReinitializeWithResult(
-            string yamlContent,
-            string userConfigUri = null)
+        public InputManagerInitializationResult ReinitializeWithResult(string yamlContent)
         {
             if (!Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread)
                 return new InputManagerInitializationResult(
@@ -251,19 +245,11 @@ namespace CycloneGames.InputSystem.Runtime
                     InputManagerInitializationStatus.JoinInProgress,
                     "Cannot replace configuration while player joins are in progress. Cancel or complete joins first.");
             }
-            if (Volatile.Read(ref _configurationOperationInProgress) != 0)
-            {
-                return SetInitializationFailure(
-                    InputManagerInitializationStatus.ConfigurationOperationInProgress,
-                    "Cannot replace configuration while a configuration load or save is in progress.");
-            }
-
-            return PrepareAndCommit(yamlContent, userConfigUri, notifyReload: _isInitialized);
+            return PrepareAndCommit(yamlContent, notifyReload: _isInitialized);
         }
 
         private InputManagerInitializationResult PrepareAndCommit(
             string yamlContent,
-            string userConfigUri,
             bool notifyReload)
         {
             if (_isConfigurationTransitioning)
@@ -387,10 +373,8 @@ namespace CycloneGames.InputSystem.Runtime
                         "Configuration state changed during preparation; retry after players and joins are cleared.");
                 }
 
-                // Keep manager-owned persistence state isolated from the mutable diagnostic DTO exposed by the result.
                 _configuration = ownedConfiguration;
                 _runtimeConfiguration = validation.RuntimeConfiguration;
-                _userConfigUri = userConfigUri;
                 _isInitialized = true;
                 _bindingOverridesByPlayer.Clear();
                 var successResult = new InputManagerInitializationResult(
@@ -428,83 +412,6 @@ namespace CycloneGames.InputSystem.Runtime
         {
             LastInitializationResult = new InputManagerInitializationResult(status, message, null);
             return LastInitializationResult;
-        }
-
-        public UniTask<bool> ReloadConfigurationAsync()
-        {
-            return ReloadConfigurationAsync(default);
-        }
-
-        public async UniTask<bool> ReloadConfigurationAsync(CancellationToken cancellationToken)
-        {
-            await SwitchToUnityMainThreadAsync(cancellationToken);
-            if (!TryBeginConfigurationOperation()) return false;
-            try
-            {
-                if (!_isInitialized || string.IsNullOrEmpty(_userConfigUri) ||
-                    _registeredPlayers.Count > 0 || _joinsInProgress.Count > 0)
-                    return false;
-
-                string sourceUri = _userConfigUri;
-                long sourceRevision = _configurationRevision;
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-#pragma warning disable CS0618 // Compatibility URI API; new composition uses InputSystemLoader source/store contracts.
-                (bool success, string yamlContent) = await InputConfigurationFileLoader.LoadTextFromUriAsync(
-                    sourceUri,
-                    DEBUG_FLAG,
-                    linked.Token);
-#pragma warning restore CS0618
-                await SwitchToUnityMainThreadAsync(linked.Token);
-                if (!success || string.IsNullOrEmpty(yamlContent) || _isDisposed ||
-                    sourceRevision != _configurationRevision ||
-                    !string.Equals(sourceUri, _userConfigUri, StringComparison.Ordinal) ||
-                    _registeredPlayers.Count > 0 || _joinsInProgress.Count > 0)
-                    return false;
-
-                return PrepareAndCommit(yamlContent, sourceUri, notifyReload: true).IsSuccess;
-            }
-            finally
-            {
-                EndConfigurationOperation();
-            }
-        }
-
-        public UniTask SaveUserConfigurationAsync()
-        {
-            return SaveUserConfigurationAsync(default);
-        }
-
-        public async UniTask SaveUserConfigurationAsync(CancellationToken cancellationToken)
-        {
-            await SwitchToUnityMainThreadAsync(cancellationToken);
-            if (!TryBeginConfigurationOperation()) return;
-            try
-            {
-                if (!_isInitialized || string.IsNullOrEmpty(_userConfigUri)) return;
-                string destinationUri = _userConfigUri;
-                long sourceRevision = _configurationRevision;
-                if (!InputConfigurationYamlCodec.TrySerialize(_configuration, out string yaml, out string error))
-                {
-                    CLogger.LogError($"{DEBUG_FLAG} User configuration serialization failed: {error}");
-                    return;
-                }
-                using var linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _shutdown.Token);
-#pragma warning disable CS0618 // Compatibility URI API; new composition uses InputSystemLoader source/store contracts.
-                if (!_isDisposed && sourceRevision == _configurationRevision &&
-                    string.Equals(destinationUri, _userConfigUri, StringComparison.Ordinal))
-                {
-                    await InputConfigurationFileLoader.SaveTextToUriAsync(
-                        destinationUri,
-                        yaml,
-                        DEBUG_FLAG,
-                        linked.Token);
-                }
-#pragma warning restore CS0618
-            }
-            finally
-            {
-                EndConfigurationOperation();
-            }
         }
 
         public List<IInputPlayer> JoinPlayersBatch(List<int> playerIds)
@@ -1619,7 +1526,6 @@ namespace CycloneGames.InputSystem.Runtime
             _bindingOverridesByPlayer.Clear();
             _configuration = null;
             _runtimeConfiguration = null;
-            _userConfigUri = null;
             OnPlayerInputReady = null;
             OnConfigurationReloaded = null;
 
@@ -1672,25 +1578,6 @@ namespace CycloneGames.InputSystem.Runtime
                 if (current is IDisposable disposable)
                     CleanupSafely(disposable.Dispose, $"roll back batch player {entry.Key}");
             }
-        }
-
-        private bool TryBeginConfigurationOperation()
-        {
-            if (_isDisposed ||
-                Interlocked.CompareExchange(ref _configurationOperationInProgress, 1, 0) != 0)
-                return false;
-            if (_isDisposed)
-            {
-                EndConfigurationOperation();
-                return false;
-            }
-
-            return true;
-        }
-
-        private void EndConfigurationOperation()
-        {
-            Interlocked.Exchange(ref _configurationOperationInProgress, 0);
         }
 
         private bool TrySnapshotBatchPlayerIds(List<int> playerIds, out int[] snapshot)
