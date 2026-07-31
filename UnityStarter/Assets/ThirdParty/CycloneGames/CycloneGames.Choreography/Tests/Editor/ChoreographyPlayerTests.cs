@@ -45,6 +45,22 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
+        public void Play_BeforeLoad_ReportsThroughCoreDiagnosticsPort()
+        {
+            RecordingChoreographyDiagnostics diagnostics = new RecordingChoreographyDiagnostics();
+            ChoreographyPlayer player = new ChoreographyPlayer();
+            player.SetDiagnostics(diagnostics);
+
+            player.Play();
+
+            Assert.AreEqual(1, diagnostics.WriteCount);
+            Assert.AreEqual(ChoreographyDiagnosticLevel.Error, diagnostics.LastLevel);
+            Assert.AreEqual(ChoreographyDiagnosticCategories.Root, diagnostics.LastCategory);
+            StringAssert.Contains("before Load", diagnostics.LastMessage);
+            Assert.AreEqual(PlaybackStatus.Idle, player.Status);
+        }
+
+        [Test]
         public void OneShotClip_FiresBeginAndEndInSameTick()
         {
             ChoreographySection section = TestFactory.Section(
@@ -421,6 +437,42 @@ namespace CycloneGames.Choreography.Tests
             {
                 sample = Sample;
                 return sample.HasTime;
+            }
+        }
+
+        private sealed class RecordingChoreographyDiagnostics : IChoreographyDiagnostics
+        {
+            public int WriteCount { get; private set; }
+            public ChoreographyDiagnosticLevel LastLevel { get; private set; }
+            public string LastCategory { get; private set; }
+            public string LastMessage { get; private set; }
+
+            public bool IsEnabled(ChoreographyDiagnosticLevel level, string category) => true;
+
+            public void Write(
+                ChoreographyDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                WriteCount++;
+                LastLevel = level;
+                LastCategory = category;
+                LastMessage = message;
+            }
+
+            public void WriteException(
+                ChoreographyDiagnosticLevel level,
+                string category,
+                System.Exception exception,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                Write(level, category, message, filePath, lineNumber, memberName);
             }
         }
     }

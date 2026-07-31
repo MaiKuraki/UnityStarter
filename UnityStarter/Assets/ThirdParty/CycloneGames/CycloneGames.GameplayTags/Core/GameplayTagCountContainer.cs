@@ -3,7 +3,6 @@ using System.Collections;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.Diagnostics.CodeAnalysis;
-using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayTags.Core
 {
@@ -48,8 +47,6 @@ namespace CycloneGames.GameplayTags.Core
    public class GameplayTagCountContainer : IGameplayTagCountContainer, IGameplayTagRuntimeIndexView
    {
       internal const int MaxRetainedMutationScratchEntries = 256;
-
-      private static readonly LogChannel Log = GameplayTagsCoreLog.Channel;
 
       private sealed class BatchMutationScratch
       {
@@ -705,15 +702,18 @@ namespace CycloneGames.GameplayTags.Core
             {
                callbackFailures ??= new List<Exception>(1);
                callbackFailures.Add(exception);
-               try
-               {
-                  Log.Error(
-                     $"Gameplay tag count callback failed for '{tag}' with committed count {newCount}: {exception}");
-               }
-               catch
-               {
-                  // A host logger must not prevent later committed-state subscribers from running.
-               }
+               if (!GameplayTagsCoreDiagnostics.TryGetEnabled(
+                  GameplayTagsDiagnosticLevel.Error,
+                  GameplayTagsDiagnosticCategories.Root,
+                  out IGameplayTagsDiagnostics diagnostics))
+                  continue;
+
+               GameplayTagsCoreDiagnostics.TryWriteException(
+                  diagnostics,
+                  GameplayTagsDiagnosticLevel.Error,
+                  GameplayTagsDiagnosticCategories.Root,
+                  exception,
+                  $"Gameplay tag count callback failed for '{tag}' with committed count {newCount}.");
             }
          }
       }

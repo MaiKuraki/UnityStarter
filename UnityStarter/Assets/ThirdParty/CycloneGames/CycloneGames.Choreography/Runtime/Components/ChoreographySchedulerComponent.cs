@@ -135,9 +135,10 @@ namespace CycloneGames.Choreography
                 throw new ArgumentNullException(nameof(providers));
             }
 
-            _scheduler = logWriter == null
-                ? new ChoreographyScheduler(providers)
-                : new ChoreographyScheduler(providers, logWriter);
+            IChoreographyDiagnostics diagnostics = logWriter == null
+                ? ChoreographyLoggingDiagnostics.Ambient
+                : new ChoreographyLoggingDiagnostics(logWriter);
+            _scheduler = new ChoreographyScheduler(providers, diagnostics);
             _scheduler.EventRaised += OnSchedulerEvent;
             _scheduler.InstanceEnded += OnSchedulerInstanceEnded;
             _initialized = true;

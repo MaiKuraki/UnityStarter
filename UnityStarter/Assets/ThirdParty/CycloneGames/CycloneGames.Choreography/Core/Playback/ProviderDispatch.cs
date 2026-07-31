@@ -1,5 +1,3 @@
-using CycloneGames.Logging;
-
 namespace CycloneGames.Choreography.Core
 {
     /// <summary>
@@ -34,7 +32,7 @@ namespace CycloneGames.Choreography.Core
 
         internal static void Begin(
             IChoreographyProviderSet providers,
-            LogChannel log,
+            IChoreographyDiagnostics diagnostics,
             ref ThrottleState throttle,
             in ChoreographyPlaybackSample sample)
         {
@@ -42,15 +40,15 @@ namespace CycloneGames.Choreography.Core
             {
                 case ChoreographyTrackKind.Animation:
                     if (providers.Animation != null) { providers.Animation.BeginClip(in sample); }
-                    else { WarnMissing(log, ref throttle, sample.TrackKind, sample.Clip.Id); }
+                    else { WarnMissing(diagnostics, ref throttle, sample.TrackKind, sample.Clip.Id); }
                     break;
                 case ChoreographyTrackKind.Audio:
                     if (providers.Audio != null) { providers.Audio.BeginClip(in sample); }
-                    else { WarnMissing(log, ref throttle, sample.TrackKind, sample.Clip.Id); }
+                    else { WarnMissing(diagnostics, ref throttle, sample.TrackKind, sample.Clip.Id); }
                     break;
                 case ChoreographyTrackKind.Vfx:
                     if (providers.Vfx != null) { providers.Vfx.BeginClip(in sample); }
-                    else { WarnMissing(log, ref throttle, sample.TrackKind, sample.Clip.Id); }
+                    else { WarnMissing(diagnostics, ref throttle, sample.TrackKind, sample.Clip.Id); }
                     break;
             }
         }
@@ -88,14 +86,21 @@ namespace CycloneGames.Choreography.Core
         }
 
         private static void WarnMissing(
-            LogChannel log,
+            IChoreographyDiagnostics diagnostics,
             ref ThrottleState throttle,
             ChoreographyTrackKind kind,
             string clipId)
         {
-            if (throttle.TryMarkMissingProvider(kind) && log.IsEnabled(LogSeverity.Warning))
+            if (throttle.TryMarkMissingProvider(kind)
+                && ChoreographyDiagnosticsGuard.IsEnabled(
+                    diagnostics,
+                    ChoreographyDiagnosticLevel.Warning,
+                    ChoreographyDiagnosticCategories.Root))
             {
-                log.Warning(
+                ChoreographyDiagnosticsGuard.Write(
+                    diagnostics,
+                    ChoreographyDiagnosticLevel.Warning,
+                    ChoreographyDiagnosticCategories.Root,
                     "No provider registered for track kind '" + kind + "'; skipping clip '" + clipId + "'. Further warnings for this track kind are suppressed.");
             }
         }

@@ -30,13 +30,14 @@ CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag
 - **AOT-safe 注册**：通过显式 `TableDescriptor<TTableSet>` 注册生成表集合，无运行时反射。
 - **Luban 与 MessagePack adapter**：与纯 C# Core assembly 隔离。
 - **Unity Editor 集成**：`DataTableLubanSettings`、自定义 Inspector 和带安全保护的 Luban 进程 Runner。
-- **统一日志**：通过 `CycloneGames.Logging` 提供进程级替换能力，包 assembly 不再直接使用 Unity 或 Console 日志 API。
+- **纯 Core 诊断**：使用模块本地 port，在 Core 外通过可选 `CycloneGames.Logging` adapter 接入统一管线；library assembly 不直接使用 Unity 或 Console 日志 API。
 
 ## 架构
 
 | 程序集 | 命名空间 | 职责 |
 | --- | --- | --- |
-| `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Table、Catalog、Registry、限制、Manifest、Hash、字节 Cache、Location、日志和 Scope。纯 C#，启用 `noEngineReferences: true`。 |
+| `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Table、Catalog、Registry、限制、Manifest、Hash、字节 Cache、Location、本地 diagnostics 和 Scope。纯 C#，启用 `noEngineReferences: true`，且不引用 Logging。 |
+| `CycloneGames.DataTable.Integrations.Logging` | `CycloneGames.DataTable` | 从 `IDataTableDiagnostics` 到 `CycloneGames.Logging` 的可选纯 C# bridge；`autoReferenced: false`。 |
 | `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`、自定义 Inspector、请求校验和外部进程执行。仅 Editor。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | 有界的 Luban `ByteBuf` 创建和生成表集合构造。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | 有界的 MessagePack 行数组解码。 |
@@ -44,7 +45,9 @@ CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag
 
 Core 会自动引用。Editor 与 Integration assembly 使用 `autoReferenced: false`；消费者 asmdef 必须引用实际使用的每个 assembly。Luban 和 MessagePack Integration 还要求对应 package 满足其 asmdef 声明的版本条件。Asset-style AssetManagement 模块不会生成 DataTable Integration 所需的 UPM `versionDefines` capability，因此该 Integration 保持不参与编译；只添加 asmdef reference 不能启用它。
 
-每个产生日志的 assembly 都把 channel 构造收敛到一个 internal facade：`DataTableCoreLog`、`DataTableEditorLog`、`DataTableAssetManagementLog` 或 `DataTableMessagePackLog`，并放在各自 assembly 的 `Diagnostics/` 目录下。统一形状为 `Category`、ambient `Channel` 与 `Create(ILogWriter)`；`Create` 要求显式 writer 非 null，ambient 调用方使用 `Channel`。Editor facade 另外保留既有 Luban Settings category。生产调用点以 `Log` 表示 ambient channel，以 `_log` 表示注入的实例 channel。`DataTableCoreLog.CommittedInfoNoThrow` 承载 registry publish 已提交后的窄化 best-effort 边界。
+Core 自己持有 `IDataTableDiagnostics`/`NullDataTableDiagnostics` 契约、`DataTableDiagnosticCategories.Root` 和进程级 `DataTableDiagnostics` 替换点，不引用 `ILogWriter`、`LogChannel` 或 Unity。`DataTableLoggingDiagnostics` 是接入共享管线的可选 adapter。非 Core 的日志生产 assembly 继续把 channel 构造收敛到 `DataTableEditorLog`、`DataTableAssetManagementLog` 或 `DataTableMessagePackLog`。`DataTableCoreDiagnostics` 是 Core 唯一的故障隔离边界；普通 sink 异常不能改变业务控制流，而 `OutOfMemoryException` 会有意继续传播。
+
+这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.data-table` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
 
 ```mermaid
 flowchart LR
@@ -579,7 +582,7 @@ DataTableCatalog catalog =
 | Table 构造 | 冷路径；除非转移所有权，否则复制数组，并分配 row view 和 key index。 |
 | Catalog 强类型查询 | 期望 `O(1)` 的 Type-keyed Dictionary 查询。 |
 | Registry 读取 | Volatile snapshot 读取，不使用 reader lock。 |
-| Registry 发布 | 串行 writer 路径；分配 state object 和诊断消息。 |
+| Registry 发布 | 串行 writer 路径；分配 state object。只有已安装 Core sink 接受 `Info` 时才构造诊断文本。 |
 | 字节 Cache 查询 | 加载路径，包含名称规范化和 Dictionary 查询。 |
 | Hash、Manifest 校验与解码 | 冷路径；分配和处理成本取决于后端。 |
 
@@ -634,9 +637,9 @@ Core 不写文件，也不使用 `EditorPrefs` 或 `PlayerPrefs`。
 | `DataTableLubanSettings.asset` | 可见的 Unity 项目配置；保留一个权威资产。 |
 | Runtime byte cache | 由 Runtime 内容 Scope 持有，在 reader 退役后 Dispose。 |
 
-包内所有诊断都使用以 `CycloneGames.DataTable` 为根 category 的 `LogChannel`。Composition root 可通过 `LogRuntime.TryInstallWriter` 安装一次进程 backend，或通过 `LogRuntime.ReplaceWriter` 原子重新配置；未显式绑定 writer 的 channel 会观察后续替换。默认 `NullLogWriter` 保持静默，因此 Core、headless、CLI 与 Unity host 共用同一 API，不需要 Unity bootstrap。独立的 `Tools~/CodeGen` 可执行程序继续使用 `System.Console` 作为面向用户的 CLI 输出协议，这不属于 library diagnostics。
+Core diagnostics 使用 `IDataTableDiagnostics` 和 `DataTableDiagnosticCategories.Root`。`DataTableDiagnosticLevel` 采用稳定的共享形状：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`，数值与 `LogSeverity` 一致；`None` 和未知值永远不会输出。默认 `NullDataTableDiagnostics` 保持静默。纯 C# host 可以通过 `DataTableDiagnostics.TryInstall`/`Replace` 安装自己的 sink。owner 使用 `TryReplace(expected, replacement)` 完成原子 handoff，或使用 `TryReset(expected)` 安全释放，因此不会清除另一个 composition root 后续安装的替代项。使用共享管线的 host 则从可选 integration assembly 安装 `DataTableLoggingDiagnostics.Ambient`。adapter 会隔离普通 `ILogWriter` 异常并保留 out-of-memory 的传播行为。独立的 `Tools~/CodeGen` 可执行程序继续使用 `System.Console` 作为面向用户的 CLI 输出协议，这不属于 library diagnostics。
 
-DataTable 不公开包专用 logger、delegate override 或 Unity logging bootstrap。只在应用 composition root 配置 `CycloneGames.Logging`。`DataTableRegistry.Publish` 完成提交后发生的 writer 失败属于 best-effort diagnostics，不会回滚，也不会让已完成的 publish 表现为失败。日志应包含 table identity、generation、stage、limit 和 failure category，但不能记录 secret 或完整恶意 payload。
+`DataTableRegistry.Publish` 提交后发生的普通 diagnostic sink failure 属于 best-effort，不会回滚，也不会让已完成的 publish 表现为失败。诊断输出应包含 table identity、generation、stage、limit 和 failure category，但不能记录 secret 或完整恶意 payload。
 
 ## 故障排查
 
@@ -703,7 +706,8 @@ DataTable 不公开包专用 logger、delegate override 或 Unity logging bootst
 | `DataTableNameUtility` | 可移植的 Table name、扩展名和路径规范化。 |
 | `DataTableLocationResolver` | 构造可移植相对 Location。 |
 | `DataTableSetScope` | 管理生成 root、Catalog 和可选 backing owner 生命周期。 |
-| `LogChannel` / `LogRuntime` | 统一 category API 与可替换的进程 writer。 |
+| `IDataTableDiagnostics` / `DataTableDiagnostics` | Core 本地诊断契约与可替换进程 sink。 |
+| `DataTableLoggingDiagnostics` | 接入 `CycloneGames.Logging` 的可选 adapter。 |
 | `LubanDataTableSetFactory` | 创建有界且私有持有的 Luban buffer。 |
 | `MessagePackConfigProvider` | 有界 MessagePack row array 解码和 Table 构造。 |
 | `DataTableLubanSettings` | 可见的 Unity Editor 生成设置。 |

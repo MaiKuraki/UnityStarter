@@ -1,9 +1,7 @@
 {
     "name": "CycloneGames.Choreography.Core",
     "rootNamespace": "CycloneGames.Choreography.Core",
-    "references": [
-        "CycloneGames.Logging"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

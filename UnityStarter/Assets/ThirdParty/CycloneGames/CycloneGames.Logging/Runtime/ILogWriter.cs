@@ -6,7 +6,9 @@ namespace CycloneGames.Logging
 {
     /// <summary>
     /// Producer-only logging contract. Implementations own admission and delivery, but callers
-    /// never own or dispose the writer through this interface.
+    /// never own or dispose the writer through this interface. Implementations must not invoke a
+    /// deferred message builder until the record is admitted. Producers use <see cref="LogChannel"/>
+    /// or <see cref="LogWriterGuard"/> so non-catastrophic backend failures stay observational.
     /// </summary>
     public interface ILogWriter
     {

@@ -1,13 +1,10 @@
 using System;
 using CycloneGames.Hash.Core;
-using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayTags.Core
 {
    public static class GameplayTagUtility
    {
-      private static readonly LogChannel Log = GameplayTagsCoreLog.Channel;
-
       /// <summary>Maximum supported UTF-16 code-unit count for a registered tag name.</summary>
       public const int MaxTagNameLength = 255;
 
@@ -42,7 +39,17 @@ namespace CycloneGames.GameplayTags.Core
 
       internal static void WarnNotExplicitlyAddedTagRemoval(GameplayTag gameplayTag)
       {
-         Log.Warning($"Attempted to remove tag {gameplayTag} from tag count container, but it is not explicitly added to the container.");
+         if (GameplayTagsCoreDiagnostics.TryGetEnabled(
+            GameplayTagsDiagnosticLevel.Warning,
+            GameplayTagsDiagnosticCategories.Root,
+            out IGameplayTagsDiagnostics diagnostics))
+         {
+            GameplayTagsCoreDiagnostics.TryWrite(
+               diagnostics,
+               GameplayTagsDiagnosticLevel.Warning,
+               GameplayTagsDiagnosticCategories.Root,
+               $"Attempted to remove tag {gameplayTag} from tag count container, but it is not explicitly added to the container.");
+         }
       }
 
       internal static void WarnNotExplicitTagsRemoval(GameplayTagEnumerator tags)

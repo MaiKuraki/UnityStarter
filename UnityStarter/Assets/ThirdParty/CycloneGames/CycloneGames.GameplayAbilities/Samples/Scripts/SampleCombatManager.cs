@@ -40,8 +40,14 @@ namespace CycloneGames.GameplayAbilities.Sample
             logTextGORef = LogText?.gameObject;
             if (LogText != null)
             {
-                _uiLogger = new UILogger(LogRuntime.Writer, UpdateLog, 7);
-                LogRuntime.ReplaceWriter(_uiLogger);
+                ILogWriter innerWriter = LogRuntime.Writer;
+                _uiLogger = new UILogger(innerWriter, UpdateLog, 7);
+                if (!LogRuntime.TryReplaceWriter(innerWriter, _uiLogger))
+                {
+                    _uiLogger.Dispose();
+                    _uiLogger = null;
+                    Log.Warning("SampleCombatManager: The process log writer changed during initialization. UI log capture was not installed.");
+                }
             }
             else
             {
@@ -203,11 +209,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             if (_uiLogger != null)
             {
-                if (object.ReferenceEquals(LogRuntime.Writer, _uiLogger))
-                {
-                    LogRuntime.ReplaceWriter(_uiLogger.InnerWriter);
-                }
-
+                LogRuntime.TryReplaceWriter(_uiLogger, _uiLogger.InnerWriter);
                 _uiLogger.Dispose();
             }
 

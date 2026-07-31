@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.Networking.Integrations.Logging",
+    "rootNamespace": "CycloneGames.Networking",
+    "references": [
+        "CycloneGames.Networking.Core",
+        "CycloneGames.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

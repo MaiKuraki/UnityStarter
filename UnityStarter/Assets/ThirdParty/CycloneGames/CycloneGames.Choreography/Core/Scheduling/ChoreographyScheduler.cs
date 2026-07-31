@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Logging;
 
 namespace CycloneGames.Choreography.Core
 {
@@ -70,7 +69,7 @@ namespace CycloneGames.Choreography.Core
         private static readonly BufferedSampleComparer SampleComparer = new BufferedSampleComparer();
 
         private readonly IChoreographyProviderSet _providers;
-        private readonly LogChannel _log;
+        private readonly IChoreographyDiagnostics _diagnostics;
         private readonly ChoreographySchedulerOptions _options;
         private readonly IPlaybackStrategy[] _strategies = new IPlaybackStrategy[5];
 
@@ -103,43 +102,32 @@ namespace CycloneGames.Choreography.Core
         public event Action<int> InstanceEnded;
 
         public ChoreographyScheduler(IChoreographyProviderSet providers)
-            : this(providers, ChoreographySchedulerOptions.Default, ChoreographyCoreLog.Channel)
+            : this(providers, ChoreographySchedulerOptions.Default, NullChoreographyDiagnostics.Instance)
         {
         }
 
-        public ChoreographyScheduler(IChoreographyProviderSet providers, ILogWriter logWriter)
+        public ChoreographyScheduler(IChoreographyProviderSet providers, IChoreographyDiagnostics diagnostics)
             : this(
                 providers,
                 ChoreographySchedulerOptions.Default,
-                ChoreographyCoreLog.Create(logWriter))
+                diagnostics)
         {
         }
 
         public ChoreographyScheduler(
             IChoreographyProviderSet providers,
             ChoreographySchedulerOptions options)
-            : this(providers, options, ChoreographyCoreLog.Channel)
+            : this(providers, options, NullChoreographyDiagnostics.Instance)
         {
         }
 
         public ChoreographyScheduler(
             IChoreographyProviderSet providers,
             ChoreographySchedulerOptions options,
-            ILogWriter logWriter)
-            : this(
-                providers,
-                options,
-                ChoreographyCoreLog.Create(logWriter))
-        {
-        }
-
-        private ChoreographyScheduler(
-            IChoreographyProviderSet providers,
-            ChoreographySchedulerOptions options,
-            LogChannel log)
+            IChoreographyDiagnostics diagnostics)
         {
             _providers = providers ?? throw new ArgumentNullException(nameof(providers));
-            _log = log;
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _options = options.MaximumActiveCount == 0 ? ChoreographySchedulerOptions.Default : options;
 
             RegisterStrategy(PriorityPlaybackStrategy.Instance);
@@ -288,9 +276,15 @@ namespace CycloneGames.Choreography.Core
 
                 default:
                     _strategyRejectedCount++;
-                    if (_log.IsEnabled(LogSeverity.Info))
+                    if (ChoreographyDiagnosticsGuard.IsEnabled(
+                        _diagnostics,
+                        ChoreographyDiagnosticLevel.Info,
+                        ChoreographyDiagnosticCategories.Root))
                     {
-                        _log.Info(
+                        ChoreographyDiagnosticsGuard.Write(
+                            _diagnostics,
+                            ChoreographyDiagnosticLevel.Info,
+                            ChoreographyDiagnosticCategories.Root,
                             "Play request rejected on channel " + request.Channel + " for asset '" + asset.Id + "'.");
                     }
                     return InvalidInstanceId;
@@ -443,7 +437,7 @@ namespace CycloneGames.Choreography.Core
 
                     if (buffered.IsStart)
                     {
-                        ProviderDispatch.Begin(_providers, _log, ref _dispatchThrottle, in resolved);
+                        ProviderDispatch.Begin(_providers, _diagnostics, ref _dispatchThrottle, in resolved);
                     }
                     else
                     {
@@ -467,7 +461,7 @@ namespace CycloneGames.Choreography.Core
         {
             Instance instance = _instancePool.Count > 0 ? _instancePool.Pop() : new Instance();
             ChoreographyPlayer player = instance.Player ?? (_playerPool.Count > 0 ? _playerPool.Pop() : new ChoreographyPlayer());
-            player.SetLogChannel(_log);
+            player.SetDiagnostics(_diagnostics);
 
             instance.Id = id;
             instance.Player = player;
@@ -630,9 +624,15 @@ namespace CycloneGames.Choreography.Core
                 return _strategies[index];
             }
 
-            if (_log.IsEnabled(LogSeverity.Warning))
+            if (ChoreographyDiagnosticsGuard.IsEnabled(
+                _diagnostics,
+                ChoreographyDiagnosticLevel.Warning,
+                ChoreographyDiagnosticCategories.Root))
             {
-                _log.Warning(
+                ChoreographyDiagnosticsGuard.Write(
+                    _diagnostics,
+                    ChoreographyDiagnosticLevel.Warning,
+                    ChoreographyDiagnosticCategories.Root,
                     "Unknown playback mode '" + mode + "'; falling back to Priority.");
             }
 

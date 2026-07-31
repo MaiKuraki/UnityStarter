@@ -3,9 +3,11 @@
     "rootNamespace": "CycloneGames.Networking.Tests.Editor",
     "references": [
         "CycloneGames.Networking.Core",
+        "CycloneGames.Networking.Integrations.Logging",
         "CycloneGames.Networking.Unity.Runtime",
         "CycloneGames.Networking.Platform.Permissions",
-        "CycloneGames.DeterministicMath.Core"
+        "CycloneGames.DeterministicMath.Core",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [
         "Editor"

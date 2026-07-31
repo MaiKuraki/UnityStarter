@@ -5,7 +5,7 @@ namespace CycloneGames.Networking.Unity.Runtime
 {
     internal static class NetworkingUnityRuntimeLog
     {
-        internal const string Category = LogCategory.Root;
+        internal const string Category = NetworkingDiagnosticCategories.Root;
         internal const string SecurityCategory = "CycloneGames.Networking.Security";
 
         internal static readonly LogChannel Channel = LogChannel.Create(Category);
