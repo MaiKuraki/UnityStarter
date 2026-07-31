@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using System.Text;
 using UnityEngine;
 using UnityEditor;
@@ -182,6 +183,8 @@ namespace CycloneGames.Audio.Editor
 
     internal static class AudioRuntimeDiagnostics
     {
+        private static readonly LogChannel Log = AudioEditorLog.Channel;
+
         private static readonly StringBuilder ReportBuilder = new StringBuilder(1024);
         private static readonly List<AudioClipReference> ExternalReferences = new List<AudioClipReference>(128);
         private static readonly HashSet<int> ExternalReferenceIds = new HashSet<int>();
@@ -247,15 +250,15 @@ namespace CycloneGames.Audio.Editor
             string message = ReportBuilder.ToString();
             if (errors > 0)
             {
-                Debug.LogError(message);
+                Log.Error(message);
             }
             else if (warnings > 0)
             {
-                Debug.LogWarning(message);
+                Log.Warning(message);
             }
             else
             {
-                Debug.Log(message);
+                Log.Info(message);
             }
 
             return new Report(errors, warnings, message);
@@ -403,15 +406,15 @@ namespace CycloneGames.Audio.Editor
             string message = ReportBuilder.ToString();
             if (errors > 0)
             {
-                Debug.LogError(message);
+                Log.Error(message);
             }
             else if (warnings > 0)
             {
-                Debug.LogWarning(message);
+                Log.Warning(message);
             }
             else
             {
-                Debug.Log(message);
+                Log.Info(message);
             }
 
             ExternalReferences.Clear();
@@ -426,7 +429,7 @@ namespace CycloneGames.Audio.Editor
             if (!EditorApplication.isPlaying)
             {
                 const string playModeMessage = "Audio playback smoke test requires Play Mode.";
-                Debug.LogWarning(playModeMessage);
+                Log.Warning(playModeMessage);
                 return new Report(0, 1, playModeMessage);
             }
 
@@ -527,15 +530,15 @@ namespace CycloneGames.Audio.Editor
             string message = ReportBuilder.ToString();
             if (errors > 0)
             {
-                Debug.LogError(message);
+                Log.Error(message);
             }
             else if (warnings > 0)
             {
-                Debug.LogWarning(message);
+                Log.Warning(message);
             }
             else
             {
-                Debug.Log(message);
+                Log.Info(message);
             }
 
             return new Report(errors, warnings, message);
@@ -722,6 +725,8 @@ namespace CycloneGames.Audio.Editor
 
     internal static class AudioBankValidator
     {
+        private static readonly LogChannel Log = AudioEditorLog.Channel;
+
         private static readonly Dictionary<string, int> EventNameCounts = new Dictionary<string, int>(128);
         private static readonly Dictionary<string, int> AssetNameCounts = new Dictionary<string, int>(64);
         private static readonly Dictionary<string, int> StateNameCounts = new Dictionary<string, int>(16);
@@ -860,11 +865,11 @@ namespace CycloneGames.Audio.Editor
                 AudioBankValidationIssue issue = issues[i];
                 if (issue.Severity == AudioBankValidationSeverity.Error)
                 {
-                    Debug.LogError(issue.Message, issue.Context);
+                    Log.Error(issue.Message);
                 }
                 else if (issue.Severity == AudioBankValidationSeverity.Warning)
                 {
-                    Debug.LogWarning(issue.Message, issue.Context);
+                    Log.Warning(issue.Message);
                 }
             }
         }
@@ -876,15 +881,15 @@ namespace CycloneGames.Audio.Editor
             string message = $"AudioBank validation finished. Banks: {summary.BankCount}, Passed: {summary.PassedCount}, Warnings: {summary.WarningCount}, Errors: {summary.ErrorCount}.";
             if (summary.ErrorCount > 0)
             {
-                Debug.LogError(message);
+                Log.Error(message);
             }
             else if (summary.WarningCount > 0)
             {
-                Debug.LogWarning(message);
+                Log.Warning(message);
             }
             else
             {
-                Debug.Log(message);
+                Log.Info(message);
             }
         }
 

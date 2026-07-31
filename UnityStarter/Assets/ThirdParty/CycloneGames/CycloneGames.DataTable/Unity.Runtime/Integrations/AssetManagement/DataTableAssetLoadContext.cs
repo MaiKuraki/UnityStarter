@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Logging;
 #if UNITY_EDITOR
 using UnityEngine;
 #endif
@@ -59,6 +60,8 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
 
     internal static class DataTableAssetLoaderUtility
     {
+        private static readonly LogChannel Log = DataTableAssetManagementLog.Channel;
+
         public static int CaptureOwnerThread()
         {
             if (!PlayerLoopHelper.IsMainThread)
@@ -104,9 +107,9 @@ namespace CycloneGames.DataTable.Unity.Integrations.AssetManagement
         {
             try
             {
-                DataTableLogger.LogError(
-                    $"{ownerName} suppressed a handle cleanup failure to preserve the primary " +
-                    $"load exception. Table={tableName}, CleanupException={exception.GetType().FullName}: {exception.Message}");
+                Log.Error(
+                    exception,
+                    $"{ownerName} suppressed a handle cleanup failure to preserve the primary load exception. Table={tableName}.");
             }
             catch (Exception)
             {

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -128,9 +129,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             catch (Exception exception)
             {
-                GASLog.Warning(sb => sb
-                    .Append("GAS full-state application failed and requires another snapshot: ")
-                    .Append(exception.Message));
+                Log.Warning(
+                    exception,
+                    "GAS full-state application failed and requires another snapshot.");
                 RequireStateDeltaResync(GASStateDeltaRejectionReason.ApplicationFailed);
                 rejectionReason = GASStateDeltaRejectionReason.ApplicationFailed;
                 return false;
@@ -311,9 +312,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             catch (Exception exception)
             {
-                GASLog.Warning(sb => sb
-                    .Append("Rejected GAS full-state snapshot during preflight: ")
-                    .Append(exception.Message));
+                Log.Warning(
+                    exception,
+                    "Rejected GAS full-state snapshot during preflight.");
                 rejectionReason = GASStateDeltaRejectionReason.InvalidPayload;
                 return false;
             }

@@ -2,7 +2,8 @@
     "name": "CycloneGames.Choreography.Tests.Editor",
     "rootNamespace": "CycloneGames.Choreography.Tests",
     "references": [
-        "CycloneGames.Choreography.Core"
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [
         "Editor"

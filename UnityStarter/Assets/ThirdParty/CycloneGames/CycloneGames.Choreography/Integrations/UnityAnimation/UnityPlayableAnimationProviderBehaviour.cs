@@ -1,4 +1,6 @@
+using System;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Choreography.UnityAnimation
@@ -23,13 +25,27 @@ namespace CycloneGames.Choreography.UnityAnimation
 
         private UnityPlayableAnimationProvider _provider;
         private IUnityChoreographyResourceResolver _resolver;
-        private IChoreographyDiagnostics _diagnostics;
+        private ILogWriter _logWriter;
+        private LogChannel _log = ChoreographyUnityAnimationLog.Channel;
         private bool _warnedUninitialized;
 
-        public void Initialize(IUnityChoreographyResourceResolver resolver, IChoreographyDiagnostics diagnostics = null)
+        public void Initialize(IUnityChoreographyResourceResolver resolver)
+        {
+            InitializeCore(resolver, null);
+        }
+
+        public void Initialize(IUnityChoreographyResourceResolver resolver, ILogWriter logWriter)
+        {
+            InitializeCore(resolver, logWriter ?? throw new ArgumentNullException(nameof(logWriter)));
+        }
+
+        private void InitializeCore(IUnityChoreographyResourceResolver resolver, ILogWriter logWriter)
         {
             _resolver = resolver;
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _logWriter = logWriter;
+            _log = logWriter == null
+                ? ChoreographyUnityAnimationLog.Channel
+                : ChoreographyUnityAnimationLog.Create(logWriter);
             BuildProvider();
         }
 
@@ -75,11 +91,6 @@ namespace CycloneGames.Choreography.UnityAnimation
                 return;
             }
 
-            if (_diagnostics == null)
-            {
-                _diagnostics = NullChoreographyDiagnostics.Instance;
-            }
-
             if (_resolver == null)
             {
                 _resolver = ResolveResourceProvider();
@@ -100,12 +111,18 @@ namespace CycloneGames.Choreography.UnityAnimation
                 return;
             }
 
-            _provider = new UnityPlayableAnimationProvider(
-                animator,
-                _resolver,
-                _diagnostics,
-                !EvaluateInLateUpdate,
-                InitialCapacity);
+            _provider = _logWriter == null
+                ? new UnityPlayableAnimationProvider(
+                    animator,
+                    _resolver,
+                    !EvaluateInLateUpdate,
+                    InitialCapacity)
+                : new UnityPlayableAnimationProvider(
+                    animator,
+                    _resolver,
+                    _logWriter,
+                    !EvaluateInLateUpdate,
+                    InitialCapacity);
         }
 
         private IUnityChoreographyResourceResolver ResolveResourceProvider()
@@ -126,9 +143,9 @@ namespace CycloneGames.Choreography.UnityAnimation
             }
 
             _warnedUninitialized = true;
-            if (_diagnostics != null && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (_log.IsEnabled(LogSeverity.Warning))
             {
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.UnityAnimation",
+                _log.Warning(
                     "UnityPlayableAnimationProviderBehaviour has no Animator or IUnityChoreographyResourceResolver; animation playback is disabled.");
             }
         }

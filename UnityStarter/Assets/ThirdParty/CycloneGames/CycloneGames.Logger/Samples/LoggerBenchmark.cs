@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 using CgILogger = CycloneGames.Logger.ILogger;
 
@@ -18,10 +19,13 @@ public sealed class LoggerBenchmark : MonoBehaviour
     private static object _allocationProbe;
     private static readonly Encoding Utf8NoBom = new UTF8Encoding(false);
     private static readonly Func<long> AllocatedBytesProvider = CreateAllocatedBytesProvider();
+    private static readonly LogChannel Log = LoggerSamplesLog.BenchmarkChannel;
 
     private readonly Stopwatch _stopwatch = new Stopwatch();
     private readonly StringBuilder _reportBuilder = new StringBuilder(16384);
 
+    private CLogger _logger;
+    private LogChannel _benchmarkLog;
     private string _reportPath;
     private string _fileBenchmarkPath;
 
@@ -39,9 +43,6 @@ public sealed class LoggerBenchmark : MonoBehaviour
     {
         AppendHeader();
         yield return WarmupPools();
-
-        AddResult(MeasurePlain("Unity Debug.Log Console", "Console", ConsoleIterations, RunUnityDebugLog, "Direct Unity Console output."));
-        yield return PrepareNextCase();
 
         AddResult(MeasureCLogger(
             "CLogger Disabled Generic",
@@ -127,14 +128,12 @@ public sealed class LoggerBenchmark : MonoBehaviour
         AppendNotes();
         string report = _reportBuilder.ToString();
         File.WriteAllText(_reportPath, report, Utf8NoBom);
-        UnityEngine.Debug.Log(report);
-
-        CLogger.Shutdown();
+        Log.Info(report);
     }
 
     private void OnDestroy()
     {
-        CLogger.Shutdown();
+        ShutdownLogger();
     }
 
     private IEnumerator WarmupPools()
@@ -142,15 +141,15 @@ public sealed class LoggerBenchmark : MonoBehaviour
         ConfigureSingleThreadedLogger(static () => new NullLogger(), ConfigureTraceLogLevel);
         for (int i = 0; i < WarmupIterations; i++)
         {
-            CLogger.LogInfo(i, static (state, sb) => sb.Append("Warmup ").Append(state), "Benchmark");
+            _benchmarkLog.Info(i, static (state, sb) => sb.Append("Warmup ").Append(state));
             if ((i + 1) % SteadyPumpBatchSize == 0)
             {
-                CLogger.Instance.Pump(SteadyPumpBatchSize);
+                _logger.Pump(SteadyPumpBatchSize);
             }
         }
 
-        CLogger.Instance.Pump(WarmupIterations);
-        CLogger.Shutdown();
+        _logger.Pump(WarmupIterations);
+        ShutdownLogger();
 
         yield return PrepareNextCase();
     }
@@ -161,25 +160,12 @@ public sealed class LoggerBenchmark : MonoBehaviour
         yield return null;
     }
 
-    private BenchmarkResult MeasurePlain(string name, string group, int iterations, Action action, string notes)
-    {
-        ForceFullGc();
-        CounterSnapshot before = CaptureCounterSnapshot();
-
-        _stopwatch.Restart();
-        action();
-        _stopwatch.Stop();
-
-        CounterSnapshot after = CaptureCounterSnapshot();
-        return BenchmarkResult.Create(name, group, iterations, _stopwatch.Elapsed.TotalMilliseconds, before, after, default, default, notes);
-    }
-
     private BenchmarkResult MeasureCLogger(
         string name,
         string group,
         int iterations,
         Func<CgILogger> loggerFactory,
-        Action configureLogger,
+        Action<CLogger> configureLogger,
         Action action,
         string notes)
     {
@@ -187,23 +173,28 @@ public sealed class LoggerBenchmark : MonoBehaviour
 
         ForceFullGc();
         CounterSnapshot before = CaptureCounterSnapshot();
-        LogProcessingStatistics processingBefore = CLogger.Instance.GetProcessingStatistics();
+        LogProcessingStatistics processingBefore = _logger.GetProcessingStatistics();
 
         _stopwatch.Restart();
         action();
         _stopwatch.Stop();
 
-        LogProcessingStatistics processingAfter = CLogger.Instance.GetProcessingStatistics();
+        LogProcessingStatistics processingAfter = _logger.GetProcessingStatistics();
         CounterSnapshot after = CaptureCounterSnapshot();
-        CLogger.Shutdown();
+        ShutdownLogger();
 
         return BenchmarkResult.Create(name, group, iterations, _stopwatch.Elapsed.TotalMilliseconds, before, after, processingBefore, processingAfter, notes);
     }
 
-    private void ConfigureSingleThreadedLogger(Func<CgILogger> loggerFactory, Action configureLogger)
+    private void ConfigureSingleThreadedLogger(Func<CgILogger> loggerFactory, Action<CLogger> configureLogger)
     {
-        CLogger.Shutdown();
-        CLogger.ConfigureSingleThreadedProcessing(new LoggerProcessingOptions
+        ShutdownLogger();
+        if (_logger != null)
+        {
+            throw new InvalidOperationException("The previous benchmark logger did not finish shutting down.");
+        }
+
+        _logger = CLoggerFactory.CreateSingleThreaded(new LoggerProcessingOptions
         {
             MaxQueuedMessages = Iterations * QueueCapacityMultiplier,
             UnityConsoleMaxQueuedMessages = ConsoleIterations * QueueCapacityMultiplier,
@@ -211,91 +202,100 @@ public sealed class LoggerBenchmark : MonoBehaviour
             CriticalLevel = LogLevel.Error,
             ShutdownDrainTimeoutMs = 5000
         });
+        _benchmarkLog = LoggerSamplesLog.CreateBenchmark(_logger);
 
-        configureLogger?.Invoke();
+        configureLogger?.Invoke(_logger);
         if (loggerFactory != null)
         {
-            CLogger.Instance.AddLoggerUnique(loggerFactory());
+            _logger.AddLoggerUnique(loggerFactory());
         }
     }
 
-    private static void ConfigureTraceLogLevel()
+    private static void ConfigureTraceLogLevel(CLogger logger)
     {
-        CLogger.Instance.SetLogLevel(LogLevel.Trace);
+        logger.SetLogLevel(LogLevel.Trace);
     }
 
-    private static void ConfigureDisabledLogLevel()
+    private static void ConfigureDisabledLogLevel(CLogger logger)
     {
-        CLogger.Instance.SetLogLevel(LogLevel.Error);
-    }
-
-    private void RunUnityDebugLog()
-    {
-        for (int i = 0; i < ConsoleIterations; i++)
-        {
-            UnityEngine.Debug.Log("Unity test message " + i);
-        }
+        logger.SetLogLevel(LogLevel.Error);
     }
 
     private void RunCLoggerStringSteady()
     {
         for (int i = 0; i < Iterations; i++)
         {
-            CLogger.LogInfo("Custom test message " + i, "Benchmark");
+            _benchmarkLog.Info("Custom test message " + i);
             PumpSteady(i);
         }
 
-        CLogger.Instance.Pump(SteadyPumpBatchSize);
+        _logger.Pump(SteadyPumpBatchSize);
     }
 
     private void RunCLoggerBuilderClosureSteady()
     {
         for (int i = 0; i < Iterations; i++)
         {
-            CLogger.LogInfo(sb => sb.Append("Custom test message ").Append(i), "Benchmark");
+            _benchmarkLog.Info(sb => sb.Append("Custom test message ").Append(i));
             PumpSteady(i);
         }
 
-        CLogger.Instance.Pump(SteadyPumpBatchSize);
+        _logger.Pump(SteadyPumpBatchSize);
     }
 
     private void RunCLoggerGenericSteady()
     {
         for (int i = 0; i < Iterations; i++)
         {
-            CLogger.LogInfo(i, static (state, sb) => sb.Append("Custom test message ").Append(state), "Benchmark");
+            _benchmarkLog.Info(i, static (state, sb) => sb.Append("Custom test message ").Append(state));
             PumpSteady(i);
         }
 
-        CLogger.Instance.Pump(SteadyPumpBatchSize);
+        _logger.Pump(SteadyPumpBatchSize);
     }
 
     private void RunCLoggerGenericBurst()
     {
         for (int i = 0; i < Iterations; i++)
         {
-            CLogger.LogInfo(i, static (state, sb) => sb.Append("Custom test message ").Append(state), "Benchmark");
+            _benchmarkLog.Info(i, static (state, sb) => sb.Append("Custom test message ").Append(state));
         }
 
-        CLogger.Instance.Pump(Iterations * 2);
+        _logger.Pump(Iterations * 2);
     }
 
     private void RunCLoggerUnityConsoleGeneric()
     {
         for (int i = 0; i < ConsoleIterations; i++)
         {
-            CLogger.LogInfo(i, static (state, sb) => sb.Append("Custom test message ").Append(state), "Benchmark");
+            _benchmarkLog.Info(i, static (state, sb) => sb.Append("Custom test message ").Append(state));
             PumpSteady(i);
         }
 
-        CLogger.Instance.Pump(SteadyPumpBatchSize);
+        _logger.Pump(SteadyPumpBatchSize);
     }
 
-    private static void PumpSteady(int index)
+    private void PumpSteady(int index)
     {
         if ((index + 1) % SteadyPumpBatchSize == 0)
         {
-            CLogger.Instance.Pump(SteadyPumpBatchSize);
+            _logger.Pump(SteadyPumpBatchSize);
+        }
+    }
+
+    private void ShutdownLogger()
+    {
+        CLogger logger = _logger;
+        if (logger == null)
+        {
+            return;
+        }
+
+        LoggerShutdownResult result = logger.ShutdownInstance(LogFlushMode.Buffered, 5000);
+        if (result.IsComplete || result.Status == LoggerShutdownStatus.NotStarted)
+        {
+            _logger = null;
+            _benchmarkLog = default;
         }
     }
 
@@ -394,10 +394,10 @@ public sealed class LoggerBenchmark : MonoBehaviour
         _reportBuilder.AppendLine("Interpretation:");
         _reportBuilder.AppendLine("- Steady cases pump every 128 messages; they model normal frame-by-frame logging.");
         _reportBuilder.AppendLine("- Burst cases enqueue all messages before Pump; they intentionally expose pool growth and memory pressure.");
-        _reportBuilder.AppendLine("- NoSink measures an initialized logger without registered sinks; Release no-sink bootstrap is cheaper because static calls do not create the global instance.");
+        _reportBuilder.AppendLine("- NoSink measures an explicit initialized backend without registered sinks; the bound channel still preserves the unified producer API.");
         _reportBuilder.AppendLine("- Core cases use NullLogger, so they measure CLogger filtering, message creation, queueing, Pump, and dispatch only.");
         _reportBuilder.AppendLine("- File and Unity Console cases use the generic API but include sink-specific formatting and output costs.");
-        _reportBuilder.AppendLine("- Unity Console is isolated because Debug.Log/log4net/hyperlink formatting dominate both time and allocations.");
+        _reportBuilder.AppendLine("- Unity Console is isolated because platform Console delivery and hyperlink formatting dominate both time and allocations.");
         _reportBuilder.AppendLine("- Alloc may be N/A or zero on runtimes where GC.GetAllocatedBytesForCurrentThread is unsupported; pool miss columns still reveal logger-owned allocations.");
         _reportBuilder.AppendLine("- us/log and logs/sec are the best columns for comparing cases with different iteration counts.");
         _reportBuilder.AppendLine("- Dropped should stay 0. Any positive value means the queue capacity or overflow policy affected the result.");

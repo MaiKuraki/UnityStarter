@@ -13,12 +13,15 @@ using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Editor
 {
     public class BehaviorTreeView : GraphView
     {
+        private static readonly LogChannel Log = BehaviorTreeEditorLog.Channel;
+
         private const float NODE_X_GAP = 160;
         private const float NODE_Y_GAP = 160;
         private const float NODE_MIN_WIDTH = 130;
@@ -1347,7 +1350,7 @@ namespace CycloneGames.BehaviorTree.Editor
                     if (!CanConnectPorts(edge.output, edge.input, false, out string reason))
                     {
                         graphviewChange.edgesToCreate.RemoveAt(i);
-                        Debug.LogWarning($"[BehaviorTreeEditor] Connection rejected: {reason}", _tree);
+                        Log.Warning($"Connection rejected: {reason}");
                         continue;
                     }
 
@@ -1651,7 +1654,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
 
                 DrawGraph();
-                Debug.LogError($"[BehaviorTree] Paste transaction was rolled back: {exception.Message}", _tree);
+                Log.Error(exception, "Paste transaction was rolled back.");
             }
         }
 
@@ -2260,7 +2263,7 @@ namespace CycloneGames.BehaviorTree.Editor
                 }
 
                 DrawGraph();
-                Debug.LogError($"[BehaviorTree] Create transaction was rolled back: {exception.Message}", _tree);
+                Log.Error(exception, "Create transaction was rolled back.");
             }
         }
         private void CreateNodeView(BTNode node)

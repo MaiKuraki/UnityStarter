@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Choreography
@@ -20,11 +21,9 @@ namespace CycloneGames.Choreography
         [SerializeField] private ChoreographyUnityClockMode ClockMode = ChoreographyUnityClockMode.GameTime;
         [SerializeField] private double FixedTickRate = 60d;
         [SerializeField] private bool AutoDiscoverProviders = true;
-        [SerializeField] private ChoreographyLogLevel DiagnosticsLevel = ChoreographyLogLevel.Warning;
 
         private ChoreographyPlayer _player;
         private DirectProviderSink _sink;
-        private IChoreographyDiagnostics _diagnostics;
         private ChoreographyUnityClockState _clockState;
         private bool _initialized;
 
@@ -37,7 +36,17 @@ namespace CycloneGames.Choreography
         public PlaybackStatus Status => _player != null ? _player.Status : PlaybackStatus.Idle;
 
         /// <summary>Initializes with a provider set. Preferred for production/DI composition.</summary>
-        public void Initialize(IChoreographyProviderSet providers, IChoreographyDiagnostics diagnostics = null)
+        public void Initialize(IChoreographyProviderSet providers)
+        {
+            InitializeCore(providers, null);
+        }
+
+        public void Initialize(IChoreographyProviderSet providers, ILogWriter logWriter)
+        {
+            InitializeCore(providers, logWriter);
+        }
+
+        private void InitializeCore(IChoreographyProviderSet providers, ILogWriter logWriter)
         {
             if (_initialized)
             {
@@ -48,10 +57,14 @@ namespace CycloneGames.Choreography
                 throw new ArgumentNullException(nameof(providers));
             }
 
-            _diagnostics = diagnostics ?? new UnityChoreographyDiagnostics(DiagnosticsLevel);
             _player = new ChoreographyPlayer();
-            _player.SetDiagnostics(_diagnostics);
-            _sink = new DirectProviderSink(providers, _diagnostics);
+            if (logWriter != null)
+            {
+                _player.SetLogWriter(logWriter);
+            }
+            _sink = logWriter == null
+                ? new DirectProviderSink(providers)
+                : new DirectProviderSink(providers, logWriter);
             _sink.EventRaised += OnSinkEvent;
             _sink.PlaybackCompleted += OnSinkCompleted;
             _initialized = true;
@@ -141,7 +154,7 @@ namespace CycloneGames.Choreography
             registry.RegisterAudio(GetComponentInChildren<IAudioProvider>(true));
             registry.RegisterVfx(GetComponentInChildren<IVfxProvider>(true));
             registry.RegisterResources(GetComponentInChildren<IResourceProvider>(true));
-            Initialize(registry, new UnityChoreographyDiagnostics(DiagnosticsLevel));
+            Initialize(registry);
         }
     }
 }

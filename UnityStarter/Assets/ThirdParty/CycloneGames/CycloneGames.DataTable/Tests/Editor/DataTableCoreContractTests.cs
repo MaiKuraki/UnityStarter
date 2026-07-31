@@ -1,28 +1,37 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading;
 
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.DataTable.Tests.Editor
 {
     public sealed class DataTableCoreContractTests
     {
+        private ILogWriter _previousLogWriter;
+
         [SetUp]
         public void SetUp()
         {
+            _previousLogWriter = LogRuntime.ReplaceWriter(NullLogWriter.Instance);
             DataTableRegistry.Reset();
-            DataTableLogger.LogInfo = _ => { };
-            DataTableLogger.LogWarning = _ => { };
-            DataTableLogger.LogError = _ => { };
         }
 
         [TearDown]
         public void TearDown()
         {
-            DataTableRegistry.Reset();
-            DataTableLogger.ResetToDefaults();
+            try
+            {
+                DataTableRegistry.Reset();
+            }
+            finally
+            {
+                LogRuntime.ReplaceWriter(_previousLogWriter ?? NullLogWriter.Instance);
+                _previousLogWriter = null;
+            }
         }
 
         [Test]
@@ -240,10 +249,10 @@ namespace CycloneGames.DataTable.Tests.Editor
         }
 
         [Test]
-        public void Registry_Publish_RemainsSuccessfulWhenInjectedLoggerThrowsAfterCommit()
+        public void Registry_Publish_RemainsSuccessfulWhenInstalledWriterThrowsAfterCommit()
         {
             DataTableCatalog catalog = CreatePairCatalog(42);
-            DataTableLogger.LogInfo = _ => throw new InvalidOperationException("Injected logger failure.");
+            LogRuntime.ReplaceWriter(new ThrowingLogWriter());
 
             Assert.DoesNotThrow(() => DataTableRegistry.Publish(catalog));
 
@@ -428,18 +437,6 @@ namespace CycloneGames.DataTable.Tests.Editor
             }
         }
 
-        [Test]
-        public void Logger_ResetRestoresAllDefaultDelegates()
-        {
-            DataTableLogger.ResetToDefaults();
-            Assert.IsTrue(DataTableLogger.IsDefault);
-            DataTableLogger.LogError = _ => { };
-            Assert.IsFalse(DataTableLogger.IsDefault);
-            DataTableLogger.ResetToDefaults();
-            Assert.IsTrue(DataTableLogger.IsDefault);
-            Assert.Throws<ArgumentNullException>(() => DataTableLogger.LogInfo = null);
-        }
-
         private static DataTableCatalog CreatePairCatalog(int version)
         {
             return new DataTableCatalogBuilder(2)
@@ -537,6 +534,48 @@ namespace CycloneGames.DataTable.Tests.Editor
             {
                 DisposeCount++;
             }
+        }
+
+        private sealed class ThrowingLogWriter : ILogWriter
+        {
+            public bool IsEnabled(LogSeverity severity, string category) => true;
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            private static void Throw() =>
+                throw new InvalidOperationException("Expected log writer failure.");
         }
 
         private sealed class UnboundedRows : IEnumerable<TestRow>

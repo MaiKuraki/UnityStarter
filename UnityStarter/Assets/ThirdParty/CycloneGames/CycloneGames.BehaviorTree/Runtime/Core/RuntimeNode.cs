@@ -177,9 +177,13 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
                 State = nextState;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                if (State != previousState && OwnerTree?.StatusLogger != null)
+                if (State != previousState && OwnerTree?.StatusObserver != null)
                 {
-                    OwnerTree.StatusLogger.Log(GUID, previousState, State, RuntimeBTTime.GetTime(blackboard, false));
+                    OwnerTree.StatusObserver.NotifyStatusChanged(
+                        GUID,
+                        previousState,
+                        State,
+                        RuntimeBTTime.GetTime(blackboard, false));
                 }
 #endif
 

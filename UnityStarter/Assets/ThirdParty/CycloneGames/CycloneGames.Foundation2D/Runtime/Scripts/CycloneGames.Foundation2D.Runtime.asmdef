@@ -2,7 +2,7 @@
     "name": "CycloneGames.Foundation2D.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logger"
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

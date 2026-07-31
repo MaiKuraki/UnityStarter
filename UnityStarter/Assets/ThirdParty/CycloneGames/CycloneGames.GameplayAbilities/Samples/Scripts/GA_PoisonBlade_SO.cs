@@ -1,11 +1,13 @@
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
     public class GA_PoisonBlade : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect impactDamageEffect;
         private readonly GameplayEffect poisonEffect;
 
@@ -30,7 +32,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (target != null && target.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
             {
                 var targetASC = holder.AbilitySystemComponent;
-                CLogger.LogInfo($"{caster.name} strikes {target.name} with Poison Blade.");
+                Log.Info($"{caster.name} strikes {target.name} with Poison Blade.");
 
                 // --- Apply Effects in Sequence ---
 
@@ -50,7 +52,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
             else
             {
-                CLogger.LogWarning($"{caster.name}'s Poison Blade found no valid target.");
+                Log.Warning($"{caster.name}'s Poison Blade found no valid target.");
             }
 
             EndAbility();

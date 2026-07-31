@@ -9,12 +9,14 @@ using UnityEngine;
 using Cysharp.Threading.Tasks;
 using YooAsset;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
     public sealed class YooAssetModule : IAssetModule
     {
+        private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
+
         private const string DEBUG_FLAG = "[YooAssetModule]";
         private const long MIN_OPERATION_TIME_SLICE_MS = 10L;
         private const long MAX_OPERATION_TIME_SLICE_MS = 100L;
@@ -97,8 +99,9 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
                 catch (Exception cleanupException) when (AssetRuntimeGuard.IsRecoverableException(cleanupException))
                 {
-                    CLogger.LogWarning(
-                        $"{DEBUG_FLAG} YooAssets cleanup after initialization failure also failed: {cleanupException.Message}");
+                    Log.Error(
+                        cleanupException,
+                        $"{DEBUG_FLAG} YooAssets cleanup after initialization failure also failed.");
                 }
                 finally
                 {

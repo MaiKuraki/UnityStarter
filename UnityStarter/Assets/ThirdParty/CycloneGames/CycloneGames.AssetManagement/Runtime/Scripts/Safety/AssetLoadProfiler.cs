@@ -1,7 +1,7 @@
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
 using System.Diagnostics;
 using Cysharp.Threading.Tasks;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -13,6 +13,8 @@ namespace CycloneGames.AssetManagement.Runtime
     /// </summary>
     public static class AssetLoadProfiler
     {
+        private static readonly LogChannel Log = AssetManagementLog.Channel;
+
         /// <summary>
         /// Loads exceeding this threshold (in milliseconds) will emit a warning log.
         /// Default 300ms (~18 frames at 60fps). Adjust per project as needed.
@@ -51,7 +53,13 @@ namespace CycloneGames.AssetManagement.Runtime
             long elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000 / Stopwatch.Frequency;
             if (elapsedMs > SlowLoadThresholdMs)
             {
-                CLogger.LogWarning($"[AssetLoadProfiler] Slow SYNC load ({elapsedMs}ms): {location}");
+                Log.Warning(
+                    (ElapsedMs: elapsedMs, Location: location),
+                    static (state, builder) => builder
+                        .Append("[AssetLoadProfiler] Slow SYNC load (")
+                        .Append(state.ElapsedMs)
+                        .Append("ms): ")
+                        .Append(state.Location));
             }
         }
 
@@ -66,14 +74,21 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (System.Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
             {
-                CLogger.LogWarning(
-                    $"[AssetLoadProfiler] ASYNC load failed ({exception.GetType().Name}): {location}");
+                Log.Error(
+                    exception,
+                    $"[AssetLoadProfiler] ASYNC load failed: {location}");
             }
 
             long elapsedMs = (Stopwatch.GetTimestamp() - startTicks) * 1000 / Stopwatch.Frequency;
             if (elapsedMs > SlowLoadThresholdMs)
             {
-                CLogger.LogWarning($"[AssetLoadProfiler] Slow ASYNC load ({elapsedMs}ms): {location}");
+                Log.Warning(
+                    (ElapsedMs: elapsedMs, Location: location),
+                    static (state, builder) => builder
+                        .Append("[AssetLoadProfiler] Slow ASYNC load (")
+                        .Append(state.ElapsedMs)
+                        .Append("ms): ")
+                        .Append(state.Location));
             }
         }
     }

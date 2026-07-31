@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using System.Text;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -12,6 +13,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class GASDebugOverlay : MonoBehaviour
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         #region Default Colors (shared with GASOverlayConfig)
 
         // These defaults must match GASOverlayConfig initializer values
@@ -156,7 +159,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (target == null || target.IsDisposed)
             {
-                Debug.LogWarning("[GAS Debug Overlay] A live AbilitySystemComponent must be selected explicitly.");
+                Log.Warning("A live AbilitySystemComponent must be selected explicitly for the GAS debug overlay.");
                 return false;
             }
 
@@ -167,7 +170,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (s_Instance == null || !s_Instance.ReplaceTarget(target, owner, trackTarget, displayName))
             {
-                Debug.LogWarning("[GAS Debug Overlay] Failed to bind the selected AbilitySystemComponent.");
+                Log.Warning("The GAS debug overlay failed to bind the selected AbilitySystemComponent.");
                 return false;
             }
 

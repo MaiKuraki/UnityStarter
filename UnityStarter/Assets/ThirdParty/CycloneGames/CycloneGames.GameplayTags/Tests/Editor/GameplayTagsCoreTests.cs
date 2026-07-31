@@ -2,32 +2,43 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
+using System.Text;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.GameplayTags.Tests.Editor
 {
     public sealed class GameplayTagsCoreTests
     {
+        private ScopedSilentLogWriter _logScope;
+
         [SetUp]
         public void SetUp()
         {
             GameplayTagManager.ResetForTests();
             GameplayTagRedirector.ClearAll();
-            GameplayTagRuntimePlatform.LogWarning = static _ => { };
-            GameplayTagRuntimePlatform.LogError = static _ => { };
             GameplayTagRuntimePlatform.IsRuntimePlaying = static () => false;
             GameplayTagRuntimePlatform.LoadBuildTagData = static () => null;
             GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => System.Array.Empty<IGameplayTagSource>();
             GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
+            _logScope = new ScopedSilentLogWriter();
         }
 
         [TearDown]
         public void TearDown()
         {
-            GameplayTagManager.ResetForTests();
-            GameplayTagRedirector.ClearAll();
-            GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
+            try
+            {
+                GameplayTagManager.ResetForTests();
+                GameplayTagRedirector.ClearAll();
+                GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
+            }
+            finally
+            {
+                _logScope?.Dispose();
+                _logScope = null;
+            }
         }
 
         [Test]
@@ -1154,6 +1165,77 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             yield return new KeyValuePair<string, string>(
                 "Redirect.Batch.Legacy",
                 "Redirect.Batch.Current");
+        }
+
+        private sealed class ScopedSilentLogWriter : ILogWriter, IDisposable
+        {
+            private ILogWriter _previousWriter;
+            private bool _isDisposed;
+
+            public ScopedSilentLogWriter()
+            {
+                _previousWriter = LogRuntime.ReplaceWriter(this);
+            }
+
+            public bool IsEnabled(LogSeverity severity, string category) => false;
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void Dispose()
+            {
+                if (_isDisposed)
+                {
+                    return;
+                }
+
+                _isDisposed = true;
+                ILogWriter previousWriter = _previousWriter;
+                _previousWriter = null;
+                if (object.ReferenceEquals(LogRuntime.Writer, this))
+                {
+                    LogRuntime.ReplaceWriter(previousWriter);
+                }
+            }
         }
     }
 }

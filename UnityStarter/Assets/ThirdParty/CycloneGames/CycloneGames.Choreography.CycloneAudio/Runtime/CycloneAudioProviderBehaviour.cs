@@ -1,5 +1,7 @@
+using System;
 using CycloneGames.Audio.Runtime;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Choreography.CycloneAudio
@@ -22,16 +24,38 @@ namespace CycloneGames.Choreography.CycloneAudio
         private CycloneAudioProvider _provider;
         private IAudioService _audioService;
         private ICycloneAudioBankState _bankState;
-        private IChoreographyDiagnostics _diagnostics;
+        private ILogWriter _logWriter;
+        private LogChannel _log = ChoreographyCycloneAudioLog.Channel;
         private bool _warnedUninitialized;
 
         public void Initialize(
             IAudioService audioService,
-            IChoreographyDiagnostics diagnostics = null,
             ICycloneAudioBankState bankState = null)
         {
+            InitializeCore(audioService, null, bankState);
+        }
+
+        public void Initialize(
+            IAudioService audioService,
+            ILogWriter logWriter,
+            ICycloneAudioBankState bankState = null)
+        {
+            InitializeCore(
+                audioService,
+                logWriter ?? throw new ArgumentNullException(nameof(logWriter)),
+                bankState);
+        }
+
+        private void InitializeCore(
+            IAudioService audioService,
+            ILogWriter logWriter,
+            ICycloneAudioBankState bankState)
+        {
             _audioService = audioService;
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _logWriter = logWriter;
+            _log = logWriter == null
+                ? ChoreographyCycloneAudioLog.Channel
+                : ChoreographyCycloneAudioLog.Create(logWriter);
             _bankState = bankState;
             BuildProvider();
         }
@@ -70,11 +94,6 @@ namespace CycloneGames.Choreography.CycloneAudio
         {
             if (_provider == null)
             {
-                if (_diagnostics == null)
-                {
-                    _diagnostics = NullChoreographyDiagnostics.Instance;
-                }
-
                 if (_audioService == null)
                 {
                     _audioService = AudioManager.Instance;
@@ -95,7 +114,16 @@ namespace CycloneGames.Choreography.CycloneAudio
                 _bankState = new AudioManagerBankState();
             }
 
-            _provider = new CycloneAudioProvider(_audioService, Emitter != null ? Emitter : gameObject, _diagnostics, _bankState);
+            _provider = _logWriter == null
+                ? new CycloneAudioProvider(
+                    _audioService,
+                    Emitter != null ? Emitter : gameObject,
+                    _bankState)
+                : new CycloneAudioProvider(
+                    _audioService,
+                    Emitter != null ? Emitter : gameObject,
+                    _logWriter,
+                    _bankState);
         }
 
         private void WarnUninitialized()
@@ -106,9 +134,9 @@ namespace CycloneGames.Choreography.CycloneAudio
             }
 
             _warnedUninitialized = true;
-            if (_diagnostics != null && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (_log.IsEnabled(LogSeverity.Warning))
             {
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.CycloneAudio",
+                _log.Warning(
                     "CycloneAudioProviderBehaviour has no IAudioService or AudioManager.Instance; audio event playback is disabled.");
             }
         }

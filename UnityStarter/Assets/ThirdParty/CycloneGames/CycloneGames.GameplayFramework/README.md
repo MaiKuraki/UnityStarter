@@ -17,6 +17,7 @@ Inspired by Unreal Engine's Gameplay Framework, this module brings the familiar 
 ## Table of Contents
 
 - [Overview](#overview)
+- [Logging](#logging)
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
@@ -32,3 +33,12 @@ A `GameInstance` owns one active `World`. That World owns actors and an authorit
 
 The module handles what UE calls the "game flow" layer — not input, not physics, not networking transport. `WorldNetMode` (Standalone, ListenServer, DedicatedServer) controls framework authority behavior; actual network transport and replication live in separate modules you compose into the World.
 
+## Logging
+
+GameplayFramework is a log producer. Its package dependency is `com.cyclone-games.logging`, and every assembly that writes records directly references `CycloneGames.Logging`. Runtime and sample records use the stable `CycloneGames.GameplayFramework` category; Editor records use `CycloneGames.GameplayFramework.Editor`.
+
+The module does not initialize or own a concrete backend. When the application has not installed an `ILogWriter`, the process writer is `NullLogWriter` and records are safe no-ops. Install or replace a writer only at the application composition root through `LogRuntime`, or optionally install `CycloneGames.Logger` and use `LoggerBootstrap` when Unity Console and file output are required. `CycloneGames.Logger` is not a GameplayFramework dependency.
+
+Runtime, Editor, and the PureUnity sample own separate assembly-local facades at `Runtime/Scripts/Diagnostics/GameplayFrameworkLog.cs`, `Editor/Diagnostics/GameplayFrameworkEditorLog.cs`, and `Samples/Sample.PureUnity/Diagnostics/GameplayFrameworkSampleLog.cs`. Every facade exposes `Category`, `Channel`, and `Create(ILogWriter logWriter)`. Internal ambient fields are named `Log`; explicitly injected instance fields are named `_log`. Calls formerly made through `CLogger` or `UnityEngine.Debug` now use these cached channels and the shared `Trace`, `Debug`, `Info`, `Warning`, `Error`, and `Fatal` methods. Exceptions use the corresponding severity overload with a complete `Exception` and semantic operation message, while dynamic non-exception messages use deferred generic-state builders. Consumers migrating package extensions should define the same facade in their own producing assembly instead of initializing a backend from the extension itself. Ambient channels resolve the current process writer on every call, so `LogRuntime.ReplaceWriter` does not require module reinitialization.
+
+This logging migration adds no serialized state and writes no files by itself. Persistence, rotation, flushing, shutdown, and recovery belong to the selected backend and its application-level owner.

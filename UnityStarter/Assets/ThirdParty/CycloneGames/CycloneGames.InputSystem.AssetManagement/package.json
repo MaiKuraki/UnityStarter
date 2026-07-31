@@ -10,7 +10,7 @@
     "com.cyclone-games.inputsystem": "1.0.0",
     "com.cyclone-games.asset-management": "1.0.0",
     "com.cysharp.unitask": "2.5.0",
-    "com.cyclone-games.logger": "1.0.0"
+    "com.cyclone-games.logging": "1.0.0"
   },
   "keywords": [
     "CycloneGames",

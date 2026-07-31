@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 #if UNITY_EDITOR
 using UnityEditor;
 using System.Collections.Generic;
@@ -14,6 +15,8 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     public class AudioNodeInput : ScriptableObject
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         /// <summary>
         /// Perimeter of the connector object in the graph
         /// </summary>
@@ -106,7 +109,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (WouldCreateCycle(newOutput.ParentNode, this.parentNode))
             {
-                Debug.LogWarning(
+                Log.Warning(
                     $"Audio graph connection rejected because it would create a cycle between " +
                     $"'{this.parentNode.name}' and '{newOutput.ParentNode.name}'.");
                 return false;
@@ -133,7 +136,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (this.connectedNodes.Length >= MaxEditorConnections)
             {
-                Debug.LogError($"Audio graph input connection limit ({MaxEditorConnections}) reached.");
+                Log.Error($"Audio graph input connection limit ({MaxEditorConnections}) reached.");
                 return false;
             }
 

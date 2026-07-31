@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.Logging;
 using System;
 using System.Collections.Generic;
 using UnityEngine.Audio;
@@ -196,6 +197,8 @@ namespace CycloneGames.Audio.Runtime
 
     public class AudioSwitch : ScriptableObject
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         [SerializeField]
         private int defaultValue = 0;
 
@@ -252,7 +255,7 @@ namespace CycloneGames.Audio.Runtime
                     return;
                 }
             }
-            Debug.LogWarning($"[AudioSwitch] State '{stateName}' not found in switch '{this.name}'.");
+            Log.Warning($"[AudioSwitch] State '{stateName}' not found in switch '{this.name}'.");
         }
 
 #if UNITY_EDITOR

@@ -152,6 +152,12 @@ These symbols are generated and consumed by integration asmdefs through `version
 
 This package is stored under `Assets/ThirdParty/CycloneGames/`. Unity does not automatically enable or disable local Asset-folder modules based on `package.json` dependency fields in the same way it does for installed UPM packages. The effective compile boundary is defined by `.asmdef` references, define constraints, version defines, and source files present in the project.
 
+## Logging
+
+RPGFoundation modules emit diagnostics through stable `LogChannel` categories under `CycloneGames.RPGFoundation.*` and depend only on the `com.cyclone-games.logging` contract. Modules do not initialize, replace, flush, or shut down the process logging writer. Without an installed backend, the contract's `NullLogWriter` safely discards messages; the application composition root may install `CycloneGames.Logger` or any other `ILogWriter` implementation.
+
+Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
+
 ## Persistence
 
 This package does not define runtime save files, editor preferences, PlayerPrefs, EditorPrefs, SessionState data, registry entries, or hidden caches. Configuration and persistent gameplay state are owned by the consuming project or by the specific optional module that declares them.

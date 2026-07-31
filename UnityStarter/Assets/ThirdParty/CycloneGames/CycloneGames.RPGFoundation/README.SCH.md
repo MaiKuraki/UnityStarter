@@ -152,6 +152,12 @@ Unity Physics 不是所有支持平台上的确定性 lockstep 真相来源。Un
 
 本包存放在 `Assets/ThirdParty/CycloneGames/` 下。Unity 不会像已安装 UPM 包那样，基于同目录 `package.json` 的 dependency 字段自动启用或禁用本地 Assets 文件夹模块。真实编译边界由项目中的 `.asmdef` 引用、define constraints、version defines 和源码文件决定。
 
+## 日志
+
+RPGFoundation 模块通过 `CycloneGames.RPGFoundation.*` 下的稳定 `LogChannel` category 输出诊断，并且只依赖 `com.cyclone-games.logging` contract。模块不会初始化、替换、flush 或关闭进程级 logging writer。未安装 backend 时，contract 的 `NullLogWriter` 会安全地丢弃消息；应用 composition root 可以安装 `CycloneGames.Logger` 或任意其他 `ILogWriter` 实现。
+
+每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
+
 ## 持久化
 
 本包不定义运行时存档、Editor 偏好、PlayerPrefs、EditorPrefs、SessionState、registry entry 或隐藏缓存。配置和持久化玩法状态由接入项目或明确声明该行为的可选模块持有。

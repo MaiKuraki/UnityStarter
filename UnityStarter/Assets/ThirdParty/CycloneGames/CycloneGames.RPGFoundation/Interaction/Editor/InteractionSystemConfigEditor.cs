@@ -1,5 +1,6 @@
 using UnityEditor;
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Interaction.Runtime;
 using CycloneGames.RPGFoundation.Interaction.Core;
 
@@ -8,6 +9,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
     [CustomEditor(typeof(InteractionSystemConfig))]
     public sealed class InteractionSystemConfigEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = RpgInteractionEditorLog.Channel;
+
         private SerializedProperty _cellSize;
         private SerializedProperty _is2DMode;
         private SerializedProperty _maxInteractables;
@@ -180,7 +183,12 @@ namespace CycloneGames.RPGFoundation.Interaction.Editor
                 EditorUtility.SetDirty(detector);
             }
 
-            Debug.Log("[InteractionSystemConfig] Applied to " + detectors.Length + " detector(s) in scene.");
+            Log.Info(
+                detectors.Length,
+                static (count, builder) => builder
+                    .Append("[InteractionSystemConfig] Applied to ")
+                    .Append(count)
+                    .Append(" detector(s) in scene."));
         }
 
         private static void SetInt(SerializedObject so, string propertyName, int value)

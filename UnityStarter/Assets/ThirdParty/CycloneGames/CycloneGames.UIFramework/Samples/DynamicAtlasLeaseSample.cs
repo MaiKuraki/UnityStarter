@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using CycloneGames.UIFramework.DynamicAtlas;
 using UnityEngine;
 using UnityEngine.UI;
@@ -7,6 +8,8 @@ namespace CycloneGames.UIFramework.Samples
     [DisallowMultipleComponent]
     public sealed class DynamicAtlasLeaseSample : MonoBehaviour
     {
+        private static readonly LogChannel Log = UIFrameworkSampleLog.Channel;
+
         private const string DefaultStableKey = "samples/ui-framework/dynamic-atlas/icon";
 
         [SerializeField]
@@ -56,7 +59,8 @@ namespace CycloneGames.UIFramework.Samples
 
             if (targetImage == null || sourceSprite == null || string.IsNullOrEmpty(stableKey))
             {
-                Debug.LogError("DynamicAtlasLeaseSample requires an Image, a source Sprite, and a stable key.", this);
+                Log.Error(
+                    "DynamicAtlasLeaseSample requires an Image, a source Sprite, and a stable key.");
                 return;
             }
 
@@ -72,7 +76,12 @@ namespace CycloneGames.UIFramework.Samples
             }
 
             _spriteLease = null;
-            Debug.LogError($"Dynamic atlas insertion failed with status {status}.", this);
+            Log.Error(
+                status,
+                static (value, builder) => builder
+                    .Append("Dynamic atlas insertion failed with status ")
+                    .Append(value)
+                    .Append('.'));
         }
 
         private void OnDisable()

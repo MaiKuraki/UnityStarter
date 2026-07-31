@@ -1,12 +1,14 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
     public class GA_Shockwave : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly float radius;
         private readonly GameplayEffect damageEffect;
         private readonly GameplayTagContainer targetRequiredFactions;
@@ -42,7 +44,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             targetTask.OnValidData += OnTargetDataReceived;
             targetTask.OnCancelled += () =>
             {
-                CLogger.LogInfo("Shockwave hit no targets.");
+                Log.Info("Shockwave hit no targets.");
                 EndAbility();
             };
 
@@ -65,7 +67,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 return;
             }
 
-            CLogger.LogInfo($"Shockwave hit {multiTargetData.ActorCount} targets.");
+            Log.Info($"Shockwave hit {multiTargetData.ActorCount} targets.");
             for (int i = 0; i < multiTargetData.ActorCount; i++)
             {
                 var targetObject = multiTargetData.GetActor(i);

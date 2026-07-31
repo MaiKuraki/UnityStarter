@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -8,6 +9,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class AbilityTask_WaitGameplayEffectApplied : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         /// <summary>
         /// Fired when a matching effect is applied. Provides the applied ActiveGameplayEffect.
         /// </summary>
@@ -40,7 +43,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             subscriptionOwner = Ability?.AbilitySystemComponent;
             if (subscriptionOwner == null)
             {
-                GASLog.Warning("WaitGameplayEffectApplied: Invalid ability or ASC.");
+                Log.Warning("WaitGameplayEffectApplied: Invalid ability or ASC.");
                 EndTask();
                 return;
             }
@@ -113,6 +116,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class AbilityTask_WaitGameplayEffectRemoved : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         /// <summary>
         /// Fired when a matching effect is removed. Provides the removed ActiveGameplayEffect.
         /// </summary>
@@ -145,7 +150,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             subscriptionOwner = Ability?.AbilitySystemComponent;
             if (subscriptionOwner == null)
             {
-                GASLog.Warning("WaitGameplayEffectRemoved: Invalid ability or ASC.");
+                Log.Warning("WaitGameplayEffectRemoved: Invalid ability or ASC.");
                 EndTask();
                 return;
             }

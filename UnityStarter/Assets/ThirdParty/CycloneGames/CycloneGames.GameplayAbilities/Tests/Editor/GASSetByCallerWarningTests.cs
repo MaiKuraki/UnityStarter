@@ -5,38 +5,38 @@ using System.Text;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.GameplayAbilities.Tests.Editor
 {
     public sealed class GASSetByCallerWarningTests
     {
-        private const int FlushTimeoutMilliseconds = 5_000;
-        private CLogger logger;
-        private RecordingWarningSink warningSink;
-        private bool sinkRegistered;
+        private ILogWriter previousWriter;
+        private RecordingWarningWriter warningWriter;
 
         [SetUp]
         public void SetUp()
         {
-            logger = CLogger.Instance;
-            warningSink = new RecordingWarningSink();
-            sinkRegistered = logger.AddLogger(warningSink);
-            Assert.That(sinkRegistered, Is.True, "The SetByCaller warning test sink could not be registered.");
+            warningWriter = new RecordingWarningWriter();
+            previousWriter = LogRuntime.ReplaceWriter(warningWriter);
         }
 
         [TearDown]
         public void TearDown()
         {
-            if (!sinkRegistered || logger == null || warningSink == null)
+            if (warningWriter == null)
             {
                 return;
             }
 
-            logger.TryFlush(LogFlushMode.Buffered, FlushTimeoutMilliseconds);
-            logger.RemoveLogger(warningSink, FlushTimeoutMilliseconds);
-            sinkRegistered = false;
+            if (object.ReferenceEquals(LogRuntime.Writer, warningWriter))
+            {
+                LogRuntime.ReplaceWriter(previousWriter ?? NullLogWriter.Instance);
+            }
+
+            warningWriter = null;
+            previousWriter = null;
         }
 
         [Test]
@@ -116,11 +116,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
 
         private string[] FlushWarnings()
         {
-            Assert.That(
-                logger.TryFlush(LogFlushMode.Buffered, FlushTimeoutMilliseconds),
-                Is.True,
-                "The logger did not drain before the warning assertions.");
-            return warningSink.Snapshot();
+            return warningWriter.Snapshot();
         }
 
         private static void AssertSingleMissingWarning(
@@ -176,26 +172,94 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
             }
         }
 
-        private sealed class RecordingWarningSink : ILogger
+        private sealed class RecordingWarningWriter : ILogWriter
         {
             private readonly object gate = new object();
             private readonly List<string> warnings = new List<string>(2);
 
-            public void Log(LogMessage logMessage)
+            public bool IsEnabled(LogSeverity severity, string category)
             {
-                if (logMessage == null ||
-                    logMessage.Level != LogLevel.Warning ||
-                    !string.Equals(logMessage.Category, "GAS", StringComparison.Ordinal))
+                return severity == LogSeverity.Warning &&
+                       string.Equals(category, "CycloneGames.GameplayAbilities", StringComparison.Ordinal);
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
                 {
                     return;
                 }
 
-                var builder = new StringBuilder(logMessage.MessageLength);
-                logMessage.AppendMessageTo(builder);
                 lock (gate)
                 {
-                    warnings.Add(builder.ToString());
+                    warnings.Add(message ?? string.Empty);
                 }
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder(builder);
+                Write(severity, category, builder.ToString(), filePath, lineNumber, memberName);
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder(state, builder);
+                Write(severity, category, builder.ToString(), filePath, lineNumber, memberName);
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                Write(
+                    severity,
+                    category,
+                    string.IsNullOrEmpty(message) ? exception?.ToString() : message + " " + exception,
+                    filePath,
+                    lineNumber,
+                    memberName);
             }
 
             public string[] Snapshot()
@@ -204,10 +268,6 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 {
                     return warnings.ToArray();
                 }
-            }
-
-            public void Dispose()
-            {
             }
         }
     }

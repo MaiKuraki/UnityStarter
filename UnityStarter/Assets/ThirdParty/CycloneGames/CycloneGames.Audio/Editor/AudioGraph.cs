@@ -1,4 +1,5 @@
 using UnityEditor;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Audio;
 using System.Collections.Generic;
@@ -8,6 +9,8 @@ namespace CycloneGames.Audio.Editor
 {
     public class AudioGraph : EditorWindow
     {
+        private static readonly LogChannel Log = AudioEditorLog.Channel;
+
         private const float EventListPanelWidth = 200f;
         private const float EventPropertyMinWidth = 290f;
         private const float EventPropertyMaxWidth = 410f;
@@ -1471,7 +1474,7 @@ namespace CycloneGames.Audio.Editor
 
             if (startedEvent == null)
             {
-                Debug.LogWarning($"AudioGraph: Preview failed to start event '{this.selectedEvent.name}'.", this.selectedEvent);
+                Log.Warning($"Preview failed to start event '{this.selectedEvent.name}'.");
                 ReleasePreview(false);
                 return;
             }
@@ -1479,7 +1482,7 @@ namespace CycloneGames.Audio.Editor
             AudioHandle startedHandle = startedEvent.Handle;
             if (!startedHandle.IsValid)
             {
-                Debug.LogWarning($"AudioGraph: Preview event '{this.selectedEvent.name}' did not produce a valid playback handle.", this.selectedEvent);
+                Log.Warning($"Preview event '{this.selectedEvent.name}' did not produce a valid playback handle.");
                 ReleasePreview(false);
                 return;
             }
@@ -1969,7 +1972,7 @@ namespace CycloneGames.Audio.Editor
                 }
                 else
                 {
-                    Debug.Log("NULL CLIP");
+                    Log.Info("NULL CLIP");
                 }
             }
 
@@ -2190,7 +2193,7 @@ namespace CycloneGames.Audio.Editor
 
             if (duplicateCount > 0)
             {
-                Debug.LogWarning($"AudioGraph: {duplicateCount} event(s) were renamed to avoid duplicate names when adding clips.");
+                Log.Warning($"AudioGraph: {duplicateCount} event(s) were renamed to avoid duplicate names when adding clips.");
             }
 
             existingNames.Clear();
@@ -2297,7 +2300,7 @@ namespace CycloneGames.Audio.Editor
             Vector2 position = ConvertToGlobalPosition(viewPosition);
             if (this.selectedEvent == null)
             {
-                Debug.LogWarning("Tried to get output with no selected event");
+                Log.Warning("Tried to get output with no selected event");
                 return null;
             }
 
@@ -2345,7 +2348,7 @@ namespace CycloneGames.Audio.Editor
         {
             if (this.audioBank == null)
             {
-                Debug.LogWarning("AudioGraph: No AudioBank to save.");
+                Log.Warning("AudioGraph: No AudioBank to save.");
                 return;
             }
 
@@ -2378,7 +2381,7 @@ namespace CycloneGames.Audio.Editor
             // Save all assets
             AssetDatabase.SaveAssets();
 
-            Debug.Log($"AudioGraph: Saved AudioBank '{this.audioBank.name}' with {this.audioBank.AudioEvents?.Count ?? 0} events.");
+            Log.Info($"AudioGraph: Saved AudioBank '{this.audioBank.name}' with {this.audioBank.AudioEvents?.Count ?? 0} events.");
         }
 
         #endregion

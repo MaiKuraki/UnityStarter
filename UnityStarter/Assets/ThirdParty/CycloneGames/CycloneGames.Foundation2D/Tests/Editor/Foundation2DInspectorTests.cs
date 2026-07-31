@@ -3,10 +3,10 @@ using System.Collections.Generic;
 using System.Reflection;
 using CycloneGames.Foundation2D.Editor;
 using CycloneGames.Foundation2D.Runtime;
+using CycloneGames.Foundation2D.Tests.Support;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.TestTools;
 using UnityEngine.UI;
 
 namespace CycloneGames.Foundation2D.Tests.Editor
@@ -354,6 +354,7 @@ namespace CycloneGames.Foundation2D.Tests.Editor
             InspectorHostWindow host = null;
             try
             {
+                using var logs = new RecordingLogWriterScope();
                 CreateCoreTargets(owners, out SpriteSequenceController controller, out SpriteRendererSequenceRenderer spriteRenderer, out UGUISequenceRenderer uguiRenderer);
                 CreateCoreTargets(owners, out SpriteSequenceController flipbookController, out SpriteRendererSequenceRenderer flipbookSpriteRenderer, out UGUISequenceRenderer flipbookUguiRenderer);
 
@@ -412,7 +413,10 @@ namespace CycloneGames.Foundation2D.Tests.Editor
                     }
                 }
 
-                LogAssert.NoUnexpectedReceived();
+                Assert.That(
+                    logs.Snapshot(),
+                    Is.Empty,
+                    "Core inspectors emitted structured log entries during Layout/Repaint.");
             }
             finally
             {

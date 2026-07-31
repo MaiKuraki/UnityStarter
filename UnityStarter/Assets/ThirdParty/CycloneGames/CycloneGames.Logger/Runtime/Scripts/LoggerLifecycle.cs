@@ -13,7 +13,8 @@ namespace CycloneGames.Logger
         CompletedWithDrops = 2,
         CompletedWithFailures = 3,
         TimedOut = 4,
-        AlreadyStopped = 5
+        AlreadyStopped = 5,
+        InProgress = 6
     }
 
     public readonly struct LoggerShutdownResult

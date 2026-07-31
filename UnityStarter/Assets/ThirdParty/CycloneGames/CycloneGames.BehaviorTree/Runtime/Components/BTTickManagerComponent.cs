@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
@@ -5,6 +6,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     [DisallowMultipleComponent]
     public class BTTickManagerComponent : MonoBehaviour
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         private static BTTickManagerComponent _instance;
         private static bool _isQuitting;
 
@@ -64,10 +67,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
             if (_instance != null && _instance != this)
             {
-                Debug.LogWarning(
+                Log.Warning(
                     $"[BTTickManagerComponent] Removing duplicate manager component from '{gameObject.name}'. " +
-                    $"The active instance is '{_instance.gameObject.name}'.",
-                    this);
+                    $"The active instance is '{_instance.gameObject.name}'.");
                 Destroy(this);
                 return;
             }
@@ -108,11 +110,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
 
             _legacyRegistrationCapacityReported = true;
-            Debug.LogError(
+            Log.Error(
                 $"[BTTickManagerComponent] Legacy Register was rejected because managed tree or " +
                 $"deferred-mutation capacity was exhausted on '{gameObject.name}'. " +
-                "Use TryRegister to handle admission failure.",
-                this);
+                "Use TryRegister to handle admission failure.");
         }
 
         public bool TryRegister(Core.RuntimeBehaviorTree tree) => GetOrCreateManager().TryRegister(tree);

@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using CycloneGames.Logging;
 using CycloneGames.Localization.Runtime;
 using CycloneGames.UIFramework.Editor;
 using TMPro;
@@ -15,6 +16,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
     [CanEditMultipleObjects]
     public sealed class UILocaleLayoutEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = UIFrameworkLocalizationEditorLog.Channel;
+
         private const int MaxDisplayedIssues = 24;
         private const double DiffRefreshIntervalSeconds = 0.5d;
 
@@ -896,7 +899,7 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
 
             if (!CanApplySelectedSnapshot(out string reason))
             {
-                Debug.LogWarning($"[UI Locale Layout] {reason}", target);
+                Log.Warning($"[UI Locale Layout] {reason}");
                 return;
             }
 
@@ -919,15 +922,14 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
 
             if (!CanApplySelectedSnapshot(out string reason))
             {
-                Debug.LogWarning($"[UI Locale Layout] {reason}", target);
+                Log.Warning($"[UI Locale Layout] {reason}");
                 return;
             }
 
             if (AnimationMode.InAnimationMode() || s_previewOwner != null)
             {
-                Debug.LogWarning(
-                    "[UI Locale Layout] Another Unity animation preview is active. Stop it before previewing this locale layout.",
-                    target);
+                Log.Warning(
+                    "[UI Locale Layout] Another Unity animation preview is active. Stop it before previewing this locale layout.");
                 return;
             }
 
@@ -952,7 +954,9 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
                 }
 
                 _isPreviewing = false;
-                Debug.LogException(exception, target);
+                Log.Error(
+                    exception,
+                    "[UI Locale Layout] Preview initialization failed.");
             }
         }
 
@@ -1194,9 +1198,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
 
             _hasUnsupportedFutureSchema = true;
             _validationDirty = true;
-            Debug.LogWarning(
-                $"[UI Locale Layout] Cannot {action}: the layout contains an unsupported future snapshot schema.",
-                target);
+            Log.Warning(
+                $"[UI Locale Layout] Cannot {action}: the layout contains an unsupported future snapshot schema.");
             return false;
         }
 

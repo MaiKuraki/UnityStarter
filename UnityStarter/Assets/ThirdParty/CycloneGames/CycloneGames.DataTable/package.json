@@ -5,7 +5,9 @@
   "description": "Immutable typed data tables, bounded loading contracts, and an Editor generation pipeline with optional backend integrations.",
   "unity": "2022.3",
   "unityRelease": "0f1",
-  "dependencies": {},
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0"
+  },
   "keywords": [
     "CycloneGames",
     "DataTable",

@@ -129,7 +129,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
         private readonly Dictionary<string, RuntimeNode> _nodeMap = new Dictionary<string, RuntimeNode>();
 
-        public BTStatusLogger StatusLogger { get; set; }
+        public BTStatusObserver StatusObserver { get; set; }
 #endif
 
         public RuntimeBehaviorTree(

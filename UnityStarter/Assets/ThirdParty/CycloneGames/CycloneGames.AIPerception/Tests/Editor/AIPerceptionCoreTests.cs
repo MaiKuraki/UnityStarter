@@ -2,11 +2,12 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.AIPerception.Runtime;
 using CycloneGames.AIPerception.Runtime.Jobs;
+using CycloneGames.AIPerception.Tests.Editor.Support;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
-using UnityEngine.TestTools;
 
 namespace CycloneGames.AIPerception.Tests.Editor
 {
@@ -113,14 +114,8 @@ namespace CycloneGames.AIPerception.Tests.Editor
         public void Registry_FiniteMaximum_RejectsRegistrationAfterCapacity()
         {
             using var registry = new PerceptibleRegistry(initialCapacity: 1, maximumCapacity: 1);
-            LogAssert.Expect(
-                LogType.Warning,
-                "[AIPerception] Registry at 1/1. Review the world capacity budget.");
+            using var logs = new RecordingLogWriterScope("CycloneGames.AIPerception");
             PerceptibleHandle accepted = registry.Register(new TestPerceptible(1));
-
-            LogAssert.Expect(
-                LogType.Error,
-                "[AIPerception] Registry capacity exhausted (1).");
             PerceptibleHandle rejected = registry.Register(new TestPerceptible(2));
 
             Assert.That(accepted.IsValid, Is.True);
@@ -130,6 +125,19 @@ namespace CycloneGames.AIPerception.Tests.Editor
             Assert.That(stats.PeakPerceptibleCount, Is.EqualTo(1));
             Assert.That(stats.RejectedRegistrationCount, Is.EqualTo(1L));
             Assert.That(stats.MaximumPerceptibleCount, Is.EqualTo(1));
+
+            RecordedLogEntry[] entries = logs.Snapshot();
+            Assert.That(entries, Has.Length.EqualTo(2));
+            Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Warning));
+            Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.AIPerception"));
+            Assert.That(
+                entries[0].Message,
+                Is.EqualTo("Registry at 1/1. Review the world capacity budget."));
+            Assert.That(entries[0].Exception, Is.Null);
+            Assert.That(entries[1].Severity, Is.EqualTo(LogSeverity.Error));
+            Assert.That(entries[1].Category, Is.EqualTo("CycloneGames.AIPerception"));
+            Assert.That(entries[1].Message, Is.EqualTo("Registry capacity exhausted (1)."));
+            Assert.That(entries[1].Exception, Is.Null);
         }
 
         [Test]
@@ -176,15 +184,12 @@ namespace CycloneGames.AIPerception.Tests.Editor
             var repeatedLegacyRejected = new TestSensor(1104);
             try
             {
+                using var logs = new RecordingLogWriterScope("CycloneGames.AIPerception");
                 Assert.That(manager.TryRegister(accepted), Is.True);
 
                 // TryRegister is the explicit result channel and must remain silent.
                 Assert.That(manager.TryRegister(tryRejected), Is.False);
 
-                LogAssert.Expect(
-                    LogType.Error,
-                    "[AIPerception] SensorManager capacity exhausted (1). " +
-                    "Legacy Register was ignored; use TryRegister to handle admission failure.");
                 manager.Register(firstLegacyRejected);
 
                 // Further capacity failures and ordinary false outcomes do not create a log storm.
@@ -195,6 +200,17 @@ namespace CycloneGames.AIPerception.Tests.Editor
                 AIPerceptionMemoryStats stats = manager.GetMemoryStats();
                 Assert.That(stats.SensorCount, Is.EqualTo(1));
                 Assert.That(stats.RejectedSensorRegistrationCount, Is.EqualTo(3L));
+
+                RecordedLogEntry[] entries = logs.Snapshot();
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.AIPerception"));
+                Assert.That(
+                    entries[0].Message,
+                    Is.EqualTo(
+                        "SensorManager capacity exhausted (1). " +
+                        "Legacy Register was ignored; use TryRegister to handle admission failure."));
+                Assert.That(entries[0].Exception, Is.Null);
             }
             finally
             {
@@ -634,7 +650,6 @@ namespace CycloneGames.AIPerception.Tests.Editor
                 string evidence =
                     $"AIPerception warmed Editor path: targets={targetCount}, iterations={iterations}, candidates/iteration={warmCandidateCount}, elapsedMs={stopwatch.Elapsed.TotalMilliseconds:F3}, managedAllocatedBytes={allocatedBytes}.";
                 TestContext.Progress.WriteLine(evidence);
-                Debug.Log(evidence);
                 Assert.That(allSucceeded, Is.True);
                 Assert.That(candidateTotal, Is.EqualTo(warmCandidateCount * iterations));
                 Assert.That(positiveTotal, Is.EqualTo(warmPositiveCount * iterations));

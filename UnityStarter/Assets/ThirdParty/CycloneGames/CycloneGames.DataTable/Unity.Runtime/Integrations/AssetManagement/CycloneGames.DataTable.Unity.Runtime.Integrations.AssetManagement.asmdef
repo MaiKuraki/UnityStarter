@@ -2,6 +2,7 @@
     "name": "CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.Logging",
         "CycloneGames.DataTable.Core",
         "CycloneGames.AssetManagement.Runtime",
         "UniTask"

@@ -62,7 +62,7 @@ flowchart LR
     AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement"]
     DataTableCore["CycloneGames.DataTable.Core"]
     UniTask["UniTask"]
-    Logger["CycloneGames.Logger"]
+    Logging["CycloneGames.Logging"]
     Runtime["GameplayAbilities.Runtime"]
     Editor["GameplayAbilities.Editor<br/>Editor only"]
     DataTable["GameplayAbilities.Runtime.Integrations.DataTable<br/>条件 UPM Integration"]
@@ -77,7 +77,11 @@ flowchart LR
     Tags --> Runtime
     Hash --> Runtime
     UniTask --> Runtime
-    Logger --> Runtime
+    Logging --> Runtime
+    Logging --> AssetIntegration
+    Logging --> Editor
+    Logging --> Samples
+    Logging --> Tests
     Asset --> AssetIntegration
     UniTask --> AssetIntegration
     Runtime --> AssetIntegration
@@ -97,7 +101,24 @@ flowchart LR
 
 `AbilitySpecContainer`、`PredictionManager` 与 `ReplicationStateBuilder` 都是 Runtime Assembly 的 Internal Implementation Type。Public Consumer 通过 `AbilitySystemComponent` Facade、稳定的 `GASReadOnlyListView<T>`、`GASReadOnlySetView<T>`、`GASReadOnlyTagView`、Query Method 与 Diagnostics 工作，不会取得 Mutable Container 或 Builder Access。这些 Internal Type 不是 Extension Point。把 Mutation Authority 收敛在 ASC 可以缩小 Public API 与长期兼容性表面积。
 
-包元数据声明直接 Package 需求。在 `Assets/ThirdParty` checkout 中，`package.json` 是描述性元数据；Unity 是否编译某程序集取决于实际 asmdef 图、已安装 Package、Constraint 和 Symbol。主 Runtime Assembly 不引用 AssetManagement 或 DataTable；这些依赖终止在各自的 Integration Assembly。
+包元数据声明直接 Package 需求。在 `Assets/ThirdParty` checkout 中，`package.json` 是描述性元数据；Unity 是否编译某程序集取决于实际 asmdef 图、已安装 Package、Constraint 和 Symbol。主 Runtime Assembly 直接引用与 Backend 无关的 `CycloneGames.Logging` 契约，但不引用 AssetManagement、DataTable 或具体日志 Backend；可选功能依赖终止在各自的 Integration Assembly。
+
+### 日志契约与 Backend 集成
+
+Runtime、Editor、Samples、AssetManagement Integration 与聚焦日志测试统一使用 `CycloneGames.Logging.LogChannel`，稳定 Category 为 `CycloneGames.GameplayAbilities`。每个产生诊断的 assembly 都在 `Diagnostics/` 下拥有名称唯一的门面：`GameplayAbilitiesLog`、`GameplayAbilitiesEditorLog`、`GameplayAbilitiesAssetManagementLog`、`GameplayAbilitiesSampleLog` 或 `GameplayAbilitiesSampleEditorLog`。所有门面都提供标准的 `Category`、`Channel` 与 `Create(ILogWriter logWriter)` 成员；实现文件的 ambient static 字段命名为 `Log`，显式注入 instance 字段命名为 `_log`。除这些边界外，Gameplay 代码不直接调用 `LogChannel.Create`、`UnityEngine.Debug`、`CLogger` 或其他 Backend API。异常使用与普通消息相同的严重级别方法，例如 `Log.Warning(exception, message)` 或 `Log.Error(exception, message)`，使 Backend 可以分别取得异常对象与上下文消息。
+
+`LogRuntime` 初始使用 `NullLogWriter.Instance`。Host 未安装 Backend 时，所有 Channel 调用都会安全 no-op；GameplayAbilities 的初始化与行为不受影响，也不需要任何 Scripting Define。产品可以在 Composition Root 安装任意 `ILogWriter`。如果选择独立的 `com.cyclone-games.logger` 包，其 Bootstrap 可以把 `CLogger` 安装为该 Writer，但 GameplayAbilities 不再对具体 Backend 建立 Assembly 或 Package 依赖。
+
+GameplayAbilities 不再公开包专用 public logging facade。外部生产 assembly 应使用自身的 assembly-local facade，并缓存其 Channel：
+
+```csharp
+private static readonly LogChannel Log = ProductAbilityLog.Channel;
+
+Log.Warning("Ability activation was rejected.");
+Log.Error(exception, "Ability activation failed.");
+```
+
+所有外部调用点迁移后，Consumer 可以移除对 Logger Backend 的直接依赖。移除 Backend 不需要修改 GameplayAbilities asmdef；日志会自然回退到 no-op Writer。
 
 ## 运行时模型
 
@@ -977,7 +998,7 @@ Core/Runtime 源码与 asmdef 中，Runtime 不依赖 `UnityEditor`，且不存�
 
 ### AssetManagement
 
-`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` 通过直接 asmdef 引用连接。它依赖 `CycloneGames.AssetManagement.Runtime` 与 GameplayAbilities 主 Runtime Assembly，并包含 `AssetManagementResourceLocator`。
+`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` 通过直接 asmdef 引用连接。它依赖 `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Logging` 与 GameplayAbilities 主 Runtime Assembly，并包含 `AssetManagementResourceLocator`。
 
 主 Runtime Assembly 只持有 `IResourceLocator` 与 `IResourceHandle<T>`，没有 AssetManagement asmdef Reference。Sample Assembly 显式引用该 Integration，并使用 `IAssetPackage` 构造 Adapter。从 Assembly 层看，不使用 AssetManagement 的项目可以保留 Core 与 Runtime 并提供其他 `IResourceLocator`，同时必须排除 AssetManagement Integration 及引用它的 Sample Composition。`package.json` 把 AssetManagement 声明为直接需求，因此省略它的 UPM Packaging Profile 必须同步调整该元数据。
 

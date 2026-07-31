@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using VitalRouter;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Interaction.Core;
 
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
@@ -11,6 +12,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
     [DisallowMultipleComponent]
     public partial class InteractionSystem : MonoBehaviour, IInteractionSystem
     {
+        private static readonly LogChannel Log = RpgInteractionLog.Channel;
+
         [Header("Spatial Grid")]
         [Tooltip("Local interaction world scope. Use unique values for split-screen, additive scenes, prediction worlds, or server-side simulations.")]
         [SerializeField] private int worldId;
@@ -56,9 +59,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             else if (s_instance != this)
             {
-                Debug.LogWarning(
-                    "[InteractionSystem] Multiple systems are active. Assign unique WorldId values and explicit detector/system references for production multiplayer or additive scenes.",
-                    this);
+                Log.Warning(
+                    "[InteractionSystem] Multiple systems are active. Assign unique WorldId values and explicit detector/system references for production multiplayer or additive scenes.");
             }
 
             if (!s_systemsByWorldId.TryGetValue(worldId, out InteractionSystem existing))
@@ -68,9 +70,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             else if (existing != this)
             {
-                Debug.LogError(
-                    "[InteractionSystem] Duplicate WorldId detected. This system will not subscribe to global interaction commands.",
-                    this);
+                Log.Error(
+                    "[InteractionSystem] Duplicate WorldId detected. This system will not subscribe to global interaction commands.");
             }
 
             Initialize();
@@ -289,7 +290,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogException(ex, this);
+                Log.Error(
+                    ex,
+                    "[InteractionSystem] An interaction-started subscriber failed.");
             }
         }
 
@@ -301,7 +304,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogException(ex, this);
+                Log.Error(
+                    ex,
+                    "[InteractionSystem] An interaction-completed subscriber failed.");
             }
         }
     }

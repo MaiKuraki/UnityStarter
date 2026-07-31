@@ -5,12 +5,14 @@ using System.Threading;
 
 using Cysharp.Threading.Tasks;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime.Batch
 {
     public sealed class GroupOperation : IGroupOperation
     {
+        private static readonly LogChannel Log = AssetManagementLog.Channel;
+
         private const int STATE_CREATED = 0;
         private const int STATE_RUNNING = 1;
         private const int STATE_COMPLETED = 2;
@@ -186,9 +188,9 @@ namespace CycloneGames.AssetManagement.Runtime.Batch
             }
             catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
             {
-                CLogger.LogWarning(
-                    $"[GroupOperation] Child operation failed after shared cancellation " +
-                    $"({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    "[GroupOperation] Child operation failed after shared cancellation.");
             }
         }
 

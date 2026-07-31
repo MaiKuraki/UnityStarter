@@ -142,9 +142,9 @@ namespace CycloneGames.Analyzers
                 argList.Parent is InvocationExpressionSyntax invoc)
             {
                 var exprText = invoc.Expression.ToString();
-                // Unity Debug.Log* / CLogger.Log* / any *Log* / *Error* calls
+                // Unity Debug.Log* and conventional *Log* / *Error* calls.
                 if (exprText.Contains("Debug.Log") || exprText.Contains("Debug.LogWarning") ||
-                    exprText.Contains("Debug.LogError") || exprText.Contains("CLogger.Log") ||
+                    exprText.Contains("Debug.LogError") ||
                     exprText.Contains("LogInfo") || exprText.Contains("LogWarning") ||
                     exprText.Contains("LogError") || exprText.Contains("LogDebug"))
                     return true;

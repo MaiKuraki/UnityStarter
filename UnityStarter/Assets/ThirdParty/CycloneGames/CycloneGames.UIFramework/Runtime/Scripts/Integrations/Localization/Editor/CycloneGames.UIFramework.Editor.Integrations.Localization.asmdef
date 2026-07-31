@@ -7,6 +7,7 @@
         "CycloneGames.UIFramework.Runtime.Integrations.Localization",
         "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
+        "CycloneGames.Logging",
         "Unity.TextMeshPro"
     ],
     "includePlatforms": [

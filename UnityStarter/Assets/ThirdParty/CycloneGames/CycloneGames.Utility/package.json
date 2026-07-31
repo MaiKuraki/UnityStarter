@@ -7,6 +7,7 @@
   "unityRelease": "0f1",
   "dependencies": {
     "com.cyclone-games.hash": "1.0.0",
+    "com.cyclone-games.logging": "1.0.0",
     "com.unity.ugui": "1.0.0"
   },
   "keywords": [

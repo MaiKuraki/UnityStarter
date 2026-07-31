@@ -2,11 +2,14 @@ using Cysharp.Threading.Tasks;
 using System.Threading;
 using UnityEngine;
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement
 {
     public sealed class AssetManagementResourceLocator : IResourceLocator
     {
+        private static readonly LogChannel Log = GameplayAbilitiesAssetManagementLog.Channel;
+
         private sealed class AssetManagementHandleWrapper<T> : IResourceHandle<T> where T : UnityEngine.Object
         {
             private IAssetHandle<T> underlyingHandle;
@@ -36,7 +39,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement
         {
             if (string.IsNullOrEmpty(key))
             {
-                GASLog.Error($"Invalid asset key: {key}, key must be a non-empty string.");
+                Log.Error(key, static (assetKey, sb) => sb.Append("Invalid asset key: ").Append(assetKey)
+                    .Append(", key must be a non-empty string."));
                 return null;
             }
 
@@ -48,7 +52,8 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement
                 cancellationToken: cancellationToken);
             if (loadHandle == null)
             {
-                GASLog.Error($"Asset package returned no load handle for key: {key}");
+                Log.Error(key, static (assetKey, sb) => sb.Append("Asset package returned no load handle for key: ")
+                    .Append(assetKey));
                 return null;
             }
 
@@ -61,7 +66,7 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement
                 try { loadHandle.Dispose(); }
                 catch (System.Exception cleanupFailure)
                 {
-                    GASLog.Error($"Asset load cleanup failed for key '{key}': {cleanupFailure.Message}");
+                    Log.Error(cleanupFailure, $"Asset load cleanup failed for key '{key}'.");
                 }
                 System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(loadFailure).Throw();
                 throw;
@@ -69,7 +74,7 @@ namespace CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement
 
             if (loadHandle.Asset == null)
             {
-                GASLog.Error($"Failed to load asset with key: {key}");
+                Log.Error(key, static (assetKey, sb) => sb.Append("Failed to load asset with key: ").Append(assetKey));
                 loadHandle.Dispose();
                 return null;
             }

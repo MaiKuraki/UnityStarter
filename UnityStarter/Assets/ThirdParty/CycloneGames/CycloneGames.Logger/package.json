@@ -5,7 +5,9 @@
   "description": "A bounded and observable logging framework for Unity and pure C# hosts, with explicit lifecycle management, failure-isolated sinks, Unity main-thread delivery, and resilient file output.",
   "unity": "2022.3",
   "unityRelease": "0f1",
-  "dependencies": {},
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0"
+  },
   "keywords": [
     "CycloneGames",
     "Log",

@@ -72,10 +72,13 @@ The owner constructs, initializes, and disposes the manager:
 
 ```csharp
 using CycloneGames.InputSystem.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 public sealed class InputBootstrap : MonoBehaviour
 {
+    private static readonly LogChannel Log = LogChannel.Create("MyGame.Input");
+
     [SerializeField] private TextAsset _configuration;
 
     private InputManager _manager;
@@ -90,7 +93,7 @@ public sealed class InputBootstrap : MonoBehaviour
 
         if (!result.IsSuccess)
         {
-            Debug.LogError($"Input initialization failed: {result.Status}: {result.Message}", this);
+            Log.Error($"Input initialization failed: {result.Status}: {result.Message}");
             enabled = false;
             return;
         }
@@ -98,7 +101,7 @@ public sealed class InputBootstrap : MonoBehaviour
         _player = _manager.JoinSinglePlayer(0);
         if (_player == null)
         {
-            Debug.LogError("Player 0 could not acquire a declared control scheme.", this);
+            Log.Error("Player 0 could not acquire a declared control scheme.");
             enabled = false;
         }
     }
@@ -131,7 +134,7 @@ The command target remains ordinary product code:
 ```csharp
 private void OnConfirm()
 {
-    Debug.Log("Confirm received.");
+    Log.Info("Confirm received.");
 }
 ```
 

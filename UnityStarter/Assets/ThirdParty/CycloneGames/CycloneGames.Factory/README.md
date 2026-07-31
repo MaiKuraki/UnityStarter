@@ -41,7 +41,11 @@ Use this module when creation policy must be injected, when a hot path needs bou
 | `CycloneGames.Factory.DOD.Runtime` | `DOD/Runtime/` | `NativePool<T>`, `NativeDensePool<T>`, `NativeDenseColumnPool2/3/4`. Compiled only when `PRESENT_COLLECTIONS` is defined by the installed `com.unity.collections` package. |
 | `CycloneGames.Factory.Tests.Editor` | `Tests/Editor/` | Core and Unity adapter contract tests. |
 | `CycloneGames.Factory.DOD.Tests.Editor` | `DOD/Tests/Editor/` | Native ownership and handle tests. Active only when Collections is installed. |
-| `CycloneGames.Factory.Samples` | `Samples/` | Opt-in examples. `autoReferenced: false`. |
+| `CycloneGames.Factory.Samples` | `Samples/` | Opt-in examples using `CycloneGames.Logging`. `autoReferenced: false`. |
+
+The production Runtime assemblies do not emit logs. Opt-in samples use the category `CycloneGames.Factory.Samples` through `LogChannel`; without an installed backend, `NullLogWriter` silently handles those teaching diagnostics.
+
+The sample asmdef owns `Samples/Diagnostics/FactorySamplesLog.cs`, which provides the standard `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` members. Sample components cache it in a class-local `Log` field instead of constructing channels independently.
 
 ```mermaid
 flowchart LR

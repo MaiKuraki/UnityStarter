@@ -3,6 +3,7 @@ using System.Collections;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -185,6 +186,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public sealed class GameplayEffectSpec : IGASLeasedObject
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         private enum SpecOwnership : byte
         {
             None,
@@ -902,8 +905,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (warnIfNotFound && setByCallerWarningSuppressionDepth == 0)
             {
                 string tagName = dataTag.IsNone ? "<None>" : dataTag.Name;
-                GASLog.Warning(sb => sb.Append("GetSetByCallerMagnitude: Tag '").Append(tagName)
-                    .Append("' not found in spec for effect '").Append(Def?.Name).Append("'."));
+                Log.Warning(
+                    (TagName: tagName, EffectName: Def?.Name),
+                    static (state, sb) => sb.Append("GetSetByCallerMagnitude: Tag '").Append(state.TagName)
+                        .Append("' not found in spec for effect '").Append(state.EffectName).Append("'."));
             }
             return defaultValueRaw;
         }
@@ -924,7 +929,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             ThrowIfEvaluatingReplicatedState();
             if (string.IsNullOrEmpty(dataName))
             {
-                GASLog.Warning(sb => sb.Append("SetSetByCallerMagnitude: dataName cannot be null or empty."));
+                Log.Warning("SetSetByCallerMagnitude: dataName cannot be null or empty.");
                 return;
             }
             if ((setByCallerMagnitudesByName == null || !setByCallerMagnitudesByName.ContainsKey(dataName)) &&
@@ -967,8 +972,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (warnIfNotFound && setByCallerWarningSuppressionDepth == 0)
             {
-                GASLog.Warning(sb => sb.Append("GetSetByCallerMagnitude: Name '").Append(dataName)
-                    .Append("' not found in spec for effect '").Append(Def?.Name).Append("'."));
+                Log.Warning(
+                    (DataName: dataName, EffectName: Def?.Name),
+                    static (state, sb) => sb.Append("GetSetByCallerMagnitude: Name '").Append(state.DataName)
+                        .Append("' not found in spec for effect '").Append(state.EffectName).Append("'."));
             }
             return defaultValueRaw;
         }

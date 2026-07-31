@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Experimental.Rendering;
 using UnityEngine.Rendering;
@@ -9,6 +10,8 @@ namespace CycloneGames.UIFramework.DynamicAtlas
 {
     public sealed class DynamicAtlasService : IDynamicAtlas
     {
+        private static readonly LogChannel Log = UIFrameworkLog.Channel;
+
         private const TextureFormat AtlasTextureFormat = TextureFormat.RGBA32;
 
         private sealed class AtlasEntry
@@ -1540,7 +1543,9 @@ namespace CycloneGames.UIFramework.DynamicAtlas
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(
+                    exception,
+                    "[DynamicAtlasService] Asset unload callback failed.");
             }
         }
 

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using Unity.Jobs;
 using Unity.Mathematics;
 using UnityEngine;
@@ -30,6 +31,7 @@ namespace CycloneGames.AIPerception.Runtime
     /// </summary>
     public sealed class SensorManager : IDisposable
     {
+        private static readonly LogChannel Log = AIPerceptionRuntimeLog.Channel;
         private const int InitialCapacity = 64;
 
         public const int DefaultMaximumSensorCount = 4_096;
@@ -216,9 +218,11 @@ namespace CycloneGames.AIPerception.Runtime
             }
 
             _legacyRegistrationCapacityReported = true;
-            Debug.LogError(
-                $"[AIPerception] SensorManager capacity exhausted ({_maximumSensorCount}). " +
-                "Legacy Register was ignored; use TryRegister to handle admission failure.");
+            Log.Error(
+                _maximumSensorCount,
+                static (capacity, builder) => builder
+                    .Append("SensorManager capacity exhausted (").Append(capacity)
+                    .Append("). Legacy Register was ignored; use TryRegister to handle admission failure."));
         }
 
         /// <summary>

@@ -2,7 +2,8 @@
     "name": "CycloneGames.Networking.Platform.Permissions",
     "rootNamespace": "CycloneGames.Networking.Platform",
     "references": [
-        "UniTask"
+        "UniTask",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

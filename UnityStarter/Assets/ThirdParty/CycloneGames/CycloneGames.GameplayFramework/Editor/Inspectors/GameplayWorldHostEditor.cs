@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
@@ -10,6 +11,8 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
     [CanEditMultipleObjects]
     internal sealed class GameplayWorldHostEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = GameplayFrameworkEditorLog.Channel;
+
         private static readonly string[] ManagedPropertyNames =
         {
             "worldSettings",
@@ -174,7 +177,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, host);
+                Log.Error(exception, "GameplayWorldHost Inspector start action failed.");
             }
         }
 
@@ -189,7 +192,7 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, host);
+                Log.Error(exception, "GameplayWorldHost Inspector stop action failed.");
             }
         }
     }

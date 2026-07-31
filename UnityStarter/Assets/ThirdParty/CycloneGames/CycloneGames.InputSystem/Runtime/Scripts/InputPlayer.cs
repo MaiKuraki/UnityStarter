@@ -1,4 +1,4 @@
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using R3;
 using System;
@@ -17,6 +17,8 @@ namespace CycloneGames.InputSystem.Runtime
     /// </summary>
     public sealed class InputPlayer : IInputPlayer, IDisposable
     {
+        private static readonly LogChannel Log = InputSystemLog.Channel;
+
         private const string DEBUG_FLAG = "[InputPlayer]";
         private const int MaxBindingOverrideJsonLength = 1024 * 1024;
         private const int MaxBindingOverrideRecordCount = 128;
@@ -771,7 +773,9 @@ namespace CycloneGames.InputSystem.Runtime
                 exception is not AccessViolationException &&
                 exception is not StackOverflowException)
             {
-                CLogger.LogError($"{DEBUG_FLAG} [P{PlayerId}] Failed to import binding overrides.");
+                Log.Error(
+                    exception,
+                    $"{DEBUG_FLAG} [P{PlayerId}] Failed to import binding overrides.");
                 return false;
             }
         }
@@ -1521,7 +1525,14 @@ namespace CycloneGames.InputSystem.Runtime
             // Cleanup callbacks can request another refresh. Keep the projection failed closed; callers may
             // explicitly call RefreshActiveContext after the failing subscriber or binding has been removed.
             _contextRefreshPending = false;
-            CLogger.LogError($"{DEBUG_FLAG} [P{PlayerId}] {message}");
+            Log.Error(
+                (PlayerId, Message: message),
+                static (state, builder) => builder
+                    .Append(DEBUG_FLAG)
+                    .Append(" [P")
+                    .Append(state.PlayerId)
+                    .Append("] ")
+                    .Append(state.Message));
         }
 
         private void BuildActiveContextList()
@@ -1706,7 +1717,13 @@ namespace CycloneGames.InputSystem.Runtime
             }
 
             key = default;
-            CLogger.LogWarning($"{DEBUG_FLAG} Action ID '{actionId}' not found. Regenerate constants after config changes.");
+            Log.Warning(
+                actionId,
+                static (value, builder) => builder
+                    .Append(DEBUG_FLAG)
+                    .Append(" Action ID '")
+                    .Append(value)
+                    .Append("' not found. Regenerate constants after config changes."));
             return false;
         }
 
@@ -1860,8 +1877,9 @@ namespace CycloneGames.InputSystem.Runtime
                     exception is not AccessViolationException &&
                     exception is not StackOverflowException)
                 {
-                    CLogger.LogError(
-                        $"{DEBUG_FLAG} [P{PlayerId}] Context subscriber failed ({exception.GetType().Name}).");
+                    Log.Error(
+                        exception,
+                        $"{DEBUG_FLAG} [P{PlayerId}] Context subscriber failed.");
                 }
 
                 if (!IsContextActivationCurrent(activationVersion)) return;
@@ -1884,8 +1902,9 @@ namespace CycloneGames.InputSystem.Runtime
                     exception is not AccessViolationException &&
                     exception is not StackOverflowException)
                 {
-                    CLogger.LogError(
-                        $"{DEBUG_FLAG} [P{PlayerId}] Device subscriber failed ({exception.GetType().Name}).");
+                    Log.Error(
+                        exception,
+                        $"{DEBUG_FLAG} [P{PlayerId}] Device subscriber failed.");
                 }
             }
         }
@@ -2143,8 +2162,9 @@ namespace CycloneGames.InputSystem.Runtime
                 exception is not AccessViolationException &&
                 exception is not StackOverflowException)
             {
-                CLogger.LogError(
-                    $"{DEBUG_FLAG} Failed to {phase} during teardown ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    $"{DEBUG_FLAG} Failed to {phase} during teardown.");
             }
         }
 

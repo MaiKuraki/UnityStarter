@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Events;
 using CycloneGames.RPGFoundation.Interaction.Core;
@@ -12,6 +13,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
     [DisallowMultipleComponent]
     public class Interactable : MonoBehaviour, IInteractable, IInteractionStableIdentity
     {
+        private static readonly LogChannel Log = RpgInteractionLog.Channel;
+
         [Tooltip("Stable authoring ID for networking, save data, analytics, and replay. Required for server-authoritative multiplayer.")]
         [SerializeField] protected string stableId;
 
@@ -351,7 +354,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
 
         protected virtual void ReportInteractionException(Exception exception)
         {
-            Debug.LogException(exception, this);
+            Log.Error(
+                exception,
+                $"[Interactable] Interaction callback failed on '{name}'.");
         }
 
         public virtual bool CanExecuteAction(string actionId)

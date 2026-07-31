@@ -1,4 +1,5 @@
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
@@ -11,11 +12,13 @@ namespace CycloneGames.GameplayAbilities.Sample
     /// </summary>
     public static class SampleTagRuntimeRegistration
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
         public static void RegisterTags()
         {
             GameplayTagManager.InitializeIfNeeded();
-            Debug.Log("[SampleTagRuntimeRegistration] GameplayTagManager initialized from build-time tag data.");
+            Log.Info("Sample GameplayTagManager initialized from build-time tag data.");
         }
     }
 }

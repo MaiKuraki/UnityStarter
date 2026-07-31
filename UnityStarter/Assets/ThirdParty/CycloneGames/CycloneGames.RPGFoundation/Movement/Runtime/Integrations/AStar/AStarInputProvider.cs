@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime;
 using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
@@ -20,6 +21,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
     [DisallowMultipleComponent]
     public class AStarInputProvider : MonoBehaviour, IPathfindingProvider
     {
+        private static readonly LogChannel Log = RpgAStarLog.Channel;
+
         [Header("Movement Settings")]
         [Tooltip("Speed multiplier for A* movement.")]
         [SerializeField] private float speedMultiplier = 1f;
@@ -154,7 +157,11 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
         {
             if (p.error)
             {
-                Debug.LogWarning($"[AStarInputProvider] Path error: {p.errorLog}");
+                Log.Warning(
+                    p.errorLog,
+                    static (value, builder) => builder
+                        .Append("[AStarInputProvider] Path error: ")
+                        .Append(value));
                 return;
             }
 
@@ -228,6 +235,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
     /// </summary>
     public class AStarInputProvider : MonoBehaviour, IPathfindingProvider
     {
+        private static readonly LogChannel Log = RpgAStarLog.Channel;
+
         public bool IsNavigating => false;
         public bool HasReachedDestination => false;
         public Vector3 CurrentDestination => Vector3.zero;
@@ -239,8 +248,9 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AStar
 
         private void Awake()
         {
-            Debug.LogWarning("[AStarInputProvider] A* Pathfinding Project (com.arongranberg.astar) is not installed. " +
-                           "Install it via Package Manager to enable A* pathfinding.");
+            Log.Warning(
+                "[AStarInputProvider] A* Pathfinding Project (com.arongranberg.astar) is not installed. " +
+                "Install it via Package Manager to enable A* pathfinding.");
             enabled = false;
         }
     }

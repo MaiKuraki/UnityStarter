@@ -1,20 +1,22 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
-using System.Text.RegularExpressions;
+using System.Text;
+using CycloneGames.Logging;
 using CycloneGames.UIFramework.Runtime.Integrations.Localization;
 using CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor;
 using NUnit.Framework;
 using TMPro;
 using UnityEditor;
 using UnityEngine;
-using UnityEngine.TestTools;
 using UnityEngine.UI;
 
 namespace CycloneGames.UIFramework.Tests.Editor
 {
     public sealed class LocalizationEditorTests
     {
+        private const string ExpectedLogCategory = "CycloneGames.UIFramework.Localization.Editor";
+
         private readonly List<UnityEngine.Object> _ownedObjects = new List<UnityEngine.Object>(16);
 
         [TearDown]
@@ -80,11 +82,10 @@ namespace CycloneGames.UIFramework.Tests.Editor
             UnityEditor.Editor editor = CreateEditor(layout);
 
             AnimationMode.StartAnimationMode();
-            LogAssert.Expect(
-                LogType.Warning,
-                new Regex("Another Unity animation preview is active", RegexOptions.CultureInvariant));
+            using var logScope = new ScopedRecordingLogWriter();
 
             InvokeInstance(editor, "EnterPreview");
+            AssertSingleWarning(logScope, "Another Unity animation preview is active");
 
             Assert.That(AnimationMode.InAnimationMode(), Is.True);
             Assert.That(rect.anchoredPosition, Is.EqualTo(basePosition));
@@ -130,17 +131,14 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 LocaleSnapshot.CurrentSchemaVersion + 1,
                 CreateSnapshot(new Vector2(14f, 28f), 33f));
             UnityEditor.Editor editor = CreateEditor(layout);
+            using var logScope = new ScopedRecordingLogWriter();
 
-            LogAssert.Expect(
-                LogType.Warning,
-                new Regex("unsupported future snapshot schema", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
             InvokeInstance(editor, "AddEmptyTrackedElement");
+            AssertSingleWarning(logScope, "unsupported future snapshot schema");
             Assert.That(ReadElements(layout).arraySize, Is.EqualTo(1));
 
-            LogAssert.Expect(
-                LogType.Warning,
-                new Regex("unsupported future snapshot schema", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
             InvokeInstance(editor, "NormalizeSnapshotsWithConfirmation");
+            AssertSingleWarning(logScope, "unsupported future snapshot schema");
             SerializedObject futureData = new SerializedObject(layout);
             Assert.That(
                 futureData.FindProperty("_snapshots")
@@ -149,10 +147,8 @@ namespace CycloneGames.UIFramework.Tests.Editor
                     .intValue,
                 Is.EqualTo(LocaleSnapshot.CurrentSchemaVersion + 1));
 
-            LogAssert.Expect(
-                LogType.Warning,
-                new Regex("unsupported future snapshot schema", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant));
             InvokeContextTrack(rect, text, group);
+            AssertSingleWarning(logScope, "unsupported future snapshot schema");
 
             SerializedProperty tracked = ReadElements(layout).GetArrayElementAtIndex(0);
             Assert.That(
@@ -176,11 +172,10 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 null,
                 LocaleSnapshot.CurrentSchemaVersion,
                 snapshot);
+            using var logScope = new ScopedRecordingLogWriter();
 
-            LogAssert.Expect(
-                LogType.Warning,
-                new Regex("Existing non-null component references were preserved", RegexOptions.CultureInvariant));
             InvokeContextTrack(rect, text, group);
+            AssertSingleWarning(logScope, "Existing non-null component references were preserved");
 
             SerializedObject serializedLayout = new SerializedObject(layout);
             SerializedProperty tracked = serializedLayout
@@ -221,11 +216,12 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 LocaleSnapshot.CurrentSchemaVersion,
                 incomplete);
             UnityEditor.Editor editor = CreateEditor(layout);
+            using var logScope = new ScopedRecordingLogWriter();
 
-            LogAssert.Expect(LogType.Warning, new Regex("incomplete", RegexOptions.IgnoreCase));
             InvokeInstance(editor, "ApplySelectedSnapshotForEditing");
-            LogAssert.Expect(LogType.Warning, new Regex("incomplete", RegexOptions.IgnoreCase));
+            AssertSingleWarning(logScope, "incomplete");
             InvokeInstance(editor, "EnterPreview");
+            AssertSingleWarning(logScope, "incomplete");
 
             Assert.That(rect.anchoredPosition, Is.EqualTo(basePosition));
             Assert.That(AnimationMode.InAnimationMode(), Is.False);
@@ -245,9 +241,10 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 LocaleSnapshot.CurrentSchemaVersion,
                 invalid);
             UnityEditor.Editor editor = CreateEditor(layout);
+            using var logScope = new ScopedRecordingLogWriter();
 
-            LogAssert.Expect(LogType.Warning, new Regex("non-finite", RegexOptions.IgnoreCase));
             InvokeInstance(editor, "EnterPreview");
+            AssertSingleWarning(logScope, "non-finite");
 
             Assert.That(rect.anchoredPosition, Is.EqualTo(basePosition));
             Assert.That(AnimationMode.InAnimationMode(), Is.False);
@@ -425,6 +422,19 @@ namespace CycloneGames.UIFramework.Tests.Editor
             return serializedLayout.FindProperty("_elements");
         }
 
+        private static void AssertSingleWarning(
+            ScopedRecordingLogWriter writer,
+            string messageFragment)
+        {
+            LogRecord[] records = writer.Flush();
+            Assert.That(records, Has.Length.EqualTo(1));
+            LogRecord record = records[0];
+            Assert.That(record.Severity, Is.EqualTo(LogSeverity.Warning));
+            Assert.That(record.Category, Is.EqualTo(ExpectedLogCategory));
+            Assert.That(record.Exception, Is.Null);
+            StringAssert.Contains(messageFragment, record.Message);
+        }
+
         private static void InvokeContextTrack(
             RectTransform rect,
             TMP_Text text,
@@ -444,6 +454,147 @@ namespace CycloneGames.UIFramework.Tests.Editor
                 BindingFlags.NonPublic | BindingFlags.Instance);
             Assert.That(method, Is.Not.Null);
             method.Invoke(editor, null);
+        }
+
+        private readonly struct LogRecord
+        {
+            public LogRecord(
+                LogSeverity severity,
+                string category,
+                string message,
+                Exception exception)
+            {
+                Severity = severity;
+                Category = category;
+                Message = message;
+                Exception = exception;
+            }
+
+            public LogSeverity Severity { get; }
+            public string Category { get; }
+            public string Message { get; }
+            public Exception Exception { get; }
+        }
+
+        private sealed class ScopedRecordingLogWriter : ILogWriter, IDisposable
+        {
+            private readonly object _gate = new object();
+            private readonly List<LogRecord> _records = new List<LogRecord>(4);
+            private ILogWriter _previousWriter;
+            private bool _isDisposed;
+
+            public ScopedRecordingLogWriter()
+            {
+                _previousWriter = LogRuntime.ReplaceWriter(this);
+            }
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                return severity != LogSeverity.None;
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Record(severity, category, message, null);
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder?.Invoke(builder);
+                Record(severity, category, builder.ToString(), null);
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder?.Invoke(state, builder);
+                Record(severity, category, builder.ToString(), null);
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Record(severity, category, message, exception);
+            }
+
+            public LogRecord[] Flush()
+            {
+                lock (_gate)
+                {
+                    LogRecord[] snapshot = _records.ToArray();
+                    _records.Clear();
+                    return snapshot;
+                }
+            }
+
+            public void Dispose()
+            {
+                if (_isDisposed)
+                {
+                    return;
+                }
+
+                _isDisposed = true;
+                ILogWriter previousWriter = _previousWriter;
+                _previousWriter = null;
+                if (object.ReferenceEquals(LogRuntime.Writer, this))
+                {
+                    LogRuntime.ReplaceWriter(previousWriter);
+                }
+            }
+
+            private void Record(
+                LogSeverity severity,
+                string category,
+                string message,
+                Exception exception)
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                lock (_gate)
+                {
+                    _records.Add(new LogRecord(severity, category, message, exception));
+                }
+            }
         }
     }
 }

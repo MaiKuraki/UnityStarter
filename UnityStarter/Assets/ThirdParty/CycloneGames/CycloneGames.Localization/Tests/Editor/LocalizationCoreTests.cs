@@ -4,13 +4,13 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Reflection;
 using System.Text;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Editor;
 using CycloneGames.Localization.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 using UnityEditor;
@@ -1096,13 +1096,28 @@ namespace CycloneGames.Localization.Tests.Editor
 
                 Assert.That(service.TrySetLocale(ja.Id), Is.True);
                 var failedHandle = (ControlledAssetHandle<Sprite>)package.Handles[1];
-                LogAssert.Expect(LogType.Exception, new Regex("provider failure"));
-                failedHandle.Fail(new InvalidOperationException("provider failure"));
-                yield return null;
+                var expectedException = new InvalidOperationException("provider failure");
+                var writer = new RecordingLogWriter();
+                ILogWriter previousWriter = LogRuntime.ReplaceWriter(writer);
+                try
+                {
+                    failedHandle.Fail(expectedException);
+                    yield return null;
+                }
+                finally
+                {
+                    RestoreWriter(previousWriter, writer);
+                }
 
                 Assert.That(spriteProperty.GetValue(image), Is.SameAs(enSprite));
                 Assert.That(enHandle.DisposeCount, Is.EqualTo(0));
                 Assert.That(failedHandle.DisposeCount, Is.EqualTo(1));
+                Assert.That(writer.Count, Is.EqualTo(1));
+                LogRecord record = writer.LastRecord;
+                Assert.That(record.Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(record.Category, Is.EqualTo("CycloneGames.Localization"));
+                Assert.That(record.Exception, Is.SameAs(expectedException));
+                Assert.That(record.Message, Is.EqualTo("Localized image refresh failed."));
 
                 spriteProperty.SetValue(image, externalSprite);
                 binding.Unbind();
@@ -1364,6 +1379,146 @@ namespace CycloneGames.Localization.Tests.Editor
             }
 
             public string GetPreferredLocaleCode() => _code;
+        }
+
+        private static void RestoreWriter(ILogWriter previousWriter, RecordingLogWriter writer)
+        {
+            if (object.ReferenceEquals(LogRuntime.Writer, writer))
+            {
+                LogRuntime.ReplaceWriter(previousWriter);
+            }
+        }
+
+        private readonly struct LogRecord
+        {
+            public LogRecord(
+                LogSeverity severity,
+                string category,
+                string message,
+                Exception exception)
+            {
+                Severity = severity;
+                Category = category;
+                Message = message;
+                Exception = exception;
+            }
+
+            public LogSeverity Severity { get; }
+            public string Category { get; }
+            public string Message { get; }
+            public Exception Exception { get; }
+        }
+
+        private sealed class RecordingLogWriter : ILogWriter
+        {
+            private readonly object m_Gate = new object();
+            private int m_Count;
+            private LogRecord m_LastRecord;
+
+            public int Count
+            {
+                get
+                {
+                    lock (m_Gate)
+                    {
+                        return m_Count;
+                    }
+                }
+            }
+
+            public LogRecord LastRecord
+            {
+                get
+                {
+                    lock (m_Gate)
+                    {
+                        return m_LastRecord;
+                    }
+                }
+            }
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                return severity >= LogSeverity.Error && severity < LogSeverity.None;
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Record(severity, category, message, null);
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder?.Invoke(builder);
+                Record(severity, category, builder.ToString(), null);
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder?.Invoke(state, builder);
+                Record(severity, category, builder.ToString(), null);
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Record(severity, category, message, exception);
+            }
+
+            private void Record(
+                LogSeverity severity,
+                string category,
+                string message,
+                Exception exception)
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                lock (m_Gate)
+                {
+                    m_Count++;
+                    m_LastRecord = new LogRecord(severity, category, message, exception);
+                }
+            }
         }
 
         private interface IControlledAssetHandle

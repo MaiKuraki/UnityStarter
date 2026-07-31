@@ -1,12 +1,15 @@
+using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
-using CycloneGames.GameplayFramework.Runtime;
 
 namespace CycloneGames.GameplayFramework.Runtime.Editor
 {
     [CustomEditor(typeof(WorldSettings), true)]
     public class WorldSettingsEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = GameplayFrameworkEditorLog.Channel;
+
         private enum ReferenceValidationState : byte
         {
             Missing = 0,
@@ -133,7 +136,14 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
                 bool valid = ws.Validate();
                 if (valid)
                 {
-                    Debug.Log($"[WorldSettings] '{ws.name}': Required references are valid. CameraManager and SpectatorPawn are optional.");
+                    Log.Info(
+                        ws,
+                        static (settings, builder) =>
+                        {
+                            builder.Append("WorldSettings '");
+                            builder.Append(settings.name);
+                            builder.Append("' required references are valid; CameraManager and SpectatorPawn are optional.");
+                        });
                 }
 
                 serializedObject.Update();
@@ -314,16 +324,32 @@ namespace CycloneGames.GameplayFramework.Runtime.Editor
 
             if (!PrefabUtility.IsPartOfPrefabAsset(selectedPrefab))
             {
-                Debug.LogWarning($"WorldSettings direct references require prefab assets. '{selectedPrefab.name}' was not assigned.");
+                Log.Warning(
+                    selectedPrefab,
+                    static (prefab, builder) =>
+                    {
+                        builder.Append("WorldSettings direct references require prefab assets; '");
+                        builder.Append(prefab.name);
+                        builder.Append("' was not assigned.");
+                    });
                 return;
             }
 
             T[] components = selectedPrefab.GetComponents<T>();
             if (components.Length != 1)
             {
-                Debug.LogWarning(
-                    $"WorldSettings expected exactly one {typeof(T).Name} component on prefab '{selectedPrefab.name}', but found {components.Length}. The existing reference was preserved.",
-                    selectedPrefab);
+                Log.Warning(
+                    (ComponentType: typeof(T), Prefab: selectedPrefab, Count: components.Length),
+                    static (state, builder) =>
+                    {
+                        builder.Append("WorldSettings expected exactly one ");
+                        builder.Append(state.ComponentType.Name);
+                        builder.Append(" component on prefab '");
+                        builder.Append(state.Prefab.name);
+                        builder.Append("', but found ");
+                        builder.Append(state.Count);
+                        builder.Append(". The existing reference was preserved.");
+                    });
                 return;
             }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.Audio.Runtime;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Choreography.CycloneAudio
@@ -13,7 +14,6 @@ namespace CycloneGames.Choreography.CycloneAudio
     public sealed class CycloneAudioProvider : IAudioProvider
     {
         public const int AbsoluteMaximumActiveHandleCount = 65_536;
-
         private readonly struct VoiceKey : IEquatable<VoiceKey>
         {
             public readonly int InstanceId;
@@ -94,7 +94,7 @@ namespace CycloneGames.Choreography.CycloneAudio
 
         private readonly IAudioService _audioService;
         private readonly GameObject _defaultEmitter;
-        private readonly IChoreographyDiagnostics _diagnostics;
+        private readonly LogChannel _log;
         private readonly ICycloneAudioBankState _bankState;
         private readonly int _maximumActiveHandleCount;
         private readonly Dictionary<VoiceKey, VoiceControl> _voices = new Dictionary<VoiceKey, VoiceControl>(16);
@@ -113,10 +113,40 @@ namespace CycloneGames.Choreography.CycloneAudio
         /// <summary>Creates a provider with the compatibility default active-handle ceiling.</summary>
         public CycloneAudioProvider(
             IAudioService audioService,
+            GameObject defaultEmitter)
+            : this(
+                audioService,
+                defaultEmitter,
+                ChoreographyCycloneAudioLog.Channel,
+                null,
+                1_024)
+        {
+        }
+
+        public CycloneAudioProvider(
+            IAudioService audioService,
             GameObject defaultEmitter,
-            IChoreographyDiagnostics diagnostics = null,
+            ICycloneAudioBankState bankState)
+            : this(
+                audioService,
+                defaultEmitter,
+                ChoreographyCycloneAudioLog.Channel,
+                bankState,
+                1_024)
+        {
+        }
+
+        public CycloneAudioProvider(
+            IAudioService audioService,
+            GameObject defaultEmitter,
+            ILogWriter logWriter,
             ICycloneAudioBankState bankState = null)
-            : this(audioService, defaultEmitter, diagnostics, bankState, 1_024)
+            : this(
+                audioService,
+                defaultEmitter,
+                ChoreographyCycloneAudioLog.Create(logWriter),
+                bankState,
+                1_024)
         {
         }
 
@@ -124,7 +154,36 @@ namespace CycloneGames.Choreography.CycloneAudio
         public CycloneAudioProvider(
             IAudioService audioService,
             GameObject defaultEmitter,
-            IChoreographyDiagnostics diagnostics,
+            ICycloneAudioBankState bankState,
+            int maximumActiveHandleCount)
+            : this(
+                audioService,
+                defaultEmitter,
+                ChoreographyCycloneAudioLog.Channel,
+                bankState,
+                maximumActiveHandleCount)
+        {
+        }
+
+        public CycloneAudioProvider(
+            IAudioService audioService,
+            GameObject defaultEmitter,
+            ILogWriter logWriter,
+            ICycloneAudioBankState bankState,
+            int maximumActiveHandleCount)
+            : this(
+                audioService,
+                defaultEmitter,
+                ChoreographyCycloneAudioLog.Create(logWriter),
+                bankState,
+                maximumActiveHandleCount)
+        {
+        }
+
+        private CycloneAudioProvider(
+            IAudioService audioService,
+            GameObject defaultEmitter,
+            LogChannel log,
             ICycloneAudioBankState bankState,
             int maximumActiveHandleCount)
         {
@@ -135,7 +194,7 @@ namespace CycloneGames.Choreography.CycloneAudio
 
             _audioService = audioService ?? throw new ArgumentNullException(nameof(audioService));
             _defaultEmitter = defaultEmitter;
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _log = log;
             _bankState = bankState;
             _maximumActiveHandleCount = maximumActiveHandleCount;
         }
@@ -302,31 +361,31 @@ namespace CycloneGames.Choreography.CycloneAudio
 
         private void WarnMissingBank(string clipId, string bank, string eventName)
         {
-            if (!_warnedMissingBank && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (!_warnedMissingBank && _log.IsEnabled(LogSeverity.Warning))
             {
                 _warnedMissingBank = true;
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.CycloneAudio",
+                _log.Warning(
                     "Audio event '" + eventName + "' for clip '" + clipId + "' skipped because bank '" + bank + "' is not loaded. Preload and load the bank before playback. Further bank warnings are suppressed.");
             }
         }
 
         private void WarnMissingEvent(string clipId, string bank, string eventName)
         {
-            if (!_warnedMissingEvent && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (!_warnedMissingEvent && _log.IsEnabled(LogSeverity.Warning))
             {
                 _warnedMissingEvent = true;
                 string bankHint = string.IsNullOrEmpty(bank) ? string.Empty : " Bank '" + bank + "' may not be loaded.";
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.CycloneAudio",
+                _log.Warning(
                     "Audio event '" + eventName + "' for clip '" + clipId + "' could not be played." + bankHint + " Further audio event warnings are suppressed.");
             }
         }
 
         private void WarnUnsupportedKind(string clipId, ChoreographyResourceKind kind)
         {
-            if (!_warnedUnsupportedKind && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (!_warnedUnsupportedKind && _log.IsEnabled(LogSeverity.Warning))
             {
                 _warnedUnsupportedKind = true;
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.CycloneAudio",
+                _log.Warning(
                     "Audio clip '" + clipId + "' skipped: CycloneAudioProvider only supports AudioEvent or BackendCue resources, but received '" + kind + "'. Further audio kind warnings are suppressed.");
             }
         }

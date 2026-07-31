@@ -152,8 +152,11 @@ AppLog.txt
 ![Aa]nalyzers/
 ![Aa]nalyzers/CycloneGames.Analyzers.sln
 ![Aa]nalyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj
+![Aa]nalyzers/CycloneGames.Analyzers.Tests/CycloneGames.Analyzers.Tests.csproj
 [Aa]nalyzers/CycloneGames.Analyzers/bin
 [Aa]nalyzers/CycloneGames.Analyzers/obj
+[Aa]nalyzers/CycloneGames.Analyzers.Tests/bin
+[Aa]nalyzers/CycloneGames.Analyzers.Tests/obj
 
 # DataTable local .NET tool build cache
 /Assets/ThirdParty/CycloneGames/CycloneGames.DataTable/Tools~/CodeGen/bin/

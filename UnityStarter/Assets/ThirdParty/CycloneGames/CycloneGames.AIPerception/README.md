@@ -37,7 +37,9 @@ The data model is genre-neutral. A target has a stable integer type, position, d
 | `CycloneGames.AIPerception.Editor` | Editor | Custom Inspectors, validation, runtime diagnostics, and Scene gizmos |
 | `CycloneGames.AIPerception.Tests.Editor` | Editor tests | Core contract and boundary tests |
 
-Runtime dependencies: `Unity.Burst`, `Unity.Collections`, `Unity.Mathematics`.
+Runtime dependencies: `CycloneGames.Logging`, `Unity.Burst`, `Unity.Collections`, `Unity.Mathematics`.
+
+Runtime diagnostics are centralized by the internal `AIPerceptionRuntimeLog` facade in `Runtime/Diagnostics/AIPerceptionRuntimeLog.cs`. The facade owns category `CycloneGames.AIPerception` and exposes the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` members used by CycloneGames logging-producing assemblies. Static and Unity-owned entry points use `AIPerceptionRuntimeLog.Channel`; services that require isolation bind an explicit writer with `AIPerceptionRuntimeLog.Create(logWriter)`. The package depends only on the engine-independent logging contract; without an installed backend, ambient diagnostics are safely discarded by `NullLogWriter`.
 
 ## Architecture
 

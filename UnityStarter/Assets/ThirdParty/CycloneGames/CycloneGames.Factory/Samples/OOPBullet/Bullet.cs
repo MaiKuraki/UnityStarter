@@ -1,11 +1,14 @@
 using System;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Factory.OOPBullet
 {
     public class Bullet : MonoBehaviour, IPoolable<BulletData, Bullet>, ITickable
     {
+        private static readonly LogChannel Log = FactorySamplesLog.Channel;
+
         [Header("Bullet Settings")]
         [SerializeField] private float lifetime = 5f;
         [SerializeField] private float speed = 10f;
@@ -67,7 +70,7 @@ namespace CycloneGames.Factory.OOPBullet
             }
             else
             {
-                Debug.LogError("Bullet: Rigidbody component is missing! This should have been added in Awake().");
+                Log.Error("Bullet Rigidbody component is missing; Awake should have created it.");
             }
         }
 
@@ -129,7 +132,7 @@ namespace CycloneGames.Factory.OOPBullet
             }
             else
             {
-                Debug.LogError("Bullet: No Rigidbody component found when setting velocity!");
+                Log.Error("No Rigidbody component was found while setting Bullet velocity.");
             }
         }
 

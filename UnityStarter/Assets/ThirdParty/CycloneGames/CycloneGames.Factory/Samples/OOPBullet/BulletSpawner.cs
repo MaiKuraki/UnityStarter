@@ -1,11 +1,14 @@
 using System.Collections.Generic;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Factory.OOPBullet
 {
     public class BulletSpawner : MonoBehaviour
     {
+        private static readonly LogChannel Log = FactorySamplesLog.Channel;
+
         [Header("Spawner Settings")]
         [SerializeField] private Bullet bulletPrefab;
         [SerializeField] private float spawnsPerSecond = 200f;
@@ -40,7 +43,7 @@ namespace CycloneGames.Factory.OOPBullet
             _mainCamera = Camera.main;
             if (_mainCamera == null)
             {
-                Debug.LogError("No main camera found! Bullet spawner needs a main camera for screen bounds calculation.");
+                Log.Error("No main camera was found; BulletSpawner requires one for screen-bounds calculation.");
             }
 
             InitializeSpawner();
@@ -89,31 +92,31 @@ namespace CycloneGames.Factory.OOPBullet
         {
             if (bulletPrefab == null)
             {
-                Debug.LogError("Bullet prefab is not assigned!");
+                Log.Error("Bullet prefab is not assigned.");
                 return;
             }
 
             if (spawnsPerSecond <= 0f)
             {
-                Debug.LogWarning("Spawns Per Second must be > 0. Falling back to 1.");
+                Log.Warning("Spawns Per Second must be greater than zero. Falling back to 1.");
                 spawnsPerSecond = 1f;
             }
 
             if (initialPoolSize < 0)
             {
-                Debug.LogWarning("Initial Pool Size cannot be negative. Falling back to 0.");
+                Log.Warning("Initial Pool Size cannot be negative. Falling back to 0.");
                 initialPoolSize = 0;
             }
 
             if (hardPoolCapacity != -1 && hardPoolCapacity < 1)
             {
-                Debug.LogWarning("Hard Pool Capacity must be -1 (unlimited) or >= 1. Falling back to -1.");
+                Log.Warning("Hard Pool Capacity must be -1 (unlimited) or at least 1. Falling back to -1.");
                 hardPoolCapacity = -1;
             }
 
             if (hardPoolCapacity > 0 && initialPoolSize > hardPoolCapacity)
             {
-                Debug.LogWarning("Initial Pool Size exceeds Hard Pool Capacity. Clamping Initial Pool Size.");
+                Log.Warning("Initial Pool Size exceeds Hard Pool Capacity. Clamping Initial Pool Size.");
                 initialPoolSize = hardPoolCapacity;
             }
 

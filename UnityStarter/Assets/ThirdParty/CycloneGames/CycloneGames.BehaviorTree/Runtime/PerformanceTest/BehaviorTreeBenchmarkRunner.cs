@@ -1,12 +1,15 @@
 using System;
 using System.Collections;
 using System.IO;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
 {
     public class BehaviorTreeBenchmarkRunner : MonoBehaviour
     {
+        private static readonly LogChannel Log = BehaviorTreeBenchmarksLog.Channel;
+
         [SerializeField] private bool _autoRunOnStart = true;
         [SerializeField] private BehaviorTreeBenchmarkRunnerMode _runnerMode = BehaviorTreeBenchmarkRunnerMode.Single;
         [SerializeField] private BehaviorTreeBenchmarkConfig _config = new BehaviorTreeBenchmarkConfig();
@@ -282,7 +285,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             LastExportPath = BehaviorTreeBenchmarkExportUtility.WriteResultFiles(GetExportDirectoryPath(), LastResult, _autoExportCsv, _autoExportJson);
             if (!string.IsNullOrEmpty(LastExportPath))
             {
-                Debug.Log($"[BehaviorTreeBenchmarkRunner] Exported benchmark result to: {LastExportPath}");
+                Log.Info($"Exported benchmark result to: {LastExportPath}");
             }
         }
 
@@ -296,7 +299,7 @@ namespace CycloneGames.BehaviorTree.Runtime.PerformanceTest
             LastExportPath = BehaviorTreeBenchmarkExportUtility.WriteBatchFiles(GetExportDirectoryPath(), LastBatchResult, _autoExportCsv, _autoExportJson);
             if (!string.IsNullOrEmpty(LastExportPath))
             {
-                Debug.Log($"[BehaviorTreeBenchmarkRunner] Exported benchmark matrix to: {LastExportPath}");
+                Log.Info($"Exported benchmark matrix to: {LastExportPath}");
             }
         }
 

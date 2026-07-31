@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.GameplayAbilities.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -635,6 +636,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public sealed class GASRuntimeContext : IDisposable
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         private readonly int ownerThreadId;
         private int nextEntityId;
         private int registeredAbilitySystems;
@@ -734,10 +737,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (ThreadPolicy == GASRuntimeThreadPolicy.LogWarning)
             {
-                GASLog.Warning(sb => sb.Append("GASRuntimeContext rejected access from thread ")
-                    .Append(current)
+                Log.Warning(
+                    (Current: current, Owner: ownerThreadId),
+                    static (state, sb) => sb.Append("GASRuntimeContext rejected access from thread ")
+                    .Append(state.Current)
                     .Append("; owner thread is ")
-                    .Append(ownerThreadId)
+                    .Append(state.Owner)
                     .Append('.'));
             }
 
@@ -776,10 +781,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (ThreadPolicy == GASRuntimeThreadPolicy.LogWarning)
             {
-                GASLog.Warning(sb => sb.Append("GASRuntimeContext memory is owned by thread ")
-                    .Append(ownerThreadId)
+                Log.Warning(
+                    (Owner: ownerThreadId, Current: current),
+                    static (state, sb) => sb.Append("GASRuntimeContext memory is owned by thread ")
+                    .Append(state.Owner)
                     .Append(" but was accessed from thread ")
-                    .Append(current)
+                    .Append(state.Current)
                     .Append('.'));
             }
 

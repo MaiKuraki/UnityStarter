@@ -6,6 +6,7 @@ using CycloneGames.BehaviorTree.Runtime.Data;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
+using CycloneGames.Logging;
 
 #if UNITY_EDITOR
 using UnityEditor;
@@ -18,6 +19,8 @@ namespace CycloneGames.BehaviorTree.Runtime
     [CreateAssetMenu(fileName = "BehaviorTree", menuName = "CycloneGames/AI/BehaviorTree")]
     public class BehaviorTree : ScriptableObject, ISerializationCallbackReceiver
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         public const int CurrentBlackboardSchemaFormatVersion = 1;
 
         public GameObject Owner { get; private set; } = null;
@@ -142,7 +145,7 @@ namespace CycloneGames.BehaviorTree.Runtime
             }
             catch (BehaviorTreeCompileException exception)
             {
-                Debug.LogError("[BehaviorTree] " + exception.Message, this);
+                Log.Error(exception, "Behavior tree compilation failed.");
                 return null;
             }
         }

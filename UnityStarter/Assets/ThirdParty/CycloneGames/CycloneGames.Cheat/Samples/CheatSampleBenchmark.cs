@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Text;
 using CycloneGames.Cheat.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Profiling;
@@ -13,6 +14,8 @@ namespace CycloneGames.Cheat.Sample
     /// </summary>
     public sealed class CheatSampleBenchmark : MonoBehaviour
     {
+        private static readonly LogChannel Log = CheatSampleLog.BenchmarkChannel;
+
         public const string BENCHMARK_COMMAND = "Benchmark_Struct";
         public const string WARMUP_COMMAND = "Benchmark_Warmup";
 
@@ -37,7 +40,7 @@ namespace CycloneGames.Cheat.Sample
 
         private void Awake()
         {
-            _runtime = new CheatCommandRuntime(new UnityDebugCheatLogger());
+            _runtime = new CheatCommandRuntime();
         }
 
         private void OnDestroy()
@@ -91,7 +94,7 @@ namespace CycloneGames.Cheat.Sample
             catch (Exception exception)
             {
                 _lastResult = string.Concat("Benchmark failed:\n", exception);
-                UnityEngine.Debug.LogException(exception);
+                Log.Error(exception, "Cheat benchmark failed.");
             }
             finally
             {
@@ -176,7 +179,7 @@ namespace CycloneGames.Cheat.Sample
             _lastResult = sb.ToString();
             if (LogResultToConsole)
             {
-                UnityEngine.Debug.LogFormat(LogType.Log, LogOption.NoStacktrace, null, "{0}", _lastResult);
+                Log.Info(_lastResult);
             }
         }
 

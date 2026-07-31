@@ -1,12 +1,14 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
     public class GA_Fireball : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect fireballDamageEffect;
         private readonly GameplayEffect burnEffect;
 
@@ -24,7 +26,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         public override void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            CLogger.LogInfo($"Activating {Name}");
+            Log.Info($"Activating {Name}");
 
             if (!CommitAbility(actorInfo, spec).Succeeded)
             {
@@ -38,7 +40,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (target != null && target.TryGetComponent<AbilitySystemComponentHolder>(out var holder))
             {
                 var targetASC = holder.AbilitySystemComponent;
-                CLogger.LogInfo($"{caster.name} casts {Name} on {target.name}");
+                Log.Info($"{caster.name} casts {Name} on {target.name}");
 
                 // Apply Instant Damage
                 var damageSpec = GameplayEffectSpec.Create(fireballDamageEffect, AbilitySystemComponent, spec.Level);
@@ -48,7 +50,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 {
                     float bonusDamageMultiplier = casterCharacter.AttributeSet.GetCurrentValue(casterCharacter.AttributeSet.BonusDamageMultiplier);
                     damageSpec.SetSetByCallerMagnitude(GameplayTagManager.RequestTag(GASSampleTags.Data_DamageMultiplier), bonusDamageMultiplier);
-                    CLogger.LogInfo($"Snapshotting DamageMultiplier: {bonusDamageMultiplier}");
+                    Log.Info($"Snapshotting DamageMultiplier: {bonusDamageMultiplier}");
                 }
 
                 targetASC.ApplyGameplayEffectSpecToSelf(damageSpec);
@@ -62,7 +64,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
             else
             {
-                CLogger.LogWarning($"{Name} could not find a valid target.");
+                Log.Warning($"{Name} could not find a valid target.");
             }
 
             EndAbility();

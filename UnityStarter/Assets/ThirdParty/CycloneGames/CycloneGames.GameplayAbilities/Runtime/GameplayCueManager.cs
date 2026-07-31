@@ -6,6 +6,7 @@ using Cysharp.Threading.Tasks;
 using CycloneGames.GameplayTags.Core;
 using UnityEngine;
 using CycloneGames.GameplayAbilities.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -14,6 +15,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public sealed class GameplayCueManager : IGameplayCueManager, IDisposable
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         private const int MaxAssetAddressLength = 1024;
         private const int MaxRetainedScratchListsPerType = 4;
         private readonly GameObjectPoolManager.PoolConfig poolConfig;
@@ -94,7 +97,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
                 catch (Exception exception)
                 {
-                    GASLog.Error($"Persistent Gameplay Cue activation cancellation callback failed: {exception.Message}");
+                    Log.Error(exception, "Persistent Gameplay Cue activation cancellation callback failed.");
                 }
             }
 
@@ -136,7 +139,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
                 catch (Exception exception)
                 {
-                    GASLog.Error($"Persistent Gameplay Cue removal cancellation callback failed: {exception.Message}");
+                    Log.Error(exception, "Persistent Gameplay Cue removal cancellation callback failed.");
                 }
             }
 
@@ -208,7 +211,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             poolManager = new GameObjectPoolManager(resourceLocator, poolConfig);
 
             isInitialized = true;
-            GASLog.Info("GameplayCueManager initialized.");
+            Log.Info("GameplayCueManager initialized.");
         }
 
         /// <summary>
@@ -238,7 +241,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 try { previousHandle?.Dispose(); }
                 catch (Exception exception)
                 {
-                    GASLog.Error($"Gameplay Cue asset handle cleanup failed for '{previousAddress}': {exception.Message}");
+                    Log.Error(exception, $"Gameplay Cue asset handle cleanup failed for '{previousAddress}'.");
                 }
             }
         }
@@ -354,7 +357,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"Persistent Gameplay Cue '{cueTag}' removal failed: {exception.Message}");
+                        Log.Error(exception, $"Persistent Gameplay Cue '{cueTag}' removal failed.");
                     }
                 }
 
@@ -390,7 +393,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         }
                         catch (Exception exception)
                         {
-                            GASLog.Error($"Static Gameplay Cue '{cueTag}' handler failed: {exception.Message}");
+                            Log.Error(exception, $"Static Gameplay Cue '{cueTag}' handler failed.");
                         }
                     }
                 }
@@ -412,7 +415,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             catch (Exception exception)
             {
-                GASLog.Error($"Gameplay Cue '{cueTag}' dispatch failed: {exception.Message}");
+                Log.Error(exception, $"Gameplay Cue '{cueTag}' dispatch failed.");
             }
             finally
             {
@@ -600,7 +603,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (occurrenceIndex < 0)
             {
-                GASLog.Warning($"Gameplay Cue '{cueTag}' removal did not match an active occurrence.");
+                Log.Warning(cueTag, static (tag, sb) => sb.Append("Gameplay Cue '").Append(tag)
+                    .Append("' removal did not match an active occurrence."));
                 return false;
             }
 
@@ -684,7 +688,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     try { safeHandlers[i].HandleCue(cueTag, eventType, parameters); }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"Runtime Gameplay Cue handler failed after cue dispatch: {exception.Message}");
+                        Log.Error(exception, "Runtime Gameplay Cue handler failed after cue dispatch.");
                     }
                 }
             }
@@ -1282,7 +1286,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             try { handle.Dispose(); }
             catch (Exception exception)
             {
-                GASLog.Error($"Gameplay Cue asset handle cleanup failed for '{address}': {exception.Message}");
+                Log.Error(exception, $"Gameplay Cue asset handle cleanup failed for '{address}'.");
             }
         }
 
@@ -1332,8 +1336,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 releaseOwnerScratchPool.OutstandingCount;
             if (outstandingScratchLeaseCount > 0)
             {
-                GASLog.Warning(
-                    $"GameplayCueManager shutdown is discarding {outstandingScratchLeaseCount} outstanding scratch-list lease(s) when they return.");
+                Log.Warning(outstandingScratchLeaseCount, static (count, sb) =>
+                    sb.Append("GameplayCueManager shutdown is discarding ").Append(count)
+                        .Append(" outstanding scratch-list lease(s) when they return."));
             }
             TryDisposeScratchPool(runtimeHandlerScratchPool, ref cleanupFailure);
             TryDisposeScratchPool(tagRemovalScratchPool, ref cleanupFailure);
@@ -1365,7 +1370,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             catch (Exception exception) { cleanupFailure ??= exception; }
             if (cleanupFailure != null)
             {
-                GASLog.Error($"GameplayCueManager shutdown completed with cleanup failures: {cleanupFailure.Message}");
+                Log.Error(cleanupFailure, "GameplayCueManager shutdown completed with cleanup failures.");
             }
         }
 
@@ -1384,7 +1389,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 var runtimeParameters = new GameplayCueParameters(parameters);
                 if (runtimeParameters.Target != null && !ReferenceEquals(runtimeParameters.Target, target))
                 {
-                    GASLog.Error("Gameplay Cue owner does not match the target in its parameter snapshot.");
+                    Log.Error("Gameplay Cue owner does not match the target in its parameter snapshot.");
                     return;
                 }
                 HandleCueAsync(cueTag, runtimeEventType, runtimeParameters).Forget();
@@ -1414,7 +1419,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"Gameplay Cue lease cleanup failed: {exception.Message}");
+                        Log.Error(exception, "Gameplay Cue lease cleanup failed.");
                     }
                 }
                 instances.Clear();

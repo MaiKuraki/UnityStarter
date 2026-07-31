@@ -2,7 +2,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using System;
 using System.Collections.Generic;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using R3;
 
 namespace CycloneGames.InputSystem.Runtime
@@ -66,6 +66,8 @@ namespace CycloneGames.InputSystem.Runtime
 
     public class MenuNavigatorVertical : MonoBehaviour
     {
+        private static readonly LogChannel Log = InputSystemUguiLog.Channel;
+
         private class InternalNavItem
         {
             public Button Button;
@@ -842,7 +844,9 @@ namespace CycloneGames.InputSystem.Runtime
 
         private static void LogException(Exception exception)
         {
-            CLogger.LogError($"[MenuNavigatorVertical] Callback failed ({exception.GetType().Name}).");
+            Log.Error(
+                exception,
+                "[MenuNavigatorVertical] Callback failed.");
         }
     }
 }

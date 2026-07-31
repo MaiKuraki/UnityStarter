@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using Unity.Burst;
 using Unity.Collections;
 using Unity.Jobs;
@@ -38,6 +39,8 @@ namespace CycloneGames.Foundation2D.Runtime
         sourceClassName: "SpriteSequenceBurstManager")]
     public sealed class SpriteSequenceBurstManager : MonoBehaviour, ISpriteSequenceBurstMemoryOwner
     {
+        private static readonly LogChannel Log = Foundation2DBurstLog.Channel;
+
         [Header("Controller Sources")]
         [Tooltip("Explicit controllers owned by this manager. Duplicate entries are ignored.")]
         [SerializeField] private List<SpriteSequenceController> controllers = new();
@@ -446,7 +449,9 @@ namespace CycloneGames.Foundation2D.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, controller);
+                    Log.Error(
+                        exception,
+                        $"Failed to apply a batch result to controller '{controller.name}'.");
                 }
             }
         }
@@ -521,10 +526,9 @@ namespace CycloneGames.Foundation2D.Runtime
             }
 
             IncrementSaturating(ref _ownershipConflictRejectionCount);
-            Debug.LogError(
+            Log.Error(
                 $"SpriteSequenceController '{controller.name}' is already owned by another active " +
-                $"SpriteSequenceBurstManager. Manager '{name}' will not update it.",
-                controller);
+                $"SpriteSequenceBurstManager. Manager '{name}' will not update it.");
             return false;
         }
 
@@ -636,10 +640,10 @@ namespace CycloneGames.Foundation2D.Runtime
                 return;
             }
 
-            Debug.LogError(
+            Log.Error(
+                exception,
                 $"SpriteSequenceBurstManager '{name}' could not allocate buffers for " +
-                $"{requestedCapacity} controllers. Claimed controllers will be released. Exception={exception}",
-                this);
+                $"{requestedCapacity} controllers. Claimed controllers will be released.");
             _allocationWarningIssued = true;
         }
 
@@ -651,10 +655,9 @@ namespace CycloneGames.Foundation2D.Runtime
                 return;
             }
 
-            Debug.LogWarning(
+            Log.Warning(
                 $"SpriteSequenceBurstManager '{name}' reached maxControllerCapacity=" +
-                $"{ResolveMaxControllerCapacity()}. Additional controllers remain unclaimed and use their fallback policy.",
-                this);
+                $"{ResolveMaxControllerCapacity()}. Additional controllers remain unclaimed and use their fallback policy.");
             _capacityLimitWarningIssued = true;
         }
 
@@ -698,7 +701,9 @@ namespace CycloneGames.Foundation2D.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    $"SpriteSequenceBurstManager '{name}' failed to complete an outstanding job during disposal.");
             }
             finally
             {
@@ -709,7 +714,9 @@ namespace CycloneGames.Foundation2D.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, this);
+                    Log.Error(
+                        exception,
+                        $"SpriteSequenceBurstManager '{name}' failed to dispose native buffers.");
                 }
                 _snapshotCount = 0;
                 _snapshotControllers.Clear();

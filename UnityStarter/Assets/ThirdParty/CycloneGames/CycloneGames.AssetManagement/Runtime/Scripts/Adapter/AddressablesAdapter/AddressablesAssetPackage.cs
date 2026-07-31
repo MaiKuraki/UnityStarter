@@ -15,13 +15,15 @@ using UnityEngine.SceneManagement;
 using Cysharp.Threading.Tasks;
 
 using CycloneGames.IO;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
     internal sealed class AddressablesAssetPackage : IAssetPackage, IAssetBulkLoader, IAssetSceneLoader,
         IAddressablesCatalogMaintenance, IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetStoragePreflight
     {
+        private static readonly LogChannel Log = AssetManagementAddressablesLog.Channel;
+
         private const int MAX_VERSION_FILE_BYTES = 1024 * 1024;
         private const int MAX_TRACKED_PROVIDER_OPERATION_TAILS = 16_384;
         private const int MAX_PENDING_CATALOG_QUERIES = 32;
@@ -326,7 +328,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
             if (string.IsNullOrEmpty(version))
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     "[AddressablesAssetPackage] Version metadata is unavailable. Addressables catalogs do not expose a provider-neutral content version.");
             }
 
@@ -354,8 +356,18 @@ namespace CycloneGames.AssetManagement.Runtime
                     cancellationToken.ThrowIfCancellationRequested();
                     if (checkOperation.Status != AsyncOperationStatus.Succeeded)
                     {
-                        CLogger.LogWarning(
-                            $"[AddressablesAssetPackage] Catalog update check failed: {checkOperation.OperationException?.Message}");
+                        Exception operationException = checkOperation.OperationException;
+                        if (operationException != null)
+                        {
+                            Log.Error(
+                                operationException,
+                                "[AddressablesAssetPackage] Catalog update check failed.");
+                        }
+                        else
+                        {
+                            Log.Warning(
+                                "[AddressablesAssetPackage] Catalog update check failed without an exception.");
+                        }
                         return false;
                     }
 
@@ -369,7 +381,9 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
                 catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
                 {
-                    CLogger.LogWarning($"[AddressablesAssetPackage] Catalog update check failed: {ex.Message}");
+                    Log.Error(
+                        ex,
+                        "[AddressablesAssetPackage] Catalog update check failed.");
                     return false;
                 }
                 finally
@@ -402,7 +416,9 @@ namespace CycloneGames.AssetManagement.Runtime
                 }
                 catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
                 {
-                    CLogger.LogWarning($"[AddressablesAssetPackage] Catalog update failed: {ex.Message}");
+                    Log.Error(
+                        ex,
+                        "[AddressablesAssetPackage] Catalog update failed.");
                     return false;
                 }
                 finally
@@ -451,7 +467,9 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
             {
-                CLogger.LogWarning($"[AddressablesAssetPackage] Unused bundle cache cleanup failed: {ex.Message}");
+                Log.Error(
+                    ex,
+                    "[AddressablesAssetPackage] Unused bundle cache cleanup failed.");
                 return false;
             }
             finally
@@ -479,7 +497,7 @@ namespace CycloneGames.AssetManagement.Runtime
             EnterMaintenanceMutation(nameof(ClearAllCacheFilesAsync));
             try
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     "[AddressablesAssetPackage] Clearing Unity's process-wide AssetBundle cache. This operation is not scoped to the current package.");
                 return UniTask.FromResult(Caching.ClearCache());
             }
@@ -888,7 +906,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 int count = locations?.Count ?? 0;
                 if (count > MAX_CATALOG_QUERY_RESULTS)
                 {
-                    CLogger.LogWarning(
+                    Log.Warning(
                         "[AddressablesAssetPackage] Catalog query input exceeded the bounded scan budget.");
                     return;
                 }
@@ -906,7 +924,7 @@ namespace CycloneGames.AssetManagement.Runtime
                     if (location.Length > MAX_CATALOG_LOCATION_LENGTH)
                     {
                         state.Locations.Clear();
-                        CLogger.LogWarning(
+                        Log.Warning(
                             "[AddressablesAssetPackage] Catalog query location exceeded the bounded length budget.");
                         return;
                     }
@@ -920,7 +938,7 @@ namespace CycloneGames.AssetManagement.Runtime
                         totalCharacters > MAX_CATALOG_QUERY_TOTAL_CHARACTERS - location.Length)
                     {
                         state.Locations.Clear();
-                        CLogger.LogWarning(
+                        Log.Warning(
                             "[AddressablesAssetPackage] Catalog query output exceeded the bounded result budget.");
                         return;
                     }
@@ -933,8 +951,9 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
             {
-                CLogger.LogWarning(
-                    $"[AddressablesAssetPackage] Catalog location query failed ({ex.GetType().Name}).");
+                Log.Error(
+                    ex,
+                    "[AddressablesAssetPackage] Catalog location query failed.");
             }
             finally
             {
@@ -1073,7 +1092,9 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
             {
-                CLogger.LogWarning($"[AddressablesAssetPackage] Persistent version metadata is invalid: {ex.Message}");
+                Log.Error(
+                    ex,
+                    "[AddressablesAssetPackage] Persistent version metadata is invalid.");
                 return string.Empty;
             }
         }

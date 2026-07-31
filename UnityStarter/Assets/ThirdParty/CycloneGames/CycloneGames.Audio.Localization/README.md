@@ -55,11 +55,13 @@ The prepare arrow is intentionally outside the bridge. A Localization change is 
 | Runtime assembly | `CycloneGames.Audio.Runtime.Integrations.Localization` |
 | Editor assembly | `CycloneGames.Audio.Editor.Integrations.Localization` |
 | Test assembly | `CycloneGames.Audio.Localization.Tests.Editor` |
-| Required project modules | `CycloneGames.AssetManagement`, `CycloneGames.Audio`, `CycloneGames.Localization`, and UniTask |
-| Direct Runtime assembly references | `CycloneGames.AssetManagement.Runtime`, `CycloneGames.Audio.Runtime`, `CycloneGames.Localization.Core`, `CycloneGames.Localization.Runtime`, `UniTask` |
-| Direct Editor assembly reference | `CycloneGames.Audio.Runtime.Integrations.Localization` |
+| Required project modules | `CycloneGames.AssetManagement`, `CycloneGames.Audio`, `CycloneGames.Localization`, `CycloneGames.Logging`, and UniTask |
+| Direct Runtime assembly references | `CycloneGames.AssetManagement.Runtime`, `CycloneGames.Audio.Runtime`, `CycloneGames.Localization.Core`, `CycloneGames.Localization.Runtime`, `CycloneGames.Logging`, `UniTask` |
+| Direct Editor assembly references | `CycloneGames.Audio.Runtime.Integrations.Localization`, `CycloneGames.Logging` |
 
 This is a physically separate local integration package. Audio Runtime does not reference the integration or Localization, and Localization does not reference Audio. The dependency direction is integration to both core modules, so no cycle is introduced.
+
+Runtime and Editor diagnostics are centralized by the internal `AudioLocalizationRuntimeLog` and `AudioLocalizationEditorLog` facades under each assembly's `Diagnostics/` folder. Both use the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` shape while preserving categories `CycloneGames.Audio.Localization` and `CycloneGames.Audio.Localization.Editor`. Static and Unity-owned entry points use the facade `Channel`; an explicitly isolated service uses `Create(logWriter)`. Neither facade initializes or owns a backend.
 
 When the integration directory is installed and its direct assembly references are present, Unity compiles the integration assembly. Runtime synchronization is **not** automatically enabled: the default state is unbound until the application constructs an `AudioLocalizationBridge` and calls `Bind()`.
 
@@ -130,7 +132,7 @@ Create an `AudioLocalizationMap` through **Create > CycloneGames > Audio > Local
 
 Pass the map as the bridge's `IAudioLocalizationMapper`. A map supports at most 256 exact source entries. Keep every source locale unique, use valid canonical locale codes, keep voice fallbacks unique and distinct from the primary, and keep the complete Audio snapshot within Audio's eight-entry bound (one primary and at most seven fallbacks). `TryValidate(out string error)` validates the complete asset as one unit; one invalid entry rejects the complete compiled map so behavior cannot depend on serialized order.
 
-Use **Validate Localization Map** in the custom Inspector or **Tools > CycloneGames > Audio > Validate All Localization Maps** for a project-wide check. The build preprocessor runs the same scan and fails a build that contains an invalid map. Missing or invalid mappings are rejected. The bridge leaves the last known good Audio locale unchanged and reports an `AudioLocalizationDiagnostic` through the supplied sink, or through Unity logging when no sink is supplied. Diagnostics distinguish invalid Localization state, unavailable mapping, mapper exceptions, Audio rejection/exception, and a failed last-known-good restore.
+Use **Validate Localization Map** in the custom Inspector or **Tools > CycloneGames > Audio > Validate All Localization Maps** for a project-wide check. The build preprocessor runs the same scan and fails a build that contains an invalid map. Missing or invalid mappings are rejected. The bridge leaves the last known good Audio locale unchanged and reports an `AudioLocalizationDiagnostic` through the supplied sink, or through the `CycloneGames.Audio.Localization` `LogChannel` when no sink is supplied. If no process backend is installed, `NullLogWriter` safely discards the diagnostic. Diagnostics distinguish invalid Localization state, unavailable mapping, mapper exceptions, Audio rejection/exception, and a failed last-known-good restore.
 
 Mapping is explicit. The bridge never derives voice fallback from `CultureInfo`, infers parent locales, inspects AudioBank contents, or copies Localization's fallback chain.
 

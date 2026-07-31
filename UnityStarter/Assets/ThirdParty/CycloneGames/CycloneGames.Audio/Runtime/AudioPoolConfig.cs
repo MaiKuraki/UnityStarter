@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Audio.Runtime
 {
@@ -12,6 +13,8 @@ namespace CycloneGames.Audio.Runtime
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Pool Config")]
     public class AudioPoolConfig : ScriptableObject
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         [Header("WebGL Platform")]
         [Tooltip("Maximum pool size for WebGL builds (browser limitations)")]
         [Range(8, 64)]
@@ -291,7 +294,7 @@ namespace CycloneGames.Audio.Runtime
                 cachedConfig = allConfigs[0];
                 if (allConfigs.Length > 1)
                 {
-                    Debug.LogWarning($"AudioPoolConfig: Found {allConfigs.Length} configs in Resources. Using first.");
+                    Log.Warning($"AudioPoolConfig: Found {allConfigs.Length} configs in Resources. Using first.");
                 }
                 return cachedConfig;
             }
@@ -303,7 +306,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 if (guids.Length > 1)
                 {
-                    Debug.LogWarning($"AudioPoolConfig: Found {guids.Length} configs in project. Only one should exist. Using first found.");
+                    Log.Warning($"AudioPoolConfig: Found {guids.Length} configs in project. Only one should exist. Using first found.");
                 }
                 string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
                 cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioPoolConfig>(path);
@@ -324,7 +327,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (config != null)
             {
-                Debug.Log($"AudioPoolConfig: External config set (Device tier: {config.GetDeviceTierName()})");
+                Log.Info($"AudioPoolConfig: External config set (Device tier: {config.GetDeviceTierName()})");
             }
         }
 

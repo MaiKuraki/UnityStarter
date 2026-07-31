@@ -5,7 +5,9 @@
   "description": "Explicit factory contracts, bounded managed object pools, Unity object adapters, and optional Native Collections dense pools.",
   "unity": "2022.3",
   "unityRelease": "0f1",
-  "dependencies": {},
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0"
+  },
   "keywords": [
     "CycloneGames",
     "Factory",

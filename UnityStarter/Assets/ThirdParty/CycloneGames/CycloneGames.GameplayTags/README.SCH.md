@@ -8,6 +8,7 @@ CycloneGames.GameplayTags 提供分层标签（`State.CrowdControl.Stunned`）�
 
 - [概述](#概述)
 - [架构](#架构)
+- [日志](#日志)
 - [快速上手](#快速上手)
 - [核心概念](#核心概念)
 - [使用指南](#使用指南)
@@ -39,9 +40,9 @@ CycloneGames.GameplayTags 提供分层标签（`State.CrowdControl.Stunned`）�
 
 | 程序集 | 职责 | 直接依赖 |
 | --- | --- | --- |
-| `CycloneGames.GameplayTags.Core` | 注册表、值、容器、计数、查询与 Player catalog contract | `CycloneGames.Hash.Core`；`noEngineReferences` |
-| `CycloneGames.GameplayTags.Unity.Runtime` | Unity logging/bootstrap、`Resources` build data loading、`GameObject` component adapter | GameplayTags Core |
-| `CycloneGames.GameplayTags.Unity.Editor` | JSON authoring、manager window、drawer、validation、file watcher、build bake | Core、Unity Runtime、Newtonsoft.Json；仅 Editor |
+| `CycloneGames.GameplayTags.Core` | 注册表、值、容器、计数、查询与 Player catalog contract | `CycloneGames.Hash.Core`、`CycloneGames.Logging`；`noEngineReferences` |
+| `CycloneGames.GameplayTags.Unity.Runtime` | Runtime bootstrap、`Resources` build data loading、`GameObject` component adapter | GameplayTags Core |
+| `CycloneGames.GameplayTags.Unity.Editor` | JSON authoring、manager window、drawer、validation、file watcher、build bake | Core、Unity Runtime、Logging、Newtonsoft.Json；仅 Editor |
 
 ```mermaid
 flowchart LR
@@ -57,6 +58,12 @@ flowchart LR
 ```
 
 Writer 在发布前构建完整 candidate。非法输入、stable-ID collision 或预算失败不会修改当前 snapshot。Tree-change notification 在发布后于 registry writer lock 之外同步执行。
+
+## 日志
+
+Core 与 Editor 诊断分别使用各自 assembly-local `Diagnostics/` 目录中的 internal `GameplayTagsCoreLog` 和 `GameplayTagsEditorLog` facade。两个 facade 都提供统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 结构，会显式拒绝 null writer，并保留 category `CycloneGames.GameplayTags`。包内 class 从对应 facade 持有 class-local `Log` channel。该包只依赖不含 Unity API 的 `CycloneGames.Logging` 契约。`LogRuntime` 未安装 backend 时，由 no-op writer 接收 ambient 写入；组合使用本包不会强制依赖 `CycloneGames.Logger`。
+
+GameplayTags 不公开包专用 logger、日志 delegate、writer setter 或 logging bootstrap。应用 composition root 通过 `LogRuntime` 安装或替换共享进程 writer；需要自身 category 的调用方代码应创建自己的 `LogChannel`。`GameplayTagRuntimePlatform` 只保留 play-state 检测、build data、settings path 与 project tag source 等 host-platform 能力。Unity bootstrap 不修改进程 writer。
 
 ## 快速上手
 

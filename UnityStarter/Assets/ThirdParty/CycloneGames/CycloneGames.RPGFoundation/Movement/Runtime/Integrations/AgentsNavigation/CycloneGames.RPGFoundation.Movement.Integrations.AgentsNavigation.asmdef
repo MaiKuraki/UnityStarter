@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation",
     "references": [
         "CycloneGames.RPGFoundation.Movement.Core",
-        "CycloneGames.RPGFoundation.Movement.Runtime"
+        "CycloneGames.RPGFoundation.Movement.Runtime",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

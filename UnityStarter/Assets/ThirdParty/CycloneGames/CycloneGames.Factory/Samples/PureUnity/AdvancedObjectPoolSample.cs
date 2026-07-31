@@ -1,5 +1,6 @@
 using UnityEngine;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Factory.Samples.PureUnity
 {
@@ -9,6 +10,8 @@ namespace CycloneGames.Factory.Samples.PureUnity
     /// </summary>
     public class AdvancedObjectPoolSample : MonoBehaviour
     {
+        private static readonly LogChannel Log = FactorySamplesLog.Channel;
+
         [SerializeField] private Bullet BulletPrefab;
 
         private ObjectPool<BulletData, Bullet> _advancedPool;
@@ -16,7 +19,7 @@ namespace CycloneGames.Factory.Samples.PureUnity
 
         void Start()
         {
-            Debug.Log("Initializing Advanced Object Pool...");
+            Log.Info("Initializing Advanced Object Pool...");
 
             //    DefaultUnityObjectSpawner -> MonoPrefabFactory -> ObjectPool
             var spawner = new DefaultUnityObjectSpawner();
@@ -28,7 +31,7 @@ namespace CycloneGames.Factory.Samples.PureUnity
                 overflowPolicy: PoolOverflowPolicy.Throw,
                 trimPolicy: PoolTrimPolicy.TrimOnDespawn));
 
-            Debug.Log($"Advanced Pool Ready. Total: {_advancedPool.CountAll}");
+            Log.Info($"Advanced Pool Ready. Total: {_advancedPool.CountAll}");
         }
 
         void Update()
@@ -42,7 +45,7 @@ namespace CycloneGames.Factory.Samples.PureUnity
             {
                 _advancedPool.ForEachActive(bullet =>
                 {
-                    Debug.Log($"Processing active bullet at {bullet.transform.position}");
+                    Log.Debug($"Processing active bullet at {bullet.transform.position}");
                 });
             }
         }
@@ -59,11 +62,11 @@ namespace CycloneGames.Factory.Samples.PureUnity
             try
             {
                 var bullet = _advancedPool.Spawn(data);
-                Debug.Log($"[Advanced] Spawned Bullet. Active Count: {_advancedPool.CountActive}");
+                Log.Info($"Spawned Bullet. Active Count: {_advancedPool.CountActive}");
             }
             catch (System.Exception e)
             {
-                Debug.LogError($"Spawn failed (maybe MaxCapacity reached): {e.Message}");
+                Log.Error(e, "Spawn failed; the pool may have reached MaxCapacity.");
             }
         }
 

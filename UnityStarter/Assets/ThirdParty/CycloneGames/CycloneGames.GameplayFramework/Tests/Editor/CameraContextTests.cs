@@ -1,10 +1,11 @@
-using CycloneGames.GameplayFramework.Runtime;
-using NUnit.Framework;
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using System.Text;
+using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Logging;
+using NUnit.Framework;
 using UnityEngine;
-using UnityEngine.TestTools;
 using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Tests.Editor
@@ -152,50 +153,34 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         [Test]
         public void TryPushCameraMode_ActivationFailureRollsBackStack()
         {
-            bool previousIgnoreState = LogAssert.ignoreFailingMessages;
-            LogAssert.ignoreFailingMessages = true;
-            try
-            {
-                CameraContext context = new CameraContext(null, 2);
-                var mode = new ThrowingCameraMode(throwOnActivate: true, throwOnDeactivate: false);
+            using var logScope = new ScopedSilentLogWriter();
+            CameraContext context = new CameraContext(null, 2);
+            var mode = new ThrowingCameraMode(throwOnActivate: true, throwOnDeactivate: false);
 
-                Assert.IsFalse(context.TryPushCameraMode(mode));
-                Assert.AreEqual(0, context.CameraModeCount);
-                Assert.IsNull(context.GetPrimaryCameraMode());
-            }
-            finally
-            {
-                LogAssert.ignoreFailingMessages = previousIgnoreState;
-            }
+            Assert.IsFalse(context.TryPushCameraMode(mode));
+            Assert.AreEqual(0, context.CameraModeCount);
+            Assert.IsNull(context.GetPrimaryCameraMode());
         }
 
         [Test]
         public void Clear_ContinuesAfterModeDeactivationFailure()
         {
-            bool previousIgnoreState = LogAssert.ignoreFailingMessages;
-            LogAssert.ignoreFailingMessages = true;
-            try
-            {
-                CameraContext context = new CameraContext(null, 2);
-                var baseMode = new TestCameraMode();
-                var first = new TestCameraMode();
-                var throwing = new ThrowingCameraMode(throwOnActivate: false, throwOnDeactivate: true);
-                context.SetBaseCameraMode(baseMode);
-                context.TryPushCameraMode(first);
-                context.TryPushCameraMode(throwing);
+            using var logScope = new ScopedSilentLogWriter();
+            CameraContext context = new CameraContext(null, 2);
+            var baseMode = new TestCameraMode();
+            var first = new TestCameraMode();
+            var throwing = new ThrowingCameraMode(throwOnActivate: false, throwOnDeactivate: true);
+            context.SetBaseCameraMode(baseMode);
+            context.TryPushCameraMode(first);
+            context.TryPushCameraMode(throwing);
 
-                context.Clear();
+            context.Clear();
 
-                Assert.AreEqual(0, context.CameraModeCount);
-                Assert.IsNull(context.BaseCameraMode);
-                Assert.AreEqual(1, first.DeactivateCount);
-                Assert.AreEqual(1, baseMode.DeactivateCount);
-                Assert.AreEqual(1, throwing.DeactivateCount);
-            }
-            finally
-            {
-                LogAssert.ignoreFailingMessages = previousIgnoreState;
-            }
+            Assert.AreEqual(0, context.CameraModeCount);
+            Assert.IsNull(context.BaseCameraMode);
+            Assert.AreEqual(1, first.DeactivateCount);
+            Assert.AreEqual(1, baseMode.DeactivateCount);
+            Assert.AreEqual(1, throwing.DeactivateCount);
         }
 
         [Test]
@@ -371,6 +356,77 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             public override CameraPose Evaluate(CameraContext context, in CameraPose basePose, float deltaTime)
             {
                 return basePose;
+            }
+        }
+
+        private sealed class ScopedSilentLogWriter : ILogWriter, IDisposable
+        {
+            private ILogWriter previousWriter;
+            private bool isDisposed;
+
+            public ScopedSilentLogWriter()
+            {
+                previousWriter = LogRuntime.ReplaceWriter(this);
+            }
+
+            public bool IsEnabled(LogSeverity severity, string category) => false;
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+            }
+
+            public void Dispose()
+            {
+                if (isDisposed)
+                {
+                    return;
+                }
+
+                isDisposed = true;
+                ILogWriter writerToRestore = previousWriter;
+                previousWriter = null;
+                if (object.ReferenceEquals(LogRuntime.Writer, this))
+                {
+                    LogRuntime.ReplaceWriter(writerToRestore);
+                }
             }
         }
     }

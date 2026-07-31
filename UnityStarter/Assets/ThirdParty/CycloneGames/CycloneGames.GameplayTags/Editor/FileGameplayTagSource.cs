@@ -6,6 +6,7 @@ using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 
@@ -27,6 +28,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private const string FlagsPropertyName = "flags";
       private const int MaxJsonDepth = 8;
 
+      private static readonly LogChannel Log = GameplayTagsEditorLog.Channel;
       private static readonly UTF8Encoding s_StrictUtf8 = new(false, true);
       private static readonly GameplayTagFlags s_KnownFlags = GameplayTagFlags.HideInEditor;
 
@@ -125,7 +127,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          catch (Exception exception)
          {
             LastLoadException = exception;
-            GameplayTagLogger.LogError($"Failed to load gameplay tags from '{Name}': {exception.Message}");
+            Log.Error(exception, $"Failed to load gameplay tags from '{Name}'.");
             return false;
          }
       }

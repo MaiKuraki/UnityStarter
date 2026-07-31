@@ -30,19 +30,21 @@ CycloneGames.DataTable loads typed configuration data — item definitions, game
 - **AOT-safe registration** of generated table sets via explicit `TableDescriptor<TTableSet>` — no runtime reflection.
 - **Luban and MessagePack adapters** isolated from the pure C# Core assembly.
 - **Unity Editor integration** with `DataTableLubanSettings`, custom Inspector, and a guarded external-process runner.
+- **Unified logging** through `CycloneGames.Logging`, with process-wide replacement and no direct Unity or console API in package assemblies.
 
 ## Architecture
 
 | Assembly | Namespace | Responsibility |
 | --- | --- | --- |
 | `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Tables, catalogs, registry, limits, manifests, hashes, byte cache, locations, logging, scopes. Pure C# with `noEngineReferences: true`. |
-| `CycloneGames.DataTable.Unity.Runtime` | `CycloneGames.DataTable.Unity` | Unity runtime logging bootstrap. |
 | `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`, custom Inspector, request validation, external-process execution. Editor only. |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | Bounded Luban `ByteBuf` creation and generated table-set construction. |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | Bounded MessagePack row-array decoding. |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | `CycloneGames.DataTable.Unity.Integrations.AssetManagement` | Optional UniTask-based `TextAsset` and raw-file payload loaders; inactive in the asset-style installation. |
 
-Core and Unity Runtime are auto-referenced. Editor and integration assemblies use `autoReferenced: false`; a consumer asmdef must reference each assembly it actually uses. Luban and MessagePack integrations also require their declared packages and version constraints to be satisfied. The asset-style AssetManagement module does not generate the UPM `versionDefines` capability required by its DataTable integration, so that integration remains inactive — adding an asmdef reference alone does not enable it.
+Core is auto-referenced. Editor and integration assemblies use `autoReferenced: false`; a consumer asmdef must reference each assembly it actually uses. Luban and MessagePack integrations also require their declared packages and version constraints to be satisfied. The asset-style AssetManagement module does not generate the UPM `versionDefines` capability required by its DataTable integration, so that integration remains inactive — adding an asmdef reference alone does not enable it.
+
+Each logging-producing assembly centralizes channel construction in one internal facade: `DataTableCoreLog`, `DataTableEditorLog`, `DataTableAssetManagementLog`, or `DataTableMessagePackLog`, each under its assembly's `Diagnostics/` directory. The common shape is `Category`, ambient `Channel`, and `Create(ILogWriter)`; `Create` requires a non-null explicit writer, while ambient callers use `Channel`. The Editor facade additionally retains the existing Luban Settings category. Production call sites use `Log` for ambient channels and `_log` for injected instance channels. `DataTableCoreLog.CommittedInfoNoThrow` contains the narrow best-effort boundary used after a registry publish has already committed.
 
 ```mermaid
 flowchart LR
@@ -632,7 +634,9 @@ Core performs no file writes and does not use `EditorPrefs` or `PlayerPrefs`.
 | `DataTableLubanSettings.asset` | Visible Unity project configuration; keep one authoritative asset. |
 | Runtime byte cache | Owned by a runtime content scope and disposed after readers retire. |
 
-`DataTableLogger` defaults to `System.Console` in Core. A composition root may assign `LogInfo`, `LogWarning`, and `LogError`; `CycloneGames.DataTable.Unity.Runtime` installs Unity logging. Reset or rebind custom delegates during subsystem registration when domain reload is disabled. Logs should include table identity, generation, stage, limits, and failure category, but not secrets or complete hostile payloads.
+All package diagnostics use `LogChannel` categories rooted at `CycloneGames.DataTable`. Install a process backend once with `LogRuntime.TryInstallWriter`, or atomically reconfigure it with `LogRuntime.ReplaceWriter`; channels created without an explicit writer observe later replacements. The default `NullLogWriter` is silent, so Core, headless, CLI, and Unity hosts share the same API without a Unity bootstrap. The standalone `Tools~/CodeGen` executable keeps `System.Console` for command output because that is its user-facing CLI protocol rather than library diagnostics.
+
+DataTable exposes no package-specific logger, delegate override, or Unity logging bootstrap. Configure `CycloneGames.Logging` only at the application composition root. A writer failure after `DataTableRegistry.Publish` commits is treated as best-effort diagnostics and cannot roll back or make the completed publish appear to fail. Logs should include table identity, generation, stage, limits, and failure category, but not secrets or complete hostile payloads.
 
 ## Troubleshooting
 
@@ -699,7 +703,7 @@ For each supported build profile:
 | `DataTableNameUtility` | Portable table-name, extension, and path normalization. |
 | `DataTableLocationResolver` | Portable relative location construction. |
 | `DataTableSetScope` | Generated root, catalog, and optional backing-owner lifetime. |
-| `DataTableLogger` | Replaceable logging boundary. |
+| `LogChannel` / `LogRuntime` | Unified category API and replaceable process writer. |
 | `LubanDataTableSetFactory` | Bounded, privately owned Luban buffer creation. |
 | `MessagePackConfigProvider` | Bounded MessagePack row-array decoding and table construction. |
 | `DataTableLubanSettings` | Project-visible Unity Editor generation settings. |
