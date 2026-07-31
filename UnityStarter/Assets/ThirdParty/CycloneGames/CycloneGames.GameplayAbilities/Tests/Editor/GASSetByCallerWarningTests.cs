@@ -30,10 +30,7 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
                 return;
             }
 
-            if (object.ReferenceEquals(LogRuntime.Writer, warningWriter))
-            {
-                LogRuntime.ReplaceWriter(previousWriter ?? NullLogWriter.Instance);
-            }
+            LogRuntime.TryReplaceWriter(warningWriter, previousWriter ?? NullLogWriter.Instance);
 
             warningWriter = null;
             previousWriter = null;

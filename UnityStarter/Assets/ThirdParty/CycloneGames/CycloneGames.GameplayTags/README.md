@@ -40,8 +40,9 @@ Use this module when:
 
 | Assembly | Role | Direct dependencies |
 | --- | --- | --- |
-| `CycloneGames.GameplayTags.Core` | Registry, values, containers, counts, queries, Player catalog contract | `CycloneGames.Hash.Core`, `CycloneGames.Logging`; `noEngineReferences` |
-| `CycloneGames.GameplayTags.Unity.Runtime` | Runtime bootstrap, `Resources` build-data loading, `GameObject` component adapter | GameplayTags Core |
+| `CycloneGames.GameplayTags.Core` | Registry, values, containers, counts, queries, Player catalog contract, local diagnostics port | `CycloneGames.Hash.Core`; `noEngineReferences` |
+| `CycloneGames.GameplayTags.Integrations.Logging` | Optional bridge from Core diagnostics to the shared writer | Core, Logging; `noEngineReferences`; `autoReferenced: false` |
+| `CycloneGames.GameplayTags.Unity.Runtime` | Runtime bootstrap, `Resources` build-data loading, `GameObject` component adapter | Core, Logging integration |
 | `CycloneGames.GameplayTags.Unity.Editor` | JSON authoring, manager window, drawers, validation, file watcher, build bake | Core, Unity Runtime, Logging, Newtonsoft.Json; Editor only |
 
 ```mermaid
@@ -61,9 +62,13 @@ Writers build a complete candidate before publication. Invalid input, a stable-I
 
 ## Logging
 
-Core and Editor diagnostics use the internal `GameplayTagsCoreLog` and `GameplayTagsEditorLog` facades under their assembly-local `Diagnostics/` folders. Both expose the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` shape, explicitly reject a null writer, and preserve category `CycloneGames.GameplayTags`. Package classes keep a class-local `Log` channel sourced from the relevant facade. The package depends only on the Unity-free `CycloneGames.Logging` contract. If no backend is installed in `LogRuntime`, ambient writes are handled by the no-op writer; adding this package does not force a dependency on `CycloneGames.Logger`.
+Core owns the engine-independent `IGameplayTagsDiagnostics`, `NullGameplayTagsDiagnostics`, `GameplayTagsDiagnosticCategories.Root`, and `GameplayTagsDiagnostics` process replacement point. It does not reference `ILogWriter`, `LogChannel`, Unity, or a concrete backend. `GameplayTagsDiagnosticLevel` has the stable shared shape `Trace`, `Debug`, `Info`, `Warning`, `Error`, `Fatal`, and `None`, with numeric values matching `LogSeverity`; `None` and unknown values are never emitted. `GameplayTagsLoggingDiagnostics` is the optional adapter to the shared process writer; it isolates ordinary writer failures while deliberately allowing `OutOfMemoryException` to propagate.
 
-GameplayTags exposes no package-specific logger, logging delegate, writer setter, or logging bootstrap. The application composition root installs or replaces the shared process writer through `LogRuntime`; caller-owned code that needs its own category creates its own `LogChannel`. `GameplayTagRuntimePlatform` retains only host-platform capabilities for play-state detection, build data, settings paths, and project tag sources. The Unity bootstrap does not mutate the process writer.
+This is an assembly boundary, not yet a separate UPM distribution boundary. The current combined `com.cyclone-games.gameplay-tags` package root also contains non-Core assemblies and therefore still declares `com.cyclone-games.logging`; installing only Core without that package dependency requires a future physical Core package split.
+
+Every Core call crosses the internal `GameplayTagsCoreDiagnostics` best-effort guard. Ordinary custom-sink failures cannot alter registry publication, tag lookup, committed count state, or subscriber iteration. Pure C# hosts may leave Core silent, install their own `IGameplayTagsDiagnostics`, or explicitly reference the Logging integration. Owners use `GameplayTagsDiagnostics.TryReplace(expected, replacement)` for atomic handoff or `TryReset(expected)` to release only the sink they installed. The Unity bootstrap tracks its ambient ownership and never resets or replaces a user-installed sink; it also never mutates `LogRuntime.Writer`.
+
+Editor-owned output continues to use the assembly-local `GameplayTagsEditorLog` facade with the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` shape. `GameplayTagRuntimePlatform` retains only host-platform capabilities for play-state detection, build data, settings paths, and project tag sources.
 
 ## Quick Start
 

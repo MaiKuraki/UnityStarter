@@ -1,7 +1,6 @@
 using System;
 using System.Runtime.CompilerServices;
 using CycloneGames.DeterministicMath;
-using CycloneGames.Logging;
 
 namespace CycloneGames.Networking.Lockstep
 {
@@ -39,7 +38,7 @@ namespace CycloneGames.Networking.Lockstep
         private readonly int _localPeerId;
         private readonly int _maxRollbackFrames;
         private readonly IRollbackSimulation _simulation;
-        private readonly LogChannel _log;
+        private readonly INetworkingDiagnostics _diagnostics;
 
         // Ring buffers indexed by frame
         private readonly TInput[,] _confirmedInputs;    // Actual inputs received
@@ -92,7 +91,7 @@ namespace CycloneGames.Networking.Lockstep
                 peerCount,
                 localPeerId,
                 simulation,
-                NetworkingCoreLog.Channel,
+                NullNetworkingDiagnostics.Instance,
                 8,
                 60)
         {
@@ -107,7 +106,7 @@ namespace CycloneGames.Networking.Lockstep
                 peerCount,
                 localPeerId,
                 simulation,
-                NetworkingCoreLog.Channel,
+                NullNetworkingDiagnostics.Instance,
                 maxRollbackFrames,
                 60)
         {
@@ -123,7 +122,7 @@ namespace CycloneGames.Networking.Lockstep
                 peerCount,
                 localPeerId,
                 simulation,
-                NetworkingCoreLog.Channel,
+                NullNetworkingDiagnostics.Instance,
                 maxRollbackFrames,
                 tickRate)
         {
@@ -133,26 +132,9 @@ namespace CycloneGames.Networking.Lockstep
             int peerCount,
             int localPeerId,
             IRollbackSimulation simulation,
-            ILogWriter logWriter,
+            INetworkingDiagnostics diagnostics,
             int maxRollbackFrames = 8,
             int tickRate = 60)
-            : this(
-                peerCount,
-                localPeerId,
-                simulation,
-                NetworkingCoreLog.Create(logWriter),
-                maxRollbackFrames,
-                tickRate)
-        {
-        }
-
-        private RollbackNetcode(
-            int peerCount,
-            int localPeerId,
-            IRollbackSimulation simulation,
-            LogChannel log,
-            int maxRollbackFrames,
-            int tickRate)
         {
             if (peerCount < 1 || peerCount > 64)
                 throw new ArgumentOutOfRangeException(nameof(peerCount));
@@ -168,7 +150,7 @@ namespace CycloneGames.Networking.Lockstep
             _peerCount = peerCount;
             _localPeerId = localPeerId;
             _simulation = simulation;
-            _log = log;
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _maxRollbackFrames = maxRollbackFrames;
             _deltaTime = FPInt64.FromDouble(1.0 / tickRate);
 
@@ -289,7 +271,12 @@ namespace CycloneGames.Networking.Lockstep
             if (frame < 0) return;
 
             long relativeFrame = (long)frame - _currentFrame;
-            if (relativeFrame < -_maxRollbackFrames || relativeFrame >= _bufferSize) return;
+            if (relativeFrame < -_maxRollbackFrames)
+            {
+                ReportRollbackDepthExceeded(peerId, frame, _currentFrame - frame);
+                return;
+            }
+            if (relativeFrame >= _bufferSize) return;
 
             int slot = frame & _bufferMask;
             int existingFrame = _slotFrames[slot];
@@ -329,22 +316,30 @@ namespace CycloneGames.Networking.Lockstep
                 // Misprediction: need rollback
                 if (!predicted.Equals(input))
                 {
-                    int rollbackDepth = _currentFrame - frame;
-                    if (rollbackDepth > _maxRollbackFrames)
-                    {
-                        // Too far back: cannot rollback; log and notify desync.
-                        _log.Warning(
-                            $"[RollbackNetcode] Rollback depth {rollbackDepth} exceeds max {_maxRollbackFrames}. " +
-                            $"Peer {peerId} frame {frame} vs current {_currentFrame}. Possible desync.");
-                        return;
-                    }
-
                     Rollback(frame);
                 }
             }
 
             // Update global confirmed frame
             UpdateLastConfirmedFrame();
+        }
+
+        private void ReportRollbackDepthExceeded(int peerId, int frame, int rollbackDepth)
+        {
+            if (!NetworkingDiagnosticsGuard.IsEnabled(
+                _diagnostics,
+                NetworkingDiagnosticLevel.Warning,
+                NetworkingDiagnosticCategories.Root))
+            {
+                return;
+            }
+
+            NetworkingDiagnosticsGuard.Write(
+                _diagnostics,
+                NetworkingDiagnosticLevel.Warning,
+                NetworkingDiagnosticCategories.Root,
+                $"Rollback depth {rollbackDepth} exceeds max {_maxRollbackFrames}. " +
+                $"Peer {peerId} frame {frame} vs current {_currentFrame}. Possible desync.");
         }
 
         /// <summary>

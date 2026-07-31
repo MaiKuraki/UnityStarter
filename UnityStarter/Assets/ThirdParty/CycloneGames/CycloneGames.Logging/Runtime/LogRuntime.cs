@@ -45,26 +45,32 @@ namespace CycloneGames.Logging
         }
 
         /// <summary>
-        /// Resets the process writer only when the expected writer is still installed.
+        /// Atomically replaces the process writer only when the expected writer is still installed.
+        /// Neither writer is owned or disposed by this operation.
         /// </summary>
-        public static bool TryResetWriter(ILogWriter expectedWriter)
+        public static bool TryReplaceWriter(ILogWriter expectedWriter, ILogWriter replacementWriter)
         {
             if (expectedWriter == null)
             {
                 throw new ArgumentNullException(nameof(expectedWriter));
             }
 
+            if (replacementWriter == null)
+            {
+                throw new ArgumentNullException(nameof(replacementWriter));
+            }
+
             return ReferenceEquals(
-                Interlocked.CompareExchange(ref _writer, NullLogWriter.Instance, expectedWriter),
+                Interlocked.CompareExchange(ref _writer, replacementWriter, expectedWriter),
                 expectedWriter);
         }
 
         /// <summary>
-        /// Unconditionally resets the process writer and returns the previous unowned writer.
+        /// Resets the process writer only when the expected writer is still installed.
         /// </summary>
-        public static ILogWriter ResetWriter()
+        public static bool TryResetWriter(ILogWriter expectedWriter)
         {
-            return Interlocked.Exchange(ref _writer, NullLogWriter.Instance);
+            return TryReplaceWriter(expectedWriter, NullLogWriter.Instance);
         }
     }
 }

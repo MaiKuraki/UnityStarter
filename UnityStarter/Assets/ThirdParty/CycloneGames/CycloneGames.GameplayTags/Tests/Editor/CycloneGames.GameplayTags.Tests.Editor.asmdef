@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.GameplayTags.Tests.Editor",
     "references": [
         "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Integrations.Logging",
         "CycloneGames.GameplayTags.Unity.Runtime",
         "CycloneGames.GameplayTags.Unity.Editor",
         "CycloneGames.Logging"

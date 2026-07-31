@@ -11,12 +11,12 @@ namespace CycloneGames.DataTable.Tests.Editor
 {
     public sealed class DataTableCoreContractTests
     {
-        private ILogWriter _previousLogWriter;
+        private IDataTableDiagnostics _previousDiagnostics;
 
         [SetUp]
         public void SetUp()
         {
-            _previousLogWriter = LogRuntime.ReplaceWriter(NullLogWriter.Instance);
+            _previousDiagnostics = DataTableDiagnostics.Replace(NullDataTableDiagnostics.Instance);
             DataTableRegistry.Reset();
         }
 
@@ -29,8 +29,8 @@ namespace CycloneGames.DataTable.Tests.Editor
             }
             finally
             {
-                LogRuntime.ReplaceWriter(_previousLogWriter ?? NullLogWriter.Instance);
-                _previousLogWriter = null;
+                DataTableDiagnostics.Replace(_previousDiagnostics ?? NullDataTableDiagnostics.Instance);
+                _previousDiagnostics = null;
             }
         }
 
@@ -248,17 +248,113 @@ namespace CycloneGames.DataTable.Tests.Editor
             Assert.AreEqual(1, owner.DisposeCount);
         }
 
-        [Test]
-        public void Registry_Publish_RemainsSuccessfulWhenInstalledWriterThrowsAfterCommit()
+        [TestCase(DiagnosticFailurePoint.IsEnabled)]
+        [TestCase(DiagnosticFailurePoint.Write)]
+        public void Registry_Publish_RemainsSuccessfulWhenInstalledDiagnosticsThrowsAfterCommit(
+            DiagnosticFailurePoint failurePoint)
         {
             DataTableCatalog catalog = CreatePairCatalog(42);
-            LogRuntime.ReplaceWriter(new ThrowingLogWriter());
+            DataTableDiagnostics.Replace(new ThrowingDataTableDiagnostics(failurePoint));
 
             Assert.DoesNotThrow(() => DataTableRegistry.Publish(catalog));
 
             Assert.IsTrue(DataTableRegistry.IsInitialized);
             Assert.AreSame(catalog, DataTableRegistry.Current);
             Assert.AreEqual(42, DataTableRegistry.Current.Get<PairLeft>().Version);
+        }
+
+        [Test]
+        public void Registry_Publish_PropagatesOutOfMemoryAfterCommittedDiagnosticsBoundary()
+        {
+            DataTableCatalog catalog = CreatePairCatalog(43);
+            DataTableDiagnostics.Replace(
+                new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.OutOfMemory));
+
+            Assert.Throws<OutOfMemoryException>(() => DataTableRegistry.Publish(catalog));
+
+            Assert.IsTrue(DataTableRegistry.IsInitialized);
+            Assert.AreSame(catalog, DataTableRegistry.Current);
+        }
+
+        [Test]
+        public void Diagnostics_ConditionalReplacementRequiresTheExpectedOwner()
+        {
+            var owner = new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.Write);
+            var other = new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.Write);
+            var replacement = new ThrowingDataTableDiagnostics(DiagnosticFailurePoint.Write);
+            DataTableDiagnostics.Replace(owner);
+
+            Assert.IsFalse(DataTableDiagnostics.TryReplace(other, replacement));
+            Assert.AreSame(owner, DataTableDiagnostics.Current);
+            Assert.IsTrue(DataTableDiagnostics.TryReplace(owner, replacement));
+            Assert.AreSame(replacement, DataTableDiagnostics.Current);
+            Assert.Throws<ArgumentNullException>(() => DataTableDiagnostics.TryReplace(null, owner));
+            Assert.Throws<ArgumentNullException>(() => DataTableDiagnostics.TryReplace(replacement, null));
+
+            Assert.IsFalse(DataTableDiagnostics.TryReset(other));
+            Assert.AreSame(replacement, DataTableDiagnostics.Current);
+            Assert.IsTrue(DataTableDiagnostics.TryReset(replacement));
+            Assert.AreSame(NullDataTableDiagnostics.Instance, DataTableDiagnostics.Current);
+            Assert.Throws<ArgumentNullException>(() => DataTableDiagnostics.TryReset(null));
+        }
+
+        [TestCase(DataTableDiagnosticLevel.Trace, LogSeverity.Trace)]
+        [TestCase(DataTableDiagnosticLevel.Debug, LogSeverity.Debug)]
+        [TestCase(DataTableDiagnosticLevel.Info, LogSeverity.Info)]
+        [TestCase(DataTableDiagnosticLevel.Warning, LogSeverity.Warning)]
+        [TestCase(DataTableDiagnosticLevel.Error, LogSeverity.Error)]
+        [TestCase(DataTableDiagnosticLevel.Fatal, LogSeverity.Fatal)]
+        public void LoggingAdapter_MapsEveryOutputLevelExactly(
+            DataTableDiagnosticLevel level,
+            LogSeverity expectedSeverity)
+        {
+            var writer = new ProbeLogWriter();
+            var adapter = new DataTableLoggingDiagnostics(writer);
+
+            adapter.Write(level, DataTableDiagnosticCategories.Root, "message");
+
+            Assert.AreEqual(1, writer.CallCount);
+            Assert.AreEqual(expectedSeverity, writer.LastSeverity);
+        }
+
+        [TestCase(DataTableDiagnosticLevel.None)]
+        [TestCase((DataTableDiagnosticLevel)byte.MaxValue)]
+        public void LoggingAdapter_DropsNonOutputAndUnknownLevels(DataTableDiagnosticLevel level)
+        {
+            var writer = new ProbeLogWriter();
+            var adapter = new DataTableLoggingDiagnostics(writer);
+
+            Assert.IsFalse(adapter.IsEnabled(level, DataTableDiagnosticCategories.Root));
+            Assert.DoesNotThrow(() =>
+                adapter.Write(level, DataTableDiagnosticCategories.Root, "message"));
+            Assert.DoesNotThrow(() =>
+                adapter.WriteException(
+                    level,
+                    DataTableDiagnosticCategories.Root,
+                    new InvalidOperationException("diagnostic")));
+            Assert.AreEqual(0, writer.CallCount);
+        }
+
+        [Test]
+        public void LoggingAdapter_IsolatesOrdinaryWriterFailures()
+        {
+            var writer = new ProbeLogWriter(throwOnCall: true);
+            var adapter = new DataTableLoggingDiagnostics(writer);
+
+            Assert.IsFalse(adapter.IsEnabled(
+                DataTableDiagnosticLevel.Info,
+                DataTableDiagnosticCategories.Root));
+            Assert.DoesNotThrow(() =>
+                adapter.Write(
+                    DataTableDiagnosticLevel.Info,
+                    DataTableDiagnosticCategories.Root,
+                    "message"));
+            Assert.DoesNotThrow(() =>
+                adapter.WriteException(
+                    DataTableDiagnosticLevel.Error,
+                    DataTableDiagnosticCategories.Root,
+                    new InvalidOperationException("diagnostic")));
+            Assert.AreEqual(3, writer.CallCount);
         }
 
         [Test]
@@ -536,9 +632,89 @@ namespace CycloneGames.DataTable.Tests.Editor
             }
         }
 
-        private sealed class ThrowingLogWriter : ILogWriter
+        public enum DiagnosticFailurePoint
         {
-            public bool IsEnabled(LogSeverity severity, string category) => true;
+            IsEnabled,
+            Write,
+            WriteException,
+            OutOfMemory
+        }
+
+        private sealed class ThrowingDataTableDiagnostics : IDataTableDiagnostics
+        {
+            private readonly DiagnosticFailurePoint _failurePoint;
+
+            public ThrowingDataTableDiagnostics(DiagnosticFailurePoint failurePoint)
+            {
+                _failurePoint = failurePoint;
+            }
+
+            public bool IsEnabled(DataTableDiagnosticLevel level, string category)
+            {
+                if (_failurePoint == DiagnosticFailurePoint.OutOfMemory)
+                {
+                    throw new OutOfMemoryException("Expected diagnostic sink failure.");
+                }
+
+                if (_failurePoint == DiagnosticFailurePoint.IsEnabled)
+                {
+                    Throw();
+                }
+
+                return true;
+            }
+
+            public void Write(
+                DataTableDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (_failurePoint == DiagnosticFailurePoint.Write)
+                {
+                    Throw();
+                }
+            }
+
+            public void WriteException(
+                DataTableDiagnosticLevel level,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (_failurePoint == DiagnosticFailurePoint.WriteException)
+                {
+                    Throw();
+                }
+            }
+
+            private static void Throw() =>
+                throw new InvalidOperationException("Expected diagnostic sink failure.");
+        }
+
+        private sealed class ProbeLogWriter : ILogWriter
+        {
+            private readonly bool _throwOnCall;
+
+            public ProbeLogWriter(bool throwOnCall = false)
+            {
+                _throwOnCall = throwOnCall;
+            }
+
+            public int CallCount { get; private set; }
+
+            public LogSeverity LastSeverity { get; private set; }
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                Record(severity);
+                return true;
+            }
 
             public void Write(
                 LogSeverity severity,
@@ -546,7 +722,7 @@ namespace CycloneGames.DataTable.Tests.Editor
                 string message,
                 string filePath = "",
                 int lineNumber = 0,
-                string memberName = "") => Throw();
+                string memberName = "") => Record(severity);
 
             public void Write(
                 LogSeverity severity,
@@ -554,7 +730,7 @@ namespace CycloneGames.DataTable.Tests.Editor
                 Action<StringBuilder> messageBuilder,
                 string filePath = "",
                 int lineNumber = 0,
-                string memberName = "") => Throw();
+                string memberName = "") => Record(severity);
 
             public void Write<TState>(
                 LogSeverity severity,
@@ -563,7 +739,7 @@ namespace CycloneGames.DataTable.Tests.Editor
                 Action<TState, StringBuilder> messageBuilder,
                 string filePath = "",
                 int lineNumber = 0,
-                string memberName = "") => Throw();
+                string memberName = "") => Record(severity);
 
             public void WriteException(
                 LogSeverity severity,
@@ -572,10 +748,17 @@ namespace CycloneGames.DataTable.Tests.Editor
                 string message = null,
                 string filePath = "",
                 int lineNumber = 0,
-                string memberName = "") => Throw();
+                string memberName = "") => Record(severity);
 
-            private static void Throw() =>
-                throw new InvalidOperationException("Expected log writer failure.");
+            private void Record(LogSeverity severity)
+            {
+                CallCount++;
+                LastSeverity = severity;
+                if (_throwOnCall)
+                {
+                    throw new InvalidOperationException("Expected writer failure.");
+                }
+            }
         }
 
         private sealed class UnboundedRows : IEnumerable<TestRow>

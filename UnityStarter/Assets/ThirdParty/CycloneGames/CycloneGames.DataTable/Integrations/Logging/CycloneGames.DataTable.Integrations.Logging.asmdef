@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.DataTable.Integrations.Logging",
+    "rootNamespace": "CycloneGames.DataTable",
+    "references": [
+        "CycloneGames.DataTable.Core",
+        "CycloneGames.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

@@ -423,10 +423,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 isDisposed = true;
                 ILogWriter writerToRestore = previousWriter;
                 previousWriter = null;
-                if (object.ReferenceEquals(LogRuntime.Writer, this))
-                {
-                    LogRuntime.ReplaceWriter(writerToRestore);
-                }
+                LogRuntime.TryReplaceWriter(this, writerToRestore);
             }
         }
     }

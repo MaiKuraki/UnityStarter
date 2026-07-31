@@ -51,8 +51,7 @@ namespace CycloneGames.DataTable
                     new RegistryState(catalog, initialized: true, generation: generation));
             }
 
-            DataTableCoreLog.CommittedInfoNoThrow(
-                $"DataTableRegistry published generation {generation} ({catalog.Count} tables).");
+            DataTableCoreDiagnostics.CommittedRegistryPublish(generation, catalog.Count);
         }
 
         /// <summary>Gets a table or returns null when the published catalog has no such contract.</summary>
