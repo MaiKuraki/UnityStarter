@@ -38,7 +38,7 @@ CycloneGames.InputSystem 是基于 Unity Input System 的 YAML 驱动输入层�
 
 | Assembly | Path | 用途 |
 | --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | 配置、manager、player、context、响应式输入、存储边界。依赖 Unity Input System、UniTask、R3、VYaml、CycloneGames.Hash、Logger。 |
+| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | 配置、manager、player、context、响应式输入、存储边界。依赖 Unity Input System、UniTask、R3、VYaml、CycloneGames.Hash 与 CycloneGames.Logging。 |
 | `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring、validation、安全写入、常量生成。仅 Editor。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | `InputDeviceIconSet`、`InputDeviceIconSwitcher`、菜单导航组件。`autoReferenced: false`。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | 容器持有的 manager、async startup、resolver adapter。无 AssetManagement 依赖。 |
@@ -48,6 +48,12 @@ CycloneGames.InputSystem 是基于 Unity Input System 的 YAML 驱动输入层�
 | `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode validation 和回归覆盖。 |
 
 可选 assembly 设置 `autoReferenced: false`。仅在用到对应功能时添加显式 asmdef 引用。UGUI 和 VContainer 使用 package 派生的 `versionDefines` 和 `defineConstraints` 激活；缺少对应 package 时排除该 assembly。AssetManagement 支持物理上位于同级 `CycloneGames.InputSystem.AssetManagement` package 中。
+
+InputSystem 通过以 `CycloneGames.InputSystem` 为根的稳定 `LogChannel` category 输出诊断。本包不会初始化、替换、flush 或关闭进程级 logging writer。`com.cyclone-games.logging` 提供安全的 `NullLogWriter` 默认实现；应用 composition root 可以安装 `CycloneGames.Logger` 或任意其他 `ILogWriter` backend。
+
+每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
+
+可选 sample asmdef 通过 `Samples/Diagnostics/InputSystemSampleLog.cs` 遵循同一约定，并保留 `CycloneGames.InputSystem.Sample`。
 
 ```mermaid
 flowchart LR
@@ -76,10 +82,13 @@ flowchart LR
 
 ```csharp
 using CycloneGames.InputSystem.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 public sealed class PlayerInputBootstrap : MonoBehaviour
 {
+    private static readonly LogChannel Log = LogChannel.Create("Game.Input");
+
     [SerializeField] private TextAsset _configuration;
 
     private InputManager _manager;
@@ -93,7 +102,7 @@ public sealed class PlayerInputBootstrap : MonoBehaviour
 
         if (!initialized.IsSuccess)
         {
-            Debug.LogError($"Input initialization failed: {initialized.Status}: {initialized.Message}");
+            Log.Error($"Input initialization failed: {initialized.Status}: {initialized.Message}");
             enabled = false;
             return;
         }
@@ -101,7 +110,7 @@ public sealed class PlayerInputBootstrap : MonoBehaviour
         IInputPlayer player = _manager.JoinSinglePlayer(0);
         if (player == null)
         {
-            Debug.LogError("No declared control scheme can be matched for player 0.");
+            Log.Error("No declared control scheme can be matched for player 0.");
             enabled = false;
             return;
         }
@@ -381,8 +390,10 @@ public sealed class InputBindingProfilePersistence
 ```csharp
 using System.IO;
 using CycloneGames.InputSystem.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
+LogChannel log = LogChannel.Create("Game.Input");
 var manager = new InputManager();
 var defaults = new UriInputConfigurationSource();
 var users = new FileInputConfigurationStore(Application.persistentDataPath);
@@ -402,7 +413,7 @@ InputSystemLoadResult load = await InputSystemLoader.LoadAndInitializeAsync(
 
 if (!load.IsBootstrapComplete)
 {
-    Debug.LogError($"Input load failed: {load.Status}: {load.Error}");
+    log.Error($"Input load failed: {load.Status}: {load.Error}");
 }
 ```
 
@@ -552,13 +563,16 @@ player.GetChordObservable(confirm, cancel, windowMs: 200f)
 ### Rebind profile save 和 load
 
 ```csharp
+using CycloneGames.Logging;
+
+LogChannel log = LogChannel.Create("Game.Input");
 PersistenceOperationResult saved = await profilePersistence.SaveAsync(cancellationToken);
 if (!saved.IsSuccess)
-    Debug.LogWarning($"Binding profile save failed: {saved.ErrorCode}");
+    log.Warning($"Binding profile save failed: {saved.ErrorCode}");
 
 string loadError = await profilePersistence.LoadAndApplyAsync(cancellationToken);
 if (loadError != null)
-    Debug.LogWarning($"Binding profile load failed: {loadError}");
+    log.Warning($"Binding profile load failed: {loadError}");
 ```
 
 加载失败时保持 configured default active。缺失数据是正常的首次运行状态；损坏、未来版本或 schema 不兼容的数据不得静默应用。不要直接暴露 persistence exception message —— 将详细异常仅发送到产品拥有的日志管道进行脱敏和访问控制。

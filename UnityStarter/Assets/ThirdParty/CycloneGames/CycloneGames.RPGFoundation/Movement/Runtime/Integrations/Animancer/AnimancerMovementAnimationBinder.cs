@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using Animancer;
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime;
 using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D;
@@ -10,6 +11,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.Animancer
     [DisallowMultipleComponent]
     public sealed class AnimancerMovementAnimationBinder : MonoBehaviour
     {
+        private static readonly LogChannel Log = RpgAnimancerLog.Channel;
+
         [SerializeField] private AnimancerComponent AnimancerComponent;
         [SerializeField] private MovementComponent Movement3D;
         [SerializeField] private MovementComponent2D Movement2D;
@@ -33,7 +36,7 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.Animancer
 
             if (AnimancerComponent == null)
             {
-                Debug.LogWarning("[AnimancerMovementAnimationBinder] AnimancerComponent is not assigned.");
+                Log.Warning("[AnimancerMovementAnimationBinder] AnimancerComponent is not assigned.");
                 return;
             }
 

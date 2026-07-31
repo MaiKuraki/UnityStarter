@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -10,6 +11,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class AbilityTask_WaitGameplayEvent : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         /// <summary>
         /// Fired when a matching GameplayEvent is received.
         /// </summary>
@@ -51,7 +54,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             subscriptionOwner = Ability?.AbilitySystemComponent;
             if (subscriptionOwner == null || eventTag.IsNone)
             {
-                GASLog.Warning("WaitGameplayEvent: Invalid ability or event tag.");
+                Log.Warning("WaitGameplayEvent: Invalid ability or event tag.");
                 EndTask();
                 return;
             }

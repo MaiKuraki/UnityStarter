@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime;
 #if CYCLONE_RPGFOUNDATION_HAS_ANIMANCER
@@ -16,6 +17,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.Animancer
     /// </summary>
     public sealed class AnimancerAnimationController : IAnimationController
     {
+        private static readonly LogChannel Log = RpgAnimancerLog.Channel;
+
 #if CYCLONE_RPGFOUNDATION_HAS_ANIMANCER
         private readonly Animator _animator;
         private readonly object _animancerComponent;
@@ -64,7 +67,7 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.Animancer
 #else
             _hashToNameMap = parameterNameMap ?? new Dictionary<int, string>();
             _isValid = false;
-            UnityEngine.Debug.LogWarning(
+            Log.Warning(
                 "[AnimancerAnimationController] Animancer package is not installed. " +
                 "The assigned animancerComponent will be ignored. Install com.kybernetik.animancer to enable Animancer support.");
 #endif

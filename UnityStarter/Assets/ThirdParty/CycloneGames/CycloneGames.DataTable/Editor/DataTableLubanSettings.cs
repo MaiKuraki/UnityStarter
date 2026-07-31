@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 
@@ -14,6 +15,8 @@ namespace CycloneGames.DataTable.Unity.Editor
         fileName = "DataTableLubanSettings")]
     public class DataTableLubanSettings : ScriptableObject
     {
+        private static readonly LogChannel Log = DataTableEditorLog.SettingsChannel;
+
         private const string DefaultAssetDir = "Assets/Editor/DataTable";
         private const string DefaultAssetName = "DataTableLubanSettings.asset";
 
@@ -98,7 +101,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             var settings = AssetDatabase.LoadAssetAtPath<TSettings>(assetPath);
             if (settings == null)
             {
-                Debug.LogError(
+                Log.Error(
                     $"[DataTable] {type.Name} GUID resolved to '{assetPath}' but the asset could not be loaded. " +
                     "Creating a default config as fallback.");
                 settings = CreateDefault<TSettings>();
@@ -217,7 +220,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             Undo.RegisterCreatedObjectUndo(settings, "Create DataTable Luban Settings");
             AssetDatabase.SaveAssets();
 
-            Debug.Log(
+            Log.Info(
                 $"[DataTable] No {typeof(TSettings).Name} found. Created default settings at:\n" +
                 $"  {path}\n" +
                 "You can move this asset anywhere under Assets/.");
@@ -269,7 +272,7 @@ namespace CycloneGames.DataTable.Unity.Editor
                 message += "\n  " + AssetDatabase.GUIDToAssetPath(guids[i]);
             }
 
-            Debug.LogWarning(message + "\nRemove duplicates or use a project-specific settings type.");
+            Log.Warning(message + "\nRemove duplicates or use a project-specific settings type.");
         }
 
         private static void EnsureDirectoryExists(string dir)

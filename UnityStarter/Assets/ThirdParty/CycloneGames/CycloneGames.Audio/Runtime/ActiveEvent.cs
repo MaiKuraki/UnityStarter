@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using CycloneGames.Logging;
 using System.Threading;
 using UnityEngine;
 using UnityEngine.Audio;
@@ -95,6 +96,8 @@ namespace CycloneGames.Audio.Runtime
 
     internal sealed class AudioEventCancellationContext
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         private CancellationTokenSource source = new CancellationTokenSource();
         private int ownerCount = 1;
 
@@ -125,7 +128,7 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
         }
 
@@ -145,7 +148,7 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
         }
     }
@@ -264,6 +267,8 @@ namespace CycloneGames.Audio.Runtime
     [Serializable]
     public class ActiveEvent
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         internal int generation;
         internal int handleSlot = -1;
         internal bool managerOwned;
@@ -443,7 +448,7 @@ namespace CycloneGames.Audio.Runtime
             catch (Exception exception)
             {
                 status = EventStatus.Error;
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
             finally
             {
@@ -678,7 +683,7 @@ namespace CycloneGames.Audio.Runtime
                     }
                     catch (Exception exception)
                     {
-                        Debug.LogException(exception);
+                        Log.Error(exception);
                     }
                 }
             }
@@ -748,7 +753,7 @@ namespace CycloneGames.Audio.Runtime
             if (processedGraphNodeCount >= MaxProcessedGraphNodes || graphNodeStackCount >= MaxGraphStackDepth)
             {
                 status = EventStatus.Error;
-                Debug.LogError($"AudioManager: Graph processing budget exceeded for event '{name}'.");
+                Log.Error($"AudioManager: Graph processing budget exceeded for event '{name}'.");
                 return false;
             }
 
@@ -756,7 +761,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 if (graphNodeStack[i] != node) continue;
                 status = EventStatus.Error;
-                Debug.LogError($"AudioManager: Runtime graph cycle detected in event '{name}' at node '{node.name}'.");
+                Log.Error($"AudioManager: Runtime graph cycle detected in event '{name}' at node '{node.name}'.");
                 return false;
             }
 
@@ -852,7 +857,7 @@ namespace CycloneGames.Audio.Runtime
             catch (Exception exception)
             {
                 status = EventStatus.Error;
-                Debug.LogException(exception);
+                Log.Error(exception);
                 StopImmediate();
             }
         }
@@ -868,7 +873,7 @@ namespace CycloneGames.Audio.Runtime
             if (snapshotTransitionCount >= MaxSnapshotTransitionsPerEvent)
             {
                 status = EventStatus.Error;
-                Debug.LogError($"AudioManager: Event '{name}' exceeds the {MaxSnapshotTransitionsPerEvent}-snapshot transition limit.");
+                Log.Error($"AudioManager: Event '{name}' exceeds the {MaxSnapshotTransitionsPerEvent}-snapshot transition limit.");
                 return;
             }
 
@@ -883,14 +888,14 @@ namespace CycloneGames.Audio.Runtime
             if (rootEvent == null || status != EventStatus.Preparing)
             {
                 AudioClipHandleRelease.Safe(clipHandle);
-                Debug.LogWarning($"AudioManager: Event '{name}' is not accepting source additions.");
+                Log.Warning($"AudioManager: Event '{name}' is not accepting source additions.");
                 return false;
             }
 
             if (sourceCount >= MaxSourcesPerEvent)
             {
                 AudioClipHandleRelease.Safe(clipHandle);
-                Debug.LogWarning($"AudioManager: Max sources ({MaxSourcesPerEvent}) reached for event {name}");
+                Log.Warning($"AudioManager: Max sources ({MaxSourcesPerEvent}) reached for event {name}");
                 StopImmediate();
                 return false;
             }
@@ -900,7 +905,7 @@ namespace CycloneGames.Audio.Runtime
             AudioSource source = AudioManager.GetUnusedSource(rootEvent, this);
             if (source == null)
             {
-                Debug.LogWarning($"AudioManager: Can't find unused audio source for event {name}!");
+                Log.Warning($"AudioManager: Can't find unused audio source for event {name}!");
                 AudioClipHandleRelease.Safe(clipHandle);
                 StopImmediate();
                 return false;
@@ -939,7 +944,7 @@ namespace CycloneGames.Audio.Runtime
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetVolume");
             if (float.IsNaN(newVolume) || float.IsInfinity(newVolume))
             {
-                Debug.LogWarning("AudioManager: Event volume must be finite.");
+                Log.Warning("AudioManager: Event volume must be finite.");
                 return;
             }
             targetVolume = Mathf.Max(0f, newVolume);
@@ -958,7 +963,7 @@ namespace CycloneGames.Audio.Runtime
             if (float.IsNaN(newPitch) || float.IsInfinity(newPitch) || newPitch <= 0)
             {
                 string eventName = rootEvent != null ? rootEvent.name : name;
-                Debug.LogWarning($"Invalid pitch set in event {eventName}");
+                Log.Warning($"Invalid pitch set in event {eventName}");
                 return;
             }
             eventPitch = newPitch;
@@ -972,7 +977,7 @@ namespace CycloneGames.Audio.Runtime
             AudioRuntimeThreadGuard.EnsureMainThread(nameof(ActiveEvent) + ".SetEmitterPosition");
             if (!IsFinite(newPos))
             {
-                Debug.LogWarning("AudioManager: Emitter position must be finite.");
+                Log.Warning("AudioManager: Emitter position must be finite.");
                 return;
             }
             SetAllSourcePositions(newPos);
@@ -1105,7 +1110,7 @@ namespace CycloneGames.Audio.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    Log.Error(exception);
                 }
             }
 
@@ -1573,7 +1578,7 @@ namespace CycloneGames.Audio.Runtime
                 var p = eventParams[i]?.parameter;
                 if (p == null)
                 {
-                    Debug.LogWarning($"Audio event '{rootEvent.name}' has a null parameter!");
+                    Log.Warning($"Audio event '{rootEvent.name}' has a null parameter!");
                     continue;
                 }
                 if (p.UseGaze) return true;

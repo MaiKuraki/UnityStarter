@@ -41,7 +41,11 @@ Factory 回答一个问题：谁在什么契约下构造这个对象？CycloneGa
 | `CycloneGames.Factory.DOD.Runtime` | `DOD/Runtime/` | `NativePool<T>`、`NativeDensePool<T>`、`NativeDenseColumnPool2/3/4`。仅当已安装的 `com.unity.collections` 包定义 `PRESENT_COLLECTIONS` 时编译。 |
 | `CycloneGames.Factory.Tests.Editor` | `Tests/Editor/` | 核心与 Unity adapter 契约测试。 |
 | `CycloneGames.Factory.DOD.Tests.Editor` | `DOD/Tests/Editor/` | Native ownership 与 handle 测试。仅在安装 Collections 时启用。 |
-| `CycloneGames.Factory.Samples` | `Samples/` | 可选示例。`autoReferenced: false`。 |
+| `CycloneGames.Factory.Samples` | `Samples/` | 使用 `CycloneGames.Logging` 的可选示例。`autoReferenced: false`。 |
+
+生产 Runtime assembly 不输出日志。可选 sample 通过 `LogChannel` 使用 category `CycloneGames.Factory.Samples`；未安装 backend 时，由 `NullLogWriter` 静默处理这些教学诊断。
+
+Sample asmdef 持有 `Samples/Diagnostics/FactorySamplesLog.cs`，提供标准的 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)` 成员。Sample component 通过 class-local `Log` 字段缓存该 channel，不再各自构造 channel。
 
 ```mermaid
 flowchart LR

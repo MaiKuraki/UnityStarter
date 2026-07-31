@@ -1,5 +1,6 @@
 using System.IO;
 using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 /// <summary>
@@ -9,19 +10,32 @@ using UnityEngine;
 public sealed class LoggerPerformanceTest : MonoBehaviour
 {
     private const int MaxLogCount = 10000;
+    private static readonly LogChannel Log = LoggerSamplesLog.LoadChannel;
 
+    private CLogger _backend;
     private FileLogger _fileLogger;
     private int _logCount;
     private float _startTime;
 
     private void Start()
     {
+        _backend = LogRuntime.Writer as CLogger;
+        if (_backend == null)
+        {
+            Log.Warning("The load sample requires CycloneGames.Logger to be installed as the process writer.");
+            enabled = false;
+            return;
+        }
+
 #if !UNITY_WEBGL || UNITY_EDITOR
         string path = Path.Combine(Application.temporaryCachePath, "CycloneGames.Logger", "LoadExample.log");
         _fileLogger = new FileLogger(path);
-        CLogger.Instance.AddLoggerUnique(_fileLogger);
+        if (!_backend.AddLoggerUnique(_fileLogger))
+        {
+            _fileLogger = null;
+        }
 #endif
-        CLogger.Instance.SetLogLevel(LogLevel.Trace);
+        _backend.SetLogLevel(LogLevel.Trace);
         _startTime = Time.time;
     }
 
@@ -29,18 +43,18 @@ public sealed class LoggerPerformanceTest : MonoBehaviour
     {
         if (_logCount >= MaxLogCount)
         {
-            Debug.Log($"Submitted {MaxLogCount} sample messages in {Time.time - _startTime:F2} seconds.");
+            Log.Info($"Submitted {MaxLogCount} sample messages in {Time.time - _startTime:F2} seconds.");
             enabled = false;
             return;
         }
 
         int value = _logCount;
-        CLogger.LogTrace(value, AppendTrace, "LoadSample");
-        CLogger.LogDebug(value, AppendDebug, "LoadSample");
-        CLogger.LogInfo(value, AppendInfo, "LoadSample");
-        CLogger.LogWarning(value, AppendWarning, "LoadSample");
-        CLogger.LogError(value, AppendError, "LoadSample");
-        CLogger.LogFatal(value, AppendFatal, "LoadSample");
+        Log.Trace(value, AppendTrace);
+        Log.Debug(value, AppendDebug);
+        Log.Info(value, AppendInfo);
+        Log.Warning(value, AppendWarning);
+        Log.Error(value, AppendError);
+        Log.Fatal(value, AppendFatal);
         _logCount += 6;
     }
 
@@ -51,12 +65,13 @@ public sealed class LoggerPerformanceTest : MonoBehaviour
             return;
         }
 
-        if (CLogger.Instance.RemoveLogger(_fileLogger, 2000))
+        if (_backend != null && _backend.RemoveLogger(_fileLogger, 2000))
         {
             _fileLogger.Dispose();
         }
 
         _fileLogger = null;
+        _backend = null;
     }
 
     private static void AppendTrace(int value, System.Text.StringBuilder builder) => builder.Append("Trace message ").Append(value);

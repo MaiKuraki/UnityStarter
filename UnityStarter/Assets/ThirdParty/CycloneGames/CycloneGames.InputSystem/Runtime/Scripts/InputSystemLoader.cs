@@ -1,6 +1,6 @@
 using System;
 using System.Threading;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.InputSystem.Runtime
@@ -164,6 +164,8 @@ namespace CycloneGames.InputSystem.Runtime
     /// </summary>
     public static class InputSystemLoader
     {
+        private static readonly LogChannel Log = InputSystemLog.Channel;
+
         private const string LogPrefix = "[InputSystemLoader]";
 
         public static UniTask<InputSystemLoadResult> LoadAndInitializeAsync(
@@ -246,7 +248,7 @@ namespace CycloneGames.InputSystem.Runtime
             bool useUserConfiguration = userRead.IsSuccess;
             if (useUserConfiguration && userRead.WasRecoveredFromBackup)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} The primary user configuration was unavailable; " +
                     "the last committed backup is active for this session.");
             }
@@ -361,7 +363,7 @@ namespace CycloneGames.InputSystem.Runtime
                         out persistenceContent,
                         out string serializationError))
                 {
-                    CLogger.LogWarning(
+                    Log.Warning(
                         $"{LogPrefix} Initialized from migrated defaults but could not serialize the prepared configuration: " +
                         serializationError);
                     persistenceStatus = InputSystemPersistenceStatus.SerializationFailed;
@@ -388,7 +390,7 @@ namespace CycloneGames.InputSystem.Runtime
                         persistenceError = saveResult.Error;
                         if (!saveResult.IsSuccess)
                         {
-                            CLogger.LogWarning(
+                            Log.Warning(
                                 $"{LogPrefix} Runtime initialization succeeded, but user configuration persistence failed: " +
                                 $"{saveResult.Status}. {saveResult.Error}");
                         }
@@ -397,16 +399,16 @@ namespace CycloneGames.InputSystem.Runtime
                     {
                         persistenceStatus = InputSystemPersistenceStatus.Canceled;
                         persistenceError = "Persistence was canceled after runtime commit.";
-                        CLogger.LogWarning(
+                        Log.Warning(
                             $"{LogPrefix} Runtime initialization succeeded, but user configuration persistence was canceled.");
                     }
                     catch (Exception exception) when (IsRecoverableException(exception))
                     {
                         persistenceStatus = InputSystemPersistenceStatus.Failed;
                         persistenceError = $"Persistence provider failed ({exception.GetType().Name}).";
-                        CLogger.LogWarning(
-                            $"{LogPrefix} Runtime initialization succeeded, but the persistence provider failed " +
-                            $"({exception.GetType().Name}).");
+                        Log.Error(
+                            exception,
+                            $"{LogPrefix} Runtime initialization succeeded, but the persistence provider failed.");
                     }
                 }
 
@@ -419,7 +421,7 @@ namespace CycloneGames.InputSystem.Runtime
             }
             else if (userRead.IsSuccess && !useUserConfiguration)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} User configuration is invalid and was preserved. " +
                     $"Defaults were used for this session. {userValidationError}");
             }

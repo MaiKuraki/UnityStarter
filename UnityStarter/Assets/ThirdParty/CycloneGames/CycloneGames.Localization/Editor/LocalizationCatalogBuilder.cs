@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.Localization.Runtime;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 
@@ -54,6 +55,8 @@ namespace CycloneGames.Localization.Editor
 
     public static class LocalizationCatalogBuilder
     {
+        private static readonly LogChannel Log = LocalizationEditorLog.Channel;
+
         internal const int MaxTableAssets = 8_192;
         internal const int MaxEntriesPerTable = 250_000;
         internal const int MaxTotalEntries = 1_000_000;
@@ -92,7 +95,7 @@ namespace CycloneGames.Localization.Editor
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception, "Localization catalog build failed.");
                 EditorUtility.DisplayDialog(
                     "Localization Catalog",
                     "Catalog build failed. See Console for details.",
@@ -115,7 +118,7 @@ namespace CycloneGames.Localization.Editor
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception, "Localization catalog build from settings failed.");
                 EditorUtility.DisplayDialog(
                     "Localization Catalog",
                     "Catalog build failed. See Console for details.",
@@ -186,12 +189,11 @@ namespace CycloneGames.Localization.Editor
                 data.AssetTables.Count,
                 data.AssetEntryCount);
 
-            Debug.Log(
-                "[Localization] Catalog built: " + result.OutputPath +
+            Log.Info(
+                "Catalog built: " + result.OutputPath +
                 " (strings: " + result.StringTableCount + "/" + result.StringEntryCount +
                 ", assets: " + result.AssetTableCount + "/" + result.AssetEntryCount +
-                ", hash: " + result.ContentHash + ")",
-                catalog);
+                ", hash: " + result.ContentHash + ")");
 
             return result;
         }
@@ -416,7 +418,7 @@ namespace CycloneGames.Localization.Editor
                     }
                     catch (Exception rollbackException)
                     {
-                        Debug.LogError("[Localization] Catalog replacement rollback failed: " + rollbackException);
+                        Log.Error(rollbackException, "Catalog replacement rollback failed.");
                     }
                 }
 
@@ -645,9 +647,9 @@ namespace CycloneGames.Localization.Editor
             {
                 LocalizationValidationResult result = results[index];
                 if (result.Type == MessageType.Error)
-                    Debug.LogError(result.Text, result.Context);
+                    Log.Error(result.Text);
                 else if (result.Type == MessageType.Warning)
-                    Debug.LogWarning(result.Text, result.Context);
+                    Log.Warning(result.Text);
             }
         }
 
@@ -675,7 +677,10 @@ namespace CycloneGames.Localization.Editor
             }
             catch (Exception exception)
             {
-                Debug.LogWarning("[Localization] Could not remove temporary catalog file: " + exception.Message);
+                Log.Warning(
+                    exception,
+                    static (error, builder) => builder
+                        .Append("Could not remove a temporary catalog file: ").Append(error.Message));
             }
         }
 

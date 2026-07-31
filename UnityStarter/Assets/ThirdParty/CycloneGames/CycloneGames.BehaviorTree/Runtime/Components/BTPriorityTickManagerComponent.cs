@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using CycloneGames.Logging;
 using UnityEngine;
 using CycloneGames.BehaviorTree.Runtime.Core;
 
@@ -10,6 +11,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     [DisallowMultipleComponent]
     public class BTPriorityTickManagerComponent : MonoBehaviour
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         public const int DefaultPendingWakeUpCapacity = 4096;
         public const int MaximumPendingWakeUpCapacity = 65536;
 
@@ -141,10 +144,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
             if (_instance != null && _instance != this)
             {
-                Debug.LogWarning(
+                Log.Warning(
                     $"[BTPriorityTickManagerComponent] Removing duplicate manager component from '{gameObject.name}'. " +
-                    $"The active instance is '{_instance.gameObject.name}'.",
-                    this);
+                    $"The active instance is '{_instance.gameObject.name}'.");
                 Destroy(this);
                 return;
             }
@@ -212,7 +214,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 if (!string.Equals(_lastConfigError, configError, System.StringComparison.Ordinal))
                 {
                     _lastConfigError = configError;
-                    Debug.LogError($"[BTPriorityTickManager] Invalid BTLODConfig '{_config.name}': {configError}", _config);
+                    Log.Error($"Invalid BTLODConfig '{_config.name}': {configError}");
                 }
                 return;
             }
@@ -240,9 +242,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             catch (UnityException exception)
             {
                 _autoFindPlayer = false;
-                Debug.LogError(
-                    $"[BTPriorityTickManager] Player tag '{_playerTag}' is not defined. Automatic lookup was disabled. {exception.Message}",
-                    this);
+                Log.Error(
+                    exception,
+                    $"Player tag '{_playerTag}' is not defined. Automatic lookup was disabled.");
                 return;
             }
 
@@ -330,11 +332,10 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
 
             _legacyRegistrationCapacityReported = true;
-            Debug.LogError(
+            Log.Error(
                 $"[BTPriorityTickManagerComponent] Legacy Register was rejected because managed tree, " +
                 $"LOD, or deferred-mutation capacity was exhausted on '{gameObject.name}'. " +
-                "Use TryRegister to handle admission failure.",
-                this);
+                "Use TryRegister to handle admission failure.");
         }
 
         public bool TryRegister(RuntimeBehaviorTree tree, Transform treeTransform)

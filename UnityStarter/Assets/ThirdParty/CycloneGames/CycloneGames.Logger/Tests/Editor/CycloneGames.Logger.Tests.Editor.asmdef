@@ -4,7 +4,8 @@
     "references": [
         "CycloneGames.Logger",
         "CycloneGames.Logger.Unity",
-        "CycloneGames.Logger.Editor"
+        "CycloneGames.Logger.Editor",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [
         "Editor"

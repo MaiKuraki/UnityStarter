@@ -1,4 +1,4 @@
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 /// <summary>
@@ -6,10 +6,12 @@ using UnityEngine;
 /// </summary>
 public sealed class LoggerSample : MonoBehaviour
 {
+    private static readonly LogChannel Log = LoggerSamplesLog.Channel;
+
     private void Start()
     {
-        CLogger.LogInfo("Logger sample started.", "Sample");
-        CLogger.LogWarning("This is a warning example.", "Sample");
-        CLogger.LogError("This is an error example.", "Sample");
+        Log.Info("Logger sample started.");
+        Log.Warning("This is a warning example.");
+        Log.Error("This is an error example.");
     }
 }

@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using CycloneGames.Logger.Editor;
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.Logger.Tests.Editor
@@ -218,14 +219,14 @@ namespace CycloneGames.Logger.Tests.Editor
         }
 
         [Test]
-        public void Factory_CanCreateLoggerForDiInterface()
+        public void Factory_CreatesBackendUsableThroughUnifiedWriter()
         {
-            ICLogger logger = CLoggerFactory.CreateSingleThreaded();
+            CLogger logger = CLoggerFactory.CreateSingleThreaded();
             try
             {
                 var recording = new RecordingLogger();
                 logger.AddLogger(recording);
-                logger.Log(LogLevel.Info, "di", "Factory");
+                logger.Write(LogSeverity.Info, "di", "Factory");
                 logger.Pump(16);
 
                 Assert.AreEqual(1, recording.Count);
@@ -250,43 +251,6 @@ namespace CycloneGames.Logger.Tests.Editor
             var second = CLogger.Instance;
             Assert.AreNotSame(first, second);
 
-            CLogger.Shutdown();
-        }
-
-        [Test]
-        public void SuppressedGlobalStaticLogging_DoesNotCreateGlobalInstance()
-        {
-            CLogger.Shutdown();
-            CLogger.ConfigureGlobalStaticLoggingSuppressed(true);
-            bool invoked = false;
-
-            CLogger.LogInfo(1, (state, sb) =>
-            {
-                invoked = true;
-                sb.Append(state);
-            }, "Suppressed");
-
-            Assert.IsFalse(invoked);
-            Assert.IsFalse(CLogger.TryGetInstance(out _));
-            CLogger.ConfigureGlobalStaticLoggingSuppressed(false);
-        }
-
-        [Test]
-        public void ExplicitGlobalInstance_DisablesSuppressedStaticLogging()
-        {
-            CLogger.Shutdown();
-            CLogger.ConfigureSingleThreadedProcessing();
-            CLogger.ConfigureGlobalStaticLoggingSuppressed(true);
-
-            var global = CLogger.Instance;
-            var recording = new RecordingLogger();
-            global.AddLogger(recording);
-
-            CLogger.LogInfo(7, static (state, sb) => sb.Append(state), "Suppressed");
-            global.Pump(16);
-
-            Assert.AreEqual(1, recording.Count);
-            Assert.AreEqual("7", recording[0].Message);
             CLogger.Shutdown();
         }
 

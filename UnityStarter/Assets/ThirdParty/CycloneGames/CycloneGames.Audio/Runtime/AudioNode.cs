@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 #if UNITY_EDITOR
 using System.Collections.Generic;
 using UnityEditor;
@@ -15,6 +16,8 @@ namespace CycloneGames.Audio.Runtime
     [System.Serializable]
     public class AudioNode : ScriptableObject
     {
+        protected static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         /// <summary>
         /// The visual size of the node in the graph
         /// </summary>
@@ -68,14 +71,14 @@ namespace CycloneGames.Audio.Runtime
         {
             if (this.input == null)
             {
-                Debug.LogWarningFormat("{0} does not have an input on node {1}", activeEvent, this.name);
+                Log.Warning($"{activeEvent} does not have an input on node {this.name}");
                 return;
             }
 
             AudioNodeOutput[] connectedNodes = this.input.ConnectedNodes;
             if (connectedNodes == null || nodeNum < 0 || nodeNum >= connectedNodes.Length)
             {
-                Debug.LogWarningFormat("{0} tried to access invalid connected node {1}", this.name, nodeNum);
+                Log.Warning($"{this.name} tried to access invalid connected node {nodeNum}");
                 return;
             }
 
@@ -83,7 +86,7 @@ namespace CycloneGames.Audio.Runtime
             AudioNode parentNode = output != null ? output.ParentNode : null;
             if (parentNode == null)
             {
-                Debug.LogWarningFormat("{0} tried to process a missing connected node at index {1}", this.name, nodeNum);
+                Log.Warning($"{this.name} tried to process a missing connected node at index {nodeNum}");
                 return;
             }
 

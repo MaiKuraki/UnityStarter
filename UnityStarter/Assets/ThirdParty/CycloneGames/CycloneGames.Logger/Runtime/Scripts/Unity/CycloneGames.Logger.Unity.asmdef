@@ -2,7 +2,8 @@
     "name": "CycloneGames.Logger.Unity",
     "rootNamespace": "CycloneGames.Logger",
     "references": [
-        "CycloneGames.Logger"
+        "CycloneGames.Logger",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

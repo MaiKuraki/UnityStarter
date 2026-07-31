@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Choreography
@@ -89,9 +90,6 @@ namespace CycloneGames.Choreography
         [Tooltip("When true and no providers are injected before the first update, discover sibling provider components.")]
         [SerializeField] private bool AutoDiscoverProviders = true;
 
-        [Tooltip("Minimum diagnostics level routed to CycloneGames.Logger.")]
-        [SerializeField] private ChoreographyLogLevel DiagnosticsLevel = ChoreographyLogLevel.Warning;
-
         [Tooltip("Clock authority used to advance the choreography scheduler.")]
         [SerializeField] private ChoreographyUnityClockMode ClockMode = ChoreographyUnityClockMode.GameTime;
 
@@ -99,7 +97,6 @@ namespace CycloneGames.Choreography
         [SerializeField] private double FixedTickRate = 60d;
 
         private ChoreographyScheduler _scheduler;
-        private IChoreographyDiagnostics _diagnostics;
         private ChoreographyUnityClockState _clockState;
         private bool _initialized;
 
@@ -114,10 +111,20 @@ namespace CycloneGames.Choreography
         public int ActiveCount => _scheduler != null ? _scheduler.ActiveCount : 0;
 
         /// <summary>
-        /// Explicitly initializes the scheduler with a provider set and optional diagnostics. Preferred for
+        /// Explicitly initializes the scheduler with a provider set. Preferred for
         /// production/DI composition. Safe to call once; subsequent calls are ignored.
         /// </summary>
-        public void Initialize(IChoreographyProviderSet providers, IChoreographyDiagnostics diagnostics = null)
+        public void Initialize(IChoreographyProviderSet providers)
+        {
+            InitializeCore(providers, null);
+        }
+
+        public void Initialize(IChoreographyProviderSet providers, ILogWriter logWriter)
+        {
+            InitializeCore(providers, logWriter);
+        }
+
+        private void InitializeCore(IChoreographyProviderSet providers, ILogWriter logWriter)
         {
             if (_initialized)
             {
@@ -128,8 +135,9 @@ namespace CycloneGames.Choreography
                 throw new ArgumentNullException(nameof(providers));
             }
 
-            _diagnostics = diagnostics ?? new UnityChoreographyDiagnostics(DiagnosticsLevel);
-            _scheduler = new ChoreographyScheduler(providers, _diagnostics);
+            _scheduler = logWriter == null
+                ? new ChoreographyScheduler(providers)
+                : new ChoreographyScheduler(providers, logWriter);
             _scheduler.EventRaised += OnSchedulerEvent;
             _scheduler.InstanceEnded += OnSchedulerInstanceEnded;
             _initialized = true;
@@ -212,7 +220,7 @@ namespace CycloneGames.Choreography
             registry.RegisterAudio(GetComponentInChildren<IAudioProvider>(true));
             registry.RegisterVfx(GetComponentInChildren<IVfxProvider>(true));
             registry.RegisterResources(GetComponentInChildren<IResourceProvider>(true));
-            Initialize(registry, new UnityChoreographyDiagnostics(DiagnosticsLevel));
+            Initialize(registry);
         }
     }
 }

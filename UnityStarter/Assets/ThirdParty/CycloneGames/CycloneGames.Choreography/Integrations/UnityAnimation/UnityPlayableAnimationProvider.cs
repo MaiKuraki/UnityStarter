@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Animations;
 using UnityEngine.Playables;
@@ -63,7 +64,7 @@ namespace CycloneGames.Choreography.UnityAnimation
 
         private readonly Animator _animator;
         private readonly IUnityChoreographyResourceResolver _resolver;
-        private readonly IChoreographyDiagnostics _diagnostics;
+        private readonly LogChannel _log;
         private readonly bool _evaluateImmediately;
         private readonly Dictionary<VoiceKey, ActiveClip> _voices;
         private readonly Stack<int> _freeInputs;
@@ -77,13 +78,42 @@ namespace CycloneGames.Choreography.UnityAnimation
         public UnityPlayableAnimationProvider(
             Animator animator,
             IUnityChoreographyResourceResolver resolver,
-            IChoreographyDiagnostics diagnostics = null,
             bool evaluateImmediately = true,
             int initialCapacity = 4)
+            : this(
+                animator,
+                resolver,
+                ChoreographyUnityAnimationLog.Channel,
+                evaluateImmediately,
+                initialCapacity)
+        {
+        }
+
+        public UnityPlayableAnimationProvider(
+            Animator animator,
+            IUnityChoreographyResourceResolver resolver,
+            ILogWriter logWriter,
+            bool evaluateImmediately = true,
+            int initialCapacity = 4)
+            : this(
+                animator,
+                resolver,
+                ChoreographyUnityAnimationLog.Create(logWriter),
+                evaluateImmediately,
+                initialCapacity)
+        {
+        }
+
+        private UnityPlayableAnimationProvider(
+            Animator animator,
+            IUnityChoreographyResourceResolver resolver,
+            LogChannel log,
+            bool evaluateImmediately,
+            int initialCapacity)
         {
             _animator = animator != null ? animator : throw new ArgumentNullException(nameof(animator));
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _log = log;
             _evaluateImmediately = evaluateImmediately;
             int capacity = initialCapacity > 0 ? initialCapacity : 4;
             _voices = new Dictionary<VoiceKey, ActiveClip>(capacity);
@@ -257,20 +287,20 @@ namespace CycloneGames.Choreography.UnityAnimation
 
         private void WarnMissingResource(string clipId, string address)
         {
-            if (!_warnedMissingResource && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (!_warnedMissingResource && _log.IsEnabled(LogSeverity.Warning))
             {
                 _warnedMissingResource = true;
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.UnityAnimation",
+                _log.Warning(
                     "Animation clip '" + clipId + "' skipped: resource '" + address + "' is not loaded. Further animation resource warnings are suppressed.");
             }
         }
 
         private void WarnUnsupportedKind(string clipId, ChoreographyResourceKind kind)
         {
-            if (!_warnedUnsupportedKind && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (!_warnedUnsupportedKind && _log.IsEnabled(LogSeverity.Warning))
             {
                 _warnedUnsupportedKind = true;
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.UnityAnimation",
+                _log.Warning(
                     "Animation clip '" + clipId + "' skipped: UnityPlayableAnimationProvider only supports Animation resources, but received '" + kind + "'. Further animation kind warnings are suppressed.");
             }
         }

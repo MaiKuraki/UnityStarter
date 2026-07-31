@@ -1,12 +1,14 @@
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
     public class CharacterAttributeSet : AttributeSet
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         // --- Primary Attributes ---
         public GameplayAttribute Level { get; } = new GameplayAttribute(GASSampleTags.Attribute_Primary_Level);
 
@@ -110,7 +112,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 {
                     var targetASC = data.Target;
                     targetASC.AddLooseGameplayTag(Tag_State_Dead);
-                    CLogger.LogWarning($"{targetASC.OwnerActor} has died!");
+                    Log.Warning($"{targetASC.OwnerActor} has died!");
 
                     var killerASC = data.EffectSpec.Source;
                     if (killerASC != null && killerASC != targetASC)

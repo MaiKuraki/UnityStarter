@@ -1,12 +1,15 @@
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Editor
 {
     [CustomEditor(typeof(GASOverlayConfig))]
     public class GASOverlayConfigEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = GameplayAbilitiesEditorLog.Channel;
+
         public override void OnInspectorGUI()
         {
             serializedObject.Update();
@@ -24,10 +27,10 @@ namespace CycloneGames.GameplayAbilities.Editor
             if (GUILayout.Button("Preview Tag Colors"))
             {
                 var config = (GASOverlayConfig)target;
-                Debug.Log($"[GAS Overlay Config] {config.SemanticTagClassifications.Count} semantic tag classification(s), " +
-                          $"{config.DebuffTagSubstrings.Count} debuff substring(s), " +
-                          $"Panel alpha={config.PanelAlpha:F2}, MaxPanels={config.MaxPanels}, " +
-                          $"TrackWorld={config.TrackWorldPosition}");
+                Log.Info($"GAS overlay config: {config.SemanticTagClassifications.Count} semantic tag classification(s), " +
+                         $"{config.DebuffTagSubstrings.Count} debuff substring(s), " +
+                         $"Panel alpha={config.PanelAlpha:F2}, MaxPanels={config.MaxPanels}, " +
+                         $"TrackWorld={config.TrackWorldPosition}");
             }
 
             serializedObject.ApplyModifiedProperties();
@@ -62,7 +65,7 @@ namespace CycloneGames.GameplayAbilities.Editor
 
             Selection.activeObject = config;
             EditorGUIUtility.PingObject(config);
-            Debug.Log($"[GAS] Created overlay config at: {assetPath}");
+            Log.Info($"Created GAS overlay config at: {assetPath}");
         }
     }
 }

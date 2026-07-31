@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Utility.Runtime
@@ -107,6 +108,7 @@ namespace CycloneGames.Utility.Runtime
     /// </remarks>
     public abstract class MonoSingleton<T> : MonoBehaviour where T : MonoSingleton<T>
     {
+        private static readonly LogChannel Log = UtilityLog.Channel;
         private static T _instance;
         private static string _cachedObjectName;
 
@@ -224,12 +226,11 @@ namespace CycloneGames.Utility.Runtime
             }
 
             enabled = false;
-            Debug.LogError(
-                string.Concat(
-                    "[MonoSingleton] Duplicate ",
-                    typeof(T).FullName,
-                    " component was disabled and will be destroyed. Its GameObject and sibling components are preserved."),
-                this);
+            Log.Error(
+                typeof(T),
+                static (type, builder) => builder
+                    .Append("Duplicate ").Append(type.FullName)
+                    .Append(" component was disabled and will be destroyed. Its GameObject and sibling components are preserved."));
             Destroy(this);
         }
 
@@ -306,12 +307,11 @@ namespace CycloneGames.Utility.Runtime
 
             if (singleton.transform.parent != null)
             {
-                Debug.LogError(
-                    string.Concat(
-                        "[MonoSingleton] Global ",
-                        typeof(T).FullName,
-                        " must be attached to a root GameObject. The configured component will keep Scene lifetime."),
-                    singleton);
+                Log.Error(
+                    typeof(T),
+                    static (type, builder) => builder
+                        .Append("Global ").Append(type.FullName)
+                        .Append(" must be attached to a root GameObject. The configured component will keep Scene lifetime."));
                 return;
             }
 

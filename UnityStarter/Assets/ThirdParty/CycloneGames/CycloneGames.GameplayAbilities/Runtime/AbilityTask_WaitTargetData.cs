@@ -1,9 +1,12 @@
 using System;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
     public class AbilityTask_WaitTargetData : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         public Action<TargetData> OnValidData;
         public Action OnCancelled;
         private ITargetActor targetActorInstance;
@@ -26,7 +29,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (targetActorInstance == null)
             {
-                GASLog.Error("WaitTargetData task failed: ITargetActor instance is null.");
+                Log.Error("WaitTargetData task failed: ITargetActor instance is null.");
                 EndTask();
                 return;
             }

@@ -5,7 +5,7 @@ using UnityEngine;
 
 using Cysharp.Threading.Tasks;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -25,6 +25,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
     internal sealed class ResourcesAssetHandle<TAsset> : ResourcesOperationHandle, IAssetHandle<TAsset>, IReferenceCounted, IInternalCacheable, IAssetMemoryFootprint, IAssetBackendLifetime where TAsset : UnityEngine.Object
     {
+        private static readonly LogChannel Log = AssetManagementLog.Channel;
+
         private const string LOAD_FAILURE_MESSAGE = "Resource asset was not found or failed to load.";
 
         private ResourceRequest _request;
@@ -136,7 +138,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Retain()
         {
-            if (Volatile.Read(ref _disposed) != 0) { CLogger.LogError("[ResourcesAssetHandle] Retain called on a disposed handle."); return; }
+            if (Volatile.Read(ref _disposed) != 0) { Log.Error("[ResourcesAssetHandle] Retain called on a disposed handle."); return; }
             Interlocked.Increment(ref _refCount);
         }
 
@@ -147,7 +149,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[ResourcesAssetHandle] Release called more times than Retain. Refcount underflow prevented.");
+                Log.Error("[ResourcesAssetHandle] Release called more times than Retain. Refcount underflow prevented.");
                 return;
             }
             if (newCount == 0)
@@ -182,6 +184,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
     internal sealed class ResourcesInstantiateHandle : ResourcesOperationHandle, IInstantiateHandle, IReferenceCounted, IInternalCacheable
     {
+        private static readonly LogChannel Log = AssetManagementLog.Channel;
+
         private const string INSTANTIATE_FAILURE_MESSAGE = "The resource instance could not be created.";
 
         public GameObject Instance { get; private set; }
@@ -220,7 +224,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Retain()
         {
-            if (Volatile.Read(ref _disposed) != 0) { CLogger.LogError("[ResourcesInstantiateHandle] Retain called on a disposed handle."); return; }
+            if (Volatile.Read(ref _disposed) != 0) { Log.Error("[ResourcesInstantiateHandle] Retain called on a disposed handle."); return; }
             Interlocked.Increment(ref _refCount);
         }
 
@@ -231,7 +235,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[ResourcesInstantiateHandle] Release called more times than Retain. Refcount underflow prevented.");
+                Log.Error("[ResourcesInstantiateHandle] Release called more times than Retain. Refcount underflow prevented.");
                 return;
             }
             if (newCount == 0)

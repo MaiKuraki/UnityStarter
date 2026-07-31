@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 using System;
 using System.Collections.Generic;
 using Cysharp.Threading.Tasks;
@@ -281,6 +282,8 @@ namespace CycloneGames.Audio.Runtime
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Ducking Profile")]
     public sealed class AudioDuckingProfile : ScriptableObject
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         [SerializeField]
         private AudioDuckingRule[] rules = new AudioDuckingRule[] { AudioDuckingRule.CreateDefaultVoiceDucksMusic() };
 
@@ -328,7 +331,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 cachedConfig = allConfigs[0];
                 if (allConfigs.Length > 1)
-                    Debug.LogWarning($"AudioDuckingProfile: Found {allConfigs.Length} configs in Resources. Using first.");
+                    Log.Warning($"AudioDuckingProfile: Found {allConfigs.Length} configs in Resources. Using first.");
                 return cachedConfig;
             }
 
@@ -337,7 +340,7 @@ namespace CycloneGames.Audio.Runtime
             if (guids.Length > 0)
             {
                 if (guids.Length > 1)
-                    Debug.LogWarning($"AudioDuckingProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
+                    Log.Warning($"AudioDuckingProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
                 string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
                 cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioDuckingProfile>(path);
             }
@@ -363,6 +366,8 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     public class AudioEvent : ScriptableObject
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         private const int MaxRuntimeGraphNodes = 1024;
         private const int MaxRuntimeGraphEdges = 4096;
         private const int MaxRuntimeGraphDepth = 128;
@@ -557,19 +562,19 @@ namespace CycloneGames.Audio.Runtime
         {
             if (this.output == null)
             {
-                Debug.LogErrorFormat("Missing output node in event: {0}", this.name);
+                Log.Error($"Missing output node in event: {this.name}");
                 return false;
             }
 
             if (this.nodes == null)
             {
-                Debug.LogErrorFormat("Missing node list in event: {0}", this.name);
+                Log.Error($"Missing node list in event: {this.name}");
                 return false;
             }
 
             if (!TryValidateGraph(out string graphError))
             {
-                Debug.LogErrorFormat("Invalid graph in event {0}: {1}", this.name, graphError);
+                Log.Error($"Invalid graph in event {this.name}: {graphError}");
                 return false;
             }
 
@@ -578,7 +583,7 @@ namespace CycloneGames.Audio.Runtime
                 AudioNode node = this.nodes[i];
                 if (node == null)
                 {
-                    Debug.LogErrorFormat("Null node in event: {0}", this.name);
+                    Log.Error($"Null node in event: {this.name}");
                     return false;
                 }
 
@@ -740,13 +745,13 @@ namespace CycloneGames.Audio.Runtime
         {
             if (clip == null)
             {
-                Debug.LogErrorFormat("Null clip in node {0}, event: {1}", nodeName, this.name);
+                Log.Error($"Null clip in node {nodeName}, event: {this.name}");
                 return false;
             }
 
             if (clip.length <= 0)
             {
-                Debug.LogErrorFormat("Invalid clip length in node {0}, event: {1}", nodeName, this.name);
+                Log.Error($"Invalid clip length in node {nodeName}, event: {this.name}");
                 return false;
             }
 
@@ -757,7 +762,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (reference == null || string.IsNullOrWhiteSpace(reference.Location))
             {
-                Debug.LogErrorFormat("Invalid AudioClipReference in node {0}, event: {1}", nodeName, this.name);
+                Log.Error($"Invalid AudioClipReference in node {nodeName}, event: {this.name}");
                 return false;
             }
 
@@ -858,12 +863,12 @@ namespace CycloneGames.Audio.Runtime
         {
             if (nodeToDelete == null)
             {
-                Debug.LogWarning("Trying to remove null node!");
+                Log.Warning("Trying to remove null node!");
                 return;
             }
             else if (nodeToDelete == this.output)
             {
-                Debug.LogWarning("Trying to delete output node!");
+                Log.Warning("Trying to delete output node!");
                 return;
             }
 

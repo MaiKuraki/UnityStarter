@@ -1,9 +1,12 @@
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Components
 {
     internal static class BTManagerSceneResolver
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         public static T FindExisting<T>(string managerName)
             where T : MonoBehaviour
         {
@@ -35,10 +38,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
             if (sceneCandidateCount > 1 && selected != null)
             {
-                Debug.LogWarning(
+                Log.Warning(
                     $"[{managerName}] Found {sceneCandidateCount} loaded scene instances. " +
-                    $"'{selected.gameObject.name}' was selected deterministically; duplicate components will be removed when they awaken.",
-                    selected);
+                    $"'{selected.gameObject.name}' was selected deterministically; duplicate components will be removed when they awaken.");
             }
 
             return selected;

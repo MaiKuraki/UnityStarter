@@ -1,6 +1,6 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 using System.Collections.Generic;
 
@@ -8,6 +8,8 @@ namespace CycloneGames.GameplayAbilities.Sample
 {
     public class GA_Purify : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly float areaOfEffectRadius;
         private readonly GameplayTagContainer targetRequiredFactions;
         private readonly GameplayTagContainer targetForbiddenFactions;
@@ -83,13 +85,13 @@ namespace CycloneGames.GameplayAbilities.Sample
                     var poisonTagContainer = new GameplayTagContainer { GameplayTagManager.RequestTag(GASSampleTags.Debuff_Poison) };
                     targetCharacter.AbilitySystemComponent.RemoveActiveEffectsWithGrantedTags(poisonTagContainer);
                     targetsPurified++;
-                    CLogger.LogInfo($"Purified {targetCharacter.name}.");
+                    Log.Info($"Purified {targetCharacter.name}.");
                 }
             }
 
             if (targetsPurified == 0)
             {
-                CLogger.LogInfo("Purify was cast, but no one had cleansable poison.");
+                Log.Info("Purify was cast, but no one had cleansable poison.");
             }
 
             EndAbility();

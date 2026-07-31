@@ -76,7 +76,11 @@ flowchart TD
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | no | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` 加显式 consumer reference |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | no | `jp.hadashikick.vcontainer` 加显式 consumer reference |
 
-核心 Runtime 直接依赖 UniTask、CycloneGames.Logger、CycloneGames.IO Core/SystemIO 与 CycloneGames.Hash Core。仅安装可选包不够：其 `versionDefines` 范围必须匹配，且 consumer asmdef 必须引用条件 Assembly。不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。
+核心 Runtime 直接依赖 UniTask、CycloneGames.Logging、CycloneGames.IO Core/SystemIO 与 CycloneGames.Hash Core。仅安装可选包不够：其 `versionDefines` 范围必须匹配，且 consumer asmdef 必须引用条件 Assembly。不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。
+
+AssetManagement 通过 `CycloneGames.AssetManagement` 下的稳定 `LogChannel` category 输出诊断。本包不会初始化、flush、替换或关闭日志 backend。仅安装 `com.cyclone-games.logging` 时，诊断会安全地进入 `NullLogWriter`；应用 composition root 可以按需安装 `CycloneGames.Logger` 或其他 `ILogWriter` backend。
+
+每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
 YooAsset 3.0.5 是最低稳定版。asmdef 范围会为低于 4.0.0 的版本启用 provider；activation test 会拒绝 prerelease 包。产品选择的确切稳定版 3.x 在发布前必须完成编译并通过 YooAsset provider test assembly。
 
@@ -463,6 +467,8 @@ Runtime 保持热路径内部缓存查询紧凑：value cache key 避免组合�
 Handle tracking 默认关闭，且有 runtime 成本。Handle registry 默认 16,384 条（最大 65,536）；scene registry 默认 4,096 条（最大 16,384）。满容量时，tracker 会丢弃新诊断注册、递增 `DroppedRegistrationCount` 并标记 observation epoch 不完整。Editor 窗口只在可见且 Play Mode 时刷新，频率不超过 2 Hz；cache detail 每层上限 4,096 行。
 
 `HandleTracker.Enabled`、`HandleTracker.EnableStackTrace` 与 `HandleTracker.ConfigureCapacity` 是进程级诊断设置。从一个 composition root 或 Editor 诊断工具配置；它们不是 `AssetManagementOptions` 字段。
+
+运行告警、provider 失败、cache-retention 事件和 Editor 校验结果均使用共享日志契约，而不直接调用 `UnityEngine.Debug`。异常记录保留原始 `Exception`；频繁执行的 load-profiler 消息使用 deferred state formatting，关闭 channel 后不会构建消息。
 
 ### 平台与硬件指引
 

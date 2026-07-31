@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using UnityEngine;
 using CycloneGames.BehaviorTree.Runtime.Core;
 
@@ -7,6 +8,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
     [DisallowMultipleComponent]
     public class BTDistanceLODProvider : MonoBehaviour, IBTLODProvider
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         public const int DefaultMaximumTreeCount = 65_536;
         public const int HardMaximumTreeCount = 1_048_576;
 
@@ -115,10 +118,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
 
             _legacyRegistrationCapacityReported = true;
-            Debug.LogError(
+            Log.Error(
                 $"[BTDistanceLODProvider] Legacy RegisterTree was rejected because LOD tree capacity " +
-                $"was exhausted on '{gameObject.name}'. Use TryRegisterTree to handle admission failure.",
-                this);
+                $"was exhausted on '{gameObject.name}'. Use TryRegisterTree to handle admission failure.");
         }
 
         public bool TryRegisterTree(RuntimeBehaviorTree tree, Transform treeTransform)

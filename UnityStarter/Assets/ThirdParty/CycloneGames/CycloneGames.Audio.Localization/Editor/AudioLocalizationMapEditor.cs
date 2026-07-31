@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using CycloneGames.Audio.Runtime.Integrations.Localization;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
@@ -87,6 +88,8 @@ namespace CycloneGames.Audio.Editor.Integrations.Localization
 
     internal static class AudioLocalizationMapValidation
     {
+        private static readonly LogChannel Log = AudioLocalizationEditorLog.Channel;
+
         public static AudioLocalizationMapValidationSummary ValidateAll(bool logValidSummary)
         {
             string[] guids = AssetDatabase.FindAssets("t:AudioLocalizationMap");
@@ -99,21 +102,21 @@ namespace CycloneGames.Audio.Editor.Integrations.Localization
                 if (map == null)
                 {
                     invalidCount++;
-                    Debug.LogError($"Audio localization map '{path}' is invalid: The asset could not be loaded.");
+                    Log.Error($"Audio localization map '{path}' is invalid: The asset could not be loaded.");
                     continue;
                 }
 
                 if (!map.TryValidate(out string error))
                 {
                     invalidCount++;
-                    Debug.LogError($"Audio localization map '{path}' is invalid: {error}", map);
+                    Log.Error($"Audio localization map '{path}' is invalid: {error}");
                 }
             }
 
             var summary = new AudioLocalizationMapValidationSummary(guids.Length, invalidCount);
             if (logValidSummary && invalidCount == 0)
             {
-                Debug.Log($"Audio localization map validation passed for {guids.Length} map assets.");
+                Log.Info($"Audio localization map validation passed for {guids.Length} map assets.");
             }
 
             return summary;

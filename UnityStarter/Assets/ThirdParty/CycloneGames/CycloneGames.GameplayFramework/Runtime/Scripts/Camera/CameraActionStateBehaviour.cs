@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -17,6 +18,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class CameraActionStateBehaviour : StateMachineBehaviour
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
         private const int MaxTrackedStateCount = 8;
 
         public enum ExitActionMode
@@ -227,10 +229,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             if (capacityWarningLogged) return;
 
             capacityWarningLogged = true;
-            Debug.LogWarning(
+            Log.Warning(
                 "CameraActionStateBehaviour reached its fixed capacity of 8 concurrent Animator/layer pairs. " +
-                "Enter and exit actions continue, but progress triggers for additional pairs are skipped until a slot is released.",
-                this);
+                "Enter and exit actions continue, but progress triggers for additional pairs are skipped until a slot is released.");
         }
 
         private void ClearBindingCacheIfUnused(Animator animator)

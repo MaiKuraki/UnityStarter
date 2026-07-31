@@ -5,8 +5,8 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEngine;
 using Mirror;
+using CycloneGames.Logging;
 using CycloneGames.Networking.Security;
-using CycloneGames.Logger;
 
 namespace CycloneGames.Networking.Adapter.Mirror
 {
@@ -26,6 +26,8 @@ namespace CycloneGames.Networking.Adapter.Mirror
     [DisallowMultipleComponent]
     public sealed class MirrorNetAdapter : MonoBehaviour, INetTransport, INetworkMessageEndpoint, INetworkSecurityPolicyConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
     {
+        private static readonly LogChannel Log = NetworkingMirrorAdapterLog.Channel;
+
         private const int MirrorArraySegmentLengthPrefixMaxBytes = 5;
         private const string MissingNetworkManagerError = "Mirror NetworkManager.singleton is not available.";
         private const string MissingTransportError = "Mirror Transport.active is not available.";
@@ -937,7 +939,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
             }
             catch (Exception e)
             {
-                CLogger.LogError($"Failed to send canonical message {messageId}: {e}", LogCategory.Network);
+                Log.Error(e, $"Failed to send canonical message {messageId}.");
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
@@ -968,7 +970,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
             }
             catch (Exception e)
             {
-                CLogger.LogError($"Failed to send canonical message {messageId} to a client: {e}", LogCategory.Network);
+                Log.Error(e, $"Failed to send canonical message {messageId} to a client.");
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, connection, e.Message);
             }
         }
@@ -1001,7 +1003,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
             }
             catch (Exception e)
             {
-                CLogger.LogError($"Failed to broadcast canonical message {messageId}: {e}", LogCategory.Network);
+                Log.Error(e, $"Failed to broadcast canonical message {messageId}.");
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
             }
         }
@@ -1143,7 +1145,7 @@ namespace CycloneGames.Networking.Adapter.Mirror
             }
             catch (Exception e)
             {
-                CLogger.LogError($"Canonical message handler {header.MessageId} failed: {e}", LogCategory.Network);
+                Log.Error(e, $"Canonical message handler {header.MessageId} failed.");
             }
         }
 

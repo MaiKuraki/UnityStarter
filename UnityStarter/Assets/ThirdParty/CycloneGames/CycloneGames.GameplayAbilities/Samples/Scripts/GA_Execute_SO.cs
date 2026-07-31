@@ -1,4 +1,5 @@
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Samples
@@ -32,6 +33,8 @@ namespace CycloneGames.GameplayAbilities.Samples
 
     public class GA_Execute : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect executeDamageEffect;
         private readonly float damageMultiplier;
 
@@ -49,7 +52,7 @@ namespace CycloneGames.GameplayAbilities.Samples
                 return;
             }
             
-            GASLog.Info($"[Execute] EXECUTE! Dealing {damageMultiplier}x damage!");
+            Log.Info($"[Execute] EXECUTE! Dealing {damageMultiplier}x damage!");
             
             // In production, you would get the target from a targeting system
             // and apply the damage effect to them

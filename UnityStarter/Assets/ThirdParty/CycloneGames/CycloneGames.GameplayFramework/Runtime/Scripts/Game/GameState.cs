@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -11,6 +12,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class GameState : Actor
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         public enum EMatchState : byte
         {
             EnteringMap = 0,
@@ -88,7 +91,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, this);
+                    Log.Error(
+                        exception,
+                        $"GameState '{name}' match-state observer failed after transition from '{oldState}' to '{newState}'.");
                 }
             }
             finally

@@ -1,39 +1,45 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.Logger.Tests.Editor
 {
     public sealed class LogAssertTests
     {
-        private CLogger _globalLogger;
+        private CLogger _logger;
         private RecordingLogger _recordingLogger;
 
         [SetUp]
         public void SetUp()
         {
-            CLogger.Shutdown();
+            LogRuntime.ResetWriter();
             CLogAssert.Reset();
-            CLogger.ConfigureSingleThreadedProcessing();
-            _globalLogger = CLogger.Instance;
+            _logger = CLoggerFactory.CreateSingleThreaded();
             _recordingLogger = new RecordingLogger();
-            _globalLogger.AddLogger(_recordingLogger);
+            _logger.AddLogger(_recordingLogger);
+            Assert.IsTrue(LogRuntime.TryInstallWriter(_logger));
         }
 
         [TearDown]
         public void TearDown()
         {
             CLogAssert.Reset();
-            CLogger.Shutdown();
-            CLogger.ConfigureThreadedProcessing();
+            if (_logger != null)
+            {
+                LogRuntime.TryResetWriter(_logger);
+            }
+
+            _logger?.ShutdownInstance();
+            _logger = null;
         }
 
         [Test]
         public void StaticAssert_LogsFailureWithCallerLocation()
         {
             CLogAssert.IsTrue(false, "broken", "Checks");
-            _globalLogger.Pump(16);
+            _logger.Pump(16);
 
             Assert.AreEqual(1, _recordingLogger.Count);
             Assert.AreEqual(LogLevel.Error, _recordingLogger[0].Level);
@@ -54,17 +60,15 @@ namespace CycloneGames.Logger.Tests.Editor
                 s.Invoked = true;
                 sb.Append("should not run");
             }, "Checks");
-            _globalLogger.Pump(16);
+            _logger.Pump(16);
 
             Assert.IsFalse(state.Invoked);
             Assert.AreEqual(0, _recordingLogger.Count);
         }
 
         [Test]
-        public void StaticAssert_DisabledDoesNotCreateGlobalInstance()
+        public void StaticAssert_DisabledDoesNotInvokeBuilderOrWrite()
         {
-            CLogger.Shutdown();
-            CLogger.ConfigureGlobalStaticLoggingSuppressed(true);
             CLogAssert.Configure(new CLogAssertOptions { Enabled = false });
             var state = new InvocationState();
 
@@ -75,8 +79,7 @@ namespace CycloneGames.Logger.Tests.Editor
             }, "Checks");
 
             Assert.IsFalse(state.Invoked);
-            Assert.IsFalse(CLogger.TryGetInstance(out _));
-            CLogger.ConfigureGlobalStaticLoggingSuppressed(false);
+            Assert.AreEqual(0, _recordingLogger.Count);
         }
 
         [Test]
@@ -89,7 +92,7 @@ namespace CycloneGames.Logger.Tests.Editor
             });
 
             var exception = Assert.Throws<CLogAssertionException>(() => CLogAssert.Fail("boom"));
-            _globalLogger.Pump(16);
+            _logger.Pump(16);
 
             Assert.AreEqual("boom", exception.Message);
             Assert.AreEqual("Checks", exception.Category);
@@ -102,12 +105,11 @@ namespace CycloneGames.Logger.Tests.Editor
             CLogAssert.Configure(new CLogAssertOptions
             {
                 FailureBehavior = CLogAssertFailureBehavior.LogAndThrow,
-                FailureLevel = LogLevel.Fatal,
+                FailureLevel = LogSeverity.Fatal,
                 Category = "Checks"
             });
 
             var exception = Assert.Throws<CLogAssertionException>(() => CLogAssert.Fail("fatal"));
-            _globalLogger.Pump(16);
 
             Assert.AreEqual("fatal", exception.Message);
             Assert.AreEqual(1, _recordingLogger.Count);
@@ -123,7 +125,7 @@ namespace CycloneGames.Logger.Tests.Editor
             logger.AddLogger(recording);
             var assert = new CLogAssertService(logger, new CLogAssertOptions
             {
-                FailureLevel = LogLevel.Warning,
+                FailureLevel = LogSeverity.Warning,
                 Category = "ServiceAssert"
             });
 

@@ -84,7 +84,13 @@ flowchart LR
 | `...Integrations.PrimeTween` | Window transition driver | `com.kyrylokuzyk.primetween` package present |
 | `CycloneGames.UIFramework.Samples` | Opt-in examples | `autoReferenced: false` |
 
-The core runtime references `UniTask`, `CycloneGames.Logger`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` and `defineConstraints`; do not add their `CYCLONEGAMES_HAS_*` symbols manually to PlayerSettings. AssetManagement and Localization integrations use explicit asmdef references to their local assemblies.
+The core runtime references `UniTask`, `CycloneGames.Logging`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` and `defineConstraints`; do not add their `CYCLONEGAMES_HAS_*` symbols manually to PlayerSettings. AssetManagement and Localization integrations use explicit asmdef references to their local assemblies.
+
+Runtime and sample diagnostics use the stable `CycloneGames.UIFramework` `LogChannel` category. General Editor tooling uses `CycloneGames.UIFramework.Editor`; localization authoring uses `CycloneGames.UIFramework.Localization.Editor`. The package depends only on the backend-neutral `com.cyclone-games.logging` contract and never initializes, replaces, flushes, or shuts down the process writer. Without an installed backend, `NullLogWriter` safely discards messages. The application composition root may install `CycloneGames.Logger` or another `ILogWriter`; any file path, rotation, retention, redaction, flush, and disposal policy belongs to that host.
+
+Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
+
+The opt-in sample asmdef applies the same convention through `Samples/Diagnostics/UIFrameworkSampleLog.cs` while preserving the existing `CycloneGames.UIFramework` category.
 
 ## Quick Start
 
@@ -94,11 +100,14 @@ A direct-reference window needs a `UIRoot`, a `UIWindowConfiguration`, and a com
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 using CycloneGames.UIFramework.Runtime;
 using UnityEngine;
 
 public sealed class GameUiBootstrap : MonoBehaviour
 {
+    private static readonly LogChannel Log = LogChannel.Create("Game.UI");
+
     [SerializeField] private UIRoot uiRoot;
     [SerializeField] private UIWindowConfiguration startupWindow;
 
@@ -129,7 +138,7 @@ public sealed class GameUiBootstrap : MonoBehaviour
         }
         catch (Exception exception)
         {
-            Debug.LogException(exception, this);
+            Log.Error(exception, "UI startup failed.");
         }
         finally
         {
@@ -145,7 +154,7 @@ public sealed class GameUiBootstrap : MonoBehaviour
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, this);
+                    Log.Error(exception, "UI shutdown failed.");
                 }
                 finally
                 {
@@ -461,7 +470,7 @@ For manual authoring, use:
 
 `GetPerformanceStats()` returns counts for sessions, lifecycle phases, scene-bound windows, binders, isolated Canvases, layers, and the configured maximum. `CopyLayerRuntimeStats` and `CopyActiveWindows` write into caller-owned buffers. `DynamicAtlasService.GetStats()` reports pages, entries, references, estimated texture bytes, utilization, copy paths, cache hits, and failures. `Tools > CycloneGames > UI Framework > Runtime Monitor` reads these bounded snapshots from an explicitly selected `UIManager`. `Performance Auditor` starts only when `Scan Project` is pressed; it reports review candidates for layout authority, raycasts, materials, textures, masks, and canvas boundaries without modifying assets.
 
-`UIPresenterBinder.LogMissingPresenterMappings` reports unmapped windows during development. Keep it disabled when missing mappings are intentionally common or when logging volume would be harmful.
+`UIPresenterBinder.LogMissingPresenterMappings` reports unmapped windows through `CycloneGames.UIFramework` during development. Its message uses deferred state formatting, so a disabled channel does not build the message. Keep the option disabled when missing mappings are intentionally common or when logging volume would be harmful.
 
 ## Common Scenarios
 

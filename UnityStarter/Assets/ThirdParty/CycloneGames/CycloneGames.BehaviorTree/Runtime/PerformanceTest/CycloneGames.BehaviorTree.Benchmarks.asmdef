@@ -2,6 +2,7 @@
     "name": "CycloneGames.BehaviorTree.Benchmarks",
     "rootNamespace": "CycloneGames.BehaviorTree.Runtime.PerformanceTest",
     "references": [
+        "CycloneGames.Logging",
         "CycloneGames.BehaviorTree.Runtime"
     ],
     "includePlatforms": [],

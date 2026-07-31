@@ -6,9 +6,9 @@ using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
-using Debug = UnityEngine.Debug;
 
 namespace CycloneGames.DataTable.Unity.Editor
 {
@@ -120,6 +120,8 @@ namespace CycloneGames.DataTable.Unity.Editor
     [InitializeOnLoad]
     public static class DataTableLubanRunner
     {
+        private static readonly LogChannel Log = DataTableEditorLog.Channel;
+
         private const string MenuPath = "Tools/CycloneGames/DataTable/Run Luban Build";
         private const string NamespaceCaseConflictMarker = "\u547D\u540D\u7A7A\u95F4\u5C0F\u5199\u91CD\u590D";
         private const string NamespaceCaseConflictMojibakeMarker = "\u935B\u85C9\u6095\u7ECC\u6D2A\u68FF\u704F\u5FD3\u5553";
@@ -890,14 +892,14 @@ namespace CycloneGames.DataTable.Unity.Editor
             var logType = ResolveResultLogType(result);
             switch (logType)
             {
-                case LogType.Error:
-                    Debug.LogError(message);
+                case LogSeverity.Error:
+                    Log.Error(message);
                     break;
-                case LogType.Warning:
-                    Debug.LogWarning(message);
+                case LogSeverity.Warning:
+                    Log.Warning(message);
                     break;
                 default:
-                    Debug.Log(message);
+                    Log.Info(message);
                     break;
             }
         }
@@ -1072,21 +1074,21 @@ namespace CycloneGames.DataTable.Unity.Editor
             builder.AppendLine();
         }
 
-        private static LogType ResolveResultLogType(DataTableLubanRunResult result)
+        private static LogSeverity ResolveResultLogType(DataTableLubanRunResult result)
         {
             if (!result.Success)
             {
-                return LogType.Error;
+                return LogSeverity.Error;
             }
 
             if (!string.IsNullOrWhiteSpace(result.StandardError) ||
                 ContainsWarning(result.StandardOutput) ||
                 ContainsWarning(result.StandardError))
             {
-                return LogType.Warning;
+                return LogSeverity.Warning;
             }
 
-            return LogType.Log;
+            return LogSeverity.Info;
         }
 
         private static bool ContainsWarning(string value)

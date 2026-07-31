@@ -35,5 +35,7 @@ namespace CycloneGames.Analyzers
         public const string LambdaAllocInHotPath = "CG0046";
         public const string AsyncTaskOverUniTask = "CG0047";
         public const string StaticClassCircularDependencyRuleId = "CG0048";
+        public const string DirectLoggingApi = "CG0049";
+        public const string ModuleLogConvention = "CG0050";
     }
 }

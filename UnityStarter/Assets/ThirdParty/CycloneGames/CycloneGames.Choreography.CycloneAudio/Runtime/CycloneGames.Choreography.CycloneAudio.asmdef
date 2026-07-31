@@ -4,7 +4,8 @@
     "references": [
         "CycloneGames.Choreography.Core",
         "CycloneGames.Choreography.Interaction",
-        "CycloneGames.Audio.Runtime"
+        "CycloneGames.Audio.Runtime",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

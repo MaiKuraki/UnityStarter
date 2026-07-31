@@ -2,8 +2,8 @@
     "name": "CycloneGames.DataTable.Unity.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.DataTable.Core",
-        "CycloneGames.DataTable.Unity.Runtime"
+        "CycloneGames.Logging",
+        "CycloneGames.DataTable.Core"
     ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],

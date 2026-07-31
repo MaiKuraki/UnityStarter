@@ -2,6 +2,7 @@
     "name": "CycloneGames.AIPerception",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.Logging",
         "Unity.Burst",
         "Unity.Collections",
         "Unity.Mathematics"

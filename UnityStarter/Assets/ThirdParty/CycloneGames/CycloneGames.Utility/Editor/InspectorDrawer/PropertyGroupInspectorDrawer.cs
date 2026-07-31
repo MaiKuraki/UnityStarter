@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 
+using CycloneGames.Logging;
 using CycloneGames.Utility.Runtime;
 
 using UnityEditor;
@@ -23,6 +24,7 @@ namespace CycloneGames.Utility.Editor
     [CanEditMultipleObjects]
     public class PropertyGroupInspectorDrawer : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = UtilityEditorLog.Channel;
         private const string MixedTargetTypesMessage =
             "Property groups are disabled because the selected objects have different concrete types.";
 
@@ -319,6 +321,8 @@ namespace CycloneGames.Utility.Editor
 
     internal static class PropertyGroupMetadataCache
     {
+        private static readonly LogChannel Log = UtilityEditorLog.Channel;
+
         private static readonly Dictionary<Type, PropertyGroupTypeMetadata> TypeMetadata =
             new Dictionary<Type, PropertyGroupTypeMetadata>();
 
@@ -336,7 +340,7 @@ namespace CycloneGames.Utility.Editor
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception, "Property group metadata construction failed.");
                 metadata = new PropertyGroupTypeMetadata(
                     new Dictionary<string, PropertyGroupFieldMetadata>(StringComparer.Ordinal),
                     string.Concat(

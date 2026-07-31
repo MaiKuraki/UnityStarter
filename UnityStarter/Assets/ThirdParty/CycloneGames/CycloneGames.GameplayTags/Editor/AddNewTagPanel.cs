@@ -4,12 +4,15 @@ using System.IO;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
    internal class AddNewTagPanel
    {
       private const int k_NewFileOptionIndex = 0;
+
+      private static readonly LogChannel Log = GameplayTagsEditorLog.Channel;
 
       public event Action OnClose;
       public event Action<GameplayTag> OnTagAdded;
@@ -113,7 +116,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
                   if (!addedTag.IsValid)
                   {
-                     Debug.LogError("Tag was added but could not be found after reloading.");
+                     Log.Error("Tag was added but could not be found after reloading.");
                      return;
                   }
 

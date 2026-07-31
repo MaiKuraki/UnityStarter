@@ -1,13 +1,14 @@
 using System;
 using System.Collections;
 using System.Reflection;
-using System.Text.RegularExpressions;
 using CycloneGames.BehaviorTree.Runtime;
 using CycloneGames.BehaviorTree.Runtime.Components;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Nodes;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
+using CycloneGames.BehaviorTree.Tests.Support;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -177,11 +178,24 @@ namespace CycloneGames.BehaviorTree.Tests.PlayMode
             gameObject.SetActive(true);
             yield return null;
 
-            LogAssert.Expect(LogType.Error, new Regex("^\\[BehaviorTree\\]"));
-            LogAssert.Expect(
-                LogType.Error,
-                new Regex("^\\[BTRunnerComponent\\] Behavior tree compilation returned null"));
-            Assert.DoesNotThrow(runner.Play);
+            RecordedLogEntry[] entries;
+            using (var logs = new RecordingLogWriterScope("CycloneGames.BehaviorTree"))
+            {
+                Assert.DoesNotThrow(runner.Play);
+                entries = logs.Snapshot();
+            }
+
+            Assert.That(entries, Has.Length.EqualTo(2));
+            Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+            Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.BehaviorTree"));
+            Assert.That(entries[0].Message, Is.EqualTo("Behavior tree compilation failed."));
+            Assert.That(entries[0].Exception, Is.Not.Null);
+            Assert.That(entries[1].Severity, Is.EqualTo(LogSeverity.Error));
+            Assert.That(entries[1].Category, Is.EqualTo("CycloneGames.BehaviorTree"));
+            Assert.That(
+                entries[1].Message,
+                Is.EqualTo("Behavior tree compilation returned null on BehaviorTreeRunner-CompileFailure."));
+            Assert.That(entries[1].Exception, Is.Null);
 
             Assert.That(runner.RuntimeTree, Is.Null);
             Assert.That(runner.IsStopped, Is.True);

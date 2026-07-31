@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using CycloneGames.Audio.Runtime;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 
@@ -11,6 +12,8 @@ namespace CycloneGames.Audio.Editor
     [CustomEditor(typeof(AudioVoicePolicyProfile))]
     public sealed class AudioVoicePolicyProfileEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = AudioEditorLog.Channel;
+
         private static string[] allConfigGuids;
         private static bool duplicateCacheDirty = true;
 
@@ -137,7 +140,7 @@ namespace CycloneGames.Audio.Editor
                 foreach (string guid in allConfigGuids)
                 {
                     string path = AssetDatabase.GUIDToAssetPath(guid);
-                    Debug.Log($"AudioVoicePolicyProfile found at: {path}");
+                    Log.Info($"AudioVoicePolicyProfile found at: {path}");
                 }
             }
 

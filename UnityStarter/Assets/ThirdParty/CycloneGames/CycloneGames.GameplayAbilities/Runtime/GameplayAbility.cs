@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayAbilities.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -114,6 +115,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public abstract class GameplayAbility : IGASAbilityDefinition
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         public const int MaxNameLength = 256;
         public const int MaxTriggerCount = 64;
         public const int MaxAggregateTagCount = 256;
@@ -476,7 +479,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
         /// </summary>
         public virtual void ActivateAbility(GameplayAbilityActorInfo actorInfo, GameplayAbilitySpec spec, GameplayAbilityActivationInfo activationInfo)
         {
-            GASLog.Warning(sb => sb.Append("Base ActivateAbility called for '").Append(Name).Append("'. Did you forget to override it in your specific ability class?"));
+            Log.Warning(Name, static (abilityName, sb) => sb.Append("Base ActivateAbility called for '")
+                .Append(abilityName).Append("'. Did you forget to override it in your specific ability class?"));
             GameplayAbilityCommitResult commit = CommitAbility(actorInfo, spec);
             if (!commit.Succeeded)
             {
@@ -861,13 +865,13 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (System.Exception exception)
                     {
-                        GASLog.Error($"AbilityTask tick failed for ability '{Name}': {exception.Message}");
+                        Log.Error(exception, $"AbilityTask tick failed for ability '{Name}'.");
                         if (tickTask != null)
                         {
                             try { tickTask.EndTaskIfCurrentLease(tickTaskLeaseGeneration); }
                             catch (System.Exception cleanupException)
                             {
-                                GASLog.Error($"AbilityTask cleanup failed after a tick exception: {cleanupException.Message}");
+                                Log.Error(cleanupException, "AbilityTask cleanup failed after a tick exception.");
                             }
                         }
                     }
@@ -977,7 +981,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 {
                     GASTrace.Record(GASTraceEventType.AbilityActivateBlocked, spec.Owner, this, decision: GASTraceDecision.Blocked, reason: GASTraceReason.BlockedByActiveAbility, abilitySpecHandle: spec.Handle);
                 }
-                GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' blocked by another active ability's BlockAbilitiesWithTag."));
+                Log.Debug(Name, static (abilityName, sb) => sb.Append("Ability '").Append(abilityName)
+                    .Append("' blocked by another active ability's BlockAbilitiesWithTag."));
                 return false;
             }
 
@@ -1025,7 +1030,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (asc.HasAnyMatchingGameplayTagsExact(CooldownGrantedTagsSnapshot))
                 {
-                    GASLog.Debug(sb => sb.Append("Ability '").Append(Name).Append("' failed: on cooldown."));
+                    Log.Debug(Name, static (abilityName, sb) => sb.Append("Ability '").Append(abilityName)
+                        .Append("' failed: on cooldown."));
                     return false;
                 }
             }

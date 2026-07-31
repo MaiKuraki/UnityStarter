@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
+using CycloneGames.Logging;
 using Unity.Collections;
 using Unity.Mathematics;
 using UnityEngine;
@@ -14,6 +15,7 @@ namespace CycloneGames.AIPerception.Runtime
     /// </summary>
     public sealed class PerceptibleRegistry : IDisposable
     {
+        private static readonly LogChannel Log = AIPerceptionRuntimeLog.Channel;
         private const int InitialCapacity = 64;
         private const float WarningThreshold = 0.75f;
         private const float DefaultCellSize = 20f;
@@ -159,7 +161,10 @@ namespace CycloneGames.AIPerception.Runtime
             if (_maximumCapacity > 0 && _count >= _maximumCapacity)
             {
                 _rejectedRegistrationCount = SaturatingIncrement(_rejectedRegistrationCount);
-                Debug.LogError($"[AIPerception] Registry capacity exhausted ({_maximumCapacity}).");
+                Log.Error(
+                    _maximumCapacity,
+                    static (capacity, builder) => builder
+                        .Append("Registry capacity exhausted (").Append(capacity).Append(")."));
                 return PerceptibleHandle.Invalid;
             }
 
@@ -524,7 +529,11 @@ namespace CycloneGames.AIPerception.Runtime
                 return;
             }
 
-            Debug.LogWarning($"[AIPerception] Registry at {_count}/{_maximumCapacity}. Review the world capacity budget.");
+            Log.Warning(
+                (Count: _count, Capacity: _maximumCapacity),
+                static (state, builder) => builder
+                    .Append("Registry at ").Append(state.Count).Append('/').Append(state.Capacity)
+                    .Append(". Review the world capacity budget."));
             _warningEmitted = true;
         }
 

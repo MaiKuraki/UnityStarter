@@ -67,7 +67,7 @@ flowchart LR
 | `CycloneGames.BehaviorTree.Runtime.DOD` | 否 | Burst/Jobs 平面树调度器与 NativeArray 状态 |
 | `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | 否 | Fixed-point Blackboard/schema adapter 与支持保存/恢复的确定性随机数 provider |
 
-Runtime assembly 依赖 `com.cyclone-games.hash`。DOD assembly 只在 Burst、Collections 和 Mathematics 均存在时启用，使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Runtime.DOD`。DeterministicMath bridge 及其测试只在 UPM 解析到受支持的 `com.cyclone-games.deterministic-math` `1.x` 版本时具备编译条件。它们的 asmdef 通过 `versionDefines` 生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`，再通过 `defineConstraints` 消费该 capability，并保持 `autoReferenced: false`。使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Integrations.DeterministicMath`。不要在 PlayerSettings 中手工添加 capability symbol；依赖缺失或版本不受支持时，integration 被排除，Core 与 Runtime 仍可编译。
+Runtime assembly 依赖 `com.cyclone-games.hash` 与不含引擎 API 的 `com.cyclone-games.logging` 生产者契约。Runtime、Editor 与 benchmark 诊断分别集中通过各自 assembly-local `Diagnostics/` 目录中的 internal `BehaviorTreeRuntimeLog`、`BehaviorTreeEditorLog` 和 `BehaviorTreeBenchmarksLog` facade 接入。每个 facade 都提供统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 成员，并保留 category `CycloneGames.BehaviorTree`、`CycloneGames.BehaviorTree.Editor` 和 `CycloneGames.BehaviorTree.Benchmarks`；未安装 backend 时，由 `NullLogWriter` 安全丢弃 ambient 诊断。DOD assembly 只在 Burst、Collections 和 Mathematics 均存在时启用，使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Runtime.DOD`。DeterministicMath bridge 及其测试只在 UPM 解析到受支持的 `com.cyclone-games.deterministic-math` `1.x` 版本时具备编译条件。它们的 asmdef 通过 `versionDefines` 生成 `CYCLONEGAMES_HAS_DETERMINISTIC_MATH`，再通过 `defineConstraints` 消费该 capability，并保持 `autoReferenced: false`。使用方 asmdef 必须显式引用 `CycloneGames.BehaviorTree.Integrations.DeterministicMath`。不要在 PlayerSettings 中手工添加 capability symbol；依赖缺失或版本不受支持时，integration 被排除，Core 与 Runtime 仍可编译。
 
 ### 所有权规则
 
@@ -396,8 +396,11 @@ blackboard.SetInt("Health", 100);
 ulong stamp = blackboard.GetStamp(HealthKey);
 
 // Observer 注册
-blackboard.AddObserver(HealthKey, (key, bb) => Debug.Log($"Health changed: {bb.GetInt(key)}"));
+LogChannel log = LogChannel.Create("MyGame.BehaviorTree");
+blackboard.AddObserver(HealthKey, (key, bb) => log.Info($"Health changed: {bb.GetInt(key)}"));
 ```
+
+运行时节点状态观察与诊断相互独立，通过 `BTStatusObserver` 暴露。可以直接设置 `RuntimeBehaviorTree.StatusObserver`，也可以在 Editor 与 Development build 中调用 `BTStatusObserver.AttachToTree`；状态变化经 `NotifyStatusChanged` 传递，观察器契约不耦合任何日志 backend。
 
 ### Composite node
 

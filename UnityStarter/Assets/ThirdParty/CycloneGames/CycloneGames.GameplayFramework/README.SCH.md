@@ -17,6 +17,7 @@
 ## 目录
 
 - [概述](#概述)
+- [日志接入与迁移](#logging-接入与迁移)
 - [架构](#架构)
 - [快速上手](#快速上手)
 - [核心概念](#核心概念)
@@ -119,6 +120,16 @@ Integration assembly 同样不会被自动引用。使用方 asmdef 只添加实
 项目代码还应添加自身直接使用的 assembly 引用，例如 UniTask 或 Factory.Runtime。不要编辑 Unity 生成的 csproj 或 solution 文件。
 
 Sample asmdef 同时面向 Runtime 和 Editor，因此其 Prefab 组件在 Player build 中仍然有效。它们不会被自动引用；调用 sample API 的项目代码必须显式添加 assembly 引用。`GameplayWorldHost` 是标准 Unity composition root；需要额外依赖的项目可重写其窄创建方法，已有其他 composition root 的项目可直接使用 `GameInstance`。
+
+### Logging 接入与迁移
+
+GameplayFramework 只产生日志。其 package dependency 是 `com.cyclone-games.logging`，所有直接写日志的 assembly 都显式引用 `CycloneGames.Logging`。Runtime 与 sample 使用稳定 category `CycloneGames.GameplayFramework`，Editor 使用 `CycloneGames.GameplayFramework.Editor`。
+
+模块不初始化、持有或关闭具体 backend。应用未安装 `ILogWriter` 时，process writer 是 `NullLogWriter`，所有记录都是安全 no-op。只有应用 composition root 应通过 `LogRuntime` 安装或替换 writer；需要 Unity Console 与文件输出时，可以额外安装 `CycloneGames.Logger` 并使用 `LoggerBootstrap`。`CycloneGames.Logger` 不再是 GameplayFramework 的依赖。
+
+Runtime、Editor 与 PureUnity sample 分别拥有 assembly 本地门面 `Runtime/Scripts/Diagnostics/GameplayFrameworkLog.cs`、`Editor/Diagnostics/GameplayFrameworkEditorLog.cs` 和 `Samples/Sample.PureUnity/Diagnostics/GameplayFrameworkSampleLog.cs`，所有门面都提供 `Category`、`Channel` 与 `Create(ILogWriter logWriter)`。包内 ambient 字段命名为 `Log`，显式注入的 instance 字段命名为 `_log`。原先通过 `CLogger` 或 `UnityEngine.Debug` 发出的记录已经迁移到这些缓存 channel，并统一使用 `Trace`、`Debug`、`Info`、`Warning`、`Error` 与 `Fatal`。异常使用对应严重级别的重载传递完整 `Exception` 和说明失败操作的 message；包含动态值的普通日志使用 deferred generic-state builder。迁移项目 extension 时，应在自身产生日志的 assembly 中定义同样的门面，而不是由 extension 自行初始化 backend。Ambient channel 每次写入都会解析当前 process writer，因此调用 `LogRuntime.ReplaceWriter` 后不需要重新初始化 GameplayFramework。
+
+此日志迁移不新增 serialized state，也不会自行写文件。持久化、轮转、flush、shutdown 与损坏恢复由所选 backend 及其应用级 owner 负责。
 
 ## Quick Start
 
@@ -1114,7 +1125,7 @@ Actor Tick dispatch 会遍历可复用的 phase snapshot，不会扫描 Tick pha
 
 ### 15.4 Player、IL2CPP 与 Server Build
 
-- Runtime assembly 引用 UnityEngine、Cinemachine、Burst、Mathematics、UniTask、Factory 和 Logger。
+- Runtime assembly 引用 UnityEngine、Cinemachine、Burst、Mathematics、UniTask、Factory 和 Logging contract。
 - GameplayWorldHost 使用一个 sealed MonoBehaviour bridge 转发 Update、FixedUpdate 和 LateUpdate。直接组合 GameInstance 时必须提供等价 loop owner。
 - 只有 `QuaternionToEulerXYZBurst` 标记了 `BurstCompile`；目标调用路径是否实际执行 Burst 必须验证。
 - PlayerStateSnapshot 序列化由外部提供。基于反射的 serializer 可能需要 AOT metadata 或 link preservation。
@@ -1129,7 +1140,7 @@ Actor Tick dispatch 会遍历可复用的 phase snapshot，不会扫描 Tick pha
 ~~~csharp
 if (world.TryGetActor<PlayerStart>(out PlayerStart start))
 {
-    Debug.Log(start.GetActorLocation());
+    Vector3 startLocation = start.GetActorLocation();
 }
 ~~~
 

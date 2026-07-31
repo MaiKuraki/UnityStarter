@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.Foundation2D.Tests.Support",
+    "rootNamespace": "CycloneGames.Foundation2D.Tests.Support",
+    "references": [
+        "CycloneGames.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

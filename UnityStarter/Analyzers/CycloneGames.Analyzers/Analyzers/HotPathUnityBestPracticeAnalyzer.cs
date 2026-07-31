@@ -48,6 +48,11 @@ namespace CycloneGames.Analyzers
             var containingType = methodSymbol.ContainingType?.ToString();
             if (containingType == "UnityEngine.Debug" && methodSymbol.Name.StartsWith("Log"))
             {
+                // CG0049 owns direct logging diagnostics in governed CycloneGames assemblies.
+                // Keep CG0043 for assemblies outside that contract without reporting twice.
+                if (LoggingAnalyzerScope.ShouldAnalyze(context.Compilation, invocation.SyntaxTree))
+                    return;
+
                 context.ReportDiagnostic(Diagnostic.Create(
                     DiagnosticRules.DebugLogInHotPath,
                     invocation.GetLocation(),

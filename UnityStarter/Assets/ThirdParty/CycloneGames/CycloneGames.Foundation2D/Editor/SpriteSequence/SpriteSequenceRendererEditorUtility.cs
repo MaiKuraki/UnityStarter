@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 using CycloneGames.Foundation2D.Runtime;
@@ -10,6 +11,8 @@ namespace CycloneGames.Foundation2D.Editor
 {
     internal static class SpriteSequenceRendererEditorUtility
     {
+        private static readonly LogChannel Log = Foundation2DEditorLog.Channel;
+
         internal readonly struct ScoreDetail
         {
             public readonly string Label;
@@ -467,8 +470,10 @@ namespace CycloneGames.Foundation2D.Editor
                     UnityEngine.Object.DestroyImmediate(material);
                 }
 
-                Debug.LogException(exception);
-                EditorUtility.DisplayDialog("Material Creation Failed", "The material asset could not be created. See the Console for details.", "OK");
+                Log.Error(
+                    exception,
+                    "Sprite sequence material asset creation failed.");
+                EditorUtility.DisplayDialog("Material Creation Failed", "The material asset could not be created. See the configured logging backend for details.", "OK");
                 return null;
             }
         }

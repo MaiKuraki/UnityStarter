@@ -23,7 +23,7 @@ CycloneGames.Audio 管理 `AudioBank` 资产与经过校验的 `AudioEvent` 图�
 
 创建 `AudioBank` 资产，在 Audio Graph 编辑器中编写 Event 图，分配 `AudioClip` 引用（内嵌或外部），通过资产引用或注册名称播放 Event。运行时池化 `AudioSource` 对象，按分类限制 Voice 数量，按发射器应用参数和 Switch，调度 State-Mix 过渡。
 
-Runtime 程序集只有一个直接依赖：UniTask。与 AssetManagement、Addressables 或 YooAsset 的集成通过 `IAudioClipProvider` Resolver 契约在组合边界完成。
+Runtime 程序集有两个直接依赖：UniTask 与不含引擎 API 的 `CycloneGames.Logging` 生产者契约。与 AssetManagement、Addressables 或 YooAsset 的集成通过 `IAudioClipProvider` Resolver 契约在组合边界完成。
 
 ### 主要特性
 
@@ -40,9 +40,11 @@ Runtime 程序集只有一个直接依赖：UniTask。与 AssetManagement、Addr
 
 | 程序集 | 路径 | 用途 |
 | --- | --- | --- |
-| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`、`IAudioService`、Bank/Event 模型、图执行、Source 池、Voice Policy、Clip Resolver、驻留 Lease。依赖 `UniTask`。 |
+| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`、`IAudioService`、Bank/Event 模型、图执行、Source 池、Voice Policy、Clip Resolver、驻留 Lease。依赖 `UniTask` 与 `CycloneGames.Logging`。 |
 | `CycloneGames.Audio.Editor` | `Editor/` | Audio Graph、自定义 Inspector、校验、诊断、预览、Profiler。仅 Editor。 |
 | `CycloneGames.Audio.Tests.Editor` | `Tests/Editor/` | EditMode 测试：路径校验、Resolver/Bank 所有权、选择逻辑、稳定语音 Locale 和创作校验。 |
+
+Runtime 与 Editor 诊断分别集中通过各程序集 `Diagnostics/` 目录中的 internal `AudioRuntimeLog` 和 `AudioEditorLog` facade 接入。两个 facade 都提供统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 成员，并保留 category `CycloneGames.Audio` 和 `CycloneGames.Audio.Editor`。静态入口与 Unity-owned 入口使用 facade 的 `Channel`；需要隔离 writer 的 service 使用 `Create(logWriter)`。该包不引用具体 backend；`LogRuntime` 未安装 writer 时，由 `NullLogWriter` 安全丢弃 ambient 诊断。
 
 ```mermaid
 flowchart LR
@@ -373,7 +375,8 @@ IAudioBankClipLease lease = residency != null
     ? await residency.AcquireBankClipLeaseAsync(bank, token)
     : null;
 
-Debug.Log($"已加载 {lease?.LoadedCount ?? 0}，失败 {lease?.FailedCount ?? 0}");
+LogChannel log = LogChannel.Create("MyGame.Audio");
+log.Info($"已加载 {lease?.LoadedCount ?? 0}，失败 {lease?.FailedCount ?? 0}");
 lease?.Dispose(); // 主线程
 ```
 

@@ -10,7 +10,7 @@ using UnityEngine.SceneManagement;
 using Cysharp.Threading.Tasks;
 using YooAsset;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -18,6 +18,8 @@ namespace CycloneGames.AssetManagement.Runtime
         IAssetRawFileLoader, IAssetSceneLoader, IYooAssetPackageMaintenance,
         IAssetCatalogQuery, IAssetCacheMaintenanceOwner, IAssetStoragePreflight
     {
+        private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
+
         private const int MAX_BUNDLE_LOADING_CONCURRENCY = 64;
         private const int MAX_DOWNLOAD_CONCURRENCY = 32;
         private const int MAX_DOWNLOAD_RETRY_COUNT = 16;
@@ -285,8 +287,9 @@ namespace CycloneGames.AssetManagement.Runtime
                     }
                     catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
                     {
-                        CLogger.LogWarning(
-                            $"YooAsset package '{Name}' initialization failed while shutdown was waiting: {ex.Message}");
+                        Log.Error(
+                            ex,
+                            $"YooAsset package '{Name}' initialization failed while shutdown was waiting.");
                     }
                 }
 
@@ -1012,7 +1015,9 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
             {
-                CLogger.LogWarning($"[YooAssetPackage] Catalog query failed ({ex.GetType().Name}).");
+                Log.Error(
+                    ex,
+                    "[YooAssetPackage] Catalog query failed.");
                 return UniTask.FromResult(false);
             }
 
@@ -1034,7 +1039,7 @@ namespace CycloneGames.AssetManagement.Runtime
                         totalCharacters > MAX_SCOPE_TOTAL_CHARACTERS - location.Length)
                     {
                         results.Clear();
-                        CLogger.LogWarning(
+                        Log.Warning(
                             "[YooAssetPackage] Catalog query output exceeded the bounded result budget.");
                         return UniTask.FromResult(false);
                     }

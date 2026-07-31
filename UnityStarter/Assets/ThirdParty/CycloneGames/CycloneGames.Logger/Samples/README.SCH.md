@@ -2,7 +2,7 @@
 
 Sample scene 通过小而隔离的步骤讲解 Logger 工作流：写入普通记录、使用关注分配的 builder API、观察 queue/cache 状态、挂载临时 file sink，以及运行本地对比 harness。
 
-示例脚本编译到 `CycloneGames.Logger.Samples`。该程序集引用 `CycloneGames.Logger` 与 `CycloneGames.Logger.Unity`，设置 `autoReferenced: false`，不属于生产 public API surface。
+示例脚本编译到 `CycloneGames.Logger.Samples`。该程序集引用 `CycloneGames.Logging`、`CycloneGames.Logger` 与 `CycloneGames.Logger.Unity`，设置 `autoReferenced: false`，不属于生产 public API surface。
 
 Sample 是教学与诊断工具。Timing 和 allocation 会受 Editor/Player、backend、硬件、Console 状态、存储、active sink 与当前 settings 影响。它们不是 shipping 性能目标、通用容量建议或平台认证证据。
 
@@ -10,10 +10,11 @@ Sample 是教学与诊断工具。Timing 和 allocation 会受 Editor/Player、b
 
 | 文件 | 演示内容 | 重要副作用 |
 | --- | --- | --- |
-| `LoggerSample.cs` | 最小 `CLogger.LogInfo`、`LogWarning` 与 `LogError` 用法 | 使用项目拥有的 Unity bootstrap；不创建或停止 logger |
-| `LoggerPerformanceTest.cs` | 使用 state 加 cached/static builder 的有限混合 level 负载 | WebGL 之外注册临时 file sink，并把全局 level 改为 `Trace` |
-| `LoggerPoolMonitor.cs` | Queue 消息/字符占用与进程级 cache 观察 | 通过 `Debug.Log` 展示，并可提交有界 burst |
-| `LoggerBenchmark.cs` | 对 filtered、no-sink、core、file 与 Unity Console path 进行本地比较 | 重新配置/停止全局 logger、强制 GC、执行 I/O 并写入 report |
+| `Diagnostics/LoggerSamplesLog.cs` | Assembly 本地 category 与标准 `Category`/`Channel`/`Create(ILogWriter)` facade surface | 统一拥有 sample assembly 中的所有 `LogChannel.Create` 调用 |
+| `LoggerSample.cs` | 最小 producer-side `LogChannel` 用法 | 使用项目拥有的 Unity bootstrap；不创建或停止 logger |
+| `LoggerPerformanceTest.cs` | 使用 state 加 cached/static builder 的有限混合 level 负载 | WebGL 之外注册临时 file sink，并把当前 CLogger process writer 的 level 改为 `Trace` |
+| `LoggerPoolMonitor.cs` | Queue 消息/字符占用与进程级 cache 观察 | 通过 `LogChannel` 报告，并可提交有界 burst |
+| `LoggerBenchmark.cs` | 对 filtered、no-sink、core、file 与 Unity Console path 进行本地比较 | 每个 case 拥有显式 backend、强制 GC、执行 I/O 并写入 report |
 | `SampleScene.unity` | 承载示例 component | 默认启用 `Benchmark`；禁用 `LoggerSample` 与 `PerformanceTest` |
 
 `LoggerPoolMonitor` 未放入 scene。需要检查 queue 与 cache 时，将它添加到临时 GameObject。
@@ -26,18 +27,21 @@ Sample 是教学与诊断工具。Timing 和 allocation 会受 Editor/Player、b
 4. `Benchmark`、`LoggerSample` 与 `PerformanceTest` 只保留一个 active。
 5. 进入 Play Mode，观察对应输出；退出后检查 shutdown 或 disposal error。
 
-`LoggerBenchmark` 在隔离运行期间拥有全局 Logger reconfiguration。包含其他全局 logger owner 或 consumer 的 Scene 中不能启用它。
+`LoggerBenchmark` 为每个隔离 case 创建显式 single-threaded `CLogger`，并把 `LogChannel` 绑定到该 writer。它不会替换 process writer，也不使用直接平台日志 API。该 component 仍会强制 full GC 并执行文件与 Console I/O，因此不要与应用性能测量同时运行。
 
 ## 教程 1：最小 Unity 日志
 
-启用 `LoggerSample` GameObject，并禁用其他 scenario。该 component 依赖 `LoggerBootstrap`，只包含普通应用调用：
+启用 `LoggerSample` GameObject，并禁用其他 scenario。该 component 依赖 `LoggerBootstrap`，使用与其他 CycloneGames 包一致、与 backend 解耦的 producer API：
 
 ```csharp
+private static readonly LogChannel Log =
+    LoggerSamplesLog.Channel;
+
 private void Start()
 {
-    CLogger.LogInfo("Logger sample started.", "Sample");
-    CLogger.LogWarning("This is a warning example.", "Sample");
-    CLogger.LogError("This is an error example.", "Sample");
+    Log.Info("Logger sample started.");
+    Log.Warning("This is a warning example.");
+    Log.Error("This is an error example.");
 }
 ```
 
@@ -45,7 +49,7 @@ private void Start()
 
 - active settings asset 决定 sink set；
 - 默认 `Info` threshold 接受三条记录；
-- `Sample` 显示为 category；
+- `CycloneGames.Logger.Sample` 显示为 category；
 - `UnityLogger` active 时，Unity Console 输出包含 source link。
 
 没有记录时，检查 `registerUnityLogger`、`defaultLevel`、`defaultFilter` 与 Console filter。
@@ -55,16 +59,15 @@ private void Start()
 Interpolated string 会在 logger 过滤前创建：
 
 ```csharp
-CLogger.LogDebug($"Entity {entityId} updated.", "Simulation");
+Log.Debug($"Entity {entityId} updated.");
 ```
 
 对已经测量的热路径，单独传递 state，并使用 static 或 cached delegate：
 
 ```csharp
-CLogger.LogDebug(
+Log.Debug(
     entityId,
-    static (value, builder) => builder.Append("Entity ").Append(value).Append(" updated."),
-    "Simulation");
+    static (value, builder) => builder.Append("Entity ").Append(value).Append(" updated."));
 ```
 
 Builder 只在 level、category、sink、lifecycle 与 queue-reservation 检查成功后运行。示例调用避免 capturing closure，但不保证完整路径零分配。Pool miss、builder 扩容、sink 格式化、Unity Console copy、exception 和 I/O 仍可能分配。
@@ -75,7 +78,7 @@ Builder 只在 level、category、sink、lifecycle 与 queue-reservation 检查�
 
 1. 在 WebGL 之外，于 `Application.temporaryCachePath` 下创建 `FileLogger`；
 2. 通过 `AddLoggerUnique` 注册；
-3. 将全局 level 设为 `Trace`；
+3. 确认 process writer 是 `CLogger`，并把该 backend 的 level 设置为 `Trace`；
 4. 提交最多 10000 条、覆盖六个 active severity 的记录；
 5. 只有 `RemoveLogger` 返回 `true` 时才移除并 Dispose file sink。
 
@@ -85,7 +88,7 @@ Builder 只在 level、category、sink、lifecycle 与 queue-reservation 检查�
 
 显示的 elapsed time 包含跨帧提交。Frame rate、active sink、queue drop、Unity Console、存储、Editor overhead 与 scheduling 都会影响它。不得作为 Logger throughput 报告。得出本地结论前应检查：
 
-- `CLogger.Instance.GetProcessingStatistics()`；
+- 当前 CLogger process writer 的 `GetProcessingStatistics()`；
 - `FileLogger.Statistics`；
 - Unity Profiler 数据；
 - 文件内容与最终 byte count。
@@ -118,7 +121,6 @@ Logger cache statistics 不是 heap profile。它不包括 caller string、大�
 
 启用 `Benchmark` 并禁用所有其他 scenario。Harness 运行：
 
-- 直接 `UnityEngine.Debug.Log` 输出；
 - filtered generic logging；
 - 已初始化但没有 sink 的 logger；
 - core string、capturing builder 与 generic state-builder case；
@@ -182,8 +184,8 @@ public sealed class ExampleSink : ILogger
 - `LoggerSample` 只生产记录。
 - `LoggerPerformanceTest` 临时拥有 `FileLogger`，直到成功注册把所有权转移给 `CLogger`。
 - 只有 `RemoveLogger(...)=true` 才把该 sink 转回调用方 Dispose。
-- `LoggerBenchmark` 在隔离执行期间拥有全局配置，并调用 `CLogger.Shutdown`。
-- Benchmark 不能与另一个全局 Logger owner 同时运行。
+- `LoggerBenchmark` 每个 case 拥有一个显式 `CLogger`，并在创建下一个 backend 前调用 `ShutdownInstance`。
+- Benchmark 不替换或停止项目拥有的 process writer。
 
 ## 输出与清理
 

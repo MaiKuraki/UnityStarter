@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime.Samples
@@ -11,6 +12,8 @@ namespace CycloneGames.UIFramework.Runtime.Samples
     /// </summary>
     public sealed class UIFrameworkMvpSampleBootstrap : MonoBehaviour
     {
+        private static readonly LogChannel Log = UIFrameworkSampleLog.Channel;
+
         [SerializeField] private UIRoot uiRoot;
         [SerializeField] private UIWindowConfiguration firstWindowConfiguration;
 
@@ -59,7 +62,9 @@ namespace CycloneGames.UIFramework.Runtime.Samples
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    "[UIFrameworkMvpSample] Startup failed.");
             }
             finally
             {
@@ -82,7 +87,9 @@ namespace CycloneGames.UIFramework.Runtime.Samples
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    "[UIFrameworkMvpSample] Shutdown failed.");
             }
             finally
             {

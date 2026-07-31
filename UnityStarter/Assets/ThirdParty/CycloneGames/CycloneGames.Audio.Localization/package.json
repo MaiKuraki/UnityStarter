@@ -9,6 +9,7 @@
     "com.cysharp.unitask": "2.5.11",
     "com.cyclone-games.asset-management": "1.0.0",
     "com.cyclone-games.audio": "1.0.0",
+    "com.cyclone-games.logging": "1.0.0",
     "com.cyclone-games.localization": "1.0.0"
   },
   "keywords": [

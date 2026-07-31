@@ -3,7 +3,7 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "CycloneGames.Logger"
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

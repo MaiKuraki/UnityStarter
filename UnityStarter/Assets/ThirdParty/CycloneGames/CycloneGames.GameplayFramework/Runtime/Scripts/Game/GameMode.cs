@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -22,6 +23,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class GameMode : Actor
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         [SerializeField] private bool bStartPlayersAsSpectators;
         [SerializeField] private GameModeConfig gameModeConfig;
         [SerializeField] private GameState gameStateClass;
@@ -363,7 +366,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, exiting);
+                Log.Error(
+                    exception,
+                    $"PlayerController '{exiting.name}' failed to release possession during logout; cleanup will continue.");
             }
 
             RemoveParticipantState(exiting, playerState);
@@ -374,7 +379,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, exiting);
+                Log.Error(
+                    exception,
+                    $"GameMode logout extension failed for PlayerController '{exiting.name}'; cleanup will continue.");
             }
 
             DestroyIfRegistered(pawn);
@@ -437,7 +444,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                         }
                         catch (Exception exception)
                         {
-                            Debug.LogException(exception, player);
+                            Log.Error(
+                                exception,
+                                $"PlayerController '{player.name}' failed to release possession during restart rollback.");
                         }
                     }
 
@@ -721,7 +730,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, playerController);
+                    Log.Error(
+                        exception,
+                        "PlayerController failed to release possession during login rollback.");
                 }
             }
 
@@ -733,7 +744,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, playerController);
+                    Log.Error(
+                        exception,
+                        "GameSession failed to unregister a PlayerController during login rollback.");
                 }
             }
 
@@ -745,7 +758,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, playerController);
+                    Log.Error(
+                        exception,
+                        "World failed to remove a PlayerController during login rollback.");
                 }
             }
 
@@ -757,7 +772,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, playerState);
+                    Log.Error(
+                        exception,
+                        "GameState failed to remove a PlayerState during login rollback.");
                 }
             }
 
@@ -778,7 +795,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, actor);
+                    Log.Error(
+                        exception,
+                        $"World failed to destroy registered Actor '{actor.name}' during participant cleanup.");
                 }
             }
         }
@@ -791,7 +810,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, playerController);
+                Log.Error(
+                    exception,
+                    "GameSession failed to unregister a PlayerController during logout; cleanup will continue.");
             }
 
             try
@@ -800,7 +821,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, playerState);
+                Log.Error(
+                    exception,
+                    "GameState failed to remove a PlayerState during logout; cleanup will continue.");
             }
 
             World?.RemovePlayerController(playerController);
@@ -838,7 +861,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, this);
+                    Log.Error(
+                        exception,
+                        $"GameMode '{name}' immediate shutdown failed during destruction.");
                 }
             }
 

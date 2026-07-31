@@ -76,7 +76,11 @@ Application composition selects a provider module and passes `IAssetPackage` to 
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | no | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` plus an explicit consumer reference |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | no | `jp.hadashikick.vcontainer` plus an explicit consumer reference |
 
-The core runtime directly depends on UniTask, CycloneGames.Logger, CycloneGames.IO Core/SystemIO, and CycloneGames.Hash Core. Installing an optional package is not sufficient: its `versionDefines` range must match and the consumer asmdef must reference the conditional assembly. Never add the generated `CYCLONEGAMES_HAS_*` symbols manually in Player Settings.
+The core runtime directly depends on UniTask, CycloneGames.Logging, CycloneGames.IO Core/SystemIO, and CycloneGames.Hash Core. Installing an optional package is not sufficient: its `versionDefines` range must match and the consumer asmdef must reference the conditional assembly. Never add the generated `CYCLONEGAMES_HAS_*` symbols manually in Player Settings.
+
+AssetManagement emits diagnostics through stable `LogChannel` categories under `CycloneGames.AssetManagement`. The package never initializes, flushes, replaces, or shuts down a logging backend. With only `com.cyclone-games.logging` installed, diagnostics safely route to `NullLogWriter`; the application composition root may optionally install `CycloneGames.Logger` or another `ILogWriter` backend.
+
+Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
 YooAsset 3.0.5 is the minimum stable release. The asmdef range enables the provider for versions below 4.0.0; activation tests reject prerelease packages. The product's exact stable 3.x version must compile and pass the YooAsset provider test assembly before release.
 
@@ -463,6 +467,8 @@ The runtime keeps hot internal cache lookup compact: value cache keys avoid comp
 Handle tracking is disabled by default and has runtime cost. The handle registry defaults to 16,384 entries (max 65,536); the scene registry defaults to 4,096 (max 16,384). At capacity, a tracker drops the new diagnostic registration, increments `DroppedRegistrationCount`, and marks the observation epoch incomplete. The Editor windows refresh only while visible and in Play Mode, at no more than 2 Hz; cache detail is capped at 4,096 rows per tier.
 
 `HandleTracker.Enabled`, `HandleTracker.EnableStackTrace`, and `HandleTracker.ConfigureCapacity` are process-wide diagnostic settings. Configure them from one composition root or an Editor diagnostics tool; they are not `AssetManagementOptions` fields.
+
+Operational warnings, provider failures, cache-retention events, and Editor validation results use the shared logging contract rather than `UnityEngine.Debug`. Exception records retain the original `Exception`; frequently evaluated load-profiler messages use deferred state formatting so a disabled channel does not build the message.
 
 ### Platform and hardware guidance
 

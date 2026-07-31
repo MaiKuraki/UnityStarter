@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using CycloneGames.Networking.Security;
 using UnityEngine;
 
@@ -15,6 +16,8 @@ namespace CycloneGames.Networking.Unity.Runtime
     /// </remarks>
     public static class NetworkSecurityStartupCheck
     {
+        private static readonly LogChannel Log = NetworkingUnityRuntimeLog.SecurityChannel;
+
         /// <summary>
         /// Evaluates the configuration and logs findings. Critical findings log as errors, warnings as
         /// warnings, and info as plain logs. When <paramref name="throwOnCritical"/> is true the call
@@ -60,13 +63,13 @@ namespace CycloneGames.Networking.Unity.Runtime
                 switch (issue.Severity)
                 {
                     case NetworkSecurityAuditSeverity.Critical:
-                        Debug.LogError(line);
+                        Log.Error(line);
                         break;
                     case NetworkSecurityAuditSeverity.Warning:
-                        Debug.LogWarning(line);
+                        Log.Warning(line);
                         break;
                     default:
-                        Debug.Log(line);
+                        Log.Info(line);
                         break;
                 }
             }

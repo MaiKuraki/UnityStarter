@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -56,6 +57,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public sealed class GameInstance : IDisposable
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         public const int MaxLocalPlayers = 8;
 
         private readonly IUnityObjectSpawner objectSpawner;
@@ -263,7 +266,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                UnityEngine.Debug.LogException(exception);
+                Log.Error(
+                    exception,
+                    "A GameInstance lifetime cancellation observer failed; disposal will continue.");
             }
 
             currentWorld?.ShutdownImmediate(EndPlayReason.ApplicationShutdown);

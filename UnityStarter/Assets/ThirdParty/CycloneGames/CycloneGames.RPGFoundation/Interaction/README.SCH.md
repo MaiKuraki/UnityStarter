@@ -99,11 +99,14 @@ sequenceDiagram
 | **VitalRouter**                  | 命令路由与拦截器管线                                     | 是       |
 | **UniTask**                      | 面向 Unity 的异步执行与取消                              | 是       |
 | **CycloneGames.Factory.Runtime** | 对象池（`ObjectPool`、`IPoolable`、`MonoPrefabFactory`） | 是       |
+| **CycloneGames.Logging**         | 与 backend 解耦的 `LogChannel` 诊断                     | 是       |
 | **CycloneGames.RPGFoundation.Interaction.Networking** | 可选 `NetworkVector3` 与 DTO 桥 | 可选     |
 | **CycloneGames.GameplayFramework.Runtime** | 可选 `Actor` / World adapter 桥                | 可选     |
 | **CycloneGames.DeterministicMath.Core** | 可选 `FPVector3` / `FPInt64` 权威校验桥         | 可选     |
 
 DeterministicMath assembly 支持 `com.cyclone-games.deterministic-math` `1.x`，由 package-derived `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH` gate 控制，且不会被自动引用。组合 GameplayFramework bridge 还要求 `com.cyclone-games.gameplay-framework` `1.x`。请通过 UPM 安装可选 package，并显式添加 integration asmdef reference；不要在 PlayerSettings 中定义 capability symbol。
+
+Runtime 诊断使用 `CycloneGames.RPGFoundation.Interaction`，Editor 诊断使用 `CycloneGames.RPGFoundation.Interaction.Editor`。模块不会持有 logging backend 生命周期。应用 composition root 选择 `ILogWriter`；未安装 backend 时，logging contract 使用 `NullLogWriter`。
 
 ## 快速上手
 
@@ -482,12 +485,16 @@ public enum InteractionCancelReason : byte
 ### 发起者追踪
 
 ```csharp
+using CycloneGames.Logging;
+
 public class CoopChest : Interactable
 {
+    private static readonly LogChannel Log = LogChannel.Create("Game.Interaction");
+
     protected override async UniTask OnDoInteractAsync(CancellationToken ct)
     {
         if (CurrentInstigator is GameObjectInstigator goi)
-            Debug.Log($"由 {goi.GameObject.name} 打开");
+            Log.Info($"Opened by: {goi.GameObject.name}");
         await HoldTimerAsync(ct);
         GiveItemToPlayer(CurrentInstigator);
     }
@@ -526,9 +533,12 @@ InteractionSystem.Instance.OnAnyInteractionCompleted += (target, instigator, suc
 ### 附近候选列表
 
 ```csharp
+using CycloneGames.Logging;
+
+LogChannel log = LogChannel.Create("Game.Interaction");
 IReadOnlyList<InteractionCandidate> candidates = detector.NearbyInteractables;
 foreach (var c in candidates)
-    Debug.Log($"{c.Interactable.InteractionPrompt}: 分数={c.Score:F1}");
+    log.Info($"{c.Interactable.InteractionPrompt}: score={c.Score:F1}");
 ```
 
 手柄循环切换：`detector.CycleTarget(+1)` / `detector.CycleTarget(-1)`。

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 #if UNITY_EDITOR
@@ -128,7 +129,7 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-                Debug.LogWarningFormat("Empty Voice File node in event {0}", activeEvent.name);
+                Log.Warning($"Empty Voice File node in event {activeEvent.name}");
             }
         }
 
@@ -144,14 +145,14 @@ namespace CycloneGames.Audio.Runtime
 
                 if (handle == null)
                 {
-                    Debug.LogError($"No loader found for VoiceFile reference '{externalReference?.name}' in event '{eventName}'.");
+                    Log.Error($"No loader found for VoiceFile reference '{externalReference?.name}' in event '{eventName}'.");
                     return;
                 }
 
                 if (!handle.IsSuccess || handle.Clip == null || handle.Clip.length <= 0f)
                 {
                     string referenceName = externalReference != null ? externalReference.name : "<missing>";
-                    Debug.LogError($"Voice audio reference '{referenceName}' failed to load.");
+                    Log.Error($"Voice audio reference '{referenceName}' failed to load.");
                     AudioClipHandleRelease.Safe(handle);
                     handle = null;
                     return;
@@ -170,7 +171,7 @@ namespace CycloneGames.Audio.Runtime
             catch (Exception e)
             {
                 string referenceName = externalReference != null ? externalReference.name : "<missing>";
-                Debug.LogError(
+                Log.Error(
                     $"Voice audio reference '{referenceName}' failed with {e.GetType().Name}. Location details are omitted from logs.");
             }
             finally

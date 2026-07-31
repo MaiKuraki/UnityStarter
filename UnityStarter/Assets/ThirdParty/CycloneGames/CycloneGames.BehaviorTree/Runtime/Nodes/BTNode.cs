@@ -1,10 +1,13 @@
 using System;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.BehaviorTree.Runtime.Nodes
 {
     public abstract class BTNode : ScriptableObject
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         [HideInInspector] public string GUID;
 
         public Vector2 Position
@@ -36,7 +39,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Nodes
             }
             catch (Exception e)
             {
-                Debug.LogError(e);
+                Log.Error(e, "Behavior tree node integrity validation failed.");
             }
         }
         protected virtual void CheckIntegrity() { }

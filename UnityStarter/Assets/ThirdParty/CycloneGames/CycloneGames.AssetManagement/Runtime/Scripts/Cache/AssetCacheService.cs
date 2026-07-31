@@ -7,6 +7,7 @@ using System.Threading;
 using UnityEngine;
 
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime.Cache
 {
@@ -99,6 +100,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
     /// </summary>
     internal sealed class AssetCacheService : IDisposable
     {
+        private static readonly LogChannel Log = AssetManagementLog.Channel;
+
         private const int MAX_METADATA_VALUES_PER_KIND = 8;
         private const int MAX_IDLE_ENTRIES_PER_SEGMENT = 131_072;
         private const long MAX_ESTIMATED_ENTRY_BYTES = 1L * 1024 * 1024 * 1024 * 1024;
@@ -417,7 +420,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             {
                 // Unity invokes low-memory subscribers as a multicast event. A provider release failure must not
                 // prevent other packages or systems from receiving the same pressure notification.
-                UnityEngine.Debug.LogException(ex);
+                Log.Error(
+                    ex,
+                    "[AssetCacheService] A low-memory release callback failed.");
             }
         }
 

@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime.Samples
@@ -15,6 +16,8 @@ namespace CycloneGames.UIFramework.Runtime.Samples
 
     public sealed class UIWindow_SampleUI : UIWindow, ISampleUIView
     {
+        private static readonly LogChannel Log = UIFrameworkSampleLog.Channel;
+
         private ISampleUIViewListener _listener;
 
         public void SetListener(ISampleUIViewListener listener)
@@ -24,7 +27,11 @@ namespace CycloneGames.UIFramework.Runtime.Samples
 
         public void SetStatus(string status)
         {
-            Debug.Log($"[UIFrameworkSample] {status}", this);
+            Log.Info(
+                status,
+                static (value, builder) => builder
+                    .Append("[UIFrameworkSample] ")
+                    .Append(value));
         }
 
         // This method can be connected directly to a UnityEvent in the Inspector.

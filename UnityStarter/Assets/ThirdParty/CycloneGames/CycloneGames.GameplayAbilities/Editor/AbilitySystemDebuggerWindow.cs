@@ -6,6 +6,7 @@ using System.Text;
 using System.Linq;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Editor
 {
@@ -32,6 +33,8 @@ namespace CycloneGames.GameplayAbilities.Editor
     /// </summary>
     public class AbilitySystemDebuggerWindow : EditorWindow
     {
+        private static readonly LogChannel Log = GameplayAbilitiesEditorLog.Channel;
+
         #region Constants & Theme
 
         // Unified color theme - easily customizable
@@ -247,7 +250,8 @@ namespace CycloneGames.GameplayAbilities.Editor
             Runtime.GASDebugOverlay.SetEnabled(true);
             if (rejectedCount > 0)
             {
-                Debug.LogWarning($"[GAS Overlay] {rejectedCount} selected target(s) exceeded the configured panel capacity and were not bound.");
+                Log.Warning(rejectedCount, static (count, sb) => sb.Append(count)
+                    .Append(" selected GAS overlay target(s) exceeded the configured panel capacity and were not bound."));
             }
         }
 

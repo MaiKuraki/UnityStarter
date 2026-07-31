@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Choreography.Core
 {
@@ -11,7 +12,7 @@ namespace CycloneGames.Choreography.Core
     public sealed class DirectProviderSink : IChoreographyPlaybackSink
     {
         private readonly IChoreographyProviderSet _providers;
-        private readonly IChoreographyDiagnostics _diagnostics;
+        private readonly LogChannel _log;
         private ProviderDispatch.ThrottleState _dispatchThrottle;
 
         /// <summary>Raised when a timeline event is crossed.</summary>
@@ -23,15 +24,21 @@ namespace CycloneGames.Choreography.Core
         /// <summary>Raised when the driven player reaches the end of its timeline.</summary>
         public event Action<int> PlaybackCompleted;
 
-        public DirectProviderSink(IChoreographyProviderSet providers, IChoreographyDiagnostics diagnostics = null)
+        public DirectProviderSink(IChoreographyProviderSet providers)
         {
             _providers = providers ?? throw new ArgumentNullException(nameof(providers));
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _log = ChoreographyCoreLog.Channel;
+        }
+
+        public DirectProviderSink(IChoreographyProviderSet providers, ILogWriter logWriter)
+        {
+            _providers = providers ?? throw new ArgumentNullException(nameof(providers));
+            _log = ChoreographyCoreLog.Create(logWriter);
         }
 
         public void OnClipStarted(in ChoreographyPlaybackSample sample)
         {
-            ProviderDispatch.Begin(_providers, _diagnostics, ref _dispatchThrottle, in sample);
+            ProviderDispatch.Begin(_providers, _log, ref _dispatchThrottle, in sample);
         }
 
         public void OnClipUpdated(in ChoreographyPlaybackSample sample)

@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.UIFramework.Runtime.Samples
@@ -10,6 +11,8 @@ namespace CycloneGames.UIFramework.Runtime.Samples
     /// </summary>
     public sealed class UIFrameworkSampleBootstrap : MonoBehaviour
     {
+        private static readonly LogChannel Log = UIFrameworkSampleLog.Channel;
+
         [SerializeField] private UIRoot uiRoot;
         [SerializeField] private UIWindowConfiguration firstWindowConfiguration;
 
@@ -47,7 +50,12 @@ namespace CycloneGames.UIFramework.Runtime.Samples
                     firstWindowConfiguration,
                     cancellationToken: lifetimeToken);
 
-                Debug.Log($"[UIFrameworkSample] Opened window '{window.WindowId}'.", window);
+                Log.Info(
+                    window.WindowId,
+                    static (windowId, builder) => builder
+                        .Append("[UIFrameworkSample] Opened window '")
+                        .Append(windowId)
+                        .Append("'."));
                 await UniTask.WaitUntilCanceled(lifetimeToken);
             }
             catch (OperationCanceledException) when (lifetimeToken.IsCancellationRequested)
@@ -56,7 +64,9 @@ namespace CycloneGames.UIFramework.Runtime.Samples
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    "[UIFrameworkSample] Startup failed.");
             }
             finally
             {
@@ -79,7 +89,9 @@ namespace CycloneGames.UIFramework.Runtime.Samples
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    "[UIFrameworkSample] Shutdown failed.");
             }
             finally
             {

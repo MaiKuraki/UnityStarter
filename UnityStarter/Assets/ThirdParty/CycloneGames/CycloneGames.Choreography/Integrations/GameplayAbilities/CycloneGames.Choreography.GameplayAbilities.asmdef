@@ -4,7 +4,8 @@
     "references": [
         "CycloneGames.Choreography.Core",
         "CycloneGames.GameplayAbilities.Runtime",
-        "CycloneGames.GameplayTags.Core"
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

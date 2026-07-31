@@ -3,7 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using CycloneGames.IO;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using CycloneGames.UIFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -13,6 +13,8 @@ namespace CycloneGames.UIFramework.Editor
     [InitializeOnLoad]
     internal static class UIWindowCreatorPostCompileProcessor
     {
+        private static readonly LogChannel Log = UIFrameworkEditorLog.Channel;
+
         public static event Action StatusChanged;
 
         [Serializable]
@@ -40,7 +42,6 @@ namespace CycloneGames.UIFramework.Editor
             public string error;
         }
 
-        private const string LogCategory = "UIWindowCreator";
         private const string PendingFileName = "CycloneGames.UIFramework.WindowCreator.Pending.json";
         private const int MaxPendingBytes = 1024 * 1024;
         private const int PendingSchemaVersion = 2;
@@ -223,9 +224,8 @@ namespace CycloneGames.UIFramework.Editor
             {
                 if (!string.IsNullOrEmpty(configPath))
                 {
-                    CLogger.LogWarning(
-                        $"Ignored invalid pending cancellation path '{configPath}': {validationError}",
-                        LogCategory);
+                    Log.Warning(
+                        $"Ignored invalid pending cancellation path '{configPath}': {validationError}");
                 }
                 return;
             }
@@ -325,9 +325,9 @@ namespace CycloneGames.UIFramework.Editor
                 {
                     FailOperation(operation, exception.Message);
                     changed = true;
-                    CLogger.LogError(
-                        $"Window creator post-compile binding failed for '{operation.scriptName}': {exception}",
-                        LogCategory);
+                    Log.Error(
+                        exception,
+                        $"Window creator post-compile binding failed for '{operation.scriptName}'.");
                 }
             }
 
@@ -456,9 +456,8 @@ namespace CycloneGames.UIFramework.Editor
             }
 
             AssetDatabase.SaveAssets();
-            CLogger.LogInfo(
-                $"Completed post-compile binding for UIWindow '{operation.scriptName}'.",
-                LogCategory);
+            Log.Info(
+                $"Completed post-compile binding for UIWindow '{operation.scriptName}'.");
         }
 
         private static bool UpdateOwnedPrefabReference(PendingOperation operation)
@@ -554,9 +553,9 @@ namespace CycloneGames.UIFramework.Editor
                 _journalError = quarantined
                     ? $"Invalid pending journal was quarantined to '{quarantinePath}': {exception.Message}"
                     : $"Invalid pending journal is blocked and could not be quarantined: {exception.Message}. {quarantineError}";
-                CLogger.LogError(
-                    "Failed to load window creator pending queue: " + _journalError,
-                    LogCategory);
+                Log.Error(
+                    exception,
+                    "Failed to load window creator pending queue: " + _journalError);
                 _queue = new PendingQueue();
             }
 
@@ -901,9 +900,8 @@ namespace CycloneGames.UIFramework.Editor
         {
             operation.failed = true;
             operation.error = Truncate(error, MaxErrorLength);
-            CLogger.LogWarning(
-                $"Window creator pending operation failed for '{operation.scriptName}': {operation.error}",
-                LogCategory);
+            Log.Warning(
+                $"Window creator pending operation failed for '{operation.scriptName}': {operation.error}");
         }
 
         private static bool ClearJournalFailure()
@@ -922,7 +920,9 @@ namespace CycloneGames.UIFramework.Editor
                 catch (Exception exception)
                 {
                     _journalError = "Failed to clear invalid pending journal: " + exception.Message;
-                    CLogger.LogError(_journalError, LogCategory);
+                    Log.Error(
+                        exception,
+                        _journalError);
                     return false;
                 }
             }

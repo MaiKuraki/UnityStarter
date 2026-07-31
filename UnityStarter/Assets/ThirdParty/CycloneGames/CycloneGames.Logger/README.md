@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.SCH.md)
 
-CycloneGames.Logger is a bounded, observable logging foundation for Unity applications, headless players, command-line tools, tests, and pure C# services. It provides a Unity-free core, an optional Unity adapter, explicit queue and memory budgets, failure-isolated sinks, resilient file output, and lifecycle results that can be monitored instead of assumed.
+CycloneGames.Logger is the bounded, observable backend for the engine-independent `CycloneGames.Logging` producer contract. It supports Unity applications, headless players, command-line tools, tests, and pure C# services with an optional Unity adapter, explicit queue and memory budgets, failure-isolated sinks, resilient file output, and lifecycle results that can be monitored instead of assumed.
 
 ## Table of Contents
 
@@ -27,6 +27,7 @@ Bounded queues are overload protection, not guaranteed delivery. Never log crede
 ### Key Features
 
 - **Bounded queue** with message-count and retained-character limits, overflow policies, and critical-record reserves.
+- **Unified producer API** through `ILogWriter`, `LogChannel`, and `LogRuntime`; packages do not reference this concrete backend.
 - **Threaded and caller-pumped processing** via `CLoggerFactory.CreateThreaded` and `CreateSingleThreaded`.
 - **Failure-isolated sinks**: `UnityLogger`, `ConsoleLogger`, `FileLogger`, and custom `ILogger` implementations; per-sink quarantine prevents one failing sink from blocking the others.
 - **Resilient file output**: bounded rotation, recovery attempts, flush modes, and health statistics.
@@ -38,29 +39,30 @@ Bounded queues are overload protection, not guaranteed delivery. Never log crede
 
 ```mermaid
 flowchart LR
-    Product["Game, tool, test, or service"] --> Facade["CLogger static facade"]
-    Product --> Contract["ICLogger instance contract"]
-    Facade --> Core["CycloneGames.Logger<br/>Unity-free core"]
-    Contract --> Core
+    Product["Game, tool, package, test, or service"] --> Contract["CycloneGames.Logging<br/>LogChannel / ILogWriter"]
+    Contract --> Backend["CLogger backend<br/>implements ILogWriter"]
+    Host["Composition root"] --> Runtime["LogRuntime process fallback"]
+    Runtime --> Contract
     UnityHost["Unity lifecycle"] --> UnityAdapter["CycloneGames.Logger.Unity"]
-    UnityAdapter --> Core
+    UnityAdapter --> Backend
     Editor["CycloneGames.Logger.Editor"] --> UnityAdapter
-    Core --> Console["ConsoleLogger"]
-    Core --> File["FileLogger"]
-    Core --> Custom["Custom synchronous sinks"]
+    Backend --> Console["ConsoleLogger"]
+    Backend --> File["FileLogger"]
+    Backend --> Custom["Custom synchronous sinks"]
     UnityAdapter --> UnityConsole["UnityLogger main-thread handoff"]
 ```
 
 | Assembly | Purpose | Unity dependency |
 | --- | --- | --- |
+| `CycloneGames.Logging` | Producer-only contract, category channels, null writer, process fallback | None (`noEngineReferences: true`) |
 | `CycloneGames.Logger` | Core contracts, processing, filtering, assertions, `ConsoleLogger`, `FileLogger` | None (`noEngineReferences: true`) |
 | `CycloneGames.Logger.Unity` | `LoggerBootstrap`, `LoggerSettings`, `UnityLogger`, Unity lifecycle host | `UnityEngine` |
-| `CycloneGames.Logger.Editor` | Settings Inspector, source hyperlinks, build override processing | `UnityEditor` |
+| `CycloneGames.Logger.Editor` | EditMode composition root, settings Inspector, source hyperlinks, build override processing | `UnityEditor` |
 | `CycloneGames.Logger.Samples` | Isolated sample scene and diagnostic components | Unity adapter (`autoReferenced: false`) |
 | `CycloneGames.Logger.Tests.Editor` | Functional and reliability tests | Unity Test Framework |
 | `CycloneGames.Logger.Tests.Performance` | Performance cases and steady-state allocation assertions | Performance Test Framework |
 
-Core public contracts do not expose `GameObject`, `MonoBehaviour`, `ScriptableObject`, or other `UnityEngine` types. Unity-specific behavior remains in the adapter assembly.
+Core public contracts do not expose `GameObject`, `MonoBehaviour`, `ScriptableObject`, or other `UnityEngine` types. Unity-specific behavior remains in the adapter assembly. `LogRuntime` owns no backend and never disposes one; the composition root that creates `CLogger` owns its flush and shutdown.
 
 Every accepted record follows the same bounded pipeline:
 
@@ -84,36 +86,39 @@ Filtering and sink availability are checked before a deferred builder runs. Mess
 
 1. In Unity, select `Tools > CycloneGames > Logger > Create Default LoggerSettings`. This creates the asset at `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset`.
 2. Select the asset and press `Validate Settings` in the custom Inspector. Invalid capacities, unsupported Unity Console policies, and unsafe file paths are rejected before they reach a build.
-3. Write logs from any code that references `CycloneGames.Logger` and `CycloneGames.Logger.Unity`:
+3. Producer assemblies reference only `CycloneGames.Logging` and create a stable category channel:
 
 ```csharp
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 public sealed class InventoryController : MonoBehaviour
 {
+    private static readonly LogChannel Log =
+        LogChannel.Create("CycloneGames.Inventory");
+
     private void Start()
     {
-        CLogger.LogInfo("Inventory initialized.", "Inventory");
+        Log.Info("Inventory initialized.");
     }
 
     public void ReportLoadFailure(string itemId)
     {
-        CLogger.LogError(
+        Log.Error(
             itemId,
-            static (value, builder) => builder.Append("Failed to load item: ").Append(value),
-            "Inventory");
+            static (value, builder) => builder.Append("Failed to load item: ").Append(value));
     }
 }
 ```
 
-`LoggerBootstrap` runs before the first scene, loads the settings asset, creates the runtime host, registers the selected sinks, and applies the default level and filter. If no sink can be registered, static logging is suppressed and does not create an unconfigured global instance.
+`LoggerBootstrap` runs before the first scene, loads the settings asset, creates the runtime host, registers the selected sinks, applies the default level and filter, and then installs the configured `CLogger` as the `LogRuntime` writer. Before that point, and when no sink can be registered, ambient channels use `NullLogWriter` without creating an unconfigured global instance.
 
 ### Pure C# or server setup
 
 The core assembly has `noEngineReferences: true` and can be used without `UnityEngine`:
 
 ```csharp
+using CycloneGames.Logging;
 using CycloneGames.Logger;
 
 var options = new LoggerProcessingOptions
@@ -127,7 +132,8 @@ var options = new LoggerProcessingOptions
 CLogger logger = CLoggerFactory.CreateThreaded(options);
 logger.AddLoggerUnique(new ConsoleLogger());
 
-logger.Log(LogLevel.Info, "Service started.", "Bootstrap");
+LogChannel log = LogChannel.Create("CycloneGames.Service", logger);
+log.Info("Service started.");
 
 LoggerShutdownResult result = logger.ShutdownInstance(LogFlushMode.Buffered, 2000);
 if (result.IsComplete)
@@ -143,11 +149,11 @@ else
 Use `CLoggerFactory.CreateSingleThreaded` when the host must control dispatch affinity, and call `Pump` from that host's update loop:
 
 ```csharp
-ICLogger logger = CLoggerFactory.CreateSingleThreaded(options);
+CLogger logger = CLoggerFactory.CreateSingleThreaded(options);
 logger.Pump(maxItems: 256);
 ```
 
-Inject `ICLogger` into domain services. The composition root owns the concrete `CLogger`, its sinks, and final shutdown. Domain code should not resolve `CLogger.Instance` through a service locator.
+Inject `ILogWriter` or an explicitly bound `LogChannel` into domain services. The composition root owns the concrete `CLogger`, its sinks, and final shutdown. Domain code should not resolve `CLogger.Instance` or mutate `LogRuntime`. `CLogger` intentionally exposes no `Log(...)` or severity-specific producer methods; all records enter through `ILogWriter`/`LogChannel`.
 
 ## Core Concepts
 
@@ -156,16 +162,18 @@ Inject `ICLogger` into domain services. The composition root owns the concrete `
 Levels are ordered from least to most severe: `Trace`, `Debug`, `Info`, `Warning`, `Error`, `Fatal`, `None`. `SetLogLevel(LogLevel.Warning)` filters `Trace`, `Debug`, and `Info`. `None` disables all accepted log levels.
 
 ```csharp
-CLogger.Instance.SetLogLevel(LogLevel.Warning);
+CLogger backend = CLoggerFactory.CreateSingleThreaded();
+backend.SetLogLevel(LogLevel.Warning);
+LogChannel loadingLog = LogChannel.Create("Loading", backend);
 
-CLogger.LogInfo("Filtered.", "Loading");   // not enqueued
-CLogger.LogError("Accepted.", "Loading");  // enqueued
+loadingLog.Info("Filtered.");   // not enqueued
+loadingLog.Error("Accepted.");  // enqueued
 ```
 
 Category matching is case-insensitive. `LogAll` accepts every category, `LogWhiteList` accepts only listed categories, and `LogNoBlackList` accepts everything except listed categories.
 
 ```csharp
-ICLogger logger = CLogger.Instance;
+CLogger logger = CLoggerFactory.CreateSingleThreaded();
 
 logger.SetLogFilter(LogFilter.LogWhiteList);
 logger.AddToWhiteList("Networking");
@@ -179,23 +187,21 @@ Whitelist and blacklist updates copy their corresponding set and share `MaxFilte
 
 ### Message construction
 
-Three overloads cover cold paths to measured hot paths.
+The uniform `LogChannel` surface provides three overload families from cold paths to measured hot paths. Implementation files obtain the channel from their assembly-local `Diagnostics/<FeatureName>Log.cs` facade.
 
 **Simple string** — the value already exists or the call is cold. Interpolation happens before the logger can filter the call, so prefer the deferred form when the level may be filtered:
 
 ```csharp
-CLogger.LogInfo("Matchmaking connected.", "Networking");
+Log.Info("Matchmaking connected.");
 
-// String is created before LogDebug checks the active level.
-CLogger.LogDebug($"Entity {entityId} moved to {position}.", "Simulation");
+// String is created before Debug checks the active level.
+Log.Debug($"Entity {entityId} moved to {position}.");
 ```
 
 **Deferred builder** — the callback runs only after admission succeeds:
 
 ```csharp
-CLogger.LogDebug(
-    builder => builder.Append("Entity ").Append(entityId).Append(" updated."),
-    "Simulation");
+Log.Debug(builder => builder.Append("Entity ").Append(entityId).Append(" updated."));
 ```
 
 **State plus cached builder** — for measured hot paths, pass state separately and cache the delegate to avoid a capturing closure:
@@ -203,18 +209,19 @@ CLogger.LogDebug(
 ```csharp
 using System;
 using System.Text;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 public static class CombatLog
 {
+    public const string Category = "CycloneGames.Combat";
+    public static LogChannel Channel { get; } = LogChannel.Create(Category);
     private static readonly Action<HitState, StringBuilder> AppendHit = AppendHitMessage;
+
+    public static LogChannel Create(ILogWriter logWriter) => LogChannel.Create(Category, logWriter);
 
     public static void Hit(int attackerId, int targetId, int damage)
     {
-        CLogger.LogDebug(
-            new HitState(attackerId, targetId, damage),
-            AppendHit,
-            "Combat");
+        Channel.Debug(new HitState(attackerId, targetId, damage), AppendHit);
     }
 
     private static void AppendHitMessage(HitState state, StringBuilder builder)
@@ -254,7 +261,7 @@ If an admitted builder throws a non-`OutOfMemoryException`, the exception does n
 
 **Single-threaded** — `CreateSingleThreaded` dispatches only when `Pump` is called. The thread calling `Pump` executes every sink in that batch. Use it on WebGL, when the host owns deterministic dispatch affinity, when a test needs explicit progress, or when a main-thread-only integration is implemented directly.
 
-Unity's runtime host pumps at most 256 core records per frame with an approximately 1 ms between-item budget, and separately drains at most 256 Unity Console entries with an approximately 2 ms between-item budget. The budgets are checked only after each synchronous item returns; one blocking sink can exceed them.
+Unity's runtime host pumps at most 256 records per frame from the core owned by `LoggerBootstrap`, with an approximately 1 ms between-item budget, and separately drains at most 256 Unity Console entries with an approximately 2 ms between-item budget. Foreign or factory-created cores are never pumped implicitly. The budgets are checked only after each synchronous item returns; one blocking sink can exceed them.
 
 ### Queue capacity and backpressure
 
@@ -350,16 +357,33 @@ This example bounds entry count but allocates one copied string per accepted rec
 
 ### Lifecycle, flush, and shutdown
 
-**Global logger** — configure processing before `CLogger.Instance` or the first accepted static log outside Unity bootstrap:
+**Unity composition root** — automatic startup remains the default. `LoggerEditorBootstrap` owns the backend in EditMode; it drains and releases that owner before Play Mode or assembly reload. `LoggerBootstrap` then owns the Play Mode/Player backend through `BeforeSceneLoad`. `EditorApplication.update` pumps the Bootstrap-owned core and bounded Unity handoff while outside Play Mode, and the hidden `LoggerUpdater` performs the same work from `MonoBehaviour.Update` only while playing. A foreign global `CLogger` is never pumped by this host; its composition root retains dispatch-affinity control. Play Mode exit callbacks converge on the same idempotent, owner-aware shutdown, so `Application.quitting` cannot apply terminal Player semantics to a domain-reload-disabled Editor session. Hosts that need deterministic tests, runtime configuration changes, or a backend restart can use the same explicit owner API on Unity's main thread:
+
+```csharp
+LoggerInitializationResult initialization = LoggerBootstrap.Initialize(settings);
+LoggerReinitializationResult restart = LoggerBootstrap.Reinitialize(updatedSettings);
+LoggerShutdownResult shutdown = LoggerBootstrap.Shutdown(LogFlushMode.Buffered);
+```
+
+`Initialize` is idempotent. It reports `ExistingLoggerNotOwned` rather than taking over a global `CLogger` created by another composition root. When `LogRuntime` already contains a process writer that this Bootstrap does not own, `Initialize` and `Reinitialize` report `ExistingProcessWriterNotOwned`; they preserve that writer without creating a secondary `CLogger`, sink set, or Unity host. For this status, `IsInitialized` and `ProcessWriterInstalled` are both `false`: the requested Logger backend was not initialized even though the host-selected process writer remains available. If another composition root wins the final atomic installation race, Bootstrap shuts down the backend it just created before returning the same status. An incomplete rollback instead reports `ShutdownFailed` and retains ownership for an explicit shutdown retry.
+
+After an owned shutdown times out, `Initialize` reports `ShutdownFailed` instead of treating the stopping backend as initialized. `Reinitialize` retries that retained owner first and creates a replacement only after shutdown completes. The process writer is removed before shutdown and restored only while an incomplete shutdown still retains ownership. Shutdown never resets or disposes a writer owned by another composition root. Hosts that require fan-out must install an explicitly owned composite writer or create and inject an explicit `CLogger`; Bootstrap does not create a hidden secondary backend.
+
+Ordinary initialization, shutdown, and Unity `SubsystemRegistration` preserve foreign ownership. A foreign global `CLogger` remains running and must be handed off explicitly by its composition root. A surviving explicit `UnityLogger` keeps its generation, queue, and hidden host; package bootstrap is blocked until the external adapters are released. Releasing the last adapter schedules main-thread host destruction after the handoff queue becomes idle, unless `LoggerBootstrap` still owns a host lease. No PlayerSettings scripting define is involved in this lifecycle.
+
+**Global logger lifecycle** — configure processing before resolving `CLogger.Instance` outside Unity bootstrap. Producers still write through `LogRuntime.Writer` or a `LogChannel`:
 
 ```csharp
 CLogger.ConfigureThreadedProcessing(options);
 CLogger.ConfigureTimestampProvider(static () => DateTime.UtcNow);
 
-ICLogger logger = CLogger.Instance;
+CLogger logger = CLogger.Instance;
+LogChannel log = LogChannel.Create("CycloneGames.Host", logger);
 ```
 
 Once the global instance exists, processing configuration returns `false`. Stop the global instance only through `CLogger.Shutdown(LogFlushMode.Buffered)`. Calling `ShutdownInstance` on `CLogger.Instance` throws because static shutdown owns global detachment and retry coordination.
+
+Shutdown callbacks may observe `InProgress` when the same shutdown re-enters through `TryFlush` or sink disposal. This fail-fast result prevents callback deadlocks. Unrelated concurrent callers remain serialized and observe the completed owner transition; they are not treated as callback re-entry.
 
 **Explicit logger** — factory-created loggers use `logger.ShutdownInstance(LogFlushMode.Durable, 5000)`. If shutdown times out, retain the instance, release or repair the blocking external dependency, then retry. Timeout is not ownership completion.
 
@@ -372,11 +396,13 @@ Once the global instance exists, processing configuration returns `false`. Stop 
 
 | Shutdown status | Meaning |
 | --- | --- |
+| `NotStarted` | No owned instance existed; callers that accept an empty shutdown handle this explicitly |
 | `Completed` | Processing and requested flush completed without observed drops or terminal failures |
 | `CompletedWithDrops` | Shutdown completed, but the logger observed dropped records |
 | `CompletedWithFailures` | Shutdown completed with a sink flush or disposal failure |
 | `TimedOut` | Work or ownership remains; retain and retry the instance |
 | `AlreadyStopped` | The instance was already stopped |
+| `InProgress` | A shutdown callback re-entered the same owner; the outer owner transition remains authoritative |
 
 `IsComplete` is `true` for `CompletedWithDrops` and `CompletedWithFailures`. Always inspect `Status`, `DroppedMessageCount`, and `SinksFlushed`.
 
@@ -418,13 +444,13 @@ Opening, rotation, or writing can fail. The triggering record is dropped rather 
 
 ### Assertions
 
-`CLogAssert` is the static facade. `CLogAssert.CreateService(ICLogger, options)` creates an injectable `CLogAssertService`.
+`CLogAssert` writes through the current `LogRuntime.Writer`. `CLogAssert.CreateService(ILogWriter, options)` creates an explicitly injected `CLogAssertService`. When the captured writer is a `CLogger`, `LogAndThrow` can request a best-effort buffered flush without adding lifecycle methods to `ILogWriter`.
 
 ```csharp
 CLogAssert.Configure(new CLogAssertOptions
 {
     Enabled = true,
-    FailureLevel = LogLevel.Error,
+    FailureLevel = LogSeverity.Error,
     FailureBehavior = CLogAssertFailureBehavior.LogAndThrow,
     Category = "GameplayInvariant",
     FlushBeforeThrow = true,
@@ -543,6 +569,7 @@ When an override exists, preprocessing creates `Assets/Generated/CycloneGames.Lo
 ### Unity Editor behavior
 
 - `LoggerSettingsEditor` uses `SerializedObject` and `SerializedProperty`, supports multi-object editing, and preserves Undo, asset serialization, and Inspector workflows.
+- `LoggerEditorBootstrap` installs the canonical settings in EditMode, shuts its owned backend down before Play Mode or assembly reload, and restores a fresh owner after returning to EditMode. It never takes over a `CLogger` created by another composition root.
 - Source links embed caller paths and lines into Unity Console output. Clicking the link opens the original logging call site. The Editor registry is bounded to 2048 entries.
 - Unity Console records suppress Unity's additional stack trace because caller source information is already included.
 - Build overrides operate on a generated asset and never mutate the canonical source settings asset.
@@ -562,13 +589,13 @@ A combat system needs per-hit logging without producing closures or string inter
 ```csharp
 public static class CombatLog
 {
+    public const string Category = "CycloneGames.Combat";
+    public static LogChannel Channel { get; } = LogChannel.Create(Category);
     private static readonly Action<HitState, StringBuilder> AppendHit = AppendHitMessage;
 
     public static void Hit(int attackerId, int targetId, int damage)
     {
-        if ((CLogger.Instance.GetLogLevel() & LogLevel.Debug) == 0) return;
-
-        CLogger.LogDebug(new HitState(attackerId, targetId, damage), AppendHit, "Combat");
+        Channel.Debug(new HitState(attackerId, targetId, damage), AppendHit);
     }
 
     private static void AppendHitMessage(HitState s, StringBuilder b) =>
@@ -605,7 +632,7 @@ logger.AddLoggerUnique(new FileLogger("/var/log/mygame/server.log", new FileLogg
 }));
 ```
 
-Under `UNITY_SERVER`, `registerUnityLogger` defaults to `false`. Container orchestration should call `CLogger.Shutdown(LogFlushMode.Durable, timeoutMs)` during SIGTERM so the file sink drains before the process exits.
+Under `UNITY_SERVER`, `registerUnityLogger` defaults to `false`. Container orchestration should retain the explicit `logger` owner and call `logger.ShutdownInstance(LogFlushMode.Durable, timeoutMs)` during SIGTERM so the file sink drains before the process exits.
 
 ### WebGL single-threaded logging
 
@@ -690,6 +717,8 @@ Do not emit one record per entity per tick at large entity counts without a meas
 | Logger-owned archives | Alongside the active file; internal name grammar | `FileLogger`; bounded by `MaxArchiveFiles` |
 
 The module does not use `EditorPrefs`, `PlayerPrefs`, or `SessionState`. Runtime log files are plaintext and can contain application-provided sensitive data. Redaction must happen before the record reaches sinks.
+
+`CycloneGames.Logging` itself has no persistence, cache, serialized assets, threads, or lifecycle ownership.
 
 ## Troubleshooting
 

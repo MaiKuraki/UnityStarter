@@ -7,6 +7,7 @@ CycloneGames.Analyzers is a Roslyn analyzer package for UnityStarter. It enforce
 ```bash
 cd UnityStarter/Analyzers
 dotnet build CycloneGames.Analyzers.sln -c Release
+dotnet test CycloneGames.Analyzers.sln -c Release
 ```
 
 The output assembly is:
@@ -17,7 +18,11 @@ CycloneGames.Analyzers/bin/Release/netstandard2.0/CycloneGames.Analyzers.dll
 
 ## Unity Project Activation
 
-Add the analyzer to Unity-generated C# projects through a team-owned `Directory.Build.props`, a NuGet analyzer package, or a Unity project-generation hook. Avoid relying on untracked per-user setup for CI or production teams.
+Building the analyzer source does not activate it in the Unity Editor. Unity activation requires a compiled analyzer DLL inside the relevant `Assets/` or package scope with the case-sensitive `RoslynAnalyzer` asset label. See the [Unity 2022.3 Roslyn analyzer manual](https://docs.unity3d.com/2022.3/Documentation/Manual/roslyn-analyzers.html).
+
+This repository currently keeps only the analyzer source project and does not publish or activate that Unity asset. Do not treat a successful analyzer build as proof that Unity compilation is enforcing the rules.
+
+For IDE and command-line validation of Unity-generated C# projects, use a team-owned `Directory.Build.props`, an analyzer package, or a Unity project-generation hook. Avoid relying on untracked per-user setup for CI or production teams.
 
 Example `Directory.Build.props` at `UnityStarter/`:
 
@@ -57,6 +62,8 @@ Example `Directory.Build.props` at `UnityStarter/`:
 | CG0046 | lambda or anonymous method in hot path | Warning |
 | CG0047 | `async Task` when UniTask is referenced | Warning |
 | CG0048 | static class circular dependency risk | Warning |
+| CG0049 | direct logging API bypass in governed CycloneGames assemblies | Error |
+| CG0050 | `LogChannel.Create` outside the assembly log facade | Error |
 
 ## Code Fixes
 
@@ -76,6 +83,23 @@ OnPreTick, OnPostTick
 ```
 
 Rules that depend on hot path detection should stay conservative. Prefer false negatives over broad false positives that make teams suppress the analyzer.
+
+## Unified Logging Enforcement
+
+`CG0049` prevents governed CycloneGames package assemblies from bypassing the shared logging contract. This includes Runtime, Editor, Samples, and Benchmarks because copyable example code is part of the package's API guidance. The rule uses resolved Roslyn symbols rather than short type names and reports:
+
+- `UnityEngine.Debug.Log*`, `UnityEngine.Debug.Assert*`, and `Debug.unityLogger` access.
+- `UnityEngine.MonoBehaviour.print`.
+- `System.Console.Write*` and access to `Console.Out` or `Console.Error`.
+- References to the concrete `CycloneGames.Logger.CLogger` backend outside Logger-owned assemblies.
+
+The rule applies only to assemblies whose names start with `CycloneGames.`. The exact backend assemblies `CycloneGames.Logger`, `CycloneGames.Logger.Unity`, and `CycloneGames.Logger.Editor` are excluded. Assemblies or source paths explicitly identified as Tests, Tools, or CodeGen are also excluded because they are verification or host I/O boundaries. Runtime, Editor, Samples, and Benchmarks remain governed. Similar business names such as `CycloneGames.MemoryGovernance.Logger` or `CycloneGames.MemoryGovernance.Logger.Editor` are not Logger backends and remain in scope.
+
+In governed package code, `CG0049` owns direct logging diagnostics, so the hot-path-only `CG0043` rule does not report the same `Debug.Log*` invocation twice. `CG0043` remains active outside this scope.
+
+`CG0050` keeps channel construction in one discoverable boundary per producing assembly. A valid boundary is a top-level `internal static` type whose unique name ends with `Log`, stored at `Diagnostics/<TypeName>.cs`, and exposing the standard internal members `Category`, `Channel`, and `Create(ILogWriter logWriter)`. For example, `CycloneGames.Audio.Runtime` owns `Diagnostics/AudioRuntimeLog.cs`; implementation files consume `AudioRuntimeLog.Channel` or `AudioRuntimeLog.Create(logWriter)` instead of calling `LogChannel.Create` directly. Unique facade names avoid type ambiguity when assemblies expose internals to tests or integration assemblies.
+
+Both rules intentionally have no CodeFix. A safe rewrite requires module category, exception/context handling, deferred formatting, and logging ownership decisions that cannot be inferred from one invocation. `CG0050` verifies the construction boundary, file convention, and standard facade member signatures. Package tests and API review remain responsible for category values and explicit null semantics.
 
 ## Suppression
 
@@ -100,7 +124,7 @@ var config = Resources.Load<GameConfig>("Config");
 Before a rule is enabled by default, it should have:
 
 - A semantic check where syntax alone would be fragile.
-- Runtime, Editor, Samples, and Tests path behavior defined.
+- Runtime, Editor, Samples, and Benchmarks governed, with explicit Tests, Tools, and CodeGen boundary behavior.
 - Positive and negative analyzer test cases.
 - A low false-positive profile for existing UnityStarter modules.
 - A CodeFix only when the rewrite is safe across common Unity code patterns.

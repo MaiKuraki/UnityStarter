@@ -4,6 +4,7 @@ using System.Threading;
 using UnityEditor;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Unity.Runtime;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -15,6 +16,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private const double FaultedWatcherRetrySeconds = 5.0;
       private const double ReloadRetrySeconds = 1.0;
       private const int MaxReloadRetryCount = 3;
+      private static readonly LogChannel Log = GameplayTagsEditorLog.Channel;
       private static FileSystemWatcher s_Watcher;
       private static int s_ReloadRequested;
       private static int s_WatcherFaulted;
@@ -76,7 +78,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                string action = retry
                   ? "A bounded retry was scheduled."
                   : "The current registry snapshot was preserved; another file event is required before retrying.";
-               UnityEngine.Debug.LogError($"Gameplay tag catalog reload failed. {action} {message}");
+               Log.Error($"Gameplay tag catalog reload failed. {action} {message}");
             }
          }
       }
@@ -130,7 +132,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             if (!string.Equals(s_LastWatcherError, message, StringComparison.Ordinal))
             {
                s_LastWatcherError = message;
-               UnityEngine.Debug.LogWarning($"Gameplay tag file watching is temporarily unavailable. Retrying automatically. {message}");
+            Log.Warning($"Gameplay tag file watching is temporarily unavailable. Retrying automatically. {message}");
             }
          }
       }
@@ -181,7 +183,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
                                              exception is ObjectDisposedException ||
                                              exception is PlatformNotSupportedException)
          {
-            UnityEngine.Debug.LogWarning($"Gameplay tag file watcher cleanup did not complete normally: {exception.Message}");
+         Log.Warning($"Gameplay tag file watcher cleanup did not complete normally: {exception.Message}");
          }
       }
    }

@@ -3,6 +3,7 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
+        "CycloneGames.Logging",
         "CycloneGames.UIFramework.Runtime"
     ],
     "includePlatforms": [],

@@ -54,14 +54,18 @@ flowchart LR
 
 | Assembly | Platform | `autoReferenced` | Direct references |
 | --- | --- | ---: | --- |
-| `CycloneGames.Utility.Runtime` | All Unity targets | `true` | `CycloneGames.Hash.Core`, `UnityEngine.UI` |
+| `CycloneGames.Utility.Runtime` | All Unity targets | `true` | `CycloneGames.Hash.Core`, `CycloneGames.Logging`, `UnityEngine.UI` |
 | `CycloneGames.Utility.SplashScreenModifier.Runtime` | All Unity targets | `true` | None |
-| `CycloneGames.Utility.Editor` | Editor only | `true` | `CycloneGames.Utility.Runtime` |
+| `CycloneGames.Utility.Editor` | Editor only | `true` | `CycloneGames.Utility.Runtime`, `CycloneGames.Logging` |
 | `CycloneGames.Utility.Tests.Editor` | Editor only | `false` | Runtime, Splash Runtime, Editor, Test Framework |
 | `CycloneGames.Utility.Tests.PlayMode` | Test builds | `false` | Runtime, Test Framework |
 | `CycloneGames.Utility.Tests.Performance` | Editor, conditional | `false` | Runtime, Performance Testing |
 
 The package lives under `Assets/ThirdParty/CycloneGames/`. Its `package.json` records release metadata and intended dependencies, but Unity does not activate sibling asset packages from that file — the current asmdef graph, installed packages, source, and project configuration remain the compilation facts.
+
+Runtime and Editor diagnostics use `LogChannel` categories `CycloneGames.Utility` and `CycloneGames.Utility.Editor`. The package depends only on `CycloneGames.Logging`; when no backend is installed, `NullLogWriter` provides a silent no-op fallback.
+
+Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
 ## Quick Start
 

@@ -49,6 +49,22 @@ namespace CycloneGames.Logger
     [DefaultExecutionOrder(-1000)]
     internal sealed class LoggerUpdater : MonoBehaviour
     {
+        private enum InitializationBlockReason : byte
+        {
+            None = 0,
+            ShutdownIncomplete = 1,
+            ExternalAdapterOwner = 2
+        }
+
+        internal enum SubsystemResetStatus : byte
+        {
+            Reset = 0,
+            OwnedShutdownIncomplete = 1,
+            ForeignGlobalPreserved = 2,
+            ExternalAdaptersPreserved = 3,
+            CoreResetIncomplete = 4
+        }
+
         internal readonly struct Reservation
         {
             internal readonly int Characters;
@@ -97,6 +113,8 @@ namespace CycloneGames.Logger
         private static int _mainThreadId;
         private static int _generation;
         private static int _adapterCount;
+        private static bool _bootstrapHostOwned;
+        private static bool _hostCleanupPending;
         private static int _maxQueuedCharacters = LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedCharacters;
         private static int _reservedCriticalMessages = LoggerProcessingOptions.DefaultReservedCriticalMessages;
         private static int _reservedCriticalCharacters = LoggerProcessingOptions.DefaultReservedCriticalCharacters;
@@ -108,6 +126,7 @@ namespace CycloneGames.Logger
         private static bool _quitStarted;
         private static bool _quitting;
         private static volatile bool _initializationBlocked;
+        private static InitializationBlockReason _initializationBlockReason;
 #if UNITY_EDITOR
         private static EditorConsoleWriter _editorConsoleWriter;
 #endif
@@ -115,85 +134,136 @@ namespace CycloneGames.Logger
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void ResetStaticState()
         {
-            LoggerShutdownResult resetResult = CLogger.ResetForUnitySubsystemRegistration();
-            if (!resetResult.IsComplete && resetResult.Status != LoggerShutdownStatus.NotStarted)
+            ResetStaticStateCore(true);
+        }
+
+        private static SubsystemResetStatus ResetStaticStateCore(bool reportDiagnostics)
+        {
+            CaptureMainThreadForLifecycle();
+
+            LoggerShutdownResult ownedResult = LoggerBootstrap.Shutdown(LogFlushMode.Buffered);
+            if (!ownedResult.IsComplete && ownedResult.Status != LoggerShutdownStatus.NotStarted)
             {
                 lock (QueueLock)
                 {
-                    _mainThreadId = Environment.CurrentManagedThreadId;
-                    _quitStarted = true;
-                    _quitting = true;
                     _initializationBlocked = true;
+                    _initializationBlockReason = InitializationBlockReason.ShutdownIncomplete;
                 }
 
-                CLogger.CompleteUnitySubsystemRegistrationReset(false);
-                UnityEngine.Debug.LogError("CycloneGames.Logger: The previous runtime did not stop during subsystem reset. New logger initialization is blocked to preserve ownership safety.");
-                return;
+                if (reportDiagnostics)
+                {
+                    UnityEngine.Debug.LogError(
+                        "CycloneGames.Logger: The Bootstrap-owned runtime did not stop during subsystem reset. New logger initialization is blocked to preserve ownership safety.");
+                }
+
+                return SubsystemResetStatus.OwnedShutdownIncomplete;
             }
 
-            DrainUnityQueue(int.MaxValue, 50);
-
+            bool foreignGlobalSurvived = CLogger.TryGetInstance(out _);
             bool explicitAdaptersSurvived;
-            int abandonedEntries = 0;
             lock (QueueLock)
             {
                 explicitAdaptersSurvived = _adapterCount != 0;
                 if (explicitAdaptersSurvived)
                 {
-                    _mainThreadId = Environment.CurrentManagedThreadId;
+                    _initializationBlocked = true;
+                    _initializationBlockReason = InitializationBlockReason.ExternalAdapterOwner;
+                }
+            }
+
+            if (foreignGlobalSurvived || explicitAdaptersSurvived)
+            {
+                if (reportDiagnostics && foreignGlobalSurvived)
+                {
+                    UnityEngine.Debug.LogError(
+                        "CycloneGames.Logger: A CLogger owned by another composition root survived subsystem reset. It was preserved; call LoggerBootstrap.Reinitialize only after the external owner completes an explicit handoff.");
+                }
+
+                if (reportDiagnostics && explicitAdaptersSurvived)
+                {
+                    UnityEngine.Debug.LogError(
+                        "CycloneGames.Logger: Explicit UnityLogger owners survived subsystem reset. Their host and queue were preserved; dispose the external owners before starting the package bootstrap.");
+                }
+
+                return explicitAdaptersSurvived
+                    ? SubsystemResetStatus.ExternalAdaptersPreserved
+                    : SubsystemResetStatus.ForeignGlobalPreserved;
+            }
+
+            LoggerShutdownResult resetResult = CLogger.ResetForUnitySubsystemRegistration();
+            if (!resetResult.IsComplete && resetResult.Status != LoggerShutdownStatus.NotStarted)
+            {
+                lock (QueueLock)
+                {
                     _quitStarted = true;
                     _quitting = true;
                     _initializationBlocked = true;
+                    _initializationBlockReason = InitializationBlockReason.ShutdownIncomplete;
                 }
-                else
+
+                if (reportDiagnostics)
                 {
-                    abandonedEntries = _count + _inFlightCount;
-                    _abandonedOnResetCount += abandonedEntries;
-                    _instance = null;
-                    _mainThreadId = Environment.CurrentManagedThreadId;
-                    _entries = new LogEntry[LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedMessages];
-                    _head = 0;
-                    _count = 0;
-                    _reservedCount = 0;
-                    _reservedCharacters = 0;
-                    _queuedCharacters = 0;
-                    _inFlightCount = 0;
-                    _inFlightCharacters = 0;
-                    _peakCount = 0;
-                    _peakCharacters = 0;
-                    _maxQueuedCharacters = LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedCharacters;
-                    _reservedCriticalMessages = LoggerProcessingOptions.DefaultReservedCriticalMessages;
-                    _reservedCriticalCharacters = LoggerProcessingOptions.DefaultReservedCriticalCharacters;
-                    _overflowPolicy = LogQueueOverflowPolicy.DropNewest;
-                    _criticalLevel = LogLevel.Error;
-                    _droppedCount = 0;
-                    _droppedCriticalCount = 0;
-                    _generation = unchecked(_generation + 1);
-                    _quitStarted = false;
-                    _quitting = false;
-                    _initializationBlocked = false;
+                    UnityEngine.Debug.LogError("CycloneGames.Logger: The previous runtime did not stop during subsystem reset. New logger initialization is blocked to preserve ownership safety.");
                 }
+
+                return SubsystemResetStatus.CoreResetIncomplete;
             }
 
-            CLogger.CompleteUnitySubsystemRegistrationReset(!explicitAdaptersSurvived);
-            if (explicitAdaptersSurvived)
+            LoggerBootstrap.ResetForSubsystemRegistration();
+            DrainUnityQueue(int.MaxValue, 50);
+
+            int abandonedEntries = 0;
+            LoggerUpdater previousInstance = null;
+            lock (QueueLock)
             {
-                UnityEngine.Debug.LogError(
-                    "CycloneGames.Logger: Explicit UnityLogger owners survived subsystem reset. Dispose their CLogger/UnityLogger owners before starting a new runtime.");
-                return;
+                abandonedEntries = _count + _inFlightCount;
+                _abandonedOnResetCount += abandonedEntries;
+                previousInstance = _instance;
+                _instance = null;
+                _entries = new LogEntry[LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedMessages];
+                _head = 0;
+                _count = 0;
+                _reservedCount = 0;
+                _reservedCharacters = 0;
+                _queuedCharacters = 0;
+                _inFlightCount = 0;
+                _inFlightCharacters = 0;
+                _peakCount = 0;
+                _peakCharacters = 0;
+                _maxQueuedCharacters = LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedCharacters;
+                _reservedCriticalMessages = LoggerProcessingOptions.DefaultReservedCriticalMessages;
+                _reservedCriticalCharacters = LoggerProcessingOptions.DefaultReservedCriticalCharacters;
+                _overflowPolicy = LogQueueOverflowPolicy.DropNewest;
+                _criticalLevel = LogLevel.Error;
+                _droppedCount = 0;
+                _droppedCriticalCount = 0;
+                _generation = unchecked(_generation + 1);
+                _quitStarted = false;
+                _quitting = false;
+                _initializationBlocked = false;
+                _initializationBlockReason = InitializationBlockReason.None;
+                _bootstrapHostOwned = false;
+                _hostCleanupPending = false;
             }
+
+            DestroyHost(previousInstance);
+            CLogger.CompleteUnitySubsystemRegistrationReset(true);
 
             if (abandonedEntries > 0)
             {
-                UnityEngine.Debug.LogError(
-                    "CycloneGames.Logger: Unity handoff entries could not be drained during subsystem reset and were explicitly abandoned: "
-                    + abandonedEntries + ".");
+                if (reportDiagnostics)
+                {
+                    UnityEngine.Debug.LogError(
+                        "CycloneGames.Logger: Unity handoff entries could not be drained during subsystem reset and were explicitly abandoned: "
+                        + abandonedEntries + ".");
+                }
             }
 
 #if UNITY_EDITOR
             LoggerEditorLinkRegistry.Reset();
             LoggerEditorPathResolver.Reset();
 #endif
+            return SubsystemResetStatus.Reset;
         }
 
         internal static void Configure(LoggerProcessingOptions options)
@@ -206,6 +276,7 @@ namespace CycloneGames.Logger
 #endif
             lock (QueueLock)
             {
+                TryReleaseExternalOwnershipBlockNoLock();
                 if (_initializationBlocked)
                 {
                     throw new InvalidOperationException("Logger runtime initialization is blocked because the previous owner did not stop safely.");
@@ -243,17 +314,48 @@ namespace CycloneGames.Logger
                 throw new InvalidOperationException("Logger runtime initialization is blocked because the previous owner did not stop safely.");
             }
 
-            if (Environment.CurrentManagedThreadId != _mainThreadId)
-            {
-                throw new InvalidOperationException("LoggerUpdater must be created on the Unity main thread.");
-            }
+            EnsureMainThreadAccess();
 
             var gameObject = new GameObject("CycloneGames.Logger.RuntimeHost");
             gameObject.hideFlags = HideFlags.HideAndDontSave;
-            DontDestroyOnLoad(gameObject);
+            if (Application.isPlaying)
+            {
+                DontDestroyOnLoad(gameObject);
+            }
+
             _instance = gameObject.AddComponent<LoggerUpdater>();
             Application.quitting -= OnApplicationQuitting;
             Application.quitting += OnApplicationQuitting;
+        }
+
+        internal static void EnsureBootstrapInstance()
+        {
+            EnsureMainThreadAccess();
+            lock (QueueLock)
+            {
+                TryReleaseExternalOwnershipBlockNoLock();
+                if (_initializationBlocked)
+                {
+                    throw new InvalidOperationException("Logger runtime initialization is blocked because the previous owner did not stop safely.");
+                }
+
+                _bootstrapHostOwned = true;
+                _hostCleanupPending = false;
+            }
+
+            try
+            {
+                EnsureInstance();
+            }
+            catch
+            {
+                lock (QueueLock)
+                {
+                    _bootstrapHostOwned = false;
+                }
+
+                throw;
+            }
         }
 
         internal static bool TryReserve(LogLevel level, int estimatedCharacters, out Reservation reservation)
@@ -296,6 +398,7 @@ namespace CycloneGames.Logger
         {
             lock (QueueLock)
             {
+                TryReleaseExternalOwnershipBlockNoLock();
                 if (_initializationBlocked || _quitStarted || _quitting)
                 {
                     throw new InvalidOperationException("Unity logger adapter registration is unavailable while runtime initialization is blocked or shutting down.");
@@ -308,12 +411,27 @@ namespace CycloneGames.Logger
 
         internal static void UnregisterAdapter(int generation)
         {
+            bool cleanupOnCurrentThread = false;
             lock (QueueLock)
             {
                 if (generation == _generation && _adapterCount > 0)
                 {
                     _adapterCount--;
+                    if (_adapterCount == 0)
+                    {
+                        TryReleaseExternalOwnershipBlockNoLock();
+                        if (!_bootstrapHostOwned)
+                        {
+                            _hostCleanupPending = true;
+                            cleanupOnCurrentThread = Environment.CurrentManagedThreadId == _mainThreadId;
+                        }
+                    }
                 }
+            }
+
+            if (cleanupOnCurrentThread)
+            {
+                CleanupUnusedHost();
             }
         }
 
@@ -451,6 +569,8 @@ namespace CycloneGames.Logger
             {
                 _quitStarted = true;
                 _quitting = true;
+                _bootstrapHostOwned = false;
+                _hostCleanupPending = false;
             }
 
             if (drain && Environment.CurrentManagedThreadId == _mainThreadId)
@@ -474,29 +594,120 @@ namespace CycloneGames.Logger
                 return;
             }
 
-            if (Application.isPlaying)
+            DestroyHost(instance);
+        }
+
+        /// <summary>
+        /// Releases the hidden Unity host after the LoggerBootstrap-owned CLogger has stopped.
+        /// A clean reset keeps the queue reusable for an immediate Reinitialize or for an
+        /// EditMode/PlayMode ownership handoff when domain reload is disabled.
+        /// </summary>
+        internal static void ResetAfterOwnedShutdown()
+        {
+            EnsureMainThreadAccess();
+
+            DrainUnityQueue(int.MaxValue, 50);
+
+            LoggerUpdater instance;
+            lock (QueueLock)
             {
-                Destroy(instance.gameObject);
+                _bootstrapHostOwned = false;
+                if (_adapterCount != 0)
+                {
+                    // Explicit UnityLogger adapters are not owned by LoggerBootstrap. Keep their
+                    // host and queue intact instead of invalidating their generation.
+                    return;
+                }
+
+                instance = _instance;
+                _instance = null;
+                _entries = new LogEntry[LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedMessages];
+                _head = 0;
+                _count = 0;
+                _reservedCount = 0;
+                _reservedCharacters = 0;
+                _queuedCharacters = 0;
+                _inFlightCount = 0;
+                _inFlightCharacters = 0;
+                _peakCount = 0;
+                _peakCharacters = 0;
+                _maxQueuedCharacters = LoggerProcessingOptions.DefaultUnityConsoleMaxQueuedCharacters;
+                _reservedCriticalMessages = LoggerProcessingOptions.DefaultReservedCriticalMessages;
+                _reservedCriticalCharacters = LoggerProcessingOptions.DefaultReservedCriticalCharacters;
+                _overflowPolicy = LogQueueOverflowPolicy.DropNewest;
+                _criticalLevel = LogLevel.Error;
+                _droppedCount = 0;
+                _droppedCriticalCount = 0;
+                _abandonedOnResetCount = 0;
+                _generation = unchecked(_generation + 1);
+                _quitStarted = false;
+                _quitting = false;
+                _initializationBlocked = false;
+                _initializationBlockReason = InitializationBlockReason.None;
+                _hostCleanupPending = false;
+                _mainThreadId = Environment.CurrentManagedThreadId;
             }
-            else
+
+            Application.quitting -= OnApplicationQuitting;
+            DestroyHost(instance);
+
+#if UNITY_EDITOR
+            LoggerEditorLinkRegistry.Reset();
+            LoggerEditorPathResolver.Reset();
+#endif
+        }
+
+        internal static void CaptureMainThreadForLifecycle()
+        {
+            Volatile.Write(ref _mainThreadId, Environment.CurrentManagedThreadId);
+        }
+
+        internal static void EnsureMainThreadAccess()
+        {
+            int mainThreadId = Volatile.Read(ref _mainThreadId);
+            if (mainThreadId == 0 || Environment.CurrentManagedThreadId != mainThreadId)
             {
-                DestroyImmediate(instance.gameObject);
+                throw new InvalidOperationException(
+                    "LoggerBootstrap must be called from the Unity main thread after its lifecycle composition root has initialized.");
             }
         }
 
+        internal static SubsystemResetStatus ResetForTests()
+        {
+            return ResetStaticStateCore(false);
+        }
+
+#if UNITY_INCLUDE_TESTS
+        internal static void ProcessApplicationQuittingForTests()
+        {
+            OnApplicationQuitting();
+        }
+#endif
+
         private void Update()
         {
-            if (CLogger.TryGetInstance(out CLogger logger))
+            PumpOnce();
+        }
+
+        internal static void PumpOnce()
+        {
+            if (Environment.CurrentManagedThreadId != Volatile.Read(ref _mainThreadId))
+            {
+                return;
+            }
+
+            if (LoggerBootstrap.TryGetOwnedLogger(out CLogger logger))
             {
                 logger.PumpWithinBudget(DefaultPumpItems, CorePumpBudgetMilliseconds);
             }
 
             DrainUnityQueue(DefaultPumpItems, UnityConsoleBudgetMilliseconds);
+            CleanupUnusedHost();
         }
 
         private void OnApplicationPause(bool paused)
         {
-            if (!paused || !CLogger.TryGetInstance(out CLogger logger))
+            if (!paused || !LoggerBootstrap.TryGetOwnedLogger(out CLogger logger))
             {
                 return;
             }
@@ -515,6 +726,16 @@ namespace CycloneGames.Logger
 
         private static void OnApplicationQuitting()
         {
+#if UNITY_EDITOR
+            LoggerShutdownResult editorResult = LoggerBootstrap.Shutdown(LogFlushMode.Buffered);
+            if (!editorResult.IsComplete && editorResult.Status != LoggerShutdownStatus.NotStarted)
+            {
+                EmergencyLogger.TryWrite(
+                    "Editor Play Mode exit could not stop the Logger backend. Ownership is retained so shutdown can be retried.");
+            }
+
+            return;
+#else
             lock (QueueLock)
             {
                 if (_quitStarted)
@@ -525,6 +746,13 @@ namespace CycloneGames.Logger
                 _quitStarted = true;
             }
 
+            LoggerShutdownResult ownedResult = LoggerBootstrap.Shutdown(LogFlushMode.Buffered);
+            if (!ownedResult.IsComplete && ownedResult.Status != LoggerShutdownStatus.NotStarted)
+            {
+                EmergencyLogger.TryWrite(
+                    "Application quit could not stop the Bootstrap-owned Logger backend before terminal shutdown.");
+            }
+
             CLogger.ShutdownForApplicationQuit();
             lock (QueueLock)
             {
@@ -532,6 +760,63 @@ namespace CycloneGames.Logger
             }
 
             DrainUnityQueue(int.MaxValue, 50);
+#endif
+        }
+
+        private static void DestroyHost(LoggerUpdater instance)
+        {
+            if (instance == null)
+            {
+                return;
+            }
+
+#if UNITY_EDITOR
+            DestroyImmediate(instance.gameObject);
+#else
+            Destroy(instance.gameObject);
+#endif
+        }
+
+        private static void CleanupUnusedHost()
+        {
+            if (Environment.CurrentManagedThreadId != Volatile.Read(ref _mainThreadId))
+            {
+                return;
+            }
+
+            LoggerUpdater instance;
+            lock (QueueLock)
+            {
+                if (!_hostCleanupPending || _bootstrapHostOwned || _adapterCount != 0)
+                {
+                    return;
+                }
+
+                if (_count != 0 || _reservedCount != 0 || _inFlightCount != 0)
+                {
+                    return;
+                }
+
+                instance = _instance;
+                _instance = null;
+                _hostCleanupPending = false;
+            }
+
+            Application.quitting -= OnApplicationQuitting;
+            DestroyHost(instance);
+        }
+
+        private static void TryReleaseExternalOwnershipBlockNoLock()
+        {
+            if (_initializationBlockReason != InitializationBlockReason.ExternalAdapterOwner
+                || _adapterCount != 0
+                || CLogger.TryGetInstance(out _))
+            {
+                return;
+            }
+
+            _initializationBlocked = false;
+            _initializationBlockReason = InitializationBlockReason.None;
         }
 
         private static void DrainUnityQueue(int maxItems, int budgetMilliseconds)

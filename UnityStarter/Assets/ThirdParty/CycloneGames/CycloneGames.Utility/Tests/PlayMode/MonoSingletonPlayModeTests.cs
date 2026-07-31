@@ -1,9 +1,10 @@
 using System;
 using System.Collections;
-using System.Text.RegularExpressions;
 using System.Threading;
 
+using CycloneGames.Logging;
 using CycloneGames.Utility.Runtime;
+using CycloneGames.Utility.Tests.PlayMode.Support;
 
 using NUnit.Framework;
 
@@ -103,21 +104,33 @@ namespace CycloneGames.Utility.Tests.PlayMode
             var duplicateOwner = new GameObject("Singleton Duplicate");
             DuplicateSingleton authority = firstOwner.AddComponent<DuplicateSingleton>();
             DuplicateSibling sibling = duplicateOwner.AddComponent<DuplicateSibling>();
-
-            LogAssert.Expect(
-                LogType.Error,
-                new Regex("\\[MonoSingleton\\] Duplicate .*DuplicateSingleton.*sibling components are preserved\\."));
-            DuplicateSingleton duplicate = duplicateOwner.AddComponent<DuplicateSingleton>();
+            DuplicateSingleton duplicate = null;
             try
             {
-                Assert.That(DuplicateSingleton.Instance, Is.SameAs(authority));
-                Assert.That(duplicate.enabled, Is.False);
-                yield return null;
+                RecordedLogEntry[] entries;
+                using (var logs = new RecordingLogWriterScope("CycloneGames.Utility"))
+                {
+                    duplicate = duplicateOwner.AddComponent<DuplicateSingleton>();
+                    Assert.That(DuplicateSingleton.Instance, Is.SameAs(authority));
+                    Assert.That(duplicate.enabled, Is.False);
+                    yield return null;
 
-                Assert.That(duplicateOwner, Is.Not.Null);
-                Assert.That(sibling, Is.Not.Null);
-                Assert.That(duplicateOwner.GetComponent<DuplicateSibling>(), Is.SameAs(sibling));
-                Assert.That(duplicateOwner.GetComponent<DuplicateSingleton>(), Is.Null);
+                    Assert.That(duplicateOwner, Is.Not.Null);
+                    Assert.That(sibling, Is.Not.Null);
+                    Assert.That(duplicateOwner.GetComponent<DuplicateSibling>(), Is.SameAs(sibling));
+                    Assert.That(duplicateOwner.GetComponent<DuplicateSingleton>(), Is.Null);
+                    entries = logs.Snapshot();
+                }
+
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.Utility"));
+                Assert.That(
+                    entries[0].Message,
+                    Is.EqualTo(
+                        $"Duplicate {typeof(DuplicateSingleton).FullName} component was disabled and will be destroyed. " +
+                        "Its GameObject and sibling components are preserved."));
+                Assert.That(entries[0].Exception, Is.Null);
             }
             finally
             {
@@ -134,16 +147,28 @@ namespace CycloneGames.Utility.Tests.PlayMode
             var root = new GameObject("Scene Root");
             var child = new GameObject("Configured Global Singleton Child");
             child.transform.SetParent(root.transform, false);
-
-            LogAssert.Expect(
-                LogType.Error,
-                new Regex("\\[MonoSingleton\\] Global .*NonRootGlobalSingleton.*must be attached to a root GameObject.*Scene lifetime\\."));
-            NonRootGlobalSingleton singleton = child.AddComponent<NonRootGlobalSingleton>();
+            NonRootGlobalSingleton singleton = null;
             try
             {
-                Assert.That(NonRootGlobalSingleton.Instance, Is.SameAs(singleton));
-                Assert.That(singleton.transform.parent, Is.SameAs(root.transform));
-                Assert.That(singleton.gameObject.scene, Is.EqualTo(root.scene));
+                RecordedLogEntry[] entries;
+                using (var logs = new RecordingLogWriterScope("CycloneGames.Utility"))
+                {
+                    singleton = child.AddComponent<NonRootGlobalSingleton>();
+                    Assert.That(NonRootGlobalSingleton.Instance, Is.SameAs(singleton));
+                    Assert.That(singleton.transform.parent, Is.SameAs(root.transform));
+                    Assert.That(singleton.gameObject.scene, Is.EqualTo(root.scene));
+                    entries = logs.Snapshot();
+                }
+
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.Utility"));
+                Assert.That(
+                    entries[0].Message,
+                    Is.EqualTo(
+                        $"Global {typeof(NonRootGlobalSingleton).FullName} must be attached to a root GameObject. " +
+                        "The configured component will keep Scene lifetime."));
+                Assert.That(entries[0].Exception, Is.Null);
             }
             finally
             {

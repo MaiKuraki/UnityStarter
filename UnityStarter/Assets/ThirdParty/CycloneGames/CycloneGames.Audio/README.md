@@ -23,7 +23,7 @@ Derived from Microsoft's [Audio-Manager-for-Unity](https://github.com/microsoft/
 
 Create an `AudioBank` asset, author event graphs in the Audio Graph editor, assign `AudioClip` references (embedded or external), and play events by asset reference or registered name. The runtime pools `AudioSource` objects, bounds voice counts per category, applies parameters and switches per emitter, and schedules state-mix transitions.
 
-The runtime assembly has one direct dependency: UniTask. Integration with AssetManagement, Addressables, or YooAsset happens at the composition boundary through the `IAudioClipProvider` resolver contract.
+The runtime assembly has two direct dependencies: UniTask and the engine-independent `CycloneGames.Logging` producer contract. Integration with AssetManagement, Addressables, or YooAsset happens at the composition boundary through the `IAudioClipProvider` resolver contract.
 
 ### Key Features
 
@@ -40,9 +40,11 @@ The runtime assembly has one direct dependency: UniTask. Integration with AssetM
 
 | Assembly | Path | Purpose |
 | --- | --- | --- |
-| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`, `IAudioService`, bank/event models, graph execution, source pool, voice policy, clip resolver, residency leases. Depends on `UniTask`. |
+| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`, `IAudioService`, bank/event models, graph execution, source pool, voice policy, clip resolver, residency leases. Depends on `UniTask` and `CycloneGames.Logging`. |
 | `CycloneGames.Audio.Editor` | `Editor/` | Audio Graph, custom inspectors, validation, diagnostics, preview, profiler. Editor-only. |
 | `CycloneGames.Audio.Tests.Editor` | `Tests/Editor/` | EditMode tests for path validation, resolver/bank ownership, selection, stable voice locales, and authoring validation. |
+
+Runtime and Editor diagnostics are centralized by the internal `AudioRuntimeLog` and `AudioEditorLog` facades under each assembly's `Diagnostics/` folder. Both expose the same `Category`, ambient `Channel`, and `Create(ILogWriter)` members while preserving categories `CycloneGames.Audio` and `CycloneGames.Audio.Editor`. Static and Unity-owned entry points use the facade `Channel`; services that require isolation use `Create(logWriter)`. The package does not reference a concrete backend; when no writer is installed in `LogRuntime`, `NullLogWriter` safely discards ambient diagnostics.
 
 ```mermaid
 flowchart LR
@@ -373,7 +375,8 @@ IAudioBankClipLease lease = residency != null
     ? await residency.AcquireBankClipLeaseAsync(bank, token)
     : null;
 
-Debug.Log($"Loaded {lease?.LoadedCount ?? 0}, failed {lease?.FailedCount ?? 0}");
+LogChannel log = LogChannel.Create("MyGame.Audio");
+log.Info($"Loaded {lease?.LoadedCount ?? 0}, failed {lease?.FailedCount ?? 0}");
 lease?.Dispose(); // Main thread
 ```
 

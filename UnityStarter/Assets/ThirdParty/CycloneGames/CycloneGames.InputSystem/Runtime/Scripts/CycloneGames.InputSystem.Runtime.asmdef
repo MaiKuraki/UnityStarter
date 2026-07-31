@@ -7,7 +7,7 @@
         "R3.Unity",
         "VYaml.Core",
         "CycloneGames.Hash.Core",
-        "CycloneGames.Logger"
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

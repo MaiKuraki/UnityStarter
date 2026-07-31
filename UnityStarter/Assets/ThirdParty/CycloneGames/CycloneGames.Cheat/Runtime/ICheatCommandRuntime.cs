@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.Cheat.Core;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using VitalRouter;
 
@@ -66,8 +67,16 @@ namespace CycloneGames.Cheat.Runtime
             where TCommand : ICheatCommand;
     }
 
+    /// <summary>
+    /// Optional logging capability for hosts that need to replace the writer of a live runtime.
+    /// Most hosts install the process writer once or inject it during construction instead.
+    /// </summary>
+    public interface ICheatLogWriterConfigurable
+    {
+        ILogWriter LogWriter { get; set; }
+    }
+
     public interface ICheatCommandRuntime : ICheatCommandPublisher, ICheatCommandControl, IDisposable
     {
-        ICheatLogger Logger { get; set; }
     }
 }

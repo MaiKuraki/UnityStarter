@@ -1,7 +1,11 @@
+using CycloneGames.Logging;
+
 namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 {
     public class RuntimeDebugLogNode : RuntimeNode
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         private string _message;
 
         public string Message
@@ -15,11 +19,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Core.Nodes.Actions
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (!string.IsNullOrEmpty(Message))
             {
-#if UNITY_5_3_OR_NEWER
-                UnityEngine.Debug.Log("[RuntimeBT] " + Message);
-#else
-                System.Console.WriteLine("[RuntimeBT] " + Message);
-#endif
+                Log.Debug(Message);
             }
 #endif
             return RuntimeState.Success;

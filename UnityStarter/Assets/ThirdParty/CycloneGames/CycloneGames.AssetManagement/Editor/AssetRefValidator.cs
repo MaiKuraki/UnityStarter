@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 
 using Stopwatch = System.Diagnostics.Stopwatch;
 
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 
@@ -18,6 +19,8 @@ namespace CycloneGames.AssetManagement.Editor
     /// </summary>
     public static class AssetRefValidator
     {
+        private static readonly LogChannel Log = AssetManagementEditorLog.Channel;
+
         private const int MAX_SCAN_WORKERS = 4;
         private const string GUID_MARKER = "m_GUID: ";
         private const string LOCATION_MARKER = "m_Location: ";
@@ -77,7 +80,7 @@ namespace CycloneGames.AssetManagement.Editor
                 int totalFiles = paths.Count;
                 if (totalFiles == 0)
                 {
-                    Debug.Log("[AssetRef Validation] No scannable assets found.");
+                    Log.Info("[AssetRef Validation] No scannable assets found.");
                     return;
                 }
 
@@ -179,7 +182,7 @@ namespace CycloneGames.AssetManagement.Editor
                 LogScanFailures(paths, scanErrors, errors);
                 for (int i = 0; i < errors.Count; i++)
                 {
-                    Debug.LogError(errors[i]);
+                    Log.Error(errors[i]);
                 }
 
                 stopwatch.Stop();
@@ -352,7 +355,7 @@ namespace CycloneGames.AssetManagement.Editor
                 string message = $"[UNREADABLE] {paths[i]} -> {error}";
                 if (destination == null)
                 {
-                    Debug.LogError(message);
+                    Log.Error(message);
                 }
                 else
                 {
@@ -376,11 +379,15 @@ namespace CycloneGames.AssetManagement.Editor
 
             if (brokenCount > 0 || emptyLocationCount > 0 || scanFailureCount > 0)
             {
-                Debug.LogError($"[AssetRef Validation] {summary}");
+                Log.Error(
+                    summary,
+                    static (value, builder) => builder.Append("[AssetRef Validation] ").Append(value));
             }
             else
             {
-                Debug.Log($"[AssetRef Validation] {summary}");
+                Log.Info(
+                    summary,
+                    static (value, builder) => builder.Append("[AssetRef Validation] ").Append(value));
             }
         }
     }

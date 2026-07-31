@@ -7,7 +7,7 @@
         "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.IO.Core",
         "CycloneGames.IO.SystemIO",
-        "CycloneGames.Logger",
+        "CycloneGames.Logging",
         "Unity.Addressables",
         "Unity.ResourceManager"
     ],

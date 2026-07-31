@@ -1,4 +1,4 @@
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using R3;
 using System;
 using System.Collections.Generic;
@@ -19,6 +19,8 @@ namespace CycloneGames.InputSystem.Runtime
     /// </summary>
     public class InputContext : IDisposable
     {
+        private static readonly LogChannel Log = InputSystemLog.Channel;
+
         private const string DEBUG_FLAG = "[InputContext]";
         public string Name { get; }
         public string ActionMapName { get; }
@@ -161,8 +163,9 @@ namespace CycloneGames.InputSystem.Runtime
                     exception is not AccessViolationException &&
                     exception is not StackOverflowException)
                 {
-                    CLogger.LogError(
-                        $"{DEBUG_FLAG} Failed to detach a disposed context owner ({exception.GetType().Name}).");
+                    Log.Error(
+                        exception,
+                        $"{DEBUG_FLAG} Failed to detach a disposed context owner.");
                 }
             }
         }

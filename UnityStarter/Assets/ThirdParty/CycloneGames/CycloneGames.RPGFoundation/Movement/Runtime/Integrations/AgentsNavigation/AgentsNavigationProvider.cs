@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime;
 
@@ -16,6 +17,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation
     [DisallowMultipleComponent]
     public class AgentsNavigationProvider : MonoBehaviour, IPathfindingProvider
     {
+        private static readonly LogChannel Log = RpgAgentsNavigationLog.Channel;
+
         [Header("Movement Settings")]
         [Tooltip("Speed multiplier for navigation movement.")]
         [SerializeField] private float speedMultiplier = 1f;
@@ -119,6 +122,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation
     /// </summary>
     public class AgentsNavigationProvider : MonoBehaviour, IPathfindingProvider
     {
+        private static readonly LogChannel Log = RpgAgentsNavigationLog.Channel;
+
         public bool IsNavigating => false;
         public bool HasReachedDestination => false;
         public Vector3 CurrentDestination => Vector3.zero;
@@ -130,8 +135,9 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.AgentsNavigation
 
         private void Awake()
         {
-            Debug.LogWarning("[AgentsNavigationProvider] Agents Navigation (com.projectdawn.navigation) is not installed. " +
-                           "Install it via Package Manager to enable DOTS-based navigation.");
+            Log.Warning(
+                "[AgentsNavigationProvider] Agents Navigation (com.projectdawn.navigation) is not installed. " +
+                "Install it via Package Manager to enable DOTS-based navigation.");
             enabled = false;
         }
     }

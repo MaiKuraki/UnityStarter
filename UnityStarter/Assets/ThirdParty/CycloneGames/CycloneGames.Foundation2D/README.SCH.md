@@ -93,7 +93,11 @@ flowchart LR
 | `CycloneGames.Foundation2D.Editor` | Inspector、校验、预览和材质 authoring | 仅 Editor |
 | `CycloneGames.Foundation2D.Sample.Runtime` / `.Editor` | 端到端 benchmark sample | 位于 Assets 下的 Sample assembly 会在条件满足时参与编译；需要 Burst integration 和 Factory Unity adapter |
 
-Runtime 使用 `CycloneGames.Logger` 输出诊断，并通过 Unity UI 支持 `Image` adapter。Burst 和 Collections 是可选 integration 依赖；基础 Runtime assembly 不引用它们。本包位于 `Assets/ThirdParty`，因此 `package.json` 只是 metadata，不会自动安装同级 package。当前 checkout 的 `Packages/manifest.json`、lock file、asmdef 和实际编译结果才是依赖事实来源。
+Foundation2D 使用 `CycloneGames.Logging` 输出诊断，并通过 Unity UI 支持 `Image` adapter。稳定的 `LogChannel` category 以 `CycloneGames.Foundation2D` 为根。本包不会初始化、替换、flush 或关闭 logging writer；未安装 backend 时 contract 的 `NullLogWriter` 可安全兜底，应用 composition root 可以安装 `CycloneGames.Logger` 或其他 `ILogWriter`。Burst 和 Collections 是可选 integration 依赖；基础 Runtime assembly 不引用它们。本包位于 `Assets/ThirdParty`，因此 `package.json` 只是 metadata，不会自动安装同级 package。当前 checkout 的 `Packages/manifest.json`、lock file、asmdef 和实际编译结果才是依赖事实来源。
+
+每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
+
+Benchmark Runtime asmdef 通过 `Samples/Benchmark/Runtime/Diagnostics/Foundation2DBenchmarkLog.cs` 遵循同一约定，并保留 `CycloneGames.Foundation2D.Benchmark`。
 
 模块不需要 PlayerSettings Scripting Define Symbols。Burst integration 通过 package `versionDefines` 和 assembly `defineConstraints` 激活。
 
@@ -223,7 +227,7 @@ Controller 通过显式注册或 manager 子级范围收集。默认不存在 wh
 | Windows、Linux、macOS | 可用于 Mono 和 IL2CPP 的 Unity 表现路径 | Release Player smoke、Profiler capture、Shader variant、目标 Graphics API |
 | Android | 有界的移动端状态工作，不从后台线程调用 Unity API | ARM64 IL2CPP、Vulkan/GLES、atlas compression/external alpha、温控与内存压力 |
 | iOS | 显式类型、无动态代码生成，适配 AOT | Metal IL2CPP build、Mask、atlas alpha、设备内存与 suspend/resume |
-| WebGL | 缺少 Burst integration 时仍可使用基础 Mono-style 更新；benchmark 文件日志被禁用 | WebGL build、浏览器内存、worker 可用性、Shader precision 和 UI Mask |
+| WebGL | 缺少 Burst integration 时仍可使用基础 Mono-style 更新；benchmark 使用 host 配置的 logging writer，自身不持有文件 sink | WebGL build、浏览器内存、worker 可用性、logging backend fallback、Shader precision 和 UI Mask |
 | Dedicated Server | 可以不包含表现模块；权威模拟不依赖本模块 | 如果仍包含 assembly，检查 headless composition 与 stripping |
 | 未来主机 | Core API 不嵌入平台 SDK 假设 | 平台 SDK build、Shader compiler、内存、suspend/resume 与认证检查 |
 
@@ -231,17 +235,11 @@ Controller 通过显式注册或 manager 子级范围收集。默认不存在 wh
 
 ## 常见场景
 
-Runtime 播放不会写入文件、偏好、registry、存档数据或隐藏全局设置，也不使用 `PlayerPrefs`、`EditorPrefs` 或 `SessionState`。
+Runtime 播放与 benchmark sample 不会写入文件、偏好、registry、存档数据或隐藏全局设置，也不使用 `PlayerPrefs`、`EditorPrefs` 或 `SessionState`。
 
 Editor 只会在用户显式操作后创建 `.mat` 资产。所选路径可见，资产的版本控制所有权属于项目；没有 renderer 引用后可以删除。模块不会自动运行资产迁移。
 
-Benchmark 可以在以下位置写入轮转日志：
-
-```text
-Application.persistentDataPath/Logs/SpriteSequenceBenchmark.log
-```
-
-叶文件名会被校验，轮转容量有界，WebGL Player 禁用文件日志。Benchmark 日志只是诊断信息，不是真实数据源；没有进程写入时可以安全删除。
+Benchmark 通过 `CycloneGames.Foundation2D.Benchmark` category 输出文本报告，不会构造或持有文件 sink。如果产品需要文件输出，应由 composition root 安装并配置合适的 logging backend。文件位置、轮转、保留策略、平台 fallback、flush 与 shutdown 均由 host 持有，benchmark 不依赖这些 policy。
 
 ### Benchmark 方法
 

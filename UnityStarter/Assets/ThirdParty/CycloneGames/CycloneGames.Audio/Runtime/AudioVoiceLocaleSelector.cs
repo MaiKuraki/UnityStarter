@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using CycloneGames.Logging;
 using System.Collections.Generic;
 using UnityEngine;
 #if UNITY_EDITOR
@@ -40,9 +41,8 @@ namespace CycloneGames.Audio.Runtime
                 if (!hasInvalidConfigurationWarning)
                 {
                     hasInvalidConfigurationWarning = true;
-                    Debug.LogError(
-                        $"AudioManager: Voice locale selector '{name}' has no connected Voice File branches. Playback was skipped.",
-                        this);
+                    Log.Error(
+                        $"Voice locale selector '{name}' has no connected Voice File branches. Playback was skipped.");
                 }
 
                 return;
@@ -66,9 +66,8 @@ namespace CycloneGames.Audio.Runtime
                 if (!hasInvalidConfigurationWarning)
                 {
                     hasInvalidConfigurationWarning = true;
-                    Debug.LogError(
-                        $"AudioManager: Voice locale selector '{name}' has invalid or duplicate branch metadata, or references a disconnected fallback. Playback was skipped.",
-                        this);
+                    Log.Error(
+                        $"Voice locale selector '{name}' has invalid or duplicate branch metadata, or references a disconnected fallback. Playback was skipped.");
                 }
 
                 return;
@@ -87,9 +86,8 @@ namespace CycloneGames.Audio.Runtime
             string localeCode = AudioManager.CurrentVoiceLocale.IsValid
                 ? AudioManager.CurrentVoiceLocale.Code
                 : "<unset>";
-            Debug.LogWarning(
-                $"AudioManager: Event '{eventName}' has no voice branch or explicit fallback for locale '{localeCode}'. Playback was skipped.",
-                this);
+            Log.Warning(
+                $"Event '{eventName}' has no voice branch or explicit fallback for locale '{localeCode}'. Playback was skipped.");
         }
 
         public override void Reset()

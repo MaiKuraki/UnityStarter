@@ -3,7 +3,8 @@
     "rootNamespace": "CycloneGames.Choreography.UnityAnimation",
     "references": [
         "CycloneGames.Choreography.Core",
-        "CycloneGames.Choreography.Interaction"
+        "CycloneGames.Choreography.Interaction",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

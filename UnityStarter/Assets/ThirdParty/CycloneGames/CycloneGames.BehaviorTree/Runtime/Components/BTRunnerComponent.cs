@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Serialization;
 using Object = UnityEngine.Object;
@@ -19,6 +20,8 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
 
     public class BTRunnerComponent : MonoBehaviour
     {
+        private static readonly LogChannel Log = BehaviorTreeRuntimeLog.Channel;
+
         private const string MESSAGE_KEY = "Message";
         private static readonly System.Collections.Generic.List<BTRunnerComponent> _activeRunnersList = new System.Collections.Generic.List<BTRunnerComponent>(64);
         private static readonly System.Collections.Generic.HashSet<BTRunnerComponent> _activeRunnersSet = new System.Collections.Generic.HashSet<BTRunnerComponent>();
@@ -107,7 +110,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (behaviorTree == null)
             {
-                Debug.LogWarning($"[BTRunnerComponent] Behavior tree is null on {gameObject.name}.");
+                Log.Warning($"Behavior tree is null on {gameObject.name}.");
                 return;
             }
             if (!_startOnAwake) return;
@@ -184,10 +187,9 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             }
 
             _managerRegistrationRejected = true;
-            Debug.LogError(
+            Log.Error(
                 $"[BTRunnerComponent] Tick manager registration was rejected for '{gameObject.name}'. " +
-                "Increase the manager's explicit capacity or reduce concurrently registered trees.",
-                this);
+                "Increase the manager's explicit capacity or reduce concurrently registered trees.");
         }
 
         private void UnregisterFromManager()
@@ -223,7 +225,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
             RuntimeBehaviorTree compiledTree = behaviorTree.Compile(_context);
             if (compiledTree == null)
             {
-                Debug.LogError($"[BTRunnerComponent] Behavior tree compilation returned null on {gameObject.name}.", this);
+                Log.Error($"Behavior tree compilation returned null on {gameObject.name}.");
                 return false;
             }
 
@@ -371,7 +373,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
         {
             if (newTree == null)
             {
-                Debug.LogWarning($"[BTRunnerComponent] Cannot set null behavior tree on {gameObject.name}.");
+                Log.Warning($"Cannot set null behavior tree on {gameObject.name}.");
                 return;
             }
             _nextTree = newTree;
@@ -548,7 +550,7 @@ namespace CycloneGames.BehaviorTree.Runtime.Components
                 {
                     if (!string.IsNullOrEmpty(objectSet.Key))
                     {
-                        Debug.LogWarning($"[BTRunnerComponent] Object value is null for key: {objectSet.Key}");
+                        Log.Warning($"Object value is null for key: {objectSet.Key}");
                     }
                     continue;
                 }

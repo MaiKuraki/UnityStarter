@@ -2,7 +2,8 @@
     "name": "CycloneGames.GameplayTags.Core",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Hash.Core"
+        "CycloneGames.Hash.Core",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

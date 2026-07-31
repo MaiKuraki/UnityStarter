@@ -1,7 +1,8 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 #if UNITY_EDITOR
 using UnityEditor;
 #endif
@@ -25,7 +26,7 @@ namespace CycloneGames.Audio.Runtime
         /// <param name="activeEvent"></param>
         public override void ProcessNode(ActiveEvent activeEvent)
         {
-            Debug.Log(this.message, activeEvent.emitterTransform);
+            Log.Info(this.message);
 
             ProcessConnectedNode(0, activeEvent);
         }

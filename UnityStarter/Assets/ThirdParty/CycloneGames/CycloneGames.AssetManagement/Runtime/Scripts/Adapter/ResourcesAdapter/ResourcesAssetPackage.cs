@@ -6,12 +6,14 @@ using UnityEngine;
 
 using Cysharp.Threading.Tasks;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
     internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetCacheMaintenanceOwner
     {
+        private static readonly LogChannel Log = AssetManagementLog.Channel;
+
         private readonly string _packageName;
 
         public string Name => _packageName;
@@ -195,7 +197,7 @@ namespace CycloneGames.AssetManagement.Runtime
             AssetRuntimeGuard.EnsureMainThread();
             ThrowIfDestroyed();
             _cacheService.ClearAll();
-            CLogger.LogWarning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync triggers Resources.UnloadUnusedAssets(). This can cause hitches on the main thread, so prefer explicit handle release and bucket clears whenever possible.");
+            Log.Warning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync triggers Resources.UnloadUnusedAssets(). This can cause hitches on the main thread, so prefer explicit handle release and bucket clears whenever possible.");
             await Resources.UnloadUnusedAssets().ToUniTask();
         }
 
