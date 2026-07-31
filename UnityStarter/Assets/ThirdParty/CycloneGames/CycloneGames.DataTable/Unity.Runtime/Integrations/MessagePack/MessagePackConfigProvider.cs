@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Threading;
+using CycloneGames.Logging;
 using MessagePack;
 
 namespace CycloneGames.DataTable.Unity.Integrations.MessagePack
@@ -12,6 +13,8 @@ namespace CycloneGames.DataTable.Unity.Integrations.MessagePack
     /// </summary>
     public static class MessagePackConfigProvider
     {
+        private static readonly LogChannel Log = DataTableMessagePackLog.Channel;
+
         /// <summary>
         /// Deserializes a MessagePack array payload without modifying the active registry.
         /// Pass source-generated resolver options for IL2CPP/AOT and an explicit security policy.
@@ -63,12 +66,12 @@ namespace CycloneGames.DataTable.Unity.Integrations.MessagePack
             ValidateOwnedRows(ownedRows, limits);
             if (ownedRows.Length == 0)
             {
-                DataTableLogger.LogWarning(
+                Log.Warning(
                     $"Decoded DataTable<{typeof(TRow).Name}> is empty.");
             }
 
             DataTable<TRow> table = DataTable<TRow>.FromOwnedArray(ownedRows, limits);
-            DataTableLogger.LogInfo(
+            Log.Info(
                 $"Built DataTable<{typeof(TRow).Name}> candidate ({table.Count} rows).");
             return table;
         }
@@ -87,7 +90,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.MessagePack
 
             if (ownedRows.Length == 0)
             {
-                DataTableLogger.LogWarning(
+                Log.Warning(
                     $"Decoded DataTable<{typeof(TRow).Name}> is empty.");
             }
 
@@ -96,7 +99,7 @@ namespace CycloneGames.DataTable.Unity.Integrations.MessagePack
                 keySelector,
                 limits,
                 comparer);
-            DataTableLogger.LogInfo(
+            Log.Info(
                 $"Built DataTable<{typeof(TKey).Name}, {typeof(TRow).Name}> candidate ({table.Count} rows).");
             return table;
         }

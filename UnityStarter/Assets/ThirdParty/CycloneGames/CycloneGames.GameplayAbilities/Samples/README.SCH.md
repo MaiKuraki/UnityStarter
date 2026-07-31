@@ -103,7 +103,10 @@ Purify 与 Shockwave 会在派生构造边界复制 Faction Filter Tag Container
 
 | 脚本或程序集 | 学习重点 |
 | --- | --- |
-| `Scripts/SampleCombatManager.cs` | Scene-owned `GASRuntimeContext` 组合、共享 ASC 初始化和逆序 Shutdown。 |
+| `Scripts/SampleCombatManager.cs` | Scene-owned `GASRuntimeContext` 组合、共享 ASC 初始化、临时 UI Log Writer 安装和逆序 Shutdown。 |
+| `Scripts/UILogger.cs` | Sample-only `ILogWriter` Decorator：向之前安装的 Writer 转发日志，把有界消息复制到 UI，并由 `SampleCombatManager` 在 Shutdown 时恢复原 Writer。 |
+| `Scripts/Diagnostics/GameplayAbilitiesSampleLog.cs` | Runtime sample 日志门面，提供稳定的 `Category`、ambient `Channel` 与严格的显式 writer 创建。 |
+| `Editor/Diagnostics/GameplayAbilitiesSampleEditorLog.cs` | 位于独立 Editor asmdef 中的 Editor sample 日志门面。 |
 | `Scripts/Integrate/Setup/GASManualSetup.cs` | 使用 `CycloneGames.AssetManagement` 的手动非 DI Cue Manager 启动，并支持可选 Runtime Backing-cache Profile。 |
 | `Scripts/Integrate/Setup/GASServerSetup.cs` | 使用 `NullGameplayCueManager` 的 Server/Headless 启动，并支持可选 Runtime Backing-cache Profile。 |
 | `Scripts/Integrate/DI/VContainer/GASLifetimeScope.cs` | 可选 VContainer 组合。该文件隔离在 `CycloneGames.GameplayAbilities.Sample.Integrations.VContainer` 中，仅当 VContainer Package 存在时编译。 |

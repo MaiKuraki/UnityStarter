@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
@@ -15,6 +16,8 @@ namespace CycloneGames.Localization.Runtime
     [DisallowMultipleComponent]
     public sealed class LocalizeImage : MonoBehaviour, ILocalizationBindingTarget
     {
+        private static readonly LogChannel Log = LocalizationLog.Channel;
+
         [SerializeField] private LocalizedAsset<Sprite> localizedAsset;
 
         private Image _image;
@@ -170,7 +173,7 @@ namespace CycloneGames.Localization.Runtime
             catch (Exception exception)
             {
                 if (this != null)
-                    Debug.LogException(exception, this);
+                    Log.Error(exception, "Localized image refresh failed.");
             }
             finally
             {

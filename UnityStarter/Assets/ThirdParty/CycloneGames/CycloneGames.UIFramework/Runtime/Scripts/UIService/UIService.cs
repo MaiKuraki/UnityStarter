@@ -2,8 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+
+namespace CycloneGames.UIFramework
+{
+}
 
 namespace CycloneGames.UIFramework.Runtime
 {
@@ -117,6 +122,8 @@ namespace CycloneGames.UIFramework.Runtime
     /// </summary>
     public sealed class UIService : IUIService, IUIWindowLifetimeObserver
     {
+        private static readonly LogChannel Log = UIFrameworkLog.Channel;
+
         private sealed class WindowSession
         {
             public readonly string WindowId;
@@ -564,9 +571,11 @@ namespace CycloneGames.UIFramework.Runtime
             _isShuttingDown = false;
             if (cleanupErrors != null)
             {
-                Debug.LogException(CreateCleanupException(
-                    "UIService disposal completed with cleanup failures.",
-                    cleanupErrors));
+                Log.Error(
+                    CreateCleanupException(
+                        "UIService disposal completed with cleanup failures.",
+                        cleanupErrors),
+                    "[UIService] Disposal completed with cleanup failures.");
             }
 
             _disposePhasesCompleted = true;
@@ -595,7 +604,9 @@ namespace CycloneGames.UIFramework.Runtime
             if (cleanupException != null)
             {
                 session.CloseCompletion?.TrySetException(cleanupException);
-                Debug.LogException(cleanupException);
+                Log.Error(
+                    cleanupException,
+                    "[UIService] Cleanup failed after a managed window was destroyed externally.");
             }
             else
             {
@@ -1105,7 +1116,9 @@ namespace CycloneGames.UIFramework.Runtime
                     }
                     catch (Exception cleanupException)
                     {
-                        Debug.LogException(cleanupException);
+                        Log.Error(
+                            cleanupException,
+                            "[UIService] Navigation rollback could not close the entering window.");
                     }
                 }
 

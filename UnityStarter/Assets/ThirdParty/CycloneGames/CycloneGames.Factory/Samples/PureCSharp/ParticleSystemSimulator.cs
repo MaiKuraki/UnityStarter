@@ -1,10 +1,13 @@
 using System;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Factory.Samples.PureCSharp
 {
     public class ParticleSystemSimulator
     {
+        private static readonly LogChannel Log = FactorySamplesLog.Channel;
+
         private readonly ObjectPool<ParticleData, Particle> _particlePool;
         private int _ticksElapsed = 0;
 
@@ -16,14 +19,14 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             // 2. Create the pool using the factory
             _particlePool = new ObjectPool<ParticleData, Particle>(particleFactory, 10);
             
-            Console.WriteLine($"Particle System Initialized. Pool contains {_particlePool.CountInactive} inactive particles.\n");
+            Log.Info($"Particle System Initialized. Pool contains {_particlePool.CountInactive} inactive particles.");
         }
 
         // This simulates one frame of the game
         public void Update()
         {
             _ticksElapsed++;
-            Console.WriteLine($"\n----- Tick {_ticksElapsed} -----");
+            Log.Debug($"Tick {_ticksElapsed}");
 
             // Every 3 ticks, spawn a new particle
             if (_ticksElapsed % 3 == 0)
@@ -40,14 +43,14 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             // Update all currently active particles
             _particlePool.ForEachActive(p => p.Tick());
 
-            Console.WriteLine($"Pool Status - Active: {_particlePool.CountActive}, Inactive: {_particlePool.CountInactive}");
+            Log.Info($"Pool Status - Active: {_particlePool.CountActive}, Inactive: {_particlePool.CountInactive}");
         }
 
         public void Shutdown()
         {
-            Console.WriteLine("\n----- SHUTTING DOWN -----");
+            Log.Info("Shutting down particle system.");
             _particlePool.Dispose();
-            Console.WriteLine($"Pool disposed. Active: {_particlePool.CountActive}, Inactive: {_particlePool.CountInactive}");
+            Log.Info($"Pool disposed. Active: {_particlePool.CountActive}, Inactive: {_particlePool.CountInactive}");
         }
     }
 }

@@ -1,9 +1,8 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
-using System.IO;
 using System.Text;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using CycloneGames.Factory.Runtime;
 using Unity.Profiling;
 using UnityEngine;
@@ -14,6 +13,8 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
     [DisallowMultipleComponent]
     public sealed class SpriteSequencePerformanceBenchmark : MonoBehaviour
     {
+        private static readonly LogChannel Log = Foundation2DBenchmarkLog.Channel;
+
         private enum BenchmarkPhase
         {
             Baseline = 0,
@@ -94,7 +95,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
         [SerializeField] private bool compareMonoAndBurst = true;
         [SerializeField] private SpriteSequenceBurstManager burstManager;
         [SerializeField] private bool includeBaselinePhase = true;
-        [SerializeField] private bool silentMode = true;
 
         [Header("Scale Sweep")]
         [SerializeField] private bool enableScaleSweep = false;
@@ -130,12 +130,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
         [SerializeField, Min(1)] private int nonMonotonicRescanStep = 250;
         [SerializeField, Min(2)] private int nonMonotonicRescanPoints = 12;
 
-        [Header("Logger")]
-        [SerializeField] private string logFileName = "SpriteSequenceBenchmark.log";
-        [SerializeField] private string logCategory = "SpriteSequence.Benchmark";
-
-        private FileLogger _fileLogger;
-        private CLogger _loggerOwner;
         private ProfilerRecorder _gcAllocRecorder;
         private bool _running;
         private static readonly WaitForEndOfFrame EndOfFrameYield = new();
@@ -169,14 +163,11 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             _running = true;
             if (RequiresBurstManager() && (burstManager == null || !burstManager.isActiveAndEnabled))
             {
-                CLogger.LogError(
-                    "Burst benchmark phases require an explicitly assigned, active SpriteSequenceBurstManager. The run was cancelled to prevent MonoUpdate fallback from being reported as BurstManaged.",
-                    logCategory);
+                Log.Error(
+                    "Burst benchmark phases require an explicitly assigned, active SpriteSequenceBurstManager. The run was cancelled to prevent MonoUpdate fallback from being reported as BurstManaged.");
                 _running = false;
                 yield break;
             }
-
-            AttachFileLogger();
 
             SpriteSequenceController[] sceneControllers = FindControllers(ignoreInactiveSceneControllers);
             if (prewarmGeneratedToMaxTargetBeforeRun)
@@ -228,11 +219,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 }
 
                 string report = BuildSuiteReport(caseResults, capacityResults);
-                CLogger.LogInfo(report, logCategory);
-                if (!silentMode)
-                {
-                    Debug.Log(report);
-                }
+                Log.Info(report);
             }
             finally
             {
@@ -248,7 +235,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                     _gcAllocRecorder.Dispose();
                 }
 
-                DetachFileLogger();
                 _running = false;
             }
         }
@@ -268,62 +254,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 CleanupGeneratedControllers();
             }
 
-            DetachFileLogger();
-        }
-
-        private void AttachFileLogger()
-        {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            CLogger.LogWarning("Sprite benchmark file logging is unavailable on WebGL.", logCategory);
-            return;
-#else
-            if (_fileLogger != null)
-            {
-                return;
-            }
-
-            string requestedFileName = string.IsNullOrWhiteSpace(logFileName) ? "SpriteSequenceBenchmark.log" : logFileName.Trim();
-            string fileName = Path.GetFileName(requestedFileName);
-            if (!string.Equals(requestedFileName, fileName, StringComparison.Ordinal) ||
-                string.IsNullOrWhiteSpace(fileName) ||
-                fileName.Length > 128 ||
-                fileName.IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
-            {
-                CLogger.LogWarning($"Invalid benchmark log file name '{requestedFileName}'. Using SpriteSequenceBenchmark.log.", logCategory);
-                fileName = "SpriteSequenceBenchmark.log";
-            }
-
-            string logPath = Path.Combine(Application.persistentDataPath, "Logs", fileName);
-            var options = new FileLoggerOptions
-            {
-                MaintenanceMode = FileMaintenanceMode.Rotate,
-                MaxFileBytes = 20L * 1024L * 1024L,
-                MaxArchiveFiles = 8,
-                FlushBatchSize = 8,
-                FlushIntervalMs = 200,
-            };
-
-            _fileLogger = new FileLogger(logPath, options);
-            _loggerOwner = CLogger.Instance;
-            _loggerOwner.AddLogger(_fileLogger);
-            CLogger.LogInfo($"Sprite benchmark logger attached: {logPath}", logCategory);
-#endif
-        }
-
-        private void DetachFileLogger()
-        {
-            if (_fileLogger == null)
-            {
-                return;
-            }
-
-            if (_loggerOwner != null && _loggerOwner.RemoveLogger(_fileLogger, 2000))
-            {
-                _fileLogger.Dispose();
-            }
-
-            _fileLogger = null;
-            _loggerOwner = null;
         }
 
         private static SpriteSequenceController[] FindControllers(bool ignoreInactive)
@@ -1038,7 +968,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
                 }
                 else
                 {
-                    CLogger.LogWarning("Scale sweep requires a template controller but none is assigned/found. Running with available scene controllers only.", logCategory);
+                    Log.Warning("Scale sweep requires a template controller but none is assigned/found. Running with available scene controllers only.");
                 }
             }
             else
@@ -1069,7 +999,7 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
 
             if (sweepTemplate == null)
             {
-                CLogger.LogWarning("Benchmark prewarm skipped: no sweep template was found.", logCategory);
+                Log.Warning("Benchmark prewarm skipped: no sweep template was found.");
                 yield break;
             }
 
@@ -1387,7 +1317,6 @@ namespace CycloneGames.Foundation2D.Sample.Runtime
             sb.Append("Time: ").AppendLine(DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             sb.Append("Warmup Frames: ").AppendLine(warmupFrames.ToString());
             sb.Append("Sample Frames: ").AppendLine(sampleFrames.ToString());
-            sb.Append("Silent Mode: ").AppendLine(silentMode ? "On" : "Off");
             sb.Append("Scale Sweep: ").AppendLine(enableScaleSweep ? "On" : "Off");
             sb.Append("Capacity Search: ").AppendLine(enableCapacitySearch ? "On" : "Off");
             if (enableScaleSweep)

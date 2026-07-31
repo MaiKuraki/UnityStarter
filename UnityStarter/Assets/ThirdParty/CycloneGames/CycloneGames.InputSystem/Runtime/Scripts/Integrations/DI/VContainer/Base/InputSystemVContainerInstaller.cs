@@ -9,7 +9,7 @@ using VContainer;
 using VContainer.Unity;
 
 using CycloneGames.IO.Unity;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 {
@@ -203,6 +203,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         IInputSystemInitializer,
         IInputSystemInitializerDiagnostics
     {
+        private static readonly LogChannel Log = InputSystemVContainerLog.Channel;
+
         private const string LogPrefix = "[InputSystemInitializer]";
         private const string DefaultUserConfigurationKey = "user_input_settings.yaml";
         private const string CustomDefaultConfigurationKey = "custom-default";
@@ -278,18 +280,18 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
             if (!result.IsBootstrapComplete)
             {
-                CLogger.LogError(
+                Log.Error(
                     $"{LogPrefix} Initialization failed: {result.Status}. {result.Error}");
                 return result;
             }
 
             if (!result.IsSuccess)
             {
-                CLogger.LogInfo($"{LogPrefix} Automatic initialization is not configured.");
+                Log.Info($"{LogPrefix} Automatic initialization is not configured.");
                 return result;
             }
 
-            CLogger.LogInfo(
+            Log.Info(
                 $"{LogPrefix} Initialized with status {result.Status}; " +
                 $"user storage status was {result.UserStorageStatus}.");
             if (_postInitCallback != null)
@@ -308,7 +310,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         {
             if (_packageConfigurationLoader == null)
             {
-                CLogger.LogError(
+                Log.Error(
                     $"{LogPrefix} No package configuration loader is registered. " +
                     "Install an explicit package integration adapter.");
                 return;
@@ -323,7 +325,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 cancellationToken.ThrowIfCancellationRequested();
                 if (yamlContent == null || yamlContent.Length == 0)
                 {
-                    CLogger.LogWarning($"{LogPrefix} Package configuration was unavailable.");
+                    Log.Warning($"{LogPrefix} Package configuration was unavailable.");
                     return;
                 }
 
@@ -332,13 +334,14 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                         saveToUserConfig,
                         cancellationToken))
                 {
-                    CLogger.LogInfo($"{LogPrefix} Reinitialized from the package configuration.");
+                    Log.Info($"{LogPrefix} Reinitialized from the package configuration.");
                 }
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
-                CLogger.LogError(
-                    $"{LogPrefix} Package configuration load failed ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    $"{LogPrefix} Package configuration load failed.");
             }
         }
 
@@ -359,7 +362,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             IInputConfigurationStore userStore = CreateUserStore(out string userKey);
             if (userStore == null)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} No user configuration store is configured.");
                 return;
             }
@@ -369,7 +372,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 cancellationToken);
             if (!read.IsSuccess)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} User configuration reload failed: {read.Status}. {read.Error}");
                 return;
             }
@@ -382,13 +385,13 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             LastConfigurationResult = initialization;
             if (!initialization.IsSuccess)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} User configuration is invalid and was preserved: " +
                     $"{initialization.Status}. {initialization.Message}");
                 return;
             }
 
-            CLogger.LogInfo(
+            Log.Info(
                 $"{LogPrefix} Reloaded user configuration. " +
                 $"Recovered from backup: {read.WasRecoveredFromBackup}.");
         }
@@ -402,7 +405,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 (yamlContent.Length <= FileInputConfigurationStore.DefaultMaximumBytes &&
                  string.IsNullOrWhiteSpace(yamlContent)))
             {
-                CLogger.LogError($"{LogPrefix} Configuration content is empty.");
+                Log.Error($"{LogPrefix} Configuration content is empty.");
                 return false;
             }
 
@@ -414,7 +417,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             LastConfigurationResult = initialization;
             if (!initialization.IsSuccess)
             {
-                CLogger.LogError(
+                Log.Error(
                     $"{LogPrefix} Configuration update failed: " +
                     $"{initialization.Status}. {initialization.Message}");
                 return false;
@@ -422,7 +425,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
             if (!saveToUserConfig)
             {
-                CLogger.LogInfo($"{LogPrefix} Configuration updated for this session.");
+                Log.Info($"{LogPrefix} Configuration updated for this session.");
                 return true;
             }
 
@@ -433,7 +436,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                     out persistenceContent,
                     out string serializationError))
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} Configuration is active but migrated YAML serialization failed: " +
                     serializationError);
                 return false;
@@ -442,7 +445,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             IInputConfigurationStore userStore = CreateUserStore(out string userKey);
             if (userStore == null)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} Configuration is active but no user store is configured.");
                 return false;
             }
@@ -457,26 +460,26 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             }
             catch (OperationCanceledException)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} Configuration is active but persistence was canceled.");
                 return false;
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
-                CLogger.LogWarning(
-                    $"{LogPrefix} Configuration is active but the persistence provider failed " +
-                    $"({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    $"{LogPrefix} Configuration is active but the persistence provider failed.");
                 return false;
             }
             if (!save.IsSuccess)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"{LogPrefix} Configuration is active but persistence failed: " +
                     $"{save.Status}. {save.Error}");
                 return false;
             }
 
-            CLogger.LogInfo(
+            Log.Info(
                 $"{LogPrefix} Configuration updated and atomically persisted.");
             return true;
         }
@@ -558,6 +561,8 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
     internal sealed class InputPlayerResolver : IInputPlayerResolver
     {
+        private static readonly LogChannel Log = InputSystemVContainerLog.Channel;
+
         private readonly InputManager _inputManager;
 
         internal InputPlayerResolver(InputManager inputManager)
@@ -601,7 +606,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
             if (!PlayerLoopHelper.IsMainThread)
             {
-                CLogger.LogError(
+                Log.Error(
                     "[InputPlayerResolver] Synchronous auto-join requires the Unity main thread.");
                 return false;
             }

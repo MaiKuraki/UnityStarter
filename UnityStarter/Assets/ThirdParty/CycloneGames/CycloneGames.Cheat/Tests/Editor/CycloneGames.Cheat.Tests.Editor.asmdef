@@ -2,6 +2,7 @@
     "name": "CycloneGames.Cheat.Tests.Editor",
     "rootNamespace": "CycloneGames.Cheat.Tests.Editor",
     "references": [
+        "CycloneGames.Logging",
         "CycloneGames.Cheat.Core",
         "CycloneGames.Cheat.Runtime",
         "UniTask"

@@ -1,5 +1,6 @@
 using System;
 using System.Threading;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -32,6 +33,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public sealed class WorldDefinition : IDisposable
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
         private readonly IDisposable[] leases;
         private readonly int ownerThreadId;
         private int leaseCount;
@@ -88,7 +90,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    Log.Error(
+                        exception,
+                        "WorldDefinition failed to dispose an external asset lease; remaining leases will still be released.");
                 }
                 finally
                 {
@@ -103,6 +107,7 @@ namespace CycloneGames.GameplayFramework.Runtime
     [CreateAssetMenu(fileName = "WorldSettings", menuName = "CycloneGames/GameplayFramework/WorldSettings")]
     public sealed class WorldSettings : ScriptableObject
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
         private const int ReferenceCount = 6;
 
         [Header("Game Mode")]
@@ -351,7 +356,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                     }
                     catch (Exception exception)
                     {
-                        Debug.LogException(exception);
+                        Log.Error(exception, "WorldSettings failed to dispose an uncommitted external asset lease.");
                     }
                 }
             }
@@ -372,7 +377,16 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (logWarnings)
             {
-                Debug.LogWarning($"[WorldSettings] '{name}': required reference {label} is not configured.", this);
+                Log.Warning(
+                    (AssetName: name, Label: label),
+                    static (state, builder) =>
+                    {
+                        builder.Append("WorldSettings '");
+                        builder.Append(state.AssetName);
+                        builder.Append("' required reference '");
+                        builder.Append(state.Label);
+                        builder.Append("' is not configured.");
+                    });
             }
 
             return false;
@@ -413,7 +427,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    Log.Error(
+                        exception,
+                        "WorldSettings reference-resolution rollback failed to dispose an acquired lease.");
                 }
                 finally
                 {

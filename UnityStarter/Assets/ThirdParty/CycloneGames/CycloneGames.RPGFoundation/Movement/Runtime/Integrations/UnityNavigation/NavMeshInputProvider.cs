@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime;
 
@@ -21,6 +22,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
     [DisallowMultipleComponent]
     public class NavMeshInputProvider : MonoBehaviour, IPathfindingProvider
     {
+        private static readonly LogChannel Log = RpgUnityNavigationLog.Channel;
+
         [Header("Movement Settings")]
         [Tooltip("Speed multiplier for NavMesh movement.")]
         [SerializeField] private float speedMultiplier = 1f;
@@ -238,6 +241,8 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
     /// </summary>
     public class NavMeshInputProvider : MonoBehaviour, IPathfindingProvider
     {
+        private static readonly LogChannel Log = RpgUnityNavigationLog.Channel;
+
         public bool IsNavigating => false;
         public bool HasReachedDestination => false;
         public Vector3 CurrentDestination => Vector3.zero;
@@ -249,8 +254,9 @@ namespace CycloneGames.RPGFoundation.Movement.Integrations.UnityNavigation
 
         private void Awake()
         {
-            Debug.LogWarning("[NavMeshInputProvider] Unity AI Navigation package (com.unity.ai.navigation) is not installed. " +
-                           "Install it via Package Manager to enable NavMesh movement.");
+            Log.Warning(
+                "[NavMeshInputProvider] Unity AI Navigation package (com.unity.ai.navigation) is not installed. " +
+                "Install it via Package Manager to enable NavMesh movement.");
             enabled = false;
         }
     }

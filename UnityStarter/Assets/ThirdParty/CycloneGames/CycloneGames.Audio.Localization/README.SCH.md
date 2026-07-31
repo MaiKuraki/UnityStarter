@@ -55,11 +55,13 @@ Prepare 箭头有意位于 Bridge 之外。Bridge 收到 Localization 变更时�
 | Runtime assembly | `CycloneGames.Audio.Runtime.Integrations.Localization` |
 | Editor assembly | `CycloneGames.Audio.Editor.Integrations.Localization` |
 | Test assembly | `CycloneGames.Audio.Localization.Tests.Editor` |
-| 必需项目模块 | `CycloneGames.AssetManagement`、`CycloneGames.Audio`、`CycloneGames.Localization` 与 UniTask |
-| Runtime 直接程序集引用 | `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Audio.Runtime`、`CycloneGames.Localization.Core`、`CycloneGames.Localization.Runtime`、`UniTask` |
-| Editor 直接程序集引用 | `CycloneGames.Audio.Runtime.Integrations.Localization` |
+| 必需项目模块 | `CycloneGames.AssetManagement`、`CycloneGames.Audio`、`CycloneGames.Localization`、`CycloneGames.Logging` 与 UniTask |
+| Runtime 直接程序集引用 | `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Audio.Runtime`、`CycloneGames.Localization.Core`、`CycloneGames.Localization.Runtime`、`CycloneGames.Logging`、`UniTask` |
+| Editor 直接程序集引用 | `CycloneGames.Audio.Runtime.Integrations.Localization`、`CycloneGames.Logging` |
 
 这是物理独立的本地 integration 包。Audio Runtime 不引用 integration 或 Localization，Localization 也不引用 Audio。依赖方向是 integration 同时指向两个核心模块，因此不会形成循环。
+
+Runtime 与 Editor 诊断分别集中通过各程序集 `Diagnostics/` 目录中的 internal `AudioLocalizationRuntimeLog` 和 `AudioLocalizationEditorLog` facade 接入。两个 facade 都采用统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 结构，并保留 category `CycloneGames.Audio.Localization` 和 `CycloneGames.Audio.Localization.Editor`。静态入口与 Unity-owned 入口使用 facade 的 `Channel`；需要显式隔离的 service 使用 `Create(logWriter)`。两个 facade 都不会初始化或拥有 backend。
 
 安装 integration 目录且其直接程序集引用均存在时，Unity 会编译 integration assembly。运行时同步**不会**自动启用：默认状态是未绑定，直到应用构造 `AudioLocalizationBridge` 并调用 `Bind()`。
 
@@ -130,7 +132,7 @@ Bridge 的所有访问（包括状态读取、绑定、Locale 变更和释放）
 
 把 Map 作为 Bridge 的 `IAudioLocalizationMapper` 传入。一个 Map 最多支持 256 个精确 Source Entry。每个 Source Locale 必须唯一，Locale code 必须有效且规范化，Voice Fallback 必须互不重复且不能重复 Primary，完整 Audio Snapshot 必须处于 Audio 的八项上限内（一个 Primary，最多七个 Fallback）。`TryValidate(out string error)` 把整个资产作为一个单元校验；任一无效 Entry 都会拒绝完整编译 Map，避免运行时行为依赖序列化顺序。
 
-在自定义 Inspector 中使用 **Validate Localization Map**，或通过 **Tools > CycloneGames > Audio > Validate All Localization Maps** 执行项目级检查。Build Preprocessor 会运行同一扫描，并在存在无效 Map 时阻止构建。缺失或无效映射会被拒绝。Bridge 保持最后一个已知良好的 Audio Locale 不变，并通过已提供的 Sink 报告 `AudioLocalizationDiagnostic`；未提供 Sink 时写入 Unity 日志。诊断可区分无效 Localization 状态、映射不可用、Mapper 异常、Audio 拒绝/异常以及最后已知良好状态恢复失败。
+在自定义 Inspector 中使用 **Validate Localization Map**，或通过 **Tools > CycloneGames > Audio > Validate All Localization Maps** 执行项目级检查。Build Preprocessor 会运行同一扫描，并在存在无效 Map 时阻止构建。缺失或无效映射会被拒绝。Bridge 保持最后一个已知良好的 Audio Locale 不变，并通过已提供的 Sink 报告 `AudioLocalizationDiagnostic`；未提供 Sink 时写入 `CycloneGames.Audio.Localization` `LogChannel`。未安装进程 backend 时，`NullLogWriter` 会安全丢弃该诊断。诊断可区分无效 Localization 状态、映射不可用、Mapper 异常、Audio 拒绝/异常以及最后已知良好状态恢复失败。
 
 映射是显式的。Bridge 不会从 `CultureInfo` 推导语音回退，不会推断父 Locale，不会检查 AudioBank 内容，也不会复制 Localization 内部 fallback chain。
 

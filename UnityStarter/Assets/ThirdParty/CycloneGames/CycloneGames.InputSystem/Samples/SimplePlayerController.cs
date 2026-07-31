@@ -1,4 +1,5 @@
 using UnityEngine;
+using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Sample
 {
@@ -7,6 +8,8 @@ namespace CycloneGames.InputSystem.Sample
     /// </summary>
     public class SimplePlayerController : MonoBehaviour
     {
+        private static readonly LogChannel Log = InputSystemSampleLog.Channel;
+
         private int _playerId;
         private Color _playerColor;
         private Renderer _renderer;
@@ -54,13 +57,23 @@ namespace CycloneGames.InputSystem.Sample
 
         public void OnConfirm()
         {
-            Debug.Log($"Player {_playerId}: Confirm triggered!");
+            Log.Info(
+                _playerId,
+                static (playerId, builder) => builder
+                    .Append("Player ")
+                    .Append(playerId)
+                    .Append(": Confirm triggered!"));
             transform.position += Vector3.up;
         }
 
         public void OnConfirmLongPress()
         {
-            Debug.Log($"Player {_playerId}: Confirm LONG-PRESSED!");
+            Log.Info(
+                _playerId,
+                static (playerId, builder) => builder
+                    .Append("Player ")
+                    .Append(playerId)
+                    .Append(": Confirm LONG-PRESSED!"));
             transform.localScale *= 1.1f;
         }
     }

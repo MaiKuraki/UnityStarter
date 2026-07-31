@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Foundation2D.Runtime
@@ -550,6 +551,8 @@ namespace CycloneGames.Foundation2D.Runtime
     [RequireComponent(typeof(SpriteRenderer))]
     public sealed class SpriteRendererSequenceRenderer : MonoBehaviour, ISpriteSequenceRenderer
     {
+        private static readonly LogChannel Log = Foundation2DLog.Channel;
+
         public enum SpriteRenderMode
         {
             SpriteSwap = 0,
@@ -880,9 +883,8 @@ namespace CycloneGames.Foundation2D.Runtime
             }
 
             string location = frameIndex >= 0 ? " Frame index: " + frameIndex + "." : string.Empty;
-            Debug.LogWarning(
-                "SpriteRenderer flipbook initialization fell back to sprite swapping. " + reason + location,
-                this);
+            Log.Warning(
+                "SpriteRenderer flipbook initialization fell back to sprite swapping. " + reason + location);
         }
 
         private void EnsureUvCapacity(int count)

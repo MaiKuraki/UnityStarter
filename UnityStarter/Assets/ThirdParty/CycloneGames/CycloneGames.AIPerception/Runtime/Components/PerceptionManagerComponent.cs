@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.AIPerception.Runtime
@@ -10,6 +11,7 @@ namespace CycloneGames.AIPerception.Runtime
     [AddComponentMenu("CycloneGames/AI/Perception Manager")]
     public sealed class PerceptionManagerComponent : MonoBehaviour
     {
+        private static readonly LogChannel Log = AIPerceptionRuntimeLog.Channel;
         private static PerceptionManagerComponent _instance;
         private static bool _isQuitting;
 
@@ -125,9 +127,14 @@ namespace CycloneGames.AIPerception.Runtime
             manager.ConfigureLOD(_lodReference, _lodLevels);
             if (!registry.TrySetMaxCapacity(_maximumPerceptibles))
             {
-                Debug.LogError(
-                    $"[AIPerception] Maximum perceptibles ({_maximumPerceptibles}) must map to a limit between the active count ({registry.Count}) and the package hard ceiling ({PerceptibleRegistry.HardMaximumPerceptibleCount}). The previous limit remains active.",
-                    this);
+                Log.Error(
+                    (Requested: _maximumPerceptibles, Active: registry.Count),
+                    static (state, builder) => builder
+                        .Append("Maximum perceptibles (").Append(state.Requested)
+                        .Append(") must map to a limit between the active count (").Append(state.Active)
+                        .Append(") and the package hard ceiling (")
+                        .Append(PerceptibleRegistry.HardMaximumPerceptibleCount)
+                        .Append("). The previous limit remains active."));
             }
             registry.SetSpatialCellSize(_spatialCellSize);
             _settingsDirty = false;

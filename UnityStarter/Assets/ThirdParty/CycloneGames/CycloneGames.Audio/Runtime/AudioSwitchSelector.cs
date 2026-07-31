@@ -1,6 +1,7 @@
-﻿// Copyright (c) Microsoft Corporation.
+// Copyright (c) Microsoft Corporation.
 // Licensed under the MIT License.
 
+using CycloneGames.Logging;
 #if UNITY_EDITOR
 using System.Collections.Generic;
 using UnityEditor;
@@ -32,13 +33,13 @@ namespace CycloneGames.Audio.Runtime
             AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
             if (connectedNodes == null || connectedNodes.Length == 0)
             {
-                Debug.LogWarningFormat("No connected nodes for {0}", this.name);
+                Log.Warning($"No connected nodes for {this.name}");
                 return;
             }
 
             if (switchObject == null)
             {
-                Debug.LogWarningFormat("No AudioSwitch assigned for {0}", this.name);
+                Log.Warning($"No AudioSwitch assigned for {this.name}");
                 return;
             }
 
@@ -55,9 +56,7 @@ namespace CycloneGames.Audio.Runtime
                 }
             }
 
-            Debug.LogWarningFormat(
-                "[SwitchSelector] '{0}': no branch assigned to state '{1}'.",
-                this.name, currentState);
+            Log.Warning($"Switch selector '{this.name}' has no branch assigned to state '{currentState}'.");
         }
 
 #if UNITY_EDITOR

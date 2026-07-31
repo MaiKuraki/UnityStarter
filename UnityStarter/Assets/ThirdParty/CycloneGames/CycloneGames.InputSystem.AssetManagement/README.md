@@ -36,9 +36,13 @@ Use this package when InputSystem configuration is loaded from an AssetManagemen
 
 | Assembly | Path | Purpose |
 | --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` and `InputSystemAssetManagementHelper`. Depends on UniTask, InputSystem.Runtime, InputSystem.Runtime.Integrations.VContainer, AssetManagement.Runtime, Logger. |
+| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` and `InputSystemAssetManagementHelper`. Depends on UniTask, InputSystem.Runtime, InputSystem.Runtime.Integrations.VContainer, AssetManagement.Runtime, and CycloneGames.Logging. |
 
 The assembly is `autoReferenced: false` and uses a package-derived `VCONTAINER_PRESENT` constraint (from `jp.hadashikick.vcontainer`). It is absent from compilation when VContainer is not installed. Consumers must explicitly reference `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`. Do not add a `PlayerSettings` scripting define — the physical integration package and its asmdef make the boundary explicit in the assembly graph.
+
+Diagnostics use the stable `CycloneGames.InputSystem.AssetManagement` `LogChannel` category. This integration does not own logging backend lifecycle. With only `com.cyclone-games.logging` installed, messages safely route to `NullLogWriter`; the application composition root may install `CycloneGames.Logger` or another `ILogWriter` backend.
+
+The diagnostic-producing asmdef owns an internal `InputSystemAssetManagementLog` facade under `Diagnostics/`. It centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
 ```mermaid
 flowchart LR

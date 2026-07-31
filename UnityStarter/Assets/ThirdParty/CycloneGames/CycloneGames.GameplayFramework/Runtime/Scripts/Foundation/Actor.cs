@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using Unity.Burst;
 using Unity.Mathematics;
@@ -37,6 +38,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class Actor : MonoBehaviour
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         public const int MaxActorTags = 64;
         public const int MaxActorTagLength = 128;
 
@@ -755,7 +758,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(exception, $"Actor '{name}' EndPlay callback failed during destruction.");
             }
 
             try
@@ -764,7 +767,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(exception, $"Actor '{name}' World-unbound callback failed during destruction.");
             }
 
             World previousWorld = world;
@@ -775,7 +778,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(exception, $"Actor '{name}' destruction bookkeeping notification failed.");
             }
 
             lifecycleState = ActorLifecycleState.Destroyed;
@@ -798,7 +801,7 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, this);
+                    Log.Error(exception, $"Actor '{name}' OnDestroyed observer failed.");
                 }
             }
         }

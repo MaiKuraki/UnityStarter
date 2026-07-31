@@ -36,6 +36,7 @@ Use this module when gameplay configuration lives in generated tables (including
 | `CycloneGames.GameplayTags.DataTable` | Row-to-tag adapters. `autoReferenced: false`. |
 | `CycloneGames.DataTable.Core` (dependency) | Typed immutable tables and catalog publication |
 | `CycloneGames.GameplayTags.Core` (dependency) | Tag registration, validation, snapshots, and queries |
+| `CycloneGames.Logging` (test dependency) | Structured failure capture for package tests; the production integration assembly does not reference it |
 
 Add explicit asmdef references:
 

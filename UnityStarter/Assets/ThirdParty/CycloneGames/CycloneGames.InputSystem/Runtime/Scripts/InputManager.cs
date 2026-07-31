@@ -1,4 +1,4 @@
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using R3;
 using System;
@@ -18,6 +18,8 @@ namespace CycloneGames.InputSystem.Runtime
     /// </summary>
     public sealed class InputManager : IDisposable
     {
+        private static readonly LogChannel Log = InputSystemLog.Channel;
+
         private const string DEBUG_FLAG = "[InputManager]";
         private const int MaxOverrideJsonPerPlayer = 1024 * 1024;
         private const int MaxOverrideProfileBytes = 4 * 1024 * 1024;
@@ -198,7 +200,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (!ValidateMainThread(nameof(Initialize))) return;
             if (_isInitialized) return;
             InputManagerInitializationResult result = InitializeWithResult(yamlContent);
-            if (!result.IsSuccess) CLogger.LogError($"{DEBUG_FLAG} {result.Message}");
+            if (!result.IsSuccess) Log.Error($"{DEBUG_FLAG} {result.Message}");
         }
 
         public InputManagerInitializationResult InitializeWithResult(string yamlContent)
@@ -223,7 +225,7 @@ namespace CycloneGames.InputSystem.Runtime
         public void Reinitialize(string yamlContent)
         {
             InputManagerInitializationResult result = ReinitializeWithResult(yamlContent);
-            if (!result.IsSuccess) CLogger.LogError($"{DEBUG_FLAG} {result.Message}");
+            if (!result.IsSuccess) Log.Error($"{DEBUG_FLAG} {result.Message}");
         }
 
         public InputManagerInitializationResult ReinitializeWithResult(string yamlContent)
@@ -592,7 +594,9 @@ namespace CycloneGames.InputSystem.Runtime
             catch (Exception exception) when (IsRecoverableException(exception))
             {
                 if (user.valid) user.UnpairDevicesAndRemoveUser();
-                CLogger.LogError($"{DEBUG_FLAG} Shared-device join failed ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    $"{DEBUG_FLAG} Shared-device join failed.");
                 return null;
             }
             catch
@@ -679,8 +683,9 @@ namespace CycloneGames.InputSystem.Runtime
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
-                CLogger.LogError(
-                    $"{DEBUG_FLAG} Join listener could not be prepared ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    $"{DEBUG_FLAG} Join listener could not be prepared.");
                 return;
             }
 
@@ -781,8 +786,9 @@ namespace CycloneGames.InputSystem.Runtime
                     }
                     catch (Exception exception) when (IsRecoverableException(exception))
                     {
-                        CLogger.LogError(
-                            $"{DEBUG_FLAG} Additional join device could not be paired ({exception.GetType().Name}).");
+                        Log.Error(
+                            exception,
+                            $"{DEBUG_FLAG} Additional join device could not be paired.");
                     }
                     return;
                 }
@@ -857,7 +863,9 @@ namespace CycloneGames.InputSystem.Runtime
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
                     if (user.valid) user.UnpairDevicesAndRemoveUser();
-                    CLogger.LogError($"{DEBUG_FLAG} Player {playerId} join failed ({exception.GetType().Name}).");
+                    Log.Error(
+                        exception,
+                        $"{DEBUG_FLAG} Player {playerId} join failed.");
                     return null;
                 }
                 catch
@@ -1472,7 +1480,9 @@ namespace CycloneGames.InputSystem.Runtime
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
-                CLogger.LogError($"{DEBUG_FLAG} Failed to import binding override profile.");
+                Log.Error(
+                    exception,
+                    $"{DEBUG_FLAG} Failed to import binding override profile.");
                 return false;
             }
         }
@@ -1547,7 +1557,13 @@ namespace CycloneGames.InputSystem.Runtime
         private static bool ValidateMainThread(string operation)
         {
             if (Cysharp.Threading.Tasks.PlayerLoopHelper.IsMainThread) return true;
-            CLogger.LogError($"{DEBUG_FLAG} {operation} must run on the Unity main thread.");
+            Log.Error(
+                operation,
+                static (value, builder) => builder
+                    .Append(DEBUG_FLAG)
+                    .Append(' ')
+                    .Append(value)
+                    .Append(" must run on the Unity main thread."));
             return false;
         }
 
@@ -1642,8 +1658,9 @@ namespace CycloneGames.InputSystem.Runtime
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
-                CLogger.LogError(
-                    $"{DEBUG_FLAG} Failed to {phase} during teardown ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    $"{DEBUG_FLAG} Failed to {phase} during teardown.");
             }
         }
 
@@ -1660,8 +1677,9 @@ namespace CycloneGames.InputSystem.Runtime
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
-                    CLogger.LogError(
-                        $"{DEBUG_FLAG} Configuration reload subscriber failed ({exception.GetType().Name}).");
+                    Log.Error(
+                        exception,
+                        $"{DEBUG_FLAG} Configuration reload subscriber failed.");
                 }
 
                 if (_isDisposed || committedRevision != _configurationRevision) return;
@@ -1681,8 +1699,9 @@ namespace CycloneGames.InputSystem.Runtime
                 }
                 catch (Exception exception) when (IsRecoverableException(exception))
                 {
-                    CLogger.LogError(
-                        $"{DEBUG_FLAG} Player-ready subscriber failed ({exception.GetType().Name}).");
+                    Log.Error(
+                        exception,
+                        $"{DEBUG_FLAG} Player-ready subscriber failed.");
                 }
 
 

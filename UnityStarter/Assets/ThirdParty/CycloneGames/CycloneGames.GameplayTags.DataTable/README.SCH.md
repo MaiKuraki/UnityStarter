@@ -36,6 +36,7 @@ CycloneGames.GameplayTags.DataTable 将 DataTable row 桥接到 GameplayTags 注
 | `CycloneGames.GameplayTags.DataTable` | Row-to-tag adapter。`autoReferenced: false`。 |
 | `CycloneGames.DataTable.Core`（依赖） | 强类型不可变 table 与 catalog 发布 |
 | `CycloneGames.GameplayTags.Core`（依赖） | Tag 注册、校验、snapshot 与查询 |
+| `CycloneGames.Logging`（测试依赖） | 为包测试提供结构化失败捕获；生产 integration assembly 不引用它 |
 
 添加显式 asmdef 引用：
 

@@ -67,7 +67,7 @@ flowchart LR
 | `CycloneGames.BehaviorTree.Runtime.DOD` | No | Burst/Jobs flat-tree scheduler and NativeArray state |
 | `CycloneGames.BehaviorTree.Integrations.DeterministicMath` | No | Fixed-point Blackboard/schema adapters and a save/restore deterministic random provider |
 
-The runtime assembly requires `com.cyclone-games.hash`. The DOD assembly is enabled only when Burst, Collections, and Mathematics are present, and a consumer asmdef must reference `CycloneGames.BehaviorTree.Runtime.DOD` explicitly. The DeterministicMath bridge and its tests are eligible only when UPM resolves `com.cyclone-games.deterministic-math` in the supported `1.x` range. Their asmdefs derive `CYCLONEGAMES_HAS_DETERMINISTIC_MATH` with `versionDefines`, consume it with `defineConstraints`, and remain `autoReferenced: false`. A consumer asmdef must reference `CycloneGames.BehaviorTree.Integrations.DeterministicMath` explicitly. Do not add the capability symbol to PlayerSettings; a missing or unsupported package excludes the integration while Core and Runtime continue to compile.
+The runtime assembly requires `com.cyclone-games.hash` and the engine-independent `com.cyclone-games.logging` producer contract. Runtime, Editor, and benchmark diagnostics are centralized by the internal `BehaviorTreeRuntimeLog`, `BehaviorTreeEditorLog`, and `BehaviorTreeBenchmarksLog` facades under their assembly-local `Diagnostics/` folders. Each facade exposes the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` members while preserving categories `CycloneGames.BehaviorTree`, `CycloneGames.BehaviorTree.Editor`, and `CycloneGames.BehaviorTree.Benchmarks`; without an installed backend, `NullLogWriter` safely discards ambient diagnostics. The DOD assembly is enabled only when Burst, Collections, and Mathematics are present, and a consumer asmdef must reference `CycloneGames.BehaviorTree.Runtime.DOD` explicitly. The DeterministicMath bridge and its tests are eligible only when UPM resolves `com.cyclone-games.deterministic-math` in the supported `1.x` range. Their asmdefs derive `CYCLONEGAMES_HAS_DETERMINISTIC_MATH` with `versionDefines`, consume it with `defineConstraints`, and remain `autoReferenced: false`. A consumer asmdef must reference `CycloneGames.BehaviorTree.Integrations.DeterministicMath` explicitly. Do not add the capability symbol to PlayerSettings; a missing or unsupported package excludes the integration while Core and Runtime continue to compile.
 
 ### Ownership rules
 
@@ -396,8 +396,11 @@ blackboard.SetInt("Health", 100);
 ulong stamp = blackboard.GetStamp(HealthKey);
 
 // Observer registration
-blackboard.AddObserver(HealthKey, (key, bb) => Debug.Log($"Health changed: {bb.GetInt(key)}"));
+LogChannel log = LogChannel.Create("MyGame.BehaviorTree");
+blackboard.AddObserver(HealthKey, (key, bb) => log.Info($"Health changed: {bb.GetInt(key)}"));
 ```
+
+Runtime node-state observation is exposed separately from diagnostics through `BTStatusObserver`. Assign `RuntimeBehaviorTree.StatusObserver` directly, or call `BTStatusObserver.AttachToTree` in Editor and Development builds; status changes are delivered through `NotifyStatusChanged` without coupling the observer contract to a log backend.
 
 ### Composite nodes
 

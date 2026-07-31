@@ -1,4 +1,5 @@
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Samples
@@ -33,6 +34,8 @@ namespace CycloneGames.GameplayAbilities.Samples
 
     public class GA_ArmorStack : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect armorStackEffect;
 
         public GA_ArmorStack(GameplayEffect armorEffect)
@@ -55,7 +58,7 @@ namespace CycloneGames.GameplayAbilities.Samples
                 var effectSpec = GameplayEffectSpec.Create(armorStackEffect, owner, spec.Level);
                 owner.ApplyGameplayEffectSpecToSelf(effectSpec);
                 
-                GASLog.Info($"[ArmorStack] Applied armor stack. View stacks in GAS Debugger.");
+                Log.Info("[ArmorStack] Applied armor stack. View stacks in GAS Debugger.");
             }
             
             EndAbility();

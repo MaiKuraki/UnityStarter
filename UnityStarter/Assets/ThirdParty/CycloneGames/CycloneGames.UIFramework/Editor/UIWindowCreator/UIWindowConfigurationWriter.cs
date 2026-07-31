@@ -1,5 +1,5 @@
 using System.IO;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using CycloneGames.UIFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -8,7 +8,8 @@ namespace CycloneGames.UIFramework.Editor
 {
     internal static class UIWindowConfigurationWriter
     {
-        private const string LogCategory = "UIWindowCreator";
+        private static readonly LogChannel Log = UIFrameworkEditorLog.Channel;
+
         private const string WindowIdPropertyName = "windowId";
         private const string SourcePropertyName = "source";
         private const string WindowPrefabPropertyName = "windowPrefab";
@@ -98,9 +99,8 @@ namespace CycloneGames.UIFramework.Editor
                 string details = loadedConfig.Source == UIWindowConfiguration.PrefabSource.PrefabReference
                     ? $"prefab='{loadedConfig.WindowPrefab?.name ?? "null"}'"
                     : $"location='{loadedConfig.EffectiveAssetReference.Location}'";
-                CLogger.LogInfo(
-                    $"Created UIWindowConfiguration '{configPath}' with source mode: {loadedConfig.Source} ({details}).",
-                    LogCategory);
+                Log.Info(
+                    $"Created UIWindowConfiguration '{configPath}' with source mode: {loadedConfig.Source} ({details}).");
                 return configGuid;
             }
             catch (System.Exception exception)
@@ -137,7 +137,7 @@ namespace CycloneGames.UIFramework.Editor
             UIWindowConfiguration config = AssetDatabase.LoadAssetAtPath<UIWindowConfiguration>(configPath);
             if (config == null || config.Source != UIWindowConfiguration.PrefabSource.PrefabReference)
             {
-                CLogger.LogWarning($"Cannot update UIWindowConfiguration prefab reference. Config missing or not PrefabReference: '{configPath}'.", LogCategory);
+                Log.Warning($"Cannot update UIWindowConfiguration prefab reference. Config missing or not PrefabReference: '{configPath}'.");
                 return false;
             }
 
@@ -145,7 +145,7 @@ namespace CycloneGames.UIFramework.Editor
             UIWindow window = ResolveWindowComponent(prefab);
             if (window == null)
             {
-                CLogger.LogWarning($"Cannot update UIWindowConfiguration prefab reference because prefab has no UIWindow component. Prefab='{prefabPath}'.", LogCategory);
+                Log.Warning($"Cannot update UIWindowConfiguration prefab reference because prefab has no UIWindow component. Prefab='{prefabPath}'.");
                 return false;
             }
 
@@ -153,13 +153,13 @@ namespace CycloneGames.UIFramework.Editor
             SerializedProperty prefabProperty = serializedConfig.FindProperty(WindowPrefabPropertyName);
             if (prefabProperty == null)
             {
-                CLogger.LogWarning($"Cannot update UIWindowConfiguration prefab reference because '{WindowPrefabPropertyName}' was not found. Config='{configPath}'.", LogCategory);
+                Log.Warning($"Cannot update UIWindowConfiguration prefab reference because '{WindowPrefabPropertyName}' was not found. Config='{configPath}'.");
                 return false;
             }
 
             if (prefabProperty.objectReferenceValue == window)
             {
-                CLogger.LogInfo($"UIWindowConfiguration prefab reference already up to date for '{configPath}'.", LogCategory);
+                Log.Info($"UIWindowConfiguration prefab reference already up to date for '{configPath}'.");
                 return true;
             }
 
@@ -167,7 +167,7 @@ namespace CycloneGames.UIFramework.Editor
             serializedConfig.ApplyModifiedProperties();
             EditorUtility.SetDirty(config);
             AssetDatabase.SaveAssets();
-            CLogger.LogInfo($"Updated UIWindowConfiguration prefab reference. Config='{configPath}', Prefab='{prefabPath}'.", LogCategory);
+            Log.Info($"Updated UIWindowConfiguration prefab reference. Config='{configPath}', Prefab='{prefabPath}'.");
             return true;
         }
 
@@ -206,7 +206,7 @@ namespace CycloneGames.UIFramework.Editor
                     prefabRefProperty.objectReferenceValue = window;
                     if (window == null)
                     {
-                        CLogger.LogInfo($"PrefabReference config created before generated UIWindow script is compiled. Prefab reference will be finalized by the post-compile processor. Prefab='{prefabAssetPath}'.", LogCategory);
+                        Log.Info($"PrefabReference config created before generated UIWindow script is compiled. Prefab reference will be finalized by the post-compile processor. Prefab='{prefabAssetPath}'.");
                     }
                     ClearAssetRef(assetRefProperty);
                     locationProperty.stringValue = string.Empty;

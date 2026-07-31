@@ -36,10 +36,10 @@ This asset-style package lives below `Assets/ThirdParty/CycloneGames`; its `pack
 
 | Assembly | Role | Activation requirement |
 | --- | --- | --- |
-| `CycloneGames.Networking.Core` | Pure C# contracts and implementations; `noEngineReferences: true`. | Auto-referenced; requires `CycloneGames.DeterministicMath.Core` and `CycloneGames.Hash.Core`. |
-| `CycloneGames.Networking.Unity.Runtime` | Unity bridges, baseline JSON serializer, prediction, interest, compression, and diagnostics. | Auto-referenced; requires Core. |
-| `CycloneGames.Networking.Platform.Permissions` | Unity-facing LAN-host permission contract and platform implementations. | Auto-referenced; requires UniTask. |
-| `CycloneGames.Networking.Editor` | Bootstrap preset/diagnostics and LAN-host permission window. | Editor only. |
+| `CycloneGames.Networking.Core` | Pure C# contracts and implementations; `noEngineReferences: true`. | Auto-referenced; requires `CycloneGames.DeterministicMath.Core`, `CycloneGames.Hash.Core`, and `CycloneGames.Logging`. |
+| `CycloneGames.Networking.Unity.Runtime` | Unity bridges, baseline JSON serializer, prediction, interest, compression, and diagnostics. | Auto-referenced; requires Core and Logging. |
+| `CycloneGames.Networking.Platform.Permissions` | Unity-facing LAN-host permission contract and platform implementations. | Auto-referenced; requires UniTask and Logging. |
+| `CycloneGames.Networking.Editor` | Bootstrap preset/diagnostics and LAN-host permission window. | Editor only; requires Core and Logging. |
 | `CycloneGames.Networking.DOD.Runtime` | NativeContainer-backed interest managers; it does not schedule Jobs or use Burst. | Explicit asmdef reference; requires `Unity.Collections` and `Unity.Mathematics`. |
 | `CycloneGames.Networking.Tests.Editor` | EditMode tests. | Test Runner only; explicit asmdef reference. |
 | `CycloneGames.Networking.Serializer.NewtonsoftJson` | Newtonsoft JSON adapter. | Explicit asmdef reference; requires `com.unity.nuget.newtonsoft-json`. |
@@ -83,6 +83,14 @@ flowchart LR
 7. Run bootstrap diagnostics, focused tests, target Player builds, and backend interoperability tests for every shipping platform.
 
 `INetworkMessageEndpoint` never selects a serializer or discovers message types. `GetMaxPayloadSize` combines the protocol descriptor, configured adapter budget, channel support, and backend packet limit. Duplicate handler registration fails immediately; the default handler registry is bounded to 1,024 live registrations; disposing a stale or copied lease cannot remove a newer registration.
+
+### Unified logging
+
+All module output uses `CycloneGames.Logging` with categories rooted at `CycloneGames.Networking`. Each logging-producing assembly centralizes category ownership in an internal facade under its `Diagnostics/` folder: `NetworkingCoreLog`, `NetworkingUnityRuntimeLog`, `NetworkingEditorLog`, `NetworkingMirrorAdapterLog`, `NetworkingMirageAdapterLog`, or `NetworkingPermissionsLog`. Every facade exposes the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` members; explicit `Create` rejects a null writer. Stable specialized categories remain `CycloneGames.Networking.Security`, `CycloneGames.Networking.Editor.Bootstrap`, `CycloneGames.Networking.Adapter.Mirror`, `CycloneGames.Networking.Adapter.Mirage`, and `CycloneGames.Networking.Platform.Permissions`. Static Unity and Editor entry points use facade channels and resolve the current process writer on every call, so a later replacement is observed without package reinitialization.
+
+Install the host backend once with `LogRuntime.TryInstallWriter`, replace it during an explicit reconfiguration with `LogRuntime.ReplaceWriter`, or inject an `ILogWriter` into services that expose that shared contract, such as `RollbackNetcode`. The facades do not initialize, own, flush, or dispose a backend.
+
+Networking exposes no package-specific logger interface, severity enum, no-op logger, or Unity logger implementation. Use `ILogWriter`, `LogSeverity`, `NullLogWriter`, and the public canonical `LogCategory.Root`. `RollbackNetcode` overloads without a writer use the process backend; the explicit `ILogWriter` overload isolates an instance from that ambient writer.
 
 ### Define a product protocol
 

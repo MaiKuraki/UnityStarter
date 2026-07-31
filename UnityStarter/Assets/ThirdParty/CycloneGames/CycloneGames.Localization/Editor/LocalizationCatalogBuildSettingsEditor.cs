@@ -1,4 +1,5 @@
 #if UNITY_EDITOR
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 
@@ -7,6 +8,8 @@ namespace CycloneGames.Localization.Editor
     [CustomEditor(typeof(LocalizationCatalogBuildSettings))]
     public sealed class LocalizationCatalogBuildSettingsEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = LocalizationEditorLog.Channel;
+
         private SerializedProperty _localizationSettings;
         private SerializedProperty _outputFolder;
         private SerializedProperty _outputFileName;
@@ -86,7 +89,7 @@ namespace CycloneGames.Localization.Editor
             }
             catch (System.Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception, "Localization catalog build from settings failed.");
                 EditorUtility.DisplayDialog(
                     "Localization Catalog",
                     "Catalog build failed. See Console for details.",

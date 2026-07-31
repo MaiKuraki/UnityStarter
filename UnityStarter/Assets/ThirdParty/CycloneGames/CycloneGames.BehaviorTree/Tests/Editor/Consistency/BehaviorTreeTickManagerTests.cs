@@ -3,9 +3,10 @@ using System.Reflection;
 using CycloneGames.BehaviorTree.Runtime.Components;
 using CycloneGames.BehaviorTree.Runtime.Core;
 using CycloneGames.BehaviorTree.Runtime.Core.Nodes;
+using CycloneGames.BehaviorTree.Tests.Support;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using UnityEngine;
-using UnityEngine.TestTools;
 
 namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 {
@@ -84,16 +85,12 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             using RuntimeBehaviorTree repeatedLegacyRejected = CreateTree(new CallbackNode(null));
             try
             {
+                using var logs = new RecordingLogWriterScope("CycloneGames.BehaviorTree");
                 Assert.That(component.TryRegister(accepted), Is.True);
 
                 // TryRegister is the explicit result channel and must remain silent.
                 Assert.That(component.TryRegister(tryRejected), Is.False);
 
-                LogAssert.Expect(
-                    LogType.Error,
-                    "[BTTickManagerComponent] Legacy Register was rejected because managed tree or " +
-                    "deferred-mutation capacity was exhausted on 'Legacy Tick Manager Owner'. " +
-                    "Use TryRegister to handle admission failure.");
                 component.Register(firstLegacyRejected);
 
                 component.Register(repeatedLegacyRejected);
@@ -103,7 +100,18 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 BTTickManagerMemoryStats stats = component.GetMemoryStats();
                 Assert.That(stats.TreeCount, Is.EqualTo(1));
                 Assert.That(stats.CapacityRejectedTreeCount, Is.EqualTo(3L));
-                LogAssert.NoUnexpectedReceived();
+
+                RecordedLogEntry[] entries = logs.Snapshot();
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.BehaviorTree"));
+                Assert.That(
+                    entries[0].Message,
+                    Is.EqualTo(
+                        "[BTTickManagerComponent] Legacy Register was rejected because managed tree or " +
+                        "deferred-mutation capacity was exhausted on 'Legacy Tick Manager Owner'. " +
+                        "Use TryRegister to handle admission failure."));
+                Assert.That(entries[0].Exception, Is.Null);
             }
             finally
             {
@@ -133,16 +141,12 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             using RuntimeBehaviorTree repeatedLegacyRejected = CreateTree(new CallbackNode(null));
             try
             {
+                using var logs = new RecordingLogWriterScope("CycloneGames.BehaviorTree");
                 Assert.That(component.TryRegister(accepted, owner.transform), Is.True);
 
                 // The failed Try* call increments diagnostics but does not log.
                 Assert.That(component.TryRegister(tryRejected, owner.transform), Is.False);
 
-                LogAssert.Expect(
-                    LogType.Error,
-                    "[BTPriorityTickManagerComponent] Legacy Register was rejected because managed tree, " +
-                    "LOD, or deferred-mutation capacity was exhausted on 'Legacy Priority Manager Owner'. " +
-                    "Use TryRegister to handle admission failure.");
                 component.Register(firstLegacyRejected, owner.transform);
 
                 component.Register(repeatedLegacyRejected, owner.transform);
@@ -153,7 +157,18 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 Assert.That(stats.RegisteredTreeCount, Is.EqualTo(1));
                 Assert.That(stats.Core.CapacityRejectedTreeCount, Is.EqualTo(3L));
                 Assert.That(stats.LOD.CapacityRejectedTreeCount, Is.Zero);
-                LogAssert.NoUnexpectedReceived();
+
+                RecordedLogEntry[] entries = logs.Snapshot();
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.BehaviorTree"));
+                Assert.That(
+                    entries[0].Message,
+                    Is.EqualTo(
+                        "[BTPriorityTickManagerComponent] Legacy Register was rejected because managed tree, " +
+                        "LOD, or deferred-mutation capacity was exhausted on 'Legacy Priority Manager Owner'. " +
+                        "Use TryRegister to handle admission failure."));
+                Assert.That(entries[0].Exception, Is.Null);
             }
             finally
             {
@@ -173,14 +188,11 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             using RuntimeBehaviorTree repeatedLegacyRejected = CreateTree(new CallbackNode(null));
             try
             {
+                using var logs = new RecordingLogWriterScope("CycloneGames.BehaviorTree");
                 Assert.That(provider.TryRegisterTree(accepted, owner.transform), Is.True);
 
                 Assert.That(provider.TryRegisterTree(tryRejected, owner.transform), Is.False);
 
-                LogAssert.Expect(
-                    LogType.Error,
-                    "[BTDistanceLODProvider] Legacy RegisterTree was rejected because LOD tree capacity " +
-                    "was exhausted on 'Legacy LOD Owner'. Use TryRegisterTree to handle admission failure.");
                 provider.RegisterTree(firstLegacyRejected, owner.transform);
 
                 provider.RegisterTree(repeatedLegacyRejected, owner.transform);
@@ -190,7 +202,17 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 BTDistanceLODProviderMemoryStats stats = provider.GetMemoryStats();
                 Assert.That(stats.TreeCount, Is.EqualTo(1));
                 Assert.That(stats.CapacityRejectedTreeCount, Is.EqualTo(3L));
-                LogAssert.NoUnexpectedReceived();
+
+                RecordedLogEntry[] entries = logs.Snapshot();
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.BehaviorTree"));
+                Assert.That(
+                    entries[0].Message,
+                    Is.EqualTo(
+                        "[BTDistanceLODProvider] Legacy RegisterTree was rejected because LOD tree capacity " +
+                        "was exhausted on 'Legacy LOD Owner'. Use TryRegisterTree to handle admission failure."));
+                Assert.That(entries[0].Exception, Is.Null);
             }
             finally
             {

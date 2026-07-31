@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.Choreography.Tests
@@ -98,7 +99,6 @@ namespace CycloneGames.Choreography.Tests
             var provider = new FakeResourceProvider();
             var runner = new PreloadRunner(
                 provider,
-                diagnostics: null,
                 maximumReferenceCount: 2,
                 maximumConcurrentLoadCount: 1,
                 maximumAssetNodeScanCount: 3);
@@ -200,13 +200,13 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
-        public void PreloadRunner_PreservesLegacyClrConstructor()
+        public void PreloadRunner_ExposesExplicitLogWriterConstructor()
         {
             Assert.That(
                 typeof(PreloadRunner).GetConstructor(new[]
                 {
                     typeof(IResourceProvider),
-                    typeof(IChoreographyDiagnostics)
+                    typeof(ILogWriter)
                 }),
                 Is.Not.Null);
         }

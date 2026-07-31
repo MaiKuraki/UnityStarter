@@ -2,7 +2,8 @@
     "name": "CycloneGames.AssetManagement.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.AssetManagement.Runtime"
+        "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [
         "Editor"

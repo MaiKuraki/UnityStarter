@@ -2,7 +2,8 @@
     "name": "CycloneGames.Utility.Tests.PlayMode",
     "rootNamespace": "CycloneGames.Utility.Tests.PlayMode",
     "references": [
-        "CycloneGames.Utility.Runtime"
+        "CycloneGames.Utility.Runtime",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

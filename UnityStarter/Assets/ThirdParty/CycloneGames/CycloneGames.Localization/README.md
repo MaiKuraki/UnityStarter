@@ -34,7 +34,7 @@ Use this module for versioned, partitioned, transactional localization through i
 - **Presentation bindings**: `LocalizeTMPText`, `LocalizeImage`, `LocalizationWindowBinder` subscribe only while enabled; no per-frame polling.
 - **Pseudo-localization**: Placeholder- and tag-safe text transformation for layout and content QA.
 - **Editor workspaces**: Multi-language table workspace, incremental CSV exchange (RFC 4180), validation window, partitioned catalog builds.
-- **Pure C# core**: `CycloneGames.Localization.Core` has `noEngineReferences: true`; runtime and components depend on `UniTask` and `CycloneGames.AssetManagement`.
+- **Pure C# core**: `CycloneGames.Localization.Core` has `noEngineReferences: true`; runtime and components depend on `UniTask` and `CycloneGames.AssetManagement`, while diagnostic-producing assemblies use `CycloneGames.Logging`.
 
 ## Architecture
 
@@ -42,10 +42,14 @@ Use this module for versioned, partitioned, transactional localization through i
 | --- | --- | --- |
 | `CycloneGames.Localization.Core` | `Core/` | `LocaleId`, fallback traversal, plural categories, pseudo-localization. No `UnityEngine` reference. |
 | `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridges, `LocalizationService`, catalogs, tables, selectors. Depends on Core, UniTask, AssetManagement. |
-| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeTMPText`, `LocalizeImage`. Depends on Runtime, TMP, UGUI, AssetManagement, UniTask. |
-| `CycloneGames.Localization.Editor` | `Editor/` | Inspectors, table workspaces, validation, CSV, catalog build. Depends on Runtime, UnityEditor. |
+| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeTMPText`, `LocalizeImage`. Depends on Runtime, TMP, UGUI, AssetManagement, UniTask, Logging. |
+| `CycloneGames.Localization.Editor` | `Editor/` | Inspectors, table workspaces, validation, CSV, catalog build. Depends on Runtime, Logging, UnityEditor. |
 | `CycloneGames.Localization.Runtime.Integrations.YarnSpinner` | `Runtime/Integrations/YarnSpinner/` | Yarn locale synchronization; compiles only when Yarn Spinner is installed. |
 | `CycloneGames.Localization.Tests.Editor` | `Tests/Editor/` | Pure core, runtime, catalog, and editor workflow tests. |
+
+Runtime and Editor diagnostics use categories `CycloneGames.Localization` and `CycloneGames.Localization.Editor`. The package does not depend on a concrete backend; if `LogRuntime` has no installed writer, `NullLogWriter` silently handles diagnostics.
+
+Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
 ```mermaid
 flowchart LR
@@ -288,9 +292,10 @@ Composite formats are translator-controlled input. Validation checks placeholder
 LocaleId japanese = new LocaleId("ja");
 if (!service.TrySetLocale(japanese)) { /* not available */ }
 
+LogChannel log = LogChannel.Create("MyGame.Localization");
 service.Changed += change =>
 {
-    Debug.Log($"Localization revision {change.Revision}: {change.Reason}");
+    log.Info($"Localization revision {change.Revision}: {change.Reason}");
 };
 ```
 

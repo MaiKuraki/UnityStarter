@@ -1,3 +1,4 @@
+using CycloneGames.Logging;
 using TMPro;
 using UnityEditor;
 using UnityEditor.SceneManagement;
@@ -11,6 +12,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
     /// </summary>
     public static class LocalizeContextMenu
     {
+        private static readonly LogChannel Log = UIFrameworkLocalizationEditorLog.Channel;
+
         private const string TmpMenu = "CONTEXT/TMP_Text/Track Locale Layout";
         private const string ImageMenu = "CONTEXT/Image/Track Locale Layout";
         private const string RectMenu = "CONTEXT/RectTransform/Track Locale Layout";
@@ -64,7 +67,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
         {
             if (rect == null)
             {
-                Debug.LogWarning("[UI Locale Layout] The target must have a RectTransform.");
+                Log.Warning(
+                    "[UI Locale Layout] The target must have a RectTransform.");
                 return;
             }
 
@@ -74,7 +78,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
                 GameObject root = FindLayoutRoot(rect);
                 if (root == null)
                 {
-                    Debug.LogWarning("[UI Locale Layout] No valid UI layout root was found.");
+                    Log.Warning(
+                        "[UI Locale Layout] No valid UI layout root was found.");
                     return;
                 }
 
@@ -96,10 +101,9 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
             SerializedProperty snapshots = serializedLayout.FindProperty("_snapshots");
             if (UILocaleLayoutEditor.HasUnsupportedFutureSchema(snapshots))
             {
-                Debug.LogWarning(
+                Log.Warning(
                     $"[UI Locale Layout] '{localeLayout.name}' contains an unsupported future snapshot schema. " +
-                    "Tracking changes are disabled until a compatible editor is available.",
-                    localeLayout);
+                    "Tracking changes are disabled until a compatible editor is available.");
                 Selection.activeObject = localeLayout;
                 EditorGUIUtility.PingObject(localeLayout);
                 return;
@@ -163,20 +167,19 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
                     EditorGUIUtility.PingObject(localeLayout);
                     if (conflictingReference)
                     {
-                        Debug.LogWarning(
+                        Log.Warning(
                             $"[UI Locale Layout] '{rect.name}' is already tracked by '{localeLayout.name}'. " +
-                            "Existing non-null component references were preserved.",
-                            localeLayout);
+                            "Existing non-null component references were preserved.");
                     }
                     else if (changed)
                     {
-                        Debug.Log(
-                            $"[UI Locale Layout] Completed component references for '{rect.name}' on '{localeLayout.name}'.",
-                            localeLayout);
+                        Log.Info(
+                            $"[UI Locale Layout] Completed component references for '{rect.name}' on '{localeLayout.name}'.");
                     }
                     else
                     {
-                        Debug.Log($"[UI Locale Layout] '{rect.name}' is already tracked by '{localeLayout.name}'.");
+                        Log.Info(
+                            $"[UI Locale Layout] '{rect.name}' is already tracked by '{localeLayout.name}'.");
                     }
                     return;
                 }
@@ -215,7 +218,8 @@ namespace CycloneGames.UIFramework.Runtime.Integrations.Localization.Editor
 
             Selection.activeObject = localeLayout;
             EditorGUIUtility.PingObject(localeLayout);
-            Debug.Log($"[UI Locale Layout] Tracking '{rect.name}' on '{localeLayout.name}'.");
+            Log.Info(
+                $"[UI Locale Layout] Tracking '{rect.name}' on '{localeLayout.name}'.");
         }
 
         private static void CompleteCurrentSnapshotFields(

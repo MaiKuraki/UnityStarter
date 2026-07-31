@@ -2,14 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
-using System.Text.RegularExpressions;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Unity.Editor;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEngine;
-using UnityEngine.TestTools;
 
 #if UNITY_6000_0_OR_NEWER
 using TreeViewState = UnityEditor.IMGUI.Controls.TreeViewState<int>;
@@ -25,8 +24,6 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       private string m_SettingsRoot;
       private Func<string> m_PreviousSettingsDirectory;
       private Func<IEnumerable<IGameplayTagSource>> m_PreviousProjectSources;
-      private Action<string> m_PreviousLogWarning;
-      private Action<string> m_PreviousLogError;
       private Func<bool> m_PreviousIsRuntimePlaying;
       private Func<byte[]> m_PreviousLoadBuildTagData;
 
@@ -42,15 +39,11 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 
          m_PreviousSettingsDirectory = GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory;
          m_PreviousProjectSources = GameplayTagRuntimePlatform.EnumerateProjectTagSources;
-         m_PreviousLogWarning = GameplayTagRuntimePlatform.LogWarning;
-         m_PreviousLogError = GameplayTagRuntimePlatform.LogError;
          m_PreviousIsRuntimePlaying = GameplayTagRuntimePlatform.IsRuntimePlaying;
          m_PreviousLoadBuildTagData = GameplayTagRuntimePlatform.LoadBuildTagData;
          GameplayTagManager.ResetForTests();
          GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory = () => m_SettingsRoot;
          GameplayTagRuntimePlatform.EnumerateProjectTagSources = () => Array.Empty<IGameplayTagSource>();
-         GameplayTagRuntimePlatform.LogWarning = message => Debug.LogWarning(message);
-         GameplayTagRuntimePlatform.LogError = message => Debug.LogError(message);
       }
 
       [TearDown]
@@ -59,8 +52,6 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          GameplayTagManager.ResetForTests();
          GameplayTagRuntimePlatform.GetProjectTagSettingsDirectory = m_PreviousSettingsDirectory;
          GameplayTagRuntimePlatform.EnumerateProjectTagSources = m_PreviousProjectSources;
-         GameplayTagRuntimePlatform.LogWarning = m_PreviousLogWarning;
-         GameplayTagRuntimePlatform.LogError = m_PreviousLogError;
          GameplayTagRuntimePlatform.IsRuntimePlaying = m_PreviousIsRuntimePlaying;
          GameplayTagRuntimePlatform.LoadBuildTagData = m_PreviousLoadBuildTagData;
          if (!string.IsNullOrEmpty(m_TemporaryProjectRoot) && Directory.Exists(m_TemporaryProjectRoot))
@@ -86,9 +77,12 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       public void FileSource_RejectsUnknownRootProperty()
       {
          string path = WriteRawSource("Unknown.json", "{\"metadata\":{},\"tags\":{}}");
-         LogAssert.Expect(LogType.Error, new Regex("Unsupported JSON property", RegexOptions.IgnoreCase));
+         FileGameplayTagSource source = new(path);
 
-         Assert.That(new FileGameplayTagSource(path).TryLoad(), Is.False);
+         Exception exception = AssertLoadFailure(source);
+
+         Assert.That(exception, Is.TypeOf<InvalidDataException>());
+         StringAssert.Contains("Unsupported JSON property", exception.Message);
       }
 
       [Test]
@@ -97,9 +91,12 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          string path = WriteRawSource(
             "Comments.json",
             "{/* comments are not supported */\"tags\":{}}");
-         LogAssert.Expect(LogType.Error, new Regex("comments are not supported", RegexOptions.IgnoreCase));
+         FileGameplayTagSource source = new(path);
 
-         Assert.That(new FileGameplayTagSource(path).TryLoad(), Is.False);
+         Exception exception = AssertLoadFailure(source);
+
+         Assert.That(exception, Is.TypeOf<InvalidDataException>());
+         StringAssert.Contains("comments are not supported", exception.Message);
       }
 
       [Test]
@@ -124,9 +121,12 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       public void FileSource_RejectsTagDefinitionsOutsideTagsObject()
       {
          string path = WriteRawSource("InvalidRoot.json", "{\"Combat.Damage\":{}}");
-         LogAssert.Expect(LogType.Error, new Regex("Unsupported JSON property", RegexOptions.IgnoreCase));
+         FileGameplayTagSource source = new(path);
 
-         Assert.That(new FileGameplayTagSource(path).TryLoad(), Is.False);
+         Exception exception = AssertLoadFailure(source);
+
+         Assert.That(exception, Is.TypeOf<InvalidDataException>());
+         StringAssert.Contains("Unsupported JSON property", exception.Message);
       }
 
       [Test]
@@ -135,9 +135,11 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          Directory.CreateDirectory(m_SettingsRoot);
          string path = Path.Combine(m_SettingsRoot, "InvalidUtf8.json");
          File.WriteAllBytes(path, new byte[] { 0x7B, 0x22, 0xFF, 0x22, 0x7D });
-         LogAssert.Expect(LogType.Error, new Regex("Unable to translate bytes|invalid", RegexOptions.IgnoreCase));
+         FileGameplayTagSource source = new(path);
 
-         Assert.That(new FileGameplayTagSource(path).TryLoad(), Is.False);
+         Exception exception = AssertLoadFailure(source);
+
+         Assert.That(ContainsException<DecoderFallbackException>(exception), Is.True);
       }
 
       [Test]
@@ -146,9 +148,12 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          Directory.CreateDirectory(m_SettingsRoot);
          string path = Path.Combine(m_SettingsRoot, "Utf16.json");
          File.WriteAllText(path, "{\"tags\":{}}", Encoding.Unicode);
-         LogAssert.Expect(LogType.Error, new Regex("UTF-8 without a byte-order mark", RegexOptions.IgnoreCase));
+         FileGameplayTagSource source = new(path);
 
-         Assert.That(new FileGameplayTagSource(path).TryLoad(), Is.False);
+         Exception exception = AssertLoadFailure(source);
+
+         Assert.That(exception, Is.TypeOf<InvalidDataException>());
+         StringAssert.Contains("UTF-8 without a byte-order mark", exception.Message);
       }
 
       [Test]
@@ -160,9 +165,12 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             path,
             "{\"tags\":{}}",
             new UTF8Encoding(encoderShouldEmitUTF8Identifier: true, throwOnInvalidBytes: true));
-         LogAssert.Expect(LogType.Error, new Regex("UTF-8 without a byte-order mark", RegexOptions.IgnoreCase));
+         FileGameplayTagSource source = new(path);
 
-         Assert.That(new FileGameplayTagSource(path).TryLoad(), Is.False);
+         Exception exception = AssertLoadFailure(source);
+
+         Assert.That(exception, Is.TypeOf<InvalidDataException>());
+         StringAssert.Contains("UTF-8 without a byte-order mark", exception.Message);
       }
 
       [Test]
@@ -558,6 +566,172 @@ namespace CycloneGames.GameplayTags.Tests.Editor
          string path = Path.Combine(m_SettingsRoot, fileName);
          File.WriteAllText(path, content, new UTF8Encoding(false, true));
          return path;
+      }
+
+      private static Exception AssertLoadFailure(FileGameplayTagSource source)
+      {
+         var writer = new RecordingLogWriter();
+         ILogWriter previousWriter = LogRuntime.ReplaceWriter(writer);
+         bool loaded;
+         try
+         {
+            loaded = source.TryLoad();
+         }
+         finally
+         {
+            RestoreWriter(previousWriter, writer);
+         }
+
+         Assert.That(loaded, Is.False);
+         Assert.That(source.LastLoadException, Is.Not.Null);
+         Assert.That(writer.Count, Is.EqualTo(1));
+         LogRecord record = writer.LastRecord;
+         Assert.That(record.Severity, Is.EqualTo(LogSeverity.Error));
+         Assert.That(record.Category, Is.EqualTo("CycloneGames.GameplayTags"));
+         Assert.That(record.Exception, Is.SameAs(source.LastLoadException));
+         StringAssert.Contains($"Failed to load gameplay tags from '{source.Name}'.", record.Message);
+         return source.LastLoadException;
+      }
+
+      private static bool ContainsException<TException>(Exception exception)
+         where TException : Exception
+      {
+         while (exception != null)
+         {
+            if (exception is TException)
+               return true;
+            exception = exception.InnerException;
+         }
+
+         return false;
+      }
+
+      private static void RestoreWriter(ILogWriter previousWriter, RecordingLogWriter writer)
+      {
+         if (object.ReferenceEquals(LogRuntime.Writer, writer))
+            LogRuntime.ReplaceWriter(previousWriter);
+      }
+
+      private readonly struct LogRecord
+      {
+         public LogRecord(
+            LogSeverity severity,
+            string category,
+            string message,
+            Exception exception)
+         {
+            Severity = severity;
+            Category = category;
+            Message = message;
+            Exception = exception;
+         }
+
+         public LogSeverity Severity { get; }
+         public string Category { get; }
+         public string Message { get; }
+         public Exception Exception { get; }
+      }
+
+      private sealed class RecordingLogWriter : ILogWriter
+      {
+         private readonly object m_Gate = new object();
+         private int m_Count;
+         private LogRecord m_LastRecord;
+
+         public int Count
+         {
+            get
+            {
+               lock (m_Gate)
+                  return m_Count;
+            }
+         }
+
+         public LogRecord LastRecord
+         {
+            get
+            {
+               lock (m_Gate)
+                  return m_LastRecord;
+            }
+         }
+
+         public bool IsEnabled(LogSeverity severity, string category)
+         {
+            return severity >= LogSeverity.Error && severity < LogSeverity.None;
+         }
+
+         public void Write(
+            LogSeverity severity,
+            string category,
+            string message,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+         {
+            Record(severity, category, message, null);
+         }
+
+         public void Write(
+            LogSeverity severity,
+            string category,
+            Action<StringBuilder> messageBuilder,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+         {
+            if (!IsEnabled(severity, category))
+               return;
+
+            var builder = new StringBuilder(128);
+            messageBuilder?.Invoke(builder);
+            Record(severity, category, builder.ToString(), null);
+         }
+
+         public void Write<TState>(
+            LogSeverity severity,
+            string category,
+            TState state,
+            Action<TState, StringBuilder> messageBuilder,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+         {
+            if (!IsEnabled(severity, category))
+               return;
+
+            var builder = new StringBuilder(128);
+            messageBuilder?.Invoke(state, builder);
+            Record(severity, category, builder.ToString(), null);
+         }
+
+         public void WriteException(
+            LogSeverity severity,
+            string category,
+            Exception exception,
+            string message = null,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+         {
+            Record(severity, category, message, exception);
+         }
+
+         private void Record(
+            LogSeverity severity,
+            string category,
+            string message,
+            Exception exception)
+         {
+            if (!IsEnabled(severity, category))
+               return;
+
+            lock (m_Gate)
+            {
+               m_Count++;
+               m_LastRecord = new LogRecord(severity, category, message, exception);
+            }
+         }
       }
 
       private static void SetSerializedTagName(GameplayTagTestHolder holder, string value)

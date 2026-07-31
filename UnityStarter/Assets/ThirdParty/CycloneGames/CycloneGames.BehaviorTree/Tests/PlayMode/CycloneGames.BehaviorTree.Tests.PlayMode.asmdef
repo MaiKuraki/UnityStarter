@@ -3,7 +3,9 @@
     "rootNamespace": "CycloneGames.BehaviorTree.Tests.PlayMode",
     "references": [
         "CycloneGames.BehaviorTree.Runtime",
-        "CycloneGames.BehaviorTree.Benchmarks"
+        "CycloneGames.BehaviorTree.Benchmarks",
+        "CycloneGames.BehaviorTree.Tests.Support",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

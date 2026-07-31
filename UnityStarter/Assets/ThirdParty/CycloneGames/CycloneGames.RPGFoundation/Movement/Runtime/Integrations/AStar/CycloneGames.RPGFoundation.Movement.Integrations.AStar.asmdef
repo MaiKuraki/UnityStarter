@@ -6,7 +6,8 @@
         "CycloneGames.RPGFoundation.Movement.Runtime",
         "AstarPathfindingProject",
         "PackageTools",
-        "Drawing"
+        "Drawing",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

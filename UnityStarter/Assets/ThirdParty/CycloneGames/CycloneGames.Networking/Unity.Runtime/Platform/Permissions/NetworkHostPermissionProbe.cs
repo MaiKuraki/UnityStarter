@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using System.Threading;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -7,6 +8,8 @@ namespace CycloneGames.Networking.Platform
 {
     public sealed class NetworkHostPermissionProbe : MonoBehaviour
     {
+        private static readonly LogChannel Log = NetworkingPermissionsLog.Channel;
+
         [SerializeField] private int Port = 7777;
         [SerializeField] private NetworkTransportProtocol Protocol = NetworkTransportProtocol.Udp;
         [SerializeField] private string RuleDisplayNamePrefix = NetworkHostPermissionServiceFactory.DEFAULT_RULE_DISPLAY_NAME_PREFIX;
@@ -36,17 +39,17 @@ namespace CycloneGames.Networking.Platform
             }
 
             NetworkHostPermissionCheckResult status = GetStatus();
-            Debug.Log($"LAN host permission status: {status.Status}. {status.DeveloperMessage}");
+            Log.Info($"LAN host permission status: {status.Status}. {status.DeveloperMessage}");
 
             if (_localAddresses.Count == 0)
             {
-                Debug.LogWarning("No LAN IPv4 address was detected. Players may need to enter the host IP manually, or the machine may be isolated from the LAN.");
+                Log.Warning("No LAN IPv4 address was detected. Players may need to enter the host IP manually, or the machine may be isolated from the LAN.");
                 return;
             }
 
             for (int i = 0; i < _localAddresses.Count; i++)
             {
-                Debug.Log($"LAN host address candidate: {_localAddresses[i]}:{Port}/{Protocol}");
+                Log.Info($"LAN host address candidate: {_localAddresses[i]}:{Port}/{Protocol}");
             }
         }
 

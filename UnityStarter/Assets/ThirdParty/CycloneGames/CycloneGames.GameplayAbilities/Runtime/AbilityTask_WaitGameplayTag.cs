@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -9,6 +10,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class AbilityTask_WaitGameplayTagAdded : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         public Action OnTagAdded;
         public Action OnCancelled;
 
@@ -40,7 +43,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             subscriptionOwner = Ability?.AbilitySystemComponent;
             if (subscriptionOwner == null || watchedTag.IsNone)
             {
-                GASLog.Warning("WaitGameplayTagAdded: Invalid ability or tag.");
+                Log.Warning("WaitGameplayTagAdded: Invalid ability or tag.");
                 EndTask();
                 return;
             }
@@ -138,6 +141,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class AbilityTask_WaitGameplayTagRemoved : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         public Action OnTagRemoved;
         public Action OnCancelled;
 
@@ -169,7 +174,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             subscriptionOwner = Ability?.AbilitySystemComponent;
             if (subscriptionOwner == null || watchedTag.IsNone)
             {
-                GASLog.Warning("WaitGameplayTagRemoved: Invalid ability or tag.");
+                Log.Warning("WaitGameplayTagRemoved: Invalid ability or tag.");
                 EndTask();
                 return;
             }

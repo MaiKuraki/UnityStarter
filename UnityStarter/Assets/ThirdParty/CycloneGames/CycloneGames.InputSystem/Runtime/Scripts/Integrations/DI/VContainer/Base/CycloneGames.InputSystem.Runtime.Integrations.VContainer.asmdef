@@ -6,7 +6,7 @@
         "VContainer",
         "CycloneGames.InputSystem.Runtime",
         "CycloneGames.IO.Unity",
-        "CycloneGames.Logger"
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

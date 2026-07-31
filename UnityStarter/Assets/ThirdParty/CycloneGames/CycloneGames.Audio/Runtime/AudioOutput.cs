@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Audio;
 #if UNITY_EDITOR
@@ -224,7 +225,7 @@ namespace CycloneGames.Audio.Runtime
             AudioNodeOutput[] connectedNodes = this.input != null ? this.input.ConnectedNodes : null;
             if (connectedNodes == null || connectedNodes.Length == 0)
             {
-                Debug.LogWarningFormat("No connected nodes for {0}", this.name);
+                Log.Warning($"No connected nodes for {this.name}");
                 return;
             }
 
@@ -263,7 +264,7 @@ namespace CycloneGames.Audio.Runtime
                     {
                         eventSource.rolloffMode = AudioRolloffMode.Logarithmic;
                         string eventName = activeEvent.rootEvent != null ? activeEvent.rootEvent.name : activeEvent.name;
-                        Debug.LogWarning($"[AudioOutput] Node '{this.name}' in event '{eventName}' has Spatial Blend > 0 but an empty Attenuation curve. Falling back to Logarithmic rolloff. Fix it in the Audio Graph.");
+                        Log.Warning($"[AudioOutput] Node '{this.name}' in event '{eventName}' has Spatial Blend > 0 but an empty Attenuation curve. Falling back to Logarithmic rolloff. Fix it in the Audio Graph.");
                     }
                     float effectiveReverbZoneMix = EffectiveReverbZoneMix;
                     eventSource.dopplerLevel = EffectiveDopplerLevel;

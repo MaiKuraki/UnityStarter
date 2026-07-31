@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 using UnityEngine.Audio;
 using System.Buffers;
 using System.Collections.Generic;
@@ -393,6 +394,8 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     public partial class AudioManager : MonoBehaviour, IAudioService, IAudioLifecyclePauseControl, IAudioBankClipLeaseProvider
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         public const int MaximumIdleTrimItemsPerCall = 1024;
 
         public static AudioManager Instance { get; private set; }
@@ -1044,7 +1047,7 @@ namespace CycloneGames.Audio.Runtime
             if (mainMixer != null)
                 mainMixer.SetFloat(parameterName, volume);
             else
-                Debug.LogWarning("AudioManager: Main Mixer not assigned.");
+                Log.Warning("AudioManager: Main Mixer not assigned.");
         }
 
         public static bool SetMixerParameter(string parameterName, float value)
@@ -1472,7 +1475,7 @@ namespace CycloneGames.Audio.Runtime
             if (eventToPlay == null)
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
+                Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return null;
             }
@@ -1491,7 +1494,7 @@ namespace CycloneGames.Audio.Runtime
             if (eventToPlay == null)
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
+                Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return null;
             }
@@ -1508,7 +1511,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (!IsFinite(dspTime))
             {
-                Debug.LogWarning("AudioManager: Scheduled DSP time must be finite.");
+                Log.Warning("AudioManager: Scheduled DSP time must be finite.");
                 return null;
             }
             if (!ValidateManager() || string.IsNullOrEmpty(eventName)) return null;
@@ -1517,7 +1520,7 @@ namespace CycloneGames.Audio.Runtime
             if (eventToPlay == null)
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
+                Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return null;
             }
@@ -1531,7 +1534,7 @@ namespace CycloneGames.Audio.Runtime
 
             if (!IsFinite(dspTime))
             {
-                Debug.LogWarning("AudioManager: Scheduled DSP time must be finite.");
+                Log.Warning("AudioManager: Scheduled DSP time must be finite.");
                 return null;
             }
             Transform emitterTransform = emitterObject != null ? emitterObject.transform : null;
@@ -1603,7 +1606,7 @@ namespace CycloneGames.Audio.Runtime
             if (eventToStop == null)
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogWarning($"AudioManager: Event '{eventName}' not found.");
+                Log.Warning($"AudioManager: Event '{eventName}' not found.");
 #endif
                 return;
             }
@@ -1964,7 +1967,7 @@ namespace CycloneGames.Audio.Runtime
             if (!activeEventIndices.ContainsKey(eventToRemove)) return;
             if (float.IsNaN(delay) || float.IsInfinity(delay))
             {
-                Debug.LogWarning("AudioManager: Deferred removal delay must be finite. Removing on the next update.");
+                Log.Warning("AudioManager: Deferred removal delay must be finite. Removing on the next update.");
                 delay = 0f;
             }
             int generation = eventToRemove.generation;
@@ -2328,7 +2331,7 @@ namespace CycloneGames.Audio.Runtime
             string platformProfileSource = activePlatformProfile != null
                 ? $"{activePlatformProfile.name} ({activePlatformProfile.GetCurrentPlatformLabel()})"
                 : "Fallback Desktop Settings";
-            Debug.Log($"AudioManager: Initialized with {currentPoolSize} sources (max: {maxPoolSize}, tier: {PoolStats.DeviceTier}, config: {configSource}, platform profile: {platformProfileSource})");
+            Log.Info($"AudioManager: Initialized with {currentPoolSize} sources (max: {maxPoolSize}, tier: {PoolStats.DeviceTier}, config: {configSource}, platform profile: {platformProfileSource})");
         }
 
         private void ApplyResolvedConfigs()
@@ -2464,7 +2467,7 @@ namespace CycloneGames.Audio.Runtime
 
                     Instance.TrimExcessIdleSources(forceTrimToMax: true);
 
-                    Debug.Log($"AudioManager: Pool config reloaded (initial: {initialPoolSize}, max: {maxPoolSize}, tier: {PoolStats.DeviceTier})");
+                    Log.Info($"AudioManager: Pool config reloaded (initial: {initialPoolSize}, max: {maxPoolSize}, tier: {PoolStats.DeviceTier})");
                 }
             }
         }
@@ -2540,12 +2543,12 @@ namespace CycloneGames.Audio.Runtime
             Camera mainCamera = GetMainCamera();
             if (mainCamera != null)
             {
-                Debug.Log("No AudioListener found. Creating one on the main camera.");
+                Log.Info("No AudioListener found. Creating one on the main camera.");
                 cachedAudioListener = mainCamera.gameObject.AddComponent<AudioListener>();
             }
             else
             {
-                Debug.LogWarning("No AudioListener or main camera found. Creating AudioListener on AudioManager.");
+                Log.Warning("No AudioListener or main camera found. Creating AudioListener on AudioManager.");
                 cachedAudioListener = gameObject.AddComponent<AudioListener>();
             }
         }
@@ -2669,7 +2672,7 @@ namespace CycloneGames.Audio.Runtime
             totalExpansions++;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-            Debug.Log($"AudioManager: Pool expanded to {currentPoolSize}/{maxPoolSize} sources (expansion #{totalExpansions})");
+            Log.Info($"AudioManager: Pool expanded to {currentPoolSize}/{maxPoolSize} sources (expansion #{totalExpansions})");
 #endif
             return true;
         }
@@ -2946,7 +2949,7 @@ namespace CycloneGames.Audio.Runtime
                 cachedStealVictimFrame = -1;
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.LogWarning($"AudioManager: Voice stolen from '{victimName}' (category:{victimCategory}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
+                Log.Warning($"AudioManager: Voice stolen from '{victimName}' (category:{victimCategory}, protection:{lowestProtectionScore:F1}, total steals: {totalSteals})");
 #endif
                 return availableSources.Count > 0 ? availableSources.Dequeue() : null;
             }
@@ -3004,7 +3007,7 @@ namespace CycloneGames.Audio.Runtime
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
                 if (currentPoolSize % 8 == 0 || currentPoolSize == initialPoolSize)
                 {
-                    Debug.Log($"AudioManager: Pool shrunk to {currentPoolSize}/{maxPoolSize} sources");
+                    Log.Info($"AudioManager: Pool shrunk to {currentPoolSize}/{maxPoolSize} sources");
                 }
 #endif
             }
@@ -3074,7 +3077,7 @@ namespace CycloneGames.Audio.Runtime
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             string requesterName = requestingEvent != null ? requestingEvent.name : "Unknown";
-            Debug.LogWarning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}) for '{requesterName}'. All sources are in use and none met the current stealing policy.");
+            Log.Warning($"AudioManager: Source pool exhausted ({currentPoolSize}/{maxPoolSize}) for '{requesterName}'. All sources are in use and none met the current stealing policy.");
 #endif
             return null;
         }
@@ -3447,7 +3450,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (bank == null)
             {
-                Debug.LogWarning("AudioManager: Attempted to load null AudioBank.");
+                Log.Warning("AudioManager: Attempted to load null AudioBank.");
                 return;
             }
 
@@ -3457,21 +3460,21 @@ namespace CycloneGames.Audio.Runtime
 
             if (!IsBankWithinRegistrationBudget(bank, out string budgetError))
             {
-                Debug.LogError($"AudioManager: Cannot load bank '{bank.name}'. {budgetError}");
+                Log.Error($"AudioManager: Cannot load bank '{bank.name}'. {budgetError}");
                 return;
             }
 
             int bankId = bank.GetInstanceID();
             if (bankOperationsInProgress.Contains(bankId))
             {
-                Debug.LogWarning($"AudioManager: Bank '{bank.name}' is already being modified.");
+                Log.Warning($"AudioManager: Bank '{bank.name}' is already being modified.");
                 return;
             }
             if (bankRegistrations.TryGetValue(bankId, out AudioBankRegistration existingRegistration))
             {
                 if (existingRegistration.OverwriteExisting != overwriteExisting)
                 {
-                    Debug.LogWarning(
+                    Log.Warning(
                         $"AudioManager: Bank '{bank.name}' is already loaded with a different overwrite policy. " +
                         "Unload it before changing the policy.");
                 }
@@ -3497,12 +3500,12 @@ namespace CycloneGames.Audio.Runtime
                 registration.OwnedStateGroups.Count == 0 &&
                 registration.OwnedProfiles.Count == 0)
             {
-                Debug.LogWarning($"AudioManager: AudioBank '{bank.name}' contains no runtime audio objects.");
+                Log.Warning($"AudioManager: AudioBank '{bank.name}' contains no runtime audio objects.");
             }
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             else
             {
-                Debug.Log(
+                Log.Info(
                     $"AudioManager: Loaded bank '{bank.name}' with {registration.OwnedEvents.Count} events, " +
                     $"{registration.OwnedParameters.Count} parameters, {registration.OwnedStateGroups.Count} state groups, " +
                     $"and {registration.OwnedProfiles.Count} state mix profiles.");
@@ -3603,7 +3606,7 @@ namespace CycloneGames.Audio.Runtime
                 ApplyAllStateMixProfiles();
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                Debug.Log($"AudioManager: Unloaded bank '{bank.name}'.");
+                Log.Info($"AudioManager: Unloaded bank '{bank.name}'.");
 #endif
 
                 NotifyBankUnloaded(registration.Bank);
@@ -3917,7 +3920,7 @@ namespace CycloneGames.Audio.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    Log.Error(exception);
                 }
             }
         }
@@ -4022,7 +4025,7 @@ namespace CycloneGames.Audio.Runtime
             eventNameMap.Clear();
             eventBindings.Clear();
             if (count > 0)
-                Debug.Log($"AudioManager: Cleared {count} events from name map.");
+                Log.Info($"AudioManager: Cleared {count} events from name map.");
         }
 
         public static int GetRegisteredEventCount()
@@ -4711,7 +4714,7 @@ namespace CycloneGames.Audio.Runtime
                         pendingHandle = null;
                         failedCount++;
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                        Debug.LogException(exception);
+                        Log.Error(exception);
 #endif
                         continue;
                     }
@@ -4897,7 +4900,7 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
         }
 
@@ -4910,7 +4913,7 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
         }
 
@@ -4923,7 +4926,7 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
         }
 
@@ -4977,7 +4980,7 @@ namespace CycloneGames.Audio.Runtime
 
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
             if (evicted > 0)
-                Debug.Log($"AudioManager: Evicted {evicted} expired external clips from cache.");
+                Log.Info($"AudioManager: Evicted {evicted} expired external clips from cache.");
 #endif
         }
 

@@ -5,7 +5,7 @@ using UnityEngine.UI;
 
 using R3;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Runtime
 {
@@ -15,6 +15,8 @@ namespace CycloneGames.InputSystem.Runtime
     [RequireComponent(typeof(Image))]
     public class InputDeviceIconSwitcher : MonoBehaviour
     {
+        private static readonly LogChannel Log = InputSystemUguiLog.Channel;
+
         [SerializeField] private InputDeviceIconSet iconSet;
 
         private Image _image;
@@ -37,7 +39,7 @@ namespace CycloneGames.InputSystem.Runtime
             if (iconSet == null)
             {
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
-                CLogger.LogWarning($"[InputDeviceIconSwitcher] {name}: IconSet is not assigned.");
+                Log.Warning($"[InputDeviceIconSwitcher] {name}: IconSet is not assigned.");
 #endif
                 return;
             }

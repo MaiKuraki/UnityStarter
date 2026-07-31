@@ -12,7 +12,7 @@ using UnityEngine.SceneManagement;
 
 using Cysharp.Threading.Tasks;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -90,6 +90,8 @@ namespace CycloneGames.AssetManagement.Runtime
         IAssetBackendLifetime
         where TAsset : UnityEngine.Object
     {
+        private static readonly LogChannel Log = AssetManagementAddressablesLog.Channel;
+
         internal AsyncOperationHandle<TAsset> Raw;
         internal string Location { get; private set; }
         internal object Owner { get; private set; }
@@ -142,7 +144,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
-                CLogger.LogError("[AddressableAssetHandle] Retain called on a disposed handle.");
+                Log.Error("[AddressableAssetHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -160,7 +162,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[AddressableAssetHandle] Release called more times than Retain.");
+                Log.Error("[AddressableAssetHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -215,6 +217,8 @@ namespace CycloneGames.AssetManagement.Runtime
         IAssetBackendLifetime
         where TAsset : UnityEngine.Object
     {
+        private static readonly LogChannel Log = AssetManagementAddressablesLog.Channel;
+
         private sealed class ReadOnlyListAdapter : IReadOnlyList<TAsset>
         {
             private IList<TAsset> _source;
@@ -279,7 +283,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
-                CLogger.LogError("[AddressableAllAssetsHandle] Retain called on a disposed handle.");
+                Log.Error("[AddressableAllAssetsHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -297,7 +301,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[AddressableAllAssetsHandle] Release called more times than Retain.");
+                Log.Error("[AddressableAllAssetsHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -367,6 +371,8 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class AddressableInstantiateHandle : AddressablesOperationHandle,
         IInstantiateHandle, IReferenceCounted, IInternalCacheable
     {
+        private static readonly LogChannel Log = AssetManagementAddressablesLog.Channel;
+
         private AsyncOperationHandle<GameObject> _raw;
         private UniTask _task;
         private Action<long> _onDisposed;
@@ -444,7 +450,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[AddressableInstantiateHandle] Release called more times than Retain.");
+                Log.Error("[AddressableInstantiateHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -494,6 +500,8 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class AddressableSceneHandle : AddressablesOperationHandle,
         ISceneHandle, IReferenceCounted
     {
+        private static readonly LogChannel Log = AssetManagementAddressablesLog.Channel;
+
         internal AsyncOperationHandle<SceneInstance> Raw;
         internal long DebugId => Id;
         internal object OwnerToken { get; private set; }
@@ -922,11 +930,11 @@ namespace CycloneGames.AssetManagement.Runtime
             if (newCount < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[AddressableSceneHandle] Release called more times than Retain.");
+                Log.Error("[AddressableSceneHandle] Release called more times than Retain.");
             }
             else if (newCount == 0)
             {
-                CLogger.LogWarning("[AddressableSceneHandle] Dispose releases caller ownership only. Use IAssetSceneLoader.UnloadSceneAsync to unload the scene.");
+                Log.Warning("[AddressableSceneHandle] Dispose releases caller ownership only. Use IAssetSceneLoader.UnloadSceneAsync to unload the scene.");
             }
         }
 

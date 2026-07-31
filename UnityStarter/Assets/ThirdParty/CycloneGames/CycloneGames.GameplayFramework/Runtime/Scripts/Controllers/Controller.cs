@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -9,6 +10,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class Controller : Actor
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         private Actor startSpot;
         private Pawn pawn;
         private PlayerState playerState;
@@ -429,7 +432,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    $"Controller '{name}' failed to release possession while unbinding from its World; fallback detachment will run.");
                 DetachPossessionWithoutCallbacks(possessedPawn, playerState);
             }
             finally
@@ -456,7 +461,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                     }
                     catch (Exception exception)
                     {
-                        Debug.LogException(exception, this);
+                        Log.Error(
+                            exception,
+                            $"Controller '{name}' failed to release possession during destruction.");
                     }
                 }
                 else

@@ -1,4 +1,5 @@
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Samples
@@ -30,6 +31,8 @@ namespace CycloneGames.GameplayAbilities.Samples
 
     public class GA_ShieldOfLight : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect shieldEffect;
 
         public GA_ShieldOfLight(GameplayEffect effect)
@@ -52,7 +55,7 @@ namespace CycloneGames.GameplayAbilities.Samples
                 var effectSpec = GameplayEffectSpec.Create(shieldEffect, owner, spec.Level);
                 owner.ApplyGameplayEffectSpecToSelf(effectSpec);
                 
-                GASLog.Info("[ShieldOfLight] Shield activated! Defense bonus active ONLY while not debuffed.");
+                Log.Info("[ShieldOfLight] Shield activated! Defense bonus active ONLY while not debuffed.");
             }
             
             EndAbility();

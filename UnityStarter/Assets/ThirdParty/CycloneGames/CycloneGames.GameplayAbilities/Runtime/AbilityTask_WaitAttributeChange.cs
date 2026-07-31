@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -9,6 +10,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class AbilityTask_WaitAttributeChange : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         /// <summary>
         /// Fired when the watched attribute changes. Provides (oldValue, newValue).
         /// </summary>
@@ -44,7 +47,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
         {
             if (watchedAttribute == null)
             {
-                GASLog.Warning("WaitAttributeChange: Attribute not found.");
+                Log.Warning("WaitAttributeChange: Attribute not found.");
                 EndTask();
                 return;
             }

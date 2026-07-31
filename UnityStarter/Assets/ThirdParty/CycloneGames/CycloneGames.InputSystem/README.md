@@ -38,7 +38,7 @@ Use for reviewable YAML authoring with bounded validation, per-player `InputUser
 
 | Assembly | Path | Purpose |
 | --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | Configuration, manager, players, contexts, reactive input, storage boundaries. Depends on Unity Input System, UniTask, R3, VYaml, CycloneGames.Hash, Logger. |
+| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | Configuration, manager, players, contexts, reactive input, storage boundaries. Depends on Unity Input System, UniTask, R3, VYaml, CycloneGames.Hash, and CycloneGames.Logging. |
 | `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring, validation, safe file writes, constant generation. Editor-only. |
 | `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | `InputDeviceIconSet`, `InputDeviceIconSwitcher`, menu-navigation components. `autoReferenced: false`. |
 | `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | Container-owned manager, async startup, resolver adapters. No AssetManagement dependency. |
@@ -48,6 +48,12 @@ Use for reviewable YAML authoring with bounded validation, per-player `InputUser
 | `CycloneGames.InputSystem.Tests.Editor` | `Tests/Editor/` | EditMode validation and regression coverage. |
 
 Optional assemblies have `autoReferenced: false`. Add an explicit asmdef reference only where the feature is used. UGUI and VContainer activation use package-derived `versionDefines` with `defineConstraints`; missing packages exclude the corresponding assembly. AssetManagement support is physically separated into the sibling `CycloneGames.InputSystem.AssetManagement` package.
+
+InputSystem emits diagnostics through stable `LogChannel` categories rooted at `CycloneGames.InputSystem`. The package does not initialize, replace, flush, or shut down the process logging writer. `com.cyclone-games.logging` supplies a safe `NullLogWriter` default; the application composition root may install `CycloneGames.Logger` or any other `ILogWriter` backend.
+
+Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
+
+The opt-in sample asmdef applies the same convention through `Samples/Diagnostics/InputSystemSampleLog.cs` and preserves `CycloneGames.InputSystem.Sample`.
 
 ```mermaid
 flowchart LR
@@ -76,10 +82,13 @@ For the shortest scene-level integration, a serialized `TextAsset` supplies vali
 
 ```csharp
 using CycloneGames.InputSystem.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 public sealed class PlayerInputBootstrap : MonoBehaviour
 {
+    private static readonly LogChannel Log = LogChannel.Create("Game.Input");
+
     [SerializeField] private TextAsset _configuration;
 
     private InputManager _manager;
@@ -93,7 +102,7 @@ public sealed class PlayerInputBootstrap : MonoBehaviour
 
         if (!initialized.IsSuccess)
         {
-            Debug.LogError($"Input initialization failed: {initialized.Status}: {initialized.Message}");
+            Log.Error($"Input initialization failed: {initialized.Status}: {initialized.Message}");
             enabled = false;
             return;
         }
@@ -101,7 +110,7 @@ public sealed class PlayerInputBootstrap : MonoBehaviour
         IInputPlayer player = _manager.JoinSinglePlayer(0);
         if (player == null)
         {
-            Debug.LogError("No declared control scheme can be matched for player 0.");
+            Log.Error("No declared control scheme can be matched for player 0.");
             enabled = false;
             return;
         }
@@ -381,8 +390,10 @@ Construct this owner once at the composition root, load before players join, and
 ```csharp
 using System.IO;
 using CycloneGames.InputSystem.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
+LogChannel log = LogChannel.Create("Game.Input");
 var manager = new InputManager();
 var defaults = new UriInputConfigurationSource();
 var users = new FileInputConfigurationStore(Application.persistentDataPath);
@@ -402,7 +413,7 @@ InputSystemLoadResult load = await InputSystemLoader.LoadAndInitializeAsync(
 
 if (!load.IsBootstrapComplete)
 {
-    Debug.LogError($"Input load failed: {load.Status}: {load.Error}");
+    log.Error($"Input load failed: {load.Status}: {load.Error}");
 }
 ```
 
@@ -552,13 +563,16 @@ player.GetChordObservable(confirm, cancel, windowMs: 200f)
 ### Rebinding profile save and load
 
 ```csharp
+using CycloneGames.Logging;
+
+LogChannel log = LogChannel.Create("Game.Input");
 PersistenceOperationResult saved = await profilePersistence.SaveAsync(cancellationToken);
 if (!saved.IsSuccess)
-    Debug.LogWarning($"Binding profile save failed: {saved.ErrorCode}");
+    log.Warning($"Binding profile save failed: {saved.ErrorCode}");
 
 string loadError = await profilePersistence.LoadAndApplyAsync(cancellationToken);
 if (loadError != null)
-    Debug.LogWarning($"Binding profile load failed: {loadError}");
+    log.Warning($"Binding profile load failed: {loadError}");
 ```
 
 Keep the configured defaults active when loading fails. Missing data is a normal first-run state; corrupted, future-version, or schema-incompatible data must not be applied silently. Do not expose persistence exception messages directly — send detailed exceptions only to a product-owned logging pipeline that applies redaction and access control.

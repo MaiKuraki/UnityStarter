@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
@@ -13,6 +14,8 @@ namespace CycloneGames.Audio.Runtime
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Voice Policy Profile")]
     public sealed class AudioVoicePolicyProfile : ScriptableObject
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         [Serializable]
         public struct CategoryPolicySettings
         {
@@ -177,7 +180,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 cachedConfig = allConfigs[0];
                 if (allConfigs.Length > 1)
-                    Debug.LogWarning($"AudioVoicePolicyProfile: Found {allConfigs.Length} configs in Resources. Using first.");
+                    Log.Warning($"AudioVoicePolicyProfile: Found {allConfigs.Length} configs in Resources. Using first.");
                 return cachedConfig;
             }
 
@@ -186,7 +189,7 @@ namespace CycloneGames.Audio.Runtime
             if (guids.Length > 0)
             {
                 if (guids.Length > 1)
-                    Debug.LogWarning($"AudioVoicePolicyProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
+                    Log.Warning($"AudioVoicePolicyProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
                 string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
                 cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioVoicePolicyProfile>(path);
             }

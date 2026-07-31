@@ -1,11 +1,13 @@
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
     public class GA_Meteor : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameObject groundSelectorPrefab;
 
         public GA_Meteor(GameObject groundSelectorPrefab)
@@ -17,7 +19,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             if (groundSelectorPrefab == null)
             {
-                CLogger.LogError("GA_Meteor is missing its GroundSelectorPrefab. Ensure it's assigned in the SO asset.");
+                Log.Error("GA_Meteor is missing its GroundSelectorPrefab. Ensure it's assigned in the SO asset.");
                 EndAbility();
                 return;
             }
@@ -31,7 +33,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 if (hitData != null)
                 {
                     Vector3 impactPoint = hitData.HitResult.point;
-                    CLogger.LogInfo($"Meteor impacting at: {impactPoint}");
+                    Log.Info($"Meteor impacting at: {impactPoint}");
                     // Here you would spawn the meteor VFX and apply damage in an area around impactPoint...
                 }
                 EndAbility();
@@ -39,7 +41,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             targetTask.OnCancelled += () =>
             {
-                CLogger.LogInfo("Meteor cast was cancelled.");
+                Log.Info("Meteor cast was cancelled.");
                 EndAbility();
             };
 

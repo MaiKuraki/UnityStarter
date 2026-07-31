@@ -1,4 +1,5 @@
 using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 /// <summary>
@@ -7,6 +8,8 @@ using UnityEngine;
 /// </summary>
 public sealed class LoggerPoolMonitor : MonoBehaviour
 {
+    private static readonly LogChannel Log = LoggerSamplesLog.PoolMonitorChannel;
+
     [SerializeField] private int BurstLogCount = 5000;
     [SerializeField] private float MonitorIntervalSeconds = 1.0f;
 
@@ -31,9 +34,15 @@ public sealed class LoggerPoolMonitor : MonoBehaviour
     [ContextMenu("Show Logger Statistics")]
     private void ShowStatistics()
     {
+        if (!(LogRuntime.Writer is CLogger backend))
+        {
+            Log.Warning("Logger processing statistics are unavailable because CLogger is not the process writer.");
+            return;
+        }
+
         LoggerMemoryStatistics memory = CLogger.GetMemoryStatistics();
-        LogProcessingStatistics processing = CLogger.Instance.GetProcessingStatistics();
-        Debug.Log(
+        LogProcessingStatistics processing = backend.GetProcessingStatistics();
+        Log.Info(
             $"Logger queue: {processing.QueuedCount} messages, {processing.QueuedCharacters} characters, "
             + $"peak {processing.PeakQueuedCount}/{processing.PeakQueuedCharacters}, dropped {processing.DroppedMessageCount}.\n"
             + $"Caches: messages {memory.RetainedLogMessages} (peak {memory.PeakRetainedLogMessages}, misses {memory.LogMessagePoolMisses}), "
@@ -45,7 +54,7 @@ public sealed class LoggerPoolMonitor : MonoBehaviour
     {
         for (int i = 0; i < BurstLogCount; i++)
         {
-            CLogger.LogInfo(i, static (value, builder) => builder.Append("Burst message ").Append(value), "BurstSample");
+            Log.Info(i, static (value, builder) => builder.Append("Burst message ").Append(value));
         }
 
         ShowStatistics();

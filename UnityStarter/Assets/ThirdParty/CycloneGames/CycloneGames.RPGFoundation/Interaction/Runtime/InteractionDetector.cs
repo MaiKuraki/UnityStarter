@@ -6,6 +6,7 @@ using Unity.Mathematics;
 using R3;
 using VitalRouter;
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Interaction.Core;
 
 namespace CycloneGames.RPGFoundation.Interaction.Runtime
@@ -20,6 +21,8 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
     [DisallowMultipleComponent]
     public class InteractionDetector : MonoBehaviour, IInteractionDetector
     {
+        private static readonly LogChannel Log = RpgInteractionLog.Channel;
+
         [Header("Detection")]
         [SerializeField] private DetectionMode detectionMode = DetectionMode.Physics3D;
         [SerializeField] private float detectionRadius = 3f;
@@ -656,7 +659,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogException(ex, this);
+                Log.Error(
+                    ex,
+                    $"[InteractionDetector] Interaction failed on '{name}'.");
             }
         }
 
@@ -772,7 +777,9 @@ namespace CycloneGames.RPGFoundation.Interaction.Runtime
             }
             catch (Exception ex)
             {
-                Debug.LogException(ex, this);
+                Log.Error(
+                    ex,
+                    $"[InteractionDetector] Target selection failed on '{name}'.");
             }
         }
 

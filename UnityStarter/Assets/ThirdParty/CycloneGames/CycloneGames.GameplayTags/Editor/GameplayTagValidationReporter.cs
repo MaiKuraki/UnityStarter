@@ -5,6 +5,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayTags.Unity.Editor
 {
@@ -20,6 +21,8 @@ namespace CycloneGames.GameplayTags.Unity.Editor
     {
         internal const int MaxInvalidTagEntries = 4096;
         private const int EntriesPerPage = 50;
+
+        private static readonly LogChannel Log = GameplayTagsEditorLog.Channel;
 
         private enum InvalidTagReferenceKind
         {
@@ -178,11 +181,9 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             m_ResultPage = 0;
             m_ScanStatus = GameplayTagValidationScanStatus.NotRun;
             m_ScanFailureMessage = null;
-            var previousFilterLogType = Debug.unityLogger.filterLogType;
             try
             {
                 GameplayTagManager.InitializeIfNeeded();
-                Debug.unityLogger.filterLogType = LogType.Error;
                 if (!ScanProjectAssets() || !ScanOpenScenes())
                     m_ScanStatus = GameplayTagValidationScanStatus.Canceled;
                 else
@@ -192,11 +193,10 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             {
                 m_ScanStatus = GameplayTagValidationScanStatus.Failed;
                 m_ScanFailureMessage = exception.Message;
-                Debug.LogException(exception);
+                Log.Error(exception, "Gameplay tag validation scan failed.");
             }
             finally
             {
-                Debug.unityLogger.filterLogType = previousFilterLogType;
                 EditorUtility.ClearProgressBar();
                 Repaint();
             }
@@ -392,7 +392,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
 
             if (fixedCount > 0)
             {
-                Debug.Log($"Successfully removed {fixedCount} invalid GameplayTag references. Please save modified scenes/assets.");
+                Log.Info($"Successfully removed {fixedCount} invalid GameplayTag references. Please save modified scenes/assets.");
             }
 
             Repaint();

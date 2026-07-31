@@ -36,10 +36,10 @@ CycloneGames.Networking 是一个 transport-neutral 底层模块，提供版本�
 
 | Assembly | 职责 | 激活条件 |
 | --- | --- | --- |
-| `CycloneGames.Networking.Core` | 纯 C# 契约与实现；`noEngineReferences: true`。 | 自动引用；依赖 `CycloneGames.DeterministicMath.Core` 和 `CycloneGames.Hash.Core`。 |
-| `CycloneGames.Networking.Unity.Runtime` | Unity bridge、基础 JSON serializer、prediction、interest、compression 和 diagnostics。 | 自动引用；依赖 Core。 |
-| `CycloneGames.Networking.Platform.Permissions` | Unity-facing LAN host permission 契约和平台实现。 | 自动引用；依赖 UniTask。 |
-| `CycloneGames.Networking.Editor` | Bootstrap preset/diagnostics 和 LAN host permission window。 | 仅 Editor。 |
+| `CycloneGames.Networking.Core` | 纯 C# 契约与实现；`noEngineReferences: true`。 | 自动引用；依赖 `CycloneGames.DeterministicMath.Core`、`CycloneGames.Hash.Core` 和 `CycloneGames.Logging`。 |
+| `CycloneGames.Networking.Unity.Runtime` | Unity bridge、基础 JSON serializer、prediction、interest、compression 和 diagnostics。 | 自动引用；依赖 Core 和 Logging。 |
+| `CycloneGames.Networking.Platform.Permissions` | Unity-facing LAN host permission 契约和平台实现。 | 自动引用；依赖 UniTask 和 Logging。 |
+| `CycloneGames.Networking.Editor` | Bootstrap preset/diagnostics 和 LAN host permission window。 | 仅 Editor；依赖 Core 和 Logging。 |
 | `CycloneGames.Networking.DOD.Runtime` | 基于 NativeContainer 的 interest manager；不调度 Job，也不使用 Burst。 | 显式 asmdef reference；依赖 `Unity.Collections` 和 `Unity.Mathematics`。 |
 | `CycloneGames.Networking.Tests.Editor` | EditMode 测试。 | 仅 Test Runner；显式 asmdef reference。 |
 | `CycloneGames.Networking.Serializer.NewtonsoftJson` | Newtonsoft JSON adapter。 | 显式 asmdef reference；依赖 `com.unity.nuget.newtonsoft-json`。 |
@@ -83,6 +83,14 @@ flowchart LR
 7. 对每个发布平台运行 bootstrap diagnostics、聚焦测试、目标 Player build 和 backend interoperability test。
 
 `INetworkMessageEndpoint` 不选择 serializer，也不发现 message type。`GetMaxPayloadSize` 综合 protocol descriptor、adapter 配置预算、channel 支持和 backend packet limit。重复注册 handler 会立即失败；默认 handler registry 最多持有 1,024 个 live registration；释放过期或复制的 lease 不会移除更新一代注册。
+
+### 统一日志
+
+模块输出统一使用 `CycloneGames.Logging`，category 以 `CycloneGames.Networking` 为根。每个日志生产 assembly 都通过自身 `Diagnostics/` 目录中的 internal facade 集中持有 category：`NetworkingCoreLog`、`NetworkingUnityRuntimeLog`、`NetworkingEditorLog`、`NetworkingMirrorAdapterLog`、`NetworkingMirageAdapterLog` 或 `NetworkingPermissionsLog`。每个 facade 都提供统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 成员；显式 `Create` 会拒绝 null writer。稳定的专用 category 继续为 `CycloneGames.Networking.Security`、`CycloneGames.Networking.Editor.Bootstrap`、`CycloneGames.Networking.Adapter.Mirror`、`CycloneGames.Networking.Adapter.Mirage` 和 `CycloneGames.Networking.Platform.Permissions`。Unity 与 Editor 的静态入口使用 facade channel，并在每次调用时解析当前进程 writer，因此后续替换无需重新初始化 package。
+
+Host 可通过 `LogRuntime.TryInstallWriter` 安装一次 backend，在显式重新配置时使用 `LogRuntime.ReplaceWriter`，也可以向公开该共享契约的 `RollbackNetcode` 等 service 注入 `ILogWriter`。facade 不会初始化、拥有、flush 或 dispose backend。
+
+Networking 不再公开包专用 logger interface、severity enum、no-op logger 或 Unity logger 实现。统一使用 `ILogWriter`、`LogSeverity`、`NullLogWriter` 与 public canonical `LogCategory.Root`。不带 writer 的 `RollbackNetcode` overload 使用进程 backend；显式 `ILogWriter` overload 可让实例与 ambient writer 隔离。
 
 ### 定义产品 Protocol
 

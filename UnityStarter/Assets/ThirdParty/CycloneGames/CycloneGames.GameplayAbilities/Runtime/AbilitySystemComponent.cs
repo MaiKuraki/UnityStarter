@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.Hash.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -167,6 +168,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
     public partial class AbilitySystemComponent : IDisposable
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         public readonly struct GASPredictionScope : IDisposable
         {
             private readonly AbilitySystemComponent asc;
@@ -595,10 +598,12 @@ namespace CycloneGames.GameplayAbilities.Runtime
             runtimeThreadViolationCount++;
             if (runtimeThreadPolicy == GASRuntimeThreadPolicy.LogWarning)
             {
-                GASLog.Warning(sb => sb.Append("AbilitySystemComponent rejected access from thread ")
-                    .Append(currentThreadId)
+                Log.Warning(
+                    (Current: currentThreadId, Runtime: runtimeThreadId),
+                    static (state, sb) => sb.Append("AbilitySystemComponent rejected access from thread ")
+                    .Append(state.Current)
                     .Append("; runtime thread is ")
-                    .Append(runtimeThreadId)
+                    .Append(state.Runtime)
                     .Append('.'));
             }
 
@@ -1278,7 +1283,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"GameplayEvent observer failed after event delivery began: {exception.Message}");
+                        Log.Error(exception, "GameplayEvent observer failed after event delivery began.");
                     }
                 }
             }
@@ -2077,7 +2082,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception cleanupException)
                     {
-                        GASLog.Error($"Ability grant rollback cleanup failed for '{ability.Name}': {cleanupException.Message}");
+                        Log.Error(cleanupException, $"Ability grant rollback cleanup failed for '{ability.Name}'.");
                     }
                     finally
                     {
@@ -3269,7 +3274,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 DispatchPredictionWindowClosedObservers(predictionKey, status);
                 if (cleanupFailure != null)
                 {
-                    GASLog.Error($"Prediction window {predictionKey.Key} closed with cleanup failures: {cleanupFailure.Message}");
+                    Log.Error(cleanupFailure, $"Prediction window {predictionKey.Key} closed with cleanup failures.");
                 }
                 return true;
             }
@@ -3559,7 +3564,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     try { TryRemoveActiveEffect(existing); }
                     catch (Exception cleanupException)
                     {
-                        GASLog.Error($"Reconciled GameplayEffect rollback failed: {cleanupException.Message}");
+                        Log.Error(cleanupException, "Reconciled GameplayEffect rollback failed.");
                     }
                 }
 
@@ -3858,7 +3863,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         }
                         catch (Exception cleanupException)
                         {
-                            GASLog.Error($"Prediction rollback failed for ability '{ability?.Name}': {cleanupException.Message}");
+                            Log.Error(cleanupException, $"Prediction rollback failed for ability '{ability?.Name}'.");
                         }
                     }
 
@@ -3870,7 +3875,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         }
                         catch (Exception cleanupException)
                         {
-                            GASLog.Error($"Ability activation rollback failed for '{ability.Name}': {cleanupException.Message}");
+                            Log.Error(cleanupException, $"Ability activation rollback failed for '{ability.Name}'.");
                         }
 
                         if (spec.IsActive)
@@ -3888,7 +3893,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                             }
                             catch (Exception cleanupException)
                             {
-                                GASLog.Error($"Ability activation tag rollback failed for '{ability?.Name}': {cleanupException.Message}");
+                                Log.Error(cleanupException, $"Ability activation tag rollback failed for '{ability?.Name}'.");
                             }
                             ability.InternalOnEndAbility();
                             MarkGrantedAbilitiesDirty();
@@ -3912,7 +3917,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         }
                         catch (Exception cleanupException)
                         {
-                            GASLog.Error($"Per-execution ability instance cleanup failed for '{ability.Name}': {cleanupException.Message}");
+                            Log.Error(cleanupException, $"Per-execution ability instance cleanup failed for '{ability.Name}'.");
                         }
                     }
                 }
@@ -3944,7 +3949,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"{observerName} observer failed after the authoritative state was committed: {exception.Message}");
+                        Log.Error(exception, $"{observerName} observer failed after the authoritative state was committed.");
                     }
                 }
             }
@@ -3989,7 +3994,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"OnPredictionWindowClosed observer failed after the local prediction transaction closed: {exception.Message}");
+                        Log.Error(exception, "OnPredictionWindowClosed observer failed after the local prediction transaction closed.");
                     }
                 }
             }
@@ -4031,7 +4036,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"OnStateDeltaResyncRequired observer failed: {exception.Message}");
+                        Log.Error(exception, "OnStateDeltaResyncRequired observer failed.");
                     }
                 }
             }
@@ -4271,7 +4276,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             catch (Exception exception)
             {
-                GASLog.Error($"GameplayEffect application failed before ownership closure: {exception.Message}");
+                Log.Error(exception, "GameplayEffect application failed before ownership closure.");
                 return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.ExecutionFailed);
             }
             finally
@@ -4284,7 +4289,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"GameplayEffectSpec reset failed and the lease was quarantined: {exception.Message}");
+                        Log.Error(exception, "GameplayEffectSpec reset failed and the lease was quarantined.");
                     }
                 }
             }
@@ -4379,7 +4384,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"GameplayEffect execution failed for '{spec.Def.Name}': {exception.Message}");
+                        Log.Error(exception, $"GameplayEffect execution failed for '{spec.Def.Name}'.");
                         spec.ReleaseRuntimeLease();
                         return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.ExecutionFailed);
                     }
@@ -4402,7 +4407,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
                 catch (Exception exception)
                 {
-                    GASLog.Error($"GameplayEffect stacking failed for '{spec.Def.Name}': {exception.Message}");
+                    Log.Error(exception, $"GameplayEffect stacking failed for '{spec.Def.Name}'.");
                     spec.ReleaseRuntimeLease();
                     return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.DurationCommitFailed);
                 }
@@ -4444,7 +4449,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         spec.ReleaseRuntimeLease();
                     }
 
-                    GASLog.Error($"GameplayEffect duration commit failed for '{spec.Def?.Name}': {exception.Message}");
+                    Log.Error(exception, $"GameplayEffect duration commit failed for '{spec.Def?.Name}'.");
                     return new GameplayEffectApplicationResult(GameplayEffectApplicationResultCode.DurationCommitFailed);
                 }
 
@@ -4512,7 +4517,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         catch (Exception exception)
                         {
                             CaptureCleanupFailure(ref cleanupFailure, exception);
-                            GASLog.Error($"Granted ability rollback failed: {exception.Message}");
+                            Log.Error(exception, "Granted ability rollback failed.");
                             if (grantedSpecs.Count > 0 &&
                                 ReferenceEquals(grantedSpecs[grantedSpecs.Count - 1], grantedSpec))
                             {
@@ -4558,7 +4563,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (cleanupFailure != null)
             {
-                GASLog.Error($"GameplayEffect rollback completed with cleanup failures: {cleanupFailure.Message}");
+                Log.Error(cleanupFailure, "GameplayEffect rollback completed with cleanup failures.");
             }
         }
 
@@ -4663,30 +4668,35 @@ namespace CycloneGames.GameplayAbilities.Runtime
             {
                 if (spec.Def.AssetTagsSnapshot.HasAny(immunityTags) || spec.Def.GrantedTagsSnapshot.HasAny(immunityTags))
                 {
-                    GASLog.Debug(sb => sb.Append("Apply GameplayEffect '").Append(spec.Def.Name).Append("' blocked: target has immunity to effect's tags."));
+                    Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Apply GameplayEffect '")
+                        .Append(effectName).Append("' blocked: target has immunity to effect's tags."));
                     return GameplayEffectApplicationResultCode.BlockedByImmunity;
                 }
                 // Also check dynamic tags on the spec instance
                 if (!spec.DynamicAssetTags.IsEmpty && spec.DynamicAssetTags.HasAny(immunityTags))
                 {
-                    GASLog.Debug(sb => sb.Append("Apply GameplayEffect '").Append(spec.Def.Name).Append("' blocked: target has immunity to effect's dynamic asset tags."));
+                    Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Apply GameplayEffect '")
+                        .Append(effectName).Append("' blocked: target has immunity to effect's dynamic asset tags."));
                     return GameplayEffectApplicationResultCode.BlockedByImmunity;
                 }
                 if (!spec.DynamicGrantedTags.IsEmpty && spec.DynamicGrantedTags.HasAny(immunityTags))
                 {
-                    GASLog.Debug(sb => sb.Append("Apply GameplayEffect '").Append(spec.Def.Name).Append("' blocked: target has immunity to effect's dynamic granted tags."));
+                    Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Apply GameplayEffect '")
+                        .Append(effectName).Append("' blocked: target has immunity to effect's dynamic granted tags."));
                     return GameplayEffectApplicationResultCode.BlockedByImmunity;
                 }
             }
 
             if (!HasAllMatchingGameplayTags(spec.Def.ApplicationRequiredTagsSnapshot))
             {
-                GASLog.Debug(sb => sb.Append("Apply GameplayEffect '").Append(spec.Def.Name).Append("' failed: does not meet application tag requirements (Required)."));
+                Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Apply GameplayEffect '")
+                    .Append(effectName).Append("' failed: does not meet application tag requirements (Required)."));
                 return GameplayEffectApplicationResultCode.MissingRequiredTags;
             }
             if (HasAnyMatchingGameplayTags(spec.Def.ApplicationForbiddenTagsSnapshot))
             {
-                GASLog.Debug(sb => sb.Append("Apply GameplayEffect '").Append(spec.Def.Name).Append("' failed: does not meet application tag requirements (Ignored)."));
+                Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Apply GameplayEffect '")
+                    .Append(effectName).Append("' failed: does not meet application tag requirements (Ignored)."));
                 return GameplayEffectApplicationResultCode.BlockedByForbiddenTags;
             }
 
@@ -4709,13 +4719,14 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
                 catch (Exception exception)
                 {
-                    GASLog.Error($"Custom GameplayEffect application requirement failed: {exception.Message}");
+                    Log.Error(exception, "Custom GameplayEffect application requirement failed.");
                     return GameplayEffectApplicationResultCode.BlockedByCustomRequirement;
                 }
 
                 if (!canApply)
                 {
-                    GASLog.Debug(sb => sb.Append("Apply GameplayEffect '").Append(spec.Def.Name).Append("' blocked by custom application requirement."));
+                    Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Apply GameplayEffect '")
+                        .Append(effectName).Append("' blocked by custom application requirement."));
                     return GameplayEffectApplicationResultCode.BlockedByCustomRequirement;
                 }
             }
@@ -4968,7 +4979,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
                     if (rollbackFailure != null)
                     {
-                        GASLog.Error($"GameplayEffect execution rollback completed with cleanup failures: {rollbackFailure.Message}");
+                        Log.Error(rollbackFailure, "GameplayEffect execution rollback completed with cleanup failures.");
                     }
                     System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(executionFailure).Throw();
                     throw;
@@ -5118,7 +5129,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                             }
                             catch (Exception exception)
                             {
-                                GASLog.Error($"Periodic GameplayEffect '{effect.Spec?.Def?.Name}' failed and was removed: {exception.Message}");
+                                Log.Error(exception, $"Periodic GameplayEffect '{effect.Spec?.Def?.Name}' failed and was removed.");
                                 RemoveActiveEffectAtIndex(i);
                                 RemoveFromStackingIndex(effect);
                                 OnEffectRemoved(effect, true);
@@ -5394,7 +5405,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"{observerName} observer failed after authoritative state commit: {exception.Message}");
+                        Log.Error(exception, $"{observerName} observer failed after authoritative state commit.");
                     }
                 }
             }
@@ -5592,7 +5603,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (cleanupFailure != null)
             {
-                GASLog.Error($"GameplayEffect removal completed with cleanup failures: {cleanupFailure.Message}");
+                Log.Error(cleanupFailure, "GameplayEffect removal completed with cleanup failures.");
             }
         }
 
@@ -5614,7 +5625,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             catch (Exception exception)
             {
-                GASLog.Error($"GameplayCue dispatch failed after authoritative state commit: {exception.Message}");
+                Log.Error(exception, "GameplayCue dispatch failed after authoritative state commit.");
             }
 
             NotifyGameplayCuesCommitted(
@@ -5694,8 +5705,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         }
                         catch (Exception exception)
                         {
-                            GASLog.Error(
-                                $"OnGameplayCueCommitted observer failed after state commit: {exception.Message}");
+                            Log.Error(exception, "OnGameplayCueCommitted observer failed after state commit.");
                         }
                     }
                 }
@@ -6383,8 +6393,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 if (deferredTriggerActivations.Count > 0)
                 {
                     deferredTriggerActivations.Clear();
-                    GASLog.Error(
-                        $"Deferred ability-trigger activation exceeded the per-flush budget of {Limits.MaxGrantedAbilities}; remaining requests were discarded.");
+                    Log.Error(Limits.MaxGrantedAbilities, static (budgetLimit, sb) =>
+                        sb.Append("Deferred ability-trigger activation exceeded the per-flush budget of ")
+                            .Append(budgetLimit).Append("; remaining requests were discarded."));
                 }
             }
             finally
@@ -6537,7 +6548,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (cleanupFailure != null)
             {
-                GASLog.Error($"AbilitySystemComponent disposal completed with cleanup failures: {cleanupFailure.Message}");
+                Log.Error(cleanupFailure, "AbilitySystemComponent disposal completed with cleanup failures.");
             }
         }
 
@@ -6711,7 +6722,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         existingEffect.RefreshDurationAndPeriod();
                     }
                 }
-                GASLog.Debug(sb => sb.Append("Stacking limit for ").Append(spec.Def.Name).Append(" reached."));
+                Log.Debug(spec.Def.Name, static (effectName, sb) => sb.Append("Stacking limit for ")
+                    .Append(effectName).Append(" reached."));
             }
             else
             {
@@ -6764,7 +6776,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (attribute == null)
             {
                 //  Zero-GC StringBuilder overload avoids string interpolation allocation in Release builds.
-                GASLog.Warning(sb => sb.Append("ApplyModifier failed: Attribute '").Append(mod.AttributeName).Append("' not found on ASC."));
+                Log.Warning(mod.AttributeName, static (attributeName, sb) => sb.Append("ApplyModifier failed: Attribute '")
+                    .Append(attributeName).Append("' not found on ASC."));
                 return;
             }
 
@@ -7423,7 +7436,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"{observerName} observer failed after the tag state was committed: {exception.Message}");
+                        Log.Error(exception, $"{observerName} observer failed after the tag state was committed.");
                     }
                 }
             }
@@ -7592,7 +7605,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
             if (!TryApplyStateDelta(delta, out GASStateDeltaRejectionReason rejectionReason) &&
                 rejectionReason != GASStateDeltaRejectionReason.None)
             {
-                GASLog.Warning(sb => sb.Append("Rejected GAS state delta: ").Append(rejectionReason).Append('.'));
+                Log.Warning(rejectionReason, static (reason, sb) => sb.Append("Rejected GAS state delta: ")
+                    .Append(reason).Append('.'));
             }
         }
 
@@ -7669,7 +7683,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             catch (Exception exception)
             {
-                GASLog.Warning(sb => sb.Append("GAS state delta application failed and requires a full-state resync: ").Append(exception.Message));
+                Log.Warning(
+                    exception,
+                    "GAS state delta application failed and requires a full-state resync.");
                 RequireStateDeltaResync(GASStateDeltaRejectionReason.ApplicationFailed);
                 rejectionReason = GASStateDeltaRejectionReason.ApplicationFailed;
                 return false;
@@ -8130,7 +8146,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
             }
             catch (Exception exception)
             {
-                GASLog.Warning(sb => sb.Append("Rejected GAS state delta during validation preflight: ").Append(exception.Message));
+                Log.Warning(
+                    exception,
+                    "Rejected GAS state delta during validation preflight.");
                 rejectionReason = GASStateDeltaRejectionReason.InvalidPayload;
                 return false;
             }

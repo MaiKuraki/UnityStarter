@@ -10,11 +10,14 @@ using R3;
 using CycloneGames.InputSystem.Runtime;
 using CycloneGames.InputSystem.Runtime.Generated;
 using CycloneGames.IO.Unity;
+using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Sample
 {
     public class GameInitializer_Sample : MonoBehaviour
     {
+        private static readonly LogChannel Log = InputSystemSampleLog.Channel;
+
         public enum StartupMode
         {
             AutoJoinLockedSinglePlayer,
@@ -119,7 +122,9 @@ namespace CycloneGames.InputSystem.Sample
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    "[GameInitializer_Sample] Startup failed; owned state will be shut down.");
                 ShutdownOwnedState();
                 if (this != null)
                 {
@@ -203,14 +208,14 @@ namespace CycloneGames.InputSystem.Sample
 
             if (_playerPrefab == null)
             {
-                Debug.LogError("Player Prefab is not set in the GameInitializer_Sample.", this);
+                Log.Error("Player Prefab is not set in the GameInitializer_Sample.");
                 return;
             }
 
             if (_spawnPoints == null || playerId < 0 || playerId >= _spawnPoints.Length ||
                 _spawnPoints[playerId] == null)
             {
-                Debug.LogError($"No valid spawn point is configured for Player {playerId}.", this);
+                Log.Error($"No valid spawn point is configured for Player {playerId}.");
                 return;
             }
 
@@ -222,7 +227,7 @@ namespace CycloneGames.InputSystem.Sample
             SimplePlayerController controller = playerInstance.GetComponent<SimplePlayerController>();
             if (controller == null)
             {
-                Debug.LogError("The sample player prefab requires SimplePlayerController.", playerInstance);
+                Log.Error("The sample player prefab requires SimplePlayerController.");
                 Destroy(playerInstance);
                 return;
             }
@@ -249,8 +254,13 @@ namespace CycloneGames.InputSystem.Sample
             gameplayContext.AddTo(controller.destroyCancellationToken);
             inputPlayer.PushContext(gameplayContext);
             inputPlayer.ActiveDeviceKind
-                .Subscribe(kind =>
-                    Debug.Log($"Player {playerId} active device changed to: {kind}", controller))
+                .Subscribe(kind => Log.Info(
+                    (PlayerId: playerId, Kind: kind),
+                    static (state, builder) => builder
+                        .Append("Player ")
+                        .Append(state.PlayerId)
+                        .Append(" active device changed to: ")
+                        .Append(state.Kind)))
                 .AddTo(controller.destroyCancellationToken);
         }
 

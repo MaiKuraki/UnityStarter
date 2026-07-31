@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEditor;
+using CycloneGames.Logging;
 using UnityEngine;
 using CycloneGames.Audio.Runtime;
 
@@ -10,6 +11,8 @@ namespace CycloneGames.Audio.Editor
     [CustomEditor(typeof(AudioPoolConfig))]
     public class AudioPoolConfigEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = AudioEditorLog.Channel;
+
         private static string[] allConfigGuids;
         private static bool hasCheckedForDuplicates;
 
@@ -208,7 +211,7 @@ namespace CycloneGames.Audio.Editor
                     foreach (var guid in allConfigGuids)
                     {
                         string path = AssetDatabase.GUIDToAssetPath(guid);
-                        Debug.Log($"AudioPoolConfig found at: {path}");
+                        Log.Info($"AudioPoolConfig found at: {path}");
                     }
                 }
 

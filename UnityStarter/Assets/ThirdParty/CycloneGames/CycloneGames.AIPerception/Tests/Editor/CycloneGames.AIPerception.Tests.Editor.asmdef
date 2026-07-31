@@ -4,6 +4,7 @@
     "references": [
         "CycloneGames.AIPerception",
         "CycloneGames.AIPerception.Editor",
+        "CycloneGames.Logging",
         "Unity.Collections",
         "Unity.Mathematics"
     ],

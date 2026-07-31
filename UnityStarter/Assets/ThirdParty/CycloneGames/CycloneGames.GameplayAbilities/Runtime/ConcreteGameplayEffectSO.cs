@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Runtime
@@ -10,6 +11,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     [CreateAssetMenu(fileName = "GE_", menuName = GameplayAbilitiesAssetMenuPaths.GameplayEffectDefinition)]
     public class ConcreteGameplayEffectSO : GameplayEffectSO
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         /// <summary>
         /// Creates a runtime instance of the GameplayEffect based on the data defined in this ScriptableObject.
         /// </summary>
@@ -105,10 +108,10 @@ namespace CycloneGames.GameplayAbilities.Runtime
                                 serializableMod.WarnIfSetByCallerMissing),
                         serializableMod.EvaluationChannel);
                 case EGameplayEffectMagnitudeCalculation.CustomCalculation:
-                    GASLog.Warning(sb => sb.Append("Modifier on effect asset uses CustomCalculation magnitude, ")
+                    Log.Warning(serializableMod.AttributeName, static (attributeName, sb) => sb.Append("Modifier on effect asset uses CustomCalculation magnitude, ")
                         .Append("but ScriptableObject modifiers cannot serialize custom calculation instances. ")
                         .Append("Falling back to ScalableFloat for attribute '")
-                        .Append(serializableMod.AttributeName).Append("'."));
+                        .Append(attributeName).Append("'."));
                     break;
             }
 

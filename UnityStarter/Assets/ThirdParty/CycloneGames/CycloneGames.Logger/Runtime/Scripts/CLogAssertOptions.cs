@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Logger
 {
@@ -12,7 +13,7 @@ namespace CycloneGames.Logger
     public sealed class CLogAssertOptions
     {
         public bool Enabled = true;
-        public LogLevel FailureLevel = LogLevel.Error;
+        public LogSeverity FailureLevel = LogSeverity.Error;
         public CLogAssertFailureBehavior FailureBehavior = CLogAssertFailureBehavior.LogOnly;
         public string Category = "Assert";
         public bool FlushBeforeThrow = true;
@@ -56,7 +57,7 @@ namespace CycloneGames.Logger
 
         private void Validate()
         {
-            if (!Enum.IsDefined(typeof(LogLevel), FailureLevel)) throw new ArgumentOutOfRangeException(nameof(FailureLevel), "Unknown failure log level.");
+            if (!Enum.IsDefined(typeof(LogSeverity), FailureLevel)) throw new ArgumentOutOfRangeException(nameof(FailureLevel), "Unknown failure log severity.");
             if (!Enum.IsDefined(typeof(CLogAssertFailureBehavior), FailureBehavior)) throw new ArgumentOutOfRangeException(nameof(FailureBehavior), "Unknown failure behavior.");
             if (FlushTimeoutMs < 0) throw new ArgumentOutOfRangeException(nameof(FlushTimeoutMs), "FlushTimeoutMs cannot be negative.");
         }
@@ -67,7 +68,7 @@ namespace CycloneGames.Logger
         public static readonly CLogAssertRuntimeOptions Default = CLogAssertOptions.CreateRuntimeOptions(CLogAssertOptions.Default);
 
         public readonly bool Enabled;
-        public readonly LogLevel FailureLevel;
+        public readonly LogSeverity FailureLevel;
         public readonly CLogAssertFailureBehavior FailureBehavior;
         public readonly string Category;
         public readonly bool FlushBeforeThrow;
@@ -75,7 +76,7 @@ namespace CycloneGames.Logger
 
         public CLogAssertRuntimeOptions(
             bool enabled,
-            LogLevel failureLevel,
+            LogSeverity failureLevel,
             CLogAssertFailureBehavior failureBehavior,
             string category,
             bool flushBeforeThrow,
@@ -89,7 +90,7 @@ namespace CycloneGames.Logger
             FlushTimeoutMs = flushTimeoutMs;
         }
 
-        public bool ShouldLog => FailureLevel != LogLevel.None && (FailureBehavior == CLogAssertFailureBehavior.LogOnly || FailureBehavior == CLogAssertFailureBehavior.LogAndThrow);
+        public bool ShouldLog => FailureLevel != LogSeverity.None && (FailureBehavior == CLogAssertFailureBehavior.LogOnly || FailureBehavior == CLogAssertFailureBehavior.LogAndThrow);
         public bool ShouldThrow => FailureBehavior == CLogAssertFailureBehavior.Throw || FailureBehavior == CLogAssertFailureBehavior.LogAndThrow;
 
         public string ResolveCategory(string category)

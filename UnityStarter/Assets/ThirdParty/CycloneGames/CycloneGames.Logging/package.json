@@ -1,0 +1,19 @@
+{
+  "name": "com.cyclone-games.logging",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Logging",
+  "description": "Engine-independent logging contracts, category channels, null defaults, and process-writer composition for CycloneGames packages.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {},
+  "keywords": [
+    "CycloneGames",
+    "Logging",
+    "Diagnostics"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

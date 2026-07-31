@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -9,6 +10,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class Pawn : Actor
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         [SerializeField] private bool bUseControllerRotationPitch;
         [SerializeField] private bool bUseControllerRotationYaw;
         [SerializeField] private bool bUseControllerRotationRoll;
@@ -207,7 +210,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                     }
                     catch (System.Exception exception)
                     {
-                        Debug.LogException(exception, this);
+                        Log.Error(
+                            exception,
+                            $"Pawn '{name}' failed to release its previous Controller during destruction.");
                     }
                 }
                 else

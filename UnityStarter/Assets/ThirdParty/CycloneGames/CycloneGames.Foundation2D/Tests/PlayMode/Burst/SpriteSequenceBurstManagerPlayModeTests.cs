@@ -1,6 +1,8 @@
 using System.Collections;
 using System.Collections.Generic;
 using System.Reflection;
+using CycloneGames.Foundation2D.Tests.Support;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using UnityEngine;
 using UnityEngine.TestTools;
@@ -47,10 +49,24 @@ namespace CycloneGames.Foundation2D.Runtime.Tests
             Assert.That(first.RegisterController(controller, out registrationAdded), Is.True);
             Assert.That(registrationAdded, Is.False);
 
-            LogAssert.Expect(LogType.Error, new System.Text.RegularExpressions.Regex("already owned by another active"));
-            Assert.That(second.RegisterController(controller, out registrationAdded), Is.False);
-            Assert.That(registrationAdded, Is.False);
-            Assert.That(second.OwnedControllerCount, Is.Zero);
+            RecordedLogEntry[] entries;
+            using (var logs = new RecordingLogWriterScope("CycloneGames.Foundation2D.Burst"))
+            {
+                Assert.That(second.RegisterController(controller, out registrationAdded), Is.False);
+                Assert.That(registrationAdded, Is.False);
+                Assert.That(second.OwnedControllerCount, Is.Zero);
+                entries = logs.Snapshot();
+            }
+
+            Assert.That(entries, Has.Length.EqualTo(1));
+            Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+            Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.Foundation2D.Burst"));
+            Assert.That(
+                entries[0].Message,
+                Is.EqualTo(
+                    "SpriteSequenceController 'Foundation2D.Owner.Controller' is already owned by another active " +
+                    "SpriteSequenceBurstManager. Manager 'Foundation2D.Owner.Second' will not update it."));
+            Assert.That(entries[0].Exception, Is.Null);
 
             Assert.That(first.UnregisterControllers(new[] { controller }), Is.EqualTo(1));
             Assert.That(first.OwnedControllerCount, Is.Zero);
@@ -110,8 +126,22 @@ namespace CycloneGames.Foundation2D.Runtime.Tests
             SpriteSequenceController rejected = rejectedObject.AddComponent<SpriteSequenceController>();
 
             Assert.That(manager.RegisterController(first), Is.True);
-            LogAssert.Expect(LogType.Warning, new System.Text.RegularExpressions.Regex("reached maxControllerCapacity=1"));
-            Assert.That(manager.RegisterController(rejected), Is.False);
+            RecordedLogEntry[] entries;
+            using (var logs = new RecordingLogWriterScope("CycloneGames.Foundation2D.Burst"))
+            {
+                Assert.That(manager.RegisterController(rejected), Is.False);
+                entries = logs.Snapshot();
+            }
+
+            Assert.That(entries, Has.Length.EqualTo(1));
+            Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Warning));
+            Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.Foundation2D.Burst"));
+            Assert.That(
+                entries[0].Message,
+                Is.EqualTo(
+                    "SpriteSequenceBurstManager 'Foundation2D.Memory.Manager' reached maxControllerCapacity=1. " +
+                    "Additional controllers remain unclaimed and use their fallback policy."));
+            Assert.That(entries[0].Exception, Is.Null);
 
             SpriteSequenceBurstMemorySnapshot snapshot = manager.GetMemorySnapshot();
             Assert.That(snapshot.OwnedControllerCount, Is.EqualTo(1));

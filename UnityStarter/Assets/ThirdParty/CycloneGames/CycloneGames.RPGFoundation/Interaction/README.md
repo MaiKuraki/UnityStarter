@@ -99,11 +99,14 @@ sequenceDiagram
 | **VitalRouter**                  | Command routing and interceptor pipeline                        | Yes      |
 | **UniTask**                      | Unity-oriented asynchronous execution and cancellation          | Yes      |
 | **CycloneGames.Factory.Runtime** | Object pooling (`ObjectPool`, `IPoolable`, `MonoPrefabFactory`) | Yes      |
+| **CycloneGames.Logging**         | Backend-neutral `LogChannel` diagnostics                        | Yes      |
 | **CycloneGames.RPGFoundation.Interaction.Networking** | Optional `NetworkVector3` and DTO bridge | Optional |
 | **CycloneGames.GameplayFramework.Runtime** | Optional `Actor` / world adapter bridge                | Optional |
 | **CycloneGames.DeterministicMath.Core** | Optional `FPVector3` / `FPInt64` authority bridge        | Optional |
 
 The DeterministicMath assemblies support `com.cyclone-games.deterministic-math` `1.x`, are gated by package-derived `CYCLONE_RPGFOUNDATION_HAS_DETERMINISTIC_MATH`, and are not auto-referenced. The combined GameplayFramework bridge also requires `com.cyclone-games.gameplay-framework` `1.x`. Install the optional packages through UPM and add explicit integration asmdef references; do not define the capability symbols in PlayerSettings.
+
+Runtime diagnostics use `CycloneGames.RPGFoundation.Interaction`; Editor diagnostics use `CycloneGames.RPGFoundation.Interaction.Editor`. The module never owns logging backend lifecycle. The application composition root selects an `ILogWriter`; absent a backend, the logging contract uses `NullLogWriter`.
 
 ## Quick Start
 
@@ -482,12 +485,16 @@ Cancel: `interactable.ForceEndInteraction(InteractionCancelReason.Interrupted);`
 ### Instigator Tracking
 
 ```csharp
+using CycloneGames.Logging;
+
 public class CoopChest : Interactable
 {
+    private static readonly LogChannel Log = LogChannel.Create("Game.Interaction");
+
     protected override async UniTask OnDoInteractAsync(CancellationToken ct)
     {
         if (CurrentInstigator is GameObjectInstigator goi)
-            Debug.Log($"Opened by: {goi.GameObject.name}");
+            Log.Info($"Opened by: {goi.GameObject.name}");
         await HoldTimerAsync(ct);
         GiveItemToPlayer(CurrentInstigator);
     }
@@ -526,9 +533,12 @@ InteractionSystem.Instance.OnAnyInteractionCompleted += (target, instigator, suc
 ### Nearby Candidates
 
 ```csharp
+using CycloneGames.Logging;
+
+LogChannel log = LogChannel.Create("Game.Interaction");
 IReadOnlyList<InteractionCandidate> candidates = detector.NearbyInteractables;
 foreach (var c in candidates)
-    Debug.Log($"{c.Interactable.InteractionPrompt}: score={c.Score:F1}");
+    log.Info($"{c.Interactable.InteractionPrompt}: score={c.Score:F1}");
 ```
 
 Gamepad cycling: `detector.CycleTarget(+1)` / `detector.CycleTarget(-1)`.

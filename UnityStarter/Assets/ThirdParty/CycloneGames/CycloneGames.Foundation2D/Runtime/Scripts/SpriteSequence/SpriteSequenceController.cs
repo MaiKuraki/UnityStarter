@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Foundation2D.Runtime
@@ -13,6 +13,8 @@ namespace CycloneGames.Foundation2D.Runtime
 
     public sealed class SpriteSequenceController : MonoBehaviour
     {
+        private static readonly LogChannel Log = Foundation2DLog.Channel;
+
         public enum PlayMode { Once = 0, Loop = 1, PingPong = 2 }
         public enum PlayDirection { Forward = 0, Reverse = 1 }
         public enum IntervalHoldFrame { Last = 0, First = 1, Blank = 2 }
@@ -59,7 +61,6 @@ namespace CycloneGames.Foundation2D.Runtime
         private bool _invalidTimingWarningIssued;
         private bool _catchUpWarningIssued;
 
-        private const string LogCategory = "SpriteSequence.Controller";
         private const float MinimumFrameRate = 0.01f;
 
         public event Action<int> OnFrameChanged;
@@ -444,7 +445,9 @@ namespace CycloneGames.Foundation2D.Runtime
             }
             catch (Exception exception)
             {
-                CLogger.LogError($"Renderer commit failed. object={name}, exception={exception}", LogCategory);
+                Log.Error(
+                    exception,
+                    $"Renderer commit failed. object={name}");
                 return false;
             }
         }
@@ -463,7 +466,9 @@ namespace CycloneGames.Foundation2D.Runtime
             }
             catch (Exception exception)
             {
-                CLogger.LogError($"Renderer initialization failed. object={name}, exception={exception}", LogCategory);
+                Log.Error(
+                    exception,
+                    $"Renderer initialization failed. object={name}");
                 return false;
             }
         }
@@ -491,14 +496,14 @@ namespace CycloneGames.Foundation2D.Runtime
 
             if (rendererComponent != null)
             {
-                CLogger.LogError($"Assigned rendererComponent does not implement ISpriteSequenceRenderer. object={name}", LogCategory);
+                Log.Error($"Assigned rendererComponent does not implement ISpriteSequenceRenderer. object={name}");
                 return;
             }
 
             _renderer = GetComponent<ISpriteSequenceRenderer>();
             if (_renderer == null)
             {
-                CLogger.LogError($"No ISpriteSequenceRenderer found. Add UGUISequenceRenderer or SpriteRendererSequenceRenderer. object={name}", LogCategory);
+                Log.Error($"No ISpriteSequenceRenderer found. Add UGUISequenceRenderer or SpriteRendererSequenceRenderer. object={name}");
             }
         }
 
@@ -514,10 +519,9 @@ namespace CycloneGames.Foundation2D.Runtime
                 return;
             }
 
-            CLogger.LogWarning(
+            Log.Warning(
                 $"UpdateDriver is BurstManaged but no active batch owner has claimed this controller. " +
-                $"FallbackToMonoUpdate={fallbackToMonoUpdateWhenBurstUnavailable}. object={name}",
-                LogCategory);
+                $"FallbackToMonoUpdate={fallbackToMonoUpdateWhenBurstUnavailable}. object={name}");
             _loggedBurstFallbackWarning = true;
         }
 
@@ -530,10 +534,9 @@ namespace CycloneGames.Foundation2D.Runtime
 
             if (result.CatchUpLimited && !_catchUpWarningIssued)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     $"Playback catch-up exceeded maxFrameAdvancesPerUpdate={ResolveMaxFrameAdvances(maxFrameAdvancesPerUpdate)}; " +
-                    $"excess elapsed time was dropped. object={name}",
-                    LogCategory);
+                    $"excess elapsed time was dropped. object={name}");
                 _catchUpWarningIssued = true;
             }
         }
@@ -552,7 +555,9 @@ namespace CycloneGames.Foundation2D.Runtime
             }
             catch (Exception exception)
             {
-                CLogger.LogError($"{nameof(OnFrameChanged)} callback failed. object={name}, exception={exception}", LogCategory);
+                Log.Error(
+                    exception,
+                    $"{nameof(OnFrameChanged)} callback failed. object={name}");
             }
         }
 
@@ -569,7 +574,9 @@ namespace CycloneGames.Foundation2D.Runtime
             }
             catch (Exception exception)
             {
-                CLogger.LogError($"{callbackName} callback failed. object={name}, exception={exception}", LogCategory);
+                Log.Error(
+                    exception,
+                    $"{callbackName} callback failed. object={name}");
             }
         }
 
@@ -682,10 +689,9 @@ namespace CycloneGames.Foundation2D.Runtime
             {
                 if (!_speedRangeWarningIssued)
                 {
-                    CLogger.LogWarning(
+                    Log.Warning(
                         $"SpeedMultiplier {clamped:F3} is out of discrete range [{min:F3}, {max:F3}]. " +
-                        $"It will be clamped before quantization. object={name}",
-                        LogCategory);
+                        $"It will be clamped before quantization. object={name}");
                     _speedRangeWarningIssued = true;
                 }
             }
@@ -736,7 +742,7 @@ namespace CycloneGames.Foundation2D.Runtime
                 return;
             }
 
-            CLogger.LogWarning($"Invalid playback timing input was ignored or normalized. object={name}", LogCategory);
+            Log.Warning($"Invalid playback timing input was ignored or normalized. object={name}");
             _invalidTimingWarningIssued = true;
         }
 

@@ -9,6 +9,7 @@
         "CycloneGames.Localization.Core",
         "CycloneGames.Localization.Runtime",
         "CycloneGames.AssetManagement.Runtime",
+        "CycloneGames.Logging",
         "Unity.TextMeshPro",
         "UniTask"
     ],

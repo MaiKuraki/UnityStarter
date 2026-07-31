@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using CycloneGames.Logging;
 using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
@@ -10,6 +11,8 @@ namespace CycloneGames.Audio.Runtime
 {
     internal static class AudioClipHandleRelease
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         internal static void Safe(IAudioClipHandle handle)
         {
             if (handle == null) return;
@@ -20,7 +23,7 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
         }
     }

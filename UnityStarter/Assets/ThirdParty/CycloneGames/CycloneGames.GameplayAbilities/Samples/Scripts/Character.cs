@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.Serialization;
 
@@ -11,6 +11,8 @@ namespace CycloneGames.GameplayAbilities.Sample
     [RequireComponent(typeof(AbilitySystemComponentHolder))]
     public class Character : MonoBehaviour
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private AbilitySystemComponentHolder ascHolder;
         public AbilitySystemComponent AbilitySystemComponent => ascHolder?.AbilitySystemComponent;
         public CharacterAttributeSet AttributeSet { get; private set; }
@@ -124,7 +126,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (levelsGained > 0)
             {
                 int finalLevel = initialLevel + levelsGained;
-                CLogger.LogInfo($"{name} gained {levelsGained} level(s)! Reached level {finalLevel}.");
+                Log.Info($"{name} gained {levelsGained} level(s)! Reached level {finalLevel}.");
 
                 var mods = new List<ModifierInfo>
                 {
@@ -164,7 +166,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
             // Apply the bounty effect to the killer
             killerASC.ApplyGameplayEffectSpecToSelf(spec);
-            CLogger.LogInfo($"{killerASC.OwnerActor} received bounty from {this.name}.");
+            Log.Info($"{killerASC.OwnerActor} received bounty from {this.name}.");
         }
 
         void Update()

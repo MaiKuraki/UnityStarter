@@ -93,7 +93,11 @@ flowchart LR
 | `CycloneGames.Foundation2D.Editor` | Inspectors, validation, previews, and material authoring | Editor only |
 | `CycloneGames.Foundation2D.Sample.Runtime` / `.Editor` | End-to-end benchmark sample | Asset-hosted sample assemblies compile when their constraints are met; require the Burst integration and Factory Unity adapter |
 
-Runtime uses `CycloneGames.Logger` for diagnostics and Unity UI for the `Image` adapter. Burst and Collections are optional integration dependencies; the base Runtime assembly does not reference them. The package lives under `Assets/ThirdParty`, so its `package.json` is metadata and does not install sibling packages automatically. The current checkout's `Packages/manifest.json`, lock file, asmdefs, and compilation result are the dependency source of truth.
+Foundation2D uses `CycloneGames.Logging` for diagnostics and Unity UI for the `Image` adapter. Stable `LogChannel` categories are rooted at `CycloneGames.Foundation2D`. The package does not initialize, replace, flush, or shut down a logging writer; the contract's `NullLogWriter` is safe when no backend is installed, and the application composition root may install `CycloneGames.Logger` or another `ILogWriter`. Burst and Collections are optional integration dependencies; the base Runtime assembly does not reference them. The package lives under `Assets/ThirdParty`, so its `package.json` is metadata and does not install sibling packages automatically. The current checkout's `Packages/manifest.json`, lock file, asmdefs, and compilation result are the dependency source of truth.
+
+Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
+
+The benchmark runtime asmdef applies the same convention through `Samples/Benchmark/Runtime/Diagnostics/Foundation2DBenchmarkLog.cs` and preserves `CycloneGames.Foundation2D.Benchmark`.
 
 No PlayerSettings scripting define is required. The Burst integration uses package `versionDefines` and assembly `defineConstraints`.
 
@@ -223,7 +227,7 @@ The base implementation uses Unity APIs available in the project's supported Uni
 | Windows, Linux, macOS | Mono and IL2CPP-capable Unity presentation path | Release Player smoke, profiler capture, shader variants, target graphics APIs |
 | Android | Mobile-safe bounded state work; no background Unity API calls | ARM64 IL2CPP, Vulkan/GLES, atlas compression/external alpha, thermal and memory pressure |
 | iOS | AOT-friendly explicit types and no dynamic code generation | Metal IL2CPP build, masking, atlas alpha, device memory and suspend/resume |
-| WebGL | Base Mono-style update remains available without the Burst integration; benchmark file logging is disabled | WebGL build, browser memory, worker availability, shader precision and UI masking |
+| WebGL | Base Mono-style update remains available without the Burst integration; the benchmark uses the host-configured logging writer and owns no file sink | WebGL build, browser memory, worker availability, logging backend fallback, shader precision and UI masking |
 | Dedicated Server | Presentation module can be omitted; it is not an authoritative simulation dependency | Headless composition and stripping check if the assembly is included |
 | Future consoles | No platform SDK assumptions are embedded in the core API | Platform-holder SDK build, shader compiler, memory, suspend/resume and certification checks |
 
@@ -231,17 +235,11 @@ Verify Player, IL2CPP, Burst, mobile, WebGL, console, and long-duration stabilit
 
 ## Common Scenarios
 
-Runtime playback writes no files, preferences, registry entries, save data, or hidden global settings. It does not use `PlayerPrefs`, `EditorPrefs`, or `SessionState`.
+Runtime playback and the benchmark sample write no files, preferences, registry entries, save data, or hidden global settings. They do not use `PlayerPrefs`, `EditorPrefs`, or `SessionState`.
 
 The Editor can create a `.mat` asset only after an explicit user action. The chosen asset path is visible, version-control ownership belongs to the project, and the asset can be deleted when no renderer references it. No module-owned migration runs automatically.
 
-The benchmark can write a rotating log under:
-
-```text
-Application.persistentDataPath/Logs/SpriteSequenceBenchmark.log
-```
-
-The leaf filename is validated, rotation is bounded, and file logging is disabled for WebGL Player. Benchmark logs are diagnostics, not a source of truth, and may be deleted safely when no process is writing them.
+The benchmark emits its text report through the `CycloneGames.Foundation2D.Benchmark` category and never constructs or owns a file sink. If a product needs file output, its composition root must install and configure a suitable logging backend. File location, rotation, retention, platform fallback, flush, and shutdown then belong to that host; the benchmark remains independent of those policies.
 
 ### Benchmarking
 

@@ -5,7 +5,8 @@
         "UniTask",
         "VitalRouter.Unity",
         "CycloneGames.Cheat.Runtime",
-        "CycloneGames.Cheat.Core"
+        "CycloneGames.Cheat.Core",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

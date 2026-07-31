@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 
@@ -11,6 +12,8 @@ namespace CycloneGames.Utility.Editor
     /// </summary>
     public static class OpenPersistentDataPath
     {
+        private static readonly LogChannel Log = UtilityEditorLog.Channel;
+
         [MenuItem("Tools/CycloneGames/Open Persistent Data Path")]
         public static void Open()
         {
@@ -35,7 +38,7 @@ namespace CycloneGames.Utility.Editor
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception, "The persistent data directory could not be opened.");
                 EditorUtility.DisplayDialog(
                     "Open Persistent Data Path",
                     "The persistent data directory could not be opened. See the Console for details.",

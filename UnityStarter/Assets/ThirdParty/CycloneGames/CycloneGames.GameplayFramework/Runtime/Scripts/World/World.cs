@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Threading;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using Unity.Cinemachine;
 using UnityEngine;
@@ -33,6 +34,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public sealed class World : IDisposable
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         /// <summary>
         /// Implementation safety ceiling for actors retained by one World. Product admission
         /// budgets should normally be lower than this value.
@@ -186,8 +189,10 @@ namespace CycloneGames.GameplayFramework.Runtime
                     catch (Exception exception)
                     {
                         // One Actor cannot starve the rest of the phase. Exceptions remain
-                        // observable with the failing Actor as the Unity log context.
-                        Debug.LogException(exception, actor);
+                        // observable through the framework logging pipeline.
+                        Log.Error(
+                            exception,
+                            $"Actor '{actor.name}' Tick failed during '{phase}'; dispatch will continue with the remaining actors.");
                     }
                 }
             }
@@ -553,7 +558,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(
+                    exception,
+                    "GameMode shutdown after World initialization failure failed; World cleanup will continue.");
             }
             finally
             {
@@ -577,7 +584,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(
+                    exception,
+                    $"GameMode immediate shutdown failed for reason '{reason}'; World cleanup will continue.");
             }
             finally
             {
@@ -991,7 +1000,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             catch (Exception exception)
             {
                 // Cancellation observers are not allowed to interrupt ownership cleanup.
-                Debug.LogException(exception);
+                Log.Error(
+                    exception,
+                    "A World lifetime cancellation observer failed; ownership cleanup will continue.");
             }
         }
 
@@ -1014,7 +1025,9 @@ namespace CycloneGames.GameplayFramework.Runtime
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, actor);
+                    Log.Error(
+                        exception,
+                        $"Actor '{actor.name}' failed to unbind during World shutdown for reason '{reason}'.");
                 }
                 finally
                 {

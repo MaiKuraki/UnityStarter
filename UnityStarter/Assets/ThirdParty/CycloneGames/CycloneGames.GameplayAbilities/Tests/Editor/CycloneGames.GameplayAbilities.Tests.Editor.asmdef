@@ -8,7 +8,7 @@
         "Unity.PerformanceTesting",
         "CycloneGames.DeterministicMath.Core",
         "CycloneGames.GameplayTags.Core",
-        "CycloneGames.Logger"
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [
         "Editor"

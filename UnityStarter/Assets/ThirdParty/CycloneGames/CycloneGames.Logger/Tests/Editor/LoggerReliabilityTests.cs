@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Threading;
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.Logger.Tests.Editor
@@ -15,10 +16,10 @@ namespace CycloneGames.Logger.Tests.Editor
             using var logger = CreateSingleThreaded(maxMessages: 1, maxCharacters: 128);
             var sink = new RecordingSink();
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "first", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "first", filePath: string.Empty, memberName: string.Empty);
 
             bool invoked = false;
-            logger.Log(LogLevel.Info, builder =>
+            logger.Write(LogSeverity.Info, builder =>
             {
                 invoked = true;
                 builder.Append("second");
@@ -39,9 +40,9 @@ namespace CycloneGames.Logger.Tests.Editor
             var sink = new RecordingSink();
             logger.AddLogger(sink);
 
-            logger.Log(LogLevel.Error, "critical", filePath: string.Empty, memberName: string.Empty);
-            logger.Log(LogLevel.Info, "normal-old", filePath: string.Empty, memberName: string.Empty);
-            logger.Log(LogLevel.Info, "normal-new", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Error, "critical", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "normal-old", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "normal-new", filePath: string.Empty, memberName: string.Empty);
             logger.Pump(8);
 
             CollectionAssert.AreEqual(new[] { "critical", "normal-new" }, sink.Messages);
@@ -56,11 +57,11 @@ namespace CycloneGames.Logger.Tests.Editor
             using var logger = CLoggerFactory.CreateSingleThreaded(options);
             var sink = new RecordingSink();
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "old", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "old", filePath: string.Empty, memberName: string.Empty);
 
             bool invoked = false;
-            logger.Log(
-                LogLevel.Info,
+            logger.Write(
+                LogSeverity.Info,
                 builder =>
                 {
                     invoked = true;
@@ -84,8 +85,8 @@ namespace CycloneGames.Logger.Tests.Editor
             var sink = new RecordingSink();
             logger.AddLogger(sink);
 
-            logger.Log(
-                LogLevel.Info,
+            logger.Write(
+                LogSeverity.Info,
                 static builder => throw new InvalidOperationException("Expected builder failure."),
                 filePath: string.Empty,
                 memberName: string.Empty);
@@ -105,8 +106,8 @@ namespace CycloneGames.Logger.Tests.Editor
 
             for (int i = 0; i < 32; i++)
             {
-                logger.Log(
-                    LogLevel.Info,
+                logger.Write(
+                    LogSeverity.Info,
                     static builder => throw new InvalidOperationException("Expected builder failure."),
                     filePath: string.Empty,
                     memberName: string.Empty);
@@ -126,8 +127,8 @@ namespace CycloneGames.Logger.Tests.Editor
             using var logger = CreateSingleThreaded(2, 256);
             logger.AddLogger(new RecordingSink());
 
-            Assert.Throws<OutOfMemoryException>(() => logger.Log(
-                LogLevel.Info,
+            Assert.Throws<OutOfMemoryException>(() => logger.Write(
+                LogSeverity.Info,
                 static builder => throw new OutOfMemoryException("Synthetic test failure."),
                 filePath: string.Empty,
                 memberName: string.Empty));
@@ -149,7 +150,7 @@ namespace CycloneGames.Logger.Tests.Editor
                 });
             var sink = new RecordingSink();
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "trip", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "trip", filePath: string.Empty, memberName: string.Empty);
 
             var producers = new Thread[8];
             for (int i = 0; i < producers.Length; i++)
@@ -158,7 +159,7 @@ namespace CycloneGames.Logger.Tests.Editor
                 {
                     for (int messageIndex = 0; messageIndex < 100; messageIndex++)
                     {
-                        logger.Log(LogLevel.Info, "message", filePath: string.Empty, memberName: string.Empty);
+                        logger.Write(LogSeverity.Info, "message", filePath: string.Empty, memberName: string.Empty);
                     }
                 });
                 producers[i].Start();
@@ -185,8 +186,8 @@ namespace CycloneGames.Logger.Tests.Editor
             LoggerMemoryStatistics before = CLogger.GetMemoryStatistics();
             bool builderInvoked = false;
 
-            Assert.Throws<OutOfMemoryException>(() => logger.Log(
-                LogLevel.Info,
+            Assert.Throws<OutOfMemoryException>(() => logger.Write(
+                LogSeverity.Info,
                 builder =>
                 {
                     builderInvoked = true;
@@ -208,8 +209,8 @@ namespace CycloneGames.Logger.Tests.Editor
             var sink = new RecordingSink();
             logger.AddLogger(sink);
 
-            logger.Log(LogLevel.Info, "1234567", filePath: string.Empty, memberName: string.Empty);
-            logger.Log(LogLevel.Info, "abcd", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "1234567", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "abcd", filePath: string.Empty, memberName: string.Empty);
             LogProcessingStatistics beforePump = logger.GetProcessingStatistics();
             logger.Pump(8);
 
@@ -339,8 +340,8 @@ namespace CycloneGames.Logger.Tests.Editor
             logger.SetLogFilter(LogFilter.LogNoBlackList);
             logger.AddToBlackList("Net");
 
-            logger.Log(LogLevel.Info, "blocked", "NetSuffix", string.Empty, 0, string.Empty);
-            logger.Log(LogLevel.Info, "accepted", "UI", string.Empty, 0, string.Empty);
+            logger.Write(LogSeverity.Info, "blocked", "NetSuffix", string.Empty, 0, string.Empty);
+            logger.Write(LogSeverity.Info, "accepted", "UI", string.Empty, 0, string.Empty);
             logger.Pump(4);
 
             CollectionAssert.AreEqual(new[] { "accepted" }, sink.Messages);
@@ -355,7 +356,7 @@ namespace CycloneGames.Logger.Tests.Editor
             var sink = new RecordingSink();
             logger.AddLogger(sink);
 
-            logger.Log(LogLevel.Info, "abcdefgh", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "abcdefgh", filePath: string.Empty, memberName: string.Empty);
             logger.Pump(8);
 
             Assert.AreEqual("abcde [truncated]", sink.Messages[0]);
@@ -373,8 +374,8 @@ namespace CycloneGames.Logger.Tests.Editor
             var sink = new PayloadShapeSink();
             logger.AddLogger(sink);
 
-            logger.Log(
-                LogLevel.Info,
+            logger.Write(
+                LogSeverity.Info,
                 new string('m', 1024),
                 new string('c', 32),
                 new string('p', 64),
@@ -389,8 +390,8 @@ namespace CycloneGames.Logger.Tests.Editor
             Assert.AreEqual(3, sink.MemberNameLength);
             Assert.IsTrue(sink.WasTruncated);
 
-            logger.Log(
-                LogLevel.Info,
+            logger.Write(
+                LogSeverity.Info,
                 static builder => builder.Append('x', 1024),
                 new string('c', 32),
                 new string('p', 64),
@@ -432,7 +433,7 @@ namespace CycloneGames.Logger.Tests.Editor
 
             for (int i = 0; i < 3; i++)
             {
-                logger.Log(LogLevel.Info, "message", filePath: string.Empty, memberName: string.Empty);
+                logger.Write(LogSeverity.Info, "message", filePath: string.Empty, memberName: string.Empty);
                 logger.Pump(1);
             }
 
@@ -454,7 +455,7 @@ namespace CycloneGames.Logger.Tests.Editor
             {
                 var sink = new ThrowingDisposableSink();
                 Assert.IsTrue(logger.AddLoggerUnique(sink));
-                logger.Log(LogLevel.Info, "message", filePath: string.Empty, memberName: string.Empty);
+                logger.Write(LogSeverity.Info, "message", filePath: string.Empty, memberName: string.Empty);
                 logger.Pump(1);
                 Assert.AreEqual(1, sink.CallCount);
                 Assert.IsTrue(SpinWait.SpinUntil(() => Volatile.Read(ref sink.DisposeCount) == 1, 2000));
@@ -472,7 +473,7 @@ namespace CycloneGames.Logger.Tests.Editor
             using var logger = CLoggerFactory.CreateThreaded(CreateOptions(8, 1024));
             var sink = new BlockingSink();
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "blocked", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "blocked", filePath: string.Empty, memberName: string.Empty);
             Assert.IsTrue(sink.Entered.Wait(2000), "Sink did not receive the message.");
 
             Assert.IsFalse(logger.RemoveLogger(sink, 10));
@@ -499,10 +500,10 @@ namespace CycloneGames.Logger.Tests.Editor
             using var logger = CLoggerFactory.CreateThreaded(CreateOptions(1, 64));
             var sink = new BlockingSink();
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "first", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "first", filePath: string.Empty, memberName: string.Empty);
             Assert.IsTrue(sink.Entered.Wait(2000), "Sink did not receive the first message.");
 
-            logger.Log(LogLevel.Info, "second", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "second", filePath: string.Empty, memberName: string.Empty);
             LogProcessingStatistics statistics = logger.GetProcessingStatistics();
 
             Assert.AreEqual(1, statistics.InFlightCount);
@@ -519,9 +520,9 @@ namespace CycloneGames.Logger.Tests.Editor
             using var logger = CLoggerFactory.CreateSingleThreaded(CreateOptions(4, 256));
             var sink = new SlowSink(20);
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "one", filePath: string.Empty, memberName: string.Empty);
-            logger.Log(LogLevel.Info, "two", filePath: string.Empty, memberName: string.Empty);
-            logger.Log(LogLevel.Info, "three", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "one", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "two", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "three", filePath: string.Empty, memberName: string.Empty);
 
             logger.PumpWithinBudget(3, 1);
 
@@ -535,7 +536,7 @@ namespace CycloneGames.Logger.Tests.Editor
             var logger = CLoggerFactory.CreateThreaded(CreateOptions(8, 1024));
             var sink = new BlockingDisposableSink();
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "blocked", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "blocked", filePath: string.Empty, memberName: string.Empty);
             Assert.IsTrue(sink.Entered.Wait(2000), "Sink did not receive the message.");
 
             Exception removeException = null;
@@ -592,7 +593,7 @@ namespace CycloneGames.Logger.Tests.Editor
             var logger = CLoggerFactory.CreateSingleThreaded(options);
             var sink = new ThrowingBlockingDisposeSink();
             logger.AddLogger(sink);
-            logger.Log(LogLevel.Info, "failure", filePath: string.Empty, memberName: string.Empty);
+            logger.Write(LogSeverity.Info, "failure", filePath: string.Empty, memberName: string.Empty);
 
             var pumpThread = new Thread(() => logger.Pump(1));
             pumpThread.Start();
@@ -853,11 +854,9 @@ namespace CycloneGames.Logger.Tests.Editor
             ResetUnityLoggerState();
             LoggerUpdater.Configure(CreateOptions(4, 512));
             int adapterGeneration = LoggerUpdater.RegisterAdapter();
-            UnityEngine.TestTools.LogAssert.Expect(
-                UnityEngine.LogType.Error,
-                "CycloneGames.Logger: Explicit UnityLogger owners survived subsystem reset. Dispose their CLogger/UnityLogger owners before starting a new runtime.");
 
-            ResetUnityLoggerState();
+            LoggerUpdater.SubsystemResetStatus status = LoggerUpdater.ResetForTests();
+            Assert.AreEqual(LoggerUpdater.SubsystemResetStatus.ExternalAdaptersPreserved, status);
             Assert.Throws<InvalidOperationException>(() => LoggerUpdater.Configure(CreateOptions(4, 512)));
 
             LoggerUpdater.UnregisterAdapter(adapterGeneration);
@@ -866,6 +865,19 @@ namespace CycloneGames.Logger.Tests.Editor
             LoggerUpdater.Configure(CreateOptions(4, 512));
             LoggerUpdater.Shutdown(false);
             ResetUnityLoggerState();
+        }
+
+        [Test]
+        public void UnitySubsystemReset_DestroysUnownedHiddenHost()
+        {
+            ResetUnityLoggerState();
+            LoggerUpdater.Configure(CreateOptions(4, 512));
+            LoggerUpdater.EnsureInstance();
+            Assert.AreEqual(1, UnityEngine.Resources.FindObjectsOfTypeAll<LoggerUpdater>().Length);
+
+            ResetUnityLoggerState();
+
+            Assert.AreEqual(0, UnityEngine.Resources.FindObjectsOfTypeAll<LoggerUpdater>().Length);
         }
 
         [Test]
@@ -939,7 +951,7 @@ namespace CycloneGames.Logger.Tests.Editor
                 {
                     for (int i = 0; i < PerProducer; i++)
                     {
-                        logger.Log(LogLevel.Info, state, static (value, builder) => builder.Append(value), filePath: string.Empty, memberName: string.Empty);
+                        logger.Write(LogSeverity.Info, state, static (value, builder) => builder.Append(value), filePath: string.Empty, memberName: string.Empty);
                     }
                 });
                 threads[producer].Start();
@@ -996,11 +1008,7 @@ namespace CycloneGames.Logger.Tests.Editor
 
         private static void ResetUnityLoggerState()
         {
-            var method = typeof(LoggerUpdater).GetMethod(
-                "ResetStaticState",
-                System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Static);
-            Assert.IsNotNull(method);
-            method.Invoke(null, null);
+            LoggerUpdater.ResetForTests();
         }
 
         private sealed class RecordingSink : ILogger

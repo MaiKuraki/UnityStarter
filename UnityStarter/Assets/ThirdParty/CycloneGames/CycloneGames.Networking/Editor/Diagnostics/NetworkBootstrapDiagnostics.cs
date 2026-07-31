@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Reflection;
+using CycloneGames.Logging;
 using CycloneGames.Networking;
 using UnityEditor;
 using UnityEngine;
@@ -9,6 +10,8 @@ namespace CycloneGames.Networking.Editor.Diagnostics
 {
     public static class NetworkBootstrapDiagnostics
     {
+        private static readonly LogChannel Log = NetworkingEditorLog.Channel;
+
         private static readonly INetworkBootstrapChecker[] Checkers =
         {
             new CycloneRuntimeChecker(),
@@ -41,7 +44,7 @@ namespace CycloneGames.Networking.Editor.Diagnostics
             IReadOnlyList<NetworkBootstrapIssue> issues = report.Issues;
             if (issues.Count == 0)
             {
-                Debug.Log("[network.bootstrap.ready] Network bootstrap diagnostics completed with no issues.");
+                Log.Info("[network.bootstrap.ready] Network bootstrap diagnostics completed with no issues.");
                 return;
             }
 
@@ -51,17 +54,21 @@ namespace CycloneGames.Networking.Editor.Diagnostics
                 string message = string.IsNullOrEmpty(issue.Action)
                     ? $"[{issue.Code}] {issue.Message}"
                     : $"[{issue.Code}] {issue.Message} {issue.Action}";
+                if (issue.Context != null)
+                {
+                    message = string.Concat(message, " Context=", issue.Context.name, ".");
+                }
 
                 switch (issue.Severity)
                 {
                     case NetworkBootstrapIssueSeverity.Error:
-                        Debug.LogError(message, issue.Context);
+                        Log.Error(message);
                         break;
                     case NetworkBootstrapIssueSeverity.Warning:
-                        Debug.LogWarning(message, issue.Context);
+                        Log.Warning(message);
                         break;
                     default:
-                        Debug.Log(message, issue.Context);
+                        Log.Info(message);
                         break;
                 }
             }
