@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Logging;
 
 namespace CycloneGames.Choreography.Core
 {
@@ -23,7 +22,7 @@ namespace CycloneGames.Choreography.Core
         public const int AbsoluteMaximumAssetNodeScanCount = 1_048_576;
 
         private readonly IResourceProvider _provider;
-        private readonly LogChannel _log;
+        private readonly IChoreographyDiagnostics _diagnostics;
         private readonly int _maximumReferenceCount;
         private readonly int _maximumConcurrentLoadCount;
         private readonly int _maximumAssetNodeScanCount;
@@ -61,17 +60,17 @@ namespace CycloneGames.Choreography.Core
         public PreloadRunner(IResourceProvider provider)
             : this(
                 provider,
-                ChoreographyCoreLog.PreloadChannel,
+                NullChoreographyDiagnostics.Instance,
                 DefaultMaximumReferenceCount,
                 DefaultMaximumConcurrentLoadCount,
                 DefaultMaximumAssetNodeScanCount)
         {
         }
 
-        public PreloadRunner(IResourceProvider provider, ILogWriter logWriter)
+        public PreloadRunner(IResourceProvider provider, IChoreographyDiagnostics diagnostics)
             : this(
                 provider,
-                ChoreographyCoreLog.CreatePreload(logWriter),
+                diagnostics,
                 DefaultMaximumReferenceCount,
                 DefaultMaximumConcurrentLoadCount,
                 DefaultMaximumAssetNodeScanCount)
@@ -85,22 +84,22 @@ namespace CycloneGames.Choreography.Core
             int maximumConcurrentLoadCount)
             : this(
                 provider,
-                ChoreographyCoreLog.PreloadChannel,
+                NullChoreographyDiagnostics.Instance,
                 maximumReferenceCount,
                 maximumConcurrentLoadCount,
                 DeriveAssetNodeScanCount(maximumReferenceCount))
         {
         }
 
-        /// <summary>Creates a bounded runner with an explicitly supplied logging writer.</summary>
+        /// <summary>Creates a bounded runner with an explicitly supplied diagnostic sink.</summary>
         public PreloadRunner(
             IResourceProvider provider,
-            ILogWriter logWriter,
+            IChoreographyDiagnostics diagnostics,
             int maximumReferenceCount,
             int maximumConcurrentLoadCount)
             : this(
                 provider,
-                ChoreographyCoreLog.CreatePreload(logWriter),
+                diagnostics,
                 maximumReferenceCount,
                 maximumConcurrentLoadCount,
                 DeriveAssetNodeScanCount(maximumReferenceCount))
@@ -118,7 +117,7 @@ namespace CycloneGames.Choreography.Core
             int maximumAssetNodeScanCount)
             : this(
                 provider,
-                ChoreographyCoreLog.PreloadChannel,
+                NullChoreographyDiagnostics.Instance,
                 maximumReferenceCount,
                 maximumConcurrentLoadCount,
                 maximumAssetNodeScanCount)
@@ -127,22 +126,7 @@ namespace CycloneGames.Choreography.Core
 
         public PreloadRunner(
             IResourceProvider provider,
-            ILogWriter logWriter,
-            int maximumReferenceCount,
-            int maximumConcurrentLoadCount,
-            int maximumAssetNodeScanCount)
-            : this(
-                provider,
-                ChoreographyCoreLog.CreatePreload(logWriter),
-                maximumReferenceCount,
-                maximumConcurrentLoadCount,
-                maximumAssetNodeScanCount)
-        {
-        }
-
-        private PreloadRunner(
-            IResourceProvider provider,
-            LogChannel log,
+            IChoreographyDiagnostics diagnostics,
             int maximumReferenceCount,
             int maximumConcurrentLoadCount,
             int maximumAssetNodeScanCount)
@@ -162,7 +146,7 @@ namespace CycloneGames.Choreography.Core
             }
 
             _provider = provider ?? throw new ArgumentNullException(nameof(provider));
-            _log = log;
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
             _maximumReferenceCount = maximumReferenceCount;
             _maximumConcurrentLoadCount = maximumConcurrentLoadCount;
             _maximumAssetNodeScanCount = maximumAssetNodeScanCount;
@@ -333,9 +317,15 @@ namespace CycloneGames.Choreography.Core
                     _failedLoadCount++;
                     handle.Release();
                     _releasedHandleCount++;
-                    if (_log.IsEnabled(LogSeverity.Warning))
+                    if (ChoreographyDiagnosticsGuard.IsEnabled(
+                        _diagnostics,
+                        ChoreographyDiagnosticLevel.Warning,
+                        ChoreographyDiagnosticCategories.Preload))
                     {
-                        _log.Warning(
+                        ChoreographyDiagnosticsGuard.Write(
+                            _diagnostics,
+                            ChoreographyDiagnosticLevel.Warning,
+                            ChoreographyDiagnosticCategories.Preload,
                             "Preload failed for '" + handle.Reference.Address + "': " + (handle.Error ?? "unknown error"));
                     }
 
@@ -439,9 +429,15 @@ namespace CycloneGames.Choreography.Core
             _failed.Add(reference);
             _failedCount++;
             _failedLoadCount++;
-            if (_log.IsEnabled(LogSeverity.Warning))
+            if (ChoreographyDiagnosticsGuard.IsEnabled(
+                _diagnostics,
+                ChoreographyDiagnosticLevel.Warning,
+                ChoreographyDiagnosticCategories.Preload))
             {
-                _log.Warning(
+                ChoreographyDiagnosticsGuard.Write(
+                    _diagnostics,
+                    ChoreographyDiagnosticLevel.Warning,
+                    ChoreographyDiagnosticCategories.Preload,
                     "Preload failed for '" + reference.Address + "': " + error);
             }
         }

@@ -149,15 +149,7 @@ namespace CycloneGames.BehaviorTree.Tests.Support
                 return;
             }
 
-            if (!LogRuntime.TryResetWriter(this))
-            {
-                return;
-            }
-
-            if (!ReferenceEquals(_previousWriter, NullLogWriter.Instance))
-            {
-                LogRuntime.TryInstallWriter(_previousWriter);
-            }
+            LogRuntime.TryReplaceWriter(this, _previousWriter);
         }
 
         private void Record(

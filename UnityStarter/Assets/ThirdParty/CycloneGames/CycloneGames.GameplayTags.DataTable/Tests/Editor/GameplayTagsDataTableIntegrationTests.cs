@@ -509,10 +509,7 @@ namespace CycloneGames.GameplayTags.DataTable.Tests.Editor
                 _isDisposed = true;
                 ILogWriter previousWriter = _previousWriter;
                 _previousWriter = null;
-                if (object.ReferenceEquals(LogRuntime.Writer, this))
-                {
-                    LogRuntime.ReplaceWriter(previousWriter);
-                }
+                LogRuntime.TryReplaceWriter(this, previousWriter);
             }
         }
     }

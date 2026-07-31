@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.Choreography.Core;
-using CycloneGames.Logging;
 using NUnit.Framework;
 
 namespace CycloneGames.Choreography.Tests
@@ -200,13 +199,13 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
-        public void PreloadRunner_ExposesExplicitLogWriterConstructor()
+        public void PreloadRunner_ExposesExplicitCoreDiagnosticsConstructor()
         {
             Assert.That(
                 typeof(PreloadRunner).GetConstructor(new[]
                 {
                     typeof(IResourceProvider),
-                    typeof(ILogWriter)
+                    typeof(IChoreographyDiagnostics)
                 }),
                 Is.Not.Null);
         }

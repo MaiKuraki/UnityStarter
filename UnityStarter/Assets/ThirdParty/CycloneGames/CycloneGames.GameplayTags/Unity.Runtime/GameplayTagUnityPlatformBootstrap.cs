@@ -9,9 +9,17 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 {
     internal static class GameplayTagUnityPlatformBootstrap
     {
+        private static bool s_ownsAmbientDiagnostics;
+
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         private static void Initialize()
         {
+            if (s_ownsAmbientDiagnostics)
+            {
+                GameplayTagsDiagnostics.TryReset(GameplayTagsLoggingDiagnostics.Ambient);
+                s_ownsAmbientDiagnostics = false;
+            }
+
             GameplayTagManager.ResetRuntimeState();
             GameplayTagRedirector.ClearAll();
             Configure();
@@ -19,6 +27,20 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
         internal static void Configure()
         {
+            if (s_ownsAmbientDiagnostics &&
+                !object.ReferenceEquals(
+                    GameplayTagsDiagnostics.Current,
+                    GameplayTagsLoggingDiagnostics.Ambient))
+            {
+                s_ownsAmbientDiagnostics = false;
+            }
+
+            if (!s_ownsAmbientDiagnostics)
+            {
+                s_ownsAmbientDiagnostics =
+                    GameplayTagsDiagnostics.TryInstall(GameplayTagsLoggingDiagnostics.Ambient);
+            }
+
             GameplayTagRuntimePlatform.IsRuntimePlaying = () => Application.isPlaying;
             GameplayTagRuntimePlatform.LoadBuildTagData = LoadBuildTagData;
         }

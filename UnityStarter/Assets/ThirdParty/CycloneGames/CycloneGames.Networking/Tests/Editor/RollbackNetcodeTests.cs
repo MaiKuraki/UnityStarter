@@ -1,4 +1,6 @@
 using System;
+using System.Text;
+using CycloneGames.Logging;
 using CycloneGames.Networking.Lockstep;
 using NUnit.Framework;
 
@@ -162,6 +164,167 @@ namespace CycloneGames.Networking.Tests.Editor
             Assert.IsFalse(rollback.ShouldStall());
         }
 
+        [Test]
+        public void ReceiveRemoteInput_BeyondRollbackWindow_ReportsThroughCoreDiagnosticsPort()
+        {
+            var simulation = new TestRollbackSimulation();
+            var diagnostics = new RecordingNetworkingDiagnostics();
+            var rollback = new RollbackNetcode<TestInput, TestState>(
+                peerCount: 2,
+                localPeerId: 0,
+                simulation: simulation,
+                diagnostics: diagnostics,
+                maxRollbackFrames: 2,
+                tickRate: 60);
+
+            rollback.AdvanceFrame(default);
+            rollback.AdvanceFrame(default);
+            rollback.AdvanceFrame(default);
+            rollback.ReceiveRemoteInput(1, 0, new TestInput { Value = 5 });
+
+            Assert.AreEqual(1, diagnostics.WriteCount);
+            Assert.AreEqual(NetworkingDiagnosticLevel.Warning, diagnostics.LastLevel);
+            Assert.AreEqual(NetworkingDiagnosticCategories.Root, diagnostics.LastCategory);
+            StringAssert.Contains("Rollback depth 3 exceeds max 2", diagnostics.LastMessage);
+            Assert.AreEqual(0, rollback.RollbackCount);
+        }
+
+        [TestCase(DiagnosticFailureMode.IsEnabled)]
+        [TestCase(DiagnosticFailureMode.Write)]
+        public void ReceiveRemoteInput_BeyondRollbackWindow_IgnoresOrdinaryDiagnosticsFailure(
+            DiagnosticFailureMode failureMode)
+        {
+            var simulation = new TestRollbackSimulation();
+            var rollback = new RollbackNetcode<TestInput, TestState>(
+                peerCount: 2,
+                localPeerId: 0,
+                simulation: simulation,
+                diagnostics: new ThrowingNetworkingDiagnostics(
+                    failureMode,
+                    new InvalidOperationException("sink failed")),
+                maxRollbackFrames: 2,
+                tickRate: 60);
+
+            rollback.AdvanceFrame(default);
+            rollback.AdvanceFrame(default);
+            rollback.AdvanceFrame(default);
+
+            Assert.DoesNotThrow(() => rollback.ReceiveRemoteInput(1, 0, new TestInput { Value = 5 }));
+            Assert.AreEqual(3, rollback.CurrentFrame);
+            Assert.AreEqual(0, rollback.RollbackCount);
+        }
+
+        [Test]
+        public void ReceiveRemoteInput_DiagnosticsOutOfMemory_RemainsVisibleToHost()
+        {
+            var simulation = new TestRollbackSimulation();
+            var rollback = new RollbackNetcode<TestInput, TestState>(
+                peerCount: 2,
+                localPeerId: 0,
+                simulation: simulation,
+                diagnostics: new ThrowingNetworkingDiagnostics(
+                    DiagnosticFailureMode.IsEnabled,
+                    new OutOfMemoryException("diagnostics allocation failed")),
+                maxRollbackFrames: 2,
+                tickRate: 60);
+
+            rollback.AdvanceFrame(default);
+            rollback.AdvanceFrame(default);
+            rollback.AdvanceFrame(default);
+
+            Assert.Throws<OutOfMemoryException>(() =>
+                rollback.ReceiveRemoteInput(1, 0, new TestInput { Value = 5 }));
+        }
+
+        [Test]
+        public void LoggingDiagnostics_MapsAllOutputLevelsExactly()
+        {
+            ProbeLogWriter writer = new ProbeLogWriter();
+            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+            NetworkingDiagnosticLevel[] levels =
+            {
+                NetworkingDiagnosticLevel.Trace,
+                NetworkingDiagnosticLevel.Debug,
+                NetworkingDiagnosticLevel.Info,
+                NetworkingDiagnosticLevel.Warning,
+                NetworkingDiagnosticLevel.Error,
+                NetworkingDiagnosticLevel.Fatal
+            };
+            LogSeverity[] severities =
+            {
+                LogSeverity.Trace,
+                LogSeverity.Debug,
+                LogSeverity.Info,
+                LogSeverity.Warning,
+                LogSeverity.Error,
+                LogSeverity.Fatal
+            };
+
+            for (int i = 0; i < levels.Length; i++)
+            {
+                Assert.AreEqual((byte)severities[i], (byte)levels[i]);
+                Assert.IsTrue(diagnostics.IsEnabled(levels[i], NetworkingDiagnosticCategories.Root));
+                Assert.AreEqual(severities[i], writer.LastSeverity);
+            }
+
+            Assert.AreEqual((byte)LogSeverity.None, (byte)NetworkingDiagnosticLevel.None);
+        }
+
+        [Test]
+        public void LoggingDiagnostics_NoneAndUnknownLevelsNeverReachWriter()
+        {
+            ProbeLogWriter writer = new ProbeLogWriter();
+            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+            NetworkingDiagnosticLevel[] invalidLevels =
+            {
+                NetworkingDiagnosticLevel.None,
+                (NetworkingDiagnosticLevel)byte.MaxValue
+            };
+
+            for (int i = 0; i < invalidLevels.Length; i++)
+            {
+                NetworkingDiagnosticLevel level = invalidLevels[i];
+                Assert.IsFalse(diagnostics.IsEnabled(level, NetworkingDiagnosticCategories.Root));
+                Assert.DoesNotThrow(() => diagnostics.Write(level, NetworkingDiagnosticCategories.Root, "ignored"));
+                Assert.DoesNotThrow(() => diagnostics.WriteException(
+                    level,
+                    NetworkingDiagnosticCategories.Root,
+                    new InvalidOperationException("ignored")));
+            }
+
+            Assert.AreEqual(0, writer.CallCount);
+        }
+
+        [Test]
+        public void LoggingDiagnostics_OrdinaryWriterFailuresAreContained()
+        {
+            ProbeLogWriter writer = new ProbeLogWriter(new InvalidOperationException("writer failed"));
+            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+
+            Assert.IsFalse(diagnostics.IsEnabled(
+                NetworkingDiagnosticLevel.Warning,
+                NetworkingDiagnosticCategories.Root));
+            Assert.DoesNotThrow(() => diagnostics.Write(
+                NetworkingDiagnosticLevel.Warning,
+                NetworkingDiagnosticCategories.Root,
+                "ignored"));
+            Assert.DoesNotThrow(() => diagnostics.WriteException(
+                NetworkingDiagnosticLevel.Error,
+                NetworkingDiagnosticCategories.Root,
+                new InvalidOperationException("source")));
+        }
+
+        [Test]
+        public void LoggingDiagnostics_WriterOutOfMemory_RemainsVisibleToHost()
+        {
+            ProbeLogWriter writer = new ProbeLogWriter(new OutOfMemoryException("writer allocation failed"));
+            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+
+            Assert.Throws<OutOfMemoryException>(() => diagnostics.IsEnabled(
+                NetworkingDiagnosticLevel.Warning,
+                NetworkingDiagnosticCategories.Root));
+        }
+
         private struct TestInput : IEquatable<TestInput>
         {
             public int Value;
@@ -208,6 +371,171 @@ namespace CycloneGames.Networking.Tests.Editor
 
             public void OnRollback(int framesToRollback)
             {
+            }
+        }
+
+        private sealed class RecordingNetworkingDiagnostics : INetworkingDiagnostics
+        {
+            public int WriteCount { get; private set; }
+            public NetworkingDiagnosticLevel LastLevel { get; private set; }
+            public string LastCategory { get; private set; }
+            public string LastMessage { get; private set; }
+
+            public bool IsEnabled(NetworkingDiagnosticLevel level, string category) => true;
+
+            public void Write(
+                NetworkingDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                WriteCount++;
+                LastLevel = level;
+                LastCategory = category;
+                LastMessage = message;
+            }
+
+            public void WriteException(
+                NetworkingDiagnosticLevel level,
+                string category,
+                Exception exception,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                Write(level, category, message, filePath, lineNumber, memberName);
+            }
+        }
+
+        public enum DiagnosticFailureMode
+        {
+            IsEnabled,
+            Write
+        }
+
+        private sealed class ThrowingNetworkingDiagnostics : INetworkingDiagnostics
+        {
+            private readonly DiagnosticFailureMode _failureMode;
+            private readonly Exception _exception;
+
+            public ThrowingNetworkingDiagnostics(DiagnosticFailureMode failureMode, Exception exception)
+            {
+                _failureMode = failureMode;
+                _exception = exception;
+            }
+
+            public bool IsEnabled(NetworkingDiagnosticLevel level, string category)
+            {
+                if (_failureMode == DiagnosticFailureMode.IsEnabled)
+                {
+                    throw _exception;
+                }
+
+                return true;
+            }
+
+            public void Write(
+                NetworkingDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                if (_failureMode == DiagnosticFailureMode.Write)
+                {
+                    throw _exception;
+                }
+            }
+
+            public void WriteException(
+                NetworkingDiagnosticLevel level,
+                string category,
+                Exception exception,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                throw _exception;
+            }
+        }
+
+        private sealed class ProbeLogWriter : ILogWriter
+        {
+            private readonly Exception _exception;
+
+            public ProbeLogWriter(Exception exception = null)
+            {
+                _exception = exception;
+            }
+
+            public int CallCount { get; private set; }
+            public LogSeverity LastSeverity { get; private set; }
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                Record(severity);
+                return true;
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                Record(severity);
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                Record(severity);
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                Record(severity);
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message,
+                string filePath,
+                int lineNumber,
+                string memberName)
+            {
+                Record(severity);
+            }
+
+            private void Record(LogSeverity severity)
+            {
+                CallCount++;
+                LastSeverity = severity;
+                if (_exception != null)
+                {
+                    throw _exception;
+                }
             }
         }
     }

@@ -36,7 +36,8 @@ This asset-style package lives below `Assets/ThirdParty/CycloneGames`; its `pack
 
 | Assembly | Role | Activation requirement |
 | --- | --- | --- |
-| `CycloneGames.Networking.Core` | Pure C# contracts and implementations; `noEngineReferences: true`. | Auto-referenced; requires `CycloneGames.DeterministicMath.Core`, `CycloneGames.Hash.Core`, and `CycloneGames.Logging`. |
+| `CycloneGames.Networking.Core` | Pure C# contracts, implementations, and module-local diagnostics; `noEngineReferences: true`. | Auto-referenced; requires only `CycloneGames.DeterministicMath.Core` and `CycloneGames.Hash.Core`. |
+| `CycloneGames.Networking.Integrations.Logging` | Optional bridge from `INetworkingDiagnostics` to the shared writer; `noEngineReferences: true`. | `autoReferenced: false`; requires Core and Logging. |
 | `CycloneGames.Networking.Unity.Runtime` | Unity bridges, baseline JSON serializer, prediction, interest, compression, and diagnostics. | Auto-referenced; requires Core and Logging. |
 | `CycloneGames.Networking.Platform.Permissions` | Unity-facing LAN-host permission contract and platform implementations. | Auto-referenced; requires UniTask and Logging. |
 | `CycloneGames.Networking.Editor` | Bootstrap preset/diagnostics and LAN-host permission window. | Editor only; requires Core and Logging. |
@@ -86,11 +87,15 @@ flowchart LR
 
 ### Unified logging
 
-All module output uses `CycloneGames.Logging` with categories rooted at `CycloneGames.Networking`. Each logging-producing assembly centralizes category ownership in an internal facade under its `Diagnostics/` folder: `NetworkingCoreLog`, `NetworkingUnityRuntimeLog`, `NetworkingEditorLog`, `NetworkingMirrorAdapterLog`, `NetworkingMirageAdapterLog`, or `NetworkingPermissionsLog`. Every facade exposes the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` members; explicit `Create` rejects a null writer. Stable specialized categories remain `CycloneGames.Networking.Security`, `CycloneGames.Networking.Editor.Bootstrap`, `CycloneGames.Networking.Adapter.Mirror`, `CycloneGames.Networking.Adapter.Mirage`, and `CycloneGames.Networking.Platform.Permissions`. Static Unity and Editor entry points use facade channels and resolve the current process writer on every call, so a later replacement is observed without package reinitialization.
+Networking Core owns `INetworkingDiagnostics`, `NetworkingDiagnosticLevel`, `NullNetworkingDiagnostics`, and the canonical `NetworkingDiagnosticCategories.Root`. It has no reference to `ILogWriter`, `LogChannel`, Unity, or a concrete backend. `RollbackNetcode` overloads without diagnostics use the no-op sink; the explicit diagnostics overload supports a pure host implementation.
 
-Install the host backend once with `LogRuntime.TryInstallWriter`, replace it during an explicit reconfiguration with `LogRuntime.ReplaceWriter`, or inject an `ILogWriter` into services that expose that shared contract, such as `RollbackNetcode`. The facades do not initialize, own, flush, or dispose a backend.
+`NetworkingDiagnosticLevel` has the same stable numeric profile as `LogSeverity`: `Trace = 0`, `Debug = 1`, `Info = 2`, `Warning = 3`, `Error = 4`, `Fatal = 5`, and `None = 6`. `NetworkingLoggingDiagnostics` maps the six output levels exactly; `None` and unknown values are disabled and dropped. Core diagnostics are a best-effort side channel: ordinary exceptions from a custom sink or shared writer are contained and cannot change rollback admission or simulation control flow. `OutOfMemoryException` deliberately remains visible to the host so its process-level resource-exhaustion policy can run. Sinks must remain non-blocking, bounded, and safe for the caller's simulation thread.
 
-Networking exposes no package-specific logger interface, severity enum, no-op logger, or Unity logger implementation. Use `ILogWriter`, `LogSeverity`, `NullLogWriter`, and the public canonical `LogCategory.Root`. `RollbackNetcode` overloads without a writer use the process backend; the explicit `ILogWriter` overload isolates an instance from that ambient writer.
+This is an assembly boundary, not yet a separate UPM distribution boundary. The current combined `com.cyclone-games.networking` package root also contains non-Core assemblies and therefore still declares `com.cyclone-games.logging`; installing only Core without that package dependency requires a future physical Core package split.
+
+`NetworkingLoggingDiagnostics` in `CycloneGames.Networking.Integrations.Logging` optionally maps that Core-local contract to an explicit `ILogWriter` or the current `LogRuntime.Writer`. Non-Core logging-producing assemblies continue to centralize category ownership in internal facades such as `NetworkingUnityRuntimeLog`, `NetworkingEditorLog`, `NetworkingMirrorAdapterLog`, `NetworkingMirageAdapterLog`, and `NetworkingPermissionsLog`. Stable specialized categories remain unchanged.
+
+Install and own the concrete backend only at the application composition root. Neither Core diagnostics nor the adapter initializes, flushes, disposes, or otherwise owns that backend.
 
 ### Define a product protocol
 

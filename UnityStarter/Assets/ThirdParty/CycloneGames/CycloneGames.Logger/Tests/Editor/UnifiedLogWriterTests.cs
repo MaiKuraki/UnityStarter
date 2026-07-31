@@ -8,13 +8,15 @@ namespace CycloneGames.Logger.Tests.Editor
 {
     public sealed class UnifiedLogWriterTests
     {
+        private ILogWriter _previousWriter;
+
         [SetUp]
         public void SetUp()
         {
             LoggerUpdater.CaptureMainThreadForLifecycle();
             LoggerBootstrap.Shutdown();
             CLogger.Shutdown();
-            LogRuntime.ResetWriter();
+            _previousWriter = LogRuntime.ReplaceWriter(NullLogWriter.Instance);
 #if UNITY_INCLUDE_TESTS
             LoggerBootstrap.BeforeProcessWriterInstallTestHook = null;
 #endif
@@ -28,7 +30,11 @@ namespace CycloneGames.Logger.Tests.Editor
 #endif
             LoggerBootstrap.Shutdown();
             CLogger.Shutdown();
-            LogRuntime.ResetWriter();
+            ILogWriter currentWriter = LogRuntime.Writer;
+            LogRuntime.TryReplaceWriter(
+                currentWriter,
+                _previousWriter ?? NullLogWriter.Instance);
+            _previousWriter = null;
         }
 
         [Test]

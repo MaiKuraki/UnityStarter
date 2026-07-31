@@ -37,7 +37,9 @@ namespace CycloneGames.Logging
 
         public bool IsEnabled(LogSeverity severity)
         {
-            return ResolveWriter().IsEnabled(severity, Category);
+            return Category != null &&
+                   LogWriterGuard.IsEmittable(severity) &&
+                   LogWriterGuard.IsEnabledValidated(ResolveWriter(), severity, Category);
         }
 
         public void Write(
@@ -47,7 +49,19 @@ namespace CycloneGames.Logging
             [CallerLineNumber] int lineNumber = 0,
             [CallerMemberName] string memberName = "")
         {
-            ResolveWriter().Write(severity, Category, message, filePath, lineNumber, memberName);
+            if (Category == null || !LogWriterGuard.IsEmittable(severity))
+            {
+                return;
+            }
+
+            LogWriterGuard.TryWriteValidated(
+                ResolveWriter(),
+                severity,
+                Category,
+                message,
+                filePath,
+                lineNumber,
+                memberName);
         }
 
         public void Write(
@@ -57,7 +71,29 @@ namespace CycloneGames.Logging
             [CallerLineNumber] int lineNumber = 0,
             [CallerMemberName] string memberName = "")
         {
-            ResolveWriter().Write(severity, Category, messageBuilder, filePath, lineNumber, memberName);
+            if (Category == null)
+            {
+                return;
+            }
+
+            if (messageBuilder == null)
+            {
+                throw new ArgumentNullException(nameof(messageBuilder));
+            }
+
+            if (!LogWriterGuard.IsEmittable(severity))
+            {
+                return;
+            }
+
+            LogWriterGuard.TryWriteValidated(
+                ResolveWriter(),
+                severity,
+                Category,
+                messageBuilder,
+                filePath,
+                lineNumber,
+                memberName);
         }
 
         public void Write<TState>(
@@ -68,7 +104,30 @@ namespace CycloneGames.Logging
             [CallerLineNumber] int lineNumber = 0,
             [CallerMemberName] string memberName = "")
         {
-            ResolveWriter().Write(severity, Category, state, messageBuilder, filePath, lineNumber, memberName);
+            if (Category == null)
+            {
+                return;
+            }
+
+            if (messageBuilder == null)
+            {
+                throw new ArgumentNullException(nameof(messageBuilder));
+            }
+
+            if (!LogWriterGuard.IsEmittable(severity))
+            {
+                return;
+            }
+
+            LogWriterGuard.TryWriteValidated(
+                ResolveWriter(),
+                severity,
+                Category,
+                state,
+                messageBuilder,
+                filePath,
+                lineNumber,
+                memberName);
         }
 
         public void WriteException(
@@ -79,7 +138,30 @@ namespace CycloneGames.Logging
             [CallerLineNumber] int lineNumber = 0,
             [CallerMemberName] string memberName = "")
         {
-            ResolveWriter().WriteException(severity, Category, exception, message, filePath, lineNumber, memberName);
+            if (Category == null)
+            {
+                return;
+            }
+
+            if (exception == null)
+            {
+                throw new ArgumentNullException(nameof(exception));
+            }
+
+            if (!LogWriterGuard.IsEmittable(severity))
+            {
+                return;
+            }
+
+            LogWriterGuard.TryWriteExceptionValidated(
+                ResolveWriter(),
+                severity,
+                Category,
+                exception,
+                message,
+                filePath,
+                lineNumber,
+                memberName);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]

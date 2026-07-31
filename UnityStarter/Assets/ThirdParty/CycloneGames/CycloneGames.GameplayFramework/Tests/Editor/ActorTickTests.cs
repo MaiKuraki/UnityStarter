@@ -271,10 +271,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
         private static void RestoreWriter(ILogWriter previousWriter, RecordingLogWriter writer)
         {
-            if (object.ReferenceEquals(LogRuntime.Writer, writer))
-            {
-                LogRuntime.ReplaceWriter(previousWriter);
-            }
+            LogRuntime.TryReplaceWriter(writer, previousWriter);
         }
 
         private readonly struct LogRecord

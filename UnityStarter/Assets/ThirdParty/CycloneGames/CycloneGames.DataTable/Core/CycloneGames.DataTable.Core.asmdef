@@ -1,9 +1,7 @@
 {
     "name": "CycloneGames.DataTable.Core",
     "rootNamespace": "",
-    "references": [
-        "CycloneGames.Logging"
-    ],
+    "references": [],
     "includePlatforms": [],
     "excludePlatforms": [],
     "allowUnsafeCode": false,

@@ -36,7 +36,8 @@ CycloneGames.Networking 是一个 transport-neutral 底层模块，提供版本�
 
 | Assembly | 职责 | 激活条件 |
 | --- | --- | --- |
-| `CycloneGames.Networking.Core` | 纯 C# 契约与实现；`noEngineReferences: true`。 | 自动引用；依赖 `CycloneGames.DeterministicMath.Core`、`CycloneGames.Hash.Core` 和 `CycloneGames.Logging`。 |
+| `CycloneGames.Networking.Core` | 纯 C# 契约、实现与模块本地 diagnostics；`noEngineReferences: true`。 | 自动引用；只依赖 `CycloneGames.DeterministicMath.Core` 和 `CycloneGames.Hash.Core`。 |
+| `CycloneGames.Networking.Integrations.Logging` | 从 `INetworkingDiagnostics` 到共享 writer 的可选 bridge；`noEngineReferences: true`。 | `autoReferenced: false`；依赖 Core 和 Logging。 |
 | `CycloneGames.Networking.Unity.Runtime` | Unity bridge、基础 JSON serializer、prediction、interest、compression 和 diagnostics。 | 自动引用；依赖 Core 和 Logging。 |
 | `CycloneGames.Networking.Platform.Permissions` | Unity-facing LAN host permission 契约和平台实现。 | 自动引用；依赖 UniTask 和 Logging。 |
 | `CycloneGames.Networking.Editor` | Bootstrap preset/diagnostics 和 LAN host permission window。 | 仅 Editor；依赖 Core 和 Logging。 |
@@ -86,11 +87,15 @@ flowchart LR
 
 ### 统一日志
 
-模块输出统一使用 `CycloneGames.Logging`，category 以 `CycloneGames.Networking` 为根。每个日志生产 assembly 都通过自身 `Diagnostics/` 目录中的 internal facade 集中持有 category：`NetworkingCoreLog`、`NetworkingUnityRuntimeLog`、`NetworkingEditorLog`、`NetworkingMirrorAdapterLog`、`NetworkingMirageAdapterLog` 或 `NetworkingPermissionsLog`。每个 facade 都提供统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 成员；显式 `Create` 会拒绝 null writer。稳定的专用 category 继续为 `CycloneGames.Networking.Security`、`CycloneGames.Networking.Editor.Bootstrap`、`CycloneGames.Networking.Adapter.Mirror`、`CycloneGames.Networking.Adapter.Mirage` 和 `CycloneGames.Networking.Platform.Permissions`。Unity 与 Editor 的静态入口使用 facade channel，并在每次调用时解析当前进程 writer，因此后续替换无需重新初始化 package。
+Networking Core 自己持有 `INetworkingDiagnostics`、`NetworkingDiagnosticLevel`、`NullNetworkingDiagnostics` 和规范 category `NetworkingDiagnosticCategories.Root`，不引用 `ILogWriter`、`LogChannel`、Unity 或具体 backend。`RollbackNetcode` 不带 diagnostics 的 overload 使用 no-op sink；显式 diagnostics overload 支持纯 C# host 实现。
 
-Host 可通过 `LogRuntime.TryInstallWriter` 安装一次 backend，在显式重新配置时使用 `LogRuntime.ReplaceWriter`，也可以向公开该共享契约的 `RollbackNetcode` 等 service 注入 `ILogWriter`。facade 不会初始化、拥有、flush 或 dispose backend。
+`NetworkingDiagnosticLevel` 与 `LogSeverity` 使用相同的稳定数值布局：`Trace = 0`、`Debug = 1`、`Info = 2`、`Warning = 3`、`Error = 4`、`Fatal = 5`、`None = 6`。`NetworkingLoggingDiagnostics` 精确映射六个可输出级别；`None` 与未知值一律禁用并丢弃。Core diagnostics 是 best-effort side channel：自定义 sink 或共享 writer 抛出的普通异常会被隔离，不能改变 rollback admission 或 simulation 控制流。`OutOfMemoryException` 会刻意继续传播，以便 host 执行进程级资源耗尽策略。sink 仍必须非阻塞、有界，并满足调用方 simulation thread 的安全要求。
 
-Networking 不再公开包专用 logger interface、severity enum、no-op logger 或 Unity logger 实现。统一使用 `ILogWriter`、`LogSeverity`、`NullLogWriter` 与 public canonical `LogCategory.Root`。不带 writer 的 `RollbackNetcode` overload 使用进程 backend；显式 `ILogWriter` overload 可让实例与 ambient writer 隔离。
+这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.networking` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
+
+`CycloneGames.Networking.Integrations.Logging` 中的 `NetworkingLoggingDiagnostics` 可以把 Core 本地契约映射到显式 `ILogWriter` 或当前 `LogRuntime.Writer`。非 Core 的日志生产 assembly 继续使用 `NetworkingUnityRuntimeLog`、`NetworkingEditorLog`、`NetworkingMirrorAdapterLog`、`NetworkingMirageAdapterLog` 与 `NetworkingPermissionsLog` 等 internal facade 集中持有 category；稳定专用 category 保持不变。
+
+具体 backend 只由应用 composition root 安装和持有。Core diagnostics 与 adapter 都不会初始化、flush、dispose 或以其他方式拥有 backend。
 
 ### 定义产品 Protocol
 

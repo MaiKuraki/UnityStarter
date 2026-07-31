@@ -57,14 +57,12 @@ namespace CycloneGames.Choreography
                 throw new ArgumentNullException(nameof(providers));
             }
 
+            IChoreographyDiagnostics diagnostics = logWriter == null
+                ? ChoreographyLoggingDiagnostics.Ambient
+                : new ChoreographyLoggingDiagnostics(logWriter);
             _player = new ChoreographyPlayer();
-            if (logWriter != null)
-            {
-                _player.SetLogWriter(logWriter);
-            }
-            _sink = logWriter == null
-                ? new DirectProviderSink(providers)
-                : new DirectProviderSink(providers, logWriter);
+            _player.SetDiagnostics(diagnostics);
+            _sink = new DirectProviderSink(providers, diagnostics);
             _sink.EventRaised += OnSinkEvent;
             _sink.PlaybackCompleted += OnSinkCompleted;
             _initialized = true;
