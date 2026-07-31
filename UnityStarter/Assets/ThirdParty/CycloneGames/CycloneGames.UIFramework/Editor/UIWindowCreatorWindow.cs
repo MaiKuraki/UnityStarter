@@ -4,7 +4,7 @@ using System.IO;
 using System.Security.Cryptography;
 using System.Text;
 using CycloneGames.IO;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using CycloneGames.UIFramework.Runtime;
 using UnityEditor;
 using UnityEngine;
@@ -45,6 +45,8 @@ namespace CycloneGames.UIFramework.Editor
 
     public sealed class UIWindowCreatorWindow : EditorWindow
     {
+        private static readonly LogChannel Log = UIFrameworkEditorLog.Channel;
+
         private enum PipelineStatus
         {
             Ready,
@@ -182,7 +184,6 @@ namespace CycloneGames.UIFramework.Editor
             }
         }
 
-        private const string LogCategory = "UIWindowCreator";
         private const string DefaultTemplateGuid = "37c32b368ca8d4841b923d1b37cf97b9";
         private const string SettingsFileName = "CycloneGames.UIFramework.WindowCreator.json";
         private const int MaxSettingsBytes = 1024 * 1024;
@@ -1641,9 +1642,8 @@ namespace CycloneGames.UIFramework.Editor
                     (bound
                         ? "The generated component is bound and the prefab is ready for authoring."
                         : "The generated component will be bound automatically after compilation. The operation is persisted across domain reloads.");
-                CLogger.LogInfo(
-                    $"Created UIWindow '{request.WindowName}' at '{paths.PrefabFilePath}'.",
-                    LogCategory);
+                Log.Info(
+                    $"Created UIWindow '{request.WindowName}' at '{paths.PrefabFilePath}'.");
             }
             catch (Exception exception)
             {
@@ -1712,7 +1712,9 @@ namespace CycloneGames.UIFramework.Editor
                     }
                     _feedbackMessage = report.ToString();
                 }
-                CLogger.LogError($"Window creation failed: {exception}", LogCategory);
+                Log.Error(
+                    exception,
+                    "Window creation failed.");
             }
             finally
             {
@@ -2324,17 +2326,16 @@ namespace CycloneGames.UIFramework.Editor
                     _templatePrefab = AssetDatabase.LoadAssetAtPath<GameObject>(settings.templatePrefabPath);
                     if (_templatePrefab == null)
                     {
-                        CLogger.LogWarning(
-                            $"Saved UIWindow template was not found at '{settings.templatePrefabPath}'.",
-                            LogCategory);
+                        Log.Warning(
+                            $"Saved UIWindow template was not found at '{settings.templatePrefabPath}'.");
                     }
                 }
             }
             catch (Exception exception)
             {
-                CLogger.LogWarning(
-                    $"Window creator settings were not loaded: {exception.Message}",
-                    LogCategory);
+                Log.Error(
+                    exception,
+                    "Window creator settings were not loaded.");
             }
         }
 
@@ -2376,9 +2377,9 @@ namespace CycloneGames.UIFramework.Editor
             }
             catch (Exception exception)
             {
-                CLogger.LogWarning(
-                    $"Window creator settings were not saved: {exception.Message}",
-                    LogCategory);
+                Log.Error(
+                    exception,
+                    "Window creator settings were not saved.");
             }
         }
 

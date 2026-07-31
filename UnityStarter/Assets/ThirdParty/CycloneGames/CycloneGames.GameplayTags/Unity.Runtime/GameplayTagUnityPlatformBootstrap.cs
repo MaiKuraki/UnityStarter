@@ -19,8 +19,6 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
 
         internal static void Configure()
         {
-            GameplayTagRuntimePlatform.LogWarning = message => Debug.LogWarning(message);
-            GameplayTagRuntimePlatform.LogError = message => Debug.LogError(message);
             GameplayTagRuntimePlatform.IsRuntimePlaying = () => Application.isPlaying;
             GameplayTagRuntimePlatform.LoadBuildTagData = LoadBuildTagData;
         }

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Choreography.Core
 {
@@ -60,7 +61,7 @@ namespace CycloneGames.Choreography.Core
         private static readonly RuntimeClipComparer ClipComparer = new RuntimeClipComparer();
         private static readonly RuntimeEventComparer EventComparer = new RuntimeEventComparer();
 
-        private IChoreographyDiagnostics _diagnostics = NullChoreographyDiagnostics.Instance;
+        private LogChannel _log = ChoreographyCoreLog.Channel;
         private IChoreographyPlaybackSink _sink;
         private ChoreographyPlaybackContext _context;
 
@@ -132,9 +133,14 @@ namespace CycloneGames.Choreography.Core
             }
         }
 
-        public void SetDiagnostics(IChoreographyDiagnostics diagnostics)
+        public void SetLogWriter(ILogWriter logWriter)
         {
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _log = ChoreographyCoreLog.Create(logWriter);
+        }
+
+        internal void SetLogChannel(LogChannel log)
+        {
+            _log = log;
         }
 
         /// <summary>
@@ -170,7 +176,7 @@ namespace CycloneGames.Choreography.Core
         {
             if (Asset == null)
             {
-                _diagnostics.Log(ChoreographyLogLevel.Error, "Choreography", "Play called before Load.");
+                _log.Error("Play called before Load.");
                 return;
             }
             if (Status == PlaybackStatus.Playing)
@@ -699,9 +705,9 @@ namespace CycloneGames.Choreography.Core
                 if (absEnd > sectionEnd)
                 {
                     absEnd = sectionEnd;
-                    if (_diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+                    if (_log.IsEnabled(LogSeverity.Warning))
                     {
-                        _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography",
+                        _log.Warning(
                             "Clip '" + clip.Id + "' end exceeds its section; clamped to the section boundary.");
                     }
                 }

@@ -151,7 +151,6 @@ namespace CycloneGames.Factory.DODBullet
             }
             else if(collisionLayers.value != 0)
             {
-                // UnityEngine.Debug.LogWarning("Collision Layers are set, but no Interaction Zone is defined. Collisions will be checked everywhere, which may be slow.");
             }
         }
 
@@ -269,7 +268,6 @@ namespace CycloneGames.Factory.DODBullet
 
                         if (movementDistance > 0 && Physics.SphereCast((Vector3)bullet.OldPosition, scaledCollisionRadius, math.normalize(movement), out RaycastHit hit, movementDistance, collisionLayers))
                         {
-                            // UnityEngine.Debug.Log($"Bullet collided with {hit.collider.name}");
                             bullet.CurrentColor = collisionFloat4;
                             bullet.ColorResetTime = collisionColorDuration;
                             bullets[i] = bullet;

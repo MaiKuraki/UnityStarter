@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 
@@ -12,6 +13,8 @@ namespace CycloneGames.GameplayAbilities.Sample.Editor
     [CanEditMultipleObjects]
     internal sealed class AbilitySystemComponentHolderEditor : UnityEditor.Editor
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleEditorLog.Channel;
+
         private readonly List<AbilitySystemComponent> liveTargets = new List<AbilitySystemComponent>(8);
         private readonly List<GameObject> liveOwners = new List<GameObject>(8);
 
@@ -184,10 +187,11 @@ namespace CycloneGames.GameplayAbilities.Sample.Editor
 
             if (rejectedCount > 0)
             {
-                Debug.LogWarningFormat(
-                    "[GAS Overlay] {0} selected ASC target(s) were not registered. The current capacity is {1}.",
-                    rejectedCount,
-                    GASDebugOverlay.TargetCapacity);
+                Log.Warning(
+                    (Rejected: rejectedCount, Capacity: GASDebugOverlay.TargetCapacity),
+                    static (state, sb) => sb.Append(state.Rejected)
+                        .Append(" selected GAS ASC target(s) were not registered. The current capacity is ")
+                        .Append(state.Capacity).Append('.'));
             }
 
             Repaint();

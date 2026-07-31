@@ -1,9 +1,11 @@
 using System;
 using System.Reflection;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using CycloneGames.Cheat.Core;
 using CycloneGames.Cheat.Runtime;
+using CycloneGames.Logging;
 using NUnit.Framework;
 
 #if ENABLE_CHEAT
@@ -30,20 +32,23 @@ namespace CycloneGames.Cheat.Tests.Editor
         }
 
         [Test]
-        public void CapacityCapabilityPreservesLegacyRuntimeContractAndConstructors()
+        public void CapacityCapabilityExposesWriterContractAndConstructors()
         {
             Assert.IsNull(typeof(ICheatCommandControl).GetProperty("MaximumConcurrentCommandCount"));
             Assert.False(typeof(ICheatCommandAdmissionPublisher).IsAssignableFrom(
                 typeof(ICheatCommandRuntime)));
             Assert.True(typeof(ICheatCommandAdmissionPublisher).IsAssignableFrom(
                 typeof(CheatCommandRuntime)));
+            Assert.IsNull(typeof(ICheatCommandRuntime).GetProperty("LogWriter"));
+            Assert.True(typeof(ICheatLogWriterConfigurable).IsAssignableFrom(
+                typeof(CheatCommandRuntime)));
+            Assert.IsNull(typeof(ICheatCommandRuntime).GetProperty("Logger"));
 
-            Assert.NotNull(typeof(CheatCommandRuntime).GetConstructor(new[] { typeof(ICheatLogger) }));
             Assert.NotNull(typeof(CheatCommandRuntime).GetConstructor(new[] { typeof(int) }));
             Assert.NotNull(typeof(CheatCommandRuntime).GetConstructor(new[]
             {
-                typeof(ICheatLogger),
-                typeof(int)
+                typeof(int),
+                typeof(ILogWriter)
             }));
         }
 
@@ -91,8 +96,10 @@ namespace CycloneGames.Cheat.Tests.Editor
         [Test]
         public async Task AdmissionIsAtomicWhenDuplicateAndUniqueCommandsCompeteForLastSlot()
         {
-            var logger = new RecordingCheatLogger();
-            using var runtime = new CheatCommandRuntime(logger, maximumConcurrentCommandCount: 2);
+            var logWriter = new RecordingLogWriter();
+            using var runtime = new CheatCommandRuntime(
+                maximumConcurrentCommandCount: 2,
+                logWriter: logWriter);
             var router = new Router();
             using var releaseHandlers = new ManualResetEventSlim(false);
             using var firstHandlerEntered = new ManualResetEventSlim(false);
@@ -159,8 +166,8 @@ namespace CycloneGames.Cheat.Tests.Editor
                 Assert.AreEqual(2, runtime.Metrics.PublishedCommandCount);
                 Assert.AreEqual(2, runtime.Metrics.DroppedDuplicateCount);
                 Assert.AreEqual(1, runtime.Metrics.CapacityRejectedCommandCount);
-                Assert.AreEqual(0, logger.ErrorCount);
-                Assert.AreEqual(0, logger.ExceptionCount);
+                Assert.AreEqual(0, logWriter.ErrorCount);
+                Assert.AreEqual(0, logWriter.ExceptionCount);
             }
             finally
             {
@@ -371,12 +378,12 @@ namespace CycloneGames.Cheat.Tests.Editor
         }
 
         [Test]
-        public async Task ClearAllContinuesWhenCancellationCallbacksAndLoggerThrow()
+        public async Task ClearAllContinuesWhenCancellationCallbacksAndLogWriterThrow()
         {
             const int CommandCount = 2;
             using var runtime = new CheatCommandRuntime(
-                new ThrowingExceptionCheatLogger(),
-                maximumConcurrentCommandCount: CommandCount);
+                maximumConcurrentCommandCount: CommandCount,
+                logWriter: new ThrowingLogWriter());
             var router = new Router();
             var options = new CheatCommandExecutionOptions(
                 router,
@@ -434,32 +441,103 @@ namespace CycloneGames.Cheat.Tests.Editor
         }
 #endif
 
-        private sealed class RecordingCheatLogger : ICheatLogger
+        private sealed class RecordingLogWriter : ILogWriter
         {
-            public int ErrorCount { get; private set; }
-            public int ExceptionCount { get; private set; }
+            private int _errorCount;
+            private int _exceptionCount;
 
-            public void LogError(string message)
+            public int ErrorCount => Volatile.Read(ref _errorCount);
+            public int ExceptionCount => Volatile.Read(ref _exceptionCount);
+
+            public bool IsEnabled(LogSeverity severity, string category) => true;
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => RecordSeverity(severity);
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => RecordSeverity(severity);
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => RecordSeverity(severity);
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
             {
-                ErrorCount++;
+                RecordSeverity(severity);
+                Interlocked.Increment(ref _exceptionCount);
             }
 
-            public void LogException(Exception exception)
+            private void RecordSeverity(LogSeverity severity)
             {
-                ExceptionCount++;
+                if (severity >= LogSeverity.Error && severity < LogSeverity.None)
+                {
+                    Interlocked.Increment(ref _errorCount);
+                }
             }
         }
 
-        private sealed class ThrowingExceptionCheatLogger : ICheatLogger
+        private sealed class ThrowingLogWriter : ILogWriter
         {
-            public void LogError(string message)
-            {
-            }
+            public bool IsEnabled(LogSeverity severity, string category) => true;
 
-            public void LogException(Exception exception)
-            {
-                throw new InvalidOperationException("Expected logger failure.");
-            }
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Throw();
+
+            private static void Throw() =>
+                throw new InvalidOperationException("Expected log writer failure.");
         }
     }
 }

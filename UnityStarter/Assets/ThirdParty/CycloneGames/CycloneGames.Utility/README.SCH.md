@@ -54,14 +54,18 @@ flowchart LR
 
 | 程序集 | 平台 | `autoReferenced` | 直接引用 |
 | --- | --- | ---: | --- |
-| `CycloneGames.Utility.Runtime` | 所有 Unity target | `true` | `CycloneGames.Hash.Core`、`UnityEngine.UI` |
+| `CycloneGames.Utility.Runtime` | 所有 Unity target | `true` | `CycloneGames.Hash.Core`、`CycloneGames.Logging`、`UnityEngine.UI` |
 | `CycloneGames.Utility.SplashScreenModifier.Runtime` | 所有 Unity target | `true` | 无 |
-| `CycloneGames.Utility.Editor` | 仅 Editor | `true` | `CycloneGames.Utility.Runtime` |
+| `CycloneGames.Utility.Editor` | 仅 Editor | `true` | `CycloneGames.Utility.Runtime`、`CycloneGames.Logging` |
 | `CycloneGames.Utility.Tests.Editor` | 仅 Editor | `false` | Runtime、Splash Runtime、Editor、Test Framework |
 | `CycloneGames.Utility.Tests.PlayMode` | Test build | `false` | Runtime、Test Framework |
 | `CycloneGames.Utility.Tests.Performance` | Editor，条件启用 | `false` | Runtime、Performance Testing |
 
 本包位于 `Assets/ThirdParty/CycloneGames/`。其中的 `package.json` 记录发布元数据和预期依赖，但 Unity 不会依据该文件激活同级 asset package——当前 asmdef 图、已安装 package、源码和项目配置才是编译事实。
+
+Runtime 与 Editor 诊断分别使用 category 为 `CycloneGames.Utility` 和 `CycloneGames.Utility.Editor` 的 `LogChannel`。该包只依赖 `CycloneGames.Logging`；未安装 backend 时，`NullLogWriter` 提供静默 no-op fallback。
+
+每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
 ## 快速上手
 

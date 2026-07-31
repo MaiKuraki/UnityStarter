@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -10,6 +11,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class GameplayAttribute
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         public string Name { get; }
         public AttributeSet OwningSet { get; internal set; }
         private long baseValueRaw;
@@ -151,7 +154,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     }
                     catch (Exception exception)
                     {
-                        GASLog.Error($"{observerName} observer failed after the attribute value was committed: {exception.Message}");
+                        Log.Error(exception, $"{observerName} observer failed after the attribute value was committed.");
                     }
                 }
             }

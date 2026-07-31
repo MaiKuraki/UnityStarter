@@ -84,7 +84,13 @@ flowchart LR
 | `...Integrations.PrimeTween` | 窗口过渡 driver | 存在 `com.kyrylokuzyk.primetween` 包 |
 | `CycloneGames.UIFramework.Samples` | 选择性示例 | `autoReferenced: false` |
 
-核心 Runtime 引用 `UniTask`、`CycloneGames.Logger` 与 Unity UGUI API。可选 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 与 `defineConstraints` 启用；不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。AssetManagement 与 Localization Integration 通过显式 asmdef reference 引用各自的本地 Assembly。
+核心 Runtime 引用 `UniTask`、`CycloneGames.Logging` 与 Unity UGUI API。可选 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 与 `defineConstraints` 启用；不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。AssetManagement 与 Localization Integration 通过显式 asmdef reference 引用各自的本地 Assembly。
+
+Runtime 与 Sample 诊断使用稳定的 `CycloneGames.UIFramework` `LogChannel` category。通用 Editor 工具使用 `CycloneGames.UIFramework.Editor`；Localization Authoring 使用 `CycloneGames.UIFramework.Localization.Editor`。本包只依赖 backend-neutral 的 `com.cyclone-games.logging` contract，不会初始化、替换、flush 或关闭进程级 writer。未安装 backend 时，`NullLogWriter` 会安全地丢弃消息。应用 composition root 可以安装 `CycloneGames.Logger` 或其他 `ILogWriter`；文件路径、轮转、保留、脱敏、flush 与 disposal policy 均由 host 持有。
+
+每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
+
+可选 sample asmdef 通过 `Samples/Diagnostics/UIFrameworkSampleLog.cs` 遵循同一约定，同时保留既有 `CycloneGames.UIFramework` category。
 
 ## 快速上手
 
@@ -94,11 +100,14 @@ flowchart LR
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
+using CycloneGames.Logging;
 using CycloneGames.UIFramework.Runtime;
 using UnityEngine;
 
 public sealed class GameUiBootstrap : MonoBehaviour
 {
+    private static readonly LogChannel Log = LogChannel.Create("Game.UI");
+
     [SerializeField] private UIRoot uiRoot;
     [SerializeField] private UIWindowConfiguration startupWindow;
 
@@ -129,7 +138,7 @@ public sealed class GameUiBootstrap : MonoBehaviour
         }
         catch (Exception exception)
         {
-            Debug.LogException(exception, this);
+            Log.Error(exception, "UI startup failed.");
         }
         finally
         {
@@ -145,7 +154,7 @@ public sealed class GameUiBootstrap : MonoBehaviour
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception, this);
+                    Log.Error(exception, "UI shutdown failed.");
                 }
                 finally
                 {
@@ -461,7 +470,7 @@ UIWindow inventory = await ui.NavigateAsync(
 
 `GetPerformanceStats()` 返回 Session、生命周期阶段、Scene-bound Window、Binder、Isolated Canvas、Layer 与配置最大值等计数。`CopyLayerRuntimeStats` 和 `CopyActiveWindows` 写入调用方缓冲区。`DynamicAtlasService.GetStats()` 报告 Page、Entry、引用、估算 Texture Bytes、利用率、Copy Path、Cache Hit 与失败。`Tools > CycloneGames > UI Framework > Runtime Monitor` 从显式选择的 `UIManager` 读取这些有界 Snapshot。`Performance Auditor` 只在按下 `Scan Project` 后启动；它为 Layout Authority、Raycast、Material、Texture、Mask 与 Canvas Boundary 提供待复核项，不修改 Asset。
 
-`UIPresenterBinder.LogMissingPresenterMappings` 可以在开发阶段报告未映射窗口。若未映射是常态或日志量会产生负担，应保持关闭。
+`UIPresenterBinder.LogMissingPresenterMappings` 可以在开发阶段通过 `CycloneGames.UIFramework` 报告未映射窗口。其消息使用 deferred state formatting，因此 channel 关闭时不会构建消息。若未映射是常态或日志量会产生负担，应保持关闭。
 
 ## 常见场景
 

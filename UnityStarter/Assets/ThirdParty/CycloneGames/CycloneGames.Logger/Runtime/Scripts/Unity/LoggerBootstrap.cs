@@ -1,15 +1,198 @@
 using System;
 using System.IO;
+using System.Threading;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Logger
 {
     public static class LoggerBootstrap
     {
-        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
-        private static void Initialize()
+        private enum LifecycleState : byte
         {
-            LoggerSettings settings = LoadSettings();
+            Stopped = 0,
+            Running = 1,
+            ShutdownIncomplete = 2
+        }
+
+        private static readonly object LifecycleLock = new object();
+        private static CLogger _ownedLogger;
+        private static CLogger _installedProcessWriter;
+        private static int _lifecycleState;
+#if UNITY_INCLUDE_TESTS
+        internal static Action BeforeProcessWriterInstallTestHook;
+#endif
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.BeforeSceneLoad)]
+        private static void InitializeAutomatically()
+        {
+            try
+            {
+                LoggerInitializationResult result = Initialize();
+                if (result.Status == LoggerInitializationStatus.ExistingLoggerNotOwned)
+                {
+                    const string Message = "Automatic bootstrap preserved a CLogger instance owned by another composition root.";
+                    EmergencyLogger.TryWrite(Message);
+                    Debug.LogError("CycloneGames.Logger: " + Message);
+                }
+                else if (result.Status == LoggerInitializationStatus.ShutdownFailed)
+                {
+                    const string Message = "Automatic bootstrap is blocked because the previous owned backend did not finish shutting down.";
+                    EmergencyLogger.TryWrite(Message);
+                    Debug.LogError("CycloneGames.Logger: " + Message);
+                }
+            }
+            catch (Exception exception)
+            {
+                string failureType = exception.GetType().Name;
+                EmergencyLogger.TryWrite("Automatic logger initialization failed. " + failureType);
+                Debug.LogError("CycloneGames.Logger: Automatic initialization failed. " + failureType);
+            }
+        }
+
+        /// <summary>
+        /// Initializes the Unity logging backend once. A null settings value loads the configured
+        /// Resources asset and then falls back to package defaults. This method must run on Unity's
+        /// main thread.
+        /// </summary>
+        public static LoggerInitializationResult Initialize(LoggerSettings settings = null)
+        {
+            LoggerUpdater.EnsureMainThreadAccess();
+            lock (LifecycleLock)
+            {
+                LifecycleState state = (LifecycleState)Volatile.Read(ref _lifecycleState);
+                if (state == LifecycleState.ShutdownIncomplete)
+                {
+                    CLogger installed = Volatile.Read(ref _installedProcessWriter);
+                    return new LoggerInitializationResult(
+                        LoggerInitializationStatus.ShutdownFailed,
+                        installed != null && ReferenceEquals(LogRuntime.Writer, installed));
+                }
+
+                if (state == LifecycleState.Running)
+                {
+                    CLogger installed = Volatile.Read(ref _installedProcessWriter);
+                    return new LoggerInitializationResult(
+                        LoggerInitializationStatus.AlreadyInitialized,
+                        installed != null && ReferenceEquals(LogRuntime.Writer, installed));
+                }
+
+                if (CLogger.TryGetInstance(out _))
+                {
+                    return new LoggerInitializationResult(
+                        LoggerInitializationStatus.ExistingLoggerNotOwned,
+                        false);
+                }
+
+                if (LogRuntime.HasWriter)
+                {
+                    return new LoggerInitializationResult(
+                        LoggerInitializationStatus.ExistingProcessWriterNotOwned,
+                        false);
+                }
+
+                return InitializeCore(settings == null ? LoadSettings() : settings);
+            }
+        }
+
+        /// <summary>
+        /// Drains and shuts down the owned global backend before applying the supplied settings.
+        /// Initialization does not continue when the previous backend cannot stop safely.
+        /// </summary>
+        public static LoggerReinitializationResult Reinitialize(
+            LoggerSettings settings = null,
+            LogFlushMode flushMode = LogFlushMode.Buffered)
+        {
+            LoggerUpdater.EnsureMainThreadAccess();
+            lock (LifecycleLock)
+            {
+                LoggerShutdownResult shutdown = ShutdownCore(flushMode);
+                if (!shutdown.IsComplete && shutdown.Status != LoggerShutdownStatus.NotStarted)
+                {
+                    return new LoggerReinitializationResult(
+                        shutdown,
+                        new LoggerInitializationResult(LoggerInitializationStatus.ShutdownFailed, false));
+                }
+
+                if (CLogger.TryGetInstance(out _))
+                {
+                    return new LoggerReinitializationResult(
+                        shutdown,
+                        new LoggerInitializationResult(
+                            LoggerInitializationStatus.ExistingLoggerNotOwned,
+                            false));
+                }
+
+                if (LogRuntime.HasWriter)
+                {
+                    return new LoggerReinitializationResult(
+                        shutdown,
+                        new LoggerInitializationResult(
+                            LoggerInitializationStatus.ExistingProcessWriterNotOwned,
+                            false));
+                }
+
+                LoggerInitializationResult initialization = InitializeCore(
+                    settings == null ? LoadSettings() : settings);
+                return new LoggerReinitializationResult(shutdown, initialization);
+            }
+        }
+
+        /// <summary>
+        /// Removes the owned process writer, drains the global backend, and releases its sinks.
+        /// </summary>
+        public static LoggerShutdownResult Shutdown(LogFlushMode flushMode = LogFlushMode.Buffered)
+        {
+            LoggerUpdater.EnsureMainThreadAccess();
+            lock (LifecycleLock)
+            {
+                return ShutdownCore(flushMode);
+            }
+        }
+
+        internal static void ResetForSubsystemRegistration()
+        {
+            lock (LifecycleLock)
+            {
+                ResetProcessWriter();
+                Volatile.Write(ref _ownedLogger, null);
+                Volatile.Write(ref _lifecycleState, (int)LifecycleState.Stopped);
+#if UNITY_INCLUDE_TESTS
+                BeforeProcessWriterInstallTestHook = null;
+#endif
+            }
+        }
+
+        private static LoggerInitializationResult InitializeCore(LoggerSettings settings)
+        {
+            try
+            {
+                return InitializeCoreTransactional(settings);
+            }
+            catch
+            {
+                try
+                {
+                    LoggerShutdownResult rollback = ShutdownCore(LogFlushMode.Buffered);
+                    if (!rollback.IsComplete && rollback.Status != LoggerShutdownStatus.NotStarted)
+                    {
+                        EmergencyLogger.TryWrite(
+                            "Logger initialization rollback did not complete. Ownership was retained for an explicit shutdown retry.");
+                    }
+                }
+                catch (Exception rollbackException)
+                {
+                    EmergencyLogger.TryWrite(
+                        "Logger initialization rollback failed. Ownership was retained for an explicit shutdown retry. "
+                        + rollbackException.GetType().Name);
+                }
+
+                throw;
+            }
+        }
+
+        private static LoggerInitializationResult InitializeCoreTransactional(LoggerSettings settings)
+        {
             LoggerProcessingOptions processingOptions = CreateProcessingOptions(settings);
             ConfigureProcessing(settings, processingOptions);
             LoggerUpdater.Configure(processingOptions);
@@ -29,12 +212,12 @@ namespace CycloneGames.Logger
             bool registeredAny = false;
             if (useUnity)
             {
-                registeredAny |= CLogger.Instance.AddLoggerUnique(new UnityLogger());
+                registeredAny |= GetOrCreateOwnedLogger().AddLoggerUnique(new UnityLogger());
             }
 
             if (useConsole)
             {
-                registeredAny |= CLogger.Instance.AddLoggerUnique(new ConsoleLogger());
+                registeredAny |= GetOrCreateOwnedLogger().AddLoggerUnique(new ConsoleLogger());
             }
 
             if (useFile && FileLogger.IsSupported)
@@ -43,7 +226,8 @@ namespace CycloneGames.Logger
                 {
                     string filePath = ResolveFilePath(settings);
                     FileLoggerOptions fileOptions = CreateFileOptions(settings);
-                    registeredAny |= CLogger.Instance.AddLoggerUnique(new FileLogger(filePath, fileOptions));
+                    var fileLogger = new FileLogger(filePath, fileOptions);
+                    registeredAny |= GetOrCreateOwnedLogger().AddLoggerUnique(fileLogger);
                 }
                 catch (Exception exception)
                 {
@@ -55,16 +239,125 @@ namespace CycloneGames.Logger
 
             if (registeredAny)
             {
-                LoggerUpdater.EnsureInstance();
+                LoggerUpdater.EnsureBootstrapInstance();
             }
 
             if (settings != null && registeredAny)
             {
-                CLogger.Instance.SetLogLevel(settings.defaultLevel);
-                CLogger.Instance.SetLogFilter(settings.defaultFilter);
+                CLogger ownedLogger = Volatile.Read(ref _ownedLogger);
+                ownedLogger.SetLogLevel(settings.defaultLevel);
+                ownedLogger.SetLogFilter(settings.defaultFilter);
             }
 
-            CLogger.ConfigureGlobalStaticLoggingSuppressed(!registeredAny);
+            bool processWriterInstalled = false;
+            if (registeredAny)
+            {
+                CLogger processWriter = Volatile.Read(ref _ownedLogger);
+#if UNITY_INCLUDE_TESTS
+                BeforeProcessWriterInstallTestHook?.Invoke();
+#endif
+                if (LogRuntime.TryInstallWriter(processWriter)
+                    || ReferenceEquals(LogRuntime.Writer, processWriter))
+                {
+                    Volatile.Write(ref _installedProcessWriter, processWriter);
+                    processWriterInstalled = true;
+                }
+                else
+                {
+                    LoggerShutdownResult rollback = ShutdownCore(LogFlushMode.Buffered);
+                    if (!rollback.IsComplete && rollback.Status != LoggerShutdownStatus.NotStarted)
+                    {
+                        EmergencyLogger.TryWrite(
+                            "Logger initialization lost the process-writer race and rollback did not complete. Ownership was retained for an explicit shutdown retry.");
+                        return new LoggerInitializationResult(
+                            LoggerInitializationStatus.ShutdownFailed,
+                            false);
+                    }
+
+                    return new LoggerInitializationResult(
+                        LoggerInitializationStatus.ExistingProcessWriterNotOwned,
+                        false);
+                }
+            }
+
+            Volatile.Write(ref _lifecycleState, (int)LifecycleState.Running);
+            return new LoggerInitializationResult(
+                registeredAny
+                    ? LoggerInitializationStatus.Initialized
+                    : LoggerInitializationStatus.NoSinksConfigured,
+                processWriterInstalled);
+        }
+
+        private static LoggerShutdownResult ShutdownCore(LogFlushMode flushMode)
+        {
+            CLogger owned = Volatile.Read(ref _ownedLogger);
+            CLogger installed = Volatile.Read(ref _installedProcessWriter);
+            ResetProcessWriter();
+            LoggerShutdownResult result;
+            if (owned == null)
+            {
+                result = new LoggerShutdownResult(LoggerShutdownStatus.NotStarted, 0, true);
+            }
+            else if (CLogger.TryGetInstance(out CLogger current) && ReferenceEquals(current, owned))
+            {
+                result = CLogger.Shutdown(flushMode);
+            }
+            else
+            {
+                result = owned.ShutdownInstance(flushMode);
+            }
+
+            if (result.IsComplete || result.Status == LoggerShutdownStatus.NotStarted)
+            {
+                if (owned != null && result.IsComplete)
+                {
+                    LoggerUpdater.ResetAfterOwnedShutdown();
+                }
+
+                Volatile.Write(ref _ownedLogger, null);
+                Volatile.Write(ref _lifecycleState, (int)LifecycleState.Stopped);
+                return result;
+            }
+
+            if (installed != null
+                && (LogRuntime.TryInstallWriter(installed)
+                    || ReferenceEquals(LogRuntime.Writer, installed)))
+            {
+                Volatile.Write(ref _installedProcessWriter, installed);
+            }
+
+            Volatile.Write(ref _lifecycleState, (int)LifecycleState.ShutdownIncomplete);
+
+            return result;
+        }
+
+        internal static bool TryGetOwnedLogger(out CLogger logger)
+        {
+            logger = Volatile.Read(ref _ownedLogger);
+            return logger != null
+                && (LifecycleState)Volatile.Read(ref _lifecycleState) == LifecycleState.Running;
+        }
+
+        private static CLogger GetOrCreateOwnedLogger()
+        {
+            CLogger owned = Volatile.Read(ref _ownedLogger);
+            if (owned != null)
+            {
+                return owned;
+            }
+
+            owned = CLogger.Instance;
+            Volatile.Write(ref _ownedLogger, owned);
+            return owned;
+        }
+
+        private static void ResetProcessWriter()
+        {
+            CLogger installed = Interlocked.Exchange(ref _installedProcessWriter, null);
+            if (installed != null)
+            {
+                LogRuntime.TryResetWriter(installed);
+            }
         }
 
         private static LoggerSettings LoadSettings()

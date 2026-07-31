@@ -1,6 +1,6 @@
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -8,6 +8,8 @@ namespace CycloneGames.GameplayAbilities.Sample
 {
     public class SampleCombatManager : MonoBehaviour
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         [Header("Characters")]
         public Character Player;
         public Character Enemy;
@@ -22,7 +24,6 @@ namespace CycloneGames.GameplayAbilities.Sample
         public Text EnemyStatusText;
         public Text LogText;
         private GameObject logTextGORef;
-        private CLogger _loggerOwner;
         private UILogger _uiLogger;
         private GASRuntimeContext runtimeContext;
         private AbilitySystemComponent playerDebugTarget;
@@ -39,13 +40,12 @@ namespace CycloneGames.GameplayAbilities.Sample
             logTextGORef = LogText?.gameObject;
             if (LogText != null)
             {
-                _loggerOwner = CLogger.Instance;
-                _uiLogger = new UILogger(UpdateLog, 7);
-                _loggerOwner.AddLogger(_uiLogger);
+                _uiLogger = new UILogger(LogRuntime.Writer, UpdateLog, 7);
+                LogRuntime.ReplaceWriter(_uiLogger);
             }
             else
             {
-                Debug.LogWarning("SampleCombatManager: LogText is not assigned in the Inspector. UI logs will not be displayed.");
+                Log.Warning("SampleCombatManager: LogText is not assigned in the Inspector. UI logs will not be displayed.");
             }
         }
 
@@ -124,7 +124,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             {
                 if (Enemy != null)
                 {
-                    CLogger.LogInfo("DEBUG: Forcing Enemy to cast ability.");
+                    Log.Info("DEBUG: Forcing Enemy to cast ability.");
                     TryActivateAbilityByTag(Enemy, GameplayTagManager.RequestTag(GASSampleTags.Ability_PoisonBlade));
                 }
             }
@@ -137,7 +137,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                     var ge = DebugXpEffect.GetGameplayEffect();
                     var spec = GameplayEffectSpec.Create(ge, Player.AbilitySystemComponent);
                     Player.AbilitySystemComponent.ApplyGameplayEffectSpecToSelf(spec);
-                    CLogger.LogInfo("Granted debug XP to player.");
+                    Log.Info("Granted debug XP to player.");
                 }
             }
         }
@@ -158,7 +158,10 @@ namespace CycloneGames.GameplayAbilities.Sample
                     return;
                 }
             }
-            CLogger.LogWarning($"TryActivateAbilityByTag: No ability found with tag {abilityTag.Name} on character {character.name}");
+            Log.Warning(
+                (TagName: abilityTag.Name, CharacterName: character.name),
+                static (state, sb) => sb.Append("TryActivateAbilityByTag: No ability found with tag ")
+                    .Append(state.TagName).Append(" on character ").Append(state.CharacterName));
         }
 
         void UpdateUI()
@@ -198,16 +201,17 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
             ownsDebugOverlayLifetime = false;
 
-            if (_uiLogger != null && _loggerOwner != null)
+            if (_uiLogger != null)
             {
-                if (_loggerOwner.RemoveLogger(_uiLogger, 2000))
+                if (object.ReferenceEquals(LogRuntime.Writer, _uiLogger))
                 {
-                    _uiLogger.Dispose();
+                    LogRuntime.ReplaceWriter(_uiLogger.InnerWriter);
                 }
+
+                _uiLogger.Dispose();
             }
 
             _uiLogger = null;
-            _loggerOwner = null;
 
             ShutdownCharacter(Player);
             ShutdownCharacter(Enemy);

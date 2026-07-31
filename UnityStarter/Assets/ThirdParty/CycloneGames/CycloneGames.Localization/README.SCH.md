@@ -34,7 +34,7 @@ CycloneGames.Localization 管理版本化文本与本地化资产内容，面向
 - **表现层绑定**：`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder` 只在 enabled 时订阅；无 per-frame polling。
 - **Pseudo-localization**：保护 placeholder 与 tag 的文本变换，用于布局和内容 QA。
 - **Editor workspace**：多语言 table workspace、增量 CSV 交换（RFC 4180）、validation 窗口、分区 catalog build。
-- **纯 C# 核心**：`CycloneGames.Localization.Core` 设 `noEngineReferences: true`；Runtime 与 Components 依赖 `UniTask` 和 `CycloneGames.AssetManagement`。
+- **纯 C# 核心**：`CycloneGames.Localization.Core` 设 `noEngineReferences: true`；Runtime 与 Components 依赖 `UniTask` 和 `CycloneGames.AssetManagement`，产生诊断的程序集使用 `CycloneGames.Logging`。
 
 ## 架构
 
@@ -42,10 +42,14 @@ CycloneGames.Localization 管理版本化文本与本地化资产内容，面向
 | --- | --- | --- |
 | `CycloneGames.Localization.Core` | `Core/` | `LocaleId`、fallback traversal、plural category、pseudo-localization。不引用 `UnityEngine`。 |
 | `CycloneGames.Localization.Runtime` | `Runtime/` | Authoring bridge、`LocalizationService`、catalog、table、selector。依赖 Core、UniTask、AssetManagement。 |
-| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeTMPText`、`LocalizeImage`。依赖 Runtime、TMP、UGUI、AssetManagement、UniTask。 |
-| `CycloneGames.Localization.Editor` | `Editor/` | Inspector、table workspace、validation、CSV、catalog build。依赖 Runtime、UnityEditor。 |
+| `CycloneGames.Localization.Components` | `Runtime/Components/` | `LocalizeTMPText`、`LocalizeImage`。依赖 Runtime、TMP、UGUI、AssetManagement、UniTask、Logging。 |
+| `CycloneGames.Localization.Editor` | `Editor/` | Inspector、table workspace、validation、CSV、catalog build。依赖 Runtime、Logging、UnityEditor。 |
 | `CycloneGames.Localization.Runtime.Integrations.YarnSpinner` | `Runtime/Integrations/YarnSpinner/` | Yarn locale 同步；仅安装 Yarn Spinner 时参与编译。 |
 | `CycloneGames.Localization.Tests.Editor` | `Tests/Editor/` | Pure core、runtime、catalog 与 Editor workflow 测试。 |
+
+Runtime 与 Editor 诊断分别使用 category `CycloneGames.Localization` 和 `CycloneGames.Localization.Editor`。该包不依赖具体 backend；`LogRuntime` 未安装 writer 时，由 `NullLogWriter` 静默处理诊断。
+
+每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
 ```mermaid
 flowchart LR
@@ -288,9 +292,10 @@ Composite format 是译者可控制的输入。Catalog build 前会校验 placeh
 LocaleId japanese = new LocaleId("ja");
 if (!service.TrySetLocale(japanese)) { /* 不可用 */ }
 
+LogChannel log = LogChannel.Create("MyGame.Localization");
 service.Changed += change =>
 {
-    Debug.Log($"Localization revision {change.Revision}: {change.Reason}");
+    log.Info($"Localization revision {change.Revision}: {change.Reason}");
 };
 ```
 

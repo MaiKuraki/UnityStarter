@@ -1,0 +1,19 @@
+{
+    "name": "CycloneGames.BehaviorTree.Tests.Support",
+    "rootNamespace": "CycloneGames.BehaviorTree.Tests.Support",
+    "references": [
+        "CycloneGames.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

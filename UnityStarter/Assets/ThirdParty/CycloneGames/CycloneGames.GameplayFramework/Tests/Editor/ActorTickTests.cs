@@ -1,10 +1,9 @@
 using System;
-using System.Text.RegularExpressions;
+using System.Text;
 using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
+using CycloneGames.Logging;
 using NUnit.Framework;
-using UnityEngine;
-using UnityEngine.TestTools;
 
 namespace CycloneGames.GameplayFramework.Tests.Editor
 {
@@ -143,13 +142,29 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             using GameplayTestWorld testWorld = GameplayTestWorld.Start();
             TestTickActor throwingActor = RegisterActor(testWorld, "ThrowingActor", ActorTickPhase.Update);
             TestTickActor healthyActor = RegisterActor(testWorld, "HealthyActor", ActorTickPhase.Update);
-            throwingActor.TickAction = _ => throw new InvalidOperationException("Tick failure requested by test.");
+            var expectedException = new InvalidOperationException("Tick failure requested by test.");
+            throwingActor.TickAction = _ => throw expectedException;
+            var writer = new RecordingLogWriter();
+            ILogWriter previousWriter = LogRuntime.ReplaceWriter(writer);
 
-            LogAssert.Expect(LogType.Exception, new Regex("Tick failure requested by test"));
-            Assert.DoesNotThrow(() => testWorld.Instance.Tick(ActorTickPhase.Update, 0.1f));
+            try
+            {
+                Assert.DoesNotThrow(() => testWorld.Instance.Tick(ActorTickPhase.Update, 0.1f));
+            }
+            finally
+            {
+                RestoreWriter(previousWriter, writer);
+            }
 
             Assert.AreEqual(1, throwingActor.TickCount);
             Assert.AreEqual(1, healthyActor.TickCount);
+            Assert.AreEqual(1, writer.Count);
+            LogRecord record = writer.LastRecord;
+            Assert.AreEqual(LogSeverity.Error, record.Severity);
+            Assert.AreEqual("CycloneGames.GameplayFramework", record.Category);
+            Assert.AreSame(expectedException, record.Exception);
+            StringAssert.Contains("ThrowingActor", record.Message);
+            StringAssert.Contains("Update", record.Message);
         }
 
         [Test]
@@ -252,6 +267,146 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         {
             Assert.AreEqual(count, actor.TickCount);
             Assert.AreEqual(deltaSeconds, actor.LastDeltaSeconds, 0.000001f);
+        }
+
+        private static void RestoreWriter(ILogWriter previousWriter, RecordingLogWriter writer)
+        {
+            if (object.ReferenceEquals(LogRuntime.Writer, writer))
+            {
+                LogRuntime.ReplaceWriter(previousWriter);
+            }
+        }
+
+        private readonly struct LogRecord
+        {
+            public LogRecord(
+                LogSeverity severity,
+                string category,
+                string message,
+                Exception exception)
+            {
+                Severity = severity;
+                Category = category;
+                Message = message;
+                Exception = exception;
+            }
+
+            public LogSeverity Severity { get; }
+            public string Category { get; }
+            public string Message { get; }
+            public Exception Exception { get; }
+        }
+
+        private sealed class RecordingLogWriter : ILogWriter
+        {
+            private readonly object m_Gate = new object();
+            private int m_Count;
+            private LogRecord m_LastRecord;
+
+            public int Count
+            {
+                get
+                {
+                    lock (m_Gate)
+                    {
+                        return m_Count;
+                    }
+                }
+            }
+
+            public LogRecord LastRecord
+            {
+                get
+                {
+                    lock (m_Gate)
+                    {
+                        return m_LastRecord;
+                    }
+                }
+            }
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                return severity >= LogSeverity.Error && severity < LogSeverity.None;
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Record(severity, category, message, null);
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder?.Invoke(builder);
+                Record(severity, category, builder.ToString(), null);
+            }
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                var builder = new StringBuilder(128);
+                messageBuilder?.Invoke(state, builder);
+                Record(severity, category, builder.ToString(), null);
+            }
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                Record(severity, category, message, exception);
+            }
+
+            private void Record(
+                LogSeverity severity,
+                string category,
+                string message,
+                Exception exception)
+            {
+                if (!IsEnabled(severity, category))
+                {
+                    return;
+                }
+
+                lock (m_Gate)
+                {
+                    m_Count++;
+                    m_LastRecord = new LogRecord(severity, category, message, exception);
+                }
+            }
         }
 
         private sealed class TestTickActor : Actor

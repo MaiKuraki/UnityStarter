@@ -3,18 +3,19 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
 using CycloneGames.Logger.Util;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Logger
 {
     public sealed class CLogAssertService : ICLogAssert
     {
         private const string DefaultFailureMessage = "Assertion failed.";
-        private readonly ICLogger _logger;
+        private readonly ILogWriter _writer;
         private volatile CLogAssertRuntimeOptions _options;
 
-        public CLogAssertService(ICLogger logger, CLogAssertOptions options = null)
+        public CLogAssertService(ILogWriter writer, CLogAssertOptions options = null)
         {
-            _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+            _writer = writer ?? throw new ArgumentNullException(nameof(writer));
             _options = CLogAssertOptions.CreateRuntimeOptions(options);
         }
 
@@ -115,7 +116,7 @@ namespace CycloneGames.Logger
             string resolvedMessage = string.IsNullOrEmpty(message) ? DefaultFailureMessage : message;
             if (options.ShouldLog)
             {
-                _logger.Log(options.FailureLevel, resolvedMessage, resolvedCategory, filePath, lineNumber, memberName);
+                _writer.Write(options.FailureLevel, resolvedCategory, resolvedMessage, filePath, lineNumber, memberName);
             }
 
             if (options.ShouldThrow)
@@ -142,7 +143,7 @@ namespace CycloneGames.Logger
                 string message = BuildMessage(messageBuilder);
                 if (options.ShouldLog)
                 {
-                    _logger.Log(options.FailureLevel, message, resolvedCategory, filePath, lineNumber, memberName);
+                    _writer.Write(options.FailureLevel, resolvedCategory, message, filePath, lineNumber, memberName);
                 }
 
                 FlushBeforeThrow(options);
@@ -151,7 +152,7 @@ namespace CycloneGames.Logger
 
             if (options.ShouldLog)
             {
-                _logger.Log(options.FailureLevel, messageBuilder, resolvedCategory, filePath, lineNumber, memberName);
+                _writer.Write(options.FailureLevel, resolvedCategory, messageBuilder, filePath, lineNumber, memberName);
             }
         }
 
@@ -172,7 +173,7 @@ namespace CycloneGames.Logger
                 string message = BuildMessage(state, messageBuilder);
                 if (options.ShouldLog)
                 {
-                    _logger.Log(options.FailureLevel, message, resolvedCategory, filePath, lineNumber, memberName);
+                    _writer.Write(options.FailureLevel, resolvedCategory, message, filePath, lineNumber, memberName);
                 }
 
                 FlushBeforeThrow(options);
@@ -181,7 +182,7 @@ namespace CycloneGames.Logger
 
             if (options.ShouldLog)
             {
-                _logger.Log(options.FailureLevel, state, messageBuilder, resolvedCategory, filePath, lineNumber, memberName);
+                _writer.Write(options.FailureLevel, resolvedCategory, state, messageBuilder, filePath, lineNumber, memberName);
             }
         }
 
@@ -201,9 +202,18 @@ namespace CycloneGames.Logger
 
         private void FlushBeforeThrow(CLogAssertRuntimeOptions options)
         {
-            if (options.ShouldLog && options.FlushBeforeThrow)
+            if (!options.ShouldLog || !options.FlushBeforeThrow || !(_writer is CLogger logger))
             {
-                _logger.TryFlush(LogFlushMode.Buffered, options.FlushTimeoutMs);
+                return;
+            }
+
+            try
+            {
+                logger.TryFlush(LogFlushMode.Buffered, options.FlushTimeoutMs);
+            }
+            catch (Exception exception) when (!(exception is OutOfMemoryException))
+            {
+                EmergencyLogger.TryWrite("Assertion flush failed before throw. " + exception.GetType().FullName);
             }
         }
 

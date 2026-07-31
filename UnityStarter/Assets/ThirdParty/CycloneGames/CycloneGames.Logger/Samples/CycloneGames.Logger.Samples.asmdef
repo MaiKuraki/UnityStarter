@@ -2,6 +2,7 @@
     "name": "CycloneGames.Logger.Samples",
     "rootNamespace": "CycloneGames.Logger.Samples",
     "references": [
+        "CycloneGames.Logging",
         "CycloneGames.Logger",
         "CycloneGames.Logger.Unity"
     ],

@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using CycloneGames.BehaviorTree.Runtime.Components;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEditor.Callbacks;
 using UnityEditor.UIElements;
@@ -11,6 +12,7 @@ namespace CycloneGames.BehaviorTree.Editor
 {
     public class BehaviorTreeEditor : EditorWindow
     {
+        private static readonly LogChannel Log = BehaviorTreeEditorLog.Channel;
         private const string DEBUG_FLAG = "[BehaviorTreeEditor]";
         private BehaviorTreeView _behaviorTreeView;
         private BTInspectorView _inspectorView;
@@ -135,13 +137,13 @@ namespace CycloneGames.BehaviorTree.Editor
         {
             if (_authoringReadOnly || EditorApplication.isPlayingOrWillChangePlaymode)
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Save skipped: behavior tree authoring is read-only in Play Mode.");
+                Log.Warning("Save skipped: behavior tree authoring is read-only in Play Mode.");
                 return;
             }
 
             if (_behaviorTreeView == null || !_behaviorTreeView.HasTree || _behaviorTreeView.Tree == null)
             {
-                Debug.LogWarning($"{DEBUG_FLAG} Save skipped: no behavior tree is currently loaded.");
+                Log.Warning("Save skipped: no behavior tree is currently loaded.");
                 return;
             }
 
@@ -149,7 +151,7 @@ namespace CycloneGames.BehaviorTree.Editor
             log.Append(DEBUG_FLAG);
             log.AppendLine("Save Behavior Tree : " + _behaviorTreeView.Tree.name);
             log.AppendLine("Path : " + AssetDatabase.GetAssetPath(_behaviorTreeView.Tree));
-            Debug.Log(log.ToString());
+            Log.Info(log.ToString());
             AssetDatabase.SaveAssetIfDirty(_behaviorTreeView.Tree);
         }
 
@@ -268,7 +270,6 @@ namespace CycloneGames.BehaviorTree.Editor
                         {
                             _lastTree.SetEditorOwner(runner.gameObject);
                         }
-                        // Debug.Log($"Selected BT Runner : {Selection.activeGameObject.name}");
                     }
                 }
             }
@@ -279,7 +280,7 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (_lastTree)
                 {
-                    Debug.Log($"Open Tree : " + _lastTree.name);
+                    Log.Info("Open Tree: " + _lastTree.name);
                     _behaviorTreeView.PopulateView(_lastTree);
                     UpdateStats();
                 }
@@ -294,7 +295,7 @@ namespace CycloneGames.BehaviorTree.Editor
             {
                 if (_lastTree && AssetDatabase.CanOpenAssetInEditor(_lastTree.GetInstanceID()))
                 {
-                    Debug.Log($"Open Tree : " + _lastTree.name);
+                    Log.Info("Open Tree: " + _lastTree.name);
                     _behaviorTreeView.PopulateView(_lastTree);
                     UpdateStats();
                 }
@@ -418,6 +419,8 @@ namespace CycloneGames.BehaviorTree.Editor
 
     internal static class BehaviorTreeEditorResources
     {
+        private static readonly LogChannel Log = BehaviorTreeEditorLog.Channel;
+
         private const string EditorLayoutGuid = "7cc5d4f0bab93384cb8db3533da654e6";
         private const string EditorStyleGuid = "bf8be869980123747aa53e13b8e51d5b";
         private const string NodeLayoutGuid = "657fad77865cc0f48bd32bf9e8736ff5";
@@ -487,14 +490,14 @@ namespace CycloneGames.BehaviorTree.Editor
             string path = AssetDatabase.GUIDToAssetPath(guid);
             if (string.IsNullOrEmpty(path))
             {
-                Debug.LogError($"[BehaviorTreeEditor] Missing {description} asset for GUID '{guid}'.");
+                Log.Error($"Missing {description} asset for GUID '{guid}'.");
                 return null;
             }
 
             cachedAsset = AssetDatabase.LoadAssetAtPath<T>(path);
             if (cachedAsset == null)
             {
-                Debug.LogError($"[BehaviorTreeEditor] Failed to load {description} at '{path}' (GUID '{guid}').");
+                Log.Error($"Failed to load {description} at '{path}' (GUID '{guid}').");
             }
 
             return cachedAsset;

@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.Choreography",
     "references": [
         "CycloneGames.Choreography.Core",
-        "CycloneGames.Logger"
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

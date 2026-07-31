@@ -1,5 +1,6 @@
 using System;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Factory.Samples.PureCSharp
 {
@@ -14,6 +15,8 @@ namespace CycloneGames.Factory.Samples.PureCSharp
     // The Particle class itself
     public class Particle : IPoolable<ParticleData, Particle>, ITickable, IDisposable
     {
+        private static readonly LogChannel Log = FactorySamplesLog.Channel;
+
         private IDespawnableMemoryPool<Particle> _pool;
         private ParticleData _data;
         private int _ticksRemaining;
@@ -28,13 +31,13 @@ namespace CycloneGames.Factory.Samples.PureCSharp
             _currentPosition = _data.StartPosition;
             _ticksRemaining = _data.LifetimeTicks;
 
-            Console.WriteLine($"---> Particle SPAWNED at {_currentPosition}. Will live for {_ticksRemaining} ticks.");
+            Log.Info($"Particle spawned at {_currentPosition}. It will live for {_ticksRemaining} ticks.");
         }
 
         // OnDespawned resets the object for reuse
         public void OnDespawned()
         {
-            Console.WriteLine($"<--- Particle DESPAWNED at {_currentPosition}.");
+            Log.Info($"Particle despawned at {_currentPosition}.");
         }
 
         // Tick is called each "frame" for active particles
@@ -54,7 +57,7 @@ namespace CycloneGames.Factory.Samples.PureCSharp
         public void Dispose()
         {
             // No unmanaged resources, so we just log a message
-            Console.WriteLine("Particle instance permanently destroyed.");
+            Log.Info("Particle instance permanently destroyed.");
         }
     }
 }

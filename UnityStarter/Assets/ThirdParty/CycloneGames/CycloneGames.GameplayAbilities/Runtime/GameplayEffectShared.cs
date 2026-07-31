@@ -1,5 +1,6 @@
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -345,6 +346,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     [System.Serializable]
     public readonly struct SetByCallerMagnitude
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         public readonly GameplayTag DataTag;
         public readonly string DataName;
         public readonly float DefaultValue;
@@ -386,8 +389,9 @@ namespace CycloneGames.GameplayAbilities.Runtime
 
             if (WarnIfNotFound)
             {
-                GASLog.Warning(sb => sb.Append("SetByCallerMagnitude has no DataTag or DataName on effect '")
-                    .Append(spec.Def?.Name).Append("'."));
+                Log.Warning(spec.Def?.Name, static (effectName, sb) =>
+                    sb.Append("SetByCallerMagnitude has no DataTag or DataName on effect '")
+                        .Append(effectName).Append("'."));
             }
 
             return defaultValueRaw;

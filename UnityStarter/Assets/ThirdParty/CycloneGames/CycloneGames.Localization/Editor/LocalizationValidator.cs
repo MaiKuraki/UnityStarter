@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Runtime;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEngine;
 using Object = UnityEngine.Object;
@@ -25,6 +26,8 @@ namespace CycloneGames.Localization.Editor
 
     public static class LocalizationValidator
     {
+        private static readonly LogChannel Log = LocalizationEditorLog.Channel;
+
         private const int MaxValidationResults = 10_000;
         private const int MaxAssetsPerKind = 8_192;
         private const int MaxEntriesPerAsset = 250_000;
@@ -90,17 +93,28 @@ namespace CycloneGames.Localization.Editor
             {
                 LocalizationValidationResult result = results[index];
                 if (result.Type == MessageType.Error)
-                    Debug.LogError(result.Text, result.Context);
+                    Log.Error(result, AppendValidationResult);
                 else if (result.Type == MessageType.Warning)
-                    Debug.LogWarning(result.Text, result.Context);
+                    Log.Warning(result, AppendValidationResult);
                 else
-                    Debug.Log(result.Text, result.Context);
+                    Log.Info(result, AppendValidationResult);
             }
 
             if (errors == 0 && warnings == 0)
-                Debug.Log("[Localization] " + operation + " passed.");
+                Log.Info(operation + " passed.");
             else
-                Debug.Log("[Localization] " + operation + " finished. Errors: " + errors + ", Warnings: " + warnings);
+                Log.Info(operation + " finished. Errors: " + errors + ", Warnings: " + warnings);
+        }
+
+        private static void AppendValidationResult(
+            LocalizationValidationResult result,
+            System.Text.StringBuilder builder)
+        {
+            builder.Append(result.Text);
+            if (result.Context != null)
+            {
+                builder.Append(" (Context: ").Append(result.Context.name).Append(')');
+            }
         }
 
         private static int CountResults(List<LocalizationValidationResult> results, MessageType type)

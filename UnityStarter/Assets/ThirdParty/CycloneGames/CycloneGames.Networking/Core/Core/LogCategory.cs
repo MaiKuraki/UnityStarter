@@ -2,14 +2,13 @@ namespace CycloneGames.Networking
 {
     /// <summary>
     /// Log category constants for the Networking module.
-    /// Used with CycloneGames.Logger to enable filtering of network-related logs.
+    /// Used with CycloneGames.Logging to enable filtering of network-related logs.
     /// </summary>
     public static class LogCategory
     {
         /// <summary>
-        /// Category for all networking-related log messages.
-        /// Use this category when logging network events, errors, and diagnostics.
+        /// Canonical root category used by the unified CycloneGames.Logging pipeline.
         /// </summary>
-        public const string Network = "Network";
+        public const string Root = "CycloneGames.Networking";
     }
 }

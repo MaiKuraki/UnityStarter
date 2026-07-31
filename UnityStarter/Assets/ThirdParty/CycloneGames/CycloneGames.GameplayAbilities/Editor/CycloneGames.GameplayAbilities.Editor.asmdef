@@ -3,7 +3,8 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.GameplayAbilities.Runtime",
-        "CycloneGames.GameplayTags.Core"
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [
         "Editor"

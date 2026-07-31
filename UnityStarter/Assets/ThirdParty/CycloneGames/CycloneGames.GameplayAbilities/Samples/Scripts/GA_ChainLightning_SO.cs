@@ -1,12 +1,14 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
     public class GA_ChainLightning : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect lightningDamageEffect;
         private readonly int maxBounces;
         private readonly float damageFalloffPerBounce;
@@ -35,7 +37,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             GameObject currentTarget = FindInitialTarget(caster, hitTargets);
             if (currentTarget == null)
             {
-                CLogger.LogWarning("Chain Lightning fizzles, no initial target found.");
+                Log.Warning("Chain Lightning fizzles, no initial target found.");
                 EndAbility();
                 return;
             }
@@ -61,7 +63,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
                 // Calculate damage for this bounce
                 float damageMultiplier = Mathf.Pow(1 - damageFalloffPerBounce, i);
-                CLogger.LogInfo($"Chain Lightning hits {currentTarget.name} for {damageMultiplier:P0} damage.");
+                Log.Info($"Chain Lightning hits {currentTarget.name} for {damageMultiplier:P0} damage.");
 
                 // A better system would allow GameplayEffectSpec modification (e.g., SetByCaller).
                 // For simplicity here, we create a temporary GE with the modified magnitude.

@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using System;
+using CycloneGames.Logging;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -55,6 +56,8 @@ namespace CycloneGames.Audio.Runtime
     /// </summary>
     public sealed class AudioVoiceLocaleControl : IAudioVoiceLocaleControl
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         private const int MaxChangesPerDispatch = 64;
 
         private readonly Action<Exception> subscriberExceptionSink;
@@ -266,7 +269,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (isReportingException)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
                 return;
             }
 
@@ -282,11 +285,11 @@ namespace CycloneGames.Audio.Runtime
                     }
                     catch (Exception sinkException)
                     {
-                        Debug.LogException(sinkException);
+                        Log.Error(sinkException);
                     }
                 }
 
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
             finally
             {

@@ -4,7 +4,8 @@
     "references": [
         "Unity.Cinemachine",
         "UniTask",
-        "CycloneGames.GameplayFramework.Runtime"
+        "CycloneGames.GameplayFramework.Runtime",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [
         "Editor"

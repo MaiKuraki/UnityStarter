@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using CycloneGames.Logging;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -8,6 +9,8 @@ namespace CycloneGames.Foundation2D.Runtime
     [RequireComponent(typeof(Image))]
     public sealed class UGUISequenceRenderer : MonoBehaviour, ISpriteSequenceRenderer
     {
+        private static readonly LogChannel Log = Foundation2DLog.Channel;
+
         public enum UGUIRenderMode
         {
             SpriteSwap = 0,
@@ -372,7 +375,7 @@ namespace CycloneGames.Foundation2D.Runtime
             }
 
             _configurationWarningIssued = true;
-            Debug.LogWarning(message, this);
+            Log.Warning(message);
         }
 
         private bool IsMeshEffectReady()

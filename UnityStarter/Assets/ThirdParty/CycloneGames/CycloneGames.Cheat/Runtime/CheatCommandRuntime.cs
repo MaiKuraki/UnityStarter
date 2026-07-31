@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using CycloneGames.Cheat.Core;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using VitalRouter;
 
@@ -12,7 +13,7 @@ using System.Collections.Generic;
 namespace CycloneGames.Cheat.Runtime
 {
 #if ENABLE_CHEAT
-    public sealed class CheatCommandRuntime : ICheatCommandRuntime, ICheatCommandAdmissionPublisher
+    public sealed class CheatCommandRuntime : ICheatCommandRuntime, ICheatCommandAdmissionPublisher, ICheatLogWriterConfigurable
     {
         private readonly struct CommandStateKey : IEquatable<CommandStateKey>
         {
@@ -88,7 +89,7 @@ namespace CycloneGames.Cheat.Runtime
                 }
             }
 
-            public bool ExecuteCancellation(ICheatLogger logger)
+            public bool ExecuteCancellation(LogChannel log)
             {
                 bool cancelled = false;
                 try
@@ -104,7 +105,7 @@ namespace CycloneGames.Cheat.Runtime
                 {
                     try
                     {
-                        logger?.LogException(exception);
+                        log.Error(exception, "A cheat command cancellation callback failed.");
                     }
                     catch
                     {
@@ -176,7 +177,7 @@ namespace CycloneGames.Cheat.Runtime
             new Dictionary<CommandStateKey, CommandExecutionState>();
         private readonly object _admissionLock = new object();
 
-        private ICheatLogger _logger;
+        private ILogWriter _logWriter;
         private long _publishedCommandCount;
         private long _completedCommandCount;
         private long _droppedDuplicateCount;
@@ -188,19 +189,19 @@ namespace CycloneGames.Cheat.Runtime
         private int _disposed;
         private readonly int _maximumConcurrentCommandCount;
 
-        public CheatCommandRuntime(ICheatLogger logger = null)
-            : this(logger, DefaultMaximumConcurrentCommandCount)
+        public CheatCommandRuntime()
+            : this(DefaultMaximumConcurrentCommandCount, null)
         {
         }
 
         public CheatCommandRuntime(int maximumConcurrentCommandCount)
-            : this(null, maximumConcurrentCommandCount)
+            : this(maximumConcurrentCommandCount, null)
         {
         }
 
         public CheatCommandRuntime(
-            ICheatLogger logger,
-            int maximumConcurrentCommandCount)
+            int maximumConcurrentCommandCount,
+            ILogWriter logWriter)
         {
             if (maximumConcurrentCommandCount <= 0 ||
                 maximumConcurrentCommandCount > AbsoluteMaximumConcurrentCommandCount)
@@ -208,18 +209,18 @@ namespace CycloneGames.Cheat.Runtime
                 throw new ArgumentOutOfRangeException(nameof(maximumConcurrentCommandCount));
             }
 
-            _logger = logger;
+            _logWriter = logWriter;
             _maximumConcurrentCommandCount = maximumConcurrentCommandCount;
         }
 
         public bool IsEnabled => Volatile.Read(ref _disposed) == 0;
 
-        public ICheatLogger Logger
+        public ILogWriter LogWriter
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => Volatile.Read(ref _logger);
+            get => Volatile.Read(ref _logWriter) ?? LogRuntime.Writer;
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => Volatile.Write(ref _logger, value);
+            set => Volatile.Write(ref _logWriter, value);
         }
 
         public int RunningCommandCount
@@ -305,7 +306,7 @@ namespace CycloneGames.Cheat.Runtime
 
             if (arg == null)
             {
-                Logger?.LogError(string.Concat(ErrClassArgPrefix, commandId, ErrClassArgSuffix));
+                CreateLogChannel().Error(string.Concat(ErrClassArgPrefix, commandId, ErrClassArgSuffix));
                 return UniTask.CompletedTask;
             }
 
@@ -356,7 +357,7 @@ namespace CycloneGames.Cheat.Runtime
                 catch (Exception exception)
                 {
                     Interlocked.Increment(ref _faultedCommandCount);
-                    Logger?.LogException(exception);
+                    CreateLogChannel().Error(exception, "A cheat command execution failed.");
                 }
             }
             finally
@@ -476,7 +477,7 @@ namespace CycloneGames.Cheat.Runtime
                 return true;
             }
 
-            Logger?.LogError(ErrCommandIdNullOrEmpty);
+            CreateLogChannel().Error(ErrCommandIdNullOrEmpty);
             return false;
         }
 
@@ -565,38 +566,44 @@ namespace CycloneGames.Cheat.Runtime
             List<CommandExecutionState> cancellationRequests,
             bool countRequests)
         {
-            ICheatLogger logger = Logger;
+            LogChannel log = CreateLogChannel();
             for (int i = 0; i < cancellationRequests.Count; i++)
             {
-                if (cancellationRequests[i].ExecuteCancellation(logger) && countRequests)
+                if (cancellationRequests[i].ExecuteCancellation(log) && countRequests)
                 {
                     Interlocked.Increment(ref _cancelRequestedCount);
                 }
             }
         }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        private LogChannel CreateLogChannel()
+        {
+            return CheatRuntimeLog.CreateOptional(Volatile.Read(ref _logWriter));
+        }
     }
 #else
-    public sealed class CheatCommandRuntime : ICheatCommandRuntime, ICheatCommandAdmissionPublisher
+    public sealed class CheatCommandRuntime : ICheatCommandRuntime, ICheatCommandAdmissionPublisher, ICheatLogWriterConfigurable
     {
-        private ICheatLogger _logger;
+        private ILogWriter _logWriter;
         private readonly int _maximumConcurrentCommandCount;
 
         public const int DefaultMaximumConcurrentCommandCount = 256;
         public const int AbsoluteMaximumConcurrentCommandCount = 4096;
 
-        public CheatCommandRuntime(ICheatLogger logger = null)
-            : this(logger, DefaultMaximumConcurrentCommandCount)
+        public CheatCommandRuntime()
+            : this(DefaultMaximumConcurrentCommandCount, null)
         {
         }
 
         public CheatCommandRuntime(int maximumConcurrentCommandCount)
-            : this(null, maximumConcurrentCommandCount)
+            : this(maximumConcurrentCommandCount, null)
         {
         }
 
         public CheatCommandRuntime(
-            ICheatLogger logger,
-            int maximumConcurrentCommandCount)
+            int maximumConcurrentCommandCount,
+            ILogWriter logWriter)
         {
             if (maximumConcurrentCommandCount <= 0 ||
                 maximumConcurrentCommandCount > AbsoluteMaximumConcurrentCommandCount)
@@ -604,18 +611,18 @@ namespace CycloneGames.Cheat.Runtime
                 throw new ArgumentOutOfRangeException(nameof(maximumConcurrentCommandCount));
             }
 
-            _logger = logger;
+            _logWriter = logWriter;
             _maximumConcurrentCommandCount = maximumConcurrentCommandCount;
         }
 
         public bool IsEnabled => false;
 
-        public ICheatLogger Logger
+        public ILogWriter LogWriter
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => _logger;
+            get => _logWriter ?? LogRuntime.Writer;
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            set => _logger = value;
+            set => _logWriter = value;
         }
 
         public int RunningCommandCount => 0;

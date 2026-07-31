@@ -30,19 +30,21 @@ CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag
 - **AOT-safe 注册**：通过显式 `TableDescriptor<TTableSet>` 注册生成表集合，无运行时反射。
 - **Luban 与 MessagePack adapter**：与纯 C# Core assembly 隔离。
 - **Unity Editor 集成**：`DataTableLubanSettings`、自定义 Inspector 和带安全保护的 Luban 进程 Runner。
+- **统一日志**：通过 `CycloneGames.Logging` 提供进程级替换能力，包 assembly 不再直接使用 Unity 或 Console 日志 API。
 
 ## 架构
 
 | 程序集 | 命名空间 | 职责 |
 | --- | --- | --- |
 | `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Table、Catalog、Registry、限制、Manifest、Hash、字节 Cache、Location、日志和 Scope。纯 C#，启用 `noEngineReferences: true`。 |
-| `CycloneGames.DataTable.Unity.Runtime` | `CycloneGames.DataTable.Unity` | Unity Runtime 日志引导。 |
 | `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`、自定义 Inspector、请求校验和外部进程执行。仅 Editor。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | 有界的 Luban `ByteBuf` 创建和生成表集合构造。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | 有界的 MessagePack 行数组解码。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | `CycloneGames.DataTable.Unity.Integrations.AssetManagement` | 可选的 UniTask `TextAsset` 和 raw-file payload loader；在 asset-style 安装方式下不参与编译。 |
 
-Core 和 Unity Runtime 会自动引用。Editor 与 Integration assembly 使用 `autoReferenced: false`；消费者 asmdef 必须引用实际使用的每个 assembly。Luban 和 MessagePack Integration 还要求对应 package 满足其 asmdef 声明的版本条件。Asset-style AssetManagement 模块不会生成 DataTable Integration 所需的 UPM `versionDefines` capability，因此该 Integration 保持不参与编译；只添加 asmdef reference 不能启用它。
+Core 会自动引用。Editor 与 Integration assembly 使用 `autoReferenced: false`；消费者 asmdef 必须引用实际使用的每个 assembly。Luban 和 MessagePack Integration 还要求对应 package 满足其 asmdef 声明的版本条件。Asset-style AssetManagement 模块不会生成 DataTable Integration 所需的 UPM `versionDefines` capability，因此该 Integration 保持不参与编译；只添加 asmdef reference 不能启用它。
+
+每个产生日志的 assembly 都把 channel 构造收敛到一个 internal facade：`DataTableCoreLog`、`DataTableEditorLog`、`DataTableAssetManagementLog` 或 `DataTableMessagePackLog`，并放在各自 assembly 的 `Diagnostics/` 目录下。统一形状为 `Category`、ambient `Channel` 与 `Create(ILogWriter)`；`Create` 要求显式 writer 非 null，ambient 调用方使用 `Channel`。Editor facade 另外保留既有 Luban Settings category。生产调用点以 `Log` 表示 ambient channel，以 `_log` 表示注入的实例 channel。`DataTableCoreLog.CommittedInfoNoThrow` 承载 registry publish 已提交后的窄化 best-effort 边界。
 
 ```mermaid
 flowchart LR
@@ -632,7 +634,9 @@ Core 不写文件，也不使用 `EditorPrefs` 或 `PlayerPrefs`。
 | `DataTableLubanSettings.asset` | 可见的 Unity 项目配置；保留一个权威资产。 |
 | Runtime byte cache | 由 Runtime 内容 Scope 持有，在 reader 退役后 Dispose。 |
 
-`DataTableLogger` 在 Core 中默认使用 `System.Console`。Composition root 可以设置 `LogInfo`、`LogWarning` 和 `LogError`；`CycloneGames.DataTable.Unity.Runtime` 会安装 Unity 日志。关闭 Domain Reload 时，应在 subsystem 注册阶段重置或重新绑定自定义 delegate。日志应包含 table identity、generation、stage、limit 和 failure category，但不能记录 secret 或完整恶意 payload。
+包内所有诊断都使用以 `CycloneGames.DataTable` 为根 category 的 `LogChannel`。Composition root 可通过 `LogRuntime.TryInstallWriter` 安装一次进程 backend，或通过 `LogRuntime.ReplaceWriter` 原子重新配置；未显式绑定 writer 的 channel 会观察后续替换。默认 `NullLogWriter` 保持静默，因此 Core、headless、CLI 与 Unity host 共用同一 API，不需要 Unity bootstrap。独立的 `Tools~/CodeGen` 可执行程序继续使用 `System.Console` 作为面向用户的 CLI 输出协议，这不属于 library diagnostics。
+
+DataTable 不公开包专用 logger、delegate override 或 Unity logging bootstrap。只在应用 composition root 配置 `CycloneGames.Logging`。`DataTableRegistry.Publish` 完成提交后发生的 writer 失败属于 best-effort diagnostics，不会回滚，也不会让已完成的 publish 表现为失败。日志应包含 table identity、generation、stage、limit 和 failure category，但不能记录 secret 或完整恶意 payload。
 
 ## 故障排查
 
@@ -699,7 +703,7 @@ Core 不写文件，也不使用 `EditorPrefs` 或 `PlayerPrefs`。
 | `DataTableNameUtility` | 可移植的 Table name、扩展名和路径规范化。 |
 | `DataTableLocationResolver` | 构造可移植相对 Location。 |
 | `DataTableSetScope` | 管理生成 root、Catalog 和可选 backing owner 生命周期。 |
-| `DataTableLogger` | 可替换的日志边界。 |
+| `LogChannel` / `LogRuntime` | 统一 category API 与可替换的进程 writer。 |
 | `LubanDataTableSetFactory` | 创建有界且私有持有的 Luban buffer。 |
 | `MessagePackConfigProvider` | 有界 MessagePack row array 解码和 Table 构造。 |
 | `DataTableLubanSettings` | 可见的 Unity Editor 生成设置。 |

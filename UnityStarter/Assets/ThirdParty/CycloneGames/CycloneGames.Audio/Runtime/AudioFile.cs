@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
@@ -720,6 +721,8 @@ namespace CycloneGames.Audio.Runtime
 
     internal sealed class ManagedAudioClipHandle : IAudioClipHandle
     {
+        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+
         private AudioClip clip;
         private Action releaseAction;
         private int refCount;
@@ -761,7 +764,7 @@ namespace CycloneGames.Audio.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception);
+                Log.Error(exception);
             }
             finally
             {
@@ -1720,7 +1723,7 @@ namespace CycloneGames.Audio.Runtime
             {
                 if (this.embeddedClip.length <= 0)
                 {
-                    Debug.LogWarningFormat("Invalid file length for node {0}, Event: {1}", this.name, activeEvent.rootEvent.name);
+                    Log.Warning($"Invalid file length for node {this.name}, Event: {activeEvent.rootEvent.name}");
                     return;
                 }
                 float selectedStartTime = SelectStartTime(this.embeddedClip);
@@ -1734,7 +1737,7 @@ namespace CycloneGames.Audio.Runtime
             }
             else
             {
-                Debug.LogWarningFormat("No file or path in node {0}, Event: {1}", this.name, activeEvent.rootEvent.name);
+                Log.Warning($"No file or path in node {this.name}, Event: {activeEvent.rootEvent.name}");
             }
         }
 
@@ -1754,13 +1757,13 @@ namespace CycloneGames.Audio.Runtime
                                           this.externalReference.LocationKind == AudioLocationKind.AssetAddress
                         ? $"No runtime loader registered for AudioClipReference '{this.externalReference.name}' using AssetAddress mode."
                         : $"Error loading audio reference for node '{this.name}'.";
-                    Debug.LogError(errorMessage);
+                    Log.Error(errorMessage);
                     return;
                 }
 
                 if (!handle.IsSuccess || handle.Clip == null || handle.Clip.length <= 0f)
                 {
-                    Debug.LogError(
+                    Log.Error(
                         $"Audio reference '{this.externalReference.name}' ({this.externalReference.LocationKind}) failed to load.");
                     AudioClipHandleRelease.Safe(handle);
                     handle = null;
@@ -1789,7 +1792,7 @@ namespace CycloneGames.Audio.Runtime
             catch (Exception e)
             {
                 string referenceName = this.externalReference != null ? this.externalReference.name : "<missing>";
-                Debug.LogError(
+                Log.Error(
                     $"Audio reference '{referenceName}' failed with {e.GetType().Name}. Location details are omitted from logs.");
             }
             finally

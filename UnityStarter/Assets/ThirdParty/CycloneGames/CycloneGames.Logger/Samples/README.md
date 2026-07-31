@@ -2,7 +2,7 @@
 
 The sample scene teaches the Logger workflow in small, isolated steps: write ordinary records, use the allocation-aware builder API, observe queue and cache state, attach a temporary file sink, and run a local comparison harness.
 
-The scripts compile in `CycloneGames.Logger.Samples`. That assembly references `CycloneGames.Logger` and `CycloneGames.Logger.Unity`, has `autoReferenced: false`, and is not part of the production API surface.
+The scripts compile in `CycloneGames.Logger.Samples`. That assembly references `CycloneGames.Logging`, `CycloneGames.Logger`, and `CycloneGames.Logger.Unity`, has `autoReferenced: false`, and is not part of the production API surface.
 
 Samples are teaching and diagnostic tools. Their timings and allocations depend on the Editor or Player, backend, hardware, Console state, storage, active sinks, and current settings. They are not shipping performance targets, universal capacity recommendations, or platform certification evidence.
 
@@ -10,10 +10,11 @@ Samples are teaching and diagnostic tools. Their timings and allocations depend 
 
 | File | What it demonstrates | Important side effect |
 | --- | --- | --- |
-| `LoggerSample.cs` | Minimal `CLogger.LogInfo`, `LogWarning`, and `LogError` usage | Uses the project-owned Unity bootstrap; it does not create or stop the logger |
-| `LoggerPerformanceTest.cs` | A finite mixed-level load using state plus cached/static builders | Registers a temporary file sink outside WebGL and changes the global level to `Trace` |
-| `LoggerPoolMonitor.cs` | Queue count/character occupancy and process-wide cache observations | Prints through `Debug.Log` and can submit a bounded burst |
-| `LoggerBenchmark.cs` | Local comparison of filtered, no-sink, core, file, and Unity Console paths | Reconfigures/stops the global logger, forces GC, performs I/O, and writes a report |
+| `Diagnostics/LoggerSamplesLog.cs` | Assembly-local categories and the standard `Category`/`Channel`/`Create(ILogWriter)` facade surface | Owns every `LogChannel.Create` call in the sample assembly |
+| `LoggerSample.cs` | Minimal producer-side `LogChannel` usage | Uses the project-owned Unity bootstrap; it does not create or stop the logger |
+| `LoggerPerformanceTest.cs` | A finite mixed-level load using state plus cached/static builders | Registers a temporary file sink outside WebGL and changes the active CLogger process writer level to `Trace` |
+| `LoggerPoolMonitor.cs` | Queue count/character occupancy and process-wide cache observations | Reports through `LogChannel` and can submit a bounded burst |
+| `LoggerBenchmark.cs` | Local comparison of filtered, no-sink, core, file, and Unity Console paths | Owns an explicit backend per case, forces GC, performs I/O, and writes a report |
 | `SampleScene.unity` | Hosts the example components | `Benchmark` is active by default; `LoggerSample` and `PerformanceTest` are inactive |
 
 `LoggerPoolMonitor` is not placed in the scene. Add it to a temporary GameObject when you want to inspect queue and cache statistics.
@@ -26,18 +27,21 @@ Samples are teaching and diagnostic tools. Their timings and allocations depend 
 4. Keep only one of `Benchmark`, `LoggerSample`, or `PerformanceTest` active.
 5. Enter Play Mode, observe the relevant output, then leave Play Mode and check for shutdown or disposal errors.
 
-`LoggerBenchmark` owns global Logger reconfiguration for its isolated run. Do not enable it in a scene containing application systems that own or use the global logger.
+`LoggerBenchmark` creates an explicit single-threaded `CLogger` for each isolated case and binds a `LogChannel` to that writer. It never replaces the process writer or uses a direct platform logging API. The component still forces full GC and performs file and Console I/O, so do not run it beside application performance measurements.
 
 ## Tutorial 1: Minimal Unity Logging
 
-Enable the `LoggerSample` GameObject and disable the other scenarios. The component relies on `LoggerBootstrap` and contains only normal application calls:
+Enable the `LoggerSample` GameObject and disable the other scenarios. The component relies on `LoggerBootstrap` and uses the same backend-independent producer API as every other CycloneGames package:
 
 ```csharp
+private static readonly LogChannel Log =
+    LoggerSamplesLog.Channel;
+
 private void Start()
 {
-    CLogger.LogInfo("Logger sample started.", "Sample");
-    CLogger.LogWarning("This is a warning example.", "Sample");
-    CLogger.LogError("This is an error example.", "Sample");
+    Log.Info("Logger sample started.");
+    Log.Warning("This is a warning example.");
+    Log.Error("This is an error example.");
 }
 ```
 
@@ -45,7 +49,7 @@ Expected result:
 
 - the active settings asset chooses the sink set;
 - the default `Info` threshold accepts all three records;
-- `Sample` appears as the category;
+- `CycloneGames.Logger.Sample` appears as the category;
 - Unity Console output contains a source link when `UnityLogger` is active.
 
 If no record appears, verify `registerUnityLogger`, `defaultLevel`, `defaultFilter`, and the Console filters.
@@ -55,16 +59,15 @@ If no record appears, verify `registerUnityLogger`, `defaultLevel`, `defaultFilt
 An interpolated string is created before the logger can filter it:
 
 ```csharp
-CLogger.LogDebug($"Entity {entityId} updated.", "Simulation");
+Log.Debug($"Entity {entityId} updated.");
 ```
 
 For a measured hot path, pass the state separately and use a static or cached delegate:
 
 ```csharp
-CLogger.LogDebug(
+Log.Debug(
     entityId,
-    static (value, builder) => builder.Append("Entity ").Append(value).Append(" updated."),
-    "Simulation");
+    static (value, builder) => builder.Append("Entity ").Append(value).Append(" updated."));
 ```
 
 The builder runs only after level, category, sink, lifecycle, and queue-reservation checks succeed. This avoids a capturing closure in the shown call, but does not guarantee that the complete path is allocation-free. Pool misses, builder growth, sink formatting, Unity Console copies, exceptions, and I/O can allocate.
@@ -75,7 +78,7 @@ Enable `PerformanceTest` and disable the other scenarios. `LoggerPerformanceTest
 
 1. creates a `FileLogger` under `Application.temporaryCachePath` outside WebGL;
 2. registers it through `AddLoggerUnique`;
-3. sets the global level to `Trace`;
+3. verifies that the process writer is a `CLogger` and sets that backend level to `Trace`;
 4. submits up to 10,000 records across all six active severities;
 5. removes and disposes the file sink only when `RemoveLogger` returns `true`.
 
@@ -85,7 +88,7 @@ The output file is:
 
 The displayed elapsed time covers frame-distributed submission. Frame rate, active sinks, queue drops, Unity Console, storage, Editor overhead, and scheduling all affect it. Do not report it as Logger throughput. Inspect all of the following before drawing a local conclusion:
 
-- `CLogger.Instance.GetProcessingStatistics()`;
+- `GetProcessingStatistics()` on the active CLogger process writer;
 - `FileLogger.Statistics`;
 - Unity Profiler data;
 - file contents and final byte count.
@@ -118,7 +121,6 @@ Logger cache statistics are not a heap profile. They exclude caller strings, mos
 
 Enable `Benchmark` and disable every other scenario. The harness runs:
 
-- direct `UnityEngine.Debug.Log` output;
 - filtered generic logging;
 - an initialized logger without a sink;
 - core string, capturing builder, and generic state-builder cases;
@@ -182,8 +184,8 @@ Do not retain `LogMessage`. A copied handoff for UI, network, upload, or platfor
 - `LoggerSample` only produces records.
 - `LoggerPerformanceTest` temporarily owns a `FileLogger` until successful registration transfers it to `CLogger`.
 - Only `RemoveLogger(...)=true` transfers that sink back for caller disposal.
-- `LoggerBenchmark` owns the global configuration during its isolated execution and calls `CLogger.Shutdown`.
-- Never run the benchmark beside another global Logger owner.
+- `LoggerBenchmark` owns one explicit `CLogger` per case and calls `ShutdownInstance` before creating the next backend.
+- The benchmark does not replace or stop the project-owned process writer.
 
 ## Output and Cleanup
 

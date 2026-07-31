@@ -1,4 +1,6 @@
+using System;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Choreography.Audio
@@ -15,14 +17,28 @@ namespace CycloneGames.Choreography.Audio
         [SerializeField] private int InitialPoolSize = 8;
 
         private UnityAudioProvider _provider;
-        private IChoreographyDiagnostics _diagnostics;
+        private LogChannel _log = ChoreographyAudioLog.Channel;
         private bool _warnedUninitialized;
 
         /// <summary>Wires a Unity Object resource resolver and builds the direct AudioClip provider.</summary>
-        public void Initialize(IUnityChoreographyResourceResolver resolver, IChoreographyDiagnostics diagnostics = null)
+        public void Initialize(IUnityChoreographyResourceResolver resolver)
         {
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
-            _provider = new UnityAudioProvider(transform, resolver, _diagnostics, InitialPoolSize);
+            InitializeCore(resolver, null);
+        }
+
+        public void Initialize(IUnityChoreographyResourceResolver resolver, ILogWriter logWriter)
+        {
+            InitializeCore(resolver, logWriter ?? throw new ArgumentNullException(nameof(logWriter)));
+        }
+
+        private void InitializeCore(IUnityChoreographyResourceResolver resolver, ILogWriter logWriter)
+        {
+            _log = logWriter == null
+                ? ChoreographyAudioLog.Channel
+                : ChoreographyAudioLog.Create(logWriter);
+            _provider = logWriter == null
+                ? new UnityAudioProvider(transform, resolver, InitialPoolSize)
+                : new UnityAudioProvider(transform, resolver, logWriter, InitialPoolSize);
         }
 
         public void BeginClip(in ChoreographyPlaybackSample sample)
@@ -62,9 +78,9 @@ namespace CycloneGames.Choreography.Audio
                 return;
             }
             _warnedUninitialized = true;
-            if (_diagnostics != null && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (_log.IsEnabled(LogSeverity.Warning))
             {
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.Audio",
+                _log.Warning(
                     "ChoreographyAudioProviderBehaviour used before Initialize; audio playback is disabled.");
             }
         }

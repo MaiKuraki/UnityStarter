@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
 using CycloneGames.Logger.Util;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Logger
 {
@@ -23,9 +24,9 @@ namespace CycloneGames.Logger
             _options = CLogAssertRuntimeOptions.Default;
         }
 
-        public static CLogAssertService CreateService(ICLogger logger, CLogAssertOptions options = null)
+        public static CLogAssertService CreateService(ILogWriter writer, CLogAssertOptions options = null)
         {
-            return new CLogAssertService(logger, options);
+            return new CLogAssertService(writer, options);
         }
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -116,13 +117,15 @@ namespace CycloneGames.Logger
 
             string resolvedCategory = options.ResolveCategory(category);
             string resolvedMessage = string.IsNullOrEmpty(message) ? DefaultFailureMessage : message;
+            ILogWriter writer = LogRuntime.Writer;
             if (options.ShouldLog)
             {
-                CLogger.LogGlobal(options.FailureLevel, resolvedMessage, resolvedCategory, filePath, lineNumber, memberName);
+                writer.Write(options.FailureLevel, resolvedCategory, resolvedMessage, filePath, lineNumber, memberName);
             }
 
             if (options.ShouldThrow)
             {
+                FlushBeforeThrow(writer, options);
                 throw new CLogAssertionException(resolvedMessage, resolvedCategory, filePath, lineNumber, memberName);
             }
         }
@@ -139,20 +142,22 @@ namespace CycloneGames.Logger
             if (!options.Enabled) return;
 
             string resolvedCategory = options.ResolveCategory(category);
+            ILogWriter writer = LogRuntime.Writer;
             if (options.ShouldThrow)
             {
                 string message = BuildMessage(messageBuilder);
                 if (options.ShouldLog)
                 {
-                    CLogger.LogGlobal(options.FailureLevel, message, resolvedCategory, filePath, lineNumber, memberName);
+                    writer.Write(options.FailureLevel, resolvedCategory, message, filePath, lineNumber, memberName);
                 }
 
+                FlushBeforeThrow(writer, options);
                 throw new CLogAssertionException(message, resolvedCategory, filePath, lineNumber, memberName);
             }
 
             if (options.ShouldLog)
             {
-                CLogger.LogGlobal(options.FailureLevel, messageBuilder, resolvedCategory, filePath, lineNumber, memberName);
+                writer.Write(options.FailureLevel, resolvedCategory, messageBuilder, filePath, lineNumber, memberName);
             }
         }
 
@@ -168,20 +173,39 @@ namespace CycloneGames.Logger
             if (!options.Enabled) return;
 
             string resolvedCategory = options.ResolveCategory(category);
+            ILogWriter writer = LogRuntime.Writer;
             if (options.ShouldThrow)
             {
                 string message = BuildMessage(state, messageBuilder);
                 if (options.ShouldLog)
                 {
-                    CLogger.LogGlobal(options.FailureLevel, message, resolvedCategory, filePath, lineNumber, memberName);
+                    writer.Write(options.FailureLevel, resolvedCategory, message, filePath, lineNumber, memberName);
                 }
 
+                FlushBeforeThrow(writer, options);
                 throw new CLogAssertionException(message, resolvedCategory, filePath, lineNumber, memberName);
             }
 
             if (options.ShouldLog)
             {
-                CLogger.LogGlobal(options.FailureLevel, state, messageBuilder, resolvedCategory, filePath, lineNumber, memberName);
+                writer.Write(options.FailureLevel, resolvedCategory, state, messageBuilder, filePath, lineNumber, memberName);
+            }
+        }
+
+        private static void FlushBeforeThrow(ILogWriter writer, CLogAssertRuntimeOptions options)
+        {
+            if (!options.ShouldLog || !options.FlushBeforeThrow || !(writer is CLogger logger))
+            {
+                return;
+            }
+
+            try
+            {
+                logger.TryFlush(LogFlushMode.Buffered, options.FlushTimeoutMs);
+            }
+            catch (Exception exception) when (!(exception is OutOfMemoryException))
+            {
+                EmergencyLogger.TryWrite("Assertion flush failed before throw. " + exception.GetType().FullName);
             }
         }
 

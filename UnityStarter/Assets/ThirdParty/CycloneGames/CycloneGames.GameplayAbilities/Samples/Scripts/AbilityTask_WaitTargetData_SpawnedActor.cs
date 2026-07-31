@@ -1,6 +1,6 @@
 using System;
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
@@ -12,6 +12,8 @@ namespace CycloneGames.GameplayAbilities.Sample
     /// </summary>
     public class AbilityTask_WaitTargetData_SpawnedActor : AbilityTask
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         public Action<TargetData> OnValidData;
         public Action OnCancelled;
         private GameObject targetActorPrefab;
@@ -28,7 +30,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         {
             if (targetActorPrefab == null)
             {
-                CLogger.LogError("WaitTargetData_SpawnedActor failed: TargetActor prefab is null.");
+                Log.Error("WaitTargetData_SpawnedActor failed: TargetActor prefab is null.");
                 EndTask();
                 return;
             }
@@ -39,7 +41,7 @@ namespace CycloneGames.GameplayAbilities.Sample
             
             if (spawnedTargetActor == null)
             {
-                CLogger.LogError($"WaitTargetData_SpawnedActor failed: Prefab '{targetActorPrefab.name}' does not have a component implementing ITargetActor.");
+                Log.Error($"WaitTargetData_SpawnedActor failed: Prefab '{targetActorPrefab.name}' does not have a component implementing ITargetActor.");
                 UnityEngine.Object.Destroy(actorInstance);
                 EndTask();
                 return;

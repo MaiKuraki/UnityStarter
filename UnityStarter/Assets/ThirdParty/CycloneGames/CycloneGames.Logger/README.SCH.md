@@ -2,7 +2,7 @@
 
 [English | 简体中文](README.md)
 
-CycloneGames.Logger 是面向 Unity 应用、Headless Player、命令行工具、测试和纯 C# 服务的有界、可观测日志底座。它提供无 Unity 依赖的核心、可选 Unity adapter、显式队列与内存预算、失败隔离 sink、具备恢复能力的文件输出，以及可以被监控而不是被假设成功的生命周期结果。
+CycloneGames.Logger 是不依赖引擎的 `CycloneGames.Logging` 生产者契约所对应的有界、可观测 backend。它面向 Unity 应用、Headless Player、命令行工具、测试和纯 C# 服务，提供可选 Unity adapter、显式队列与内存预算、失败隔离 sink、具备恢复能力的文件输出，以及可以被监控而不是被假设成功的生命周期结果。
 
 ## 目录
 
@@ -27,6 +27,7 @@ CycloneGames.Logger 是面向 Unity 应用、Headless Player、命令行工具�
 ### 主要特性
 
 - **有界队列**：消息数与保留字符数双重限制，多种 overflow policy，以及 critical record 预留。
+- **统一生产者 API**：通过 `ILogWriter`、`LogChannel` 与 `LogRuntime` 接入；业务包不引用此具体 backend。
 - **Threaded 与 caller-pumped 两种处理模式**：通过 `CLoggerFactory.CreateThreaded` 与 `CreateSingleThreaded` 选择。
 - **失败隔离 sink**：`UnityLogger`、`ConsoleLogger`、`FileLogger` 以及自定义 `ILogger`；按 sink 隔离避免一个失败 sink 阻塞其他 sink。
 - **具备恢复能力的文件输出**：有界轮转、恢复尝试、flush 模式与健康统计。
@@ -38,29 +39,30 @@ CycloneGames.Logger 是面向 Unity 应用、Headless Player、命令行工具�
 
 ```mermaid
 flowchart LR
-    Product["游戏、工具、测试或服务"] --> Facade["CLogger 静态 Facade"]
-    Product --> Contract["ICLogger 实例契约"]
-    Facade --> Core["CycloneGames.Logger<br/>无 Unity 依赖核心"]
-    Contract --> Core
+    Product["游戏、工具、包、测试或服务"] --> Contract["CycloneGames.Logging<br/>LogChannel / ILogWriter"]
+    Contract --> Backend["CLogger backend<br/>实现 ILogWriter"]
+    Host["Composition root"] --> Runtime["LogRuntime process fallback"]
+    Runtime --> Contract
     UnityHost["Unity 生命周期"] --> UnityAdapter["CycloneGames.Logger.Unity"]
-    UnityAdapter --> Core
+    UnityAdapter --> Backend
     Editor["CycloneGames.Logger.Editor"] --> UnityAdapter
-    Core --> Console["ConsoleLogger"]
-    Core --> File["FileLogger"]
-    Core --> Custom["自定义同步 sink"]
+    Backend --> Console["ConsoleLogger"]
+    Backend --> File["FileLogger"]
+    Backend --> Custom["自定义同步 sink"]
     UnityAdapter --> UnityConsole["UnityLogger 主线程 handoff"]
 ```
 
 | 程序集 | 用途 | Unity 依赖 |
 | --- | --- | --- |
+| `CycloneGames.Logging` | 仅生产者契约、category channel、null writer、进程 fallback | 无（`noEngineReferences: true`） |
 | `CycloneGames.Logger` | 核心契约、处理、过滤、断言、`ConsoleLogger`、`FileLogger` | 无（`noEngineReferences: true`） |
 | `CycloneGames.Logger.Unity` | `LoggerBootstrap`、`LoggerSettings`、`UnityLogger`、Unity 生命周期宿主 | `UnityEngine` |
-| `CycloneGames.Logger.Editor` | 设置 Inspector、源码超链接、构建覆盖处理 | `UnityEditor` |
+| `CycloneGames.Logger.Editor` | EditMode composition root、设置 Inspector、源码超链接、构建覆盖处理 | `UnityEditor` |
 | `CycloneGames.Logger.Samples` | 隔离的 sample scene 与诊断 component | Unity adapter（`autoReferenced: false`） |
 | `CycloneGames.Logger.Tests.Editor` | 功能与可靠性测试 | Unity Test Framework |
 | `CycloneGames.Logger.Tests.Performance` | 性能 case 与稳态分配断言 | Performance Test Framework |
 
-核心 public 契约不暴露 `GameObject`、`MonoBehaviour`、`ScriptableObject` 或其他 `UnityEngine` 类型。Unity 专属行为留在 adapter 程序集中。
+核心 public 契约不暴露 `GameObject`、`MonoBehaviour`、`ScriptableObject` 或其他 `UnityEngine` 类型。Unity 专属行为留在 adapter 程序集中。`LogRuntime` 不拥有 backend，也不会 dispose backend；创建 `CLogger` 的 composition root 负责 flush 与 shutdown。
 
 每条被接受的记录都经过相同的有界管线：
 
@@ -84,36 +86,39 @@ flowchart LR
 
 1. 在 Unity 中选择 `Tools > CycloneGames > Logger > Create Default LoggerSettings`，命令会在 `Assets/Resources/CycloneGames.Logger/LoggerSettings.asset` 创建资产。
 2. 选中资产，在自定义 Inspector 中点击 `Validate Settings`。无效容量、不受支持的 Unity Console policy 和不安全文件路径会在进入构建前被拒绝。
-3. 在任何引用 `CycloneGames.Logger` 与 `CycloneGames.Logger.Unity` 的代码中写日志：
+3. 生产者程序集只引用 `CycloneGames.Logging`，并创建稳定 category channel：
 
 ```csharp
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 public sealed class InventoryController : MonoBehaviour
 {
+    private static readonly LogChannel Log =
+        LogChannel.Create("CycloneGames.Inventory");
+
     private void Start()
     {
-        CLogger.LogInfo("Inventory initialized.", "Inventory");
+        Log.Info("Inventory initialized.");
     }
 
     public void ReportLoadFailure(string itemId)
     {
-        CLogger.LogError(
+        Log.Error(
             itemId,
-            static (value, builder) => builder.Append("Failed to load item: ").Append(value),
-            "Inventory");
+            static (value, builder) => builder.Append("Failed to load item: ").Append(value));
     }
 }
 ```
 
-`LoggerBootstrap` 在第一个 Scene 之前运行，加载设置资产、创建 runtime host、注册所选 sink，并应用默认 level 与 filter。如果没有 sink 能够注册，静态日志会被抑制，也不会创建未配置的全局实例。
+`LoggerBootstrap` 在第一个 Scene 之前运行，加载设置资产、创建 runtime host、注册所选 sink、应用默认 level 与 filter，之后才把已配置的 `CLogger` 安装为 `LogRuntime` writer。在此之前以及没有任何 sink 能注册时，ambient channel 使用 `NullLogWriter`，不会创建未配置的全局实例。
 
 ### 纯 C# 或服务器接入
 
 核心程序集设置了 `noEngineReferences: true`，可以在没有 `UnityEngine` 的环境中使用：
 
 ```csharp
+using CycloneGames.Logging;
 using CycloneGames.Logger;
 
 var options = new LoggerProcessingOptions
@@ -127,7 +132,8 @@ var options = new LoggerProcessingOptions
 CLogger logger = CLoggerFactory.CreateThreaded(options);
 logger.AddLoggerUnique(new ConsoleLogger());
 
-logger.Log(LogLevel.Info, "Service started.", "Bootstrap");
+LogChannel log = LogChannel.Create("CycloneGames.Service", logger);
+log.Info("Service started.");
 
 LoggerShutdownResult result = logger.ShutdownInstance(LogFlushMode.Buffered, 2000);
 if (result.IsComplete)
@@ -143,11 +149,11 @@ else
 宿主必须控制 dispatch affinity 时使用 `CLoggerFactory.CreateSingleThreaded`，并从宿主 update loop 调用 `Pump`：
 
 ```csharp
-ICLogger logger = CLoggerFactory.CreateSingleThreaded(options);
+CLogger logger = CLoggerFactory.CreateSingleThreaded(options);
 logger.Pump(maxItems: 256);
 ```
 
-向领域服务注入 `ICLogger`。Composition root 拥有具体 `CLogger`、sink 与最终 shutdown。领域代码不应通过 Service Locator 解析 `CLogger.Instance`。
+向领域服务注入 `ILogWriter` 或显式绑定的 `LogChannel`。Composition root 拥有具体 `CLogger`、sink 与最终 shutdown。领域代码不应解析 `CLogger.Instance` 或修改 `LogRuntime`。`CLogger` 不再暴露 `Log(...)` 或按 severity 命名的 producer 方法；所有记录统一通过 `ILogWriter`/`LogChannel` 进入 backend。
 
 ## 核心概念
 
@@ -156,16 +162,18 @@ logger.Pump(maxItems: 256);
 Level 按严重程度从低到高排列：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`。`SetLogLevel(LogLevel.Warning)` 过滤 `Trace`、`Debug` 与 `Info`。`None` 禁用所有可接受日志级别。
 
 ```csharp
-CLogger.Instance.SetLogLevel(LogLevel.Warning);
+CLogger backend = CLoggerFactory.CreateSingleThreaded();
+backend.SetLogLevel(LogLevel.Warning);
+LogChannel loadingLog = LogChannel.Create("Loading", backend);
 
-CLogger.LogInfo("Filtered.", "Loading");   // 不会入队
-CLogger.LogError("Accepted.", "Loading");  // 入队
+loadingLog.Info("Filtered.");   // 不会入队
+loadingLog.Error("Accepted.");  // 入队
 ```
 
 Category 匹配不区分大小写。`LogAll` 接受所有 category，`LogWhiteList` 只接受已列出的 category，`LogNoBlackList` 接受除列出项之外的所有 category。
 
 ```csharp
-ICLogger logger = CLogger.Instance;
+CLogger logger = CLoggerFactory.CreateSingleThreaded();
 
 logger.SetLogFilter(LogFilter.LogWhiteList);
 logger.AddToWhiteList("Networking");
@@ -179,23 +187,21 @@ Whitelist 与 blacklist 更新会复制对应集合，并共享 `MaxFilterCatego
 
 ### 消息构造
 
-三种 overload 覆盖冷路径到已测量的热路径。
+统一的 `LogChannel` surface 提供三组 overload，覆盖冷路径到已测量的热路径。实现文件从 assembly 本地的 `Diagnostics/<FeatureName>Log.cs` facade 取得 channel。
 
 **简单字符串** —— 值已经存在或调用属于冷路径。字符串插值发生在 logger 过滤之前，因此当 level 可能被过滤时优先使用延迟形式：
 
 ```csharp
-CLogger.LogInfo("Matchmaking connected.", "Networking");
+Log.Info("Matchmaking connected.");
 
-// The string is created before LogDebug checks the active level.
-CLogger.LogDebug($"Entity {entityId} moved to {position}.", "Simulation");
+// The string is created before Debug checks the active level.
+Log.Debug($"Entity {entityId} moved to {position}.");
 ```
 
 **延迟 builder** —— callback 只在 admission 成功后运行：
 
 ```csharp
-CLogger.LogDebug(
-    builder => builder.Append("Entity ").Append(entityId).Append(" updated."),
-    "Simulation");
+Log.Debug(builder => builder.Append("Entity ").Append(entityId).Append(" updated."));
 ```
 
 **State 与缓存 builder** —— 对已测量的热路径，单独传递 state 并缓存 delegate 以避免 capturing closure：
@@ -203,18 +209,19 @@ CLogger.LogDebug(
 ```csharp
 using System;
 using System.Text;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 public static class CombatLog
 {
+    public const string Category = "CycloneGames.Combat";
+    public static LogChannel Channel { get; } = LogChannel.Create(Category);
     private static readonly Action<HitState, StringBuilder> AppendHit = AppendHitMessage;
+
+    public static LogChannel Create(ILogWriter logWriter) => LogChannel.Create(Category, logWriter);
 
     public static void Hit(int attackerId, int targetId, int damage)
     {
-        CLogger.LogDebug(
-            new HitState(attackerId, targetId, damage),
-            AppendHit,
-            "Combat");
+        Channel.Debug(new HitState(attackerId, targetId, damage), AppendHit);
     }
 
     private static void AppendHitMessage(HitState state, StringBuilder builder)
@@ -254,7 +261,7 @@ API 默认捕获 `CallerFilePath`、`CallerLineNumber` 与 `CallerMemberName`。
 
 **Single-threaded** —— `CreateSingleThreaded` 只在调用 `Pump` 时 dispatch。调用 `Pump` 的线程会执行该 batch 中所有 sink。适用情景包括 WebGL、宿主拥有确定的 dispatch affinity、测试需要显式推进，或主线程集成没有使用 handoff adapter 而是直接执行。
 
-Unity runtime host 每帧最多 pump 256 条 core record，并使用约 1 ms 的 between-item budget；Unity Console 独立最多 drain 256 条并使用约 2 ms 的 between-item budget。预算只在每个同步 item 返回后检查，因此一个阻塞 sink 可以突破预算。
+Unity runtime host 每帧最多从 `LoggerBootstrap` 自身拥有的 core pump 256 条 record，并使用约 1 ms 的 between-item budget；Unity Console 独立最多 drain 256 条并使用约 2 ms 的 between-item budget。外部或 factory 创建的 core 不会被隐式 pump。预算只在每个同步 item 返回后检查，因此一个阻塞 sink 可以突破预算。
 
 ### 队列容量与背压
 
@@ -350,16 +357,33 @@ public sealed class RecentLogSink : ILogger
 
 ### 生命周期、Flush 与 Shutdown
 
-**全局 Logger** —— 在 Unity bootstrap 之外，应在 `CLogger.Instance` 或第一条被接受的静态日志之前配置 processing：
+**Unity composition root** —— 自动启动仍是默认行为。`LoggerEditorBootstrap` 在 EditMode 拥有 backend，并在进入 Play Mode 或程序集重载前排空并释放该 owner；随后 `LoggerBootstrap` 通过 `BeforeSceneLoad` 拥有 Play Mode/Player backend。Play Mode 外由 `EditorApplication.update` 驱动 Bootstrap 自身拥有的 core 与有界 Unity handoff，Play Mode 内则只由隐藏 `LoggerUpdater` 的 `MonoBehaviour.Update` 驱动同样的工作。该 host 不会 pump 外部全局 `CLogger`，因此外部 composition root 仍然拥有 dispatch affinity。退出 Play Mode 的多个回调会汇合到同一个幂等、owner-aware shutdown，因此 `Application.quitting` 不会在关闭 domain reload 的 Editor 会话中错误应用 Player 的终止语义。需要确定性测试、运行时配置变更或 backend 重启的 host，可以在 Unity 主线程使用同一套显式 owner API：
+
+```csharp
+LoggerInitializationResult initialization = LoggerBootstrap.Initialize(settings);
+LoggerReinitializationResult restart = LoggerBootstrap.Reinitialize(updatedSettings);
+LoggerShutdownResult shutdown = LoggerBootstrap.Shutdown(LogFlushMode.Buffered);
+```
+
+`Initialize` 具有幂等性。遇到由其他 composition root 创建的全局 `CLogger` 时，它返回 `ExistingLoggerNotOwned`，不会接管所有权。当 `LogRuntime` 已存在不属于该 Bootstrap 的进程 writer 时，`Initialize` 与 `Reinitialize` 返回 `ExistingProcessWriterNotOwned`；它们保留该 writer，并且不创建第二套 `CLogger`、sink 集合或 Unity host。此状态下 `IsInitialized` 与 `ProcessWriterInstalled` 都是 `false`：请求的 Logger backend 没有初始化，但 host 选择的进程 writer 仍然可用。如果另一个 composition root 在最终原子安装竞争中胜出，Bootstrap 会先关闭刚创建的 backend，再返回同一状态；如果 rollback 未完成，则返回 `ShutdownFailed` 并保留所有权，等待显式重试 shutdown。
+
+自身拥有的 shutdown 超时后，`Initialize` 会返回 `ShutdownFailed`，不会把正在停止的 backend 误报为已初始化。`Reinitialize` 会先重试仍被保留的 owner，只有 shutdown 完成后才创建替代 backend。进程 writer 会在 shutdown 前移除，并仅在 shutdown 未完成且所有权仍被保留时恢复。Shutdown 不会 reset 或 dispose 其他 composition root 拥有的 writer。需要 fan-out 的 host 必须安装由自身显式拥有的 composite writer，或者创建并注入显式 `CLogger`；Bootstrap 不会创建隐藏的第二套 backend。
+
+普通 initialize、shutdown 与 Unity `SubsystemRegistration` 都会保留外部 owner。外部全局 `CLogger` 会继续运行，必须由它的 composition root 显式完成 handoff。仍然存活的显式 `UnityLogger` 会保留 generation、queue 与隐藏 host；在外部 adapter 全部释放前，包 bootstrap 会保持阻塞。最后一个 adapter 释放后，会在 handoff queue 空闲时调度主线程销毁 host；如果 `LoggerBootstrap` 仍持有 host lease，则不会销毁。该生命周期不依赖 PlayerSettings scripting define。
+
+**全局 Logger 生命周期** —— 在 Unity bootstrap 之外，应在解析 `CLogger.Instance` 前配置 processing。Producer 仍统一通过 `LogRuntime.Writer` 或 `LogChannel` 写入：
 
 ```csharp
 CLogger.ConfigureThreadedProcessing(options);
 CLogger.ConfigureTimestampProvider(static () => DateTime.UtcNow);
 
-ICLogger logger = CLogger.Instance;
+CLogger logger = CLogger.Instance;
+LogChannel log = LogChannel.Create("CycloneGames.Host", logger);
 ```
 
 全局实例存在后，processing 配置会返回 `false`。全局实例只能通过 `CLogger.Shutdown(LogFlushMode.Buffered)` 停止。对 `CLogger.Instance` 调用 `ShutdownInstance` 会抛异常，因为静态 shutdown 负责全局 detach 与重试协调。
+
+当同一次 shutdown 通过 `TryFlush` 或 sink disposal 重入时，回调会得到 `InProgress`，从而避免 callback deadlock。无关线程发起的并发调用仍会串行等待 owner transition 完成，不会被误判为回调重入。
 
 **显式 Logger** —— Factory 创建的 logger 使用 `logger.ShutdownInstance(LogFlushMode.Durable, 5000)`。Shutdown 超时时应保留实例，释放或修复阻塞的外部依赖，然后重试。Timeout 不表示所有权已经完成。
 
@@ -372,11 +396,13 @@ ICLogger logger = CLogger.Instance;
 
 | Shutdown 状态 | 含义 |
 | --- | --- |
+| `NotStarted` | 不存在已拥有的实例；允许空 shutdown 的调用方需显式处理该状态 |
 | `Completed` | Processing 与所请求 flush 完成，未观察到 drop 或终态失败 |
 | `CompletedWithDrops` | Shutdown 完成，但 logger 观察到记录丢弃 |
 | `CompletedWithFailures` | Shutdown 完成，但存在 sink flush 或 disposal 失败 |
 | `TimedOut` | 工作或所有权仍未完成；保留实例并重试 |
 | `AlreadyStopped` | 实例已经停止 |
+| `InProgress` | Shutdown 回调重入同一 owner；外层 owner transition 仍是权威结果 |
 
 对于 `CompletedWithDrops` 和 `CompletedWithFailures`，`IsComplete` 也为 `true`。必须同时检查 `Status`、`DroppedMessageCount` 和 `SinksFlushed`。
 
@@ -418,13 +444,13 @@ logger.AddLoggerUnique(fileSink);
 
 ### 断言
 
-`CLogAssert` 是静态 Facade，`CLogAssert.CreateService(ICLogger, options)` 创建可注入的 `CLogAssertService`。
+`CLogAssert` 通过当前 `LogRuntime.Writer` 写入。`CLogAssert.CreateService(ILogWriter, options)` 创建显式注入的 `CLogAssertService`。当捕获的 writer 是 `CLogger` 时，`LogAndThrow` 可以请求 best-effort buffered flush，而无需向 `ILogWriter` 添加生命周期方法。
 
 ```csharp
 CLogAssert.Configure(new CLogAssertOptions
 {
     Enabled = true,
-    FailureLevel = LogLevel.Error,
+    FailureLevel = LogSeverity.Error,
     FailureBehavior = CLogAssertFailureBehavior.LogAndThrow,
     Category = "GameplayInvariant",
     FlushBeforeThrow = true,
@@ -543,6 +569,7 @@ Boolean 接受 `true/false`、`1/0`、`yes/no`、`on/off` 和 `enabled/disabled`
 ### Unity Editor 行为
 
 - `LoggerSettingsEditor` 使用 `SerializedObject` 与 `SerializedProperty`，支持多对象编辑，并保持 Undo、asset serialization 与 Inspector workflow。
+- `LoggerEditorBootstrap` 在 EditMode 使用 canonical settings，进入 Play Mode 或程序集重载前关闭自身拥有的 backend，并在返回 EditMode 后建立新的 owner。它不会接管其他 composition root 创建的 `CLogger`。
 - Source link 将 caller path 与 line 嵌入 Unity Console 输出。点击链接会打开原始写日志的调用位置。Editor registry 有界为 2048 entry。
 - Unity Console record 禁用 Unity 附加 stack trace，因为 logger 已包含 caller source 信息。
 - Build override 使用生成资产，绝不修改 canonical source settings asset。
@@ -562,13 +589,13 @@ Boolean 接受 `true/false`、`1/0`、`yes/no`、`on/off` 和 `enabled/disabled`
 ```csharp
 public static class CombatLog
 {
+    public const string Category = "CycloneGames.Combat";
+    public static LogChannel Channel { get; } = LogChannel.Create(Category);
     private static readonly Action<HitState, StringBuilder> AppendHit = AppendHitMessage;
 
     public static void Hit(int attackerId, int targetId, int damage)
     {
-        if ((CLogger.Instance.GetLogLevel() & LogLevel.Debug) == 0) return;
-
-        CLogger.LogDebug(new HitState(attackerId, targetId, damage), AppendHit, "Combat");
+        Channel.Debug(new HitState(attackerId, targetId, damage), AppendHit);
     }
 
     private static void AppendHitMessage(HitState s, StringBuilder b) =>
@@ -605,7 +632,7 @@ logger.AddLoggerUnique(new FileLogger("/var/log/mygame/server.log", new FileLogg
 }));
 ```
 
-`UNITY_SERVER` 下 `registerUnityLogger` 默认为 `false`。容器编排应在 SIGTERM 时调用 `CLogger.Shutdown(LogFlushMode.Durable, timeoutMs)`，让 file sink 在进程退出前 drain。
+`UNITY_SERVER` 下 `registerUnityLogger` 默认为 `false`。容器编排应保留显式 `logger` owner，并在 SIGTERM 时调用 `logger.ShutdownInstance(LogFlushMode.Durable, timeoutMs)`，让 file sink 在进程退出前 drain。
 
 ### WebGL 单线程日志
 
@@ -690,6 +717,8 @@ Performance test assembly 对四条具体 warm 路径提供 current-thread 稳�
 | Logger-owned archive | 与 active file 同目录；内部 name grammar | `FileLogger`；受 `MaxArchiveFiles` 限制 |
 
 模块不使用 `EditorPrefs`、`PlayerPrefs` 或 `SessionState`。Runtime log file 是明文，可能包含应用传入的敏感数据。脱敏必须在记录到达 sink 前完成。
+
+`CycloneGames.Logging` 本身不包含持久化、cache、序列化资产、thread 或 lifecycle ownership。
 
 ## 故障排查
 

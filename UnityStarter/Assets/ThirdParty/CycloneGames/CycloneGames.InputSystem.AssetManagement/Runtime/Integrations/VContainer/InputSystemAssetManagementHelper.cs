@@ -8,6 +8,7 @@ using System.Threading;
 using Cysharp.Threading.Tasks;
 
 using CycloneGames.AssetManagement.Runtime;
+using CycloneGames.Logging;
 
 namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 {
@@ -20,6 +21,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         private const int MaximumConfigurationLocationCharacters = 512;
         private const int MaximumConfigurationLocationUtf8Bytes = 1024;
         private const int MaximumProviderFilePathCharacters = 4096;
+        private static readonly LogChannel Log = InputSystemAssetManagementLog.Channel;
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         private enum ConfigurationLoadAttemptStatus : byte
@@ -78,7 +80,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             ValidateMaximumBytes(maximumBytes);
             if (package == null)
             {
-                CycloneGames.Logger.CLogger.LogError("[InputSystemAssetManagementHelper] Package cannot be null.");
+                Log.Error("[InputSystemAssetManagementHelper] Package cannot be null.");
                 return _ => UniTask.FromResult<string>(null);
             }
 
@@ -122,7 +124,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 UnityEngine.TextAsset asset = handle.Asset;
                 if (asset == null)
                 {
-                    CycloneGames.Logger.CLogger.LogWarning(
+                    Log.Warning(
                         "[InputSystemAssetManagementHelper] TextAsset load completed without an asset.");
                     return null;
                 }
@@ -131,7 +133,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 // decompression, cache, and native allocation budgets before this point.
                 if (asset.dataSize > maximumBytes)
                 {
-                    CycloneGames.Logger.CLogger.LogError(
+                    Log.Error(
                         $"[InputSystemAssetManagementHelper] TextAsset exceeds the {maximumBytes}-byte acceptance limit.");
                     return null;
                 }
@@ -139,21 +141,22 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 byte[] bytes = asset.bytes;
                 if (bytes == null || bytes.Length > maximumBytes)
                 {
-                    CycloneGames.Logger.CLogger.LogError(
+                    Log.Error(
                         $"[InputSystemAssetManagementHelper] TextAsset payload exceeds the {maximumBytes}-byte acceptance limit.");
                     return null;
                 }
 
                 string content = StrictUtf8.GetString(bytes);
-                CycloneGames.Logger.CLogger.LogInfo(
+                Log.Info(
                     "[InputSystemAssetManagementHelper] Loaded configuration as TextAsset.");
                 return content;
             }
             catch (Exception e) when (IsRecoverableException(e))
             {
                 await SwitchToUnityMainThreadForCleanupAsync();
-                CycloneGames.Logger.CLogger.LogError(
-                    $"[InputSystemAssetManagementHelper] TextAsset loading failed ({e.GetType().Name}).");
+                Log.Error(
+                    e,
+                    "[InputSystemAssetManagementHelper] TextAsset loading failed.");
                 return null;
             }
             finally
@@ -184,7 +187,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             ValidateMaximumBytes(maximumBytes);
             if (package == null)
             {
-                CycloneGames.Logger.CLogger.LogError("[InputSystemAssetManagementHelper] Package cannot be null.");
+                Log.Error("[InputSystemAssetManagementHelper] Package cannot be null.");
                 return _ => UniTask.FromResult<string>(null);
             }
 
@@ -270,13 +273,13 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             {
                 case ConfigurationLoadAttemptStatus.Success:
                     await SwitchToUnityMainThreadAsync(cancellationToken);
-                    CycloneGames.Logger.CLogger.LogInfo(
+                    Log.Info(
                         "[InputSystemAssetManagementHelper] Loaded configuration as RawFile.");
                     return rawAttempt.Content;
 
                 case ConfigurationLoadAttemptStatus.CapabilityUnavailable:
                     diagnostics?.RecordRawCapabilityFallback();
-                    CycloneGames.Logger.CLogger.LogInfo(
+                    Log.Info(
                         "[InputSystemAssetManagementHelper] Bounded RawFile capability is unavailable; trying TextAsset.");
                     return await LoadConfigAsTextAsset(
                         package,
@@ -286,13 +289,13 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                         cancellationToken);
 
                 case ConfigurationLoadAttemptStatus.ProviderLoadFailed:
-                    CycloneGames.Logger.CLogger.LogError(
+                    Log.Error(
                         "[InputSystemAssetManagementHelper] RawFile provider load failed; TextAsset fallback was not attempted.");
                     return null;
 
                 case ConfigurationLoadAttemptStatus.PolicyRejected:
                     diagnostics?.RecordPolicyRejection();
-                    CycloneGames.Logger.CLogger.LogError(
+                    Log.Error(
                         "[InputSystemAssetManagementHelper] RawFile content was rejected by bounded-read policy; TextAsset fallback was not attempted.");
                     return null;
 
@@ -342,8 +345,9 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             catch (Exception exception) when (IsRecoverableException(exception))
             {
                 await SwitchToUnityMainThreadForCleanupAsync();
-                CycloneGames.Logger.CLogger.LogWarning(
-                    $"[InputSystemAssetManagementHelper] RawFile provider load failed ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    "[InputSystemAssetManagementHelper] RawFile provider load failed.");
                 return ConfigurationLoadAttempt.Failure(
                     ConfigurationLoadAttemptStatus.ProviderLoadFailed);
             }
@@ -361,7 +365,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
         {
             if (string.IsNullOrWhiteSpace(path))
             {
-                CycloneGames.Logger.CLogger.LogWarning(
+                Log.Warning(
                     "[InputSystemAssetManagementHelper] RawFile provider did not expose a local path for bounded reading.");
                 return ConfigurationLoadAttempt.Failure(
                     ConfigurationLoadAttemptStatus.CapabilityUnavailable);
@@ -371,7 +375,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             {
                 if (path.Length > MaximumProviderFilePathCharacters)
                 {
-                    CycloneGames.Logger.CLogger.LogWarning(
+                    Log.Warning(
                         "[InputSystemAssetManagementHelper] RawFile provider path exceeds the bounded-read policy.");
                     return ConfigurationLoadAttempt.Failure(
                         ConfigurationLoadAttemptStatus.PolicyRejected);
@@ -384,7 +388,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
                 if (!Path.IsPathRooted(path))
                 {
-                    CycloneGames.Logger.CLogger.LogWarning(
+                    Log.Warning(
                         "[InputSystemAssetManagementHelper] RawFile provider path is not an absolute local path.");
                     return ConfigurationLoadAttempt.Failure(
                         ConfigurationLoadAttemptStatus.PolicyRejected);
@@ -392,7 +396,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
                 if (!File.Exists(path))
                 {
-                    CycloneGames.Logger.CLogger.LogWarning(
+                    Log.Warning(
                         "[InputSystemAssetManagementHelper] RawFile provider path does not exist.");
                     return ConfigurationLoadAttempt.Failure(
                         ConfigurationLoadAttemptStatus.ProviderLoadFailed);
@@ -408,7 +412,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 {
                     if (stream.Length > maximumBytes)
                     {
-                        CycloneGames.Logger.CLogger.LogError(
+                        Log.Error(
                             $"[InputSystemAssetManagementHelper] RawFile exceeds the {maximumBytes}-byte limit.");
                         return ConfigurationLoadAttempt.Failure(
                             ConfigurationLoadAttemptStatus.PolicyRejected);
@@ -430,7 +434,7 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
 
                     if (totalRead != length || stream.Length != length)
                     {
-                        CycloneGames.Logger.CLogger.LogWarning(
+                        Log.Warning(
                             "[InputSystemAssetManagementHelper] RawFile changed while it was being read.");
                         return ConfigurationLoadAttempt.Failure(
                             ConfigurationLoadAttemptStatus.PolicyRejected);
@@ -444,9 +448,10 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             {
                 throw;
             }
-            catch (DecoderFallbackException)
+            catch (DecoderFallbackException exception)
             {
-                CycloneGames.Logger.CLogger.LogWarning(
+                Log.Error(
+                    exception,
                     "[InputSystemAssetManagementHelper] RawFile content is not valid UTF-8.");
                 return ConfigurationLoadAttempt.Failure(
                     ConfigurationLoadAttemptStatus.PolicyRejected);
@@ -456,15 +461,17 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
                 exception is ArgumentException ||
                 exception is NotSupportedException)
             {
-                CycloneGames.Logger.CLogger.LogWarning(
-                    $"[InputSystemAssetManagementHelper] RawFile path was rejected ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    "[InputSystemAssetManagementHelper] RawFile path was rejected.");
                 return ConfigurationLoadAttempt.Failure(
                     ConfigurationLoadAttemptStatus.PolicyRejected);
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
-                CycloneGames.Logger.CLogger.LogWarning(
-                    $"[InputSystemAssetManagementHelper] Bounded RawFile read failed ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    "[InputSystemAssetManagementHelper] Bounded RawFile read failed.");
                 return ConfigurationLoadAttempt.Failure(
                     ConfigurationLoadAttemptStatus.ProviderLoadFailed);
             }
@@ -575,8 +582,9 @@ namespace CycloneGames.InputSystem.Runtime.Integrations.VContainer
             }
             catch (Exception exception) when (IsRecoverableException(exception))
             {
-                CycloneGames.Logger.CLogger.LogError(
-                    $"[InputSystemAssetManagementHelper] Provider handle disposal failed ({exception.GetType().Name}).");
+                Log.Error(
+                    exception,
+                    "[InputSystemAssetManagementHelper] Provider handle disposal failed.");
             }
         }
 

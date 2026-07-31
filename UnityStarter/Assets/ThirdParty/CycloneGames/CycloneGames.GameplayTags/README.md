@@ -8,6 +8,7 @@ CycloneGames.GameplayTags provides hierarchical tags (`State.CrowdControl.Stunne
 
 - [Overview](#overview)
 - [Architecture](#architecture)
+- [Logging](#logging)
 - [Quick Start](#quick-start)
 - [Core Concepts](#core-concepts)
 - [Usage Guide](#usage-guide)
@@ -39,9 +40,9 @@ Use this module when:
 
 | Assembly | Role | Direct dependencies |
 | --- | --- | --- |
-| `CycloneGames.GameplayTags.Core` | Registry, values, containers, counts, queries, Player catalog contract | `CycloneGames.Hash.Core`; `noEngineReferences` |
-| `CycloneGames.GameplayTags.Unity.Runtime` | Unity logging/bootstrap, `Resources` build-data loading, `GameObject` component adapter | GameplayTags Core |
-| `CycloneGames.GameplayTags.Unity.Editor` | JSON authoring, manager window, drawers, validation, file watcher, build bake | Core, Unity Runtime, Newtonsoft.Json; Editor only |
+| `CycloneGames.GameplayTags.Core` | Registry, values, containers, counts, queries, Player catalog contract | `CycloneGames.Hash.Core`, `CycloneGames.Logging`; `noEngineReferences` |
+| `CycloneGames.GameplayTags.Unity.Runtime` | Runtime bootstrap, `Resources` build-data loading, `GameObject` component adapter | GameplayTags Core |
+| `CycloneGames.GameplayTags.Unity.Editor` | JSON authoring, manager window, drawers, validation, file watcher, build bake | Core, Unity Runtime, Logging, Newtonsoft.Json; Editor only |
 
 ```mermaid
 flowchart LR
@@ -57,6 +58,12 @@ flowchart LR
 ```
 
 Writers build a complete candidate before publication. Invalid input, a stable-ID collision, or a budget failure leaves the current snapshot unchanged. Tree-change notifications run synchronously after publication outside the registry writer lock.
+
+## Logging
+
+Core and Editor diagnostics use the internal `GameplayTagsCoreLog` and `GameplayTagsEditorLog` facades under their assembly-local `Diagnostics/` folders. Both expose the standard `Category`, ambient `Channel`, and `Create(ILogWriter)` shape, explicitly reject a null writer, and preserve category `CycloneGames.GameplayTags`. Package classes keep a class-local `Log` channel sourced from the relevant facade. The package depends only on the Unity-free `CycloneGames.Logging` contract. If no backend is installed in `LogRuntime`, ambient writes are handled by the no-op writer; adding this package does not force a dependency on `CycloneGames.Logger`.
+
+GameplayTags exposes no package-specific logger, logging delegate, writer setter, or logging bootstrap. The application composition root installs or replaces the shared process writer through `LogRuntime`; caller-owned code that needs its own category creates its own `LogChannel`. `GameplayTagRuntimePlatform` retains only host-platform capabilities for play-state detection, build data, settings paths, and project tag sources. The Unity bootstrap does not mutate the process writer.
 
 ## Quick Start
 

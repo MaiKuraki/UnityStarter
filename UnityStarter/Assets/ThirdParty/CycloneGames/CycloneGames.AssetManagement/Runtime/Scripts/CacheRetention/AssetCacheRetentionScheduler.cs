@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 using Cysharp.Threading.Tasks;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime.CacheRetention
 {
@@ -11,6 +11,8 @@ namespace CycloneGames.AssetManagement.Runtime.CacheRetention
     /// </summary>
     public sealed class AssetCacheRetentionScheduler : IDisposable
     {
+        private static readonly LogChannel Log = AssetCacheRetentionLog.Channel;
+
         private static readonly TimeSpan MinCheckInterval = TimeSpan.FromSeconds(1d);
 
         private readonly Func<IAssetPackage> _packageProvider;
@@ -124,7 +126,12 @@ namespace CycloneGames.AssetManagement.Runtime.CacheRetention
                     int evicted = TrimNow();
                     if (_logEvictions && evicted > 0)
                     {
-                        CLogger.LogInfo($"[AssetCacheRetentionScheduler] Trimmed {evicted} idle asset handle(s).");
+                        Log.Info(
+                            evicted,
+                            static (count, builder) => builder
+                                .Append("[AssetCacheRetentionScheduler] Trimmed ")
+                                .Append(count)
+                                .Append(" idle asset handle(s)."));
                     }
                 }
             }
@@ -134,7 +141,9 @@ namespace CycloneGames.AssetManagement.Runtime.CacheRetention
             }
             catch (Exception ex) when (ex is not OutOfMemoryException && ex is not AccessViolationException)
             {
-                CLogger.LogError($"[AssetCacheRetentionScheduler] Retention loop stopped due to an unexpected error: {ex}");
+                Log.Error(
+                    ex,
+                    "[AssetCacheRetentionScheduler] Retention loop stopped due to an unexpected error.");
             }
             finally
             {

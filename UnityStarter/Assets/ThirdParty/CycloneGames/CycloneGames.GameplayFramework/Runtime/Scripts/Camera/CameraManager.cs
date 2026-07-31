@@ -1,4 +1,4 @@
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using Unity.Cinemachine;
 using UnityEngine;
 
@@ -6,7 +6,7 @@ namespace CycloneGames.GameplayFramework.Runtime
 {
     public class CameraManager : Actor
     {
-        private const string DEBUG_FLAG = "<color=cyan>[CameraManager]</color>";
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
 
         [SerializeField] protected float DefaultFOV = 60.0f;
         [SerializeField] private float defaultBlendDuration = 0.15f;
@@ -251,7 +251,13 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (!World.TryAcquireCameraBrain(this, newBrain, out int newOwnershipId, out string error))
             {
-                CLogger.LogError($"{DEBUG_FLAG} {error}");
+                Log.Error(
+                    error,
+                    static (message, builder) =>
+                    {
+                        builder.Append("Camera brain ownership acquisition failed: ");
+                        builder.Append(message);
+                    });
                 return false;
             }
 
@@ -292,7 +298,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             CinemachineBrain[] brains = FindObjectsByType<CinemachineBrain>(FindObjectsSortMode.None);
             if (brains == null || brains.Length <= 0)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} No CinemachineBrain found. Camera output will not be driven.");
+                Log.Warning("No CinemachineBrain was found; camera output will not be driven.");
                 return null;
             }
 
@@ -315,8 +321,16 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (brains.Length > 1)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Multiple CinemachineBrain instances detected ({brains.Length}). " +
-                                   $"Using '{chosen.name}'. Assign Bootstrap Brain for deterministic binding.");
+                Log.Warning(
+                    (Count: brains.Length, Chosen: chosen),
+                    static (state, builder) =>
+                    {
+                        builder.Append("Multiple CinemachineBrain instances were detected (");
+                        builder.Append(state.Count);
+                        builder.Append("); using '");
+                        builder.Append(state.Chosen.name);
+                        builder.Append("'. Assign Bootstrap Brain for deterministic binding.");
+                    });
             }
 
             return chosen;
@@ -480,7 +494,14 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (postProcessorCount >= MAX_POST_PROCESSORS)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Max post-processors reached ({MAX_POST_PROCESSORS}).");
+                Log.Warning(
+                    MAX_POST_PROCESSORS,
+                    static (capacity, builder) =>
+                    {
+                        builder.Append("Camera post-processor registry reached capacity ");
+                        builder.Append(capacity);
+                        builder.Append('.');
+                    });
                 return;
             }
 

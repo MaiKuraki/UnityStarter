@@ -203,5 +203,21 @@ namespace CycloneGames.Analyzers
             DiagnosticCategories.UnityBestPractices,
             DiagnosticSeverity.Warning,
             isEnabledByDefault: true);
+
+        public static readonly DiagnosticDescriptor DirectLoggingApi = new(
+            DiagnosticIds.DirectLoggingApi,
+            "Direct logging API bypasses the CycloneGames logging contract",
+            "Direct logging API '{0}' bypasses the unified CycloneGames logging contract. Use the assembly log facade instead.",
+            DiagnosticCategories.ApiContract,
+            DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
+
+        public static readonly DiagnosticDescriptor ModuleLogConvention = new(
+            DiagnosticIds.ModuleLogConvention,
+            "LogChannel creation must stay inside an assembly log facade",
+            "LogChannel.Create in '{0}' bypasses the standard assembly log facade. Create channels only in an internal static '*Log' type stored as 'Diagnostics/<TypeName>.cs' with internal Category, Channel, and Create(ILogWriter logWriter) members.",
+            DiagnosticCategories.ApiContract,
+            DiagnosticSeverity.Error,
+            isEnabledByDefault: true);
     }
 }

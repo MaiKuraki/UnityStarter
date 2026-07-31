@@ -2,6 +2,7 @@
     "name": "CycloneGames.Localization.Components",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.Logging",
         "CycloneGames.Localization.Core",
         "UniTask",
         "CycloneGames.Localization.Runtime",

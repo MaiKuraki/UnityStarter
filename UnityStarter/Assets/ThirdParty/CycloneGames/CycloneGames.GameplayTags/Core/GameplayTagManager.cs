@@ -5,6 +5,7 @@ using System.Reflection;
 #endif
 using System.Runtime.CompilerServices;
 using System.Threading;
+using CycloneGames.Logging;
 
 [assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Unity.Runtime")]
 
@@ -22,6 +23,8 @@ namespace CycloneGames.GameplayTags.Core
    /// </summary>
    public static partial class GameplayTagManager
    {
+      private static readonly LogChannel Log = GameplayTagsCoreLog.Channel;
+
       private readonly struct PendingRegistration
       {
          public readonly string Name;
@@ -172,7 +175,7 @@ namespace CycloneGames.GameplayTags.Core
             return tag;
 
          if (logWarningIfNotFound)
-            GameplayTagLogger.LogWarning($"No tag registered with name \"{name}\".");
+            Log.Warning($"No tag registered with name \"{name}\".");
 
          return GameplayTagDefinition.CreateInvalidDefinition(name).Tag;
       }
@@ -322,7 +325,7 @@ namespace CycloneGames.GameplayTags.Core
 
          if (preserveCurrentIndices)
          {
-            GameplayTagLogger.LogWarning(
+            Log.Warning(
                "Gameplay tags were reloaded during play. Existing runtime indices were preserved; " +
                "tags removed from authoring sources remain registered until the next runtime reset.");
          }
@@ -563,14 +566,14 @@ namespace CycloneGames.GameplayTags.Core
 
          foreach (GameplayTagRegistrationError error in context.GetRegistrationErrors())
          {
-            GameplayTagLogger.LogError(
+            Log.Error(
                $"Failed to register gameplay tag '{error.TagName}': {error.Message} " +
                $"(source: {error.Source?.Name ?? "unknown"})");
          }
 
          if (context.SuppressedRegistrationErrorCount > 0)
          {
-            GameplayTagLogger.LogError(
+            Log.Error(
                $"Suppressed {context.SuppressedRegistrationErrorCount} additional gameplay tag registration diagnostic(s). " +
                "The registry candidate was not published.");
          }
@@ -718,7 +721,7 @@ namespace CycloneGames.GameplayTags.Core
             }
             catch (Exception exception)
             {
-               GameplayTagLogger.LogError($"Gameplay tag tree-change subscriber failed: {exception}");
+               Log.Error(exception, "Gameplay tag tree-change subscriber failed.");
             }
          }
       }

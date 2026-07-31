@@ -5,7 +5,7 @@
         "Mirage",
         "CycloneGames.Networking.Core",
         "CycloneGames.Networking.Unity.Runtime",
-        "CycloneGames.Logger"
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

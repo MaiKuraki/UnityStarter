@@ -31,7 +31,7 @@
     "com.cyclone-games.hash": "1.0.0",
     "com.cyclone-games.io": "1.0.0",
     "com.cyclone-games.utility": "1.0.0",
-    "com.cyclone-games.logger": "1.0.0",
+    "com.cyclone-games.logging": "1.0.0",
     "jp.hadashikick.vyaml": "1.4.0"
   }
 }

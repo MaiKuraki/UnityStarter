@@ -1,4 +1,4 @@
-﻿{
+{
   "name": "com.cyclone-games.behavior-tree",
   "version": "1.0.0",
   "displayName": "CycloneGames.BehaviorTree",
@@ -6,7 +6,8 @@
   "unity": "2022.3",
   "unityRelease": "0f1",
   "dependencies": {
-    "com.cyclone-games.hash": "1.0.0"
+    "com.cyclone-games.hash": "1.0.0",
+    "com.cyclone-games.logging": "1.0.0"
   },
   "keywords": [
     "CycloneGames",

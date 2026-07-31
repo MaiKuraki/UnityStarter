@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
-using System.Text.RegularExpressions;
 using CycloneGames.BehaviorTree.Editor;
 using CycloneGames.BehaviorTree.Editor.CustomEditors;
 using CycloneGames.BehaviorTree.Runtime.Components;
@@ -11,11 +10,12 @@ using CycloneGames.BehaviorTree.Runtime.Nodes.Actions;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Compositors;
 using CycloneGames.BehaviorTree.Runtime.Nodes.Decorators;
 using CycloneGames.BehaviorTree.Runtime.PerformanceTest;
+using CycloneGames.BehaviorTree.Tests.Support;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEditor.Experimental.GraphView;
 using UnityEngine;
-using UnityEngine.TestTools;
 
 namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 {
@@ -734,9 +734,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 copiedNodes.Add(source);
                 int registeredCount = tree.Nodes.Count;
                 int subAssetCount = AssetDatabase.LoadAllAssetsAtPath(assetPath).OfType<BTNode>().Count();
-                LogAssert.Expect(
-                    LogType.Error,
-                    new Regex(@"\[BehaviorTree\] Paste transaction was rolled back:"));
+                using var logs = new RecordingLogWriterScope("CycloneGames.BehaviorTree.Editor");
 
                 InvokePrivate(view, "PasteCopiedNodes", new Vector2(100f, 100f));
 
@@ -745,6 +743,13 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
                 Assert.That(
                     AssetDatabase.LoadAllAssetsAtPath(assetPath).OfType<BTNode>().Count(),
                     Is.EqualTo(subAssetCount));
+
+                RecordedLogEntry[] entries = logs.Snapshot();
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.BehaviorTree.Editor"));
+                Assert.That(entries[0].Message, Is.EqualTo("Paste transaction was rolled back."));
+                Assert.That(entries[0].Exception, Is.Not.Null);
             }
             finally
             {
@@ -764,9 +769,7 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
             {
                 AssetDatabase.CreateAsset(tree, assetPath);
                 view.PopulateView(tree);
-                LogAssert.Expect(
-                    LogType.Error,
-                    new Regex(@"\[BehaviorTree\] Create transaction was rolled back:"));
+                using var logs = new RecordingLogWriterScope("CycloneGames.BehaviorTree.Editor");
                 MethodInfo create = typeof(BehaviorTreeView).GetMethod(
                     "CreateNode",
                     BindingFlags.Instance | BindingFlags.NonPublic);
@@ -776,6 +779,13 @@ namespace CycloneGames.BehaviorTree.Tests.Editor.Consistency
 
                 Assert.That(tree.Nodes, Is.Empty);
                 Assert.That(AssetDatabase.LoadAllAssetsAtPath(assetPath).OfType<BTNode>(), Is.Empty);
+
+                RecordedLogEntry[] entries = logs.Snapshot();
+                Assert.That(entries, Has.Length.EqualTo(1));
+                Assert.That(entries[0].Severity, Is.EqualTo(LogSeverity.Error));
+                Assert.That(entries[0].Category, Is.EqualTo("CycloneGames.BehaviorTree.Editor"));
+                Assert.That(entries[0].Message, Is.EqualTo("Create transaction was rolled back."));
+                Assert.That(entries[0].Exception, Is.Not.Null);
             }
             finally
             {

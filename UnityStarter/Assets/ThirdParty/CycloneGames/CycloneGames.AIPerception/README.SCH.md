@@ -37,7 +37,9 @@ CycloneGames.AIPerception 是用于连续世界感知的 Unity Runtime 模块。
 | `CycloneGames.AIPerception.Editor` | Editor | 自定义 Inspector、校验、Runtime 诊断和 Scene Gizmo |
 | `CycloneGames.AIPerception.Tests.Editor` | Editor 测试 | 核心契约与边界测试 |
 
-Runtime 依赖：`Unity.Burst`、`Unity.Collections`、`Unity.Mathematics`。
+Runtime 依赖：`CycloneGames.Logging`、`Unity.Burst`、`Unity.Collections`、`Unity.Mathematics`。
+
+Runtime 诊断集中通过 `Runtime/Diagnostics/AIPerceptionRuntimeLog.cs` 中的 internal `AIPerceptionRuntimeLog` facade 接入。该 facade 持有 category `CycloneGames.AIPerception`，并提供 CycloneGames 日志生产程序集统一使用的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 成员。静态入口与 Unity-owned 入口使用 `AIPerceptionRuntimeLog.Channel`；需要隔离 writer 的 service 使用 `AIPerceptionRuntimeLog.Create(logWriter)` 显式绑定。该包只依赖不含引擎 API 的日志契约；未安装 backend 时，ambient 诊断由 `NullLogWriter` 安全丢弃。
 
 ## 架构
 

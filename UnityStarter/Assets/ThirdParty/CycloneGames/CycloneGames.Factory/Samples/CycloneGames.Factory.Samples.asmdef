@@ -2,6 +2,7 @@
     "name": "CycloneGames.Factory.Samples",
     "rootNamespace": "",
     "references": [
+        "CycloneGames.Logging",
         "Unity.Burst",
         "Unity.Mathematics",
         "Unity.Collections",

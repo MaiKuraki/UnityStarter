@@ -9,7 +9,7 @@ using UnityEngine.SceneManagement;
 using Cysharp.Threading.Tasks;
 using YooAsset;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
@@ -55,6 +55,8 @@ namespace CycloneGames.AssetManagement.Runtime
         IInternalCacheable, IAssetMemoryFootprint, IAssetBackendLifetime, ITrackedAssetHandle
         where TAsset : UnityEngine.Object
     {
+        private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
+
         private readonly long _id;
         long ITrackedAssetHandle.DiagnosticHandleId => _id;
         private readonly Cache.AssetCacheKey _cacheKey;
@@ -110,7 +112,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
-                CLogger.LogError("[YooAssetHandle] Retain called on a disposed handle.");
+                Log.Error("[YooAssetHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -128,7 +130,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (count < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[YooAssetHandle] Release called more times than Retain.");
+                Log.Error("[YooAssetHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -175,6 +177,8 @@ namespace CycloneGames.AssetManagement.Runtime
         IInternalCacheable, IAssetMemoryFootprint, IAssetBackendLifetime, ITrackedAssetHandle
         where TAsset : UnityEngine.Object
     {
+        private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
+
         private sealed class ReadOnlyListAdapter : IReadOnlyList<TAsset>
         {
             private IReadOnlyList<UnityEngine.Object> _source;
@@ -258,7 +262,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
-                CLogger.LogError("[YooAllAssetsHandle] Retain called on a disposed handle.");
+                Log.Error("[YooAllAssetsHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -276,7 +280,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (count < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[YooAllAssetsHandle] Release called more times than Retain.");
+                Log.Error("[YooAllAssetsHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -341,6 +345,8 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class YooRawFileHandle : IRawFileHandle, IReferenceCounted, IInternalCacheable,
         IAssetMemoryFootprint, IAssetBackendLifetime, ITrackedAssetHandle
     {
+        private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
+
         private const long SNAPSHOT_OBJECT_OVERHEAD_BYTES = 64L;
 
         private readonly long _id;
@@ -519,7 +525,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             if (Volatile.Read(ref _disposed) != 0)
             {
-                CLogger.LogError("[YooRawFileHandle] Retain called on a disposed handle.");
+                Log.Error("[YooRawFileHandle] Retain called on a disposed handle.");
                 return;
             }
 
@@ -537,7 +543,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (count < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[YooRawFileHandle] Release called more times than Retain.");
+                Log.Error("[YooRawFileHandle] Release called more times than Retain.");
                 return;
             }
 
@@ -596,6 +602,8 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class YooInstantiateHandle : IInstantiateHandle, IReferenceCounted, IInternalCacheable,
         ITrackedAssetHandle
     {
+        private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
+
         private readonly long _id;
         long ITrackedAssetHandle.DiagnosticHandleId => _id;
         private readonly UniTask _task;
@@ -653,7 +661,7 @@ namespace CycloneGames.AssetManagement.Runtime
             if (count < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[YooInstantiateHandle] Release called more times than Retain.");
+                Log.Error("[YooInstantiateHandle] Release called more times than Retain.");
             }
             else if (count == 0)
             {
@@ -711,6 +719,8 @@ namespace CycloneGames.AssetManagement.Runtime
     internal sealed class YooSceneHandle : ISceneHandle, IReferenceCounted,
         ISceneTrackerHandleState, ITrackedAssetHandle
     {
+        private static readonly LogChannel Log = AssetManagementYooAssetLog.Channel;
+
         private const float MANUAL_ACTIVATION_READY_PROGRESS = 0.9f;
 
         private readonly long _id;
@@ -1184,11 +1194,11 @@ namespace CycloneGames.AssetManagement.Runtime
             if (count < 0)
             {
                 Interlocked.Increment(ref _refCount);
-                CLogger.LogError("[YooSceneHandle] Release called more times than Retain.");
+                Log.Error("[YooSceneHandle] Release called more times than Retain.");
             }
             else if (count == 0)
             {
-                CLogger.LogWarning("[YooSceneHandle] Dispose releases caller ownership only. Use IAssetSceneLoader.UnloadSceneAsync to unload the scene.");
+                Log.Warning("[YooSceneHandle] Dispose releases caller ownership only. Use IAssetSceneLoader.UnloadSceneAsync to unload the scene.");
             }
         }
 

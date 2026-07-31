@@ -4,7 +4,8 @@
     "references": [
         "VContainer",
         "CycloneGames.Cheat.Runtime",
-        "CycloneGames.Cheat.Core"
+        "CycloneGames.Cheat.Core",
+        "CycloneGames.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

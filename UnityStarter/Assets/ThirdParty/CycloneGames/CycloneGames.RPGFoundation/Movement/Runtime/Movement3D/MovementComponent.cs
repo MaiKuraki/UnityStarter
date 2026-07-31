@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using Unity.Mathematics;
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime.States;
-using CycloneGames.Logger;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime
 {
@@ -14,6 +14,8 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
     [RequireComponent(typeof(Rigidbody), typeof(CapsuleCollider))]
     public class MovementComponent : MonoBehaviour, IMovementStateQuery3D, IMovementSnapshotProvider
     {
+        private static readonly LogChannel Log = RpgMovementLog.Channel;
+
         /// <summary>Implementation safety ceiling for explicit collision-ignore policy entries.</summary>
         public const int MaximumIgnoredColliderCount = 65_536;
 
@@ -396,7 +398,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (animancerComponent != null)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     "[MovementComponent] External animation component is assigned, but no Movement animation integration has bound it yet. " +
                     "Falling back to Unity Animator.");
             }
@@ -416,7 +418,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         {
             if (animationController == null)
             {
-                CLogger.LogWarning("[MovementComponent] External animation controller is null.");
+                Log.Warning("[MovementComponent] External animation controller is null.");
                 return;
             }
 
@@ -435,7 +437,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (useRootMotion && !supportsRootMotion)
             {
-                CLogger.LogWarning("[MovementComponent] Root motion requires an external animation controller that supports root motion.");
+                Log.Warning("[MovementComponent] Root motion requires an external animation controller that supports root motion.");
             }
         }
 
@@ -515,7 +517,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
 
             if (config == null)
             {
-                CLogger.LogError("[MovementComponent] MovementConfig is null.");
+                Log.Error("[MovementComponent] MovementConfig is null.");
                 return;
             }
 
@@ -2056,7 +2058,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
         {
             if (math.lengthsq(worldDirection) <= kMinSqrMagnitude)
             {
-                CLogger.LogWarning("[MovementComponent] Cannot set rotation with zero direction.");
+                Log.Warning("[MovementComponent] Cannot set rotation with zero direction.");
                 return;
             }
 
@@ -2086,7 +2088,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             MovementStateBase targetState = GetStateByType(targetStateType);
             if (targetState == null)
             {
-                CLogger.LogWarning($"[MovementComponent] State {targetStateType} not found.");
+                Log.Warning(
+                    targetStateType,
+                    static (value, builder) => builder
+                        .Append("[MovementComponent] State ")
+                        .Append(value)
+                        .Append(" not found."));
                 return false;
             }
 
@@ -2269,7 +2276,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime
             if (_cachedTargetAnimator != null)
                 _cachedTargetAnimator.applyRootMotion = enable;
             else if (enable && _isUsingAnimancer && !_isUsingHybridAnimancer)
-                CLogger.LogWarning("[MovementComponent] Root motion requires HybridAnimancerComponent.");
+                Log.Warning("[MovementComponent] Root motion requires HybridAnimancerComponent.");
         }
 
         #endregion

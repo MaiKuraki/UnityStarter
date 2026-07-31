@@ -3,7 +3,7 @@ using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Text;
 using System.Threading;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
@@ -11,11 +11,12 @@ namespace CycloneGames.GameplayAbilities.Sample
     /// Copies worker-thread log payloads into a bounded owned queue and renders them only
     /// when Pump is called from the Unity main thread.
     /// </summary>
-    public sealed class UILogger : CycloneGames.Logger.ILogger
+    public sealed class UILogger : ILogWriter
     {
         private const int MaxPendingMessages = 128;
 
         private readonly Action<string> _updateLog;
+        private readonly ILogWriter _innerWriter;
         private readonly int _maxLogLines;
         private readonly ConcurrentQueue<string> _pending = new ConcurrentQueue<string>();
         private readonly Queue<string> _visibleLines;
@@ -24,31 +25,113 @@ namespace CycloneGames.GameplayAbilities.Sample
         private int _pendingCount;
         private int _disposed;
 
-        public UILogger(Action<string> updateLog, int maxLines = 7)
+        public UILogger(ILogWriter innerWriter, Action<string> updateLog, int maxLines = 7)
         {
+            _innerWriter = innerWriter ?? throw new ArgumentNullException(nameof(innerWriter));
             _updateLog = updateLog ?? throw new ArgumentNullException(nameof(updateLog));
             _maxLogLines = Math.Max(1, maxLines);
             _visibleLines = new Queue<string>(_maxLogLines);
         }
 
-        public void Log(LogMessage logMessage)
+        public ILogWriter InnerWriter => _innerWriter;
+
+        public bool IsEnabled(LogSeverity severity, string category)
         {
-            if (logMessage == null || Volatile.Read(ref _disposed) != 0)
+            return Volatile.Read(ref _disposed) == 0 || _innerWriter.IsEnabled(severity, category);
+        }
+
+        public void Write(
+            LogSeverity severity,
+            string category,
+            string message,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+        {
+            _innerWriter.Write(severity, category, message, filePath, lineNumber, memberName);
+            Enqueue(message);
+        }
+
+        public void Write(
+            LogSeverity severity,
+            string category,
+            Action<StringBuilder> messageBuilder,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                _innerWriter.Write(severity, category, messageBuilder, filePath, lineNumber, memberName);
+                return;
+            }
+
+            if (messageBuilder == null)
+            {
+                throw new ArgumentNullException(nameof(messageBuilder));
+            }
+
+            var builder = new StringBuilder(128);
+            messageBuilder(builder);
+            string message = builder.ToString();
+            _innerWriter.Write(severity, category, message, filePath, lineNumber, memberName);
+            Enqueue(message);
+        }
+
+        public void Write<TState>(
+            LogSeverity severity,
+            string category,
+            TState state,
+            Action<TState, StringBuilder> messageBuilder,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                _innerWriter.Write(severity, category, state, messageBuilder, filePath, lineNumber, memberName);
+                return;
+            }
+
+            if (messageBuilder == null)
+            {
+                throw new ArgumentNullException(nameof(messageBuilder));
+            }
+
+            var builder = new StringBuilder(128);
+            messageBuilder(state, builder);
+            string message = builder.ToString();
+            _innerWriter.Write(severity, category, message, filePath, lineNumber, memberName);
+            Enqueue(message);
+        }
+
+        public void WriteException(
+            LogSeverity severity,
+            string category,
+            Exception exception,
+            string message = null,
+            string filePath = "",
+            int lineNumber = 0,
+            string memberName = "")
+        {
+            if (exception == null)
+            {
+                throw new ArgumentNullException(nameof(exception));
+            }
+
+            _innerWriter.WriteException(severity, category, exception, message, filePath, lineNumber, memberName);
+            if (Volatile.Read(ref _disposed) != 0)
             {
                 return;
             }
 
-            if (!TryReservePendingSlot())
+            var builder = new StringBuilder(256);
+            if (!string.IsNullOrEmpty(message))
             {
-                return;
+                builder.Append(message).Append(' ');
             }
-
-            var builder = new StringBuilder(logMessage.MessageLength + 32);
-            builder.Append('[');
-            builder.Append(logMessage.Timestamp.ToUniversalTime().ToString("HH:mm:ss.fff"));
-            builder.Append("] ");
-            logMessage.AppendMessageTo(builder);
-            _pending.Enqueue(builder.ToString());
+            builder.Append(exception);
+            Enqueue(builder.ToString());
         }
 
         public void Pump(int maxMessages = 32)
@@ -128,6 +211,21 @@ namespace CycloneGames.GameplayAbilities.Sample
                     return true;
                 }
             }
+        }
+
+        private void Enqueue(string message)
+        {
+            if (Volatile.Read(ref _disposed) != 0 || !TryReservePendingSlot())
+            {
+                return;
+            }
+
+            var builder = new StringBuilder((message?.Length ?? 0) + 32);
+            builder.Append('[');
+            builder.Append(DateTime.UtcNow.ToString("HH:mm:ss.fff"));
+            builder.Append("] ");
+            builder.Append(message);
+            _pending.Enqueue(builder.ToString());
         }
     }
 }

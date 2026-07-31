@@ -1,6 +1,7 @@
 using System;
 using System.Threading;
 using CycloneGames.Factory.Runtime;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -26,6 +27,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     [DisallowMultipleComponent]
     public class GameplayWorldHost : MonoBehaviour
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         [SerializeField] private WorldSettings worldSettings;
         [SerializeField] private WorldNetMode netMode = WorldNetMode.Standalone;
         [SerializeField] private bool autoStart = true;
@@ -222,7 +225,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(exception, "GameplayWorldHost automatic World startup failed.");
             }
         }
 
@@ -278,7 +281,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    "A GameplayWorldHost cancellation observer failed; lifecycle cleanup will continue.");
             }
         }
 

@@ -3,6 +3,7 @@
 
 using System;
 using System.Threading;
+using CycloneGames.Logging;
 using CycloneGames.Localization.Core;
 using CycloneGames.Localization.Runtime;
 using Cysharp.Threading.Tasks;
@@ -61,6 +62,8 @@ namespace CycloneGames.Audio.Runtime.Integrations.Localization
     /// </summary>
     public sealed class AudioLocalizationBridge : IDisposable
     {
+        private static readonly LogChannel Log = AudioLocalizationRuntimeLog.Channel;
+
         private readonly ILocalizationService localization;
         private readonly IAudioVoiceLocaleControl audio;
         private readonly IAudioLocalizationMapper mapper;
@@ -419,19 +422,20 @@ namespace CycloneGames.Audio.Runtime.Integrations.Localization
                 }
                 catch (Exception exception)
                 {
-                    Debug.LogException(exception);
+                    Log.Error(exception, "The Audio localization diagnostic sink threw an exception.");
                 }
             }
 
             if (diagnostic.Severity == AudioLocalizationDiagnosticSeverity.Error)
             {
                 if (diagnostic.Exception != null)
-                    Debug.LogException(diagnostic.Exception);
-                Debug.LogError(diagnostic.Message);
+                    Log.Error(diagnostic.Exception, diagnostic.Message);
+                else
+                    Log.Error(diagnostic.Message);
             }
             else
             {
-                Debug.LogWarning(diagnostic.Message);
+                Log.Warning(diagnostic.Message);
             }
         }
     }

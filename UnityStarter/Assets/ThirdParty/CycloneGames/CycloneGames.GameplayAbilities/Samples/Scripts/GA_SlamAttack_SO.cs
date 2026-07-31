@@ -1,12 +1,14 @@
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Runtime;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Sample
 {
     public class GA_SlamAttack : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect slamDamageEffect;
         private readonly float slamRadius;
 
@@ -46,7 +48,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                 return;
             }
 
-            CLogger.LogInfo($"{Name} impacts the ground!");
+            Log.Info($"{Name} impacts the ground!");
 
             // Perform a sphere overlap to find all enemies in the slam radius.
             var colliders = Physics.OverlapSphere(caster.transform.position, slamRadius);
@@ -60,7 +62,7 @@ namespace CycloneGames.GameplayAbilities.Sample
                     hitTargets.Add(holder.AbilitySystemComponent);
                 }
             }
-            CLogger.LogInfo($"{Name} hit {hitTargets.Count} targets.");
+            Log.Info($"{Name} hit {hitTargets.Count} targets.");
 
             // Apply the damage effect to all valid targets found.
             foreach (var targetASC in hitTargets)

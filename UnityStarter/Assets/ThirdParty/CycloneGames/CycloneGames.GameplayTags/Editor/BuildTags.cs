@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using CycloneGames.GameplayTags.Core;
 using CycloneGames.GameplayTags.Unity.Runtime;
+using CycloneGames.Logging;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;
@@ -20,6 +21,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
       private const string GeneratedDirectoryAssetPath = "Assets/Resources";
       private const string GeneratedAssetPath = GeneratedDirectoryAssetPath + "/GameplayTags.bytes";
 
+      private static readonly LogChannel Log = GameplayTagsEditorLog.Channel;
       private static readonly UTF8Encoding s_StrictUtf8 = new(false, true);
 
       [Serializable]
@@ -235,7 +237,7 @@ namespace CycloneGames.GameplayTags.Unity.Editor
             string message = $"Gameplay tag build output was preserved because ownership could not be proven: {exception.Message}";
             if (throwOnAmbiguousState)
                throw new BuildFailedException(message);
-            Debug.LogError(message);
+            Log.Error(message);
          }
       }
 
@@ -342,7 +344,9 @@ namespace CycloneGames.GameplayTags.Unity.Editor
          }
          catch (Exception cleanupException)
          {
-            Debug.LogError($"Gameplay tag build preprocessing failed and automatic cleanup stopped safely: {cleanupException.Message}");
+            Log.Error(
+               cleanupException,
+               "Gameplay tag build preprocessing failed and automatic cleanup stopped safely.");
          }
       }
 

@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEngine;
 
@@ -57,6 +57,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public sealed class GameObjectPoolManager : IGameObjectPoolManager, IGameObjectLeaseAuthority, IDisposable
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         /// <summary>
         /// Explicit capacity and retention policy. Values are hardware-profile inputs supplied by composition;
         /// the pool does not infer capacity from platform compiler symbols.
@@ -734,7 +736,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 builder.AppendLine($"[{entry.AssetKey}] Retained:{entry.CurrentPoolSize} Active:{entry.ActiveCount} Pending:{entry.PendingCount} Peak:{entry.PeakActive} HitRate:{entry.HitRate:P1} Gets:{entry.TotalGets} Created:{entry.TotalCreated}");
             }
 
-            GASLog.Info(builder.ToString());
+            Log.Info(builder.ToString());
         }
 
         public void ResetStatistics()
@@ -817,7 +819,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
             resourceLocator = null;
             if (cleanupFailure != null)
             {
-                GASLog.Error($"GameObjectPoolManager shutdown completed with cleanup failures: {cleanupFailure.Message}");
+                Log.Error(cleanupFailure, "GameObjectPoolManager shutdown completed with cleanup failures.");
             }
         }
 
@@ -952,7 +954,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                     completion.TrySetCanceled(shutdownToken);
                     if (cleanupFailure != null)
                     {
-                        GASLog.Error($"Gameplay Cue resource cleanup failed after shutdown cancellation: {cleanupFailure.Message}");
+                        Log.Error(cleanupFailure, "Gameplay Cue resource cleanup failed after shutdown cancellation.");
                     }
                     return;
                 }
@@ -984,7 +986,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 completion.TrySetCanceled(cancellation.CancellationToken);
                 if (cleanupFailure != null)
                 {
-                    GASLog.Error($"Gameplay Cue resource cleanup failed after load cancellation: {cleanupFailure.Message}");
+                    Log.Error(cleanupFailure, "Gameplay Cue resource cleanup failed after load cancellation.");
                 }
             }
             catch (Exception exception)
@@ -1349,7 +1351,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                         try { handlers[rollbackIndex]?.OnReturnToPool(); }
                         catch (Exception cleanupException)
                         {
-                            GASLog.Error($"Pooled GameObject rent rollback failed: {cleanupException.Message}");
+                            Log.Error(cleanupException, "Pooled GameObject rent rollback failed.");
                         }
                     }
                     throw;

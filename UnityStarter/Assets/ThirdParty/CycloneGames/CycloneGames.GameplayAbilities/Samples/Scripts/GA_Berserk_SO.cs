@@ -1,4 +1,5 @@
 using CycloneGames.GameplayAbilities.Runtime;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayAbilities.Samples
@@ -30,6 +31,8 @@ namespace CycloneGames.GameplayAbilities.Samples
 
     public class GA_Berserk : GameplayAbility
     {
+        private static readonly LogChannel Log = GameplayAbilitiesSampleLog.Channel;
+
         private readonly GameplayEffect berserkBuffEffect;
 
         public GA_Berserk(GameplayEffect buffEffect)
@@ -52,7 +55,7 @@ namespace CycloneGames.GameplayAbilities.Samples
                 var effectSpec = GameplayEffectSpec.Create(berserkBuffEffect, owner, spec.Level);
                 owner.ApplyGameplayEffectSpecToSelf(effectSpec);
                 
-                GASLog.Info($"[Berserk] Activated! Execute ability granted.");
+                Log.Info("[Berserk] Activated! Execute ability granted.");
             }
             
             EndAbility();

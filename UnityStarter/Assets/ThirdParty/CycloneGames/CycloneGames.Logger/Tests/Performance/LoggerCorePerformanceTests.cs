@@ -1,5 +1,6 @@
 using System;
 using System.Text;
+using CycloneGames.Logging;
 using NUnit.Framework;
 using Unity.PerformanceTesting;
 
@@ -15,6 +16,7 @@ namespace CycloneGames.Logger.Tests.Performance
         private static readonly Action<int, StringBuilder> AppendValueCallback = AppendValue;
 
         private CLogger _logger;
+        private ILogWriter _writer;
         private CountingSink _sink;
 
         [TearDown]
@@ -22,13 +24,14 @@ namespace CycloneGames.Logger.Tests.Performance
         {
             _logger?.Dispose();
             _logger = null;
+            _writer = null;
             _sink = null;
         }
 
         [Test, Performance]
         public void FilteredGenericBuilder_ProducerCost()
         {
-            _logger = CLoggerFactory.CreateSingleThreaded(CreateOptions());
+            _logger = CreateLogger(CreateOptions());
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
             _logger.SetLogLevel(LogLevel.Error);
@@ -44,7 +47,7 @@ namespace CycloneGames.Logger.Tests.Performance
         [Test, Performance]
         public void AcceptedGenericBuilder_WithSynchronousDispatch()
         {
-            _logger = CLoggerFactory.CreateSingleThreaded(CreateOptions());
+            _logger = CreateLogger(CreateOptions());
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
 
@@ -59,7 +62,7 @@ namespace CycloneGames.Logger.Tests.Performance
         [Test, Performance]
         public void AcceptedShortString_WithSynchronousDispatch()
         {
-            _logger = CLoggerFactory.CreateSingleThreaded(CreateOptions());
+            _logger = CreateLogger(CreateOptions());
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
 
@@ -78,12 +81,12 @@ namespace CycloneGames.Logger.Tests.Performance
             options.OverflowPolicy = LogQueueOverflowPolicy.DropOldest;
             options.ReservedCriticalMessages = 0;
             options.ReservedCriticalCharacters = 0;
-            _logger = CLoggerFactory.CreateSingleThreaded(options);
+            _logger = CreateLogger(options);
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
             for (int i = 0; i < options.MaxQueuedMessages; i++)
             {
-                _logger.Log(LogLevel.Info, "queued", filePath: string.Empty, memberName: string.Empty);
+                _writer.Write(LogSeverity.Info, null, "queued", filePath: string.Empty, memberName: string.Empty);
             }
 
             Measure.Method(LogOverloadedDropOldest)
@@ -97,7 +100,7 @@ namespace CycloneGames.Logger.Tests.Performance
         [Test]
         public void FilteredCachedBuilder_SteadyStateAllocatesZeroBytes()
         {
-            _logger = CLoggerFactory.CreateSingleThreaded(CreateOptions());
+            _logger = CreateLogger(CreateOptions());
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
             _logger.SetLogLevel(LogLevel.Error);
@@ -115,7 +118,7 @@ namespace CycloneGames.Logger.Tests.Performance
         [Test]
         public void AcceptedCachedBuilder_SteadyStateAllocatesZeroBytes()
         {
-            _logger = CLoggerFactory.CreateSingleThreaded(CreateOptions());
+            _logger = CreateLogger(CreateOptions());
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
             for (int i = 0; i < 512; i++)
@@ -135,7 +138,7 @@ namespace CycloneGames.Logger.Tests.Performance
         [Test]
         public void AcceptedShortString_SteadyStateAllocatesZeroBytes()
         {
-            _logger = CLoggerFactory.CreateSingleThreaded(CreateOptions());
+            _logger = CreateLogger(CreateOptions());
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
             for (int i = 0; i < 512; i++)
@@ -159,12 +162,12 @@ namespace CycloneGames.Logger.Tests.Performance
             options.OverflowPolicy = LogQueueOverflowPolicy.DropOldest;
             options.ReservedCriticalMessages = 0;
             options.ReservedCriticalCharacters = 0;
-            _logger = CLoggerFactory.CreateSingleThreaded(options);
+            _logger = CreateLogger(options);
             _sink = new CountingSink();
             _logger.AddLogger(_sink);
             for (int i = 0; i < options.MaxQueuedMessages; i++)
             {
-                _logger.Log(LogLevel.Info, "queued", filePath: string.Empty, memberName: string.Empty);
+                _writer.Write(LogSeverity.Info, null, "queued", filePath: string.Empty, memberName: string.Empty);
             }
 
             LogOverloadedDropOldest();
@@ -179,24 +182,31 @@ namespace CycloneGames.Logger.Tests.Performance
 
         private void LogFiltered()
         {
-            _logger.Log(LogLevel.Info, 42, AppendValueCallback, "Performance", string.Empty, 0, string.Empty);
+            _writer.Write(LogSeverity.Info, "Performance", 42, AppendValueCallback, string.Empty, 0, string.Empty);
         }
 
         private void LogAndPump()
         {
-            _logger.Log(LogLevel.Info, 42, AppendValueCallback, "Performance", string.Empty, 0, string.Empty);
+            _writer.Write(LogSeverity.Info, "Performance", 42, AppendValueCallback, string.Empty, 0, string.Empty);
             _logger.Pump(1);
         }
 
         private void LogStringAndPump()
         {
-            _logger.Log(LogLevel.Info, "short message", "Performance", string.Empty, 0, string.Empty);
+            _writer.Write(LogSeverity.Info, "Performance", "short message", string.Empty, 0, string.Empty);
             _logger.Pump(1);
         }
 
         private void LogOverloadedDropOldest()
         {
-            _logger.Log(LogLevel.Info, "replacement", filePath: string.Empty, memberName: string.Empty);
+            _writer.Write(LogSeverity.Info, null, "replacement", filePath: string.Empty, memberName: string.Empty);
+        }
+
+        private CLogger CreateLogger(LoggerProcessingOptions options)
+        {
+            CLogger logger = CLoggerFactory.CreateSingleThreaded(options);
+            _writer = logger;
+            return logger;
         }
 
         private static void AppendValue(int value, StringBuilder builder)

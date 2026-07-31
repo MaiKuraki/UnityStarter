@@ -2,6 +2,7 @@
 // Licensed under the MIT License.
 
 using UnityEngine;
+using CycloneGames.Logging;
 using UnityEngine.Audio;
 
 #if UNITY_EDITOR
@@ -31,7 +32,7 @@ namespace CycloneGames.Audio.Runtime
         {
             if (this.snapshot == null)
             {
-                Debug.LogWarningFormat("No snapshot in transition trigger {0}", this.name);
+                Log.Warning($"No snapshot in transition trigger {this.name}");
                 return;
             }
 

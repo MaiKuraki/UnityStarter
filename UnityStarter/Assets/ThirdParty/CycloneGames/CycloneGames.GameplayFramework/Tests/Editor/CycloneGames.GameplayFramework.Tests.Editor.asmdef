@@ -9,6 +9,7 @@
         "CycloneGames.GameplayTags.Unity.Runtime",
         "CycloneGames.Factory.Runtime",
         "CycloneGames.Factory.Unity.Runtime",
+        "CycloneGames.Logging",
         "UniTask",
         "Unity.Mathematics",
         "Unity.Cinemachine",

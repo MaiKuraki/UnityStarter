@@ -2,6 +2,7 @@
     "name": "CycloneGames.DataTable.Tests.Editor",
     "rootNamespace": "CycloneGames.DataTable.Tests.Editor",
     "references": [
+        "CycloneGames.Logging",
         "CycloneGames.DataTable.Core"
     ],
     "includePlatforms": [

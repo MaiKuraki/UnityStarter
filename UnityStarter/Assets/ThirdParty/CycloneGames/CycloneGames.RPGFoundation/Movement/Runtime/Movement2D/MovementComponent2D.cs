@@ -1,15 +1,17 @@
 using System;
 using Unity.Mathematics;
 using UnityEngine;
+using CycloneGames.Logging;
 using CycloneGames.RPGFoundation.Movement.Core;
 using CycloneGames.RPGFoundation.Movement.Runtime.Movement2D.States;
-using CycloneGames.Logger;
 
 namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 {
     [RequireComponent(typeof(Rigidbody2D))]
     public class MovementComponent2D : MonoBehaviour, IMovementStateQuery2D, IMovementSnapshotProvider
     {
+        private static readonly LogChannel Log = RpgMovementLog.Channel;
+
         [SerializeField] private MovementConfig2D config;
         [SerializeField] private Animator characterAnimator;
         [SerializeField] private UnityEngine.Object animancerComponent;
@@ -97,7 +99,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (animancerComponent != null)
             {
-                CLogger.LogWarning(
+                Log.Warning(
                     "[MovementComponent2D] External animation component is assigned, but no Movement animation integration has bound it yet. " +
                     "Falling back to Unity Animator.");
             }
@@ -112,7 +114,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (config == null)
             {
-                CLogger.LogError("[MovementComponent2D] MovementConfig2D is not assigned. Creating default config.");
+                Log.Error("[MovementComponent2D] MovementConfig2D is not assigned. Creating default config.");
                 config = ScriptableObject.CreateInstance<MovementConfig2D>();
             }
 
@@ -147,7 +149,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         {
             if (animationController == null)
             {
-                CLogger.LogWarning("[MovementComponent2D] External animation controller is null.");
+                Log.Warning("[MovementComponent2D] External animation controller is null.");
                 return;
             }
 
@@ -166,7 +168,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
 
             if (useRootMotion && !supportsRootMotion)
             {
-                CLogger.LogWarning("[MovementComponent2D] Root motion requires an external animation controller that supports root motion.");
+                Log.Warning("[MovementComponent2D] Root motion requires an external animation controller that supports root motion.");
             }
         }
 
@@ -541,7 +543,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
         {
             if (config == null)
             {
-                CLogger.LogError("[MovementComponent2D] MovementConfig2D is null. Movement may not work correctly.");
+                Log.Error("[MovementComponent2D] MovementConfig2D is null. Movement may not work correctly.");
                 return;
             }
 
@@ -579,7 +581,7 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 }
                 else
                 {
-                    CLogger.LogError("[MovementComponent2D] Failed to initialize state. Movement will not work.");
+                    Log.Error("[MovementComponent2D] Failed to initialize state. Movement will not work.");
                     return;
                 }
             }
@@ -914,7 +916,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
             MovementStateBase2D targetState = GetStateByType(targetStateType);
             if (targetState == null)
             {
-                CLogger.LogWarning($"[MovementComponent2D] State {targetStateType} not found.");
+                Log.Warning(
+                    targetStateType,
+                    static (value, builder) => builder
+                        .Append("[MovementComponent2D] State ")
+                        .Append(value)
+                        .Append(" not found."));
                 return false;
             }
 
@@ -972,7 +979,12 @@ namespace CycloneGames.RPGFoundation.Movement.Runtime.Movement2D
                 case MovementStateType.Swim: return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
                 case MovementStateType.Fly: return StatePool<MovementStateBase2D>.GetState<IdleState2D>();
                 default:
-                    CLogger.LogWarning($"[MovementComponent2D] State {stateType} not implemented yet.");
+                    Log.Warning(
+                        stateType,
+                        static (value, builder) => builder
+                            .Append("[MovementComponent2D] State ")
+                            .Append(value)
+                            .Append(" not implemented yet."));
                     return null;
             }
         }

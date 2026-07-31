@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using CycloneGames.GameplayAbilities.Core;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayAbilities.Runtime
 {
@@ -12,6 +13,8 @@ namespace CycloneGames.GameplayAbilities.Runtime
     /// </summary>
     public class ActiveGameplayEffect : IGASLeasedObject
     {
+        private static readonly LogChannel Log = GameplayAbilitiesLog.Channel;
+
         private const int MaxInhibitionObservers = 64;
         private GASRuntimeMemory memoryOwner;
         private bool leaseActive;
@@ -84,7 +87,7 @@ namespace CycloneGames.GameplayAbilities.Runtime
                 }
                 catch (Exception exception)
                 {
-                    GASLog.Error($"ActiveGameplayEffect inhibition observer failed: {exception.Message}");
+                    Log.Error(exception, "ActiveGameplayEffect inhibition observer failed.");
                 }
             }
         }

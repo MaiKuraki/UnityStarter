@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.UIFramework.Runtime
 {
@@ -15,6 +15,8 @@ namespace CycloneGames.UIFramework.Runtime
     /// </remarks>
     public sealed class UIPresenterBinder : IUIWindowBinder
     {
+        private static readonly LogChannel Log = UIFrameworkLog.Channel;
+
         private readonly struct PresenterRegistration
         {
             public PresenterRegistration(
@@ -245,7 +247,12 @@ namespace CycloneGames.UIFramework.Runtime
             {
                 if (LogMissingPresenterMappings)
                 {
-                    CLogger.LogWarning($"[UIPresenterBinder] No presenter registration exists for window '{window.WindowId}'.");
+                    Log.Warning(
+                        window.WindowId,
+                        static (windowId, builder) => builder
+                            .Append("[UIPresenterBinder] No presenter registration exists for window '")
+                            .Append(windowId)
+                            .Append("'."));
                 }
 
                 return null;

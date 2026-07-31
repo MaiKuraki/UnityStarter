@@ -36,9 +36,13 @@ adapter 不拥有缓存、Unity object 或全局服务。调用方拥有 AssetMa
 
 | 程序集 | 路径 | 用途 |
 | --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` 与 `InputSystemAssetManagementHelper`。依赖 UniTask、InputSystem.Runtime、InputSystem.Runtime.Integrations.VContainer、AssetManagement.Runtime、Logger。 |
+| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` 与 `InputSystemAssetManagementHelper`。依赖 UniTask、InputSystem.Runtime、InputSystem.Runtime.Integrations.VContainer、AssetManagement.Runtime 与 CycloneGames.Logging。 |
 
 该程序集设 `autoReferenced: false`，并使用 package-derived `VCONTAINER_PRESENT` constraint（来自 `jp.hadashikick.vcontainer`）。未安装 VContainer 时不参与编译。消费者必须显式引用 `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`。不要添加 `PlayerSettings` scripting define —— 物理 integration package 及其 asmdef 使该边界在 assembly graph 中显式可见。
+
+诊断使用稳定的 `CycloneGames.InputSystem.AssetManagement` `LogChannel` category。此 integration 不持有 logging backend 生命周期。仅安装 `com.cyclone-games.logging` 时，消息会安全地进入 `NullLogWriter`；应用 composition root 可以安装 `CycloneGames.Logger` 或其他 `ILogWriter` backend。
+
+产生诊断的 asmdef 在 `Diagnostics/` 下持有 internal `InputSystemAssetManagementLog` facade。它统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
 ```mermaid
 flowchart LR

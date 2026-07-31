@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.GameplayFramework.Runtime
@@ -9,6 +10,8 @@ namespace CycloneGames.GameplayFramework.Runtime
     /// </summary>
     public class PlayerController : Controller
     {
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
+
         [SerializeField] private bool bAutoManageActiveCameraTarget = true;
 
         private LocalPlayer localPlayer;
@@ -380,7 +383,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, this);
+                Log.Error(
+                    exception,
+                    $"PlayerController '{name}' failed to clear its camera context; relationship cleanup will continue.");
             }
             finally
             {
@@ -399,7 +404,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
         }
 
-        private static void DestroyAssociatedActor(World currentWorld, Actor actor)
+        private void DestroyAssociatedActor(World currentWorld, Actor actor)
         {
             if (actor == null || !currentWorld.IsActorRegistered(actor))
             {
@@ -412,7 +417,9 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                Debug.LogException(exception, actor);
+                Log.Error(
+                    exception,
+                    $"PlayerController '{name}' failed to destroy associated Actor '{actor.name}'.");
             }
         }
     }

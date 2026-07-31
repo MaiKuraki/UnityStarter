@@ -1,11 +1,11 @@
 using System;
-using CycloneGames.Logger;
+using CycloneGames.Logging;
 
 namespace CycloneGames.GameplayFramework.Runtime
 {
     public sealed class CameraContext
     {
-        private const string DEBUG_FLAG = "<color=cyan>[CameraContext]</color>";
+        private static readonly LogChannel Log = GameplayFrameworkLog.Channel;
         private readonly CameraMode[] cameraModes;
         private int cameraModeCount;
         private bool isClearing;
@@ -102,7 +102,16 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (cameraModeCount >= cameraModes.Length)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} CameraMode stack full ({cameraModes.Length}). Drop {cameraMode.GetType().Name}.");
+                Log.Warning(
+                    (Capacity: cameraModes.Length, Mode: cameraMode),
+                    static (state, builder) =>
+                    {
+                        builder.Append("CameraMode stack reached capacity ");
+                        builder.Append(state.Capacity);
+                        builder.Append("; dropped '");
+                        builder.Append(state.Mode.GetType().Name);
+                        builder.Append("'.");
+                    });
                 return false;
             }
 
@@ -150,7 +159,14 @@ namespace CycloneGames.GameplayFramework.Runtime
 
             if (cameraModeCount <= 0)
             {
-                CLogger.LogWarning($"{DEBUG_FLAG} Invalid full-stack state. Unable to push {cameraMode.GetType().Name}.");
+                Log.Warning(
+                    cameraMode,
+                    static (mode, builder) =>
+                    {
+                        builder.Append("CameraMode stack entered an invalid full-stack state; unable to push '");
+                        builder.Append(mode.GetType().Name);
+                        builder.Append("'.");
+                    });
                 return false;
             }
 
@@ -326,7 +342,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                CLogger.LogError($"{DEBUG_FLAG} CameraMode activation failed: {exception}");
+                Log.Error(exception, $"CameraMode '{cameraMode.GetType().Name}' activation failed.");
                 return false;
             }
         }
@@ -345,7 +361,7 @@ namespace CycloneGames.GameplayFramework.Runtime
             }
             catch (Exception exception)
             {
-                CLogger.LogError($"{DEBUG_FLAG} CameraMode deactivation failed: {exception}");
+                Log.Error(exception, $"CameraMode '{cameraMode.GetType().Name}' deactivation failed.");
                 return false;
             }
         }

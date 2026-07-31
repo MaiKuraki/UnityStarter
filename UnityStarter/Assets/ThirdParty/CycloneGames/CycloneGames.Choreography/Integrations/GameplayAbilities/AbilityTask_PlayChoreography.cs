@@ -2,6 +2,7 @@ using System;
 using CycloneGames.Choreography.Core;
 using CycloneGames.GameplayAbilities.Runtime;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Choreography.GameplayAbilities
 {
@@ -21,6 +22,8 @@ namespace CycloneGames.Choreography.GameplayAbilities
     /// </summary>
     public sealed class AbilityTask_PlayChoreography : AbilityTask
     {
+        private static readonly LogChannel Log = ChoreographyGameplayAbilitiesLog.Channel;
+
         /// <summary>Fired when the choreography instance completes naturally.</summary>
         public Action OnCompleted;
 
@@ -60,7 +63,7 @@ namespace CycloneGames.Choreography.GameplayAbilities
         {
             if (_scheduler == null || _asset == null || Ability?.AbilitySystemComponent == null)
             {
-                GASLog.Warning("AbilityTask_PlayChoreography: missing scheduler, asset, or ability system component.");
+                Log.Warning("AbilityTask_PlayChoreography: missing scheduler, asset, or ability system component.");
                 EndTask();
                 return;
             }

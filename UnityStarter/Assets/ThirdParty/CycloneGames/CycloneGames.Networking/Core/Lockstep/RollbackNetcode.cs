@@ -1,6 +1,7 @@
 using System;
 using System.Runtime.CompilerServices;
 using CycloneGames.DeterministicMath;
+using CycloneGames.Logging;
 
 namespace CycloneGames.Networking.Lockstep
 {
@@ -38,7 +39,7 @@ namespace CycloneGames.Networking.Lockstep
         private readonly int _localPeerId;
         private readonly int _maxRollbackFrames;
         private readonly IRollbackSimulation _simulation;
-        private readonly INetLogger _logger;
+        private readonly LogChannel _log;
 
         // Ring buffers indexed by frame
         private readonly TInput[,] _confirmedInputs;    // Actual inputs received
@@ -83,8 +84,75 @@ namespace CycloneGames.Networking.Lockstep
         /// <param name="simulation">Game simulation callbacks</param>
         /// <param name="maxRollbackFrames">Maximum frames to roll back (7-10 typical for fighting games)</param>
         /// <param name="tickRate">Simulation tick rate for fixed delta time</param>
-        public RollbackNetcode(int peerCount, int localPeerId, IRollbackSimulation simulation,
-            int maxRollbackFrames = 8, int tickRate = 60, INetLogger logger = null)
+        public RollbackNetcode(
+            int peerCount,
+            int localPeerId,
+            IRollbackSimulation simulation)
+            : this(
+                peerCount,
+                localPeerId,
+                simulation,
+                NetworkingCoreLog.Channel,
+                8,
+                60)
+        {
+        }
+
+        public RollbackNetcode(
+            int peerCount,
+            int localPeerId,
+            IRollbackSimulation simulation,
+            int maxRollbackFrames)
+            : this(
+                peerCount,
+                localPeerId,
+                simulation,
+                NetworkingCoreLog.Channel,
+                maxRollbackFrames,
+                60)
+        {
+        }
+
+        public RollbackNetcode(
+            int peerCount,
+            int localPeerId,
+            IRollbackSimulation simulation,
+            int maxRollbackFrames,
+            int tickRate)
+            : this(
+                peerCount,
+                localPeerId,
+                simulation,
+                NetworkingCoreLog.Channel,
+                maxRollbackFrames,
+                tickRate)
+        {
+        }
+
+        public RollbackNetcode(
+            int peerCount,
+            int localPeerId,
+            IRollbackSimulation simulation,
+            ILogWriter logWriter,
+            int maxRollbackFrames = 8,
+            int tickRate = 60)
+            : this(
+                peerCount,
+                localPeerId,
+                simulation,
+                NetworkingCoreLog.Create(logWriter),
+                maxRollbackFrames,
+                tickRate)
+        {
+        }
+
+        private RollbackNetcode(
+            int peerCount,
+            int localPeerId,
+            IRollbackSimulation simulation,
+            LogChannel log,
+            int maxRollbackFrames,
+            int tickRate)
         {
             if (peerCount < 1 || peerCount > 64)
                 throw new ArgumentOutOfRangeException(nameof(peerCount));
@@ -100,7 +168,7 @@ namespace CycloneGames.Networking.Lockstep
             _peerCount = peerCount;
             _localPeerId = localPeerId;
             _simulation = simulation;
-            _logger = logger ?? NoopNetLogger.Instance;
+            _log = log;
             _maxRollbackFrames = maxRollbackFrames;
             _deltaTime = FPInt64.FromDouble(1.0 / tickRate);
 
@@ -265,7 +333,7 @@ namespace CycloneGames.Networking.Lockstep
                     if (rollbackDepth > _maxRollbackFrames)
                     {
                         // Too far back: cannot rollback; log and notify desync.
-                        _logger.Log(LogLevel.Warning,
+                        _log.Warning(
                             $"[RollbackNetcode] Rollback depth {rollbackDepth} exceeds max {_maxRollbackFrames}. " +
                             $"Peer {peerId} frame {frame} vs current {_currentFrame}. Possible desync.");
                         return;

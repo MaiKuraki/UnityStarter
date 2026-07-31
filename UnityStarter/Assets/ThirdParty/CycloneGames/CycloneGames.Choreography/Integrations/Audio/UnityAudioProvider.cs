@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using CycloneGames.Choreography.Core;
+using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Choreography.Audio
@@ -61,7 +62,7 @@ namespace CycloneGames.Choreography.Audio
         }
 
         private readonly IUnityChoreographyResourceResolver _resolver;
-        private readonly IChoreographyDiagnostics _diagnostics;
+        private readonly LogChannel _log;
         private readonly AudioSourcePool _pool;
         private readonly Dictionary<VoiceKey, AudioSource> _voices = new Dictionary<VoiceKey, AudioSource>();
         private readonly List<AudioSource> _oneShots = new List<AudioSource>(8);
@@ -71,15 +72,32 @@ namespace CycloneGames.Choreography.Audio
         public UnityAudioProvider(
             Transform poolRoot,
             IUnityChoreographyResourceResolver resolver,
-            IChoreographyDiagnostics diagnostics = null,
             int initialPoolSize = 8)
+            : this(poolRoot, resolver, ChoreographyAudioLog.Channel, initialPoolSize)
+        {
+        }
+
+        public UnityAudioProvider(
+            Transform poolRoot,
+            IUnityChoreographyResourceResolver resolver,
+            ILogWriter logWriter,
+            int initialPoolSize = 8)
+            : this(poolRoot, resolver, ChoreographyAudioLog.Create(logWriter), initialPoolSize)
+        {
+        }
+
+        private UnityAudioProvider(
+            Transform poolRoot,
+            IUnityChoreographyResourceResolver resolver,
+            LogChannel log,
+            int initialPoolSize)
         {
             if (poolRoot == null)
             {
                 throw new ArgumentNullException(nameof(poolRoot));
             }
             _resolver = resolver ?? throw new ArgumentNullException(nameof(resolver));
-            _diagnostics = diagnostics ?? NullChoreographyDiagnostics.Instance;
+            _log = log;
             _pool = new AudioSourcePool(poolRoot, initialPoolSize);
         }
 
@@ -173,20 +191,20 @@ namespace CycloneGames.Choreography.Audio
 
         private void WarnMissing(string clipId, string address)
         {
-            if (!_warnedMissingResource && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (!_warnedMissingResource && _log.IsEnabled(LogSeverity.Warning))
             {
                 _warnedMissingResource = true;
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.Audio",
+                _log.Warning(
                     "Audio clip '" + clipId + "' skipped: resource '" + address + "' is not loaded (preload it first). Further audio resource warnings are suppressed.");
             }
         }
 
         private void WarnUnsupportedKind(string clipId, ChoreographyResourceKind kind)
         {
-            if (!_warnedUnsupportedKind && _diagnostics.IsEnabled(ChoreographyLogLevel.Warning))
+            if (!_warnedUnsupportedKind && _log.IsEnabled(LogSeverity.Warning))
             {
                 _warnedUnsupportedKind = true;
-                _diagnostics.Log(ChoreographyLogLevel.Warning, "Choreography.Audio",
+                _log.Warning(
                     "Audio clip '" + clipId + "' skipped: UnityAudioProvider only supports AudioClip resources, but received '" + kind + "'. Further audio kind warnings are suppressed.");
             }
         }
