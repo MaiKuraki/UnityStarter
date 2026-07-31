@@ -2,7 +2,8 @@
     "name": "CycloneGames.GameplayTags.Unity.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.GameplayTags.Core"
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.GameplayTags.Integrations.Logging"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

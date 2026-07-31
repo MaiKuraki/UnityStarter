@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using CycloneGames.Logging;
 
 namespace CycloneGames.Choreography.Core
 {
@@ -61,7 +60,7 @@ namespace CycloneGames.Choreography.Core
         private static readonly RuntimeClipComparer ClipComparer = new RuntimeClipComparer();
         private static readonly RuntimeEventComparer EventComparer = new RuntimeEventComparer();
 
-        private LogChannel _log = ChoreographyCoreLog.Channel;
+        private IChoreographyDiagnostics _diagnostics = NullChoreographyDiagnostics.Instance;
         private IChoreographyPlaybackSink _sink;
         private ChoreographyPlaybackContext _context;
 
@@ -133,14 +132,9 @@ namespace CycloneGames.Choreography.Core
             }
         }
 
-        public void SetLogWriter(ILogWriter logWriter)
+        public void SetDiagnostics(IChoreographyDiagnostics diagnostics)
         {
-            _log = ChoreographyCoreLog.Create(logWriter);
-        }
-
-        internal void SetLogChannel(LogChannel log)
-        {
-            _log = log;
+            _diagnostics = diagnostics ?? throw new ArgumentNullException(nameof(diagnostics));
         }
 
         /// <summary>
@@ -176,7 +170,17 @@ namespace CycloneGames.Choreography.Core
         {
             if (Asset == null)
             {
-                _log.Error("Play called before Load.");
+                if (ChoreographyDiagnosticsGuard.IsEnabled(
+                    _diagnostics,
+                    ChoreographyDiagnosticLevel.Error,
+                    ChoreographyDiagnosticCategories.Root))
+                {
+                    ChoreographyDiagnosticsGuard.Write(
+                        _diagnostics,
+                        ChoreographyDiagnosticLevel.Error,
+                        ChoreographyDiagnosticCategories.Root,
+                        "Play called before Load.");
+                }
                 return;
             }
             if (Status == PlaybackStatus.Playing)
@@ -705,9 +709,15 @@ namespace CycloneGames.Choreography.Core
                 if (absEnd > sectionEnd)
                 {
                     absEnd = sectionEnd;
-                    if (_log.IsEnabled(LogSeverity.Warning))
+                    if (ChoreographyDiagnosticsGuard.IsEnabled(
+                        _diagnostics,
+                        ChoreographyDiagnosticLevel.Warning,
+                        ChoreographyDiagnosticCategories.Root))
                     {
-                        _log.Warning(
+                        ChoreographyDiagnosticsGuard.Write(
+                            _diagnostics,
+                            ChoreographyDiagnosticLevel.Warning,
+                            ChoreographyDiagnosticCategories.Root,
                             "Clip '" + clip.Id + "' end exceeds its section; clamped to the section boundary.");
                     }
                 }

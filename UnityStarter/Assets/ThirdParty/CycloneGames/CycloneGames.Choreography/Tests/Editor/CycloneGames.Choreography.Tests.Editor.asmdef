@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.Choreography.Tests",
     "references": [
         "CycloneGames.Choreography.Core",
+        "CycloneGames.Choreography.Integrations.Logging",
         "CycloneGames.Logging"
     ],
     "includePlatforms": [
@@ -15,7 +16,7 @@
     "autoReferenced": false,
     "defineConstraints": [],
     "versionDefines": [],
-    "noEngineReferences": false,
+    "noEngineReferences": true,
     "optionalUnityReferences": [
         "TestAssemblies"
     ]

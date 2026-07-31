@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.Choreography.Integrations.Logging",
+    "rootNamespace": "CycloneGames.Choreography",
+    "references": [
+        "CycloneGames.Choreography.Core",
+        "CycloneGames.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

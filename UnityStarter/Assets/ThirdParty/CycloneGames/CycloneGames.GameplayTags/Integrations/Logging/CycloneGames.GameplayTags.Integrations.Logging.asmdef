@@ -1,0 +1,17 @@
+{
+    "name": "CycloneGames.GameplayTags.Integrations.Logging",
+    "rootNamespace": "CycloneGames.GameplayTags",
+    "references": [
+        "CycloneGames.GameplayTags.Core",
+        "CycloneGames.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

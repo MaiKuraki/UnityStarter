@@ -40,8 +40,9 @@ CycloneGames.GameplayTags 提供分层标签（`State.CrowdControl.Stunned`）�
 
 | 程序集 | 职责 | 直接依赖 |
 | --- | --- | --- |
-| `CycloneGames.GameplayTags.Core` | 注册表、值、容器、计数、查询与 Player catalog contract | `CycloneGames.Hash.Core`、`CycloneGames.Logging`；`noEngineReferences` |
-| `CycloneGames.GameplayTags.Unity.Runtime` | Runtime bootstrap、`Resources` build data loading、`GameObject` component adapter | GameplayTags Core |
+| `CycloneGames.GameplayTags.Core` | 注册表、值、容器、计数、查询、Player catalog contract 与本地 diagnostics port | `CycloneGames.Hash.Core`；`noEngineReferences` |
+| `CycloneGames.GameplayTags.Integrations.Logging` | 从 Core diagnostics 到共享 writer 的可选 bridge | Core、Logging；`noEngineReferences`；`autoReferenced: false` |
+| `CycloneGames.GameplayTags.Unity.Runtime` | Runtime bootstrap、`Resources` build data loading、`GameObject` component adapter | Core、Logging integration |
 | `CycloneGames.GameplayTags.Unity.Editor` | JSON authoring、manager window、drawer、validation、file watcher、build bake | Core、Unity Runtime、Logging、Newtonsoft.Json；仅 Editor |
 
 ```mermaid
@@ -61,9 +62,13 @@ Writer 在发布前构建完整 candidate。非法输入、stable-ID collision �
 
 ## 日志
 
-Core 与 Editor 诊断分别使用各自 assembly-local `Diagnostics/` 目录中的 internal `GameplayTagsCoreLog` 和 `GameplayTagsEditorLog` facade。两个 facade 都提供统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 结构，会显式拒绝 null writer，并保留 category `CycloneGames.GameplayTags`。包内 class 从对应 facade 持有 class-local `Log` channel。该包只依赖不含 Unity API 的 `CycloneGames.Logging` 契约。`LogRuntime` 未安装 backend 时，由 no-op writer 接收 ambient 写入；组合使用本包不会强制依赖 `CycloneGames.Logger`。
+Core 自己持有引擎无关的 `IGameplayTagsDiagnostics`、`NullGameplayTagsDiagnostics`、`GameplayTagsDiagnosticCategories.Root` 和 `GameplayTagsDiagnostics` 进程替换点，不引用 `ILogWriter`、`LogChannel`、Unity 或具体 backend。`GameplayTagsDiagnosticLevel` 采用稳定的共享形状：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`，数值与 `LogSeverity` 一致；`None` 和未知值永远不会输出。`GameplayTagsLoggingDiagnostics` 是接入共享进程 writer 的可选 adapter；它会隔离普通 writer 异常，同时有意保留 `OutOfMemoryException` 的传播行为。
 
-GameplayTags 不公开包专用 logger、日志 delegate、writer setter 或 logging bootstrap。应用 composition root 通过 `LogRuntime` 安装或替换共享进程 writer；需要自身 category 的调用方代码应创建自己的 `LogChannel`。`GameplayTagRuntimePlatform` 只保留 play-state 检测、build data、settings path 与 project tag source 等 host-platform 能力。Unity bootstrap 不修改进程 writer。
+这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.gameplay-tags` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
+
+每个 Core 调用都会经过内部 `GameplayTagsCoreDiagnostics` best-effort guard。普通自定义 sink 异常不能改变 registry publication、tag lookup、已提交的 count 状态或 subscriber 迭代。纯 C# host 可以让 Core 保持静默、安装自己的 `IGameplayTagsDiagnostics`，或显式引用 Logging integration。owner 使用 `GameplayTagsDiagnostics.TryReplace(expected, replacement)` 完成原子 handoff，或使用 `TryReset(expected)` 只释放自己安装的 sink。Unity bootstrap 会跟踪 ambient ownership，绝不会 reset 或替换用户安装的 sink，也不会修改 `LogRuntime.Writer`。
+
+Editor 自己的输出继续使用 assembly-local `GameplayTagsEditorLog` facade，并保持统一的 `Category`、ambient `Channel` 与 `Create(ILogWriter)` 形状。`GameplayTagRuntimePlatform` 只保留 play-state 检测、build data、settings path 与 project tag source 等 host-platform 能力。
 
 ## 快速上手
 

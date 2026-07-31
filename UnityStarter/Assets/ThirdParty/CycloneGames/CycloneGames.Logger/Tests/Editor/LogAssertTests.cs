@@ -10,11 +10,12 @@ namespace CycloneGames.Logger.Tests.Editor
     {
         private CLogger _logger;
         private RecordingLogger _recordingLogger;
+        private ILogWriter _previousWriter;
 
         [SetUp]
         public void SetUp()
         {
-            LogRuntime.ResetWriter();
+            _previousWriter = LogRuntime.ReplaceWriter(NullLogWriter.Instance);
             CLogAssert.Reset();
             _logger = CLoggerFactory.CreateSingleThreaded();
             _recordingLogger = new RecordingLogger();
@@ -28,11 +29,14 @@ namespace CycloneGames.Logger.Tests.Editor
             CLogAssert.Reset();
             if (_logger != null)
             {
-                LogRuntime.TryResetWriter(_logger);
+                LogRuntime.TryReplaceWriter(
+                    _logger,
+                    _previousWriter ?? NullLogWriter.Instance);
             }
 
             _logger?.ShutdownInstance();
             _logger = null;
+            _previousWriter = null;
         }
 
         [Test]

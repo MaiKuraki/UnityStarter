@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Reflection;
 using System.Text;
+using CycloneGames.GameplayTags;
 using CycloneGames.GameplayTags.Core;
+using CycloneGames.GameplayTags.Unity.Runtime;
 using CycloneGames.Logging;
 using NUnit.Framework;
 
@@ -11,7 +13,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 {
     public sealed class GameplayTagsCoreTests
     {
-        private ScopedSilentLogWriter _logScope;
+        private ScopedSilentDiagnostics _diagnosticScope;
 
         [SetUp]
         public void SetUp()
@@ -22,7 +24,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             GameplayTagRuntimePlatform.LoadBuildTagData = static () => null;
             GameplayTagRuntimePlatform.EnumerateProjectTagSources = static () => System.Array.Empty<IGameplayTagSource>();
             GameplayTagRuntimePlatform.ClearRegisteredProjectTagSources();
-            _logScope = new ScopedSilentLogWriter();
+            _diagnosticScope = new ScopedSilentDiagnostics();
         }
 
         [TearDown]
@@ -36,8 +38,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             }
             finally
             {
-                _logScope?.Dispose();
-                _logScope = null;
+                _diagnosticScope?.Dispose();
+                _diagnosticScope = null;
             }
         }
 
@@ -307,6 +309,193 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             Assert.That(reentryFailure, Is.TypeOf<InvalidOperationException>());
             Assert.That(laterSubscriberCalls, Is.EqualTo(leaf.HierarchyLevel));
             Assert.That(container.GetExplicitTagCount(leaf), Is.EqualTo(1));
+        }
+
+        [TestCase(DiagnosticFailurePoint.IsEnabled)]
+        [TestCase(DiagnosticFailurePoint.WriteException)]
+        public void CountContainer_DiagnosticFailureCannotInterruptCommittedSubscriberIteration(
+            DiagnosticFailurePoint failurePoint)
+        {
+            RegisterTestTags();
+            GameplayTag leaf = GameplayTagManager.RequestTag("Test.Status.Stun");
+            GameplayTagCountContainer container = new();
+            int laterSubscriberCalls = 0;
+            container.OnAnyTagCountChange += (_, _) =>
+                throw new InvalidOperationException("subscriber failure");
+            container.OnAnyTagCountChange += (_, _) => laterSubscriberCalls++;
+            var diagnostics = new ThrowingGameplayTagsDiagnostics(failurePoint);
+            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(diagnostics);
+
+            try
+            {
+                AggregateException callbackFailure =
+                    Assert.Throws<AggregateException>(() => container.AddTag(leaf));
+
+                Assert.That(callbackFailure.InnerExceptions.Count, Is.EqualTo(leaf.HierarchyLevel));
+                Assert.That(laterSubscriberCalls, Is.EqualTo(leaf.HierarchyLevel));
+                Assert.That(container.GetExplicitTagCount(leaf), Is.EqualTo(1));
+            }
+            finally
+            {
+                GameplayTagsDiagnostics.Replace(previous);
+            }
+        }
+
+        [TestCase(DiagnosticFailurePoint.IsEnabled)]
+        [TestCase(DiagnosticFailurePoint.Write)]
+        public void RequestTag_OrdinaryDiagnosticFailureDoesNotChangeMissingTagControlFlow(
+            DiagnosticFailurePoint failurePoint)
+        {
+            var diagnostics = new ThrowingGameplayTagsDiagnostics(failurePoint);
+            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(diagnostics);
+
+            try
+            {
+                GameplayTag result = default;
+                Assert.DoesNotThrow(() =>
+                    result = GameplayTagManager.RequestTag("Test.Missing.Tag", true));
+                Assert.That(result.IsValid, Is.False);
+            }
+            finally
+            {
+                GameplayTagsDiagnostics.Replace(previous);
+            }
+        }
+
+        [Test]
+        public void RequestTag_DiagnosticOutOfMemoryStillPropagates()
+        {
+            var diagnostics =
+                new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.OutOfMemory);
+            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(diagnostics);
+
+            try
+            {
+                Assert.Throws<OutOfMemoryException>(() =>
+                    GameplayTagManager.RequestTag("Test.Missing.Tag", true));
+            }
+            finally
+            {
+                GameplayTagsDiagnostics.Replace(previous);
+            }
+        }
+
+        [Test]
+        public void Diagnostics_ConditionalReplacementRequiresTheExpectedOwner()
+        {
+            var owner = new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
+            var other = new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
+            var replacement = new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
+            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(owner);
+
+            try
+            {
+                Assert.That(GameplayTagsDiagnostics.TryReplace(other, replacement), Is.False);
+                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(owner));
+                Assert.That(GameplayTagsDiagnostics.TryReplace(owner, replacement), Is.True);
+                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(replacement));
+                Assert.Throws<ArgumentNullException>(() => GameplayTagsDiagnostics.TryReplace(null, owner));
+                Assert.Throws<ArgumentNullException>(() => GameplayTagsDiagnostics.TryReplace(replacement, null));
+
+                Assert.That(GameplayTagsDiagnostics.TryReset(other), Is.False);
+                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(replacement));
+                Assert.That(GameplayTagsDiagnostics.TryReset(replacement), Is.True);
+                Assert.That(
+                    GameplayTagsDiagnostics.Current,
+                    Is.SameAs(NullGameplayTagsDiagnostics.Instance));
+                Assert.Throws<ArgumentNullException>(() => GameplayTagsDiagnostics.TryReset(null));
+            }
+            finally
+            {
+                GameplayTagsDiagnostics.Replace(previous);
+            }
+        }
+
+        [Test]
+        public void UnityBootstrap_InitializationDoesNotReplaceUserDiagnostics()
+        {
+            var userDiagnostics =
+                new ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint.Write);
+            IGameplayTagsDiagnostics previous = GameplayTagsDiagnostics.Replace(userDiagnostics);
+
+            try
+            {
+                Type bootstrapType = typeof(GameObjectGameplayTagContainer).Assembly.GetType(
+                    "CycloneGames.GameplayTags.Unity.Runtime.GameplayTagUnityPlatformBootstrap",
+                    throwOnError: true);
+                MethodInfo initialize = bootstrapType.GetMethod(
+                    "Initialize",
+                    BindingFlags.Static | BindingFlags.NonPublic);
+
+                Assert.That(initialize, Is.Not.Null);
+                Assert.DoesNotThrow(() => initialize.Invoke(null, null));
+                Assert.That(GameplayTagsDiagnostics.Current, Is.SameAs(userDiagnostics));
+            }
+            finally
+            {
+                GameplayTagsDiagnostics.Replace(previous);
+            }
+        }
+
+        [TestCase(GameplayTagsDiagnosticLevel.Trace, LogSeverity.Trace)]
+        [TestCase(GameplayTagsDiagnosticLevel.Debug, LogSeverity.Debug)]
+        [TestCase(GameplayTagsDiagnosticLevel.Info, LogSeverity.Info)]
+        [TestCase(GameplayTagsDiagnosticLevel.Warning, LogSeverity.Warning)]
+        [TestCase(GameplayTagsDiagnosticLevel.Error, LogSeverity.Error)]
+        [TestCase(GameplayTagsDiagnosticLevel.Fatal, LogSeverity.Fatal)]
+        public void LoggingAdapter_MapsEveryOutputLevelExactly(
+            GameplayTagsDiagnosticLevel level,
+            LogSeverity expectedSeverity)
+        {
+            var writer = new ProbeLogWriter();
+            var adapter = new GameplayTagsLoggingDiagnostics(writer);
+
+            adapter.Write(level, GameplayTagsDiagnosticCategories.Root, "message");
+
+            Assert.That(writer.CallCount, Is.EqualTo(1));
+            Assert.That(writer.LastSeverity, Is.EqualTo(expectedSeverity));
+        }
+
+        [TestCase(GameplayTagsDiagnosticLevel.None)]
+        [TestCase((GameplayTagsDiagnosticLevel)byte.MaxValue)]
+        public void LoggingAdapter_DropsNonOutputAndUnknownLevels(GameplayTagsDiagnosticLevel level)
+        {
+            var writer = new ProbeLogWriter();
+            var adapter = new GameplayTagsLoggingDiagnostics(writer);
+
+            Assert.That(adapter.IsEnabled(level, GameplayTagsDiagnosticCategories.Root), Is.False);
+            Assert.DoesNotThrow(() =>
+                adapter.Write(level, GameplayTagsDiagnosticCategories.Root, "message"));
+            Assert.DoesNotThrow(() =>
+                adapter.WriteException(
+                    level,
+                    GameplayTagsDiagnosticCategories.Root,
+                    new InvalidOperationException("diagnostic")));
+            Assert.That(writer.CallCount, Is.Zero);
+        }
+
+        [Test]
+        public void LoggingAdapter_IsolatesOrdinaryWriterFailures()
+        {
+            var writer = new ProbeLogWriter(throwOnCall: true);
+            var adapter = new GameplayTagsLoggingDiagnostics(writer);
+
+            Assert.That(
+                adapter.IsEnabled(
+                    GameplayTagsDiagnosticLevel.Info,
+                    GameplayTagsDiagnosticCategories.Root),
+                Is.False);
+            Assert.DoesNotThrow(() =>
+                adapter.Write(
+                    GameplayTagsDiagnosticLevel.Info,
+                    GameplayTagsDiagnosticCategories.Root,
+                    "message"));
+            Assert.DoesNotThrow(() =>
+                adapter.WriteException(
+                    GameplayTagsDiagnosticLevel.Error,
+                    GameplayTagsDiagnosticCategories.Root,
+                    new InvalidOperationException("diagnostic")));
+            Assert.That(writer.CallCount, Is.EqualTo(3));
         }
 
         [Test]
@@ -1103,6 +1292,135 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             }
         }
 
+        public enum DiagnosticFailurePoint
+        {
+            IsEnabled,
+            Write,
+            WriteException,
+            OutOfMemory
+        }
+
+        private sealed class ThrowingGameplayTagsDiagnostics : IGameplayTagsDiagnostics
+        {
+            private readonly DiagnosticFailurePoint _failurePoint;
+
+            public ThrowingGameplayTagsDiagnostics(DiagnosticFailurePoint failurePoint)
+            {
+                _failurePoint = failurePoint;
+            }
+
+            public bool IsEnabled(GameplayTagsDiagnosticLevel level, string category)
+            {
+                if (_failurePoint == DiagnosticFailurePoint.OutOfMemory)
+                {
+                    throw new OutOfMemoryException("Expected diagnostic sink failure.");
+                }
+
+                if (_failurePoint == DiagnosticFailurePoint.IsEnabled)
+                {
+                    Throw();
+                }
+
+                return true;
+            }
+
+            public void Write(
+                GameplayTagsDiagnosticLevel level,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (_failurePoint == DiagnosticFailurePoint.Write)
+                {
+                    Throw();
+                }
+            }
+
+            public void WriteException(
+                GameplayTagsDiagnosticLevel level,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "")
+            {
+                if (_failurePoint == DiagnosticFailurePoint.WriteException)
+                {
+                    Throw();
+                }
+            }
+
+            private static void Throw() =>
+                throw new InvalidOperationException("Expected diagnostic sink failure.");
+        }
+
+        private sealed class ProbeLogWriter : ILogWriter
+        {
+            private readonly bool _throwOnCall;
+
+            public ProbeLogWriter(bool throwOnCall = false)
+            {
+                _throwOnCall = throwOnCall;
+            }
+
+            public int CallCount { get; private set; }
+
+            public LogSeverity LastSeverity { get; private set; }
+
+            public bool IsEnabled(LogSeverity severity, string category)
+            {
+                Record(severity);
+                return true;
+            }
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                string message,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Record(severity);
+
+            public void Write(
+                LogSeverity severity,
+                string category,
+                Action<StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Record(severity);
+
+            public void Write<TState>(
+                LogSeverity severity,
+                string category,
+                TState state,
+                Action<TState, StringBuilder> messageBuilder,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Record(severity);
+
+            public void WriteException(
+                LogSeverity severity,
+                string category,
+                Exception exception,
+                string message = null,
+                string filePath = "",
+                int lineNumber = 0,
+                string memberName = "") => Record(severity);
+
+            private void Record(LogSeverity severity)
+            {
+                CallCount++;
+                LastSeverity = severity;
+                if (_throwOnCall)
+                {
+                    throw new InvalidOperationException("Expected writer failure.");
+                }
+            }
+        }
+
         private static byte[] CreateBuildTagData(params string[] tagNames)
         {
             using MemoryStream memoryStream = new();
@@ -1167,20 +1485,20 @@ namespace CycloneGames.GameplayTags.Tests.Editor
                 "Redirect.Batch.Current");
         }
 
-        private sealed class ScopedSilentLogWriter : ILogWriter, IDisposable
+        private sealed class ScopedSilentDiagnostics : IGameplayTagsDiagnostics, IDisposable
         {
-            private ILogWriter _previousWriter;
+            private IGameplayTagsDiagnostics _previousDiagnostics;
             private bool _isDisposed;
 
-            public ScopedSilentLogWriter()
+            public ScopedSilentDiagnostics()
             {
-                _previousWriter = LogRuntime.ReplaceWriter(this);
+                _previousDiagnostics = GameplayTagsDiagnostics.Replace(this);
             }
 
-            public bool IsEnabled(LogSeverity severity, string category) => false;
+            public bool IsEnabled(GameplayTagsDiagnosticLevel level, string category) => false;
 
             public void Write(
-                LogSeverity severity,
+                GameplayTagsDiagnosticLevel level,
                 string category,
                 string message,
                 string filePath = "",
@@ -1189,29 +1507,8 @@ namespace CycloneGames.GameplayTags.Tests.Editor
             {
             }
 
-            public void Write(
-                LogSeverity severity,
-                string category,
-                Action<StringBuilder> messageBuilder,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "")
-            {
-            }
-
-            public void Write<TState>(
-                LogSeverity severity,
-                string category,
-                TState state,
-                Action<TState, StringBuilder> messageBuilder,
-                string filePath = "",
-                int lineNumber = 0,
-                string memberName = "")
-            {
-            }
-
             public void WriteException(
-                LogSeverity severity,
+                GameplayTagsDiagnosticLevel level,
                 string category,
                 Exception exception,
                 string message = null,
@@ -1229,12 +1526,9 @@ namespace CycloneGames.GameplayTags.Tests.Editor
                 }
 
                 _isDisposed = true;
-                ILogWriter previousWriter = _previousWriter;
-                _previousWriter = null;
-                if (object.ReferenceEquals(LogRuntime.Writer, this))
-                {
-                    LogRuntime.ReplaceWriter(previousWriter);
-                }
+                IGameplayTagsDiagnostics previousDiagnostics = _previousDiagnostics;
+                _previousDiagnostics = null;
+                GameplayTagsDiagnostics.TryReplace(this, previousDiagnostics);
             }
         }
     }

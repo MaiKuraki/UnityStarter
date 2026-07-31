@@ -5,7 +5,6 @@ using System.Reflection;
 #endif
 using System.Runtime.CompilerServices;
 using System.Threading;
-using CycloneGames.Logging;
 
 [assembly: InternalsVisibleTo("CycloneGames.GameplayTags.Unity.Runtime")]
 
@@ -23,8 +22,6 @@ namespace CycloneGames.GameplayTags.Core
    /// </summary>
    public static partial class GameplayTagManager
    {
-      private static readonly LogChannel Log = GameplayTagsCoreLog.Channel;
-
       private readonly struct PendingRegistration
       {
          public readonly string Name;
@@ -175,7 +172,19 @@ namespace CycloneGames.GameplayTags.Core
             return tag;
 
          if (logWarningIfNotFound)
-            Log.Warning($"No tag registered with name \"{name}\".");
+         {
+            if (GameplayTagsCoreDiagnostics.TryGetEnabled(
+               GameplayTagsDiagnosticLevel.Warning,
+               GameplayTagsDiagnosticCategories.Root,
+               out IGameplayTagsDiagnostics diagnostics))
+            {
+               GameplayTagsCoreDiagnostics.TryWrite(
+                  diagnostics,
+                  GameplayTagsDiagnosticLevel.Warning,
+                  GameplayTagsDiagnosticCategories.Root,
+                  $"No tag registered with name \"{name}\".");
+            }
+         }
 
          return GameplayTagDefinition.CreateInvalidDefinition(name).Tag;
       }
@@ -325,9 +334,18 @@ namespace CycloneGames.GameplayTags.Core
 
          if (preserveCurrentIndices)
          {
-            Log.Warning(
-               "Gameplay tags were reloaded during play. Existing runtime indices were preserved; " +
-               "tags removed from authoring sources remain registered until the next runtime reset.");
+            if (GameplayTagsCoreDiagnostics.TryGetEnabled(
+               GameplayTagsDiagnosticLevel.Warning,
+               GameplayTagsDiagnosticCategories.Root,
+               out IGameplayTagsDiagnostics diagnostics))
+            {
+               GameplayTagsCoreDiagnostics.TryWrite(
+                  diagnostics,
+                  GameplayTagsDiagnosticLevel.Warning,
+                  GameplayTagsDiagnosticCategories.Root,
+                  "Gameplay tags were reloaded during play. Existing runtime indices were preserved; " +
+                  "tags removed from authoring sources remain registered until the next runtime reset.");
+            }
          }
 
          BroadcastTreeChanged();
@@ -566,16 +584,34 @@ namespace CycloneGames.GameplayTags.Core
 
          foreach (GameplayTagRegistrationError error in context.GetRegistrationErrors())
          {
-            Log.Error(
-               $"Failed to register gameplay tag '{error.TagName}': {error.Message} " +
-               $"(source: {error.Source?.Name ?? "unknown"})");
+            if (GameplayTagsCoreDiagnostics.TryGetEnabled(
+               GameplayTagsDiagnosticLevel.Error,
+               GameplayTagsDiagnosticCategories.Root,
+               out IGameplayTagsDiagnostics diagnostics))
+            {
+               GameplayTagsCoreDiagnostics.TryWrite(
+                  diagnostics,
+                  GameplayTagsDiagnosticLevel.Error,
+                  GameplayTagsDiagnosticCategories.Root,
+                  $"Failed to register gameplay tag '{error.TagName}': {error.Message} " +
+                  $"(source: {error.Source?.Name ?? "unknown"})");
+            }
          }
 
          if (context.SuppressedRegistrationErrorCount > 0)
          {
-            Log.Error(
-               $"Suppressed {context.SuppressedRegistrationErrorCount} additional gameplay tag registration diagnostic(s). " +
-               "The registry candidate was not published.");
+            if (GameplayTagsCoreDiagnostics.TryGetEnabled(
+               GameplayTagsDiagnosticLevel.Error,
+               GameplayTagsDiagnosticCategories.Root,
+               out IGameplayTagsDiagnostics diagnostics))
+            {
+               GameplayTagsCoreDiagnostics.TryWrite(
+                  diagnostics,
+                  GameplayTagsDiagnosticLevel.Error,
+                  GameplayTagsDiagnosticCategories.Root,
+                  $"Suppressed {context.SuppressedRegistrationErrorCount} additional gameplay tag registration diagnostic(s). " +
+                  "The registry candidate was not published.");
+            }
          }
 
          throw new InvalidOperationException(
@@ -721,7 +757,18 @@ namespace CycloneGames.GameplayTags.Core
             }
             catch (Exception exception)
             {
-               Log.Error(exception, "Gameplay tag tree-change subscriber failed.");
+               if (GameplayTagsCoreDiagnostics.TryGetEnabled(
+                  GameplayTagsDiagnosticLevel.Error,
+                  GameplayTagsDiagnosticCategories.Root,
+                  out IGameplayTagsDiagnostics diagnostics))
+               {
+                  GameplayTagsCoreDiagnostics.TryWriteException(
+                     diagnostics,
+                     GameplayTagsDiagnosticLevel.Error,
+                     GameplayTagsDiagnosticCategories.Root,
+                     exception,
+                     "Gameplay tag tree-change subscriber failed.");
+               }
             }
          }
       }
