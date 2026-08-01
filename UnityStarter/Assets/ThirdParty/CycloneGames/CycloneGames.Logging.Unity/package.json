@@ -1,0 +1,29 @@
+{
+  "name": "com.cyclone-games.logging.unity",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Logging.Unity",
+  "description": "Unity lifecycle, settings, Editor tooling, and Unity Console integration for the CycloneGames logging pipeline.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0",
+    "com.cyclone-games.logging.pipeline": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Logging",
+    "Unity"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  },
+  "samples": [
+    {
+      "displayName": "Logging Unity Samples",
+      "description": "Unity examples for pipeline bootstrap, bounded queue observation, file output, and local performance diagnostics.",
+      "path": "Samples"
+    }
+  ]
+}

@@ -62,7 +62,7 @@ Writer 在发布前构建完整 candidate。非法输入、stable-ID collision �
 
 ## 日志
 
-Core 自己持有引擎无关的 `IGameplayTagsDiagnostics`、`NullGameplayTagsDiagnostics`、`GameplayTagsDiagnosticCategories.Root` 和 `GameplayTagsDiagnostics` 进程替换点，不引用 `ILogWriter`、`LogChannel`、Unity 或具体 backend。`GameplayTagsDiagnosticLevel` 采用稳定的共享形状：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`，数值与 `LogSeverity` 一致；`None` 和未知值永远不会输出。`GameplayTagsLoggingDiagnostics` 是接入共享进程 writer 的可选 adapter；它会隔离普通 writer 异常，同时有意保留 `OutOfMemoryException` 的传播行为。
+Core 自己持有引擎无关的 `IGameplayTagsDiagnostics`、`NullGameplayTagsDiagnostics`、`GameplayTagsDiagnosticCategories.Root` 和 `GameplayTagsDiagnostics` 进程替换点，不引用 `ILogWriter`、`LogChannel`、Unity 或具体 backend。`GameplayTagsDiagnosticLevel` 采用稳定的共享形状：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`，数值与 `LogSeverity` 一致；`None` 和未知值永远不会输出。`GameplayTagsLogWriterAdapter` 是接入共享进程 writer 的可选 adapter；它会隔离普通 writer 异常，同时有意保留 `OutOfMemoryException` 的传播行为。
 
 这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.gameplay-tags` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
 

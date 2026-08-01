@@ -288,7 +288,75 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
-        public void SceneUnloadCallback_RetiresWrapperAfterProviderReleasedBeforeSceneCapture()
+        public void SceneHandle_InvalidProviderHandleDoesNotProveSceneAbsence()
+        {
+            AssetRuntime.YooSceneHandle handle = CreateUninitialized<AssetRuntime.YooSceneHandle>();
+            MethodInfo knownSceneAbsent = typeof(AssetRuntime.YooSceneHandle).GetMethod(
+                "IsKnownSceneAbsent",
+                PrivateInstance);
+
+            Assert.That(knownSceneAbsent, Is.Not.Null);
+            Assert.That(knownSceneAbsent.Invoke(handle, new object[] { null }), Is.False);
+        }
+
+        [Test]
+        public void PackageShutdown_KeepsSceneUnloadObservationUntilCleanupSucceeds()
+        {
+            AssetRuntime.YooAssetPackage package = CreateUninitialized<AssetRuntime.YooAssetPackage>();
+            SetField(package, "_sceneUnloadSubscribed", true);
+
+            package.BeginModuleShutdown();
+
+            FieldInfo subscriptionField = typeof(AssetRuntime.YooAssetPackage).GetField(
+                "_sceneUnloadSubscribed",
+                PrivateInstance);
+            FieldInfo shutdownField = typeof(AssetRuntime.YooAssetPackage).GetField(
+                "_shutdownRequested",
+                PrivateInstance);
+            Assert.That(subscriptionField, Is.Not.Null);
+            Assert.That(shutdownField, Is.Not.Null);
+            Assert.That(subscriptionField.GetValue(package), Is.True);
+            Assert.That(shutdownField.GetValue(package), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void ModuleShutdown_RejectsMaintenanceBeforeMutatingOwnedScenes()
+        {
+            const long HandleId = 9_100_007L;
+            var module = new AssetRuntime.YooAssetModule();
+            AssetRuntime.YooAssetPackage package = CreateUninitialized<AssetRuntime.YooAssetPackage>();
+            AssetRuntime.YooSceneHandle sceneHandle = CreateUninitialized<AssetRuntime.YooSceneHandle>();
+            int releasedState = 0;
+            AssetRuntime.ProviderReleaseStateMachine.MarkReleased(ref releasedState);
+            SetField(sceneHandle, "_id", HandleId);
+            SetField(sceneHandle, "_releaseState", releasedState);
+            var scenes = new Dictionary<long, AssetRuntime.YooSceneHandle>
+            {
+                [HandleId] = sceneHandle
+            };
+            SetField(package, "_sceneHandles", scenes);
+            SetField(package, "_maintenanceMutationInProgress", true);
+            SetField(package, "_sceneUnloadSubscribed", true);
+            SetField(module, "_initialized", true);
+
+            FieldInfo packagesField = typeof(AssetRuntime.YooAssetModule).GetField("_packages", PrivateInstance);
+            Assert.That(packagesField, Is.Not.Null);
+            var packages = (Dictionary<string, AssetRuntime.YooAssetPackage>)packagesField.GetValue(module);
+            packages.Add("Maintenance", package);
+
+            Assert.ThrowsAsync<InvalidOperationException>(async () => await module.DestroyAsync());
+
+            Assert.That(scenes.ContainsKey(HandleId), Is.True);
+            Assert.That(module.Initialized, Is.False);
+            FieldInfo subscriptionField = typeof(AssetRuntime.YooAssetPackage).GetField(
+                "_sceneUnloadSubscribed",
+                PrivateInstance);
+            Assert.That(subscriptionField, Is.Not.Null);
+            Assert.That(subscriptionField.GetValue(package), Is.True);
+        }
+
+        [Test]
+        public void SceneUnloadCallback_DoesNotRetireUnmatchedInvalidProviderHandle()
         {
             const long HandleId = 9_100_005L;
             AssetRuntime.YooAssetPackage package = CreateUninitialized<AssetRuntime.YooAssetPackage>();
@@ -307,8 +375,8 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             Assert.That(callback, Is.Not.Null);
             callback.Invoke(package, new object[] { default(UnityEngine.SceneManagement.Scene) });
 
-            Assert.That(registry, Is.Empty);
-            Assert.That(handle.IsTerminallyReleased, Is.True);
+            Assert.That(registry.ContainsKey(HandleId), Is.True);
+            Assert.That(handle.IsTerminallyReleased, Is.False);
         }
 
         [Test]
@@ -357,7 +425,8 @@ namespace CycloneGames.AssetManagement.Tests.Editor
                 new object(),
                 "Scenes/Failed",
                 raw,
-                activateOnLoad: true);
+                activateOnLoad: true,
+                operationTails: new AssetRuntime.AssetOperationTailTracker());
 
             Cysharp.Threading.Tasks.UniTask unload = handle.UnloadAsync(CancellationToken.None);
 

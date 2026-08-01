@@ -69,6 +69,7 @@ Application composition selects a provider module and passes `IAssetPackage` to 
 | `CycloneGames.AssetManagement.Runtime.CacheRetention` | yes | Always |
 | `CycloneGames.AssetManagement.Editor` | yes | Unity Editor only |
 | `CycloneGames.AssetManagement.Tests.Editor` | no | Unity Test Runner |
+| `CycloneGames.AssetManagement.Tests.PlayMode` | no | Unity PlayMode Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | no | `com.unity.addressables` `[2.11.1,2.11.2)` plus an explicit consumer reference |
 | `CycloneGames.AssetManagement.Providers.Addressables.Tests.Editor` | no | Addressables 2.11.1 plus Unity Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | no | `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` plus an explicit consumer reference |
@@ -78,7 +79,7 @@ Application composition selects a provider module and passes `IAssetPackage` to 
 
 The core runtime directly depends on UniTask, CycloneGames.Logging, CycloneGames.IO Core/SystemIO, and CycloneGames.Hash Core. Installing an optional package is not sufficient: its `versionDefines` range must match and the consumer asmdef must reference the conditional assembly. Never add the generated `CYCLONEGAMES_HAS_*` symbols manually in Player Settings.
 
-AssetManagement emits diagnostics through stable `LogChannel` categories under `CycloneGames.AssetManagement`. The package never initializes, flushes, replaces, or shuts down a logging backend. With only `com.cyclone-games.logging` installed, diagnostics safely route to `NullLogWriter`; the application composition root may optionally install `CycloneGames.Logger` or another `ILogWriter` backend.
+AssetManagement emits diagnostics through stable `LogChannel` categories under `CycloneGames.AssetManagement`. The package never initializes, flushes, replaces, or shuts down a logging backend. With only `com.cyclone-games.logging` installed, diagnostics safely route to `NullLogWriter`; the application composition root may optionally install `CycloneGames.Logging.Pipeline`, compose `CycloneGames.Logging.Unity`, or provide another `ILogWriter` backend.
 
 Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
@@ -132,11 +133,13 @@ The application owner constructs and shuts down the module. The module owns name
 
 ### Handle, cancellation, and thread model
 
-Asset, all-assets, and raw-file load calls return non-pooled caller leases. A lease pins a shared provider handle until the lease is disposed. Lease disposal is idempotent. Access after disposal throws `ObjectDisposedException`. `IOperation.Task` is memoized and safe for repeated or concurrent awaiters; `Error` is diagnostic text that never replaces awaiting `Task`.
+Asset, all-assets, and raw-file load calls return non-pooled caller leases. A lease pins a shared provider handle until the lease is disposed. Lease disposal is idempotent. Access after disposal throws `ObjectDisposedException`. `IOperation.Task` is memoized and safe for repeated or concurrent awaiters. Its first terminal transition wins: provider plus adapter post-processing success completes it, a real provider or adapter failure faults it, and caller-wait cancellation, provider cancellation, or authoritative owner retirement while pending cancels it. `Error` is diagnostic text that never replaces awaiting `Task`.
 
 `WaitForAsyncComplete` is not a portable replacement for async flow. Addressables rejects it for every pending operation. Await `Task`. Synchronous single-asset access is an optional `IAssetSyncOperations` capability; scenes only expose the asynchronous lifecycle.
 
 Caller cancellation cancels that caller's wait, not a shared backend load that may be used by other callers. The caller must still dispose its lease. This separates request cancellation from shared-resource ownership.
+
+A caller-visible cancellation is not proof of physical provider termination. When package or module retirement cancels a pending owned operation, the adapter continues observing its provider/adapter tail. Successful package destruction does not complete until every retained tail has drained, including a late success, cancellation, or observed failure. A later provider outcome cannot replace the already-published public cancellation. Ordinary `ISceneHandle.Dispose` is deliberately excluded from authoritative retirement: it releases only caller wrapper ownership and neither cancels the load nor unloads the scene.
 
 Unity objects, provider APIs, cache mutation, handle disposal, scene operations, module/package lifecycle, and maintenance orchestration are main-thread-affine. Permitted worker-thread work is narrow: completed `IRawFileHandle.ReadText` and `ReadBytes` reads, telemetry ring-buffer operations, and product-scheduled pure file hashing on supported platforms. Never call Unity object properties, provider handles, `Dispose`, or cache mutation from a background task.
 
@@ -164,8 +167,11 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | `IAssetSceneLoader` | no | yes | yes |
 | `IAssetCatalogQuery` | no | yes | yes |
 | `IAssetStoragePreflight` | no | desktop volume only | desktop Host mode only |
+| `IUnityUnusedAssetCollector` | yes | no | no |
 | Provider maintenance/downloader | no | `IAddressablesCatalogMaintenance` | `IYooAssetPackageMaintenance` |
 | `IAssetRuntimeDiagnostics` | yes | yes | yes |
+
+`IAssetPackage` deliberately has no generic unload-unused operation because the providers cannot implement one meaning. Use `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)` for common framework-cache eviction, `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync` for the Resources process-wide Unity pass, and `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync` for YooAsset's package-local operation. Addressables has no equivalent beyond framework-cache trimming. This is the direct migration from the removed `IAssetPackage.UnloadUnusedAssetsAsync`; no compatibility shim is retained.
 
 Addressables and YooAsset cannot be active through these adapters at the same time. The module-level AssetBundle runtime guard establishes one framework-controlled provider authority until coexistence, shutdown ordering, and memory behavior are qualified as a complete product configuration.
 
@@ -352,7 +358,7 @@ _package = await AssetManager.InitializeDefaultPackageAsync(
     cancellationToken);
 ```
 
-Resources locations are relative to a `Resources/` folder and omit both the prefix and the file extension. `Assets/Game/Resources/UI/Icons/Inventory.png` loads as `UI/Icons/Inventory`. Releasing a wrapper does not guarantee immediate native reclamation; `UnloadUnusedAssetsAsync` clears idle wrappers and invokes Unity's hitch-prone global unused-resource pass.
+Resources locations are relative to a `Resources/` folder and omit both the prefix and the file extension. `Assets/Game/Resources/UI/Icons/Inventory.png` loads as `UI/Icons/Inventory`. Releasing a wrapper does not guarantee immediate native reclamation. At a measured phase boundary, cast the package to `IUnityUnusedAssetCollector` and await `CollectUnusedUnityAssetsAsync`; this clears idle framework ownership and invokes Unity's hitch-prone, process-wide unused-resource pass. Keep a framework lease alive for every asset that must remain owned.
 
 ### Load an icon with bounded ownership
 
@@ -482,7 +488,7 @@ Operational warnings, provider failures, cache-retention events, and Editor vali
 
 | Symptom | Likely cause | Resolution |
 | --- | --- | --- |
-| Package has no maintenance capability | Provider assembly not referenced | Check `package is IYooAssetPackageMaintenance` / `IAddressablesCatalogMaintenance`; Resources is loading-only |
+| Package has no provider-maintenance capability | Provider assembly not referenced or Resources selected | Check `package is IYooAssetPackageMaintenance` / `IAddressablesCatalogMaintenance`; Resources exposes the separate `IUnityUnusedAssetCollector` engine-global capability |
 | Storage capacity is `Unknown` | Platform cannot report reliable capacity | Stop unless an explicitly validated product policy supplies an equivalent decision |
 | Download scope unsupported | Wrong downloader factory | YooAsset: All/Tags/Locations with explicit recursion; Addressables: Tags or recursive Locations only |
 | Provider state may have changed after failure | Operation crossed the mutation boundary | Quarantine dependent content, preserve recovery evidence, require an explicit owner decision before retry |
@@ -499,8 +505,8 @@ Operational warnings, provider failures, cache-retention events, and Editor vali
 Minimum validation for a runtime change:
 
 1. Build `CycloneGames.AssetManagement.Runtime` and `CycloneGames.AssetManagement.Runtime.CacheRetention` from Unity-generated projects.
-2. Run all `CycloneGames.AssetManagement.Tests.Editor` EditMode tests and both `AssetCachePerformanceTests` harnesses.
-3. In Play Mode, exercise package initialize/load/cancel/dispose, repeated awaits of memoized tasks, provider-fault propagation, cross-package rejection, manual activation/unload, low-memory idle clearing, downloader prepare/start faults and cancellation, shutdown cleanup of leaked operations, and shutdown retry.
+2. Run all `CycloneGames.AssetManagement.Tests.Editor` EditMode tests, `CycloneGames.AssetManagement.Tests.PlayMode` PlayMode tests, and both `AssetCachePerformanceTests` harnesses.
+3. In Play Mode, exercise package initialize/load/cancel/dispose, Resources' deferred-destruction barrier, repeated awaits of memoized tasks, provider-fault propagation, owner-retirement cancellation with late provider success/failure and tail drain, cross-package rejection, manual activation/unload, low-memory idle clearing, downloader prepare/start faults and cancellation, shutdown cleanup of leaked operations, and shutdown retry.
 4. For each optional provider, install the exact locked dependency, compile the provider assembly, run provider-specific tests, and exercise a clean Player cache. Verify `PrepareAsync` performs no payload writes, totals become authoritative only after preparation, and disposal is idempotent.
 5. Run clean-clone CI and target Player builds for every claimed Windows, Linux, macOS, iOS, Android, WebGL, Dedicated Server, and approved console configuration. Repeat critical scenarios under Mono and IL2CPP, low storage, disk full, denied permissions, network loss, suspend/resume, and domain reload disabled.
 
@@ -512,6 +518,8 @@ An Editor or CLI assembly result does not establish Player, IL2CPP, long-session
   -testFilter CycloneGames.AssetManagement \
   -testResults <result-path> -quit
 ```
+
+Repeat with `-testPlatform PlayMode -assemblyNames CycloneGames.AssetManagement.Tests.PlayMode` for the deferred Unity object-destruction contract.
 
 ## Memory Limits and Bounded Maintenance
 

@@ -118,11 +118,6 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
                 return false;
             }
 
-            public UniTask UnloadUnusedAssetsAsync()
-            {
-                return UniTask.CompletedTask;
-            }
-
             public void SetCacheIdleMemoryBudget(long maxIdleBytes)
             {
             }

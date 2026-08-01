@@ -82,7 +82,7 @@ Tick, OnTick, OnUpdate, PreUpdate, PostUpdate,
 OnPreTick, OnPostTick
 ```
 
-Rules that depend on hot path detection should stay conservative. Prefer false negatives over broad false positives that make teams suppress the analyzer.
+Hot-path rules stay conservative: prefer false negatives over broad false positives that push teams to suppress the analyzer.
 
 ## Unified Logging Enforcement
 
@@ -91,15 +91,15 @@ Rules that depend on hot path detection should stay conservative. Prefer false n
 - `UnityEngine.Debug.Log*`, `UnityEngine.Debug.Assert*`, and `Debug.unityLogger` access.
 - `UnityEngine.MonoBehaviour.print`.
 - `System.Console.Write*` and access to `Console.Out` or `Console.Error`.
-- References to the concrete `CycloneGames.Logger.CLogger` backend outside Logger-owned assemblies.
+- References to the concrete `CycloneGames.Logging.LogPipeline` backend outside logging backend assemblies.
 
-The rule applies only to assemblies whose names start with `CycloneGames.`. The exact backend assemblies `CycloneGames.Logger`, `CycloneGames.Logger.Unity`, and `CycloneGames.Logger.Editor` are excluded. Assemblies or source paths explicitly identified as Tests, Tools, or CodeGen are also excluded because they are verification or host I/O boundaries. Runtime, Editor, Samples, and Benchmarks remain governed. Similar business names such as `CycloneGames.MemoryGovernance.Logger` or `CycloneGames.MemoryGovernance.Logger.Editor` are not Logger backends and remain in scope.
+The rule applies only to assemblies whose names start with `CycloneGames.`. The backend assemblies `CycloneGames.Logging.Pipeline`, `CycloneGames.Logging.Unity`, and `CycloneGames.Logging.Unity.Editor` are excluded, as are assemblies or source paths explicitly identified as Tests, Tools, or CodeGen — those sit at verification or host I/O boundaries. Runtime, Editor, Samples, and Benchmarks stay governed. `CycloneGames.Logging.Unity.Samples` may reference `LogPipeline`, but its direct Unity and Console output calls remain governed. Similar names such as `CycloneGames.MemoryGovernance.Logging.Pipeline` or `CycloneGames.MemoryGovernance.Logging.Pipeline.Editor` are not standard backend assemblies and remain in scope.
 
 In governed package code, `CG0049` owns direct logging diagnostics, so the hot-path-only `CG0043` rule does not report the same `Debug.Log*` invocation twice. `CG0043` remains active outside this scope.
 
-`CG0050` keeps channel construction in one discoverable boundary per producing assembly. A valid boundary is a top-level `internal static` type whose unique name ends with `Log`, stored at `Diagnostics/<TypeName>.cs`, and exposing the standard internal members `Category`, `Channel`, and `Create(ILogWriter logWriter)`. For example, `CycloneGames.Audio.Runtime` owns `Diagnostics/AudioRuntimeLog.cs`; implementation files consume `AudioRuntimeLog.Channel` or `AudioRuntimeLog.Create(logWriter)` instead of calling `LogChannel.Create` directly. Unique facade names avoid type ambiguity when assemblies expose internals to tests or integration assemblies.
+`CG0050` keeps channel construction in one discoverable boundary per producing assembly: a top-level `internal static` type whose unique name ends with `Log`, stored at `Diagnostics/<TypeName>.cs`, exposing the standard internal members `Category`, `Channel`, and `Create(ILogWriter logWriter)`. For example, `CycloneGames.Audio.Runtime` owns `Diagnostics/AudioRuntimeLog.cs`; implementation files consume `AudioRuntimeLog.Channel` or `AudioRuntimeLog.Create(logWriter)` instead of calling `LogChannel.Create` directly. Unique facade names avoid type ambiguity when assemblies expose internals to tests or integration assemblies.
 
-Both rules intentionally have no CodeFix. A safe rewrite requires module category, exception/context handling, deferred formatting, and logging ownership decisions that cannot be inferred from one invocation. `CG0050` verifies the construction boundary, file convention, and standard facade member signatures. Package tests and API review remain responsible for category values and explicit null semantics.
+Neither rule ships a CodeFix. A safe rewrite depends on module category, exception/context handling, deferred formatting, and logging ownership decisions that a single invocation cannot reveal. `CG0050` verifies the construction boundary, file convention, and standard facade member signatures; package tests and API review own category values and explicit null semantics.
 
 ## Suppression
 
@@ -124,7 +124,7 @@ var config = Resources.Load<GameConfig>("Config");
 Before a rule is enabled by default, it should have:
 
 - A semantic check where syntax alone would be fragile.
-- Runtime, Editor, Samples, and Benchmarks governed, with explicit Tests, Tools, and CodeGen boundary behavior.
+- Runtime, Editor, Samples, and Benchmarks governed, including the narrow pipeline-composition exception for `CycloneGames.Logging.Unity.Samples` while raw output remains prohibited.
 - Positive and negative analyzer test cases.
 - A low false-positive profile for existing UnityStarter modules.
 - A CodeFix only when the rewrite is safe across common Unity code patterns.

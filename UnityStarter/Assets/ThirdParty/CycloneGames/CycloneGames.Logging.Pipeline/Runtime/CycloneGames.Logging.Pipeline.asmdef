@@ -1,0 +1,16 @@
+{
+    "name": "CycloneGames.Logging.Pipeline",
+    "rootNamespace": "CycloneGames.Logging",
+    "references": [
+        "CycloneGames.Logging"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": true
+}

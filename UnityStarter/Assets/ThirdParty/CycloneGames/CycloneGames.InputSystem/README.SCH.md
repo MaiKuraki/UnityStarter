@@ -20,7 +20,7 @@ CycloneGames.InputSystem 是基于 Unity Input System 的 YAML 驱动输入层�
 
 本模块将 authoring（在 Input System Editor 中编辑 YAML 配置）与 runtime dispatch（`InputManager` 提交不可变快照）以及 per-player delivery（`IInputPlayer` 持有 `InputUser`、action asset、active context 与 R3 stream）分离。在 YAML 中定义 context、action、binding、composite、interaction、processor 与 control scheme；manager 提交前根据当前 Unity Input System registry 验证；每个 joined player 获得独立构建的 action asset。
 
-适用于需要可审阅的 YAML authoring、有界验证、per-player `InputUser` 与设备所有权（本地多人）、优先级 context（Gameplay、Vehicle、Menu、Modal）、事件驱动和轮询读取、长按和 chord、具有版本化模块自有 JSON profile 的运行时 rebind、以及显式配置 source 和 store 的产品。
+本模块面向可审阅的 YAML authoring、有界验证、per-player `InputUser` 与设备所有权（本地多人）、优先级 context（Gameplay、Vehicle、Menu、Modal）、事件驱动和轮询读取、长按和 chord、具有版本化模块自有 JSON profile 的运行时 rebind、以及显式配置 source 和 store。
 
 ### 核心特性
 
@@ -49,7 +49,7 @@ CycloneGames.InputSystem 是基于 Unity Input System 的 YAML 驱动输入层�
 
 可选 assembly 设置 `autoReferenced: false`。仅在用到对应功能时添加显式 asmdef 引用。UGUI 和 VContainer 使用 package 派生的 `versionDefines` 和 `defineConstraints` 激活；缺少对应 package 时排除该 assembly。AssetManagement 支持物理上位于同级 `CycloneGames.InputSystem.AssetManagement` package 中。
 
-InputSystem 通过以 `CycloneGames.InputSystem` 为根的稳定 `LogChannel` category 输出诊断。本包不会初始化、替换、flush 或关闭进程级 logging writer。`com.cyclone-games.logging` 提供安全的 `NullLogWriter` 默认实现；应用 composition root 可以安装 `CycloneGames.Logger` 或任意其他 `ILogWriter` backend。
+InputSystem 通过以 `CycloneGames.InputSystem` 为根的稳定 `LogChannel` category 输出诊断。logging writer 生命周期由 host 负责。`com.cyclone-games.logging` 提供安全的 `NullLogWriter` 默认实现；应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供任意其他 `ILogWriter` backend。
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
@@ -76,7 +76,7 @@ flowchart LR
 
 ## 快速开始
 
-打开 `Tools > CycloneGames > Input System Editor` 生成或编辑配置。模块不要求 `Assets/StreamingAssets` 下有项目级默认文件。产品 composition root 决定配置来自 serialized `TextAsset`、StreamingAssets、asset package、有界远程 source、user store 还是显式 in-memory content。
+打开 `Tools > CycloneGames > Input System Editor` 生成或编辑配置。`Assets/StreamingAssets` 下不需要项目级默认文件。产品 composition root 决定配置来自 serialized `TextAsset`、StreamingAssets、asset package、有界远程 source、user store 还是显式 in-memory content。
 
 最简单的 scene 级集成使用 serialized `TextAsset` 直接提供已验证的 YAML：
 
@@ -417,7 +417,7 @@ if (!load.IsBootstrapComplete)
 }
 ```
 
-`Disabled`：不执行读取。`Optional`：user 和 default content 都缺失时返回 `NotConfigured`。`Required`：无可用配置时报告 `DefaultConfigurationUnavailable`。User file 有效时直接使用。缺失时使用已验证的 default 并复制到 user store。存在但无效时保留并暂用有效 default。主文件缺失但 `.bak` 可读时 store 报告 backup recovery。只有在 schema validation 和 Input System preflight 都成功后配置才会被 commit。
+`Disabled`：不执行读取。`Optional`：user 和 default content 都缺失时返回 `NotConfigured`；`Required`：无可用配置时报告 `DefaultConfigurationUnavailable`。User file 有效时直接使用；缺失时使用已验证的 default 并复制到 user store；存在但无效时保留并暂用有效 default。主文件缺失但 `.bak` 可读时 store 报告 backup recovery。只有在 schema validation 和 Input System preflight 都成功后配置才会被 commit。
 
 `InputManager` 只持有经过验证的 runtime state，不保留 URI、source 或 store。Composition root 持有配置持久化所有权，并通过显式 `IInputConfigurationSource` 与 `IInputConfigurationStore` 实例执行后续 load、save、reset 或 delete。
 
@@ -601,7 +601,7 @@ if (loadError != null)
 - Subscription owner dispose 未通过 active `InputContext` 管理的 direct R3 subscription。
 - Storage owner 选择 root、key、retention、encryption、backup 和 format-update policy。
 
-`InputManager.GetMemoryStats()` 与 `InputPlayer.GetMemoryStats()` 提供 main-thread、allocation-free 的 count snapshot，recorder count/capacity/drop property 也是标量读取。Caller-owned adapter 可以使用这些 API；基础模块不注册全局 telemetry 或 pressure callback。
+`InputManager.GetMemoryStats()` 与 `InputPlayer.GetMemoryStats()` 提供 main-thread、allocation-free 的 count snapshot，recorder count/capacity/drop property 也是标量读取。Caller-owned adapter 可以使用这些 API；全局 telemetry 与 pressure callback 由 host 负责。
 
 可配置的 `InputConfigurationLimits` 还具有公开的绝对上限，避免调用方用 `int.MaxValue` allocation/iteration budget 替代实际产品预算。重复 capture scope 另受 `InputPlayer.MaximumContextCaptureDepth`（`1024`）限制；泄漏的 scope 会 fail closed，而不是让 capture stack 无限增长。
 
@@ -634,7 +634,7 @@ Input control path 和 device layout 因平台和 package version 而异。使�
 | Editor-local settings | Input System Editor | `UserSettings/CycloneGames.InputSystem.EditorSettings.asset` | Unity serialized Editor settings | 关闭窗口并删除文件恢复默认值。 |
 | Generated constants | Project/code owner | `Assets/.../InputActions.cs` | Generated C# | 从 YAML 重新生成；不手动编辑。 |
 
-模块对这些记录不使用 `PlayerPrefs`、`EditorPrefs` 或 `SessionState`。
+这些记录从不使用 `PlayerPrefs`、`EditorPrefs` 或 `SessionState`。
 
 ## 故障排除
 

@@ -28,14 +28,12 @@ Gameplay 行为具备以下一项或多项需求时，可以使用本模块：
 - 由 Instant、Duration、Infinite 或 Periodic Effect 修改的数值 Attribute；
 - 由 Tag 驱动的眩晕、免疫、Cooldown、伤害类型或 Ability 分类等状态；
 - Stacking、Overflow、Dispel、Ability 授予和 Effect Execution Calculation；
-- 具有显式 Commit 与 Rollback 的 Local Prediction Bookkeeping；不提供 Remote-prediction Transport API；
+- 具有显式 Commit 与 Rollback 的 Local Prediction Bookkeeping；
 - 与权威 Gameplay 状态隔离的表现层 GameplayCue；
 - 具有目标数量上限和 Local Validation 的可复用目标选择任务；
 - 用于 Headless 模拟、校验或测试的 Unity-free 状态表示。
 
-本模块不提供特定游戏的战斗模型、输入系统、网络 Transport、账号系统、存档格式、匹配层、动画图或项目级 Service Container。这些职责通过 Composition Code 和窄 Adapter 接入。
-
-通用 API 不假设游戏品类、相机模型、2D/3D 物理、实时/回合制调度、Peer-to-Peer/Server Authority 或固定的实体规模。基于物理的 TargetActor 与视觉 Cue 属于 Unity 表现层；权威规则属于 Attribute、Effect、Ability 和项目 Domain Service。
+战斗模型、输入系统、网络 Transport、账号、存档、匹配、动画与项目级 Service Container 属于各自模块；通过 Composition Code 和窄 Adapter 接入。通用 API 不假设游戏品类、相机模型、2D/3D 物理、实时/回合制调度、Peer-to-Peer/Server Authority 或固定的实体规模。
 
 ## 架构
 
@@ -105,9 +103,9 @@ flowchart LR
 
 ### 日志契约与 Backend 集成
 
-Runtime、Editor、Samples、AssetManagement Integration 与聚焦日志测试统一使用 `CycloneGames.Logging.LogChannel`，稳定 Category 为 `CycloneGames.GameplayAbilities`。每个产生诊断的 assembly 都在 `Diagnostics/` 下拥有名称唯一的门面：`GameplayAbilitiesLog`、`GameplayAbilitiesEditorLog`、`GameplayAbilitiesAssetManagementLog`、`GameplayAbilitiesSampleLog` 或 `GameplayAbilitiesSampleEditorLog`。所有门面都提供标准的 `Category`、`Channel` 与 `Create(ILogWriter logWriter)` 成员；实现文件的 ambient static 字段命名为 `Log`，显式注入 instance 字段命名为 `_log`。除这些边界外，Gameplay 代码不直接调用 `LogChannel.Create`、`UnityEngine.Debug`、`CLogger` 或其他 Backend API。异常使用与普通消息相同的严重级别方法，例如 `Log.Warning(exception, message)` 或 `Log.Error(exception, message)`，使 Backend 可以分别取得异常对象与上下文消息。
+Runtime、Editor、Samples、AssetManagement Integration 与聚焦日志测试统一使用 `CycloneGames.Logging.LogChannel`，稳定 Category 为 `CycloneGames.GameplayAbilities`。每个产生诊断的 assembly 都在 `Diagnostics/` 下拥有名称唯一的门面：`GameplayAbilitiesLog`、`GameplayAbilitiesEditorLog`、`GameplayAbilitiesAssetManagementLog`、`GameplayAbilitiesSampleLog` 或 `GameplayAbilitiesSampleEditorLog`。所有门面都提供标准的 `Category`、`Channel` 与 `Create(ILogWriter logWriter)` 成员；实现文件的 ambient static 字段命名为 `Log`，显式注入 instance 字段命名为 `_log`。除这些边界外，Gameplay 代码不直接调用 `LogChannel.Create`、平台原生日志 API 或具体 pipeline API。异常使用与普通消息相同的严重级别方法，例如 `Log.Warning(exception, message)` 或 `Log.Error(exception, message)`，使 Backend 可以分别取得异常对象与上下文消息。
 
-`LogRuntime` 初始使用 `NullLogWriter.Instance`。Host 未安装 Backend 时，所有 Channel 调用都会安全 no-op；GameplayAbilities 的初始化与行为不受影响，也不需要任何 Scripting Define。产品可以在 Composition Root 安装任意 `ILogWriter`。如果选择独立的 `com.cyclone-games.logger` 包，其 Bootstrap 可以把 `CLogger` 安装为该 Writer，但 GameplayAbilities 不再对具体 Backend 建立 Assembly 或 Package 依赖。
+`LogRuntime` 初始使用 `NullLogWriter.Instance`。Host 未安装 Backend 时，所有 Channel 调用都会安全 no-op；GameplayAbilities 的初始化与行为不受影响，也不需要任何 Scripting Define。产品可以在 Composition Root 安装任意 `ILogWriter`。可选标准 backend 被拆分为提供 `LogPipeline` 的 `com.cyclone-games.logging.pipeline`，以及负责 Unity bootstrap、settings 与 Console integration 的 `com.cyclone-games.logging.unity`。GameplayAbilities 不对这两个 backend package 建立 assembly 或 package 依赖。
 
 GameplayAbilities 不再公开包专用 public logging facade。外部生产 assembly 应使用自身的 assembly-local facade，并缓存其 Channel：
 
@@ -118,7 +116,7 @@ Log.Warning("Ability activation was rejected.");
 Log.Error(exception, "Ability activation failed.");
 ```
 
-所有外部调用点迁移后，Consumer 可以移除对 Logger Backend 的直接依赖。移除 Backend 不需要修改 GameplayAbilities asmdef；日志会自然回退到 no-op Writer。
+Consumer 可以移除具体 logging backend，而不需要修改 GameplayAbilities asmdef；日志会自然回退到 no-op Writer。
 
 ## 运行时模型
 

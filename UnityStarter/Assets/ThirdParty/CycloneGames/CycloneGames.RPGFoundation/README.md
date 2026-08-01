@@ -54,7 +54,7 @@ flowchart LR
     Networking --> Core
 ```
 
-Core assemblies are intended to be usable from Unity, EditMode tests, CLI tools, headless servers, and future non-Unity adapters. Runtime assemblies are the Unity boundary. Integration assemblies depend on the host module and the optional dependency, but host module Core assemblies do not depend on integrations.
+Core assemblies work in Unity, EditMode tests, CLI tools, headless servers, and future non-Unity adapters. Runtime assemblies are the Unity boundary. Integration assemblies depend on the host module and the optional dependency, but host module Core assemblies do not depend on integrations.
 
 ## Module Documentation
 
@@ -154,7 +154,7 @@ This package is stored under `Assets/ThirdParty/CycloneGames/`. Unity does not a
 
 ## Logging
 
-RPGFoundation modules emit diagnostics through stable `LogChannel` categories under `CycloneGames.RPGFoundation.*` and depend only on the `com.cyclone-games.logging` contract. Modules do not initialize, replace, flush, or shut down the process logging writer. Without an installed backend, the contract's `NullLogWriter` safely discards messages; the application composition root may install `CycloneGames.Logger` or any other `ILogWriter` implementation.
+RPGFoundation modules emit diagnostics through stable `LogChannel` categories under `CycloneGames.RPGFoundation.*` and depend only on the `com.cyclone-games.logging` contract. Modules do not initialize, replace, flush, or shut down the process logging writer. Without an installed backend, the contract's `NullLogWriter` safely discards messages; the application composition root may install `com.cyclone-games.logging.pipeline`, optionally add `com.cyclone-games.logging.unity`, or provide any other `ILogWriter` implementation.
 
 Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 

@@ -187,7 +187,7 @@ namespace CycloneGames.Analyzers.Tests
 
         [TestCase("Product.Runtime", RuntimePath)]
         [TestCase("CycloneGames.Feature.Tests.Editor", RuntimePath)]
-        [TestCase("CycloneGames.Logger", RuntimePath)]
+        [TestCase("CycloneGames.Logging.Pipeline", RuntimePath)]
         public async Task DoesNotReportOutsideGovernedPackageScope(
             string assemblyName,
             string sourcePath)

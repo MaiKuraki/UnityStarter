@@ -52,8 +52,8 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly object _sceneOwnerToken = new object();
         private readonly Action<long> _onInstantiateDisposed;
         private readonly Action<AddressableDownloader> _onDownloaderDisposed;
-        private UniTaskCompletionSource _providerOperationTailsDrained;
-        private int _pendingProviderOperationTailCount;
+        private readonly AssetOperationTailTracker _operationTails =
+            new AssetOperationTailTracker(deferCompletionOnePlayerLoop: true);
         private int _pendingCatalogQueryCount;
         private int _registeredDownloaderScopeValueCount;
         private bool _initialized;
@@ -131,7 +131,7 @@ namespace CycloneGames.AssetManagement.Runtime
             foreach (KeyValuePair<long, AddressableSceneHandle> pair in _sceneHandles)
             {
                 AddressableSceneHandle handle = pair.Value;
-                if (!handle.IsProviderHandleReleased && !handle.MatchesScene(scene))
+                if (!handle.MatchesScene(scene))
                 {
                     continue;
                 }
@@ -164,7 +164,6 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             AssetRuntimeGuard.EnsureMainThread();
             Interlocked.Exchange(ref _shutdownRequested, 1);
-            UnsubscribeFromSceneUnloads();
             if (_maintenanceMutationInProgress)
             {
                 throw new InvalidOperationException(
@@ -182,8 +181,16 @@ namespace CycloneGames.AssetManagement.Runtime
             }
 
             _destroying = true;
-            _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
-            return _destroyTask;
+            try
+            {
+                _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
+                return _destroyTask;
+            }
+            catch
+            {
+                _destroying = false;
+                throw;
+            }
         }
 
         private async UniTask DestroyCoreAsync()
@@ -286,17 +293,8 @@ namespace CycloneGames.AssetManagement.Runtime
                     failures.Add(ex);
                 }
 
-                // A pending Addressables operation owns an internal running reference. Releasing the wrapper's
-                // external handle does not abort it. Wait through terminal publication and one player-loop yield
-                // before the module is allowed to release the process-wide AssetBundle ownership guard.
-                await WaitForProviderOperationTailsAsync();
-
-                // Scene and downloader wrappers have their own drain paths and are not duplicated in the generic
-                // tail registry. Addressables can resume those awaiters from its completion callback before the
-                // callback stack releases the provider's internal running reference. This shutdown-only barrier
-                // lets every terminal callback unwind before process-global AssetBundle ownership is released.
-                await UniTask.Yield();
-
+                // A cleanup failure leaves this package owned and retryable. Returning the failure before the
+                // generic drain also avoids waiting forever on an unresolved scene activation or unload tail.
                 if (failures != null)
                 {
                     throw new AggregateException(
@@ -304,6 +302,20 @@ namespace CycloneGames.AssetManagement.Runtime
                         failures);
                 }
 
+                // A pending Addressables operation owns an internal running reference. Releasing the wrapper's
+                // external handle does not abort it. Wait through terminal publication and one player-loop yield
+                // before the module is allowed to release the process-wide AssetBundle ownership guard.
+                await WaitForProviderOperationTailsAsync();
+
+                // Downloader wrappers have their own drain path. Addressables can resume those awaiters from its
+                // completion callback before the callback stack releases the provider's internal running reference.
+                // This shutdown-only barrier lets every terminal callback unwind before process-global AssetBundle
+                // ownership is released.
+                await UniTask.Yield();
+
+                // Keep observing Single-mode and external scene unloads until every owned cleanup step has
+                // succeeded. A failed shutdown remains retryable and still needs provider unload callbacks to
+                // converge scene wrappers without releasing an Addressables scene handle twice.
                 _initialized = false;
                 UnsubscribeFromSceneUnloads();
                 Interlocked.Exchange(ref _destroyed, 1);
@@ -579,8 +591,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 cacheKey,
                 location,
                 raw,
-                _cacheService.OnHandleReleased);
-            TrackProviderOperationTail(backend.Task);
+                _cacheService.OnHandleReleased,
+                _operationTails);
             if (HandleTracker.Enabled)
             {
                 HandleTracker.Register(id, _packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
@@ -627,8 +639,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 id,
                 cacheKey,
                 raw,
-                _cacheService.OnHandleReleased);
-            TrackProviderOperationTail(backend.Task);
+                _cacheService.OnHandleReleased,
+                _operationTails);
             if (HandleTracker.Enabled)
             {
                 HandleTracker.Register(id, _packageName, $"AllAssets {typeof(TAsset).Name} : {location}");
@@ -680,8 +692,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 id,
                 operation,
                 setActive,
-                _onInstantiateDisposed);
-            TrackProviderOperationTail(result.Task);
+                _onInstantiateDisposed,
+                _operationTails);
             _instantiateHandles.Add(id, result);
             if (HandleTracker.Enabled)
             {
@@ -741,6 +753,7 @@ namespace CycloneGames.AssetManagement.Runtime
             ThrowIfDestroyed();
             ValidateLocation(sceneLocation);
             ValidateSceneLoadParameters(loadParameters);
+            EnsureProviderOperationTailCapacity();
             AsyncOperationHandle<UnityEngine.ResourceManagement.ResourceProviders.SceneInstance> operation =
                 Addressables.LoadSceneAsync(sceneLocation, loadParameters, activateOnLoad, priority);
             long id = AssetRuntimeGuard.NextHandleId();
@@ -749,7 +762,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 _sceneOwnerToken,
                 sceneLocation,
                 operation,
-                activateOnLoad);
+                activateOnLoad,
+                _operationTails);
             _sceneHandles.Add(id, result);
             if (HandleTracker.Enabled)
             {
@@ -801,14 +815,6 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             await sceneHandle.UnloadAsync(cancellationToken);
             _sceneHandles.Remove(sceneHandle.DebugId);
-        }
-
-        public UniTask UnloadUnusedAssetsAsync()
-        {
-            AssetRuntimeGuard.EnsureMainThread();
-            ThrowIfDestroyed();
-            _cacheService.ClearAll();
-            return UniTask.CompletedTask;
         }
 
         public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object
@@ -1231,7 +1237,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void EnsureProviderOperationTailCapacity()
         {
-            if (_pendingProviderOperationTailCount >= MAX_TRACKED_PROVIDER_OPERATION_TAILS)
+            if (_operationTails.PendingCount >= MAX_TRACKED_PROVIDER_OPERATION_TAILS)
             {
                 throw new InvalidOperationException(
                     $"Addressables package '{_packageName}' reached the limit of " +
@@ -1273,12 +1279,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void TrackProviderOperationTail(UniTask providerTask)
         {
-            if (_pendingProviderOperationTailCount == 0)
-            {
-                _providerOperationTailsDrained = null;
-            }
-
-            _pendingProviderOperationTailCount++;
+            _operationTails.RegisterTail();
             CompleteProviderOperationTailAsync(providerTask).Forget();
         }
 
@@ -1295,33 +1296,14 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             finally
             {
-                if (!PlayerLoopHelper.IsMainThread)
-                {
-                    await UniTask.SwitchToMainThread();
-                }
-
-                // Addressables 2.11.1 decrements its internal running reference after completion callbacks return.
-                // Yield once so the provider cleanup stack can unwind before declaring the tail drained. This
-                // bookkeeping must also run when a fatal provider exception propagates out of this observer.
-                await UniTask.Yield();
-                _pendingProviderOperationTailCount--;
-                if (_pendingProviderOperationTailCount == 0)
-                {
-                    _providerOperationTailsDrained?.TrySetResult();
-                }
+                // The package tracker owns the main-thread switch and Addressables callback-unwind yield.
+                _operationTails.CompleteTail();
             }
         }
 
         private UniTask WaitForProviderOperationTailsAsync()
         {
-            AssetRuntimeGuard.EnsureMainThread();
-            if (_pendingProviderOperationTailCount == 0)
-            {
-                return UniTask.CompletedTask;
-            }
-
-            _providerOperationTailsDrained ??= new UniTaskCompletionSource();
-            return _providerOperationTailsDrained.Task;
+            return _operationTails.WaitForAllAsync();
         }
 
         private static async UniTask WaitWithCallerCancellationOnMainThreadAsync(

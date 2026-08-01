@@ -45,7 +45,7 @@ CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag
 
 Core 会自动引用。Editor 与 Integration assembly 使用 `autoReferenced: false`；消费者 asmdef 必须引用实际使用的每个 assembly。Luban 和 MessagePack Integration 还要求对应 package 满足其 asmdef 声明的版本条件。Asset-style AssetManagement 模块不会生成 DataTable Integration 所需的 UPM `versionDefines` capability，因此该 Integration 保持不参与编译；只添加 asmdef reference 不能启用它。
 
-Core 自己持有 `IDataTableDiagnostics`/`NullDataTableDiagnostics` 契约、`DataTableDiagnosticCategories.Root` 和进程级 `DataTableDiagnostics` 替换点，不引用 `ILogWriter`、`LogChannel` 或 Unity。`DataTableLoggingDiagnostics` 是接入共享管线的可选 adapter。非 Core 的日志生产 assembly 继续把 channel 构造收敛到 `DataTableEditorLog`、`DataTableAssetManagementLog` 或 `DataTableMessagePackLog`。`DataTableCoreDiagnostics` 是 Core 唯一的故障隔离边界；普通 sink 异常不能改变业务控制流，而 `OutOfMemoryException` 会有意继续传播。
+Core 自己持有 `IDataTableDiagnostics`/`NullDataTableDiagnostics` 契约、`DataTableDiagnosticCategories.Root` 和进程级 `DataTableDiagnostics` 替换点，不引用 `ILogWriter`、`LogChannel` 或 Unity。`DataTableLogWriterAdapter` 是接入共享管线的可选 adapter。非 Core 的日志生产 assembly 继续把 channel 构造收敛到 `DataTableEditorLog`、`DataTableAssetManagementLog` 或 `DataTableMessagePackLog`。`DataTableCoreDiagnostics` 是 Core 唯一的故障隔离边界；普通 sink 异常不能改变业务控制流，而 `OutOfMemoryException` 会有意继续传播。
 
 这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.data-table` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
 
@@ -637,7 +637,7 @@ Core 不写文件，也不使用 `EditorPrefs` 或 `PlayerPrefs`。
 | `DataTableLubanSettings.asset` | 可见的 Unity 项目配置；保留一个权威资产。 |
 | Runtime byte cache | 由 Runtime 内容 Scope 持有，在 reader 退役后 Dispose。 |
 
-Core diagnostics 使用 `IDataTableDiagnostics` 和 `DataTableDiagnosticCategories.Root`。`DataTableDiagnosticLevel` 采用稳定的共享形状：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`，数值与 `LogSeverity` 一致；`None` 和未知值永远不会输出。默认 `NullDataTableDiagnostics` 保持静默。纯 C# host 可以通过 `DataTableDiagnostics.TryInstall`/`Replace` 安装自己的 sink。owner 使用 `TryReplace(expected, replacement)` 完成原子 handoff，或使用 `TryReset(expected)` 安全释放，因此不会清除另一个 composition root 后续安装的替代项。使用共享管线的 host 则从可选 integration assembly 安装 `DataTableLoggingDiagnostics.Ambient`。adapter 会隔离普通 `ILogWriter` 异常并保留 out-of-memory 的传播行为。独立的 `Tools~/CodeGen` 可执行程序继续使用 `System.Console` 作为面向用户的 CLI 输出协议，这不属于 library diagnostics。
+Core diagnostics 使用 `IDataTableDiagnostics` 和 `DataTableDiagnosticCategories.Root`。`DataTableDiagnosticLevel` 采用稳定的共享形状：`Trace`、`Debug`、`Info`、`Warning`、`Error`、`Fatal`、`None`，数值与 `LogSeverity` 一致；`None` 和未知值永远不会输出。默认 `NullDataTableDiagnostics` 保持静默。纯 C# host 可以通过 `DataTableDiagnostics.TryInstall`/`Replace` 安装自己的 sink。owner 使用 `TryReplace(expected, replacement)` 完成原子 handoff，或使用 `TryReset(expected)` 安全释放，因此不会清除另一个 composition root 后续安装的替代项。使用共享管线的 host 则从可选 integration assembly 安装 `DataTableLogWriterAdapter.Ambient`。adapter 会隔离普通 `ILogWriter` 异常并保留 out-of-memory 的传播行为。独立的 `Tools~/CodeGen` 可执行程序继续使用 `System.Console` 作为面向用户的 CLI 输出协议，这不属于 library diagnostics。
 
 `DataTableRegistry.Publish` 提交后发生的普通 diagnostic sink failure 属于 best-effort，不会回滚，也不会让已完成的 publish 表现为失败。诊断输出应包含 table identity、generation、stage、limit 和 failure category，但不能记录 secret 或完整恶意 payload。
 
@@ -707,7 +707,7 @@ Core diagnostics 使用 `IDataTableDiagnostics` 和 `DataTableDiagnosticCategori
 | `DataTableLocationResolver` | 构造可移植相对 Location。 |
 | `DataTableSetScope` | 管理生成 root、Catalog 和可选 backing owner 生命周期。 |
 | `IDataTableDiagnostics` / `DataTableDiagnostics` | Core 本地诊断契约与可替换进程 sink。 |
-| `DataTableLoggingDiagnostics` | 接入 `CycloneGames.Logging` 的可选 adapter。 |
+| `DataTableLogWriterAdapter` | 接入 `CycloneGames.Logging` 的可选 adapter。 |
 | `LubanDataTableSetFactory` | 创建有界且私有持有的 Luban buffer。 |
 | `MessagePackConfigProvider` | 有界 MessagePack row array 解码和 Table 构造。 |
 | `DataTableLubanSettings` | 可见的 Unity Editor 生成设置。 |

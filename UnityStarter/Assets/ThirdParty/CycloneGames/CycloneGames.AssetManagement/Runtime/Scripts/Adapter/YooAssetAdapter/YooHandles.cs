@@ -1,6 +1,7 @@
 #if CYCLONEGAMES_HAS_YOOASSET
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 
 using UnityEngine;
@@ -60,10 +61,10 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly long _id;
         long ITrackedAssetHandle.DiagnosticHandleId => _id;
         private readonly Cache.AssetCacheKey _cacheKey;
-        private readonly UniTask _task;
+        private readonly AssetOperationCompletion _completion;
         private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
         private int _refCount;
-        private int _disposed;
+        private int _releaseState;
 
         internal AssetHandle Raw { get; private set; }
         internal object Owner { get; private set; }
@@ -73,15 +74,17 @@ namespace CycloneGames.AssetManagement.Runtime
             object owner,
             Cache.AssetCacheKey cacheKey,
             AssetHandle raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache)
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails)
         {
             _id = id;
             Owner = owner;
             _cacheKey = cacheKey;
             Raw = raw;
-            _task = AssetOperationBroadcast.Create(YooOperationTask.CompleteAsync(
+            _completion = AssetOperationCompletion.Start(YooOperationTask.CompleteAsync(
                 raw,
-                $"YooAsset failed to load an asset of type '{typeof(TAsset).Name}'."));
+                $"YooAsset failed to load an asset of type '{typeof(TAsset).Name}'."),
+                operationTails);
             _onReleaseToCache = onReleaseToCache;
             _refCount = 1;
         }
@@ -91,13 +94,14 @@ namespace CycloneGames.AssetManagement.Runtime
             object owner,
             Cache.AssetCacheKey cacheKey,
             AssetHandle raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache) =>
-            new YooAssetHandle<TAsset>(id, owner, cacheKey, raw, onReleaseToCache);
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails) =>
+            new YooAssetHandle<TAsset>(id, owner, cacheKey, raw, onReleaseToCache, operationTails);
 
-        public bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public float Progress => Raw?.Progress ?? 0f;
         public string Error => Raw?.Error ?? string.Empty;
-        public UniTask Task => _task;
+        public UniTask Task => _completion.Task;
         public TAsset Asset => Raw?.GetAssetObject<TAsset>();
         public UnityEngine.Object AssetObject => Raw?.AssetObject;
         public int RefCount => Volatile.Read(ref _refCount);
@@ -110,7 +114,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Retain()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 Log.Error("[YooAssetHandle] Retain called on a disposed handle.");
                 return;
@@ -121,7 +125,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -156,20 +160,31 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!ProviderReleaseStateMachine.TryBeginRelease(ref _releaseState))
             {
                 return;
             }
 
-            Raw?.Dispose();
+            _completion.TryCancelByOwner();
+            try
+            {
+                Raw?.Dispose();
+            }
+            catch
+            {
+                ProviderReleaseStateMachine.MarkReleaseFailed(ref _releaseState);
+                throw;
+            }
+
             Raw = null;
             Owner = null;
             _onReleaseToCache = null;
+            ProviderReleaseStateMachine.MarkReleased(ref _releaseState);
             HandleTracker.Unregister(_id);
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
-        bool IAssetBackendLifetime.IsDisposed => Volatile.Read(ref _disposed) != 0;
+        bool IAssetBackendLifetime.IsDisposed => ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState);
         long IAssetMemoryFootprint.EstimateRuntimeBytes() => Cache.AssetMemoryEstimator.Estimate(AssetObject);
     }
 
@@ -208,24 +223,26 @@ namespace CycloneGames.AssetManagement.Runtime
         long ITrackedAssetHandle.DiagnosticHandleId => _id;
         private readonly Cache.AssetCacheKey _cacheKey;
         private readonly ReadOnlyListAdapter _assets = new ReadOnlyListAdapter();
-        private readonly UniTask _task;
+        private readonly AssetOperationCompletion _completion;
         private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
         private AllAssetsHandle _raw;
         private int _refCount;
-        private int _disposed;
+        private int _releaseState;
 
         private YooAllAssetsHandle(
             long id,
             Cache.AssetCacheKey cacheKey,
             AllAssetsHandle raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache)
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails)
         {
             _id = id;
             _cacheKey = cacheKey;
             _raw = raw;
-            _task = AssetOperationBroadcast.Create(YooOperationTask.CompleteAsync(
+            _completion = AssetOperationCompletion.Start(YooOperationTask.CompleteAsync(
                 raw,
-                "YooAsset failed to load the requested asset collection."));
+                "YooAsset failed to load the requested asset collection."),
+                operationTails);
             _onReleaseToCache = onReleaseToCache;
             _refCount = 1;
         }
@@ -234,13 +251,14 @@ namespace CycloneGames.AssetManagement.Runtime
             long id,
             Cache.AssetCacheKey cacheKey,
             AllAssetsHandle raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache) =>
-            new YooAllAssetsHandle<TAsset>(id, cacheKey, raw, onReleaseToCache);
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails) =>
+            new YooAllAssetsHandle<TAsset>(id, cacheKey, raw, onReleaseToCache, operationTails);
 
-        public bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public float Progress => _raw?.Progress ?? 0f;
         public string Error => _raw?.Error ?? string.Empty;
-        public UniTask Task => _task;
+        public UniTask Task => _completion.Task;
         public int RefCount => Volatile.Read(ref _refCount);
 
         public IReadOnlyList<TAsset> Assets
@@ -260,7 +278,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Retain()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 Log.Error("[YooAllAssetsHandle] Retain called on a disposed handle.");
                 return;
@@ -271,7 +289,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -306,20 +324,31 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!ProviderReleaseStateMachine.TryBeginRelease(ref _releaseState))
             {
                 return;
             }
 
-            _raw?.Dispose();
+            _completion.TryCancelByOwner();
+            try
+            {
+                _raw?.Dispose();
+            }
+            catch
+            {
+                ProviderReleaseStateMachine.MarkReleaseFailed(ref _releaseState);
+                throw;
+            }
+
             _raw = null;
             _assets.Clear();
             _onReleaseToCache = null;
+            ProviderReleaseStateMachine.MarkReleased(ref _releaseState);
             HandleTracker.Unregister(_id);
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
-        bool IAssetBackendLifetime.IsDisposed => Volatile.Read(ref _disposed) != 0;
+        bool IAssetBackendLifetime.IsDisposed => ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState);
 
         long IAssetMemoryFootprint.EstimateRuntimeBytes()
         {
@@ -352,7 +381,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly long _id;
         long ITrackedAssetHandle.DiagnosticHandleId => _id;
         private readonly Cache.AssetCacheKey _cacheKey;
-        private readonly UniTask _task;
+        private readonly AssetOperationCompletion _completion;
         private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
         private AssetHandle _raw;
         private byte[] _bytesSnapshot;
@@ -360,18 +389,19 @@ namespace CycloneGames.AssetManagement.Runtime
         private string _error = string.Empty;
         private float _progress;
         private int _refCount;
-        private int _disposed;
+        private int _releaseState;
 
         private YooRawFileHandle(
             long id,
             Cache.AssetCacheKey cacheKey,
             AssetHandle raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache)
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails)
         {
             _id = id;
             _cacheKey = cacheKey;
             _raw = raw;
-            _task = AssetOperationBroadcast.Create(CompleteAndSnapshotAsync(raw));
+            _completion = AssetOperationCompletion.Start(CompleteAndSnapshotAsync(raw), operationTails);
             _onReleaseToCache = onReleaseToCache;
             _refCount = 1;
         }
@@ -380,10 +410,11 @@ namespace CycloneGames.AssetManagement.Runtime
             long id,
             Cache.AssetCacheKey cacheKey,
             AssetHandle raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache) =>
-            new YooRawFileHandle(id, cacheKey, raw, onReleaseToCache);
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails) =>
+            new YooRawFileHandle(id, cacheKey, raw, onReleaseToCache, operationTails);
 
-        public bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public float Progress
         {
             get
@@ -399,14 +430,14 @@ namespace CycloneGames.AssetManagement.Runtime
         }
 
         public string Error => Volatile.Read(ref _error) ?? string.Empty;
-        public UniTask Task => _task;
+        public UniTask Task => _completion.Task;
         public string FilePath => string.Empty;
         public int RefCount => Volatile.Read(ref _refCount);
 
         public void WaitForAsyncComplete()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (_task.Status != UniTaskStatus.Pending)
+            if (_completion.Task.Status != UniTaskStatus.Pending)
             {
                 return;
             }
@@ -420,7 +451,7 @@ namespace CycloneGames.AssetManagement.Runtime
             // YooAsset 3 invokes its native completion continuation inline during synchronous waiting. The
             // snapshot and its broadcast task must therefore also be terminal before this method may return.
             // Keep a defensive fallback so a provider scheduling change cannot expose a false completion.
-            if (_task.Status == UniTaskStatus.Pending)
+            if (_completion.Task.Status == UniTaskStatus.Pending)
             {
                 throw new NotSupportedException(
                     "YooAsset could not materialize the raw-file snapshot synchronously. Await Task instead.");
@@ -429,7 +460,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public string ReadText()
         {
-            if (_task.Status != UniTaskStatus.Succeeded || Volatile.Read(ref _disposed) != 0)
+            if (_completion.Task.Status != UniTaskStatus.Succeeded ||
+                ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return string.Empty;
             }
@@ -439,7 +471,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public byte[] ReadBytes()
         {
-            if (_task.Status != UniTaskStatus.Succeeded || Volatile.Read(ref _disposed) != 0)
+            if (_completion.Task.Status != UniTaskStatus.Succeeded ||
+                ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return null;
             }
@@ -473,7 +506,7 @@ namespace CycloneGames.AssetManagement.Runtime
                     await UniTask.SwitchToMainThread();
                 }
 
-                if (Volatile.Read(ref _disposed) != 0)
+                if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
                 {
                     throw new ObjectDisposedException(nameof(YooRawFileHandle));
                 }
@@ -499,7 +532,10 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (Exception ex)
             {
-                Volatile.Write(ref _error, ex.Message ?? "YooAsset raw-file load failed.");
+                if (_completion.Task.Status != UniTaskStatus.Canceled)
+                {
+                    Volatile.Write(ref _error, ex.Message ?? "YooAsset raw-file load failed.");
+                }
                 throw;
             }
             finally
@@ -510,7 +546,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void ReleaseProviderHandle(AssetHandle raw)
         {
-            if (raw == null || !ReferenceEquals(Interlocked.CompareExchange(ref _raw, null, raw), raw))
+            if (raw == null || !ReferenceEquals(Volatile.Read(ref _raw), raw))
             {
                 return;
             }
@@ -519,11 +555,13 @@ namespace CycloneGames.AssetManagement.Runtime
             {
                 raw.Dispose();
             }
+
+            Interlocked.CompareExchange(ref _raw, null, raw);
         }
 
         public void Retain()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 Log.Error("[YooRawFileHandle] Retain called on a disposed handle.");
                 return;
@@ -534,7 +572,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -569,25 +607,36 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!ProviderReleaseStateMachine.TryBeginRelease(ref _releaseState))
             {
                 return;
             }
 
-            AssetHandle raw = Interlocked.Exchange(ref _raw, null);
-            if (raw != null && raw.IsValid)
+            _completion.TryCancelByOwner();
+            AssetHandle raw = Volatile.Read(ref _raw);
+            try
             {
-                raw.Dispose();
+                if (raw != null && raw.IsValid)
+                {
+                    raw.Dispose();
+                }
+            }
+            catch
+            {
+                ProviderReleaseStateMachine.MarkReleaseFailed(ref _releaseState);
+                throw;
             }
 
+            Interlocked.CompareExchange(ref _raw, null, raw);
             Volatile.Write(ref _bytesSnapshot, null);
             Volatile.Write(ref _textSnapshot, string.Empty);
             _onReleaseToCache = null;
+            ProviderReleaseStateMachine.MarkReleased(ref _releaseState);
             HandleTracker.Unregister(_id);
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
-        bool IAssetBackendLifetime.IsDisposed => Volatile.Read(ref _disposed) != 0;
+        bool IAssetBackendLifetime.IsDisposed => ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState);
 
         long IAssetMemoryFootprint.EstimateRuntimeBytes()
         {
@@ -606,53 +655,84 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private readonly long _id;
         long ITrackedAssetHandle.DiagnosticHandleId => _id;
-        private readonly UniTask _task;
+        private readonly AssetOperationCompletion _completion;
         private InstantiateOperation _raw;
         private YooAssetHandle<GameObject> _source;
         private Action<long> _onDisposed;
         private int _refCount;
         private int _callerDisposed;
-        private int _disposed;
+        private int _releaseState;
 
         private YooInstantiateHandle(
             long id,
             InstantiateOperation raw,
             YooAssetHandle<GameObject> source,
-            Action<long> onDisposed)
+            Action<long> onDisposed,
+            AssetOperationTailTracker operationTails)
         {
             _id = id;
             _raw = raw;
-            _task = AssetOperationBroadcast.Create(YooOperationTask.CompleteAsync(
-                raw,
-                "YooAsset failed to instantiate the requested asset."));
+            _completion = AssetOperationCompletion.Start(CompleteAsync(raw), operationTails);
             _source = source;
             _onDisposed = onDisposed;
             _source.Retain();
             _refCount = 1;
         }
 
+        private async UniTask CompleteAsync(InstantiateOperation raw)
+        {
+            try
+            {
+                await YooOperationTask.CompleteAsync(
+                    raw,
+                    "YooAsset failed to instantiate the requested asset.");
+            }
+            finally
+            {
+                // The currently supported provider cancellation is synchronous, but retain authoritative cleanup
+                // if another compatible provider revision publishes an instance after the wrapper is retired.
+                if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) && raw?.Result != null)
+                {
+                    UnityEngine.Object.Destroy(raw.Result);
+                }
+            }
+        }
+
         public static YooInstantiateHandle Create(
             long id,
             InstantiateOperation raw,
             YooAssetHandle<GameObject> source,
-            Action<long> onDisposed) => new YooInstantiateHandle(id, raw, source, onDisposed);
+            Action<long> onDisposed,
+            AssetOperationTailTracker operationTails) =>
+            new YooInstantiateHandle(id, raw, source, onDisposed, operationTails);
 
-        public bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public float Progress => _raw?.Progress ?? 0f;
         public string Error => _raw?.Error ?? string.Empty;
-        public UniTask Task => _task;
-        public GameObject Instance => _raw?.Result;
+        public UniTask Task => _completion.Task;
+        public GameObject Instance => !ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState)
+            ? _raw?.Result
+            : null;
         public int RefCount => Volatile.Read(ref _refCount);
         public void WaitForAsyncComplete()
         {
             AssetRuntimeGuard.EnsureMainThread();
             _raw?.WaitForCompletion();
         }
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
+            {
+                Log.Error("[YooInstantiateHandle] Retain called on a disposed handle.");
+                return;
+            }
+
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -675,17 +755,25 @@ namespace CycloneGames.AssetManagement.Runtime
             if (Interlocked.Exchange(ref _callerDisposed, 1) == 0)
             {
                 Release();
+                return;
+            }
+
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) &&
+                !ProviderReleaseStateMachine.IsReleased(ref _releaseState))
+            {
+                DisposeInternal();
             }
         }
 
         internal void DisposeInternal()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!ProviderReleaseStateMachine.TryBeginRelease(ref _releaseState))
             {
                 return;
             }
 
+            _completion.TryCancelByOwner();
             try
             {
                 if (_raw != null)
@@ -701,16 +789,33 @@ namespace CycloneGames.AssetManagement.Runtime
                     }
                 }
             }
-            finally
+            catch
             {
-                Action<long> onDisposed = _onDisposed;
-                _onDisposed = null;
-                _raw = null;
-                _source?.Release();
-                _source = null;
-                HandleTracker.Unregister(_id);
-                onDisposed?.Invoke(_id);
+                ProviderReleaseStateMachine.MarkReleaseFailed(ref _releaseState);
+                throw;
             }
+
+            YooAssetHandle<GameObject> source = _source;
+            _source = null;
+            ExceptionDispatchInfo sourceReleaseFailure = null;
+            try
+            {
+                source?.Release();
+            }
+            catch (Exception exception)
+            {
+                // The cache retains a failed source release in its retry registry. This instantiate handle no
+                // longer owns the source reference and must not decrement its refcount a second time on retry.
+                sourceReleaseFailure = ExceptionDispatchInfo.Capture(exception);
+            }
+
+            Action<long> onDisposed = _onDisposed;
+            _onDisposed = null;
+            _raw = null;
+            ProviderReleaseStateMachine.MarkReleased(ref _releaseState);
+            HandleTracker.Unregister(_id);
+            onDisposed?.Invoke(_id);
+            sourceReleaseFailure?.Throw();
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
@@ -725,9 +830,9 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private readonly long _id;
         long ITrackedAssetHandle.DiagnosticHandleId => _id;
-        private readonly UniTask _task;
+        private readonly AssetOperationCompletion _completion;
         private int _refCount;
-        private int _disposed;
+        private int _releaseState;
         private SceneActivationState _activationState;
         private bool _activationStarted;
         private UniTask _activationTask;
@@ -746,8 +851,7 @@ namespace CycloneGames.AssetManagement.Runtime
         internal long DebugId => _id;
         internal object OwnerToken { get; private set; }
         internal bool UnloadStarted => _unloadStarted;
-        internal bool IsProviderHandleReleased => Raw == null || !Raw.IsValid;
-        internal bool IsTerminallyReleased => Volatile.Read(ref _disposed) != 0;
+        internal bool IsTerminallyReleased => ProviderReleaseStateMachine.IsReleased(ref _releaseState);
         internal bool RequiresShutdownActivation
         {
             get
@@ -780,12 +884,13 @@ namespace CycloneGames.AssetManagement.Runtime
             object ownerToken,
             string scenePath,
             YooAsset.SceneHandle raw,
-            bool activateOnLoad)
+            bool activateOnLoad,
+            AssetOperationTailTracker operationTails)
         {
             _id = id;
             OwnerToken = ownerToken ?? throw new ArgumentNullException(nameof(ownerToken));
             Raw = raw;
-            _task = AssetOperationBroadcast.Create(CompleteLoadAsync(raw));
+            _completion = AssetOperationCompletion.Start(CompleteLoadAsync(raw), operationTails);
             ActivationMode = activateOnLoad ? SceneActivationMode.ActivateOnLoad : SceneActivationMode.Manual;
             _activationState = SceneActivationState.Loading;
             _scenePath = scenePath ?? string.Empty;
@@ -805,11 +910,15 @@ namespace CycloneGames.AssetManagement.Runtime
             object ownerToken,
             string scenePath,
             YooAsset.SceneHandle raw,
-            bool activateOnLoad) => new YooSceneHandle(id, ownerToken, scenePath, raw, activateOnLoad);
+            bool activateOnLoad,
+            AssetOperationTailTracker operationTails) =>
+            new YooSceneHandle(id, ownerToken, scenePath, raw, activateOnLoad, operationTails);
 
-        private bool CanReadRaw => Volatile.Read(ref _disposed) == 0 && Raw != null && Raw.IsValid;
+        private bool CanReadRaw => !ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) &&
+                                   Raw != null &&
+                                   Raw.IsValid;
 
-        public bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public float Progress
         {
             get
@@ -831,7 +940,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return CanReadRaw ? _error = Raw.Error ?? string.Empty : _error;
             }
         }
-        public UniTask Task => _task;
+        public UniTask Task => _completion.Task;
         public string ScenePath => _scenePath;
         public Scene Scene
         {
@@ -859,7 +968,7 @@ namespace CycloneGames.AssetManagement.Runtime
         {
             get
             {
-                if (Volatile.Read(ref _disposed) != 0)
+                if (ProviderReleaseStateMachine.IsReleased(ref _releaseState))
                 {
                     return true;
                 }
@@ -886,7 +995,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask ActivateAsync(CancellationToken cancellationToken = default)
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 throw new ObjectDisposedException(nameof(YooSceneHandle));
             }
@@ -976,7 +1085,7 @@ namespace CycloneGames.AssetManagement.Runtime
         internal UniTask UnloadAsync(CancellationToken cancellationToken)
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsReleased(ref _releaseState))
             {
                 return UniTask.CompletedTask;
             }
@@ -1136,7 +1245,9 @@ namespace CycloneGames.AssetManagement.Runtime
 
             if (raw == null || !raw.IsValid)
             {
-                return true;
+                // Provider invalidation is not proof that the Unity scene is absent. Another owner can
+                // invalidate YooAsset state before this package observes SceneManager.sceneUnloaded.
+                return false;
             }
 
             Scene providerScene = raw.SceneObject;
@@ -1156,7 +1267,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return;
             }
 
-            UniTaskStatus taskStatus = _task.Status;
+            UniTaskStatus taskStatus = _completion.Task.Status;
             if (ActivationMode == SceneActivationMode.Manual && !_manualLoadResumed)
             {
                 if (PlayerLoopHelper.IsMainThread && CanReadRaw)
@@ -1181,11 +1292,20 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
+            {
+                Log.Error("[YooSceneHandle] Retain called on a disposed handle.");
+                return;
+            }
+
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (ProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -1214,16 +1334,15 @@ namespace CycloneGames.AssetManagement.Runtime
         private void DisposeInternal(bool providerHandleAlreadyReleased)
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!ProviderReleaseStateMachine.TryBeginRelease(ref _releaseState))
             {
                 return;
             }
 
-            SceneTracker.Unregister(_id);
-            Interlocked.Exchange(ref _refCount, 0);
-            if (!providerHandleAlreadyReleased && Raw != null)
+            _completion.TryCancelByOwner();
+            try
             {
-                if (Raw.IsValid)
+                if (!providerHandleAlreadyReleased && Raw != null && Raw.IsValid)
                 {
                     _progress = Raw.Progress;
                     _error = Raw.Error ?? string.Empty;
@@ -1231,12 +1350,20 @@ namespace CycloneGames.AssetManagement.Runtime
                     Raw.Dispose();
                 }
             }
+            catch
+            {
+                ProviderReleaseStateMachine.MarkReleaseFailed(ref _releaseState);
+                throw;
+            }
 
             Raw = null;
 
             _scenePath = string.Empty;
             _activationTask = default;
             _unloadTask = default;
+            ProviderReleaseStateMachine.MarkReleased(ref _releaseState);
+            Interlocked.Exchange(ref _refCount, 0);
+            SceneTracker.Unregister(_id);
             HandleTracker.Unregister(_id);
         }
     }

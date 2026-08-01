@@ -102,7 +102,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        private static void SetExceptionAndMarkObserved(
+        internal static void SetExceptionAndMarkObserved(
             UniTaskCompletionSource completion,
             Exception exception)
         {

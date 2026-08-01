@@ -69,6 +69,7 @@ flowchart TD
 | `CycloneGames.AssetManagement.Runtime.CacheRetention` | yes | 始终 |
 | `CycloneGames.AssetManagement.Editor` | yes | 仅 Unity Editor |
 | `CycloneGames.AssetManagement.Tests.Editor` | no | Unity Test Runner |
+| `CycloneGames.AssetManagement.Tests.PlayMode` | no | Unity PlayMode Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Providers.Addressables` | no | `com.unity.addressables` `[2.11.1,2.11.2)` 加显式 consumer reference |
 | `CycloneGames.AssetManagement.Providers.Addressables.Tests.Editor` | no | Addressables 2.11.1 加 Unity Test Runner |
 | `CycloneGames.AssetManagement.Runtime.Providers.YooAsset` | no | `com.tuyoogame.yooasset` `[3.0.5,4.0.0)` 加显式 consumer reference |
@@ -78,7 +79,7 @@ flowchart TD
 
 核心 Runtime 直接依赖 UniTask、CycloneGames.Logging、CycloneGames.IO Core/SystemIO 与 CycloneGames.Hash Core。仅安装可选包不够：其 `versionDefines` 范围必须匹配，且 consumer asmdef 必须引用条件 Assembly。不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。
 
-AssetManagement 通过 `CycloneGames.AssetManagement` 下的稳定 `LogChannel` category 输出诊断。本包不会初始化、flush、替换或关闭日志 backend。仅安装 `com.cyclone-games.logging` 时，诊断会安全地进入 `NullLogWriter`；应用 composition root 可以按需安装 `CycloneGames.Logger` 或其他 `ILogWriter` backend。
+AssetManagement 通过 `CycloneGames.AssetManagement` 下的稳定 `LogChannel` category 输出诊断。本包不会初始化、flush、替换或关闭日志 backend。仅安装 `com.cyclone-games.logging` 时，诊断会安全地进入 `NullLogWriter`；应用 composition root 可以按需安装 `CycloneGames.Logging.Pipeline`、组合 `CycloneGames.Logging.Unity`，或提供其他 `ILogWriter` backend。
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
@@ -132,11 +133,13 @@ Application lifetime
 
 ### Handle、取消与线程模型
 
-Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。Lease 会钉住一个共享 provider handle，直到 Lease 被 Dispose。Lease Dispose 幂等。Dispose 后访问会抛出 `ObjectDisposedException`。`IOperation.Task` 是 memoized 的，可安全重复或并发 await；`Error` 是诊断文本，不能替代 await `Task`。
+Asset、all-assets 与 raw-file load 调用返回非池化的调用方 lease。Lease 会钉住一个共享 provider handle，直到 Lease 被 Dispose。Lease Dispose 幂等。Dispose 后访问会抛出 `ObjectDisposedException`。`IOperation.Task` 是 memoized 的，可安全重复或并发 await。第一次终态转换胜出：provider 与 adapter 后处理成功会完成它，真实 provider 或 adapter 失败会使其 fault；调用方等待取消、provider 取消，或 pending 时权威 owner 退役会使其 canceled。`Error` 是诊断文本，不能替代 await `Task`。
 
 `WaitForAsyncComplete` 不是 async flow 的可移植替代品。Addressables 对每个 pending 操作都拒绝它。应 await `Task`。同步单资产加载仍是可选的 `IAssetSyncOperations` 能力；scene 只暴露异步生命周期。
 
 调用方取消只取消该调用方的等待，不取消可能被其他调用方使用的共享后端加载。调用方仍必须 Dispose 其 lease。这把请求取消与共享资源所有权分离。
+
+调用方可见的 canceled 并不能证明 provider 已物理终止。当 package 或 module 退役使 pending 的自有操作取消时，adapter 会继续观察其 provider/adapter 尾任务。Package 成功销毁只有在全部保留尾任务排空后才完成，包括迟到的成功、取消或已观察失败。之后到达的 provider 结果不能覆盖已经发布的公开 canceled 状态。普通 `ISceneHandle.Dispose` 被刻意排除在权威退役之外：它只释放调用方 wrapper 所有权，既不取消 load，也不 unload scene。
 
 Unity object、provider API、缓存 mutation、handle dispose、scene 操作、module/package 生命周期与维护编排都受主线程约束。允许的 worker-thread 工作很窄：已完成的 `IRawFileHandle.ReadText` 与 `ReadBytes` 读取、telemetry ring-buffer 操作，以及支持平台上产品调度的纯文件哈希。不要从后台任务调用 Unity object 属性、provider handle、`Dispose` 或缓存 mutation。
 
@@ -164,8 +167,11 @@ bool activated = await maintenance.UpdatePackageManifestAsync(
 | `IAssetSceneLoader` | no | yes | yes |
 | `IAssetCatalogQuery` | no | yes | yes |
 | `IAssetStoragePreflight` | no | 仅桌面卷 | 仅桌面 Host mode |
+| `IUnityUnusedAssetCollector` | yes | no | no |
 | Provider maintenance/downloader | no | `IAddressablesCatalogMaintenance` | `IYooAssetPackageMaintenance` |
 | `IAssetRuntimeDiagnostics` | yes | yes | yes |
+
+`IAssetPackage` 刻意不提供通用 unload-unused 操作，因为各 provider 无法实现同一种语义。通用框架缓存驱逐使用 `TrimIdleCache(AssetCacheRetentionPolicy.EvictAllIdle)`；Resources 的 Unity 进程全局扫描使用 `IUnityUnusedAssetCollector.CollectUnusedUnityAssetsAsync`；YooAsset 的 package-local 操作使用 `IYooAssetPackageMaintenance.UnloadUnusedProviderAssetsAsync`。Addressables 除框架缓存 trim 外没有对应操作。这是从已删除 `IAssetPackage.UnloadUnusedAssetsAsync` 的直接迁移方式；不保留 compatibility shim。
 
 Addressables 与 YooAsset 不能同时通过这些 adapter 激活。Module 级 AssetBundle runtime guard 建立唯一的框架控制 provider authority，直到共存、shutdown 顺序与内存行为作为完整产品配置得到验证。
 
@@ -352,7 +358,7 @@ _package = await AssetManager.InitializeDefaultPackageAsync(
     cancellationToken);
 ```
 
-Resources 地址相对于 `Resources/` 文件夹，省略前缀与文件扩展名。`Assets/Game/Resources/UI/Icons/Inventory.png` 加载为 `UI/Icons/Inventory`。释放 wrapper 不保证立即回收 native 内存；`UnloadUnusedAssetsAsync` 清理 idle wrapper 并调用 Unity 可能卡顿的全局未使用资源扫描。
+Resources 地址相对于 `Resources/` 文件夹，省略前缀与文件扩展名。`Assets/Game/Resources/UI/Icons/Inventory.png` 加载为 `UI/Icons/Inventory`。释放 wrapper 不保证立即回收 native 内存。在经过测量的阶段边界，把 package 转换为 `IUnityUnusedAssetCollector` 并 await `CollectUnusedUnityAssetsAsync`；它会清理框架 idle 所有权并调用 Unity 可能卡顿的进程全局未使用资源扫描。每个必须继续持有的资产都要保留框架 lease。
 
 ### 加载图标的有界所有权
 
@@ -482,7 +488,7 @@ Handle tracking 默认关闭，且有 runtime 成本。Handle registry 默认 16
 
 | 现象 | 可能原因 | 解决方法 |
 | --- | --- | --- |
-| Package 没有 maintenance 能力 | 未引用 provider assembly | 检查 `package is IYooAssetPackageMaintenance` / `IAddressablesCatalogMaintenance`；Resources 只支持加载 |
+| Package 没有 provider-maintenance 能力 | 未引用 provider assembly 或选择了 Resources | 检查 `package is IYooAssetPackageMaintenance` / `IAddressablesCatalogMaintenance`；Resources 暴露独立的 `IUnityUnusedAssetCollector` engine-global 能力 |
 | 存储容量为 `Unknown` | 平台无法报告可靠容量 | 除非有显式验证的产品 policy 提供等价决策，否则停止 |
 | Download scope 不支持 | Downloader factory 选错 | YooAsset：All/Tags/Locations 带显式 recursion；Addressables：仅 Tags 或递归 Locations |
 | 失败后 provider 状态可能已变化 | 操作越过 mutation 边界 | 隔离依赖内容，保留恢复证据，重试前要求显式 owner 决策 |
@@ -499,8 +505,8 @@ Handle tracking 默认关闭，且有 runtime 成本。Handle registry 默认 16
 运行时变更的最低验证：
 
 1. 从 Unity 生成的工程构建 `CycloneGames.AssetManagement.Runtime` 与 `CycloneGames.AssetManagement.Runtime.CacheRetention`。
-2. 运行全部 `CycloneGames.AssetManagement.Tests.Editor` EditMode test 与两个 `AssetCachePerformanceTests` harness。
-3. Play Mode 下演练 package initialize/load/cancel/dispose、重复 await memoized task、provider-fault 传播、跨 package 拒绝、手动 activation/unload、低内存 idle 清理、downloader prepare/start 失败与取消、泄漏操作的 shutdown 清理与 shutdown 重试。
+2. 运行全部 `CycloneGames.AssetManagement.Tests.Editor` EditMode test、`CycloneGames.AssetManagement.Tests.PlayMode` PlayMode test 与两个 `AssetCachePerformanceTests` harness。
+3. Play Mode 下演练 package initialize/load/cancel/dispose、Resources deferred-destruction 屏障、重复 await memoized task、provider-fault 传播、owner 退役取消及迟到 provider 成功/失败与尾任务排空、跨 package 拒绝、手动 activation/unload、低内存 idle 清理、downloader prepare/start 失败与取消、泄漏操作的 shutdown 清理与 shutdown 重试。
 4. 对每个可选 provider，安装确切锁定的依赖，编译 provider assembly，运行 provider 专属测试，演练干净 Player 缓存。验证 `PrepareAsync` 不执行 payload 写入、total 只在 prepare 后才权威、Dispose 幂等。
 5. 对每个声明的 Windows、Linux、macOS、iOS、Android、WebGL、Dedicated Server 与批准的主机配置运行 clean-clone CI 与目标 Player build。在 Mono 与 IL2CPP、低存储、磁盘满、权限拒绝、网络丢失、suspend/resume 与禁用 domain reload 下重复关键场景。
 
@@ -512,6 +518,8 @@ Editor 或 CLI assembly 结果不能证明 Player、IL2CPP、长期会话、存�
   -testFilter CycloneGames.AssetManagement \
   -testResults <result-path> -quit
 ```
+
+对 deferred Unity object-destruction 契约，改用 `-testPlatform PlayMode -assemblyNames CycloneGames.AssetManagement.Tests.PlayMode` 再运行一次。
 
 ## 内存限制与有界维护
 

@@ -202,7 +202,6 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         public UniTask UnloadSceneAsync(ISceneHandle sceneHandle, CancellationToken cancellationToken = default) => UniTask.CompletedTask;
-        public UniTask UnloadUnusedAssetsAsync() => UniTask.CompletedTask;
 
         public UniTask<AssetStoragePreflightResult> CheckStorageAsync(
             AssetStoragePreflightRequest request,
