@@ -304,12 +304,12 @@ namespace CycloneGames.DataTable.Tests.Editor
         [TestCase(DataTableDiagnosticLevel.Warning, LogSeverity.Warning)]
         [TestCase(DataTableDiagnosticLevel.Error, LogSeverity.Error)]
         [TestCase(DataTableDiagnosticLevel.Fatal, LogSeverity.Fatal)]
-        public void LoggingAdapter_MapsEveryOutputLevelExactly(
+        public void LogWriterAdapter_MapsEveryOutputLevelExactly(
             DataTableDiagnosticLevel level,
             LogSeverity expectedSeverity)
         {
             var writer = new ProbeLogWriter();
-            var adapter = new DataTableLoggingDiagnostics(writer);
+            var adapter = new DataTableLogWriterAdapter(writer);
 
             adapter.Write(level, DataTableDiagnosticCategories.Root, "message");
 
@@ -319,10 +319,10 @@ namespace CycloneGames.DataTable.Tests.Editor
 
         [TestCase(DataTableDiagnosticLevel.None)]
         [TestCase((DataTableDiagnosticLevel)byte.MaxValue)]
-        public void LoggingAdapter_DropsNonOutputAndUnknownLevels(DataTableDiagnosticLevel level)
+        public void LogWriterAdapter_DropsNonOutputAndUnknownLevels(DataTableDiagnosticLevel level)
         {
             var writer = new ProbeLogWriter();
-            var adapter = new DataTableLoggingDiagnostics(writer);
+            var adapter = new DataTableLogWriterAdapter(writer);
 
             Assert.IsFalse(adapter.IsEnabled(level, DataTableDiagnosticCategories.Root));
             Assert.DoesNotThrow(() =>
@@ -336,10 +336,10 @@ namespace CycloneGames.DataTable.Tests.Editor
         }
 
         [Test]
-        public void LoggingAdapter_IsolatesOrdinaryWriterFailures()
+        public void LogWriterAdapter_IsolatesOrdinaryWriterFailures()
         {
             var writer = new ProbeLogWriter(throwOnCall: true);
-            var adapter = new DataTableLoggingDiagnostics(writer);
+            var adapter = new DataTableLogWriterAdapter(writer);
 
             Assert.IsFalse(adapter.IsEnabled(
                 DataTableDiagnosticLevel.Info,

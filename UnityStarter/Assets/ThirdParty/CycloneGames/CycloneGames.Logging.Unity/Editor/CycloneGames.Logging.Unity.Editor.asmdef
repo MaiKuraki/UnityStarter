@@ -1,0 +1,20 @@
+{
+    "name": "CycloneGames.Logging.Unity.Editor",
+    "rootNamespace": "CycloneGames.Logging.Unity.Editor",
+    "references": [
+        "CycloneGames.Logging.Pipeline",
+        "CycloneGames.Logging",
+        "CycloneGames.Logging.Unity"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

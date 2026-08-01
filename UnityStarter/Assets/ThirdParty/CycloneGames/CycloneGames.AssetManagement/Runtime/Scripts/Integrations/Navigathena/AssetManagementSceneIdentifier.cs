@@ -7,6 +7,9 @@ using UnityEngine.SceneManagement;
 using Cysharp.Threading.Tasks;
 using MackySoft.Navigathena.SceneManagement;
 
+using AssetSceneHandle = CycloneGames.AssetManagement.Runtime.ISceneHandle;
+using NavigathenaSceneHandle = MackySoft.Navigathena.SceneManagement.ISceneHandle;
+
 namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
 {
     /// <summary>
@@ -48,13 +51,20 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
                 throw new ArgumentException("Scene location cannot be null or empty.", nameof(location));
             }
 
+            NavigathenaSceneHandleAdapter.ValidateAdditiveLoadMode(
+                loadParameters.loadSceneMode,
+                nameof(loadParameters));
+            NavigathenaSceneHandleAdapter.ValidateSceneActivationMode(
+                activationMode,
+                nameof(activationMode));
+
             _location = location;
             _loadParameters = loadParameters;
             _activationMode = activationMode;
             _bucket = bucket;
         }
 
-        public MackySoft.Navigathena.SceneManagement.ISceneHandle CreateHandle()
+        public NavigathenaSceneHandle CreateHandle()
         {
             return new NavigathenaSceneHandleAdapter(
                 _sceneLoader,
@@ -68,14 +78,14 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
     /// <summary>
     /// Bridges an AssetManagement scene ownership lease into a Navigathena transition handle.
     /// </summary>
-    public sealed class NavigathenaSceneHandleAdapter : MackySoft.Navigathena.SceneManagement.ISceneHandle
+    public sealed class NavigathenaSceneHandleAdapter : NavigathenaSceneHandle
     {
         private readonly IAssetSceneLoader _sceneLoader;
         private readonly string _location;
         private readonly LoadSceneParameters _loadParameters;
         private readonly SceneActivationMode _activationMode;
         private readonly string _bucket;
-        private ISceneHandle _sceneHandle;
+        private AssetSceneHandle _sceneHandle;
         private bool _loadStarted;
         private bool _unloadStarted;
         private bool _providerUnloadCompleted;
@@ -83,12 +93,41 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
         private UniTask<Scene> _loadTask;
         private UniTask _unloadTask;
 
-        public NavigathenaSceneHandleAdapter(
-            ISceneHandle sceneHandle,
+        private NavigathenaSceneHandleAdapter(
+            AssetSceneHandle sceneHandle,
             IAssetSceneLoader sceneLoader)
         {
             _sceneHandle = sceneHandle ?? throw new ArgumentNullException(nameof(sceneHandle));
             _sceneLoader = sceneLoader ?? throw new ArgumentNullException(nameof(sceneLoader));
+        }
+
+        /// <summary>
+        /// Transfers the sole caller-owned wrapper lease for an already-started additive scene operation to
+        /// Navigathena. After this call, the previous owner must not dispose the handle or request its unload.
+        /// </summary>
+        /// <param name="sceneHandle">The active AssetManagement scene handle whose caller ownership is transferred.</param>
+        /// <param name="sceneLoader">The exact loader that created and owns <paramref name="sceneHandle"/>.</param>
+        /// <param name="loadSceneMode">
+        /// The mode used to create <paramref name="sceneHandle"/>. Only <see cref="LoadSceneMode.Additive"/> is supported.
+        /// </param>
+        public static NavigathenaSceneHandleAdapter TakeOwnership(
+            AssetSceneHandle sceneHandle,
+            IAssetSceneLoader sceneLoader,
+            LoadSceneMode loadSceneMode)
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (sceneHandle == null)
+            {
+                throw new ArgumentNullException(nameof(sceneHandle));
+            }
+            if (sceneLoader == null)
+            {
+                throw new ArgumentNullException(nameof(sceneLoader));
+            }
+
+            ValidateAdditiveLoadMode(loadSceneMode, nameof(loadSceneMode));
+            ValidateSceneActivationMode(sceneHandle.ActivationMode, nameof(sceneHandle));
+            return new NavigathenaSceneHandleAdapter(sceneHandle, sceneLoader);
         }
 
         internal NavigathenaSceneHandleAdapter(
@@ -100,9 +139,36 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
         {
             _sceneLoader = sceneLoader ?? throw new ArgumentNullException(nameof(sceneLoader));
             _location = location ?? throw new ArgumentNullException(nameof(location));
+            ValidateAdditiveLoadMode(loadParameters.loadSceneMode, nameof(loadParameters));
+            ValidateSceneActivationMode(activationMode, nameof(activationMode));
             _loadParameters = loadParameters;
             _activationMode = activationMode;
             _bucket = bucket;
+        }
+
+        internal static void ValidateAdditiveLoadMode(LoadSceneMode loadSceneMode, string parameterName)
+        {
+            if (loadSceneMode != LoadSceneMode.Additive)
+            {
+                throw new ArgumentOutOfRangeException(
+                    parameterName,
+                    loadSceneMode,
+                    "The Navigathena integration supports additive scene loading only.");
+            }
+        }
+
+        internal static void ValidateSceneActivationMode(
+            SceneActivationMode activationMode,
+            string parameterName)
+        {
+            if (activationMode != SceneActivationMode.ActivateOnLoad &&
+                activationMode != SceneActivationMode.Manual)
+            {
+                throw new ArgumentOutOfRangeException(
+                    parameterName,
+                    activationMode,
+                    "The scene activation mode is not supported.");
+            }
         }
 
         public Scene Scene
@@ -150,7 +216,9 @@ namespace CycloneGames.AssetManagement.Runtime.Integrations.Navigathena
                         bucket: _bucket);
                 }
 
-                if (_sceneHandle.ActivationMode == SceneActivationMode.Manual)
+                SceneActivationMode providerActivationMode = _sceneHandle.ActivationMode;
+                ValidateSceneActivationMode(providerActivationMode, nameof(_sceneHandle));
+                if (providerActivationMode == SceneActivationMode.Manual)
                 {
                     await _sceneHandle.ActivateAsync(cancellationToken);
                 }

@@ -20,7 +20,7 @@ CycloneGames.InputSystem.AssetManagement bridges `CycloneGames.InputSystem`, `Cy
 
 A product that loads input configuration from an asset package needs a bridge between three owners: the InputSystem runtime (validates and commits configuration), the AssetManagement runtime (loads bytes from a package), and the VContainer composition root (owns the manager lifetime). This package provides that bridge as one assembly with one public adapter and one helper, so the base InputSystem VContainer integration never takes a direct dependency on AssetManagement.
 
-The adapter owns no cache, Unity object, or global service. The caller owns the AssetManagement package and VContainer scope. User configuration persistence remains owned by `FileInputConfigurationStore` under `Application.persistentDataPath`; this integration introduces no additional files or preferences.
+The adapter keeps no cache, Unity object, or global service; the caller owns the AssetManagement package and VContainer scope. User configuration persistence stays with `FileInputConfigurationStore` under `Application.persistentDataPath`; this integration adds no files or preferences.
 
 Use this package when InputSystem configuration is loaded from an AssetManagement package at runtime. Do not install it when configuration comes from a serialized `TextAsset`, StreamingAssets, or an in-memory source — the base InputSystem VContainer integration handles those without this adapter.
 
@@ -40,7 +40,7 @@ Use this package when InputSystem configuration is loaded from an AssetManagemen
 
 The assembly is `autoReferenced: false` and uses a package-derived `VCONTAINER_PRESENT` constraint (from `jp.hadashikick.vcontainer`). It is absent from compilation when VContainer is not installed. Consumers must explicitly reference `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`. Do not add a `PlayerSettings` scripting define — the physical integration package and its asmdef make the boundary explicit in the assembly graph.
 
-Diagnostics use the stable `CycloneGames.InputSystem.AssetManagement` `LogChannel` category. This integration does not own logging backend lifecycle. With only `com.cyclone-games.logging` installed, messages safely route to `NullLogWriter`; the application composition root may install `CycloneGames.Logger` or another `ILogWriter` backend.
+Diagnostics use the stable `CycloneGames.InputSystem.AssetManagement` `LogChannel` category. Logging backend lifecycle belongs to the host. With only `com.cyclone-games.logging` installed, messages safely route to `NullLogWriter`; the application composition root may install `com.cyclone-games.logging.pipeline`, optionally add `com.cyclone-games.logging.unity`, or provide another `ILogWriter` backend.
 
 The diagnostic-producing asmdef owns an internal `InputSystemAssetManagementLog` facade under `Diagnostics/`. It centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
@@ -86,7 +86,7 @@ The assembly's `defineConstraints` is `VCONTAINER_PRESENT`, which is set by a `v
 
 ### Acquisition vs. Acceptance
 
-The helper's 1 MiB limit is a **post-acquisition acceptance/copy limit**, not an acquisition budget. It bounds what the helper copies into its own buffer after the provider has already acquired the asset. It does not bound provider catalog lookup, download, decompression, cache, native allocation, or disk materialization. The selected AssetManagement provider and composition root must enforce those acquisition budgets before invoking this adapter.
+The helper's 1 MiB limit is a **post-acquisition acceptance/copy limit**, not an acquisition budget. It bounds what the helper copies into its own buffer after the provider has already acquired the asset. It leaves provider catalog lookup, download, decompression, cache, native allocation, and disk materialization to the AssetManagement provider and composition root, which must enforce acquisition budgets before invoking this adapter.
 
 ## Usage Guide
 
@@ -141,7 +141,7 @@ Provider failures fail closed rather than starting a second acquisition. Policy 
 
 ### Ownership and persistence
 
-The adapter owns no cache, Unity object, or global service. The caller owns the AssetManagement package and VContainer scope. User configuration persistence remains owned by `FileInputConfigurationStore` under `Application.persistentDataPath`; this integration introduces no additional files or preferences.
+The adapter keeps no cache, Unity object, or global service; the caller owns the AssetManagement package and VContainer scope. User configuration persistence stays with `FileInputConfigurationStore` under `Application.persistentDataPath`; this integration adds no files or preferences.
 
 ## Common Scenarios
 
@@ -162,7 +162,7 @@ A product authors input configuration as `TextAsset` assets in the AssetManageme
 | Acceptance/copy | 1 MiB bounded buffer | Post-acquisition limit; `TextAsset.dataSize` or raw-file length checked before allocation. |
 | Runtime commit | 0 bytes module-owned | Delegated to base InputSystem integration; helper releases its buffer after handoff. |
 
-The helper does not retain the configuration bytes after handing them to the base integration. Provider load, Unity-object access, and handle disposal run on the Unity main thread; the helper does not create threads or synchronization primitives.
+The helper releases the configuration bytes after handing them to the base integration. Provider load, Unity-object access, and handle disposal run on the Unity main thread; the helper creates no threads or synchronization primitives.
 
 For explicit telemetry, create an `InputSystemAssetManagementDiagnostics` instance and pass it through the optional `diagnostics` parameter of `CreateDefaultConfigLoader` or `CreateConfigLoader`. `GetMemoryStats()` returns only scalar request, failure, fallback, and transient-lease counters. Caller-owned adapters may publish those counters; AssetManagement remains the owner of asset bytes and eviction.
 

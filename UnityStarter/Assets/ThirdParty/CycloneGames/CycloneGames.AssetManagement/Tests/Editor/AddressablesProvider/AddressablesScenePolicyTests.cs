@@ -178,7 +178,7 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         }
 
         [Test]
-        public void SceneUnloadCallback_RetiresWrapperAfterProviderReleasedBeforeSceneCapture()
+        public void SceneUnloadCallback_DoesNotRetireUnmatchedInvalidProviderHandle()
         {
             const long HandleId = 9_200_004L;
             AssetRuntime.AddressablesAssetPackage package =
@@ -199,8 +199,55 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             Assert.That(callback, Is.Not.Null);
             callback.Invoke(package, new object[] { default(UnityEngine.SceneManagement.Scene) });
 
-            Assert.That(registry, Is.Empty);
-            Assert.That(handle.IsTerminallyReleased, Is.True);
+            Assert.That(registry.ContainsKey(HandleId), Is.True);
+            Assert.That(handle.IsTerminallyReleased, Is.False);
+        }
+
+        [Test]
+        public void InvalidProviderHandleDoesNotProveSceneAbsence()
+        {
+            AssetRuntime.AddressableSceneHandle handle =
+                CreateUninitialized<AssetRuntime.AddressableSceneHandle>();
+            MethodInfo knownSceneAbsent = typeof(AssetRuntime.AddressableSceneHandle).GetMethod(
+                "IsKnownSceneAbsent",
+                PrivateInstance);
+
+            Assert.That(knownSceneAbsent, Is.Not.Null);
+            Assert.That(knownSceneAbsent.Invoke(handle, null), Is.False);
+        }
+
+        [Test]
+        public void FailedProviderHandleStillRequiresExplicitRelease()
+        {
+            AssetRuntime.AddressableSceneHandle handle =
+                CreateUninitialized<AssetRuntime.AddressableSceneHandle>();
+            var resourceManager = new UnityEngine.ResourceManagement.ResourceManager();
+            UnityEngine.ResourceManagement.AsyncOperations.AsyncOperationHandle<
+                UnityEngine.ResourceManagement.ResourceProviders.SceneInstance> raw =
+                resourceManager.CreateCompletedOperation(
+                    default(UnityEngine.ResourceManagement.ResourceProviders.SceneInstance),
+                    "Synthetic scene load failure.");
+            SetField(handle, "Raw", raw);
+
+            try
+            {
+                MethodInfo knownSceneAbsent = typeof(AssetRuntime.AddressableSceneHandle).GetMethod(
+                    "IsKnownSceneAbsent",
+                    PrivateInstance);
+
+                Assert.That(knownSceneAbsent, Is.Not.Null);
+                Assert.That(knownSceneAbsent.Invoke(handle, null), Is.False);
+                Assert.That(raw.IsValid(), Is.True);
+            }
+            finally
+            {
+                if (raw.IsValid())
+                {
+                    raw.Release();
+                }
+
+                resourceManager.Dispose();
+            }
         }
 
         [Test]

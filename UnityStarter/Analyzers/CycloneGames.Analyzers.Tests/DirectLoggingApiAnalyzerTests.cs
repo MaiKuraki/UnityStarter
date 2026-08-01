@@ -139,20 +139,21 @@ namespace CycloneGames.Analyzers.Tests
         }
 
         [Test]
-        public async Task ReportsBackendCLoggerInstanceConstructionAndAliasUses()
+        public async Task ReportsBackendLogPipelineConstructionAndAliasUses()
         {
             const string source = """
-                using BackendLogger = CycloneGames.Logger.CLogger;
+                using BackendPipeline = CycloneGames.Logging.LogPipeline;
 
                 public sealed class Consumer
                 {
-                    private BackendLogger _logger;
+                    private BackendPipeline _pipeline;
+
+                    public BackendPipeline Current => _pipeline;
 
                     public void Run()
                     {
-                        _logger = BackendLogger.Instance;
-                        _logger = CycloneGames.Logger.CLogger.Instance;
-                        _logger = new CycloneGames.Logger.CLogger();
+                        _pipeline = new BackendPipeline();
+                        _pipeline = new CycloneGames.Logging.LogPipeline();
                     }
                 }
                 """;
@@ -182,7 +183,7 @@ namespace CycloneGames.Analyzers.Tests
                         public static void WriteLine(string message) { }
                     }
 
-                    public static class CLogger
+                    public static class LogPipeline
                     {
                         public static void Write(string message) { }
                     }
@@ -194,7 +195,7 @@ namespace CycloneGames.Analyzers.Tests
                     {
                         Local.Debug.Log("message");
                         Local.Console.WriteLine("message");
-                        Local.CLogger.Write("message");
+                        Local.LogPipeline.Write("message");
                     }
                 }
                 """;
@@ -247,7 +248,7 @@ namespace CycloneGames.Analyzers.Tests
                     {
                         UnityEngine.Debug.Log("message");
                         System.Console.WriteLine("message");
-                        _ = new CycloneGames.Logger.CLogger();
+                        _ = new CycloneGames.Logging.LogPipeline();
                     }
                 }
                 """;
@@ -262,9 +263,9 @@ namespace CycloneGames.Analyzers.Tests
         [TestCase("CycloneGames.Feature.Tests.Runtime")]
         [TestCase("CycloneGames.Feature.Tools.CodeGen")]
         [TestCase("CycloneGames.Feature.CodeGen")]
-        [TestCase("CycloneGames.Logger")]
-        [TestCase("CycloneGames.Logger.Unity")]
-        [TestCase("CycloneGames.Logger.Editor")]
+        [TestCase("CycloneGames.Logging.Pipeline")]
+        [TestCase("CycloneGames.Logging.Unity")]
+        [TestCase("CycloneGames.Logging.Unity.Editor")]
         public async Task DoesNotReportInAllowlistedAssembly(string assemblyName)
         {
             const string source = """
@@ -274,7 +275,7 @@ namespace CycloneGames.Analyzers.Tests
                     {
                         UnityEngine.Debug.Log("message");
                         System.Console.WriteLine("message");
-                        _ = new CycloneGames.Logger.CLogger();
+                        _ = new CycloneGames.Logging.LogPipeline();
                     }
                 }
                 """;
@@ -284,8 +285,8 @@ namespace CycloneGames.Analyzers.Tests
             Assert.That(diagnostics, Is.Empty);
         }
 
-        [TestCase("CycloneGames.MemoryGovernance.Logger")]
-        [TestCase("CycloneGames.MemoryGovernance.Logger.Editor")]
+        [TestCase("CycloneGames.MemoryGovernance.Logging.Pipeline")]
+        [TestCase("CycloneGames.MemoryGovernance.Logging.Pipeline.Editor")]
         public async Task ReportsSimilarlyNamedBusinessAssembly(string assemblyName)
         {
             const string source = """
@@ -293,7 +294,7 @@ namespace CycloneGames.Analyzers.Tests
                 {
                     public void Run()
                     {
-                        _ = new CycloneGames.Logger.CLogger();
+                        _ = new CycloneGames.Logging.LogPipeline();
                     }
                 }
                 """;
@@ -322,7 +323,7 @@ namespace CycloneGames.Analyzers.Tests
                     {
                         UnityEngine.Debug.Log("message");
                         System.Console.WriteLine("message");
-                        _ = new CycloneGames.Logger.CLogger();
+                        _ = new CycloneGames.Logging.LogPipeline();
                     }
                 }
                 """;
@@ -335,6 +336,32 @@ namespace CycloneGames.Analyzers.Tests
             AssertDiagnosticIds(
                 diagnostics,
                 DiagnosticIds.DirectLoggingApi,
+                DiagnosticIds.DirectLoggingApi,
+                DiagnosticIds.DirectLoggingApi);
+        }
+
+        [Test]
+        public async Task LoggingUnitySample_AllowsPipelineCompositionButStillReportsRawOutput()
+        {
+            const string source = """
+                public sealed class Consumer
+                {
+                    public void Run()
+                    {
+                        UnityEngine.Debug.Log("message");
+                        System.Console.WriteLine("message");
+                        _ = new CycloneGames.Logging.LogPipeline();
+                    }
+                }
+                """;
+
+            ImmutableArray<Diagnostic> diagnostics = await AnalyzeAsync(
+                source,
+                assemblyName: "CycloneGames.Logging.Unity.Samples",
+                sourcePath: "C:/repo/Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Unity/Samples/Consumer.cs");
+
+            AssertDiagnosticIds(
+                diagnostics,
                 DiagnosticIds.DirectLoggingApi,
                 DiagnosticIds.DirectLoggingApi);
         }
@@ -353,7 +380,7 @@ namespace CycloneGames.Analyzers.Tests
                     {
                         UnityEngine.Debug.Log("message");
                         System.Console.WriteLine("message");
-                        _ = new CycloneGames.Logger.CLogger();
+                        _ = new CycloneGames.Logging.LogPipeline();
                     }
                 }
                 """;
@@ -389,7 +416,7 @@ namespace CycloneGames.Analyzers.Tests
                     {
                         UnityEngine.Debug.Log("message");
                         System.Console.WriteLine("message");
-                        _ = new CycloneGames.Logger.CLogger();
+                        _ = new CycloneGames.Logging.LogPipeline();
                     }
                 }
                 """;
@@ -546,12 +573,10 @@ namespace CycloneGames.Analyzers.Tests
                     }
                 }
 
-                namespace CycloneGames.Logger
+                namespace CycloneGames.Logging
                 {
-                    public sealed class CLogger
+                    public sealed class LogPipeline
                     {
-                        public static CLogger Instance { get; } = new CLogger();
-
                     }
                 }
                 """;

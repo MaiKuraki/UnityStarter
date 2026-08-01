@@ -136,8 +136,8 @@ namespace CycloneGames.Choreography
             }
 
             IChoreographyDiagnostics diagnostics = logWriter == null
-                ? ChoreographyLoggingDiagnostics.Ambient
-                : new ChoreographyLoggingDiagnostics(logWriter);
+                ? ChoreographyLogWriterAdapter.Ambient
+                : new ChoreographyLogWriterAdapter(logWriter);
             _scheduler = new ChoreographyScheduler(providers, diagnostics);
             _scheduler.EventRaised += OnSchedulerEvent;
             _scheduler.InstanceEnded += OnSchedulerInstanceEnded;

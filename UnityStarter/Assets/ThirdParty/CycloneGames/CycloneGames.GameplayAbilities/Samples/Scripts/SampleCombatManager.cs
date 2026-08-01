@@ -24,7 +24,7 @@ namespace CycloneGames.GameplayAbilities.Sample
         public Text EnemyStatusText;
         public Text LogText;
         private GameObject logTextGORef;
-        private UILogger _uiLogger;
+        private UILogWriter _uiLogWriter;
         private GASRuntimeContext runtimeContext;
         private AbilitySystemComponent playerDebugTarget;
         private AbilitySystemComponent enemyDebugTarget;
@@ -41,11 +41,11 @@ namespace CycloneGames.GameplayAbilities.Sample
             if (LogText != null)
             {
                 ILogWriter innerWriter = LogRuntime.Writer;
-                _uiLogger = new UILogger(innerWriter, UpdateLog, 7);
-                if (!LogRuntime.TryReplaceWriter(innerWriter, _uiLogger))
+                _uiLogWriter = new UILogWriter(innerWriter, UpdateLog, 7);
+                if (!LogRuntime.TryReplaceWriter(innerWriter, _uiLogWriter))
                 {
-                    _uiLogger.Dispose();
-                    _uiLogger = null;
+                    _uiLogWriter.Dispose();
+                    _uiLogWriter = null;
                     Log.Warning("SampleCombatManager: The process log writer changed during initialization. UI log capture was not installed.");
                 }
             }
@@ -113,7 +113,7 @@ namespace CycloneGames.GameplayAbilities.Sample
 
         void Update()
         {
-            _uiLogger?.Pump();
+            _uiLogWriter?.Pump();
             HandleInput();
             UpdateUI();
         }
@@ -207,13 +207,13 @@ namespace CycloneGames.GameplayAbilities.Sample
             }
             ownsDebugOverlayLifetime = false;
 
-            if (_uiLogger != null)
+            if (_uiLogWriter != null)
             {
-                LogRuntime.TryReplaceWriter(_uiLogger, _uiLogger.InnerWriter);
-                _uiLogger.Dispose();
+                LogRuntime.TryReplaceWriter(_uiLogWriter, _uiLogWriter.InnerWriter);
+                _uiLogWriter.Dispose();
             }
 
-            _uiLogger = null;
+            _uiLogWriter = null;
 
             ShutdownCharacter(Player);
             ShutdownCharacter(Enemy);

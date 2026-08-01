@@ -58,8 +58,8 @@ namespace CycloneGames.Choreography
             }
 
             IChoreographyDiagnostics diagnostics = logWriter == null
-                ? ChoreographyLoggingDiagnostics.Ambient
-                : new ChoreographyLoggingDiagnostics(logWriter);
+                ? ChoreographyLogWriterAdapter.Ambient
+                : new ChoreographyLogWriterAdapter(logWriter);
             _player = new ChoreographyPlayer();
             _player.SetDiagnostics(diagnostics);
             _sink = new DirectProviderSink(providers, diagnostics);

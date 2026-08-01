@@ -132,8 +132,16 @@ namespace CycloneGames.AssetManagement.Runtime
             }
 
             _destroying = true;
-            _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
-            return _destroyTask;
+            try
+            {
+                _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
+                return _destroyTask;
+            }
+            catch
+            {
+                _destroying = false;
+                throw;
+            }
         }
 
         private async UniTask DestroyCoreAsync()

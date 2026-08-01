@@ -20,7 +20,7 @@ CycloneGames.InputSystem is a YAML-authored input layer over Unity Input System.
 
 Authoring (YAML configuration in the Input System Editor) runs separately from runtime dispatch (`InputManager` commits an immutable snapshot) and per-player delivery (`IInputPlayer` owns an `InputUser`, action asset, active contexts, and R3 streams). Configure contexts, actions, bindings, composites, interactions, processors, and control schemes in YAML; the manager validates against the current Unity Input System registry; each joined player receives an independently constructed action asset.
 
-Use for reviewable YAML authoring with bounded validation, per-player `InputUser` and device ownership for local multiplayer, prioritized contexts (Gameplay, Vehicle, Menu, Modal), event-driven and polling value reads, long-press and chords, runtime rebinding with a versioned module-owned JSON profile, and explicit configuration sources and stores.
+The module targets reviewable YAML authoring with bounded validation, per-player `InputUser` and device ownership for local multiplayer, prioritized contexts (Gameplay, Vehicle, Menu, Modal), event-driven and polling reads, long-press and chords, runtime rebinding with a versioned module-owned JSON profile, and explicit configuration sources and stores.
 
 ### Key Features
 
@@ -49,7 +49,7 @@ Use for reviewable YAML authoring with bounded validation, per-player `InputUser
 
 Optional assemblies have `autoReferenced: false`. Add an explicit asmdef reference only where the feature is used. UGUI and VContainer activation use package-derived `versionDefines` with `defineConstraints`; missing packages exclude the corresponding assembly. AssetManagement support is physically separated into the sibling `CycloneGames.InputSystem.AssetManagement` package.
 
-InputSystem emits diagnostics through stable `LogChannel` categories rooted at `CycloneGames.InputSystem`. The package does not initialize, replace, flush, or shut down the process logging writer. `com.cyclone-games.logging` supplies a safe `NullLogWriter` default; the application composition root may install `CycloneGames.Logger` or any other `ILogWriter` backend.
+InputSystem emits diagnostics through stable `LogChannel` categories rooted at `CycloneGames.InputSystem`. The logging writer lifecycle belongs to the host. `com.cyclone-games.logging` supplies a safe `NullLogWriter` default; the application composition root may install `com.cyclone-games.logging.pipeline`, optionally add `com.cyclone-games.logging.unity`, or provide any other `ILogWriter` backend.
 
 Each diagnostic-producing asmdef owns an internal `<FeatureName>Log` facade under `Diagnostics/`. The facade centralizes `Category`, ambient `Channel`, and strict `Create(ILogWriter logWriter)` binding; consumers use `Log` for ambient class-local channels and `_log` for explicitly injected instance channels.
 
@@ -76,7 +76,7 @@ The initialization path is transactional. It performs a bounded shape preflight 
 
 ## Quick Start
 
-Open `Tools > CycloneGames > Input System Editor` to generate or edit a configuration. The module does not require a project-owned default under `Assets/StreamingAssets`. A product composition root chooses whether configuration comes from a serialized `TextAsset`, StreamingAssets, an asset package, a bounded remote source, a user store, or explicit in-memory content.
+Open `Tools > CycloneGames > Input System Editor` to generate or edit a configuration. No project-owned default under `Assets/StreamingAssets` is required. A product composition root chooses whether configuration comes from a serialized `TextAsset`, StreamingAssets, an asset package, a bounded remote source, a user store, or explicit in-memory content.
 
 For the shortest scene-level integration, a serialized `TextAsset` supplies validated YAML directly:
 
@@ -417,7 +417,7 @@ if (!load.IsBootstrapComplete)
 }
 ```
 
-`Disabled` performs no reads. `Optional` returns `NotConfigured` when both user and default content are absent. `Required` reports `DefaultConfigurationUnavailable` when no usable configuration exists. When the user file is valid, it is used. When it is missing, the validated default is used and copied into the user store. When it exists but is invalid, it is preserved and the valid default is used for that session. When the primary file is missing but its `.bak` is readable, the store reports backup recovery. A configuration is never committed until schema validation and Input System preflight both succeed.
+`Disabled` performs no reads. `Optional` returns `NotConfigured` when both user and default content are absent; `Required` reports `DefaultConfigurationUnavailable` when no usable configuration exists. A valid user file is used as-is; a missing file falls back to the validated default and copies it into the user store; an invalid file is preserved while the valid default is used for that session. When the primary file is missing but its `.bak` is readable, the store reports backup recovery. Configuration commits only after schema validation and Input System preflight both succeed.
 
 `InputManager` owns only validated runtime state; it does not retain a URI, source, or store. The composition root owns configuration persistence and performs later load, save, reset, or delete operations through its explicit `IInputConfigurationSource` and `IInputConfigurationStore` instances.
 
@@ -601,7 +601,7 @@ Profile initialization and player construction with Unity Profiler markers `Cycl
 - Subscription owners dispose direct R3 subscriptions not managed through an active `InputContext`.
 - Storage owners choose roots, keys, retention, encryption, backup, and format-update policy.
 
-`InputManager.GetMemoryStats()` and `InputPlayer.GetMemoryStats()` expose main-thread, allocation-free count snapshots for explicit diagnostics. Recorder count/capacity/drop properties are also scalar reads. Caller-owned adapters may consume these APIs; the base module does not register global telemetry or pressure callbacks.
+`InputManager.GetMemoryStats()` and `InputPlayer.GetMemoryStats()` expose main-thread, allocation-free count snapshots for explicit diagnostics. Recorder count/capacity/drop properties are also scalar reads. Caller-owned adapters may consume these APIs; global telemetry and pressure callbacks stay with the host.
 
 Configurable `InputConfigurationLimits` values also have public absolute ceilings, preventing a caller from replacing a practical product budget with an `int.MaxValue` allocation/iteration budget. Repeated capture scopes are independently capped at `InputPlayer.MaximumContextCaptureDepth` (`1024`); a leaked scope fails closed instead of growing the capture stack indefinitely.
 
@@ -634,7 +634,7 @@ Input control paths and device layouts vary by platform and package version. Val
 | Editor-local settings | Input System Editor | `UserSettings/CycloneGames.InputSystem.EditorSettings.asset` | Unity serialized Editor settings | Close window and delete file to restore defaults. |
 | Generated constants | Project/code owner | `Assets/.../InputActions.cs` | Generated C# | Regenerate from YAML; do not hand-edit. |
 
-The module does not use `PlayerPrefs`, `EditorPrefs`, or `SessionState` for these records.
+These records never use `PlayerPrefs`, `EditorPrefs`, or `SessionState`.
 
 ## Troubleshooting
 

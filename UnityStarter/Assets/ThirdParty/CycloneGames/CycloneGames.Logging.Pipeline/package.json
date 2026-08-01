@@ -1,0 +1,21 @@
+{
+  "name": "com.cyclone-games.logging.pipeline",
+  "version": "1.0.0",
+  "displayName": "CycloneGames.Logging.Pipeline",
+  "description": "A Unity-free, bounded, observable logging pipeline with explicit ownership, failure-isolated sinks, resilient file output, and deterministic shutdown.",
+  "unity": "2022.3",
+  "unityRelease": "0f1",
+  "dependencies": {
+    "com.cyclone-games.logging": "1.0.0"
+  },
+  "keywords": [
+    "CycloneGames",
+    "Logging",
+    "Pipeline"
+  ],
+  "author": {
+    "name": "CycloneGames",
+    "email": "",
+    "url": ""
+  }
+}

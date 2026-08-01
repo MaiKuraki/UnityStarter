@@ -117,7 +117,16 @@ public sealed class ResourcesAssetOwner
 }
 ```
 
-Resources 暴露异步与同步单资产加载以及 runtime 诊断。它不暴露 bulk、raw-file、scene、catalog、downloader、storage-preflight 或 provider-maintenance 能力。释放 handle 释放 AssetManagement 所有权，但 Unity 可能保留 native Resources 数据。`UnloadUnusedAssetsAsync` 清理 idle wrapper 并调用 Unity 全局未使用资源扫描；在测量的阶段边界调度。
+Resources 暴露异步与同步单资产加载、runtime 诊断，以及可选的 `IUnityUnusedAssetCollector` 能力。它不暴露 bulk、raw-file、scene、catalog、downloader、storage-preflight 或 provider-maintenance 能力。释放 handle 释放 AssetManagement 所有权，但 Unity 可能保留 native Resources 数据。只在经过测量的阶段边界调度进程全局回收：
+
+```csharp
+if (package is IUnityUnusedAssetCollector collector)
+{
+    await collector.CollectUnusedUnityAssetsAsync();
+}
+```
+
+该调用清理框架 idle 所有权、合并并发请求，并 await Unity 全局未使用资源扫描。Package shutdown 会加入在途扫描。每个必须继续持有的资产都要保留 AssetManagement lease；在该 Unity 操作期间，只有 managed 调用栈上的裸引用不能保证所有权。
 
 ### Addressables 组合
 
@@ -150,6 +159,8 @@ bool cleaned = await maintenance.CleanUnusedBundleCacheAsync(cancellationToken);
 `CleanUnusedBundleCacheAsync` 是常规维护操作。`ClearAllCacheFilesAsync` 调用 Unity 进程全局 `Caching.ClearCache`；它是破坏性的、不限定于逻辑 package。`ReadReleaseMetadataVersionAsync` 读取有界产品 metadata 用于关联；它不是已认证授权或防回滚证据。
 
 Addressables Tags/Locations downloader 使用 provider 全局调度；不暴露 per-downloader 并发与重试。Key 数组接受 1-65,536 个值，每个最多 4,096 字符，总计 8 Mi 字符。每个 package 最多保留 128 个已注册 downloader wrapper 与 262,144 个显式 scope 值。Addressables 无法中止在途 `DownloadDependenciesAsync`；`Cancel`/`Dispose` 取消每个加入的调用方可见等待，同时 adapter 保留 pending handle、排空到 terminal、记录最终 snapshot，并只释放一次 provider handle。`CurrentDownloadBytes` 缓存 provider 状态，最多每秒刷新 4 次。所有 downloader 状态属性受主线程约束。
+
+Addressables 会在 provider destruction 完成前先递减 operation 的 provider 引用计数。如果 `Addressables.Release` 在该 mutation 可能已开始后抛出，adapter 会把 release 结果标记为 indeterminate，保留 handle 与诊断，并绝不重发同一 release 请求。Package shutdown 的每次重试都会保持失败，而不是冒险再次递减或报告虚假成功。应把该 package generation 视为 terminally unhealthy，并为产品外层恢复或进程重启 policy 保留异常证据。
 
 Pending Addressables 操作在每个平台拒绝 `WaitForAsyncComplete`。应 await `Task`。
 
@@ -188,7 +199,7 @@ bool initialized = await package.InitializeAsync(
 
 `asyncOperationMaxTimeSliceMs` 接受 10-100 ms。它控制 Yoo 主线程异步操作预算，不是网络并发。默认 16 ms 不是 60/120 fps 保证。
 
-`IYooAssetPackageMaintenance` 接受产品提供的 version 进行类型化 manifest 加载，并暴露类型化缓存清理与 All/Tags/Locations downloader。Package 名称与 manifest version 是 1-128 字符的 ASCII token，带 path-safe 规则。Downloader 并发 1-32，重试 0-16，维护超时 1-3,600 秒。Tag/location 数组使用与 Addressables 相同的边界。Downloader `Cancel`/`Dispose` 取消每个加入的调用方可见等待，请求 provider-native `CancelDownload`，并保持 wrapper 注册直到观察 provider terminal 状态。
+`IYooAssetPackageMaintenance` 接受产品提供的 version 进行类型化 manifest 加载，并暴露 `UnloadUnusedProviderAssetsAsync`、类型化缓存清理与 All/Tags/Locations downloader。Unload-unused 调用清理框架 idle 所有权并运行 YooAsset 的 package-local 操作；它不是 Unity 进程全局 Resources 扫描。Package 名称与 manifest version 是 1-128 字符的 ASCII token，带 path-safe 规则。Downloader 并发 1-32，重试 0-16，维护超时 1-3,600 秒。Tag/location 数组使用与 Addressables 相同的边界。Downloader `Cancel`/`Dispose` 取消每个加入的调用方可见等待，请求 provider-native `CancelDownload`，并保持 wrapper 注册直到观察 provider terminal 状态。
 
 Desktop/Editor 存储预检只在 Host mode 使用默认 sandbox cache 文件系统且 `PackageRoot` 非空显式时才可靠。其他 mode、自定义文件系统、隐式 root、移动端、WebGL 与主机报告 `Unknown`。
 
@@ -256,9 +267,9 @@ var identifier = sceneRef.ToSceneIdentifier(
     bucket: "Gameplay.Scene");
 ```
 
-`CreateHandle` 是惰性的，不获取 provider scene。首次 `Load` 执行取消预检、获取 provider handle，并在所有权交回前 load 或 activation 失败时启动权威清理。重复 `Load` fail-fast；重复或并发 `Unload` 加入一个可重试操作。StandardSceneNavigator 只对 additive 加载验证，这是集成默认。
+`CreateHandle` 是惰性的，不获取 provider scene。首次 `Load` 执行取消预检、获取 provider handle，并在所有权交回前 load 或 activation 失败时启动权威清理。重复 `Load` fail-fast；重复或并发 `Unload` 加入一个可重试操作。集成在构造时拒绝 `LoadSceneMode.Single` 与未定义 mode，只接受 additive 加载。要转移已经启动的 additive handle，调用 `NavigathenaSceneHandleAdapter.TakeOwnership(handle, owningLoader, LoadSceneMode.Additive)`，并立即停止使用之前的调用方 lease。
 
-Navigathena 1.1.0 在 `ISceneHandle.Load` 返回后、`SceneState` 接管所有权前，若取消、blank-scene unload 或 entry-point discovery 失败，不会清理目标 handle。生产使用需要通过取消与故障 fixture 关闭 load 后所有权交接与异步 teardown 边界的 upstream、fork 或自定义 navigator。
+Navigathena 1.1.0 `StandardSceneNavigator` 在 `ISceneHandle.Load` 返回后、`SceneState` 接管所有权前，若取消、blank-scene unload 或 entry-point discovery 失败，不会清理目标 handle；其同步 dispose 也不会 await 活跃 transition 或卸载当前 scene。因此，即使使用 additive scene，它也不受支持用于生产 provider-backed scene。生产使用需要修复后的 upstream/fork 或自定义 navigator，以关闭 load 后所有权交接与异步 teardown 边界。不要让 Navigathena 原生 Addressables identifier 与 CycloneGames provider owner 同时持有同一个 scene。
 
 ### 自定义 provider 边界
 

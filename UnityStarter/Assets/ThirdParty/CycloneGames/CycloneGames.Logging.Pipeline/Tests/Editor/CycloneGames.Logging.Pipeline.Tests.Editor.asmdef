@@ -1,0 +1,23 @@
+{
+    "name": "CycloneGames.Logging.Pipeline.Tests.Editor",
+    "rootNamespace": "CycloneGames.Logging.Pipeline.Tests.Editor",
+    "references": [
+        "CycloneGames.Logging",
+        "CycloneGames.Logging.Pipeline"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
+

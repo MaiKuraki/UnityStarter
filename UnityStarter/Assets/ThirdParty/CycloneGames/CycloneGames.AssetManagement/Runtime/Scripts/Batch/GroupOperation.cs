@@ -167,6 +167,15 @@ namespace CycloneGames.AssetManagement.Runtime.Batch
                 Interlocked.Exchange(ref _state, STATE_COMPLETED);
                 _completion.TrySetException(exception);
             }
+            catch (Exception exception)
+            {
+                // Fatal child failures must still retire the shared operation before this detached execution
+                // returns. Publishing the same failure through the shared completion also avoids an unobserved
+                // exception from ExecuteAsync().Forget().
+                _error = exception.Message;
+                Interlocked.Exchange(ref _state, STATE_COMPLETED);
+                _completion.TrySetException(exception);
+            }
         }
 
         private void ObserveChildrenAfterCancellation()
@@ -213,23 +222,46 @@ namespace CycloneGames.AssetManagement.Runtime.Batch
 
         private async UniTask ObserveCompletedOperationsAsync()
         {
+            Exception firstFatalFailure = null;
             Exception firstFailure = null;
+            OperationCanceledException firstCancellation = null;
             for (int i = 0; i < _items.Count; i++)
             {
                 try
                 {
                     await _items[i].Task;
                 }
+                catch (OperationCanceledException cancellation)
+                {
+                    firstCancellation ??= cancellation;
+                }
                 catch (Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
                 {
-                    // Observe every recoverable child failure, then report the first item failure deterministically.
+                    // Observe every recoverable child failure. A real fault takes precedence over expected lifecycle
+                    // cancellation so package retirement cannot hide an unrelated provider failure in the same group.
                     firstFailure ??= exception;
                 }
+                catch (Exception exception)
+                {
+                    // Continue through the full child set even for process-level failures. Every terminal UniTask
+                    // must have GetResult observed before the group publishes its own terminal state.
+                    firstFatalFailure ??= exception;
+                }
+            }
+
+            if (firstFatalFailure != null)
+            {
+                throw firstFatalFailure;
             }
 
             if (firstFailure != null)
             {
                 throw firstFailure;
+            }
+
+            if (firstCancellation != null)
+            {
+                throw firstCancellation;
             }
         }
 

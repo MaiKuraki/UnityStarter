@@ -20,7 +20,7 @@ CycloneGames.Networking 是一个 transport-neutral 底层模块，提供版本�
 
 本模块提供 transport、connection、runtime-context、serializer 和 canonical message-endpoint 契约。Protocol 注册仅通过 manifest 完成，具有显式 ID range、contract identity、payload budget、channel、version window 和 fingerprint。有界 buffer、queue、rate-limit state、sequence window、reconnection reservation 和 simulation history 由产品 composition root 或相应 subsystem 显式持有。Replication、interest、prediction、lockstep、rollback、session 和 host-handoff primitive 是供产品显式组合的基础能力。Unity runtime bridge、LAN host permission 指引、Editor diagnostics 以及可选 backend/serializer integration 共同构成完整 package。
 
-本模块不包含 RPC framework、通用 Service Locator 或自动 state-variable replication。Request、response、command 和 notification 语义由产品自有的版本化 message 表达。Composition 必须显式且由 instance 持有。
+RPC framework、通用 Service Locator 与自动 state-variable replication 不在本模块范围内。Request、response、command 和 notification 语义由产品自有的版本化 message 表达。Composition 必须显式且由 instance 持有。
 
 ### 主要特性
 
@@ -67,10 +67,10 @@ flowchart LR
     Family[Domain Networking package] --> Core
 ```
 
-- Core 不引用 Unity、backend SDK、可选 serializer library 或 domain Networking package。
-- Adapter 只转换 lifecycle、identity、channel 和 byte delivery，不决定产品 authority 或 gameplay policy。
-- 每个 adapter instance 持有自身 runtime context、connection wrapper、callback binding、有界可变状态和 shutdown；composition 中不存在 static adapter accessor。
-- `NetworkRuntimeContext` 通过显式构造创建，在 `Build()` 前接收 service，之后被冻结。它是 instance-scoped composition object，不是全局查询点。
+- Core 不依赖 Unity、backend SDK、可选 serializer library 或 domain Networking package。
+- Adapter 只转换 lifecycle、identity、channel 和 byte delivery；产品 authority 与 gameplay policy 由产品负责。
+- 每个 adapter instance 持有自身 runtime context、connection wrapper、callback binding、有界可变状态和 shutdown；composition 不使用 static adapter accessor。
+- `NetworkRuntimeContext` 通过显式构造创建，在 `Build()` 前接收 service，之后被冻结。它是 instance-scoped composition object。
 - Domain package 在 Module range 中拥有互不重叠的范围。游戏专用 contract 使用产品自有的 User-range manifest。
 
 ## 快速上手
@@ -87,15 +87,15 @@ flowchart LR
 
 ### 统一日志
 
-Networking Core 自己持有 `INetworkingDiagnostics`、`NetworkingDiagnosticLevel`、`NullNetworkingDiagnostics` 和规范 category `NetworkingDiagnosticCategories.Root`，不引用 `ILogWriter`、`LogChannel`、Unity 或具体 backend。`RollbackNetcode` 不带 diagnostics 的 overload 使用 no-op sink；显式 diagnostics overload 支持纯 C# host 实现。
+Networking Core 自己持有 `INetworkingDiagnostics`、`NetworkingDiagnosticLevel`、`NullNetworkingDiagnostics` 和规范 category `NetworkingDiagnosticCategories.Root`，不依赖 `ILogWriter`、`LogChannel`、Unity 或具体 backend。`RollbackNetcode` 不带 diagnostics 的 overload 使用 no-op sink；显式 diagnostics overload 支持纯 C# host 实现。
 
-`NetworkingDiagnosticLevel` 与 `LogSeverity` 使用相同的稳定数值布局：`Trace = 0`、`Debug = 1`、`Info = 2`、`Warning = 3`、`Error = 4`、`Fatal = 5`、`None = 6`。`NetworkingLoggingDiagnostics` 精确映射六个可输出级别；`None` 与未知值一律禁用并丢弃。Core diagnostics 是 best-effort side channel：自定义 sink 或共享 writer 抛出的普通异常会被隔离，不能改变 rollback admission 或 simulation 控制流。`OutOfMemoryException` 会刻意继续传播，以便 host 执行进程级资源耗尽策略。sink 仍必须非阻塞、有界，并满足调用方 simulation thread 的安全要求。
+`NetworkingDiagnosticLevel` 与 `LogSeverity` 使用相同的稳定数值布局：`Trace = 0`、`Debug = 1`、`Info = 2`、`Warning = 3`、`Error = 4`、`Fatal = 5`、`None = 6`。`NetworkingLogWriterAdapter` 精确映射六个可输出级别；`None` 与未知值一律禁用并丢弃。Core diagnostics 是 best-effort side channel：自定义 sink 或共享 writer 抛出的普通异常会被隔离，不能改变 rollback admission 或 simulation 控制流。`OutOfMemoryException` 会刻意继续传播，以便 host 执行进程级资源耗尽策略。sink 仍必须非阻塞、有界，并满足调用方 simulation thread 的安全要求。
 
 这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.networking` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
 
-`CycloneGames.Networking.Integrations.Logging` 中的 `NetworkingLoggingDiagnostics` 可以把 Core 本地契约映射到显式 `ILogWriter` 或当前 `LogRuntime.Writer`。非 Core 的日志生产 assembly 继续使用 `NetworkingUnityRuntimeLog`、`NetworkingEditorLog`、`NetworkingMirrorAdapterLog`、`NetworkingMirageAdapterLog` 与 `NetworkingPermissionsLog` 等 internal facade 集中持有 category；稳定专用 category 保持不变。
+`CycloneGames.Networking.Integrations.Logging` 中的 `NetworkingLogWriterAdapter` 可以把 Core 本地契约映射到显式 `ILogWriter` 或当前 `LogRuntime.Writer`。非 Core 的日志生产 assembly 继续使用 `NetworkingUnityRuntimeLog`、`NetworkingEditorLog`、`NetworkingMirrorAdapterLog`、`NetworkingMirageAdapterLog` 与 `NetworkingPermissionsLog` 等 internal facade 集中持有 category；稳定专用 category 保持不变。
 
-具体 backend 只由应用 composition root 安装和持有。Core diagnostics 与 adapter 都不会初始化、flush、dispose 或以其他方式拥有 backend。
+具体 backend 只由应用 composition root 安装和持有；Core diagnostics 与 adapter 把它的生命周期留给 host。
 
 ### 定义产品 Protocol
 
@@ -161,11 +161,11 @@ FNV-1a checksum 只检测偶发损坏和 parser 分歧，不是 MAC。必须先�
 ### Runtime 基础能力
 
 - Replication planner、spatial index、state cache、send budget 和 packet builder 都是 primitive；产品仍是 relevance 与 overload policy 的唯一 authority。
-- Unity interest manager 提供 grid、group、team visibility 和 composite 选择。DOD assembly 提供两个必须显式 dispose 的 NativeContainer-backed alternative：`NativeGridInterestManager` 和 `NativeTeamVisibilityInterestManager`。它不是 ECS，不调度 Job，也不使用 Burst。
+- Unity interest manager 提供 grid、group、team visibility 和 composite 选择。DOD assembly 提供两个必须显式 dispose 的 NativeContainer-backed alternative：`NativeGridInterestManager` 和 `NativeTeamVisibilityInterestManager`。它是 NativeContainer-backed 集合，不是 ECS；不使用 Job 或 Burst。
 - Prediction、interpolation、lag compensation、lockstep、rollback、reconnection、session directory、matchmaking coordination 和 host handoff 是彼此独立的能力。
 - `QuantizedVector3`、`QuantizedQuaternion` 与 `DeltaCompressor` 使用显式 little-endian encoding 和固定 quantization configuration。Quantization 与 delta baseline 属于 protocol manifest 和 endpoint rollout。
 - `ActorRouteTable` 是进程内 helper，不是 distributed router。它应拥有唯一 owner 和外部 capacity policy。
-- `LocalLoopTransport` 用于可重复的进程内开发，不模拟 latency、loss、NAT、encryption、多 client load 或 release transport behavior。
+- `LocalLoopTransport` 用于可重复的进程内开发；latency、loss、NAT、encryption、多 client load 与 release transport behavior 不在其范围内。
 
 ### 可选 Transport 与 Backend Adapter
 
@@ -191,7 +191,7 @@ Adapter 使用显式 instance reference，并通过 `INetworkMessageEndpoint` �
 | `NewtonsoftJsonSerializerAdapter` | 显式 opt-in assembly；依赖 `com.unity.nuget.newtonsoft-json`。 | 会产生 managed string；默认关闭 type-name handling。Polymorphism 必须使用显式 allow-list binder。 |
 | `MessagePackSerializerAdapter` | 显式 opt-in assembly；依赖 `com.github.messagepack-csharp`。 | 使用 pooled/thread-local scratch storage，但必须验证 formatter registration、AOT 和 stripping。 |
 
-Serializer choice 属于每个版本化 domain protocol 或产品 codec，并在调用 canonical byte endpoint 前完成。不存在 ambient registration，也不会根据已安装 package 自动选择。Serializer type、option、generated formatter、compression 和 message schema 都是必须在 peer 间一致的 protocol fact。
+Serializer choice 属于每个版本化 domain protocol 或产品 codec，并在调用 canonical byte endpoint 前完成。没有 ambient registration，也不会根据已安装 package 自动选择。Serializer type、option、generated formatter、compression 和 message schema 都是必须在 peer 间一致的 protocol fact。
 
 ### Editor 工作流
 
@@ -202,7 +202,7 @@ Serializer choice 属于每个版本化 domain protocol 或产品 codec，并在
 - `Tools/CycloneGames/Networking/LAN Host Permission` 显示 host 指引、本机 IPv4 candidate 和 Windows firewall 状态/操作。
 - 可选 adapter Inspector 只在对应 SDK integration assembly 激活后出现。
 
-Diagnostics 只在用户请求时运行，不会在每次 repaint 中扫描 scene。它不能验证未打开的 build scene、Player execution、backend connectivity 或平台认证。依赖 authoring workflow 前，应在当前 Unity version 验证 Undo/Redo、Prefab Override、multi-object editing、domain reload、layout 和 asset safety。
+Diagnostics 只在用户请求时运行，并且只在此时扫描 scene。未打开的 build scene、Player execution、backend connectivity 与平台认证不在其范围内。依赖 authoring workflow 前，应在当前 Unity version 验证 Undo/Redo、Prefab Override、multi-object editing、domain reload、layout 和 asset safety。
 
 ## 进阶主题
 
@@ -220,7 +220,7 @@ Diagnostics 只在用户请求时运行，不会在每次 repaint 中扫描 scen
 - 日志和 diagnostics 必须脱敏 key、token、payload、account identifier 与 remote error body。
 - Process result enum 将 0 保留给 `Invalid` 或 `Unknown`；compatible、accepted、valid、launched 和 authenticated outcome 都是显式非零值。因此，默认初始化的 result struct 会 fail closed。
 
-本包不实现 transport encryption、certificate validation、identity proof、key storage 或 key exchange。应使用经过目标平台验证的 TLS/DTLS/WSS 或 platform/backend security boundary，并测试真实 failure mode。
+transport encryption、certificate validation、identity proof、key storage 与 key exchange 不在本包范围内。应使用经过目标平台验证的 TLS/DTLS/WSS 或 platform/backend security boundary，并测试真实 failure mode。
 
 ### Contract 与发布规则
 
@@ -355,7 +355,7 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 
 ## 相关包
 
-- `CycloneGames.GameplayAbilities` — 拥有 gameplay state、显式 authority/replica role 与权威 `TryExecuteAuthorityAbility` 边界；它不拥有 transport bridge。
+- `CycloneGames.GameplayAbilities` — 拥有 gameplay state、显式 authority/replica role 与权威 `TryExecuteAuthorityAbility` 边界，自身不携带 transport bridge。
 - `CycloneGames.GameplayAbilities.Networking` — 面向非预测、authority-owned `AuthorityOnly` activation 的 fixed-wire protocol、codec、structural validator 与 result mapper。它是 protocol integration，不是 transport endpoint；产品 endpoint 负责 authentication、ownership、replay/rate policy、有界 pending state、authority-ID mapping 与 owner-thread marshaling。
 - `CycloneGames.GameplayFramework.Networking`
 - `CycloneGames.BehaviorTree.Networking`

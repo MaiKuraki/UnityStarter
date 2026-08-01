@@ -1,57 +1,64 @@
 # CycloneGames.Logging
 
-`CycloneGames.Logging` is the engine-independent producer contract used by CycloneGames packages. It standardizes severity, category naming, deferred message construction, exception reporting, null defaults, explicit injection, and process-level backend replacement without depending on Unity or a concrete sink.
+`CycloneGames.Logging` is the Unity-free producer contract shared by CycloneGames packages. It defines how code emits a categorized record without selecting a queue, thread, sink, file format, Unity lifecycle, or concrete backend.
 
-## Responsibilities
+The package version is `1.0.0`. Its runtime assembly is `CycloneGames.Logging` with `noEngineReferences: true`. A consuming asmdef declares the dependency explicitly.
 
-- `ILogWriter` is the producer-only backend boundary.
-- `LogChannel` binds a stable category to either an explicit writer or the process fallback.
-- `LogWriterGuard` contains non-catastrophic writer and formatter failures for adapters that cannot use a channel.
-- `LogRuntime` atomically installs or replaces the process fallback but never owns or disposes it.
-- `NullLogWriter` keeps independently installed packages safe and silent when no backend is present.
+## Architecture and naming
 
-Sink registration, queues, threads, file output, Unity delivery, flushing, and shutdown belong to a backend such as `CycloneGames.Logger`.
-
-## Assembly and package model
+The logging family has three package roots with one responsibility each:
 
 ```mermaid
 flowchart LR
-    subgraph Assembly["Each log-producing asmdef"]
-        Consumer["Implementation"] --> Facade["Diagnostics/<FeatureName>Log"]
-    end
-    Facade --> Contract["CycloneGames.Logging"]
-    Host["Application composition root"] --> Contract
-    Host -. "optional" .-> Backend["CycloneGames.Logger"]
-    Backend --> Contract
+    Producer["Business package"] --> Contract["CycloneGames.Logging<br/>ILogWriter and LogChannel"]
+    Host["Pure C# composition root"] --> Pipeline["CycloneGames.Logging.Pipeline<br/>LogPipeline and ILogSink"]
+    UnityHost["Unity composition root"] --> Unity["CycloneGames.Logging.Unity<br/>settings and lifecycle"]
+    Pipeline --> Contract
+    Unity --> Pipeline
+    Unity --> Contract
 ```
 
-Ordinary Runtime, Unity, Editor, Sample, and integration assemblies that produce records reference `CycloneGames.Logging` directly. A strict PureCore assembly may instead own a minimal module-local diagnostics port so it has no Logging package dependency; the bridge from that port to `CycloneGames.Logging` belongs to a separate `*.Integrations.Logging` assembly. Business assemblies never reference `CycloneGames.Logger`. The concrete backend is selected only by the host.
+The names describe layers rather than competing logging APIs:
 
-This design deliberately does not use PlayerSettings scripting symbols or distributed source-level `#if` blocks. Local packages under `Assets/` cannot use their `package.json` as an automatic presence condition, while a mandatory, Unity-free contract is small and deterministic in both UPM and asset-style layouts. Optional third-party backend adapters should remain in separate integration assemblies.
+| Package | Responsibility | Unity dependency |
+| --- | --- | --- |
+| `com.cyclone-games.logging` | Producer contract and safe ambient fallback | None |
+| `com.cyclone-games.logging.pipeline` | Explicitly owned queue, routing, sinks, monitoring, and shutdown | None |
+| `com.cyclone-games.logging.unity` | Unity settings, bootstrap, Console bridge, Editor tooling, and samples | Required |
 
-## Uniform contract
+The family follows the repository's common package roots. `CycloneGames.Logging` contains `Runtime/` and `Tests/`; `CycloneGames.Logging.Pipeline` contains `Runtime/` and `Tests/`; `CycloneGames.Logging.Unity` adds `Editor/`, `Samples/`, and `Documents~/`. Runtime source sits directly below `Runtime/` or a responsibility subfolder such as `Processors/` or `Settings/`.
 
-| Type | Contract |
+Business packages depend only on this package. They do not reference the pipeline or Unity composition packages. A host chooses and owns the backend. This direction keeps reusable packages usable in Unity, command-line tests, headless processes, and other C# hosts.
+
+There is one ambient writer slot: `LogRuntime.Writer`.
+
+## Producer contract
+
+| Type | Purpose |
 | --- | --- |
-| `LogSeverity` | Ordered `Trace` through `Fatal`; `None` is a filtering sentinel and is not emitted |
-| `ILogWriter` | Admission check, string/deferred/generic-state writes, and structured exception writes |
-| `LogChannel` | Stable category plus either an explicit writer or the current process fallback |
-| `LogWriterGuard` | Best-effort protected calls for adapter boundaries; `TryWrite*` reports call completion, not delivery |
-| `LogRuntime` | Atomic fallback installation/replacement; no ownership, flush, or disposal |
-| `NullLogWriter` | Allocation-free disabled default when a backend is absent |
+| `ILogWriter` | Backend-neutral admission and write contract |
+| `LogSeverity` | Ordered `Trace`, `Debug`, `Info`, `Warning`, `Error`, and `Fatal`; `None` is a filtering sentinel |
+| `LogChannel` | Immutable category bound to an explicit writer or the current ambient writer |
+| `LogChannelExtensions` | Uniform severity-specific string, deferred-builder, generic-state, and exception overloads |
+| `LogWriterGuard` | Validates producer input and contains non-catastrophic backend failures |
+| `LogRuntime` | Atomically installs or replaces the non-owning process fallback |
+| `NullLogWriter` | Silent default used when no host backend is installed |
 
-Categories use `CycloneGames.<Package>[.<Area>]`, for example `CycloneGames.Audio.Editor`. Keep them stable because filters and dashboards may treat them as identifiers. Message text does not repeat the category. Use `WriteException`/`Error(exception, message)` rather than flattening an exception to `Message`, so a backend can preserve type, stack, and inner-exception evidence.
+`ILogWriter` is producer-only. Sink registration, flush, shutdown, and disposal belong to the concrete owner.
 
-## Assembly-local log facade
+Categories are stable identifiers. Use `CycloneGames.<Package>[.<Area>]`, for example `CycloneGames.AssetManagement.Download`. Do not repeat the category in message text. Preserve exceptions with an exception overload so the backend receives the exception type, stack, and inner exception rather than only `Exception.Message`.
 
-Every non-Core package assembly that emits records owns one internal facade at `Diagnostics/<FeatureName>Log.cs`, including Samples and Benchmarks. Copyable examples follow the same contract as production code so importing a sample cannot reintroduce a competing logging style. The type name must be unique across the package and end with `Log`; using the same generic `ModuleLog` name in several assemblies can become ambiguous when tests or integrations receive internals access.
+## Uniform package facade
 
-Each facade provides the same minimum surface:
+Each non-Core assembly that emits records keeps its category construction in one internal file such as `Diagnostics/AssetManagementLog.cs`:
 
 ```csharp
-internal static class AudioRuntimeLog
+using System;
+using CycloneGames.Logging;
+
+internal static class AssetManagementLog
 {
-    internal const string Category = "CycloneGames.Audio";
+    internal const string Category = "CycloneGames.AssetManagement";
     internal static readonly LogChannel Channel = LogChannel.Create(Category);
 
     internal static LogChannel Create(ILogWriter logWriter)
@@ -63,93 +70,132 @@ internal static class AudioRuntimeLog
 }
 ```
 
-- `Category` owns the stable default category for that assembly.
-- `Channel` is the ambient channel for static and Unity-owned entry points.
-- `Create(ILogWriter logWriter)` creates an explicitly bound channel for constructed services.
-- An assembly with multiple established categories may add clearly named members such as `EditorChannel` or `CreateForCategory`, but keeps the minimum surface above.
+This is a small assembly-local facade, not another logging abstraction. It centralizes the category and gives every module the same usage shape:
 
-Only facade files call `LogChannel.Create`. Implementation files use the facade, which makes category changes, writer injection, and policy audits discoverable without introducing a package-specific logger interface. `CG0050` in `CycloneGames.Analyzers` checks the construction boundary and file convention.
+- static or Unity-owned entry points use `AssetManagementLog.Channel`;
+- constructed services receive `ILogWriter` and use `AssetManagementLog.Create(logWriter)`;
+- implementation files do not create ad hoc categories;
+- Samples, Tests, Runtime, and Editor assemblies use distinct facade type names when they own distinct categories.
 
 ### Strict PureCore boundary
 
-A PureCore assembly is stricter than merely putting `Core` in its name: it sets `noEngineReferences: true` and its complete asmdef dependency graph references neither Unity, `CycloneGames.Logging`, `CycloneGames.Logger`, nor a Logging integration. The architecture tests automatically treat production `*.Core` asmdefs with `noEngineReferences: true` as this strict profile; a deliberately Unity-dependent assembly whose name ends in `Core` is not silently presented as PureCore. When strict Core must expose best-effort diagnostics, it owns a small module-named contract with the same shape across packages: `I<Module>Diagnostics`, `<Module>DiagnosticLevel`, `<Module>DiagnosticCategories.Root`, `Null<Module>Diagnostics`, and `IsEnabled`/`Write`/`WriteException`. Static Core owners may additionally expose an atomic `<Module>Diagnostics` replacement point that owns no sink lifetime. The optional `<Module>LoggingDiagnostics` adapter lives in `<Module>.Integrations.Logging`, references both Core and this package, sets `autoReferenced: false`, and may follow `LogRuntime.Writer` or bind an explicit `ILogWriter`.
+A strict PureCore assembly does not reference Unity or this package. If it needs best-effort diagnostics, it owns a minimal module-specific port, for example `IAssetDiagnostics`, plus its own disabled implementation and diagnostic level/category model. The optional adapter is placed in `<Module>.Integrations.Logging` and references both the PureCore assembly and `CycloneGames.Logging`.
 
-This local port is reserved for a real physical package/assembly independence requirement. It is not permission to add competing backend configuration, files, threads, queues, Unity bootstrap code, or package-specific sink APIs to Core. Non-Core assemblies continue to use `LogChannel` directly.
+```mermaid
+flowchart LR
+    Core["Module.Core"] --> Port["Module-owned diagnostics port"]
+    Adapter["Module.Integrations.Logging"] --> Core
+    Adapter --> Contract["CycloneGames.Logging"]
+```
+
+The adapter points outward from Core. Core never gains a transitive Unity dependency, and the module-local port does not grow queues, files, sinks, or lifecycle management. Use this pattern only when physical Core independence is required; ordinary runtime assemblies use `LogChannel` directly.
+
+Assembly independence and package-install independence are separate. A Core asmdef can have no Logging reference while another assembly in the same physical UPM package causes that package root to declare `com.cyclone-games.logging`. Installing the package root will still resolve the dependency. Consumers that must install Core without any Logging package need a separate physical Core package root.
 
 ## Usage
 
-Use explicit injection for plain C# services:
+Prefer explicit injection in plain C# services:
 
 ```csharp
-private readonly LogChannel _log;
-
-public NetworkSession(ILogWriter logWriter)
+public sealed class CacheService
 {
-    _log = NetworkingRuntimeLog.Create(logWriter);
+    private readonly LogChannel _log;
+
+    public CacheService(ILogWriter logWriter)
+    {
+        _log = AssetManagementLog.Create(logWriter);
+    }
+
+    public void Clear()
+    {
+        _log.Info("Cache cleared.");
+    }
 }
 ```
 
-Static or Unity-owned entry points may use the process fallback:
+Pass `NullLogWriter.Instance` when silence is an explicit policy. Do not use `null` to encode that choice.
+
+Static and Unity-owned entry points may follow the ambient writer:
 
 ```csharp
-private static readonly LogChannel Log = AudioRuntimeLog.Channel;
+private static readonly LogChannel Log = AssetManagementLog.Channel;
 
-Log.Warning("Voice budget was exhausted.");
+Log.Warning("The download queue reached its soft limit.");
 ```
 
-Use `Log` for an ambient static field, `_log` for an injected instance field, and `logWriter` for the constructor or factory parameter. Calls use the same six severity names in every package: `Trace`, `Debug`, `Info`, `Warning`, `Error`, and `Fatal`. Every severity also accepts `(Exception exception, string message = null)`. Messages should not repeat the category as a text prefix. Use deferred or generic-state overloads on hot paths so filtered messages do not allocate.
+`LogChannel.Create(category)` resolves `LogRuntime.Writer` on each call, so an owner-controlled replacement is observed. `LogChannel.Create(category, writer)` remains bound to the supplied writer.
 
-Explicit injection does not treat `null` as an implicit policy choice. A caller that deliberately wants silence passes `NullLogWriter.Instance`:
+For a measured hot path, avoid building a filtered interpolated string. Pass state separately and cache or use a static delegate:
 
 ```csharp
-public CacheService(ILogWriter logWriter)
-{
-    _log = AssetManagementLog.Create(logWriter);
-}
-
-var cache = new CacheService(NullLogWriter.Instance);
+Log.Debug(
+    itemCount,
+    static (value, builder) => builder.Append("Queued items: ").Append(value));
 ```
 
-Do not cache `LogRuntime.Writer` in an ambient channel: `LogChannel.Create(category)` intentionally resolves it on every call so a controlled backend replacement is observed. Explicit channels remain bound to the injected writer.
+A conforming writer invokes the builder only after admission. This avoids the shown closure and preformatted string; it does not guarantee that a concrete backend or sink performs no allocations.
 
-## Failure and input contract
+## Ambient ownership and replacement
 
-Producer operations through `LogChannel` are best-effort and observational: `IsEnabled` returns `false`, while writes return without changing business control flow, when a writer or deferred formatter throws a non-catastrophic `Exception`. `LogWriterGuard` provides the same boundary to integration adapters that hold an `ILogWriter` directly. `TryWrite* == true` means only that the writer call returned normally; admission, queueing, persistence, and delivery remain backend-owned outcomes.
+`LogRuntime` owns only an atomic `ILogWriter` reference:
 
-This isolation is intentionally not absolute. `OutOfMemoryException` propagates, and `StackOverflowException` is not a recoverable logging failure. Invalid construction input (`null` writer or blank category), a `null` deferred builder, and a `null` exception are caller programming errors and throw before a valid channel enters the writer. `default(LogChannel)`, `LogSeverity.None`, unknown severity values, and `NullLogWriter.Instance` are safe silent paths and never invoke a writer or builder. Direct calls to `ILogWriter` bypass this producer protection.
+- `TryInstallWriter` succeeds only while the silent default is installed;
+- `TryReplaceWriter(expected, replacement)` performs an identity-checked handoff;
+- `TryResetWriter(expected)` restores the silent default only for the expected owner;
+- `ReplaceWriter` is an unconditional administrative operation and returns an unowned reference.
 
-## Performance contract
+None of these methods flushes or disposes a writer. The composition root must retain the concrete owner, stop or redirect producers, reset the ambient reference with identity checking, drain the backend, and dispose it according to that backend's contract. Never dispose a returned writer unless ownership is known independently.
 
-The default/null and invalid-severity paths short-circuit before interface dispatch and deferred-builder execution. A conforming `ILogWriter` performs admission before invoking a deferred builder. The generic-state overload allows hot code to avoid a capturing closure; it does not promise zero allocation inside a backend. Exception containment is kept outside the null fast path. These are structural properties verified by focused tests, not measured Player or IL2CPP performance claims; target builds still require profiling.
+## Failure and safety contract
 
-## Lifecycle and ownership
+Calls through `LogChannel` and `LogWriterGuard` are observational. A non-`OutOfMemoryException` raised by a writer or deferred formatter is contained; `IsEnabled` returns `false` and writes return without changing business control flow. `OutOfMemoryException` remains visible.
 
-The composition root creates the concrete backend and normally installs it with `LogRuntime.TryInstallWriter`. `TryReplaceWriter(expected, replacement)` and `TryResetWriter(expected)` provide reference-identity compare/exchange for owner-safe restoration. `ReplaceWriter` is an unconditional administrative handoff and returns the previous unowned writer; there is no unconditional reset API. `LogRuntime` deliberately performs no disposal. CycloneGames packages must not initialize, flush, restart, or shut down the process backend.
+Caller mistakes remain visible before dispatch:
 
-`ILogWriter` implementations must document thread affinity and be safe for every thread from which their consumers can write. `LogRuntime` replacement is atomic, but it is not a handoff protocol: the composition root must stop new producers, replace/reset the writer, drain the backend it owns, and only then dispose it. Never dispose the value returned by `ReplaceWriter` unless ownership is independently known.
+- a blank category or explicit `null` writer is rejected during channel creation;
+- a `null` builder or exception is rejected on a valid channel;
+- `default(LogChannel)`, `LogSeverity.None`, unknown severity values, and `NullLogWriter.Instance` are silent and do not invoke a builder.
 
-Invalid categories fail when a channel is created. A missing backend is not an error and stays silent. Writer-specific queue overflow, sink failure, persistence, and shutdown behavior are intentionally outside this contract and must be reported by that backend.
+`LogWriterGuard.TryWrite* == true` means the writer call returned normally. It does not prove queue admission, sink delivery, flush, or persistence. Direct `ILogWriter` calls bypass the guard and are intended for controlled adapter/backend code.
 
-## Persistence
+## Threading, performance, and AOT
 
-This package writes no files or preferences and owns no serialized assets. File output and its retention policy are backend concerns. The package has no cache and requires no cleanup.
+`LogRuntime.Writer` uses `Volatile` and `Interlocked` for atomic publication and replacement. The contract does not add locks or define a backend's thread affinity. An `ILogWriter` implementation must support every producer thread from which it is used.
 
-The runtime uses no reflection, dynamic code generation, Unity object, or implicit lifecycle discovery. Its static fallback contains only an interface reference updated with `Interlocked`/`Volatile`; IL2CPP, stripping, and platform validation still belong to the consuming Player build.
+The silent, disabled, and invalid-severity paths short-circuit before builder execution. Generic-state builders can avoid captured closures. Actual allocation rate, throughput, latency, and contention depend on the selected writer and sinks and must be profiled in representative Player builds.
 
-## UPM composition
+The runtime uses no Unity API, reflection discovery, dynamic code generation, unsafe code, or implicit lifecycle callbacks. The assembly is suitable for AOT-oriented composition by static analysis, but IL2CPP, stripping, platform, and target-device behavior still require validation in the consuming build.
 
-Packages that produce logs depend on `com.cyclone-games.logging`. They do not depend on `com.cyclone-games.logger` unless they are a host or concrete backend integration. Removing the backend therefore leaves packages compilable and routes ambient channels to `NullLogWriter`.
+## Persistence and privacy
 
-Assembly independence and package installation independence are different boundaries. A strict Core asmdef can have no Logging reference while its containing UPM package still declares `com.cyclone-games.logging` for another assembly. Installing that package will still resolve Logging. A consumer that must install Core without the Logging package needs a separate physical Core package root; `autoReferenced: false` changes assembly inclusion, not UPM dependency resolution.
+This package writes no files, assets, preferences, registry values, or caches. It owns no serialized data and requires no cleanup. Persistence, retention, path policy, redaction, and privacy belong to the selected sink and application owner.
 
-Package-specific backend interfaces and compatibility shims are not part of the logging architecture. Non-Core assemblies use `ILogWriter`/`LogChannel` through assembly-local facades; strict PureCore assemblies may use only the standardized local diagnostics port and an outward Logging integration adapter. Breaking migrations remove old logging entry points instead of retaining parallel APIs.
+Caller file paths and member names are part of the producer contract. Treat them as potentially sensitive metadata, especially when forwarding records to files or remote systems.
+
+## Package integration
+
+For an ordinary CycloneGames package:
+
+1. Add `"com.cyclone-games.logging": "1.0.0"` to `package.json`.
+2. Add `CycloneGames.Logging` to each producer asmdef's `references`.
+3. Add one assembly-local `Diagnostics/<FeatureName>Log.cs` facade.
+4. Inject `ILogWriter` into constructed services and use the ambient channel only at static or Unity-owned boundaries.
+5. Let the application composition root select `CycloneGames.Logging.Pipeline`, `CycloneGames.Logging.Unity`, or another `ILogWriter` implementation.
+
+No PlayerSettings scripting symbol is required. Optional adapters stay in separate integration assemblies instead of spreading conditional compilation through business code.
+
+In an asset-style checkout under `Assets/`, `package.json` does not automatically enable or order local package dependencies. The explicit asmdef reference is the compilation fact. When distributed as real UPM packages, the manifest dependency additionally participates in package resolution.
 
 ## Validation
 
-1. Compile `CycloneGames.Logging` without Unity engine references.
+Minimum package validation:
+
+1. Confirm `CycloneGames.Logging.asmdef` has no references and keeps `noEngineReferences: true`.
 2. Run `CycloneGames.Logging.Tests.Editor`.
-3. Verify a channel follows `LogRuntime.ReplaceWriter` while an explicitly bound channel remains isolated.
-4. Verify a package compiles with only `com.cyclone-games.logging` installed.
-5. Run `CycloneGames.Analyzers` tests and verify `CG0049`/`CG0050` reject direct output APIs and ad hoc `LogChannel.Create` calls.
-6. Verify the automatically discovered strict PureCore dependency graphs and `*.Integrations.Logging` direction tests pass.
-7. Verify the source backstop finds no `Debug.Log*`, `print`, `Console.Write*`, or direct `CLogger` use in governed production sources outside the Logger backend.
+3. Verify an ambient channel observes an identity-safe writer replacement while an explicitly bound channel does not.
+4. Verify disabled and invalid-severity paths never invoke deferred builders.
+5. Compile a representative business package with only `com.cyclone-games.logging` from this logging family.
+6. Compile a strict PureCore assembly without this package and compile its optional integration separately.
+7. Run project source/analyzer checks that prohibit direct platform output APIs and ad hoc channel construction.
+
+These checks establish the tested contract. They do not by themselves validate Player performance, IL2CPP, stripping, or target-platform behavior.

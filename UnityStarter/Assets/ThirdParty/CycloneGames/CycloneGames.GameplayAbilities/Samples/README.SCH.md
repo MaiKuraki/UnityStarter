@@ -14,7 +14,7 @@
 | Prefab | `Samples/Prefabs/Player.prefab`、`Samples/Prefabs/Enemy.prefab` | 承载示例 Character 和 ASC 组件的最小 Actor。 |
 | Material | `Samples/Materials/` | 示例 Actor 使用的简单视觉材质。 |
 | Ability 与 Effect 资产 | `Samples/ScriptableObjects/` | 已配置的 Ability、Effect、Cue、Execution、DoT、Poison、Purify、Passive、Bounty 和 Level Data 资产。 |
-| Runtime 示例脚本 | `Samples/Scripts/` | Ability、Attribute、Target Actor、Setup、Cue Pool 和 UI Logger 示例。 |
+| Runtime 示例脚本 | `Samples/Scripts/` | Ability、Attribute、Target Actor、Setup、Cue Pool 和 UI Log Writer 示例。 |
 | Editor 示例脚本 | `Samples/Editor/` | 示例 Property Drawer，以及 ASC Holder Inspector 的 Play Mode Diagnostics 控件。 |
 | 预览媒体 | `../Documents~/DemoPreview_1.gif`、`../Documents~/DemoPreview_2.gif` | 用于入门和文档的 README 预览图。 |
 
@@ -104,7 +104,7 @@ Purify 与 Shockwave 会在派生构造边界复制 Faction Filter Tag Container
 | 脚本或程序集 | 学习重点 |
 | --- | --- |
 | `Scripts/SampleCombatManager.cs` | Scene-owned `GASRuntimeContext` 组合、共享 ASC 初始化、临时 UI Log Writer 安装和逆序 Shutdown。 |
-| `Scripts/UILogger.cs` | Sample-only `ILogWriter` Decorator：向之前安装的 Writer 转发日志，把有界消息复制到 UI，并由 `SampleCombatManager` 在 Shutdown 时恢复原 Writer。 |
+| `Scripts/UILogWriter.cs` | Sample-only `ILogWriter`/`IDisposable` Decorator：向之前安装的 Writer 转发日志，把有界消息复制到 UI，并由 `SampleCombatManager` 在 Shutdown 时恢复原 Writer。 |
 | `Scripts/Diagnostics/GameplayAbilitiesSampleLog.cs` | Runtime sample 日志门面，提供稳定的 `Category`、ambient `Channel` 与严格的显式 writer 创建。 |
 | `Editor/Diagnostics/GameplayAbilitiesSampleEditorLog.cs` | 位于独立 Editor asmdef 中的 Editor sample 日志门面。 |
 | `Scripts/Integrate/Setup/GASManualSetup.cs` | 使用 `CycloneGames.AssetManagement` 的手动非 DI Cue Manager 启动，并支持可选 Runtime Backing-cache Profile。 |
