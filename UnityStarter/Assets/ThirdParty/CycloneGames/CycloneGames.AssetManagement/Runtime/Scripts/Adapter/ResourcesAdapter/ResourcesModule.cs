@@ -10,19 +10,22 @@ namespace CycloneGames.AssetManagement.Runtime
         private const string DEBUG_FLAG = "[ResourcesAssetModule]";
         private readonly Dictionary<string, IAssetPackage> _packages = new Dictionary<string, IAssetPackage>(StringComparer.Ordinal);
         private bool _initialized;
+        private bool _shutdownRequested;
         private bool _destroying;
         private UniTask _destroyTask;
         private IReadOnlyList<string> _packageNamesCache;
         private AssetCacheTuning _defaultCacheTuning;
 
-        public bool Initialized => _initialized;
+        public bool Initialized => _initialized && !_shutdownRequested;
 
         public UniTask InitializeAsync(AssetManagementOptions options = default)
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (_destroying)
+            if (_shutdownRequested)
             {
-                throw new InvalidOperationException($"{DEBUG_FLAG} Module destruction is in progress.");
+                throw new ObjectDisposedException(
+                    nameof(ResourcesModule),
+                    $"{DEBUG_FLAG} Shutdown was requested and this module instance cannot be reused.");
             }
 
             if (_initialized)
@@ -44,22 +47,31 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask DestroyAsync()
         {
             AssetRuntimeGuard.EnsureMainThread();
+            _shutdownRequested = true;
             if (_destroying)
             {
                 return _destroyTask;
             }
 
             _destroying = true;
-            _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
-            return _destroyTask;
+            try
+            {
+                _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
+                return _destroyTask;
+            }
+            catch
+            {
+                _destroying = false;
+                throw;
+            }
         }
 
         private async UniTask DestroyCoreAsync()
         {
-            var packageNames = new List<string>(_packages.Keys);
-            List<Exception> failures = null;
             try
             {
+                var packageNames = new List<string>(_packages.Keys);
+                List<Exception> failures = null;
                 for (int i = 0; i < packageNames.Count; i++)
                 {
                     string packageName = packageNames[i];
@@ -80,18 +92,18 @@ namespace CycloneGames.AssetManagement.Runtime
                         failures.Add(ex);
                     }
                 }
+
+                if (failures != null)
+                {
+                    throw new AggregateException($"{DEBUG_FLAG} One or more packages failed to shut down.", failures);
+                }
+
+                _initialized = false;
             }
             finally
             {
                 _destroying = false;
             }
-
-            if (failures != null)
-            {
-                throw new AggregateException($"{DEBUG_FLAG} One or more packages failed to shut down.", failures);
-            }
-
-            _initialized = false;
         }
 
         public IAssetPackage CreatePackage(string packageName)
@@ -159,9 +171,11 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void EnsureOperational()
         {
-            if (_destroying)
+            if (_shutdownRequested)
             {
-                throw new InvalidOperationException($"{DEBUG_FLAG} Module destruction is in progress.");
+                throw new ObjectDisposedException(
+                    nameof(ResourcesModule),
+                    $"{DEBUG_FLAG} Shutdown was requested and this module instance cannot be reused.");
             }
         }
     }

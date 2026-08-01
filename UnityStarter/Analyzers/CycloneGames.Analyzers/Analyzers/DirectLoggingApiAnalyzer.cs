@@ -11,7 +11,7 @@ namespace CycloneGames.Analyzers
 {
     /// <summary>
     /// Prevents CycloneGames package assemblies from bypassing the shared logging contract.
-    /// Exact Logger backends and test, tool, and code generation boundaries are outside this
+    /// Exact logging backend assemblies and test, tool, and code generation boundaries are outside this
     /// rule's scope by design; copyable samples and benchmarks remain governed.
     /// </summary>
     [DiagnosticAnalyzer(LanguageNames.CSharp)]
@@ -20,7 +20,7 @@ namespace CycloneGames.Analyzers
         private const string UnityDebugMetadataName = "UnityEngine.Debug";
         private const string UnityMonoBehaviourMetadataName = "UnityEngine.MonoBehaviour";
         private const string SystemConsoleMetadataName = "System.Console";
-        private const string BackendCLoggerMetadataName = "CycloneGames.Logger.CLogger";
+        private const string BackendLogPipelineMetadataName = "CycloneGames.Logging.LogPipeline";
 
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
             ImmutableArray.Create(DiagnosticRules.DirectLoggingApi);
@@ -58,10 +58,14 @@ namespace CycloneGames.Analyzers
                 operationContext => AnalyzePropertyReference(operationContext, analyzedTrees, knownTypes),
                 OperationKind.PropertyReference);
 
-            if (knownTypes.BackendCLogger != null)
+            if (knownTypes.BackendLogPipeline != null &&
+                !LoggingAnalyzerScope.MayReferenceBackendPipeline(context.Compilation.AssemblyName))
             {
                 context.RegisterSyntaxNodeAction(
-                    syntaxContext => AnalyzeBackendCLoggerTypeUse(syntaxContext, analyzedTrees, knownTypes.BackendCLogger),
+                    syntaxContext => AnalyzeBackendLogPipelineTypeUse(
+                        syntaxContext,
+                        analyzedTrees,
+                        knownTypes.BackendLogPipeline),
                     SyntaxKind.IdentifierName);
             }
         }
@@ -133,10 +137,10 @@ namespace CycloneGames.Analyzers
             }
         }
 
-        private static void AnalyzeBackendCLoggerTypeUse(
+        private static void AnalyzeBackendLogPipelineTypeUse(
             SyntaxNodeAnalysisContext context,
             ImmutableHashSet<SyntaxTree> analyzedTrees,
-            INamedTypeSymbol backendCLogger)
+            INamedTypeSymbol backendLogPipeline)
         {
             if (!analyzedTrees.Contains(context.Node.SyntaxTree) ||
                 context.Node is not IdentifierNameSyntax identifier ||
@@ -150,7 +154,7 @@ namespace CycloneGames.Analyzers
             ISymbol? symbol = alias?.Target ??
                               context.SemanticModel.GetSymbolInfo(identifier, context.CancellationToken).Symbol;
 
-            if (!SymbolEqualityComparer.Default.Equals(symbol, backendCLogger))
+            if (!SymbolEqualityComparer.Default.Equals(symbol, backendLogPipeline))
             {
                 return;
             }
@@ -158,7 +162,7 @@ namespace CycloneGames.Analyzers
             context.ReportDiagnostic(Diagnostic.Create(
                 DiagnosticRules.DirectLoggingApi,
                 identifier.GetLocation(),
-                BackendCLoggerMetadataName));
+                BackendLogPipelineMetadataName));
         }
 
         private static bool IsInsideUsingDirective(SyntaxNode node)
@@ -195,13 +199,13 @@ namespace CycloneGames.Analyzers
                 UnityDebug = compilation.GetTypeByMetadataName(UnityDebugMetadataName);
                 UnityMonoBehaviour = compilation.GetTypeByMetadataName(UnityMonoBehaviourMetadataName);
                 SystemConsole = compilation.GetTypeByMetadataName(SystemConsoleMetadataName);
-                BackendCLogger = compilation.GetTypeByMetadataName(BackendCLoggerMetadataName);
+                BackendLogPipeline = compilation.GetTypeByMetadataName(BackendLogPipelineMetadataName);
             }
 
             internal INamedTypeSymbol? UnityDebug { get; }
             internal INamedTypeSymbol? UnityMonoBehaviour { get; }
             internal INamedTypeSymbol? SystemConsole { get; }
-            internal INamedTypeSymbol? BackendCLogger { get; }
+            internal INamedTypeSymbol? BackendLogPipeline { get; }
         }
     }
 }

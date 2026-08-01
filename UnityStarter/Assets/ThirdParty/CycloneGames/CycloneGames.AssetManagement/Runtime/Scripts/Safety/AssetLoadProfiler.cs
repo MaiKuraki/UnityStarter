@@ -71,6 +71,7 @@ namespace CycloneGames.AssetManagement.Runtime
             }
             catch (System.OperationCanceledException)
             {
+                return;
             }
             catch (System.Exception exception) when (AssetRuntimeGuard.IsRecoverableException(exception))
             {

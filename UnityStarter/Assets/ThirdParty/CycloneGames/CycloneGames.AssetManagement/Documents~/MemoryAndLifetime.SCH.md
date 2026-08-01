@@ -103,6 +103,24 @@ flowchart TD
 
 所有改变所有权的调用都受 Unity 主线程约束。
 
+### 公开终态与 provider 尾任务
+
+`IOperation.Task` 只有一个稳定的调用方可见终态。Provider 与 adapter 后处理成功产生 `Succeeded`；真实 provider 或 adapter 失败产生 `Faulted`；调用方等待取消、provider 取消，或 pending 时权威 package/module 退役产生 `Canceled`。第一次转换胜出，因此迟到的 provider 结果不会改写公开 canceled 状态或更早的失败。
+
+公开完成与 provider 物理完成是两个不同的生命周期边界。如果退役取消了 pending 的公开任务，所属 package 会保留有界尾任务计数，并继续观察 provider 与 adapter continuation。`DestroyAsync` 只有在这些尾任务排空后才成功完成。迟到的可恢复失败会被观察，但不会替换公开 `Canceled` 状态。这既防止过早释放和未观察 provider 工作，也不需要为每个操作分配 cancellation source 或保留 collection 条目。
+
+权威退役是 provider 资源所有权退役，并非每次 wrapper 释放。尤其是 `ISceneHandle.Dispose` 只释放调用方 wrapper；`UnloadSceneAsync` 或 package shutdown 才拥有 load 取消与 provider scene 释放权。
+
+### Shutdown 接纳与清理重试
+
+首次被接纳的 module 或 package `DestroyAsync` 请求是 sticky 的。它会立即关闭初始化与全部业务 API，即使后续清理失败也是如此；同一实例之后只能重试 `DestroyAsync`。Scene-unload observation 会一直保持订阅到清理成功，因此在 shutdown 失败期间，外部或 Single-mode unload 仍能让自有 wrapper 收敛。重试绝不会重新打开 package。
+
+清理重试取决于 provider 边界：
+
+- Resources 保留销毁失败的 instance 所有权并重试。Player shutdown 在发布成功前等待一个有界的帧末销毁屏障。并发的进程全局 unused-asset collection 会加入同一操作，shutdown 也会加入它。
+- YooAsset 保持 scene-unload observation 直到成功。Provider scene handle 失效本身不能证明 Unity scene 已不存在；必须有已捕获且已卸载的 scene、provider unload callback，或 terminal failed load 作为证据。
+- Addressables release 是 one-shot，因为其引用计数会在 provider destruction 完成前递减。如果 release 在 mutation 可能开始后抛出，则结果为 indeterminate：adapter 保留所有权证据、绝不重复该 release 请求，并让每次 shutdown 重试保持失败，而不是冒险 double release 或虚假成功。
+
 ### 取消矩阵
 
 | 操作 | 调用方 token 取消什么 | 共享/provider 工作 |
@@ -115,9 +133,9 @@ flowchart TD
 | Addressables catalog-label query | 该调用方等待 | provider 只写私有结果状态；取消绝不允许后写进入调用方 list |
 | `GroupOperation.StartAsync` | 该调用方等待 | 显式 `GroupOperation.Cancel` 拥有 group 取消 |
 | Catalog/manifest/cache mutation | mutation 前检查 | provider 检查或不可回滚 mutation 仍在运行时不报告取消 |
-| Module/package shutdown | 无外部 token | 必须达到 terminal 或可重试失败状态 |
+| Module/package shutdown | pending 的自有公开任务变为 canceled | provider/adapter 尾任务继续由 package 持有，并在 shutdown 完成前排空 |
 
-取消绝不转移 dispose 所有权，也绝不意味着回滚部分缓存数据。Addressables 没有物理中止；adapter 保留 pending handle 并排空到 terminal。YooAsset 请求 provider-native 中止并保持 wrapper 注册直到观察 terminal 状态。
+取消绝不转移 dispose 所有权，也绝不意味着回滚部分缓存数据。Addressables 没有物理中止；adapter 保留 pending handle 并排空到 terminal。YooAsset 请求 provider-native 中止并保持 wrapper 注册直到观察 terminal 状态。当 group 同时包含 canceled child 与真实 faulted child 时，会在观察全部 child 终态后报告真实故障；生命周期取消不会掩盖它。
 
 ### 线程模型
 
@@ -324,6 +342,8 @@ Handle tracking 默认关闭。启用 stack capture 时，可恢复捕获失败�
 | --- | --- | --- |
 | 所有调用方 Dispose 后资产仍在内存 | Idle 缓存条目被有意保留 | 检查 Cache Debugger，调用定向 bucket clear 或 retention policy，与 Memory Profiler 证据对比 |
 | Handle 看起来泄漏 | 某条路径未 Dispose lease | 启用 handle tracking，确认每条成功/异常/取消路径都 Dispose 调用方 lease；取消 `handle.Task` 不会 Dispose 它 |
+| Shutdown 失败后业务 API 拒绝调用 | Shutdown 请求是 sticky 的 | 修复清理原因并重试 `DestroyAsync`；新业务需创建新的 module/package generation |
+| Addressables shutdown 重复同一个 indeterminate-release 失败 | Provider cleanup 在引用计数 mutation 可能开始后抛出 | 不要再次调用 `Addressables.Release`；保留诊断，并使用产品外层 teardown 或进程重启恢复 policy |
 | Scene unload 被取消 | 取消只在 mutation 开始前接受 | 加入不可取消的 provider completion；失败 unload 仍可重试 |
 | 失败后 `_pendingScene` 仍保留 | unload 完成前清理失败 | 用 `UnloadSceneAsync(_pendingScene, CancellationToken.None)` 重试或通过 package shutdown 收敛；只在成功 unload 后清空字段 |
 | Bulk handle 绕过 idle retention | 某个成员无正估算 | 确保每个成员类型可测量，或接受绕过 |

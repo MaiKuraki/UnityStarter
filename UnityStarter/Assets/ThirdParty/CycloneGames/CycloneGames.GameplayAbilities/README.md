@@ -92,9 +92,9 @@ The package metadata declares its direct package requirements. In an `Assets/Thi
 
 ### Logging contract and backend integration
 
-Runtime, Editor, Samples, the AssetManagement integration, and focused logging tests use `CycloneGames.Logging.LogChannel` with the stable category `CycloneGames.GameplayAbilities`. Each diagnostic-producing assembly owns a uniquely named facade under `Diagnostics/`: `GameplayAbilitiesLog`, `GameplayAbilitiesEditorLog`, `GameplayAbilitiesAssetManagementLog`, `GameplayAbilitiesSampleLog`, or `GameplayAbilitiesSampleEditorLog`. Every facade exposes the standard `Category`, `Channel`, and `Create(ILogWriter logWriter)` members; implementation files use `Log` for ambient static fields and `_log` for explicitly injected instance fields. Gameplay code does not call `LogChannel.Create`, `UnityEngine.Debug`, `CLogger`, or another backend API outside those boundaries. Exceptions use the same severity methods as messages, for example `Log.Warning(exception, message)` or `Log.Error(exception, message)`, so a backend receives the exception separately from its contextual message.
+Runtime, Editor, Samples, the AssetManagement integration, and focused logging tests use `CycloneGames.Logging.LogChannel` with the stable category `CycloneGames.GameplayAbilities`. Each diagnostic-producing assembly owns a uniquely named facade under `Diagnostics/`: `GameplayAbilitiesLog`, `GameplayAbilitiesEditorLog`, `GameplayAbilitiesAssetManagementLog`, `GameplayAbilitiesSampleLog`, or `GameplayAbilitiesSampleEditorLog`. Every facade exposes the standard `Category`, `Channel`, and `Create(ILogWriter logWriter)` members; implementation files use `Log` for ambient static fields and `_log` for explicitly injected instance fields. Gameplay code does not call `LogChannel.Create`, direct platform logging APIs, or concrete pipeline APIs outside those boundaries. Exceptions use the same severity methods as messages, for example `Log.Warning(exception, message)` or `Log.Error(exception, message)`, so a backend receives the exception separately from its contextual message.
 
-`LogRuntime` starts with `NullLogWriter.Instance`. When a host installs no backend, every channel call is a safe no-op; GameplayAbilities initialization and behavior do not change, and no scripting define is required. A product may install any `ILogWriter` at its composition root. If the separate `com.cyclone-games.logger` package is selected, its bootstrap can install `CLogger` as that writer, but GameplayAbilities has no assembly or package dependency on the concrete backend.
+`LogRuntime` starts with `NullLogWriter.Instance`. When a host installs no backend, every channel call is a safe no-op; GameplayAbilities initialization and behavior do not change, and no scripting define is required. A product may install any `ILogWriter` at its composition root. The optional standard backend is split between `com.cyclone-games.logging.pipeline`, which provides `LogPipeline`, and `com.cyclone-games.logging.unity`, which owns Unity bootstrap, settings, and Console integration. GameplayAbilities has no assembly or package dependency on either backend package.
 
 GameplayAbilities exposes no package-specific public logging facade. External production assemblies should use their own assembly-local facade and cache its channel:
 
@@ -105,7 +105,7 @@ Log.Warning("Ability activation was rejected.");
 Log.Error(exception, "Ability activation failed.");
 ```
 
-After all external call sites migrate, consumers may remove their direct Logger backend dependency. Removing a backend does not require changing GameplayAbilities asmdefs; logging naturally returns to the no-op writer.
+Consumers may remove a concrete logging backend without changing GameplayAbilities asmdefs; logging naturally returns to the no-op writer.
 
 ## Runtime model
 

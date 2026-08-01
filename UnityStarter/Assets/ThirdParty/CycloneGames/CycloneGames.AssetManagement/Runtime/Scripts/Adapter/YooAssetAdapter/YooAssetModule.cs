@@ -123,8 +123,16 @@ namespace CycloneGames.AssetManagement.Runtime
             }
 
             _destroying = true;
-            _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
-            return _destroyTask;
+            try
+            {
+                _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
+                return _destroyTask;
+            }
+            catch
+            {
+                _destroying = false;
+                throw;
+            }
         }
 
         private async UniTask DestroyCoreAsync()
@@ -140,6 +148,13 @@ namespace CycloneGames.AssetManagement.Runtime
                 for (int i = 0; i < packages.Count; i++)
                 {
                     packages[i].BeginModuleShutdown();
+                }
+
+                // Refuse before resolving activation barriers or creating scene unload operations. An existing
+                // manifest, cache, or unload-unused mutation must reach terminal state before shutdown mutates scenes.
+                for (int i = 0; i < packages.Count; i++)
+                {
+                    packages[i].EnsureNoMaintenanceMutationForShutdown();
                 }
 
                 // Unity scene operations share one global queue. Resolve every manual activation barrier across

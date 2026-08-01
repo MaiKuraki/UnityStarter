@@ -8,6 +8,7 @@ using UnityEngine.TestTools;
 using Cysharp.Threading.Tasks;
 using NUnit.Framework;
 
+using CycloneGames.AssetManagement.Runtime;
 using CycloneGames.AssetManagement.Runtime.Batch;
 
 namespace CycloneGames.AssetManagement.Tests.Editor
@@ -95,6 +96,50 @@ namespace CycloneGames.AssetManagement.Tests.Editor
 
             Assert.IsTrue(group.IsDone);
             Assert.That(group.Items[0].Error, Is.Null.Or.Empty);
+        }
+
+        [Test]
+        public void StartAsync_PrioritizesARealFailureOverAnEarlierChildCancellation()
+        {
+            var group = new GroupOperation();
+            group.Add(new TestOperation(
+                1f,
+                task: UniTask.FromCanceled(new CancellationToken(canceled: true))));
+            group.Add(new TestOperation(
+                1f,
+                task: UniTask.FromException(new InvalidOperationException("provider failure"))));
+
+            InvalidOperationException exception = Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await group.StartAsync());
+            InvalidOperationException taskException = Assert.ThrowsAsync<InvalidOperationException>(
+                async () => await group.Task);
+
+            Assert.That(group.IsDone, Is.True);
+            Assert.That(group.Error, Is.EqualTo("provider failure"));
+            Assert.That(exception.Message, Is.EqualTo("provider failure"));
+            Assert.That(taskException.Message, Is.EqualTo("provider failure"));
+        }
+
+        [Test]
+        public void StartAsync_FatalChildFault_TerminalizesGroupAndObservesEveryChild()
+        {
+            var fatalSource = new ObservedFaultSource(new OutOfMemoryException("fatal provider failure"));
+            var laterSource = new ObservedFaultSource(new InvalidOperationException("later provider failure"));
+            var group = new GroupOperation();
+            group.Add(new DirectTaskOperation(fatalSource.Task));
+            group.Add(new DirectTaskOperation(laterSource.Task));
+
+            OutOfMemoryException startFailure = Assert.ThrowsAsync<OutOfMemoryException>(
+                async () => await group.StartAsync());
+            OutOfMemoryException sharedFailure = Assert.ThrowsAsync<OutOfMemoryException>(
+                async () => await group.Task);
+
+            Assert.That(group.IsDone, Is.True);
+            Assert.That(group.Error, Is.EqualTo("fatal provider failure"));
+            Assert.That(startFailure.Message, Is.EqualTo("fatal provider failure"));
+            Assert.That(sharedFailure.Message, Is.EqualTo("fatal provider failure"));
+            Assert.That(fatalSource.GetResultCount, Is.EqualTo(1));
+            Assert.That(laterSource.GetResultCount, Is.EqualTo(1));
         }
 
         [Test]
@@ -192,6 +237,48 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             catch (Exception exception)
             {
                 return exception;
+            }
+        }
+
+        private sealed class DirectTaskOperation : IOperation
+        {
+            public DirectTaskOperation(UniTask task)
+            {
+                Task = task;
+            }
+
+            public bool IsDone => Task.Status != UniTaskStatus.Pending;
+            public float Progress => IsDone ? 1f : 0f;
+            public string Error => string.Empty;
+            public UniTask Task { get; }
+            public void WaitForAsyncComplete() { }
+        }
+
+        private sealed class ObservedFaultSource : IUniTaskSource
+        {
+            private readonly Exception _failure;
+
+            public ObservedFaultSource(Exception failure)
+            {
+                _failure = failure ?? throw new ArgumentNullException(nameof(failure));
+                Task = new UniTask(this, 0);
+            }
+
+            public UniTask Task { get; }
+            public int GetResultCount { get; private set; }
+
+            public UniTaskStatus GetStatus(short token) => UniTaskStatus.Faulted;
+            public UniTaskStatus UnsafeGetStatus() => UniTaskStatus.Faulted;
+
+            public void OnCompleted(Action<object> continuation, object state, short token)
+            {
+                continuation(state);
+            }
+
+            public void GetResult(short token)
+            {
+                GetResultCount++;
+                throw _failure;
             }
         }
     }

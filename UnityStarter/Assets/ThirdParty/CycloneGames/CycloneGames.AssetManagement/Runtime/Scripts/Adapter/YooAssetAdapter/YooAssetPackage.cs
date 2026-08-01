@@ -34,6 +34,7 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly ResourcePackage _rawPackage;
         private readonly YooAssetModule _moduleOwner;
         private readonly Cache.AssetCacheService _cacheService;
+        private readonly AssetOperationTailTracker _operationTails = new AssetOperationTailTracker();
         private readonly HashSet<YooDownloader> _downloaders = new HashSet<YooDownloader>();
         private readonly Dictionary<long, YooInstantiateHandle> _instantiateHandles =
             new Dictionary<long, YooInstantiateHandle>();
@@ -166,7 +167,7 @@ namespace CycloneGames.AssetManagement.Runtime
             foreach (KeyValuePair<long, YooSceneHandle> pair in _sceneHandles)
             {
                 YooSceneHandle handle = pair.Value;
-                if (!handle.IsProviderHandleReleased && !handle.MatchesScene(scene))
+                if (!handle.MatchesScene(scene))
                 {
                     continue;
                 }
@@ -208,24 +209,37 @@ namespace CycloneGames.AssetManagement.Runtime
                 return _destroyTask;
             }
 
-            _moduleOwner.ValidatePackageSceneDrainOrder(this);
             BeginModuleShutdown();
-            if (_maintenanceMutationInProgress)
-            {
-                throw new InvalidOperationException(
-                    "YooAsset package shutdown was requested during a manifest or cache mutation. Retry cleanup after the mutation completes.");
-            }
+            EnsureNoMaintenanceMutationForShutdown();
+            _moduleOwner.ValidatePackageSceneDrainOrder(this);
 
             _destroying = true;
-            _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
-            return _destroyTask;
+            try
+            {
+                _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
+                return _destroyTask;
+            }
+            catch
+            {
+                _destroying = false;
+                throw;
+            }
         }
 
         internal void BeginModuleShutdown()
         {
             AssetRuntimeGuard.EnsureMainThread();
             Interlocked.Exchange(ref _shutdownRequested, 1);
-            UnsubscribeFromSceneUnloads();
+        }
+
+        internal void EnsureNoMaintenanceMutationForShutdown()
+        {
+            AssetRuntimeGuard.EnsureMainThread();
+            if (_maintenanceMutationInProgress)
+            {
+                throw new InvalidOperationException(
+                    "YooAsset package shutdown was requested during a provider maintenance mutation. Retry cleanup after the mutation completes.");
+            }
         }
 
         internal void CopyOwnedSceneHandlesTo(List<YooSceneHandle> destination)
@@ -397,6 +411,10 @@ namespace CycloneGames.AssetManagement.Runtime
 
                     Interlocked.Exchange(ref _providerDestroyed, 1);
                 }
+
+                // Native package destruction drives any outstanding provider handles terminal. Keep the
+                // package registered until every adapter continuation has observed and published that state.
+                await _operationTails.WaitForAllAsync();
 
                 YooAssets.RemovePackage(Name);
 
@@ -625,7 +643,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
             AssetHandle raw = _rawPackage.LoadAssetSync<TAsset>(location);
             long id = AssetRuntimeGuard.NextHandleId();
-            var backend = YooAssetHandle<TAsset>.Create(id, this, cacheKey, raw, _cacheService.OnHandleReleased);
+            var backend = YooAssetHandle<TAsset>.Create(
+                id, this, cacheKey, raw, _cacheService.OnHandleReleased, _operationTails);
             if (HandleTracker.Enabled)
             {
                 HandleTracker.Register(id, Name, $"AssetSync {typeof(TAsset).Name} : {location}");
@@ -663,7 +682,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
             AssetHandle raw = _rawPackage.LoadAssetAsync<TAsset>(location);
             long id = AssetRuntimeGuard.NextHandleId();
-            var backend = YooAssetHandle<TAsset>.Create(id, this, cacheKey, raw, _cacheService.OnHandleReleased);
+            var backend = YooAssetHandle<TAsset>.Create(
+                id, this, cacheKey, raw, _cacheService.OnHandleReleased, _operationTails);
             if (HandleTracker.Enabled)
             {
                 HandleTracker.Register(id, Name, $"AssetAsync {typeof(TAsset).Name} : {location}");
@@ -704,7 +724,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
             AllAssetsHandle raw = _rawPackage.LoadAllAssetsAsync<TAsset>(location);
             long id = AssetRuntimeGuard.NextHandleId();
-            var backend = YooAllAssetsHandle<TAsset>.Create(id, cacheKey, raw, _cacheService.OnHandleReleased);
+            var backend = YooAllAssetsHandle<TAsset>.Create(
+                id, cacheKey, raw, _cacheService.OnHandleReleased, _operationTails);
             if (HandleTracker.Enabled)
             {
                 HandleTracker.Register(id, Name, $"AllAssets {typeof(TAsset).Name} : {location}");
@@ -742,7 +763,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
             AssetHandle raw = _rawPackage.LoadAssetSync<RawFileObject>(location);
             long id = AssetRuntimeGuard.NextHandleId();
-            var backend = YooRawFileHandle.Create(id, cacheKey, raw, _cacheService.OnHandleReleased);
+            var backend = YooRawFileHandle.Create(
+                id, cacheKey, raw, _cacheService.OnHandleReleased, _operationTails);
             if (HandleTracker.Enabled)
             {
                 HandleTracker.Register(id, Name, $"RawFileSync : {location}");
@@ -779,7 +801,8 @@ namespace CycloneGames.AssetManagement.Runtime
 
             AssetHandle raw = _rawPackage.LoadAssetAsync<RawFileObject>(location);
             long id = AssetRuntimeGuard.NextHandleId();
-            var backend = YooRawFileHandle.Create(id, cacheKey, raw, _cacheService.OnHandleReleased);
+            var backend = YooRawFileHandle.Create(
+                id, cacheKey, raw, _cacheService.OnHandleReleased, _operationTails);
             if (HandleTracker.Enabled)
             {
                 HandleTracker.Register(id, Name, $"RawFileAsync : {location}");
@@ -824,7 +847,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 id,
                 operation,
                 backend,
-                _onInstantiateDisposed);
+                _onInstantiateDisposed,
+                _operationTails);
             _instantiateHandles.Add(id, result);
             string assetPath = backend.Raw.GetAssetInfo().AssetPath;
             if (HandleTracker.Enabled)
@@ -897,7 +921,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 _sceneOwnerToken,
                 sceneLocation,
                 raw,
-                activateOnLoad);
+                activateOnLoad,
+                _operationTails);
             _sceneHandles.Add(id, result);
             if (HandleTracker.Enabled)
             {
@@ -951,16 +976,24 @@ namespace CycloneGames.AssetManagement.Runtime
             _sceneHandles.Remove(sceneHandle.DebugId);
         }
 
-        public async UniTask UnloadUnusedAssetsAsync()
+        public async UniTask UnloadUnusedProviderAssetsAsync()
         {
             AssetRuntimeGuard.EnsureMainThread();
             ThrowIfDestroyed();
-            _cacheService.ClearAll();
-            UnloadUnusedAssetsOperation operation = _rawPackage.UnloadUnusedAssetsAsync();
-            await operation;
-            if (operation.Status != EOperationStatus.Succeeded)
+            EnterMaintenanceMutation(nameof(UnloadUnusedProviderAssetsAsync));
+            try
             {
-                throw new InvalidOperationException(operation.Error ?? "YooAsset unload-unused operation failed.");
+                _cacheService.ClearAll();
+                UnloadUnusedAssetsOperation operation = _rawPackage.UnloadUnusedAssetsAsync();
+                await operation;
+                if (operation.Status != EOperationStatus.Succeeded)
+                {
+                    throw new InvalidOperationException(operation.Error ?? "YooAsset unload-unused operation failed.");
+                }
+            }
+            finally
+            {
+                ExitMaintenanceMutation();
             }
         }
 

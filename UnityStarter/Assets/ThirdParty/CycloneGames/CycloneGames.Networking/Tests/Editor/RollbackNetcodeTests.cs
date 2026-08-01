@@ -237,10 +237,10 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void LoggingDiagnostics_MapsAllOutputLevelsExactly()
+        public void LogWriterAdapter_MapsAllOutputLevelsExactly()
         {
             ProbeLogWriter writer = new ProbeLogWriter();
-            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+            NetworkingLogWriterAdapter diagnostics = new NetworkingLogWriterAdapter(writer);
             NetworkingDiagnosticLevel[] levels =
             {
                 NetworkingDiagnosticLevel.Trace,
@@ -271,10 +271,10 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void LoggingDiagnostics_NoneAndUnknownLevelsNeverReachWriter()
+        public void LogWriterAdapter_NoneAndUnknownLevelsNeverReachWriter()
         {
             ProbeLogWriter writer = new ProbeLogWriter();
-            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+            NetworkingLogWriterAdapter diagnostics = new NetworkingLogWriterAdapter(writer);
             NetworkingDiagnosticLevel[] invalidLevels =
             {
                 NetworkingDiagnosticLevel.None,
@@ -296,10 +296,10 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void LoggingDiagnostics_OrdinaryWriterFailuresAreContained()
+        public void LogWriterAdapter_OrdinaryWriterFailuresAreContained()
         {
             ProbeLogWriter writer = new ProbeLogWriter(new InvalidOperationException("writer failed"));
-            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+            NetworkingLogWriterAdapter diagnostics = new NetworkingLogWriterAdapter(writer);
 
             Assert.IsFalse(diagnostics.IsEnabled(
                 NetworkingDiagnosticLevel.Warning,
@@ -315,10 +315,10 @@ namespace CycloneGames.Networking.Tests.Editor
         }
 
         [Test]
-        public void LoggingDiagnostics_WriterOutOfMemory_RemainsVisibleToHost()
+        public void LogWriterAdapter_WriterOutOfMemory_RemainsVisibleToHost()
         {
             ProbeLogWriter writer = new ProbeLogWriter(new OutOfMemoryException("writer allocation failed"));
-            NetworkingLoggingDiagnostics diagnostics = new NetworkingLoggingDiagnostics(writer);
+            NetworkingLogWriterAdapter diagnostics = new NetworkingLogWriterAdapter(writer);
 
             Assert.Throws<OutOfMemoryException>(() => diagnostics.IsEnabled(
                 NetworkingDiagnosticLevel.Warning,

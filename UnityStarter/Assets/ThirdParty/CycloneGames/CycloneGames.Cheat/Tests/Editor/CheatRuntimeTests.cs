@@ -42,8 +42,6 @@ namespace CycloneGames.Cheat.Tests.Editor
             Assert.IsNull(typeof(ICheatCommandRuntime).GetProperty("LogWriter"));
             Assert.True(typeof(ICheatLogWriterConfigurable).IsAssignableFrom(
                 typeof(CheatCommandRuntime)));
-            Assert.IsNull(typeof(ICheatCommandRuntime).GetProperty("Logger"));
-
             Assert.NotNull(typeof(CheatCommandRuntime).GetConstructor(new[] { typeof(int) }));
             Assert.NotNull(typeof(CheatCommandRuntime).GetConstructor(new[]
             {

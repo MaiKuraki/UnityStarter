@@ -658,6 +658,11 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             Assert.IsTrue(throwing.DisposeAttempted);
             Assert.IsTrue(healthy.ForceDisposed);
             Assert.AreEqual(0, cache.ActiveCount);
+            Assert.AreEqual(1, cache.PendingReleaseRetryCount);
+
+            Assert.DoesNotThrow(() => cache.Dispose());
+            Assert.IsTrue(throwing.ForceDisposed);
+            Assert.AreEqual(0, cache.PendingReleaseRetryCount);
         }
 
         [Test]
@@ -816,7 +821,61 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             Assert.IsTrue(healthyHandle.ForceDisposed);
             Assert.AreEqual(0, cache.ActiveCount);
             Assert.AreEqual(0, cache.IdleCount);
+            Assert.AreEqual(1, throwingHandle.ForceDisposeCount);
+            Assert.AreEqual(1, cache.PendingReleaseRetryCount);
+
             Assert.DoesNotThrow(() => cache.Dispose());
+            Assert.IsTrue(throwingHandle.ForceDisposed);
+            Assert.AreEqual(2, throwingHandle.ForceDisposeCount);
+            Assert.AreEqual(0, cache.PendingReleaseRetryCount);
+        }
+
+        [Test]
+        public void Fatal_Provider_Release_Failure_Retains_Ownership_For_Explicit_Retry()
+        {
+            var package = new RecordingAssetPackage();
+            using var cache = new AssetCacheService(
+                package,
+                maxTrialEntries: 1,
+                maxMainEntries: 1,
+                maxIdleBytes: 1L * 1024 * 1024);
+            AssetCacheKey key = AssetCacheService.BuildCacheKey("FatalRelease", typeof(Texture2D));
+            var handle = new ThrowingDisposeCacheHandle(
+                estimatedBytes: 2L * 1024 * 1024,
+                firstFailure: new OutOfMemoryException("Synthetic fatal provider release failure."));
+
+            cache.RegisterNew(key, null, null, null, handle);
+            handle.Release();
+
+            Assert.Throws<OutOfMemoryException>(() => cache.OnHandleReleased(key, handle));
+            Assert.AreEqual(1, handle.ForceDisposeCount);
+            Assert.AreEqual(1, cache.PendingReleaseRetryCount);
+
+            Assert.DoesNotThrow(() => cache.ClearAll());
+            Assert.IsTrue(handle.ForceDisposed);
+            Assert.AreEqual(2, handle.ForceDisposeCount);
+            Assert.AreEqual(0, cache.PendingReleaseRetryCount);
+        }
+
+        [Test]
+        public void Fatal_Dispose_Failure_Detaches_Indexed_Node_Before_Retrying()
+        {
+            var package = new RecordingAssetPackage();
+            var cache = new AssetCacheService(package, maxTrialEntries: 1, maxMainEntries: 1);
+            AssetCacheKey key = AssetCacheService.BuildCacheKey("FatalDispose", typeof(Texture2D));
+            var handle = new ThrowingDisposeCacheHandle(
+                firstFailure: new OutOfMemoryException("Synthetic fatal shutdown failure."));
+            cache.RegisterNew(key, null, null, null, handle);
+
+            Assert.Throws<OutOfMemoryException>(() => cache.Dispose());
+            Assert.AreEqual(1, cache.ActiveCount);
+            Assert.AreEqual(1, cache.PendingReleaseRetryCount);
+
+            Assert.DoesNotThrow(() => cache.Dispose());
+            Assert.AreEqual(0, cache.ActiveCount);
+            Assert.AreEqual(0, cache.PendingReleaseRetryCount);
+            Assert.IsTrue(handle.ForceDisposed);
+            Assert.AreEqual(2, handle.ForceDisposeCount);
         }
 
         [Test]
@@ -1172,10 +1231,15 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             IInternalCacheable, IAssetMemoryFootprint
         {
             private readonly long _estimatedBytes;
+            private readonly Exception _firstFailure;
 
-            public ThrowingDisposeCacheHandle(long estimatedBytes = 1L)
+            public ThrowingDisposeCacheHandle(
+                long estimatedBytes = 1L,
+                Exception firstFailure = null)
             {
                 _estimatedBytes = estimatedBytes;
+                _firstFailure = firstFailure ?? new InvalidOperationException(
+                    "Synthetic provider release failure.");
             }
 
             public Texture2D Asset => null;
@@ -1186,6 +1250,8 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             public UniTask Task => UniTask.CompletedTask;
             public int RefCount { get; private set; } = 1;
             public bool DisposeAttempted { get; private set; }
+            public bool ForceDisposed { get; private set; }
+            public int ForceDisposeCount { get; private set; }
 
             public void Retain() => RefCount++;
             public void Release() => RefCount--;
@@ -1196,7 +1262,13 @@ namespace CycloneGames.AssetManagement.Tests.Editor
             void IInternalCacheable.ForceDispose()
             {
                 DisposeAttempted = true;
-                throw new InvalidOperationException("Synthetic provider release failure.");
+                ForceDisposeCount++;
+                if (ForceDisposeCount == 1)
+                {
+                    throw _firstFailure;
+                }
+
+                ForceDisposed = true;
             }
         }
 

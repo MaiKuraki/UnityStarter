@@ -104,7 +104,7 @@ Read the ability scripts in this order:
 | Script Or Assembly | What To Learn |
 | --- | --- |
 | `Scripts/SampleCombatManager.cs` | Scene-owned `GASRuntimeContext` composition, shared ASC initialization, temporary UI log-writer installation, and reverse-order shutdown. |
-| `Scripts/UILogger.cs` | Sample-only `ILogWriter` decorator that forwards to the previously installed writer, copies bounded messages into the UI, and is restored by `SampleCombatManager` during shutdown. |
+| `Scripts/UILogWriter.cs` | Sample-only `ILogWriter`/`IDisposable` decorator that forwards to the previously installed writer, copies bounded messages into the UI, and is restored by `SampleCombatManager` during shutdown. |
 | `Scripts/Diagnostics/GameplayAbilitiesSampleLog.cs` | Runtime sample logging facade with stable `Category`, ambient `Channel`, and strict explicit-writer creation. |
 | `Editor/Diagnostics/GameplayAbilitiesSampleEditorLog.cs` | Editor sample logging facade in the separate Editor asmdef. |
 | `Scripts/Integrate/Setup/GASManualSetup.cs` | Manual non-DI cue manager startup using `CycloneGames.AssetManagement`, with an optional runtime backing-cache profile. |

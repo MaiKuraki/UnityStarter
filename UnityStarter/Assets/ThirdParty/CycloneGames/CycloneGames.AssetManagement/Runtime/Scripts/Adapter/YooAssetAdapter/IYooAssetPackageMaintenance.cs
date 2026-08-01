@@ -13,6 +13,13 @@ namespace CycloneGames.AssetManagement.Runtime
     public interface IYooAssetPackageMaintenance
     {
         /// <summary>
+        /// Clears idle framework ownership, then asks this YooAsset package to unload provider-owned assets
+        /// that are no longer in use. This is a provider-local maintenance mutation, not Unity's process-wide
+        /// <c>Resources.UnloadUnusedAssets</c> pass, and cannot overlap manifest or cache-file mutations.
+        /// </summary>
+        UniTask UnloadUnusedProviderAssetsAsync();
+
+        /// <summary>
         /// Activates a manifest version obtained by product code through an authenticated, response-size-bounded
         /// version service. Provider-native version requests are intentionally not exposed because their response
         /// buffering cannot enforce the framework's authentication and response-size boundaries.

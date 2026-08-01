@@ -1598,7 +1598,6 @@ namespace CycloneGames.Localization.Tests.Editor
             }
 
             public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object => false;
-            public UniTask UnloadUnusedAssetsAsync() => UniTask.CompletedTask;
             public void SetCacheIdleMemoryBudget(long maxIdleBytes) { }
             public int TrimIdleCache(AssetCacheRetentionPolicy policy) => 0;
             public void ClearBucket(string bucket) { }

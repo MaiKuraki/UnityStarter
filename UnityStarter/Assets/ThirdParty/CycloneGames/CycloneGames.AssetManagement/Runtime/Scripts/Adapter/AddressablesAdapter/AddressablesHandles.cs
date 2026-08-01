@@ -68,6 +68,83 @@ namespace CycloneGames.AssetManagement.Runtime
         }
     }
 
+    /// <summary>
+    /// Models Addressables release as a one-shot request. Addressables decrements the provider reference count
+    /// before invoking provider cleanup, so an exception can leave a still-valid handle whose reference count is
+    /// already zero. Reissuing Release for that handle would be unsafe and cannot repair the original failure.
+    /// </summary>
+    internal static class AddressablesProviderReleaseStateMachine
+    {
+        private const int STATE_ACTIVE = 0;
+        private const int STATE_RELEASING = 1;
+        private const int STATE_OUTCOME_INDETERMINATE = 2;
+        private const int STATE_RELEASED = 3;
+
+        public static bool IsOwnerRetired(ref int state)
+        {
+            return Volatile.Read(ref state) != STATE_ACTIVE;
+        }
+
+        public static bool IsReleased(ref int state)
+        {
+            return Volatile.Read(ref state) == STATE_RELEASED;
+        }
+
+        public static bool TryBeginRelease(ref int state, Exception indeterminateFailure)
+        {
+            while (true)
+            {
+                int observed = Volatile.Read(ref state);
+                switch (observed)
+                {
+                    case STATE_ACTIVE:
+                        if (Interlocked.CompareExchange(
+                                ref state,
+                                STATE_RELEASING,
+                                STATE_ACTIVE) == STATE_ACTIVE)
+                        {
+                            return true;
+                        }
+
+                        break;
+
+                    case STATE_RELEASING:
+                    case STATE_RELEASED:
+                        return false;
+
+                    case STATE_OUTCOME_INDETERMINATE:
+                        throw indeterminateFailure ?? new InvalidOperationException(
+                            "Addressables provider release outcome is indeterminate and cannot be retried safely.");
+
+                    default:
+                        throw new InvalidOperationException(
+                            $"Unknown Addressables provider release state '{observed}'.");
+                }
+            }
+        }
+
+        public static InvalidOperationException CreateIndeterminateFailure(
+            string ownerName,
+            Exception providerFailure)
+        {
+            return new InvalidOperationException(
+                $"Addressables release for '{ownerName}' failed after provider reference-count mutation may " +
+                "have begun. The release outcome is indeterminate; ownership is retained and the same " +
+                "release request will not be issued again.",
+                providerFailure);
+        }
+
+        public static void MarkOutcomeIndeterminate(ref int state)
+        {
+            Volatile.Write(ref state, STATE_OUTCOME_INDETERMINATE);
+        }
+
+        public static void MarkReleased(ref int state)
+        {
+            Volatile.Write(ref state, STATE_RELEASED);
+        }
+    }
+
     internal abstract class AddressablesOperationHandle : IOperation, ITrackedAssetHandle
     {
         protected long Id;
@@ -98,15 +175,42 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private Cache.AssetCacheKey _cacheKey;
         private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
-        private UniTask _task;
+        private AssetOperationCompletion _completion;
         private int _refCount;
-        private int _disposed;
+        private int _releaseState;
+        private Exception _releaseFailure;
 
-        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
-        public override float Progress => Raw.IsValid() ? Raw.PercentComplete : 0f;
-        public override string Error => Raw.IsValid() ? Raw.OperationException?.Message ?? string.Empty : string.Empty;
-        public override UniTask Task => _task;
-        public TAsset Asset => Raw.IsValid() ? Raw.Result : null;
+        public override bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
+        public override float Progress
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return !AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) && Raw.IsValid()
+                    ? Raw.PercentComplete
+                    : 0f;
+            }
+        }
+        public override string Error
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return _releaseFailure?.Message ??
+                       (Raw.IsValid() ? Raw.OperationException?.Message ?? string.Empty : string.Empty);
+            }
+        }
+        public override UniTask Task => _completion.Task;
+        public TAsset Asset
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return !AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) && Raw.IsValid()
+                    ? Raw.Result
+                    : null;
+            }
+        }
         public UnityEngine.Object AssetObject => Asset;
         public int RefCount => Volatile.Read(ref _refCount);
 
@@ -116,7 +220,8 @@ namespace CycloneGames.AssetManagement.Runtime
             Cache.AssetCacheKey cacheKey,
             string location,
             AsyncOperationHandle<TAsset> raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache)
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails)
         {
             var handle = new AddressableAssetHandle<TAsset>
             {
@@ -128,9 +233,10 @@ namespace CycloneGames.AssetManagement.Runtime
                 _onReleaseToCache = onReleaseToCache,
                 _refCount = 1,
             };
-            handle._task = AssetOperationBroadcast.Create(AddressablesOperationTask.CompleteAsync(
+            handle._completion = AssetOperationCompletion.Start(AddressablesOperationTask.CompleteAsync(
                 raw,
-                $"Addressables failed to load asset '{location}'."));
+                $"Addressables failed to load asset '{location}'."),
+                operationTails);
             return handle;
         }
 
@@ -142,7 +248,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Retain()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 Log.Error("[AddressableAssetHandle] Retain called on a disposed handle.");
                 return;
@@ -153,7 +259,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -188,15 +294,35 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!AddressablesProviderReleaseStateMachine.TryBeginRelease(
+                    ref _releaseState,
+                    _releaseFailure))
             {
                 return;
             }
 
-            HandleTracker.Unregister(Id);
-            if (Raw.IsValid())
+            _completion.TryCancelByOwner();
+            try
             {
-                Addressables.Release(Raw);
+                if (Raw.IsValid())
+                {
+                    Addressables.Release(Raw);
+                }
+            }
+            catch (Exception exception)
+            {
+                _releaseFailure = AssetRuntimeGuard.IsRecoverableException(exception)
+                    ? AddressablesProviderReleaseStateMachine.CreateIndeterminateFailure(
+                        nameof(AddressableAssetHandle<TAsset>),
+                        exception)
+                    : exception;
+                AddressablesProviderReleaseStateMachine.MarkOutcomeIndeterminate(ref _releaseState);
+                if (ReferenceEquals(_releaseFailure, exception))
+                {
+                    throw;
+                }
+
+                throw _releaseFailure;
             }
 
             Raw = default;
@@ -204,10 +330,13 @@ namespace CycloneGames.AssetManagement.Runtime
             Location = null;
             _cacheKey = default;
             _onReleaseToCache = null;
+            AddressablesProviderReleaseStateMachine.MarkReleased(ref _releaseState);
+            HandleTracker.Unregister(Id);
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
-        bool IAssetBackendLifetime.IsDisposed => Volatile.Read(ref _disposed) != 0;
+        bool IAssetBackendLifetime.IsDisposed =>
+            AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState);
         long IAssetMemoryFootprint.EstimateRuntimeBytes() =>
             Raw.IsValid() ? Cache.AssetMemoryEstimator.Estimate(Raw.Result) : 0L;
     }
@@ -235,19 +364,43 @@ namespace CycloneGames.AssetManagement.Runtime
         private readonly ReadOnlyListAdapter _assets = new ReadOnlyListAdapter();
         private Cache.AssetCacheKey _cacheKey;
         private Action<Cache.AssetCacheKey, IReferenceCounted> _onReleaseToCache;
-        private UniTask _task;
+        private AssetOperationCompletion _completion;
         private int _refCount;
-        private int _disposed;
+        private int _releaseState;
+        private Exception _releaseFailure;
 
-        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
-        public override float Progress => _raw.IsValid() ? _raw.PercentComplete : 0f;
-        public override string Error => _raw.IsValid() ? _raw.OperationException?.Message ?? string.Empty : string.Empty;
-        public override UniTask Task => _task;
+        public override bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
+        public override float Progress
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return !AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) && _raw.IsValid()
+                    ? _raw.PercentComplete
+                    : 0f;
+            }
+        }
+        public override string Error
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return _releaseFailure?.Message ??
+                       (_raw.IsValid() ? _raw.OperationException?.Message ?? string.Empty : string.Empty);
+            }
+        }
+        public override UniTask Task => _completion.Task;
         public IReadOnlyList<TAsset> Assets
         {
             get
             {
-                _assets.SetSource(_raw.IsValid() && _raw.IsDone ? _raw.Result : null);
+                AssetRuntimeGuard.EnsureMainThread();
+                _assets.SetSource(
+                    !AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) &&
+                    _raw.IsValid() &&
+                    _raw.IsDone
+                        ? _raw.Result
+                        : null);
                 return _assets;
             }
         }
@@ -257,7 +410,8 @@ namespace CycloneGames.AssetManagement.Runtime
             long id,
             Cache.AssetCacheKey cacheKey,
             AsyncOperationHandle<IList<TAsset>> raw,
-            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache)
+            Action<Cache.AssetCacheKey, IReferenceCounted> onReleaseToCache,
+            AssetOperationTailTracker operationTails)
         {
             var handle = new AddressableAllAssetsHandle<TAsset>
             {
@@ -267,9 +421,10 @@ namespace CycloneGames.AssetManagement.Runtime
                 _onReleaseToCache = onReleaseToCache,
                 _refCount = 1,
             };
-            handle._task = AssetOperationBroadcast.Create(AddressablesOperationTask.CompleteAsync(
+            handle._completion = AssetOperationCompletion.Start(AddressablesOperationTask.CompleteAsync(
                 raw,
-                "Addressables failed to load the requested asset collection."));
+                "Addressables failed to load the requested asset collection."),
+                operationTails);
             return handle;
         }
 
@@ -281,7 +436,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Retain()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 Log.Error("[AddressableAllAssetsHandle] Retain called on a disposed handle.");
                 return;
@@ -292,7 +447,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -327,25 +482,48 @@ namespace CycloneGames.AssetManagement.Runtime
         internal void DisposeInternal()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!AddressablesProviderReleaseStateMachine.TryBeginRelease(
+                    ref _releaseState,
+                    _releaseFailure))
             {
                 return;
             }
 
-            HandleTracker.Unregister(Id);
-            if (_raw.IsValid())
+            _completion.TryCancelByOwner();
+            try
             {
-                Addressables.Release(_raw);
+                if (_raw.IsValid())
+                {
+                    Addressables.Release(_raw);
+                }
+            }
+            catch (Exception exception)
+            {
+                _releaseFailure = AssetRuntimeGuard.IsRecoverableException(exception)
+                    ? AddressablesProviderReleaseStateMachine.CreateIndeterminateFailure(
+                        nameof(AddressableAllAssetsHandle<TAsset>),
+                        exception)
+                    : exception;
+                AddressablesProviderReleaseStateMachine.MarkOutcomeIndeterminate(ref _releaseState);
+                if (ReferenceEquals(_releaseFailure, exception))
+                {
+                    throw;
+                }
+
+                throw _releaseFailure;
             }
 
             _raw = default;
             _assets.Clear();
             _cacheKey = default;
             _onReleaseToCache = null;
+            AddressablesProviderReleaseStateMachine.MarkReleased(ref _releaseState);
+            HandleTracker.Unregister(Id);
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
-        bool IAssetBackendLifetime.IsDisposed => Volatile.Read(ref _disposed) != 0;
+        bool IAssetBackendLifetime.IsDisposed =>
+            AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState);
 
         long IAssetMemoryFootprint.EstimateRuntimeBytes()
         {
@@ -374,25 +552,53 @@ namespace CycloneGames.AssetManagement.Runtime
         private static readonly LogChannel Log = AssetManagementAddressablesLog.Channel;
 
         private AsyncOperationHandle<GameObject> _raw;
-        private UniTask _task;
+        private AssetOperationCompletion _completion;
         private Action<long> _onDisposed;
         private bool _setActive;
         private int _refCount;
         private int _callerDisposed;
-        private int _disposed;
+        private int _releaseState;
+        private Exception _releaseFailure;
 
-        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
-        public override float Progress => _raw.IsValid() ? _raw.PercentComplete : 0f;
-        public override string Error => _raw.IsValid() ? _raw.OperationException?.Message ?? string.Empty : string.Empty;
-        public override UniTask Task => _task;
-        public GameObject Instance => _raw.IsValid() ? _raw.Result : null;
+        public override bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
+        public override float Progress
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return !AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) && _raw.IsValid()
+                    ? _raw.PercentComplete
+                    : 0f;
+            }
+        }
+        public override string Error
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return _releaseFailure?.Message ??
+                       (_raw.IsValid() ? _raw.OperationException?.Message ?? string.Empty : string.Empty);
+            }
+        }
+        public override UniTask Task => _completion.Task;
+        public GameObject Instance
+        {
+            get
+            {
+                AssetRuntimeGuard.EnsureMainThread();
+                return !AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) && _raw.IsValid()
+                    ? _raw.Result
+                    : null;
+            }
+        }
         public int RefCount => Volatile.Read(ref _refCount);
 
         public static AddressableInstantiateHandle Create(
             long id,
             AsyncOperationHandle<GameObject> raw,
             bool setActive,
-            Action<long> onDisposed)
+            Action<long> onDisposed,
+            AssetOperationTailTracker operationTails)
         {
             var handle = new AddressableInstantiateHandle
             {
@@ -402,7 +608,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 _setActive = setActive,
                 _refCount = 1,
             };
-            handle._task = AssetOperationBroadcast.Create(handle.CompleteAsync());
+            handle._completion = AssetOperationCompletion.Start(handle.CompleteAsync(), operationTails);
             return handle;
         }
 
@@ -437,11 +643,20 @@ namespace CycloneGames.AssetManagement.Runtime
             }
         }
 
-        public void Retain() => Interlocked.Increment(ref _refCount);
+        public void Retain()
+        {
+            if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
+            {
+                Log.Error("[AddressableInstantiateHandle] Retain called on a disposed handle.");
+                return;
+            }
+
+            Interlocked.Increment(ref _refCount);
+        }
 
         public void Release()
         {
-            if (Volatile.Read(ref _disposed) != 0)
+            if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState))
             {
                 return;
             }
@@ -466,18 +681,27 @@ namespace CycloneGames.AssetManagement.Runtime
             if (Interlocked.Exchange(ref _callerDisposed, 1) == 0)
             {
                 Release();
+                return;
+            }
+
+            if (AddressablesProviderReleaseStateMachine.IsOwnerRetired(ref _releaseState) &&
+                !AddressablesProviderReleaseStateMachine.IsReleased(ref _releaseState))
+            {
+                DisposeInternal();
             }
         }
 
         internal void DisposeInternal()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            if (!AddressablesProviderReleaseStateMachine.TryBeginRelease(
+                    ref _releaseState,
+                    _releaseFailure))
             {
                 return;
             }
 
-            HandleTracker.Unregister(Id);
+            _completion.TryCancelByOwner();
             try
             {
                 if (_raw.IsValid())
@@ -485,13 +709,28 @@ namespace CycloneGames.AssetManagement.Runtime
                     Addressables.Release(_raw);
                 }
             }
-            finally
+            catch (Exception exception)
             {
-                Action<long> onDisposed = _onDisposed;
-                _onDisposed = null;
-                _raw = default;
-                onDisposed?.Invoke(Id);
+                _releaseFailure = AssetRuntimeGuard.IsRecoverableException(exception)
+                    ? AddressablesProviderReleaseStateMachine.CreateIndeterminateFailure(
+                        nameof(AddressableInstantiateHandle),
+                        exception)
+                    : exception;
+                AddressablesProviderReleaseStateMachine.MarkOutcomeIndeterminate(ref _releaseState);
+                if (ReferenceEquals(_releaseFailure, exception))
+                {
+                    throw;
+                }
+
+                throw _releaseFailure;
             }
+
+            Action<long> onDisposed = _onDisposed;
+            _onDisposed = null;
+            _raw = default;
+            AddressablesProviderReleaseStateMachine.MarkReleased(ref _releaseState);
+            HandleTracker.Unregister(Id);
+            onDisposed?.Invoke(Id);
         }
 
         void IInternalCacheable.ForceDispose() => DisposeInternal();
@@ -506,7 +745,6 @@ namespace CycloneGames.AssetManagement.Runtime
         internal long DebugId => Id;
         internal object OwnerToken { get; private set; }
         internal bool UnloadStarted => _unloadStarted;
-        internal bool IsProviderHandleReleased => !Raw.IsValid();
         internal bool IsTerminallyReleased => Volatile.Read(ref _disposed) != 0;
         internal bool RequiresShutdownActivation
         {
@@ -539,13 +777,13 @@ namespace CycloneGames.AssetManagement.Runtime
         private UniTask _activationTask;
         private bool _unloadStarted;
         private UniTask _unloadTask;
-        private UniTask _task;
+        private AssetOperationCompletion _completion;
         private Scene _scene;
         private int _callerDisposed;
         private string _lifecycleError = string.Empty;
         private bool _providerSceneUnloaded;
 
-        public override bool IsDone => _task.Status != UniTaskStatus.Pending;
+        public override bool IsDone => _completion.Task.Status != UniTaskStatus.Pending;
         public override float Progress
         {
             get
@@ -567,7 +805,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return Raw.IsValid() ? Raw.OperationException?.Message ?? string.Empty : string.Empty;
             }
         }
-        public override UniTask Task => _task;
+        public override UniTask Task => _completion.Task;
         public string ScenePath { get; private set; }
         public Scene Scene
         {
@@ -597,7 +835,8 @@ namespace CycloneGames.AssetManagement.Runtime
             object ownerToken,
             string scenePath,
             AsyncOperationHandle<SceneInstance> raw,
-            bool activateOnLoad)
+            bool activateOnLoad,
+            AssetOperationTailTracker operationTails)
         {
             var handle = new AddressableSceneHandle
             {
@@ -609,9 +848,10 @@ namespace CycloneGames.AssetManagement.Runtime
                 _activationState = SceneActivationState.Loading,
                 _refCount = 1,
             };
-            handle._task = AssetOperationBroadcast.Create(handle.CompleteLoadAsync(
+            handle._completion = AssetOperationCompletion.Start(handle.CompleteLoadAsync(
                 raw,
-                scenePath));
+                scenePath),
+                operationTails);
             return handle;
         }
 
@@ -892,18 +1132,25 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private bool IsKnownSceneAbsent()
         {
-            if (_scene.IsValid() && _scene.isLoaded)
+            if (_scene.IsValid())
             {
-                return false;
+                return !_scene.isLoaded;
             }
 
-            return _providerSceneUnloaded || !Raw.IsValid();
+            if (_providerSceneUnloaded)
+            {
+                return true;
+            }
+
+            // Provider invalidation alone cannot prove that Unity unloaded this scene. A terminal failed load is
+            // handled by the explicit release branches in UnloadCoreAsync because it still owns a provider handle.
+            return false;
         }
 
         private void RefreshActivationState()
         {
             if (_activationState != SceneActivationState.Loading ||
-                _task.Status != UniTaskStatus.Succeeded ||
+                _completion.Task.Status != UniTaskStatus.Succeeded ||
                 !Raw.IsValid() ||
                 Raw.Status != AsyncOperationStatus.Succeeded)
             {
@@ -955,6 +1202,7 @@ namespace CycloneGames.AssetManagement.Runtime
                 return;
             }
 
+            _completion.TryCancelByOwner();
             SceneTracker.Unregister(Id);
             HandleTracker.Unregister(Id);
             Interlocked.Exchange(ref _refCount, 0);

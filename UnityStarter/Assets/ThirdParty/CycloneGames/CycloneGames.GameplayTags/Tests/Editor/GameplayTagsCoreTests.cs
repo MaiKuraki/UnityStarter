@@ -443,12 +443,12 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         [TestCase(GameplayTagsDiagnosticLevel.Warning, LogSeverity.Warning)]
         [TestCase(GameplayTagsDiagnosticLevel.Error, LogSeverity.Error)]
         [TestCase(GameplayTagsDiagnosticLevel.Fatal, LogSeverity.Fatal)]
-        public void LoggingAdapter_MapsEveryOutputLevelExactly(
+        public void LogWriterAdapter_MapsEveryOutputLevelExactly(
             GameplayTagsDiagnosticLevel level,
             LogSeverity expectedSeverity)
         {
             var writer = new ProbeLogWriter();
-            var adapter = new GameplayTagsLoggingDiagnostics(writer);
+            var adapter = new GameplayTagsLogWriterAdapter(writer);
 
             adapter.Write(level, GameplayTagsDiagnosticCategories.Root, "message");
 
@@ -458,10 +458,10 @@ namespace CycloneGames.GameplayTags.Tests.Editor
 
         [TestCase(GameplayTagsDiagnosticLevel.None)]
         [TestCase((GameplayTagsDiagnosticLevel)byte.MaxValue)]
-        public void LoggingAdapter_DropsNonOutputAndUnknownLevels(GameplayTagsDiagnosticLevel level)
+        public void LogWriterAdapter_DropsNonOutputAndUnknownLevels(GameplayTagsDiagnosticLevel level)
         {
             var writer = new ProbeLogWriter();
-            var adapter = new GameplayTagsLoggingDiagnostics(writer);
+            var adapter = new GameplayTagsLogWriterAdapter(writer);
 
             Assert.That(adapter.IsEnabled(level, GameplayTagsDiagnosticCategories.Root), Is.False);
             Assert.DoesNotThrow(() =>
@@ -475,10 +475,10 @@ namespace CycloneGames.GameplayTags.Tests.Editor
         }
 
         [Test]
-        public void LoggingAdapter_IsolatesOrdinaryWriterFailures()
+        public void LogWriterAdapter_IsolatesOrdinaryWriterFailures()
         {
             var writer = new ProbeLogWriter(throwOnCall: true);
-            var adapter = new GameplayTagsLoggingDiagnostics(writer);
+            var adapter = new GameplayTagsLogWriterAdapter(writer);
 
             Assert.That(
                 adapter.IsEnabled(

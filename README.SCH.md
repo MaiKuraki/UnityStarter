@@ -2,9 +2,9 @@
 
 一套面向生产、模块化的 Unity **基础工程**与可复用框架底座，借鉴**虚幻引擎**架构。其中 `GameplayFramework` 采用类似 Unreal 的 `Actor`、`Pawn`、`Controller`、`GameMode` 组织方式，**Gameplay Abilities** 与 **GameplayTags** 则提供 GAS 风格的能力与标签基础，用于建立清晰的玩法契约。
 
-UnityStarter 并不是面向新人和小型项目的开箱即用框架。它的设计目标是成为中大型 Unity 项目中稳定、可维护、可长期演进的底层工程基础：明确的所有权边界、性能优先的运行时系统、引擎无关核心，以及由项目自身维护的构建与工具基础设施。
+UnityStarter 面向有长期演进需求的中大型 Unity 项目：明确的所有权边界、性能优先的运行时系统、引擎无关核心，以及由项目自身维护的构建与工具基础设施。
 
-<p align="left"><br> <a href="README.md">English</a> | 简体中文</p>
+[English](README.md) | [简体中文](README.SCH.md)
 
 > [!NOTE]
 > 如果你觉得这个项目对你有帮助，请点一个 Star ⭐，谢谢！
@@ -50,13 +50,13 @@ UnityStarter 面向希望从第一天就具备生产级工程结构的 Unity 开
 - **作为项目模板**：在 Unity 中打开 `UnityStarter/`，用内置工具改名，让项目自有的 `Assets/Build/` 层随着你的游戏继续演进。
 - **以 Package（UPM）形式**：把`CycloneGames` 目录下的包，移动到项目外，然后用 PackageManager 引入项目。
 
-它真正提供的是围绕所有权、可测试性、可选集成、构建配置、Editor tooling 和文档形成的可复用工程基础。
+价值在于围绕所有权、可测试性、可选集成、构建配置、Editor tooling 与文档形成的可复用工程基础。
 
 ## 项目内容概览
 
-UnityStarter 由可复用的 `CycloneGames` 框架层、Unity 项目模板、项目自有 Build/CI 模块、独立维护工具、中英文文档，以及面向验证和工程规范的 analyzer 支持共同组成。
+UnityStarter 由可复用的 `CycloneGames` 框架层、Unity 项目模板、项目自有 Build/CI 模块、独立维护工具、中英文文档，以及面向验证和工程规范的 analyzer 支持组成。
 
-如果需要查看具体模块，请直接阅读[模块地图](#模块地图)。它是 gameplay、content、UI/input、AI、runtime infrastructure、build tooling 与 experimental networking packages 的主要入口。
+[模块地图](#模块地图) 是 gameplay、content、UI/input、AI、runtime infrastructure、build tooling 与 experimental networking packages 的主要入口。
 
 | 项目 | 详细信息 |
 | --- | --- |
@@ -144,18 +144,18 @@ flowchart TD
 
 ## 模块地图
 
-这里作为模块导航地图使用。快速评估时，建议先看 `GameplayFramework`、`AssetManagement`、`GameplayAbilities`、`GameplayTags`、`DataTable` 和 `Build`。
+建议先看 `GameplayFramework`、`AssetManagement`、`GameplayAbilities`、`GameplayTags`、`DataTable` 和 `Build`。
 
 ### Gameplay
 
 | 模块 | 职责 | 文档 |
 | --- | --- | --- |
 | **GameplayFramework** | Actor/Pawn/Controller/GameMode 结构、gameplay lifecycle、camera flow 与 scene-flow foundation。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.SCH.md) |
-| **GameplayAbilities** | GAS 风格 data-driven ability、attribute、effect、cost、cooldown 与 cue system，具有显式 authority/replica role 与权威 `AuthorityOnly` execution boundary。可选 Networking integration 提供 authority activation protocol building block，不是 transport endpoint。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
+| **GameplayAbilities** | GAS 风格 data-driven ability、attribute、effect、cost、cooldown 与 cue system，具有显式 authority/replica role 与权威 `AuthorityOnly` execution boundary。可选 Networking integration 提供 authority activation protocol building block。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.SCH.md) |
 | **Choreography** | 引擎无关的 action presentation scheduling，用于 animation、audio、VFX、gameplay-event markers 与 preload coordination。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography/README.SCH.md) |
 | **GameplayTags** | 层级 tags、generated constants、query helpers、editor tooling 与 integration points。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.SCH.md) |
 | **RPGFoundation** | RPG movement 与 interaction foundations，可与其他 gameplay packages 集成。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.SCH.md) |
-| **UIFramework** | Window management、UI flow、presentation patterns，以及委托给 `AssetManagement` W-TinyLFU cache 的 asset-backed UI loading；`UIFramework` 自身不维护独立的 `CacheRetention` 策略层。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
+| **UIFramework** | Window management、UI flow、presentation patterns，以及委托给 `AssetManagement` W-TinyLFU cache 的 asset-backed UI loading。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.SCH.md) |
 | **Foundation2D** | 面向派生项目的 2D foundation package 与 samples。 | [目录](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/) |
 
 ### AI
@@ -183,7 +183,9 @@ flowchart TD
 | 模块 | 职责 | 文档 |
 | --- | --- | --- |
 | **Factory** | Factory 与 object pooling module，支持 DI-friendly usage 和 ECS/DOD variants。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.SCH.md) |
-| **Logger** | Thread-safe logging，包含 levels、filtering、background processing 与 Unity integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.SCH.md) |
+| **Logging** | Unity-free logging contract，提供 channel、severity、process writer 路由与安全的 null writer。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logging/README.SCH.md) |
+| **Logging Pipeline** | Unity-free bounded processing，提供 filtering、sinks、file output、statistics 与确定性 shutdown。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Pipeline/README.SCH.md) |
+| **Logging Unity** | Logging pipeline 的可选 Unity lifecycle、settings、Console sink、Editor tooling 与 build integration。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Unity/README.SCH.md) |
 | **DeterministicMath** | Fixed-point deterministic math，用于 replay、simulation 与 lockstep-friendly systems。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeterministicMath/README.SCH.md) |
 | **Hash** | Deterministic hashing primitives，用于 manifests、protocol checks、IDs 与 consistency。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Hash/README.SCH.md) |
 | **IO** | 面向 Unity-aware foundation modules 的 managed file and path utilities。 | [README.SCH](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.IO/README.SCH.md) |
