@@ -86,7 +86,7 @@ flowchart LR
 
 核心 Runtime 引用 `UniTask`、`CycloneGames.Logging` 与 Unity UGUI API。可选 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 与 `defineConstraints` 启用；不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。AssetManagement 与 Localization Integration 通过显式 asmdef reference 引用各自的本地 Assembly。
 
-Runtime 与 Sample 诊断使用稳定的 `CycloneGames.UIFramework` `LogChannel` category。通用 Editor 工具使用 `CycloneGames.UIFramework.Editor`；Localization Authoring 使用 `CycloneGames.UIFramework.Localization.Editor`。本包只依赖 backend-neutral 的 `com.cyclone-games.logging` contract，不会初始化、替换、flush 或关闭进程级 writer。未安装 backend 时，`NullLogWriter` 会安全地丢弃消息。应用 composition root 可以安装 `CycloneGames.Logger` 或其他 `ILogWriter`；文件路径、轮转、保留、脱敏、flush 与 disposal policy 均由 host 持有。
+Runtime 与 Sample 诊断使用稳定的 `CycloneGames.UIFramework` `LogChannel` category；通用 Editor 工具使用 `CycloneGames.UIFramework.Editor`，Localization Authoring 使用 `CycloneGames.UIFramework.Localization.Editor`。本包只依赖 backend-neutral 的 `com.cyclone-games.logging` contract，writer 生命周期由 host 负责。未安装 backend 时，`NullLogWriter` 会丢弃消息。应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供其他 `ILogWriter`；文件路径、轮转、保留、脱敏、flush 与 disposal policy 均由 host 持有。
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
@@ -186,7 +186,7 @@ stateDiagram-v2
     Closed --> [*]
 ```
 
-`UIWindowState` 是受管窗口的单一权威状态。`UIWindow` 校验每次局部迁移；`UIService` 则拥有生命周期工作流、取消、回滚与清理。Binder、Presenter、Transition Driver 与 DI Container 都不能持有竞争状态机。
+`UIWindowState` 是受管窗口的单一权威状态。`UIWindow` 校验每次局部迁移；`UIService` 则拥有生命周期工作流、取消、回滚与清理。
 
 打开管线按以下顺序执行：创建 Binding、通知 `OnStartOpen`、执行 `UIWindow.OnOpening()`、配置 Driver 时等待 `IUIWindowTransitionDriver.PlayOpenAsync`、提交 `Open`、执行 `UIWindow.OnOpened()`、再通知 `OnFinishedOpen`。关闭采用对称顺序；关闭 hook 或过渡失败时，Service 会先把权威状态强制收敛到 `Closed`，再发布 `OnFinishedClose`，继续清理，并报告聚合后的失败。
 
@@ -300,7 +300,7 @@ public sealed class UiComposition
 
 ### Window + MVP
 
-MVP 是可选组合。`UIPresenterBinder` 将注册保存在单个 Binder 实例中，不做反射发现。
+MVP 是可选组合。`UIPresenterBinder` 将注册保存在单个 Binder 实例中，无需反射发现。
 
 ```csharp
 public interface ILoginView
@@ -458,7 +458,7 @@ UIWindow inventory = await ui.NavigateAsync(
 
 ### Editor Authoring
 
-通过 `Tools > CycloneGames > UI Framework > UIWindow Creator` 生成 Window Script、Prefab、Configuration 与可选 MVP 文件。生成前，选择项目拥有的输出目录、Template Prefab 与 Layer Configuration，设置稳定 Window ID 与 Source Mode，并确认每个生成 Script 目录都能通过最近的 asmdef/asmref 解析到可引用 `CycloneGames.UIFramework.Runtime` 的 Player-capable Assembly。Creator 在写入前会再次校验 Template、规范化 `Assets/` 路径、Assembly Graph 与冲突。Script 使用同目录临时文件和 create-new move 提交；Prefab 与 Configuration 先在最终目录的唯一临时路径创建，再通过 `AssetDatabase.MoveAsset` 提交。Pending Binding 使用有界、带 Schema Version 的 Journal，可跨 Reload 恢复。
+通过 `Tools > CycloneGames > UI Framework > UIWindow Creator` 生成 Window Script、Prefab、Configuration 与可选 MVP 文件。生成前，选择项目拥有的输出目录、Template Prefab、Layer Configuration、稳定 Window ID 与 Source Mode，并确认每个生成 Script 目录都能通过最近的 asmdef/asmref 解析到可引用 `CycloneGames.UIFramework.Runtime` 的 Player-capable Assembly。Creator 在写入前会再次校验 Template、规范化 `Assets/` 路径、Assembly Graph 与冲突。Script 使用同目录临时文件和 create-new move 提交；Prefab 与 Configuration 先在最终目录的唯一临时路径创建，再通过 `AssetDatabase.MoveAsset` 提交。Pending Binding 使用有界、带 Schema Version 的 Journal，可跨 Reload 恢复。
 
 手工 Authoring 菜单：
 
@@ -529,15 +529,15 @@ Open 与 Close 是生命周期操作，不是零分配热循环。一个会话�
 
 ### 缓存与 Lease policy
 
-窗口会话 Service 不池化窗口 GameObject，也不保留已关闭窗口缓存。Provider 可以共享底层资产，但每次成功获取都会返回由会话持有的 Lease。Binding 清理和窗口销毁后会 Dispose Lease。动态图集 Retention 是独立且显式有界的 Cache，具有自己的 Sprite Lease 与 Trim Policy。只有 Profiling 证明实例 churn 是主要成本，并且产品可以定义容量、Reset、耗尽、陈旧引用、Scene 与 Shutdown policy 时，才应增加池。
+窗口会话 Service 不保留窗口池或已关闭窗口缓存。Provider 可以共享底层资产，但每次成功获取都会返回由会话持有的 Lease，在 Binding 清理和窗口销毁后 Dispose。动态图集 Retention 是独立且显式有界的 Cache，具有自己的 Sprite Lease 与 Trim Policy。只有 Profiling 证明实例 churn 是主要成本，并且产品可以定义容量、Reset、耗尽、陈旧引用、Scene 与 Shutdown policy 时，才应增加池。
 
-`DynamicAtlasStats` 会在当前 page、entry、reference、retained entry、estimated bytes、pending-destruction bytes 与压力 counter 之外，报告配置的 `PageCapacity`、`EntryCapacity` 和 `MemoryBudgetBytes`。达到 page、entry 或 byte ceiling 时，admission 继续通过显式 `DynamicAtlasInsertStatus` 失败；active sprite lease 永不被驱逐。`TrimUnused(maximumEntriesToRemove)` 是安全的 owner-local mitigation，只移除零引用 retained entry。参数小于等于零时 no-op。legacy 无参数调用保持源码兼容，并可能清空全部 eligible entry，但总 work 仍受已校验的 `maxEntries` 限制（hard maximum 为 65,535）；pressure orchestration 应始终传入更小的单 pump work budget。
+`DynamicAtlasStats` 会在当前 page、entry、reference、retained entry、estimated bytes、pending-destruction bytes 与压力 counter 之外，报告配置的 `PageCapacity`、`EntryCapacity` 和 `MemoryBudgetBytes`。达到 page、entry 或 byte ceiling 时，admission 继续通过显式 `DynamicAtlasInsertStatus` 失败；active sprite lease 永不被驱逐。`TrimUnused(maximumEntriesToRemove)` 是安全的 owner-local mitigation，只移除零引用 retained entry；参数小于等于零时 no-op。legacy 无参数调用保持源码兼容，并可能清空全部 eligible entry，但总 work 仍受已校验的 `maxEntries` 限制（hard maximum 为 65,535）；pressure orchestration 应始终传入更小的单 pump work budget。
 
 ### 线程、AOT 与 Stripping
 
 `UIService` 与 `DynamicAtlasService` 捕获 Unity Owner Thread，并拒绝其他线程调用。Binder、Presenter、生命周期回调、过渡、Hierarchy 修改、Locale Layout 应用、Texture Copy 与 Lease 消费也在该线程运行。Asset Provider 可以按自身 policy 执行后端 I/O 或解压；完成的 Unity Object 会在校验与实例化前切回主线程。不要用 Lock 包围 Unity Object 访问；应把工作调度到 Owner Thread。
 
-核心不使用反射发现、运行时代码生成或仅 JIT 可用的 Delegate。Presenter Mapping 与 Binder 均显式连接，适合 IL2CPP/AOT Composition。第三方容器或内容后端仍可能需要自己的生成注册或 `link.xml`。必须用代表性 Player Build 验证 Stripping；Editor 编译不能作为证据。WebGL 不能假定存在通用托管 Worker Thread；主线程受限 API 与异步 Yield 不依赖后台线程。
+核心避免反射发现、运行时代码生成与仅 JIT 可用的 Delegate；Presenter Mapping 与 Binder 均显式连接，因此 IL2CPP/AOT Composition 可以工作。第三方容器或内容后端仍可能需要自己的生成注册或 `link.xml`。必须用代表性 Player Build 验证 Stripping；Editor 编译不能作为证据。WebGL 不能假定存在通用托管 Worker Thread；主线程受限 API 与异步 Yield 不依赖后台线程。
 
 ### 内存安全清单
 

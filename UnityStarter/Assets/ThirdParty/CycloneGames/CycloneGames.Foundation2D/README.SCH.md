@@ -93,7 +93,7 @@ flowchart LR
 | `CycloneGames.Foundation2D.Editor` | Inspector、校验、预览和材质 authoring | 仅 Editor |
 | `CycloneGames.Foundation2D.Sample.Runtime` / `.Editor` | 端到端 benchmark sample | 位于 Assets 下的 Sample assembly 会在条件满足时参与编译；需要 Burst integration 和 Factory Unity adapter |
 
-Foundation2D 使用 `CycloneGames.Logging` 输出诊断，并通过 Unity UI 支持 `Image` adapter。稳定的 `LogChannel` category 以 `CycloneGames.Foundation2D` 为根。本包不会初始化、替换、flush 或关闭 logging writer；未安装 backend 时 contract 的 `NullLogWriter` 可安全兜底，应用 composition root 可以安装 `CycloneGames.Logger` 或其他 `ILogWriter`。Burst 和 Collections 是可选 integration 依赖；基础 Runtime assembly 不引用它们。本包位于 `Assets/ThirdParty`，因此 `package.json` 只是 metadata，不会自动安装同级 package。当前 checkout 的 `Packages/manifest.json`、lock file、asmdef 和实际编译结果才是依赖事实来源。
+Foundation2D 使用 `CycloneGames.Logging` 输出诊断，并通过 Unity UI 支持 `Image` adapter。稳定的 `LogChannel` category 以 `CycloneGames.Foundation2D` 为根。本包不会初始化、替换、flush 或关闭 logging writer；未安装 backend 时 contract 的 `NullLogWriter` 可安全兜底。应用 composition root 可以安装可选的 `com.cyclone-games.logging.pipeline` backend，需要 Unity lifecycle 与 Console integration 时再加入 `com.cyclone-games.logging.unity`，也可以提供其他 `ILogWriter`。Burst 和 Collections 是可选 integration 依赖；基础 Runtime assembly 不引用它们。本包位于 `Assets/ThirdParty`，因此 `package.json` 只是 metadata，不会自动安装同级 package。当前 checkout 的 `Packages/manifest.json`、lock file、asmdef 和实际编译结果才是依赖事实来源。
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 

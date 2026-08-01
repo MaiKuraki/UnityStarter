@@ -16,7 +16,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
         {
             if (s_ownsAmbientDiagnostics)
             {
-                GameplayTagsDiagnostics.TryReset(GameplayTagsLoggingDiagnostics.Ambient);
+                GameplayTagsDiagnostics.TryReset(GameplayTagsLogWriterAdapter.Ambient);
                 s_ownsAmbientDiagnostics = false;
             }
 
@@ -30,7 +30,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
             if (s_ownsAmbientDiagnostics &&
                 !object.ReferenceEquals(
                     GameplayTagsDiagnostics.Current,
-                    GameplayTagsLoggingDiagnostics.Ambient))
+                    GameplayTagsLogWriterAdapter.Ambient))
             {
                 s_ownsAmbientDiagnostics = false;
             }
@@ -38,7 +38,7 @@ namespace CycloneGames.GameplayTags.Unity.Runtime
             if (!s_ownsAmbientDiagnostics)
             {
                 s_ownsAmbientDiagnostics =
-                    GameplayTagsDiagnostics.TryInstall(GameplayTagsLoggingDiagnostics.Ambient);
+                    GameplayTagsDiagnostics.TryInstall(GameplayTagsLogWriterAdapter.Ambient);
             }
 
             GameplayTagRuntimePlatform.IsRuntimePlaying = () => Application.isPlaying;

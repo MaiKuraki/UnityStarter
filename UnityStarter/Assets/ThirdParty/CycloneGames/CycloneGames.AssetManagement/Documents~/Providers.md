@@ -117,7 +117,16 @@ public sealed class ResourcesAssetOwner
 }
 ```
 
-Resources exposes async and sync single-asset loading plus runtime diagnostics. It does not expose bulk, raw-file, scene, catalog, downloader, storage-preflight, or provider-maintenance capabilities. Releasing a handle releases AssetManagement ownership, but Unity may retain native Resources data. `UnloadUnusedAssetsAsync` clears idle wrappers and calls Unity's global unused-resource pass; schedule it at a measured phase boundary.
+Resources exposes async and sync single-asset loading, runtime diagnostics, and the optional `IUnityUnusedAssetCollector` capability. It does not expose bulk, raw-file, scene, catalog, downloader, storage-preflight, or provider-maintenance capabilities. Releasing a handle releases AssetManagement ownership, but Unity may retain native Resources data. Schedule the process-wide collection only at a measured phase boundary:
+
+```csharp
+if (package is IUnityUnusedAssetCollector collector)
+{
+    await collector.CollectUnusedUnityAssetsAsync();
+}
+```
+
+The call clears idle framework ownership, joins concurrent requests, and awaits Unity's global unused-resource pass. Package shutdown joins an in-flight pass. Keep an AssetManagement lease alive for every asset that must remain owned; a bare managed stack reference is not an ownership guarantee during this Unity operation.
 
 ### Addressables composition
 
@@ -150,6 +159,8 @@ Catalog and cache mutations fail fast when another mutation is active on the sam
 `CleanUnusedBundleCacheAsync` is the normal maintenance operation. `ClearAllCacheFilesAsync` calls Unity's process-wide `Caching.ClearCache`; it is destructive, not scoped to the logical package. `ReadReleaseMetadataVersionAsync` reads bounded product metadata for correlation; it is not authenticated authorization or anti-rollback evidence.
 
 Addressables Tags/Locations downloaders use provider-global scheduling; per-downloader concurrency and retry are not exposed. A key array accepts 1-65,536 values, up to 4,096 characters each and 8 Mi characters total. Each package retains at most 128 registered downloader wrappers and 262,144 explicit scope values. Addressables cannot abort an in-flight `DownloadDependenciesAsync`; `Cancel`/`Dispose` cancels every joined caller-visible wait while the adapter retains the pending handle, drains it to terminal, records its final snapshot, and releases the provider handle exactly once. `CurrentDownloadBytes` caches provider status and refreshes at most four times per second. All downloader status properties are main-thread-affine.
+
+Addressables decrements an operation's provider reference count before provider destruction finishes. If `Addressables.Release` throws after that mutation may have started, the adapter marks the release outcome indeterminate, retains the handle and diagnostic, and never reissues the same release request. Package shutdown remains failed on every retry instead of risking a second decrement or reporting false success. Treat that package generation as terminally unhealthy and preserve the exception for the product's outer recovery or process-restart policy.
 
 Pending Addressables operations reject `WaitForAsyncComplete` on every platform. Await `Task`.
 
@@ -188,7 +199,7 @@ Create a fresh `InitializePackageOptions` subtype for each package. The adapter 
 
 `asyncOperationMaxTimeSliceMs` accepts 10-100 ms. It controls Yoo's main-thread asynchronous-operation budget, not network concurrency. The default 16 ms is not a 60/120 fps guarantee.
 
-`IYooAssetPackageMaintenance` accepts a product-supplied version for typed manifest loading and exposes typed cache cleanup plus All/Tags/Locations downloaders. Package names and manifest versions are ASCII tokens, 1-128 characters with path-safe rules. Downloader concurrency is 1-32, retry count 0-16, and maintenance timeouts 1-3,600 seconds. Tag/location arrays use the same bounds as Addressables. Downloader `Cancel`/`Dispose` cancels every joined caller-visible wait, requests provider-native `CancelDownload`, and keeps the wrapper registered until it observes provider terminal state.
+`IYooAssetPackageMaintenance` accepts a product-supplied version for typed manifest loading and exposes `UnloadUnusedProviderAssetsAsync`, typed cache cleanup, and All/Tags/Locations downloaders. The unload-unused call clears idle framework ownership and runs YooAsset's package-local operation; it is not Unity's process-wide Resources pass. Package names and manifest versions are ASCII tokens, 1-128 characters with path-safe rules. Downloader concurrency is 1-32, retry count 0-16, and maintenance timeouts 1-3,600 seconds. Tag/location arrays use the same bounds as Addressables. Downloader `Cancel`/`Dispose` cancels every joined caller-visible wait, requests provider-native `CancelDownload`, and keeps the wrapper registered until it observes provider terminal state.
 
 Desktop/Editor storage preflight is reliable only for Host mode using the default sandbox cache file system with a non-empty explicit `PackageRoot`. Other modes, custom file systems, implicit roots, mobile, WebGL, and consoles report `Unknown`.
 
@@ -256,9 +267,9 @@ var identifier = sceneRef.ToSceneIdentifier(
     bucket: "Gameplay.Scene");
 ```
 
-`CreateHandle` is lazy and does not acquire a provider scene. The first `Load` performs a cancellation precheck, acquires the provider handle, and starts authoritative cleanup if load or activation fails before ownership is handed back. Repeated `Load` calls fail fast; repeated or concurrent `Unload` calls join one retryable operation. StandardSceneNavigator is qualified only for additive loading, which is the integration default.
+`CreateHandle` is lazy and does not acquire a provider scene. The first `Load` performs a cancellation precheck, acquires the provider handle, and starts authoritative cleanup if load or activation fails before ownership is handed back. Repeated `Load` calls fail fast; repeated or concurrent `Unload` calls join one retryable operation. The integration rejects `LoadSceneMode.Single` and undefined modes at construction; only additive loading is accepted. To transfer an already-started additive handle, call `NavigathenaSceneHandleAdapter.TakeOwnership(handle, owningLoader, LoadSceneMode.Additive)` and stop using the previous caller lease immediately.
 
-Navigathena 1.1.0 does not clean up the target handle when cancellation, blank-scene unloading, or entry-point discovery fails after `ISceneHandle.Load` returns but before `SceneState` takes ownership. Production use requires an upstream, fork, or custom navigator that closes both the post-load ownership handoff and asynchronous teardown boundaries.
+Navigathena 1.1.0 `StandardSceneNavigator` does not clean up the target handle when cancellation, blank-scene unloading, or entry-point discovery fails after `ISceneHandle.Load` returns but before `SceneState` takes ownership; its synchronous disposal also does not await an active transition or unload the current scene. It is therefore not supported for production provider-backed scenes, including additive scenes. Production use requires a fixed upstream/fork or a custom navigator that closes both the post-load ownership handoff and asynchronous teardown boundaries. Do not combine Navigathena's native Addressables identifier with the CycloneGames provider owner for the same scene.
 
 ### Custom provider boundary
 

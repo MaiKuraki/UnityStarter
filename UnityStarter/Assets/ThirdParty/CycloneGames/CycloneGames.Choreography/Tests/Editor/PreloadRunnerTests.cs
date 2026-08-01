@@ -115,10 +115,10 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
-        public void LoggingDiagnostics_MapsAllOutputLevelsExactly()
+        public void LogWriterAdapter_MapsAllOutputLevelsExactly()
         {
             ProbeLogWriter writer = new ProbeLogWriter();
-            ChoreographyLoggingDiagnostics diagnostics = new ChoreographyLoggingDiagnostics(writer);
+            ChoreographyLogWriterAdapter diagnostics = new ChoreographyLogWriterAdapter(writer);
             ChoreographyDiagnosticLevel[] levels =
             {
                 ChoreographyDiagnosticLevel.Trace,
@@ -149,10 +149,10 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
-        public void LoggingDiagnostics_NoneAndUnknownLevelsNeverReachWriter()
+        public void LogWriterAdapter_NoneAndUnknownLevelsNeverReachWriter()
         {
             ProbeLogWriter writer = new ProbeLogWriter();
-            ChoreographyLoggingDiagnostics diagnostics = new ChoreographyLoggingDiagnostics(writer);
+            ChoreographyLogWriterAdapter diagnostics = new ChoreographyLogWriterAdapter(writer);
             ChoreographyDiagnosticLevel[] invalidLevels =
             {
                 ChoreographyDiagnosticLevel.None,
@@ -174,10 +174,10 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
-        public void LoggingDiagnostics_OrdinaryWriterFailuresAreContained()
+        public void LogWriterAdapter_OrdinaryWriterFailuresAreContained()
         {
             ProbeLogWriter writer = new ProbeLogWriter(new InvalidOperationException("writer failed"));
-            ChoreographyLoggingDiagnostics diagnostics = new ChoreographyLoggingDiagnostics(writer);
+            ChoreographyLogWriterAdapter diagnostics = new ChoreographyLogWriterAdapter(writer);
 
             Assert.IsFalse(diagnostics.IsEnabled(
                 ChoreographyDiagnosticLevel.Warning,
@@ -193,10 +193,10 @@ namespace CycloneGames.Choreography.Tests
         }
 
         [Test]
-        public void LoggingDiagnostics_WriterOutOfMemory_RemainsVisibleToHost()
+        public void LogWriterAdapter_WriterOutOfMemory_RemainsVisibleToHost()
         {
             ProbeLogWriter writer = new ProbeLogWriter(new OutOfMemoryException("writer allocation failed"));
-            ChoreographyLoggingDiagnostics diagnostics = new ChoreographyLoggingDiagnostics(writer);
+            ChoreographyLogWriterAdapter diagnostics = new ChoreographyLogWriterAdapter(writer);
 
             Assert.Throws<OutOfMemoryException>(() => diagnostics.IsEnabled(
                 ChoreographyDiagnosticLevel.Warning,

@@ -2,9 +2,9 @@
 
 A production-oriented, modular Unity **foundation project** and reusable framework base, informed by **Unreal Engine** architecture. Its `GameplayFramework` applies Unreal-style gameplay organization around `Actor`, `Pawn`, `Controller`, and `GameMode`, while **Gameplay Abilities** and **GameplayTags** provide GAS-like ability and tagging primitives for explicit gameplay contracts.
 
-UnityStarter is not intended to be a beginner-first, plug-and-play framework for small projects. It is designed as a stable, maintainable engineering foundation for medium-to-large Unity productions that expect long-term iteration: explicit ownership boundaries, performance-conscious runtime systems, engine-agnostic core layers, and project-owned build/tooling infrastructure.
+UnityStarter targets medium-to-large Unity productions with long-term iteration needs: explicit ownership boundaries, performance-conscious runtime systems, engine-agnostic core layers, and project-owned build/tooling infrastructure.
 
-<p align="left"><br> English | <a href="README.SCH.md">简体中文</a></p>
+[English](README.md) | [简体中文](README.SCH.md)
 
 > [!NOTE]
 > If you find this project helpful, please consider giving it a star ⭐ Thank you!
@@ -50,13 +50,13 @@ Use the repository in two practical ways:
 - **As a project template**: open `UnityStarter/` in Unity, rename it with the bundled tools, and let the project-owned `Assets/Build/` layer evolve with your game.
 - **As a package (UPM)**: move out folders under `CycloneGames`, add from PackageManager.
 
-Its value is the reusable engineering foundation around ownership, testability, optional integrations, build configuration, editor tooling, and documentation.
+The value is a reusable engineering foundation covering ownership, testability, optional integrations, build configuration, editor tooling, and documentation.
 
 ## What Is Inside
 
-UnityStarter combines a reusable `CycloneGames` framework layer with a Unity project template, a project-owned Build/CI module, standalone maintenance tools, bilingual documentation, and validation-oriented analyzer support.
+UnityStarter combines a reusable `CycloneGames` framework layer, a Unity project template, a project-owned Build/CI module, standalone maintenance tools, bilingual documentation, and validation-oriented analyzer support.
 
-For module-level details, use the [Module Map](#module-map). It is the primary index for gameplay, content, UI/input, AI, runtime infrastructure, build tooling, and experimental networking packages.
+The [Module Map](#module-map) is the primary index for gameplay, content, UI/input, AI, runtime infrastructure, build tooling, and experimental networking packages.
 
 | Item | Detail |
 | --- | --- |
@@ -144,18 +144,18 @@ flowchart TD
 
 ## Module Map
 
-Use this section as a navigation map. Recommended first pass: `GameplayFramework`, `AssetManagement`, `GameplayAbilities`, `GameplayTags`, `DataTable`, and `Build`.
+Recommended first pass: `GameplayFramework`, `AssetManagement`, `GameplayAbilities`, `GameplayTags`, `DataTable`, and `Build`.
 
 ### Gameplay
 
 | Module | Role | Docs |
 | --- | --- | --- |
 | **GameplayFramework** | Actor/Pawn/Controller/GameMode structure, gameplay lifecycle, camera flow, and scene-flow foundation. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayFramework/README.md) |
-| **GameplayAbilities** | GAS-style data-driven ability, attribute, effect, cost, cooldown, and cue system with an explicit authority/replica role and authoritative `AuthorityOnly` execution boundary. The optional Networking integration provides authority-activation protocol building blocks and is not a transport endpoint. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
+| **GameplayAbilities** | GAS-style data-driven ability, attribute, effect, cost, cooldown, and cue system with an explicit authority/replica role and authoritative `AuthorityOnly` execution boundary. The optional Networking integration provides authority-activation protocol building blocks. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayAbilities/README.md) |
 | **Choreography** | Engine-free action presentation scheduling for animation, audio, VFX, gameplay-event markers, and preload coordination. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Choreography/README.md) |
 | **GameplayTags** | Hierarchical tags, generated constants, query helpers, editor tooling, and integration points. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.GameplayTags/README.md) |
 | **RPGFoundation** | RPG movement and interaction foundations that can integrate with other gameplay packages. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.RPGFoundation/README.md) |
-| **UIFramework** | Window management, UI flow, presentation patterns, and asset-backed UI loading that delegates handle ownership and eviction decisions to `AssetManagement`'s W-TinyLFU cache; `UIFramework` does not maintain a separate `CacheRetention` policy layer. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
+| **UIFramework** | Window management, UI flow, presentation patterns, and asset-backed UI loading that delegates handle ownership and eviction decisions to `AssetManagement`'s W-TinyLFU cache. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.UIFramework/README.md) |
 | **Foundation2D** | 2D foundation package and samples for derived projects. | [Folder](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Foundation2D/) |
 
 ### AI
@@ -183,7 +183,9 @@ Use this section as a navigation map. Recommended first pass: `GameplayFramework
 | Module | Role | Docs |
 | --- | --- | --- |
 | **Factory** | Factory and object pooling module with DI-friendly use and ECS/DOD variants. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Factory/README.md) |
-| **Logger** | Thread-safe logging with levels, filtering, background processing, and Unity integration. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logger/README.md) |
+| **Logging** | Unity-free logging contracts, channels, severity, process-writer routing, and a safe null writer. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logging/README.md) |
+| **Logging Pipeline** | Unity-free bounded processing, filtering, sinks, file output, statistics, and deterministic shutdown. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Pipeline/README.md) |
+| **Logging Unity** | Optional Unity lifecycle, settings, Console sink, Editor tooling, and build integration for the logging pipeline. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Unity/README.md) |
 | **DeterministicMath** | Fixed-point deterministic math for replay, simulation, and lockstep-friendly systems. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.DeterministicMath/README.md) |
 | **Hash** | Deterministic hashing primitives for manifests, protocol checks, IDs, and consistency. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Hash/README.md) |
 | **IO** | Managed file and path utilities for Unity-aware foundation modules. | [README](UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.IO/README.md) |

@@ -10,7 +10,8 @@ namespace CycloneGames.Logging.Tests
     public sealed class PureCoreDependencyTests
     {
         private const string LoggingAssembly = "CycloneGames.Logging";
-        private const string LoggerAssemblyPrefix = "CycloneGames.Logger";
+        private const string LoggingPipelineAssemblyPrefix = "CycloneGames.Logging.Pipeline";
+        private const string LoggingUnityAssemblyPrefix = "CycloneGames.Logging.Unity";
         private const string LoggingIntegrationSuffix = ".Integrations.Logging";
 
         private static readonly Regex NamePattern = new Regex(
@@ -28,7 +29,7 @@ namespace CycloneGames.Logging.Tests
         private static readonly Regex DirectLoggingPattern = new Regex(
             @"\b(?:UnityEngine\s*\.\s*)?Debug\s*\.\s*(?:Log[A-Za-z0-9_]*|Assert[A-Za-z0-9_]*|unityLogger)\b|" +
             @"\b(?:System\s*\.\s*)?Console\s*\.\s*(?:Write[A-Za-z0-9_]*|Out|Error)\b|" +
-            @"\bprint\s*\(|\bCLogger\b",
+            @"\bprint\s*\(|\bLogPipeline\b",
             RegexOptions.CultureInvariant);
 
         private static readonly Lazy<ArchitectureSnapshot> Snapshot =
@@ -142,7 +143,7 @@ namespace CycloneGames.Logging.Tests
             Assert.That(
                 violations,
                 Is.Empty,
-                "Production CycloneGames sources outside the Logger backend must use the shared contract. " +
+                "Production CycloneGames sources outside Logging backend packages must use the shared contract. " +
                 "Tests, tools, code generation, and generated files are excluded:\n" +
                 string.Join("\n", violations));
         }
@@ -230,7 +231,7 @@ namespace CycloneGames.Logging.Tests
             return assemblyName.StartsWith("UnityEngine", StringComparison.Ordinal) ||
                    assemblyName.StartsWith("UnityEditor", StringComparison.Ordinal) ||
                    string.Equals(assemblyName, LoggingAssembly, StringComparison.Ordinal) ||
-                   IsLoggerAssembly(assemblyName) ||
+                   IsLoggingBackendAssembly(assemblyName) ||
                    assemblyName.EndsWith(LoggingIntegrationSuffix, StringComparison.Ordinal);
         }
 
@@ -238,14 +239,16 @@ namespace CycloneGames.Logging.Tests
         {
             return assemblyName.StartsWith("UnityEngine", StringComparison.Ordinal) ||
                    assemblyName.StartsWith("UnityEditor", StringComparison.Ordinal) ||
-                   IsLoggerAssembly(assemblyName) ||
+                   IsLoggingBackendAssembly(assemblyName) ||
                    assemblyName.EndsWith(LoggingIntegrationSuffix, StringComparison.Ordinal);
         }
 
-        private static bool IsLoggerAssembly(string assemblyName)
+        private static bool IsLoggingBackendAssembly(string assemblyName)
         {
-            return string.Equals(assemblyName, LoggerAssemblyPrefix, StringComparison.Ordinal) ||
-                   assemblyName.StartsWith(LoggerAssemblyPrefix + ".", StringComparison.Ordinal);
+            return string.Equals(assemblyName, LoggingPipelineAssemblyPrefix, StringComparison.Ordinal) ||
+                   assemblyName.StartsWith(LoggingPipelineAssemblyPrefix + ".", StringComparison.Ordinal) ||
+                   string.Equals(assemblyName, LoggingUnityAssemblyPrefix, StringComparison.Ordinal) ||
+                   assemblyName.StartsWith(LoggingUnityAssemblyPrefix + ".", StringComparison.Ordinal);
         }
 
         private static bool IsExemptSourcePath(string sourcePath, string root)
@@ -254,7 +257,8 @@ namespace CycloneGames.Logging.Tests
             string[] segments = relative.Split(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
             for (int i = 0; i < segments.Length - 1; i++)
             {
-                if (string.Equals(segments[i], "CycloneGames.Logger", StringComparison.OrdinalIgnoreCase) ||
+                if (string.Equals(segments[i], "CycloneGames.Logging.Pipeline", StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(segments[i], "CycloneGames.Logging.Unity", StringComparison.OrdinalIgnoreCase) ||
                     IsExemptSegment(segments[i]))
                 {
                     return true;

@@ -82,7 +82,7 @@ Tick, OnTick, OnUpdate, PreUpdate, PostUpdate,
 OnPreTick, OnPostTick
 ```
 
-热路径规则应保持保守。对团队级 Analyzer 来说，少量漏报通常优于大量误报。
+热路径规则保持保守：宁可少量漏报，也不要大范围误报导致团队禁用 Analyzer。
 
 ## 统一日志约束
 
@@ -91,15 +91,15 @@ OnPreTick, OnPostTick
 - `UnityEngine.Debug.Log*`、`UnityEngine.Debug.Assert*` 和 `Debug.unityLogger` 访问。
 - `UnityEngine.MonoBehaviour.print`。
 - `System.Console.Write*` 以及对 `Console.Out` 或 `Console.Error` 的访问。
-- Logger 自有 assembly 之外对具体 `CycloneGames.Logger.CLogger` backend 类型的引用。
+- Logging backend assembly 之外对具体 `CycloneGames.Logging.LogPipeline` backend 类型的引用。
 
-规则只作用于名称以 `CycloneGames.` 开头的 assembly。精确 backend assembly `CycloneGames.Logger`、`CycloneGames.Logger.Unity` 与 `CycloneGames.Logger.Editor` 不参与检查。明确标识为 Tests、Tools 或 CodeGen 的 assembly 或源码路径也不参与检查，因为这些位置属于验证或宿主 I/O 边界。Runtime、Editor、Samples 与 Benchmarks 仍在治理范围内。`CycloneGames.MemoryGovernance.Logger` 或 `CycloneGames.MemoryGovernance.Logger.Editor` 等相似业务名称不是 Logger backend，仍会接受检查。
+规则只作用于名称以 `CycloneGames.` 开头的 assembly。backend assembly `CycloneGames.Logging.Pipeline`、`CycloneGames.Logging.Unity` 与 `CycloneGames.Logging.Unity.Editor` 不参与检查；明确标识为 Tests、Tools 或 CodeGen 的 assembly 或源码路径也不参与检查，这些位置属于验证或宿主 I/O 边界。Runtime、Editor、Samples 与 Benchmarks 仍在治理范围内。`CycloneGames.Logging.Unity.Samples` composition sample 可以引用 `LogPipeline`，但其中直接使用 Unity 与 Console 输出 API 仍受治理。`CycloneGames.MemoryGovernance.Logging.Pipeline` 或 `CycloneGames.MemoryGovernance.Logging.Pipeline.Editor` 等相似业务名称不是标准 backend assembly，仍会接受检查。
 
 在受约束的 package 代码中，直接日志诊断由 `CG0049` 负责，因此只检查热路径的 `CG0043` 不会对同一个 `Debug.Log*` 调用重复报告。`CG0043` 在该范围之外仍保持启用。
 
-`CG0050` 将 channel 构造收敛到每个产生日志 assembly 的单一、可发现边界。合法边界是名称唯一且以 `Log` 结尾的顶层 `internal static` 类型，存放在 `Diagnostics/<TypeName>.cs`，并提供统一的 internal 成员 `Category`、`Channel` 与 `Create(ILogWriter logWriter)`。例如，`CycloneGames.Audio.Runtime` 使用 `Diagnostics/AudioRuntimeLog.cs`；实现文件消费 `AudioRuntimeLog.Channel` 或 `AudioRuntimeLog.Create(logWriter)`，不再直接调用 `LogChannel.Create`。名称按 assembly 特征保持唯一，可避免测试或 integration assembly 通过 internals 可见性同时看到多个同名门面时发生类型歧义。
+`CG0050` 将 channel 构造收敛到每个产生日志 assembly 的单一、可发现边界：名称唯一且以 `Log` 结尾的顶层 `internal static` 类型，存放在 `Diagnostics/<TypeName>.cs`，并提供统一的 internal 成员 `Category`、`Channel` 与 `Create(ILogWriter logWriter)`。例如，`CycloneGames.Audio.Runtime` 使用 `Diagnostics/AudioRuntimeLog.cs`；实现文件消费 `AudioRuntimeLog.Channel` 或 `AudioRuntimeLog.Create(logWriter)`，不再直接调用 `LogChannel.Create`。名称按 assembly 特征保持唯一，可避免测试或 integration assembly 通过 internals 可见性同时看到多个同名门面时发生类型歧义。
 
-两个规则都不提供 CodeFix。安全替换需要明确模块 category、exception/context 处理、延迟格式化和日志所有权，这些信息无法从单个调用点推断。`CG0050` 自动验证构造边界、文件约定与标准门面成员签名；category 具体值与显式 null 语义仍由 package test 和 API 评审负责。
+两个规则都不提供 CodeFix。安全替换依赖模块 category、exception/context 处理、延迟格式化和日志所有权，单个调用点无法推断这些信息。`CG0050` 自动验证构造边界、文件约定与标准门面成员签名；category 具体值与显式 null 语义仍由 package test 和 API 评审负责。
 
 ## 抑制规则
 
@@ -124,7 +124,7 @@ var config = Resources.Load<GameConfig>("Config");
 默认启用一条规则前应满足：
 
 - 语义检查优先，避免只依赖脆弱的字符串匹配。
-- Runtime、Editor、Samples 与 Benchmarks 接受治理，并明确 Tests、Tools 与 CodeGen 边界行为。
+- Runtime、Editor、Samples 与 Benchmarks 接受治理；`CycloneGames.Logging.Unity.Samples` 仅获得 pipeline composition 窄例外，原始输出 API 仍被禁止。
 - 覆盖正例和反例测试。
 - 对现有 UnityStarter 模块保持低误报。
 - 只有在改写对常见 Unity 代码模式安全时才提供 CodeFix。

@@ -102,7 +102,8 @@ namespace CycloneGames.AssetManagement.Runtime
 		UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default);
 
 		/// <summary>
-		/// Destroys the package and releases all provider resources.
+		/// Destroys the package and releases all provider resources. Successful completion is not published until
+		/// provider operations and adapter continuations retained by the package have reached a terminal state.
 		/// </summary>
 		UniTask DestroyAsync();
 
@@ -128,9 +129,6 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// does not affect reference counts or LRU ordering.
 		/// </summary>
 		bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object;
-
-		// --- Maintenance ---
-		UniTask UnloadUnusedAssetsAsync();
 
 		/// <summary>
 		/// Overrides the cache's idle (RefCount == 0) memory budget at runtime, in bytes. Pass a positive
@@ -158,6 +156,22 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// Useful for hierarchical lifetime domains such as "UI.Scene" or "Gameplay.Levels.BossRoom".
 		/// </summary>
 		void ClearBucketsByPrefix(string bucketPrefix);
+	}
+
+	/// <summary>
+	/// Optional capability for scheduling Unity's process-wide unused-asset collection pass.
+	/// This is intentionally separate from <see cref="IAssetPackage"/> because the operation is not
+	/// package-local and provider adapters cannot implement equivalent semantics.
+	/// </summary>
+	public interface IUnityUnusedAssetCollector
+	{
+		/// <summary>
+		/// Clears idle framework ownership and awaits Unity's process-wide unused-asset collection pass.
+		/// The call is main-thread-affine and can cause a visible frame hitch. Keep framework leases alive
+		/// for every asset that must remain owned; a bare reference on the managed execution stack is not
+		/// an ownership guarantee for this operation.
+		/// </summary>
+		UniTask CollectUnusedUnityAssetsAsync();
 	}
 
 	/// <summary>Optional synchronous asset operations. Addressables intentionally does not implement this capability.</summary>
@@ -249,8 +263,15 @@ namespace CycloneGames.AssetManagement.Runtime
 		void Cancel();
 	}
 
+	/// <summary>
+	/// Provider-independent operation state. <see cref="Task"/> is the authoritative terminal contract;
+	/// progress and diagnostic text are observational only.
+	/// </summary>
 	public interface IOperation
 	{
+		/// <summary>
+		/// True after this caller-visible operation reaches its first terminal state.
+		/// </summary>
 		bool IsDone { get; }
 		float Progress { get; }
 		/// <summary>
@@ -259,10 +280,17 @@ namespace CycloneGames.AssetManagement.Runtime
 		/// </summary>
 		string Error { get; }
 		/// <summary>
-		/// Memoized broadcast completion task that is safe for repeated and concurrent awaiters. Successful
-		/// completion means the provider operation succeeded. Provider failures fault this task;
-		/// <see cref="Error"/> remains diagnostic context and is never a substitute for observing task completion.
+		/// Memoized completion task that is safe for repeated and concurrent awaiters. Its first terminal
+		/// transition is stable: provider and adapter success completes it, a real provider or adapter failure
+		/// faults it, and cancellation cancels it. Cancellation includes the caller's load-wait token, provider
+		/// cancellation, or authoritative package/module retirement while the operation is pending.
 		/// </summary>
+		/// <remarks>
+		/// Caller-visible cancellation does not imply that a provider can physically abort its operation.
+		/// The owning package retains and observes any remaining provider/adapter tail, and successful package
+		/// destruction does not complete until those tails drain. <see cref="Error"/> remains diagnostic context
+		/// and is never a substitute for observing this task.
+		/// </remarks>
 		UniTask Task { get; }
 		void WaitForAsyncComplete();
 	}

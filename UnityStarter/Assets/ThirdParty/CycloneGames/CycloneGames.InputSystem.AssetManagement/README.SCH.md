@@ -20,7 +20,7 @@ CycloneGames.InputSystem.AssetManagement 是 `CycloneGames.InputSystem`、`Cyclo
 
 当产品从 asset package 加载输入配置时，需要在三个 owner 之间搭桥：InputSystem runtime（校验并提交配置）、AssetManagement runtime（从 package 加载字节）与 VContainer composition root（持有 manager 生命周期）。本包以一个程序集、一个公开 adapter 和一个 helper 提供该桥梁，使 InputSystem 基础 VContainer 集成永远不直接依赖 AssetManagement。
 
-adapter 不拥有缓存、Unity object 或全局服务。调用方拥有 AssetManagement package 与 VContainer scope。用户配置仍由 `Application.persistentDataPath` 下的 `FileInputConfigurationStore` 管理；本集成不新增文件或 preference。
+adapter 不保留缓存、Unity object 或全局服务；调用方拥有 AssetManagement package 与 VContainer scope。用户配置持久化仍由 `Application.persistentDataPath` 下的 `FileInputConfigurationStore` 负责；本集成不新增文件或 preference。
 
 当 InputSystem 配置在运行时从 AssetManagement package 加载时使用本包。当配置来自 serialized `TextAsset`、StreamingAssets 或 in-memory source 时不要安装本包 —— InputSystem 基础 VContainer 集成无需本 adapter 即可处理这些来源。
 
@@ -40,7 +40,7 @@ adapter 不拥有缓存、Unity object 或全局服务。调用方拥有 AssetMa
 
 该程序集设 `autoReferenced: false`，并使用 package-derived `VCONTAINER_PRESENT` constraint（来自 `jp.hadashikick.vcontainer`）。未安装 VContainer 时不参与编译。消费者必须显式引用 `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`。不要添加 `PlayerSettings` scripting define —— 物理 integration package 及其 asmdef 使该边界在 assembly graph 中显式可见。
 
-诊断使用稳定的 `CycloneGames.InputSystem.AssetManagement` `LogChannel` category。此 integration 不持有 logging backend 生命周期。仅安装 `com.cyclone-games.logging` 时，消息会安全地进入 `NullLogWriter`；应用 composition root 可以安装 `CycloneGames.Logger` 或其他 `ILogWriter` backend。
+诊断使用稳定的 `CycloneGames.InputSystem.AssetManagement` `LogChannel` category。logging backend 生命周期由 host 负责。仅安装 `com.cyclone-games.logging` 时，消息会安全地进入 `NullLogWriter`；应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供其他 `ILogWriter` backend。
 
 产生诊断的 asmdef 在 `Diagnostics/` 下持有 internal `InputSystemAssetManagementLog` facade。它统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 
@@ -86,7 +86,7 @@ builder.Install(new InputSystemVContainerInstaller(
 
 ### Acquisition 与 Acceptance
 
-helper 的 1 MiB 限制是 **acquisition 完成后的 acceptance/copy limit**，不是 acquisition budget。它约束的是 provider 已经 acquire 资产之后 helper 复制到自己 buffer 的内容大小，不约束 provider catalog lookup、download、decompression、cache、native allocation 或 disk materialization。所选 AssetManagement provider 与 composition root 必须在调用本 adapter 前实施这些 acquisition budget。
+helper 的 1 MiB 限制是 **acquisition 完成后的 acceptance/copy limit**，不是 acquisition budget。它约束的是 provider 已经 acquire 资产之后 helper 复制到自己 buffer 的内容大小。provider catalog lookup、download、decompression、cache、native allocation 与 disk materialization 由 AssetManagement provider 与 composition root 负责，它们必须在调用本 adapter 前实施这些 acquisition budget。
 
 ## 使用指南
 
@@ -141,7 +141,7 @@ provider failure 会 fail closed，不会发起第二次 acquisition。policy re
 
 ### 所有权与持久化
 
-adapter 不拥有缓存、Unity object 或全局服务。调用方拥有 AssetManagement package 与 VContainer scope。用户配置仍由 `Application.persistentDataPath` 下的 `FileInputConfigurationStore` 管理；本集成不新增文件或 preference。
+adapter 不保留缓存、Unity object 或全局服务；调用方拥有 AssetManagement package 与 VContainer scope。用户配置持久化仍由 `Application.persistentDataPath` 下的 `FileInputConfigurationStore` 负责；本集成不新增文件或 preference。
 
 ## 常见场景
 
@@ -162,7 +162,7 @@ Live-service 游戏把输入配置存储在 AssetManagement package 中。配置
 | Acceptance/copy | 1 MiB 有界 buffer | acquisition 完成后的限制；分配前检查 `TextAsset.dataSize` 或 raw-file 长度。 |
 | Runtime commit | 模块级 0 字节 | 交给基础 InputSystem 集成；helper 在 handoff 后释放自己的 buffer。 |
 
-helper 在把内容交给基础集成后不再保留配置 bytes。provider load、Unity object access 与 handle disposal 在 Unity main thread 执行；helper 不创建线程或同步原语。
+helper 在把内容交给基础集成后释放配置 bytes。provider load、Unity object access 与 handle disposal 在 Unity main thread 执行；helper 不创建线程或同步原语。
 
 如需显式 telemetry，创建 `InputSystemAssetManagementDiagnostics` 实例，并通过 `CreateDefaultConfigLoader` 或 `CreateConfigLoader` 的可选 `diagnostics` 参数传入。`GetMemoryStats()` 只返回标量 request、failure、fallback 与临时 lease 计数。Caller-owned adapter 可以发布这些计数；asset bytes 与 eviction 仍由 AssetManagement 拥有。
 

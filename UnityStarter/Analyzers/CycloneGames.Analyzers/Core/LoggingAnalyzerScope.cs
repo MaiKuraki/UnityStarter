@@ -11,9 +11,10 @@ namespace CycloneGames.Analyzers
     internal static class LoggingAnalyzerScope
     {
         private const string AssemblyPrefix = "CycloneGames.";
-        private const string LoggerBackendAssembly = "CycloneGames.Logger";
-        private const string UnityLoggerBackendAssembly = "CycloneGames.Logger.Unity";
-        private const string EditorLoggerBackendAssembly = "CycloneGames.Logger.Editor";
+        private const string PipelineBackendAssembly = "CycloneGames.Logging.Pipeline";
+        private const string UnityBackendAssembly = "CycloneGames.Logging.Unity";
+        private const string UnityEditorBackendAssembly = "CycloneGames.Logging.Unity.Editor";
+        private const string UnitySamplesAssembly = "CycloneGames.Logging.Unity.Samples";
 
         private static readonly string[] ExemptAssemblySegments =
         {
@@ -47,9 +48,9 @@ namespace CycloneGames.Analyzers
                 return false;
             }
 
-            if (string.Equals(assemblyName, LoggerBackendAssembly, StringComparison.Ordinal) ||
-                string.Equals(assemblyName, UnityLoggerBackendAssembly, StringComparison.Ordinal) ||
-                string.Equals(assemblyName, EditorLoggerBackendAssembly, StringComparison.Ordinal))
+            if (string.Equals(assemblyName, PipelineBackendAssembly, StringComparison.Ordinal) ||
+                string.Equals(assemblyName, UnityBackendAssembly, StringComparison.Ordinal) ||
+                string.Equals(assemblyName, UnityEditorBackendAssembly, StringComparison.Ordinal))
             {
                 return false;
             }
@@ -73,6 +74,15 @@ namespace CycloneGames.Analyzers
         {
             return IsEnforcedAssembly(compilation.AssemblyName) &&
                    !IsExemptPath(syntaxTree.FilePath);
+        }
+
+        /// <summary>
+        /// The Unity package sample is an explicit composition example and benchmark. It may
+        /// construct a pipeline, but remains governed for direct Unity and Console output APIs.
+        /// </summary>
+        internal static bool MayReferenceBackendPipeline(string? assemblyName)
+        {
+            return string.Equals(assemblyName, UnitySamplesAssembly, StringComparison.Ordinal);
         }
 
         internal static bool IsExemptPath(string? filePath)

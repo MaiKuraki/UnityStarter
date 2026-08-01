@@ -10,7 +10,8 @@ using CycloneGames.Logging;
 
 namespace CycloneGames.AssetManagement.Runtime
 {
-    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetSyncOperations, IAssetCacheMaintenanceOwner
+    internal sealed class ResourcesAssetPackage : IAssetPackage, IAssetSyncOperations,
+        IUnityUnusedAssetCollector, IAssetCacheMaintenanceOwner
     {
         private static readonly LogChannel Log = AssetManagementLog.Channel;
 
@@ -19,18 +20,33 @@ namespace CycloneGames.AssetManagement.Runtime
         public string Name => _packageName;
 
         private readonly Cache.AssetCacheService _cacheService;
+        private readonly AssetOperationTailTracker _operationTails = new AssetOperationTailTracker();
         private readonly Dictionary<long, ResourcesInstantiateHandle> _instantiateHandles =
             new Dictionary<long, ResourcesInstantiateHandle>();
         private readonly Action<long> _onInstantiateDisposed;
+        private readonly Func<UniTask> _unloadUnusedAssetsOperation;
         private bool _initialized;
+        private bool _shutdownRequested;
         private bool _destroyed;
         private bool _destroying;
+        private UniTask _destroyTask;
+        private bool _unloadUnusedAssetsRunning;
+        private UniTask _unloadUnusedAssetsTask;
+
+        internal AssetOperationTailTracker OperationTails => _operationTails;
 
         public ResourcesAssetPackage(string name)
+            : this(name, UnloadUnityUnusedAssetsAsync)
+        {
+        }
+
+        internal ResourcesAssetPackage(string name, Func<UniTask> unloadUnusedAssetsOperation)
         {
             _packageName = name;
             _cacheService = new Cache.AssetCacheService(this);
             _onInstantiateDisposed = OnInstantiateDisposed;
+            _unloadUnusedAssetsOperation = unloadUnusedAssetsOperation ??
+                throw new ArgumentNullException(nameof(unloadUnusedAssetsOperation));
         }
 
         public UniTask<bool> InitializeAsync(AssetPackageInitOptions options, CancellationToken cancellationToken = default)
@@ -62,21 +78,42 @@ namespace CycloneGames.AssetManagement.Runtime
         public UniTask DestroyAsync()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (_destroyed || _destroying)
+            _shutdownRequested = true;
+            if (_destroyed)
             {
                 return UniTask.CompletedTask;
+            }
+
+            if (_destroying)
+            {
+                return _destroyTask;
             }
 
             _destroying = true;
             try
             {
+                _destroyTask = AssetOperationBroadcast.Create(DestroyCoreAsync());
+                return _destroyTask;
+            }
+            catch
+            {
+                _destroying = false;
+                throw;
+            }
+        }
+
+        private async UniTask DestroyCoreAsync()
+        {
+            try
+            {
                 List<Exception> failures = null;
                 var instances = new List<ResourcesInstantiateHandle>(_instantiateHandles.Values);
+                var instanceReleaseTasks = new List<UniTask>(instances.Count);
                 for (int i = 0; i < instances.Count; i++)
                 {
                     try
                     {
-                        instances[i].DisposeInternal();
+                        instanceReleaseTasks.Add(instances[i].DisposeInternal());
                     }
                     catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
                     {
@@ -85,7 +122,19 @@ namespace CycloneGames.AssetManagement.Runtime
                     }
                 }
 
-                _instantiateHandles.Clear();
+                for (int i = 0; i < instanceReleaseTasks.Count; i++)
+                {
+                    try
+                    {
+                        await instanceReleaseTasks[i];
+                    }
+                    catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+                    {
+                        failures ??= new List<Exception>();
+                        failures.Add(ex);
+                    }
+                }
+
                 try
                 {
                     _cacheService.Dispose();
@@ -96,8 +145,8 @@ namespace CycloneGames.AssetManagement.Runtime
                     failures.Add(ex);
                 }
 
-                _initialized = false;
-                _destroyed = true;
+                await _operationTails.WaitForAllAsync();
+
                 if (failures != null)
                 {
                     throw new AggregateException(
@@ -105,7 +154,8 @@ namespace CycloneGames.AssetManagement.Runtime
                         failures);
                 }
 
-                return UniTask.CompletedTask;
+                _initialized = false;
+                _destroyed = true;
             }
             finally
             {
@@ -129,7 +179,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 cacheKey,
                 asset,
                 _cacheService.OnHandleReleased,
-                this);
+                this,
+                _operationTails);
             if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"AssetSync {typeof(TAsset).Name} : {location}");
             handle = (ResourcesAssetHandle<TAsset>)_cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
             return AssetHandleLeases.Create(handle);
@@ -152,7 +203,8 @@ namespace CycloneGames.AssetManagement.Runtime
                 cacheKey,
                 request,
                 _cacheService.OnHandleReleased,
-                this);
+                this,
+                _operationTails);
             if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"AssetAsync {typeof(TAsset).Name} : {location}");
             handle = (ResourcesAssetHandle<TAsset>)_cacheService.RegisterNew(cacheKey, bucket, tag, owner, handle);
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -183,7 +235,11 @@ namespace CycloneGames.AssetManagement.Runtime
             GameObject instance = GameObject.Instantiate(backend.Asset, parent, worldPositionStays);
             if (instance != null) instance.SetActive(setActive);
             long id = RegisterHandle();
-            var wrapped = ResourcesInstantiateHandle.Create(id, instance, _onInstantiateDisposed);
+            var wrapped = ResourcesInstantiateHandle.Create(
+                id,
+                instance,
+                _onInstantiateDisposed,
+                _operationTails);
             _instantiateHandles.Add(id, wrapped);
             if (HandleTracker.Enabled) HandleTracker.Register(id, _packageName, $"InstantiateAsync : {handle?.AssetObject?.name ?? "null"}");
 #if UNITY_EDITOR || DEVELOPMENT_BUILD
@@ -192,13 +248,54 @@ namespace CycloneGames.AssetManagement.Runtime
             return wrapped;
         }
 
-        public async UniTask UnloadUnusedAssetsAsync()
+        public UniTask CollectUnusedUnityAssetsAsync()
         {
             AssetRuntimeGuard.EnsureMainThread();
             ThrowIfDestroyed();
+            if (_unloadUnusedAssetsRunning)
+            {
+                return _unloadUnusedAssetsTask;
+            }
+
             _cacheService.ClearAll();
-            Log.Warning("[ResourcesAssetPackage] UnloadUnusedAssetsAsync triggers Resources.UnloadUnusedAssets(). This can cause hitches on the main thread, so prefer explicit handle release and bucket clears whenever possible.");
-            await Resources.UnloadUnusedAssets().ToUniTask();
+            Log.Warning("[ResourcesAssetPackage] CollectUnusedUnityAssetsAsync triggers Resources.UnloadUnusedAssets(). This can cause hitches on the main thread, so prefer explicit handle release and bucket clears whenever possible.");
+            _unloadUnusedAssetsRunning = true;
+            try
+            {
+                AssetOperationCompletion completion = AssetOperationCompletion.Start(
+                    UnloadUnusedAssetsCoreAsync(),
+                    _operationTails);
+                _unloadUnusedAssetsTask = completion.Task;
+                return _unloadUnusedAssetsTask;
+            }
+            catch
+            {
+                _unloadUnusedAssetsRunning = false;
+                throw;
+            }
+        }
+
+        private async UniTask UnloadUnusedAssetsCoreAsync()
+        {
+            try
+            {
+                await _unloadUnusedAssetsOperation();
+            }
+            finally
+            {
+                _unloadUnusedAssetsRunning = false;
+            }
+        }
+
+        private static async UniTask UnloadUnityUnusedAssetsAsync()
+        {
+            AsyncOperation operation = Resources.UnloadUnusedAssets();
+            if (operation == null)
+            {
+                throw new InvalidOperationException("Resources.UnloadUnusedAssets returned no operation.");
+            }
+
+            await operation.ToUniTask();
         }
 
         public bool IsAssetCached<TAsset>(string location) where TAsset : UnityEngine.Object
@@ -287,7 +384,7 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private void ThrowIfShutdownRequested()
         {
-            if (_destroyed || _destroying)
+            if (_shutdownRequested || _destroyed || _destroying)
             {
                 throw new ObjectDisposedException(nameof(ResourcesAssetPackage));
             }

@@ -54,7 +54,7 @@ flowchart LR
     Networking --> Core
 ```
 
-Core 程序集设计为可在 Unity、EditMode tests、CLI 工具、headless server 和未来非 Unity adapter 中使用。Runtime 程序集是 Unity 边界。Integration 程序集依赖宿主模块和可选依赖，但宿主模块 Core 不反向依赖 integration。
+Core 程序集可在 Unity、EditMode tests、CLI 工具、headless server 和未来非 Unity adapter 中使用。Runtime 程序集是 Unity 边界。Integration 程序集依赖宿主模块和可选依赖，但宿主模块 Core 不反向依赖 integration。
 
 ## 模块文档
 
@@ -154,7 +154,7 @@ Unity Physics 不是所有支持平台上的确定性 lockstep 真相来源。Un
 
 ## 日志
 
-RPGFoundation 模块通过 `CycloneGames.RPGFoundation.*` 下的稳定 `LogChannel` category 输出诊断，并且只依赖 `com.cyclone-games.logging` contract。模块不会初始化、替换、flush 或关闭进程级 logging writer。未安装 backend 时，contract 的 `NullLogWriter` 会安全地丢弃消息；应用 composition root 可以安装 `CycloneGames.Logger` 或任意其他 `ILogWriter` 实现。
+RPGFoundation 模块通过 `CycloneGames.RPGFoundation.*` 下的稳定 `LogChannel` category 输出诊断，并且只依赖 `com.cyclone-games.logging` contract。模块不会初始化、替换、flush 或关闭进程级 logging writer。未安装 backend 时，contract 的 `NullLogWriter` 会安全地丢弃消息；应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供任意其他 `ILogWriter` 实现。
 
 每个产生诊断的 asmdef 都在 `Diagnostics/` 下持有唯一命名的 internal `<FeatureName>Log` facade。Facade 统一定义 `Category`、ambient `Channel` 和严格绑定的 `Create(ILogWriter logWriter)`；消费端以 `Log` 表示 class-local ambient channel，以 `_log` 表示显式注入的实例 channel。
 

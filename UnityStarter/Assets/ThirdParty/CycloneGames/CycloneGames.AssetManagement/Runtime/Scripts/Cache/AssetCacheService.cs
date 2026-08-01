@@ -224,6 +224,10 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         // Handles detached from keyed lookup by a provider generation change. They remain caller-owned and
         // must stay enumerable until their final release or package shutdown.
         private readonly Dictionary<IReferenceCounted, CacheNode> _generationDetachedMap;
+        // A provider release can fail after a node has been detached from keyed lookup. Keep the node and handle
+        // strongly owned until a later cleanup attempt confirms release; otherwise shutdown could report success
+        // while the provider still owns native resources.
+        private readonly Dictionary<IReferenceCounted, CacheNode> _releaseRetryMap;
         // Handles idle (RefCount == 0), partitioned into trial and main LRU lists.
         private readonly Dictionary<AssetCacheKey, CacheNode> _idleMap;
         // Reverse index: bucket name to CacheNodes in that bucket (idle only).
@@ -273,6 +277,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         // Mutations are main-thread-affine because eviction releases Unity/provider resources. The monitor only
         // protects cold diagnostic snapshots and does not make provider operations safe on worker threads.
         private readonly object _gate = new object();
+        // 0 = active, 1 = shutdown requested with cleanup pending, 2 = cleanup completed.
         private int _disposed;
         private int _evaluatingRetentionRules;
 
@@ -315,6 +320,9 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             _activeMap = new Dictionary<AssetCacheKey, CacheNode>(128);
             _generationDetachedMap = new Dictionary<IReferenceCounted, CacheNode>(
                 16,
+                HandleReferenceComparer.Instance);
+            _releaseRetryMap = new Dictionary<IReferenceCounted, CacheNode>(
+                4,
                 HandleReferenceComparer.Instance);
             int idleWarmCapacity = (int)Math.Min(
                 1_024L,
@@ -376,6 +384,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             lock (_gate)
             {
                 if (Volatile.Read(ref _disposed) != 0) return;
+                RetryPendingReleasesBestEffort(ref failures);
                 _maxIdleBytes = ResolveIdleBudget(maxIdleBytes);
                 EvictIfNeeded(ref failures);
             }
@@ -396,6 +405,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             lock (_gate)
             {
                 if (Volatile.Read(ref _disposed) != 0) return;
+                RetryPendingReleasesBestEffort(ref failures);
                 _maxTrialEntries = tuning.ProbationEntryLimit;
                 _maxMainEntries = tuning.ProtectedEntryLimit;
                 _maxIdleBytes = tuning.IdleByteBudget;
@@ -470,7 +480,15 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
 
             if (Volatile.Read(ref _disposed) != 0)
             {
-                ForceDisposeHandle(handle);
+                List<Exception> shutdownFailures = null;
+                lock (_gate)
+                {
+                    DisposeUntrackedHandleBestEffort(handle, ref shutdownFailures);
+                }
+
+                ThrowReleaseFailures(
+                    shutdownFailures,
+                    "The newly loaded provider handle failed to release after cache shutdown.");
                 throw new ObjectDisposedException(nameof(AssetCacheService));
             }
 
@@ -478,15 +496,32 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             {
                 if (_activeMap.TryGetValue(cacheKey, out CacheNode activeNode))
                 {
+                    if (!ReferenceEquals(activeNode.Handle, handle))
+                    {
+                        List<Exception> duplicateFailures = null;
+                        DisposeUntrackedHandleBestEffort(handle, ref duplicateFailures);
+                        ThrowReleaseFailures(
+                            duplicateFailures,
+                            "A duplicate provider handle failed to release while reusing an active cache entry.");
+                    }
+
                     activeNode.Handle.Retain();
                     IncrementAccessCount(activeNode);
                     AddMetadata(activeNode, bucket, tag, owner);
-                    ForceDisposeHandle(handle);
                     return activeNode.Handle;
                 }
 
                 if (_idleMap.Remove(cacheKey, out CacheNode idleNode))
                 {
+                    if (!ReferenceEquals(idleNode.Handle, handle))
+                    {
+                        List<Exception> duplicateFailures = null;
+                        DisposeUntrackedHandleBestEffort(handle, ref duplicateFailures);
+                        ThrowReleaseFailures(
+                            duplicateFailures,
+                            "A duplicate provider handle failed to release while reviving an idle cache entry.");
+                    }
+
                     RemoveFromLru(idleNode);
                     RemoveFromBucketIndex(idleNode);
                     idleNode.Handle.Retain();
@@ -495,7 +530,6 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     AddMetadata(idleNode, bucket, tag, owner);
                     _activeMap[cacheKey] = idleNode;
                     UpdatePeaks();
-                    ForceDisposeHandle(handle);
                     return idleNode.Handle;
                 }
 
@@ -593,6 +627,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                     throw new ObjectDisposedException(nameof(AssetCacheService));
                 }
 
+                RetryPendingReleasesBestEffort(ref failures);
                 ClearIdleInternalBestEffort(EvictionReason.Explicit, ref failures);
                 foreach (KeyValuePair<AssetCacheKey, CacheNode> pair in _activeMap)
                 {
@@ -622,7 +657,15 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             ThrowIfEvaluatingRetentionRules();
             if (Volatile.Read(ref _disposed) != 0)
             {
-                ForceDisposeHandle(handle);
+                List<Exception> shutdownFailures = null;
+                lock (_gate)
+                {
+                    DisposeUntrackedHandleBestEffort(handle, ref shutdownFailures);
+                }
+
+                ThrowReleaseFailures(
+                    shutdownFailures,
+                    "A provider handle failed to release after cache shutdown.");
                 return;
             }
 
@@ -630,7 +673,15 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             // cacheKey. They must be disposed directly; no map lookup is needed.
             if (!cacheKey.IsValid)
             {
-                ForceDisposeHandle(handle);
+                List<Exception> untrackedFailures = null;
+                lock (_gate)
+                {
+                    DisposeUntrackedHandleBestEffort(handle, ref untrackedFailures);
+                }
+
+                ThrowReleaseFailures(
+                    untrackedFailures,
+                    "An untracked provider handle failed to release.");
                 return;
             }
 
@@ -641,7 +692,10 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 {
                     if (!_generationDetachedMap.TryGetValue(handle, out node))
                     {
-                        ForceDisposeHandle(handle);
+                        DisposeUntrackedHandleBestEffort(handle, ref failures);
+                        ThrowReleaseFailures(
+                            failures,
+                            "A provider handle that was no longer indexed by the cache failed to release.");
                         return;
                     }
 
@@ -754,6 +808,22 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
                 handle.Dispose();
         }
 
+        private void DisposeUntrackedHandleBestEffort(
+            IReferenceCounted handle,
+            ref List<Exception> failures)
+        {
+            if (_releaseRetryMap.TryGetValue(handle, out CacheNode retainedNode))
+            {
+                DetachNodeFromCacheIndexes(retainedNode);
+                DisposeNodeBestEffort(retainedNode, ref failures);
+                return;
+            }
+
+            CacheNode node = NodePool.Get();
+            node.Handle = handle;
+            DisposeNodeBestEffort(node, ref failures);
+        }
+
         public void ClearBucket(string bucket)
         {
             AssetRuntimeGuard.EnsureMainThread();
@@ -763,6 +833,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             List<Exception> failures = null;
             lock (_gate)
             {
+                RetryPendingReleasesBestEffort(ref failures);
                 ClearBucketsInternal(bucket, false, ref failures);
             }
 
@@ -780,6 +851,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             List<Exception> failures = null;
             lock (_gate)
             {
+                RetryPendingReleasesBestEffort(ref failures);
                 ClearBucketsInternal(bucketPrefix, true, ref failures);
             }
 
@@ -795,6 +867,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             List<Exception> failures = null;
             lock (_gate)
             {
+                RetryPendingReleasesBestEffort(ref failures);
                 ClearIdleInternalBestEffort(EvictionReason.Explicit, ref failures);
             }
 
@@ -823,29 +896,35 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             lock (_gate)
             {
                 if (Volatile.Read(ref _disposed) != 0) return 0;
-                if (_trialHead == null && _mainHead == null) return 0;
-
-                long nowTimestamp = _clock.Timestamp;
-
-                _nodesToClearScratch.Clear();
-                _evaluatingRetentionRules = 1;
-                try
+                RetryPendingReleasesBestEffort(ref failures);
+                if (_trialHead == null && _mainHead == null)
                 {
-                    CollectMatching(_trialHead, nowTimestamp, policy, _nodesToClearScratch);
-                    CollectMatching(_mainHead, nowTimestamp, policy, _nodesToClearScratch);
+                    evicted = 0;
                 }
-                finally
+                else
                 {
-                    _evaluatingRetentionRules = 0;
-                }
+                    long nowTimestamp = _clock.Timestamp;
 
-                evicted = _nodesToClearScratch.Count;
-                for (int i = 0; i < evicted; i++)
-                {
-                    EvictNodeBestEffort(_nodesToClearScratch[i], EvictionReason.Retention, ref failures);
-                }
+                    _nodesToClearScratch.Clear();
+                    _evaluatingRetentionRules = 1;
+                    try
+                    {
+                        CollectMatching(_trialHead, nowTimestamp, policy, _nodesToClearScratch);
+                        CollectMatching(_mainHead, nowTimestamp, policy, _nodesToClearScratch);
+                    }
+                    finally
+                    {
+                        _evaluatingRetentionRules = 0;
+                    }
 
-                _nodesToClearScratch.Clear();
+                    evicted = _nodesToClearScratch.Count;
+                    for (int i = 0; i < evicted; i++)
+                    {
+                        EvictNodeBestEffort(_nodesToClearScratch[i], EvictionReason.Retention, ref failures);
+                    }
+
+                    _nodesToClearScratch.Clear();
+                }
             }
 
             ThrowReleaseFailures(
@@ -876,6 +955,7 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             AssetCacheTrimResult result;
             lock (_gate)
             {
+                RetryPendingReleasesBestEffort(ref failures);
                 long beforeBytes = _idleBytes;
                 int processed = 0;
                 while (processed < maxWork && (_trialTail != null || _mainTail != null))
@@ -981,6 +1061,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         private void ClearAllInternalBestEffort(out List<Exception> failures)
         {
             failures = null;
+            RetryPendingReleasesBestEffort(ref failures);
+
             foreach (KeyValuePair<AssetCacheKey, CacheNode> pair in _activeMap)
             {
                 DisposeNodeBestEffort(pair.Value, ref failures);
@@ -1002,14 +1084,100 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
             {
                 ForceDisposeHandle(node.Handle);
             }
-            catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+            catch (Exception ex)
             {
+                // Keep a strong ownership record before classifying or rethrowing the provider failure. Otherwise
+                // a fatal exception (for example OutOfMemoryException) could escape after the node was detached
+                // from its active/idle index, making a later deterministic cleanup retry impossible.
+                RetainNodeForReleaseRetry(node);
                 _providerReleaseFailureCount++;
+                if (!AssetRuntimeGuard.IsRecoverableException(ex))
+                {
+                    throw;
+                }
+
                 AddReleaseFailure(ref failures, ex);
+                return;
             }
-            finally
+
+            IReferenceCounted releasedHandle = node.Handle;
+            if (releasedHandle != null)
             {
-                NodePool.Release(node);
+                _releaseRetryMap.Remove(releasedHandle);
+            }
+
+            NodePool.Release(node);
+        }
+
+        private void RetainNodeForReleaseRetry(CacheNode node)
+        {
+            IReferenceCounted handle = node.Handle;
+            if (handle == null)
+            {
+                throw new InvalidOperationException(
+                    "A provider release retry cannot retain a cache node without a handle.");
+            }
+
+            if (_releaseRetryMap.TryGetValue(handle, out CacheNode retainedNode))
+            {
+                if (!ReferenceEquals(retainedNode, node))
+                {
+                    NodePool.Release(node);
+                }
+
+                return;
+            }
+
+            _releaseRetryMap.Add(handle, node);
+        }
+
+        private void RetryPendingReleasesBestEffort(ref List<Exception> failures)
+        {
+            if (_releaseRetryMap.Count == 0)
+            {
+                return;
+            }
+
+            _nodesToClearScratch.Clear();
+            foreach (KeyValuePair<IReferenceCounted, CacheNode> pair in _releaseRetryMap)
+            {
+                _nodesToClearScratch.Add(pair.Value);
+            }
+
+            for (int i = 0; i < _nodesToClearScratch.Count; i++)
+            {
+                CacheNode node = _nodesToClearScratch[i];
+                // A fatal release can interrupt a caller before its normal post-pass clears the source index.
+                // Detach explicitly before retry so a successful retry can safely return the node to the pool.
+                DetachNodeFromCacheIndexes(node);
+                DisposeNodeBestEffort(node, ref failures);
+            }
+
+            _nodesToClearScratch.Clear();
+        }
+
+        private void DetachNodeFromCacheIndexes(CacheNode node)
+        {
+            if (_activeMap.TryGetValue(node.Key, out CacheNode activeNode) &&
+                ReferenceEquals(activeNode, node))
+            {
+                _activeMap.Remove(node.Key);
+            }
+
+            IReferenceCounted handle = node.Handle;
+            if (handle != null &&
+                _generationDetachedMap.TryGetValue(handle, out CacheNode detachedNode) &&
+                ReferenceEquals(detachedNode, node))
+            {
+                _generationDetachedMap.Remove(handle);
+            }
+
+            if (_idleMap.TryGetValue(node.Key, out CacheNode idleNode) &&
+                ReferenceEquals(idleNode, node))
+            {
+                _idleMap.Remove(node.Key);
+                RemoveFromLru(node);
+                RemoveFromBucketIndex(node);
             }
         }
 
@@ -1337,6 +1505,8 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         /// <summary>Number of active (RefCount &gt; 0) handles currently pinned and never evictable. Thread-safe.</summary>
         public int ActiveCount { get { lock (_gate) { return _activeMap.Count + _generationDetachedMap.Count; } } }
 
+        internal int PendingReleaseRetryCount { get { lock (_gate) { return _releaseRetryMap.Count; } } }
+
         /// <summary>
         /// Creates a compact runtime snapshot without enumerating cache entries.
         /// Intended for telemetry, stress HUDs, and automatic memory governance.
@@ -1378,34 +1548,36 @@ namespace CycloneGames.AssetManagement.Runtime.Cache
         public void Dispose()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (Interlocked.Exchange(ref _disposed, 1) != 0)
+            int previousState = Interlocked.CompareExchange(ref _disposed, 1, 0);
+            if (previousState == 2)
             {
                 return;
             }
 
-            try
+            if (previousState == 0)
             {
 #if !UNITY_EDITOR
                 Application.lowMemory -= HandleLowMemory;
-#endif
-                List<Exception> failures;
-                lock (_gate)
-                {
-                    ClearAllInternalBestEffort(out failures);
-                }
-
-                if (failures != null)
-                {
-                    throw new AggregateException(
-                        "One or more cached provider handles failed to release.",
-                        failures);
-                }
-            }
-            finally
-            {
-#if UNITY_EDITOR
+#else
                 UnregisterEditorInstance(this);
 #endif
+            }
+
+            List<Exception> failures;
+            lock (_gate)
+            {
+                ClearAllInternalBestEffort(out failures);
+                if (failures == null && _releaseRetryMap.Count == 0)
+                {
+                    Volatile.Write(ref _disposed, 2);
+                }
+            }
+
+            if (failures != null)
+            {
+                throw new AggregateException(
+                    "One or more cached provider handles failed to release. Cleanup ownership is retained for retry.",
+                    failures);
             }
         }
 

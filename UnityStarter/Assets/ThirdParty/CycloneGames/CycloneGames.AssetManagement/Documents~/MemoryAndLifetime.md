@@ -103,6 +103,24 @@ flowchart TD
 
 All ownership-changing calls are Unity-main-thread-affine.
 
+### Public terminal state and provider tails
+
+`IOperation.Task` has one stable caller-visible terminal state. Provider and adapter post-processing success produces `Succeeded`; a real provider or adapter failure produces `Faulted`; caller-wait cancellation, provider cancellation, or authoritative package/module retirement while pending produces `Canceled`. The first transition wins, so a late provider result never rewrites a public cancellation or an earlier failure.
+
+Public completion and physical provider completion are separate lifetime boundaries. If retirement cancels a pending public task, the owning package keeps a bounded tail count and continues observing the provider plus adapter continuation. Successful `DestroyAsync` completion waits until those tails drain. A late recoverable failure is observed without replacing the public `Canceled` state. This prevents use-after-release and unobserved provider work without allocating one cancellation source or retained collection entry per operation.
+
+Authoritative retirement is provider-resource ownership retirement, not every wrapper release. In particular, `ISceneHandle.Dispose` releases only the caller wrapper; `UnloadSceneAsync` or package shutdown owns load cancellation and provider-scene release.
+
+### Shutdown admission and cleanup retry
+
+The first accepted module or package `DestroyAsync` request is sticky. It closes initialization and every business API immediately, even when cleanup later fails; the same instance can only retry `DestroyAsync`. Scene-unload observation remains subscribed until cleanup succeeds, so an external or Single-mode unload can still converge an owned wrapper during a failed shutdown. A retry never reopens the package.
+
+Cleanup retry depends on the provider boundary:
+
+- Resources retains failed instance ownership and retries destruction. Player shutdown waits through a bounded end-of-frame destruction barrier before publishing success. Concurrent process-wide unused-asset collections join one operation, and shutdown joins it.
+- YooAsset keeps scene-unload observation until success. An invalid provider scene handle alone is not proof that the Unity scene is absent; absence requires a captured unloaded scene, a provider unload callback, or a terminal failed load.
+- Addressables release is one-shot because its reference count is decremented before provider destruction finishes. If release throws after mutation may have started, the outcome is indeterminate: the adapter retains ownership evidence, never repeats that release request, and keeps every shutdown retry failed rather than risking double release or false success.
+
 ### Cancellation matrix
 
 | Operation | What a caller token cancels | Shared/provider work |
@@ -115,9 +133,9 @@ All ownership-changing calls are Unity-main-thread-affine.
 | Addressables catalog-label query | that caller's wait | provider writes only private result state; cancellation never permits a late write into the caller list |
 | `GroupOperation.StartAsync` | that caller's wait | explicit `GroupOperation.Cancel` owns group cancellation |
 | Catalog/manifest/cache mutation | checked before mutation | not reported cancelled while the provider check or non-rollbackable mutation is still running |
-| Module/package shutdown | no external token | must reach a terminal or retryable failure state |
+| Module/package shutdown | pending owned public tasks become canceled | provider/adapter tails remain owned and are drained before shutdown completes |
 
-Cancellation never transfers disposal ownership and never implies rollback of partial cache data. Addressables has no physical abort; the adapter retains the pending handle and drains it to terminal. YooAsset requests provider-native abort and keeps its wrapper registered until terminal state is observed.
+Cancellation never transfers disposal ownership and never implies rollback of partial cache data. Addressables has no physical abort; the adapter retains the pending handle and drains it to terminal. YooAsset requests provider-native abort and keeps its wrapper registered until terminal state is observed. When a group contains both a canceled child and a genuinely faulted child, the real fault is reported after every child terminal state is observed; lifecycle cancellation cannot hide it.
 
 ### Thread model
 
@@ -324,6 +342,8 @@ Handle tracking is disabled by default. When stack capture is enabled, a recover
 | --- | --- | --- |
 | Asset remains in memory after all callers dispose | Idle cache entry retained intentionally | Inspect Cache Debugger, call a targeted bucket clear or retention policy, compare with Memory Profiler evidence |
 | Handle appears leaked | Lease not disposed on some path | Enable handle tracking, confirm every success/exception/cancellation path disposes the caller lease; cancelling `handle.Task` does not dispose it |
+| Business API rejects calls after failed shutdown | Shutdown request is sticky | Fix the cleanup cause and retry `DestroyAsync`; create a new module/package generation for new work |
+| Addressables shutdown repeats the same indeterminate-release failure | Provider cleanup threw after reference-count mutation may have started | Do not call `Addressables.Release` again; preserve diagnostics and use the product's outer teardown or process-restart recovery policy |
 | Scene unload was cancelled | Cancellation accepted only before mutation starts | Join the non-cancellable provider completion; a failed unload remains retryable |
 | `_pendingScene` retained after failure | Cleanup failed before unload completed | Retry `UnloadSceneAsync(_pendingScene, CancellationToken.None)` or converge through package shutdown; clear the field only after successful unload |
 | Bulk handle bypasses idle retention | One member has no positive estimate | Ensure every member type is measurable or accept the bypass |

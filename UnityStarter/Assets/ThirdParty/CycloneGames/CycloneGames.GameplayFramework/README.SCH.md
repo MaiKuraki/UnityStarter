@@ -37,7 +37,7 @@
 
 架构概览
 
-### 2.1 生命周期与关系图
+### 生命周期与关系图
 
 ~~~mermaid
 flowchart TD
@@ -69,7 +69,7 @@ flowchart TD
 - **View target：**PlayerController 的相机目标与 possession 相互独立。
 - **Authority：**World 在 Standalone、ListenServer 和 DedicatedServer mode 下接受权威端 Gameplay 编排。
 
-### 2.2 目录布局
+### 目录布局
 
 | 区域 | 职责 |
 | --- | --- |
@@ -86,7 +86,7 @@ flowchart TD
 | `Tests/PlayMode` | GameplayWorldHost 的 Unity 生命周期测试 |
 | `Samples` | 可在 Runtime 使用的 composition 和 camera 示例 |
 
-### 2.3 Assembly 边界
+### Assembly 边界
 
 | Assembly | Auto referenced | 平台 | 使用方操作 |
 | --- | --- | --- | --- |
@@ -125,9 +125,9 @@ Sample asmdef 同时面向 Runtime 和 Editor，因此其 Prefab 组件在 Playe
 
 GameplayFramework 只产生日志。其 package dependency 是 `com.cyclone-games.logging`，所有直接写日志的 assembly 都显式引用 `CycloneGames.Logging`。Runtime 与 sample 使用稳定 category `CycloneGames.GameplayFramework`，Editor 使用 `CycloneGames.GameplayFramework.Editor`。
 
-模块不初始化、持有或关闭具体 backend。应用未安装 `ILogWriter` 时，process writer 是 `NullLogWriter`，所有记录都是安全 no-op。只有应用 composition root 应通过 `LogRuntime` 安装或替换 writer；需要 Unity Console 与文件输出时，可以额外安装 `CycloneGames.Logger` 并使用 `LoggerBootstrap`。`CycloneGames.Logger` 不再是 GameplayFramework 的依赖。
+模块不初始化、持有或关闭具体 backend。应用未安装 `ILogWriter` 时，process writer 是 `NullLogWriter`，所有记录都是安全 no-op。只有应用 composition root 应通过 `LogRuntime` 安装或替换 writer。需要标准 Unity Console 与文件输出时，组合 `com.cyclone-games.logging.pipeline` 和 `com.cyclone-games.logging.unity`，由 `LoggingBootstrap` 持有 pipeline 生命周期。这两个 backend package 都不是 GameplayFramework 的依赖。
 
-Runtime、Editor 与 PureUnity sample 分别拥有 assembly 本地门面 `Runtime/Scripts/Diagnostics/GameplayFrameworkLog.cs`、`Editor/Diagnostics/GameplayFrameworkEditorLog.cs` 和 `Samples/Sample.PureUnity/Diagnostics/GameplayFrameworkSampleLog.cs`，所有门面都提供 `Category`、`Channel` 与 `Create(ILogWriter logWriter)`。包内 ambient 字段命名为 `Log`，显式注入的 instance 字段命名为 `_log`。原先通过 `CLogger` 或 `UnityEngine.Debug` 发出的记录已经迁移到这些缓存 channel，并统一使用 `Trace`、`Debug`、`Info`、`Warning`、`Error` 与 `Fatal`。异常使用对应严重级别的重载传递完整 `Exception` 和说明失败操作的 message；包含动态值的普通日志使用 deferred generic-state builder。迁移项目 extension 时，应在自身产生日志的 assembly 中定义同样的门面，而不是由 extension 自行初始化 backend。Ambient channel 每次写入都会解析当前 process writer，因此调用 `LogRuntime.ReplaceWriter` 后不需要重新初始化 GameplayFramework。
+Runtime、Editor 与 PureUnity sample 分别拥有 assembly 本地门面 `Runtime/Scripts/Diagnostics/GameplayFrameworkLog.cs`、`Editor/Diagnostics/GameplayFrameworkEditorLog.cs` 和 `Samples/Sample.PureUnity/Diagnostics/GameplayFrameworkSampleLog.cs`，所有门面都提供 `Category`、`Channel` 与 `Create(ILogWriter logWriter)`。包内 ambient 字段命名为 `Log`，显式注入的 instance 字段命名为 `_log`。所有记录都通过这些缓存 channel 使用统一的 `Trace`、`Debug`、`Info`、`Warning`、`Error` 与 `Fatal` 方法，不直接调用平台原生日志或具体 pipeline API。异常使用对应严重级别的重载传递完整 `Exception` 和说明失败操作的 message；包含动态值的普通日志使用 deferred generic-state builder。迁移项目 extension 时，应在自身产生日志的 assembly 中定义同样的门面，而不是由 extension 自行初始化 backend。Ambient channel 每次写入都会解析当前 process writer，因此调用 `LogRuntime.ReplaceWriter` 后不需要重新初始化 GameplayFramework。
 
 此日志迁移不新增 serialized state，也不会自行写文件。持久化、轮转、flush、shutdown 与损坏恢复由所选 backend 及其应用级 owner 负责。
 
@@ -135,7 +135,7 @@ Runtime、Editor 与 PureUnity sample 分别拥有 assembly 本地门面 `Runtim
 
 快速开始
 
-### 4.1 准备 Prefab
+### 准备 Prefab
 
 创建包含以下组件的 GameObject prefab：
 
@@ -148,7 +148,7 @@ Runtime、Editor 与 PureUnity sample 分别拥有 assembly 本地门面 `Runtim
 
 如果 spawn 玩家需要 authoring 起点，请在 scene 中放置一个或多个 `PlayerStart` Actor。
 
-### 4.2 创建 WorldSettings
+### 创建 WorldSettings
 
 使用：
 
@@ -165,7 +165,7 @@ Create > CycloneGames > GameplayFramework > WorldSettings
 
 CameraManager 和 SpectatorPawn 为可选项。进入 Play Mode 前，在 Inspector 中点击 **Validate Configuration**。
 
-### 4.3 添加 GameplayWorldHost
+### 添加 GameplayWorldHost
 
 1. 创建名为 `Gameplay World Host` 的 scene GameObject。
 2. 添加 `GameplayWorldHost`。
@@ -177,7 +177,7 @@ Dedicated Server mode 始终使用零个 local player。Host 早于普通 Actor 
 
 Direct Reference 不需要 resolver。Asset Reference 和 Path 需要显式 `IWorldSettingsReferenceResolver`；第 6 节介绍 resolver 契约和模块提供的 AssetManagement 实现。如果项目的 DI 容器已经持有 application lifetime，可直接构造并 dispose `GameInstance`，无需添加 Host。
 
-### 4.4 Standalone 预期结果
+### Standalone 预期结果
 
 `StartWorldAsync` 完成后：
 
@@ -195,9 +195,9 @@ Sample scene 位于：
 Samples/Sample.PureUnity/Scene/UnitySampleScene.unity
 ~~~
 
-## 5. Runtime 生命周期
+## Runtime 生命周期
 
-### 5.1 GameInstance 与 LocalPlayer
+### GameInstance 与 LocalPlayer
 
 `GameInstance` 将创建它的线程记录为 owner thread。修改状态的调用（包括 `Tick`）会校验该线程。涉及 Unity API 的调用方应在 Unity main thread 创建和使用该实例。
 
@@ -214,7 +214,7 @@ Samples/Sample.PureUnity/Scene/UnitySampleScene.unity
 
 一个 GameInstance 只接受一个 active World。启动下一个 World 前先调用并等待 `StopWorldAsync`。直接调用 public `World.ShutdownAsync` 或 `World.Dispose` 也会执行相同的所有权清理，并通知所属 GameInstance 清空 `CurrentWorld`。World 已处于 `Stopping` 时发生的重入 stop 不会释放 `CurrentWorld`；在 disposal 完成前，replacement start 仍会被拒绝。
 
-### 5.2 Net mode
+### Net mode
 
 | WorldNetMode | IsAuthority | 创建 GameMode | 自动本地登录 |
 | --- | --- | --- | --- |
@@ -225,7 +225,7 @@ Samples/Sample.PureUnity/Scene/UnitySampleScene.unity
 
 Dedicated server composition 应使用零个 LocalPlayer。Client World 提供非权威 scope；network transport 和 replication adapter 负责添加客户端可见状态。
 
-### 5.3 World 状态
+### World 状态
 
 ~~~mermaid
 stateDiagram-v2
@@ -241,7 +241,7 @@ stateDiagram-v2
 
 World 仅在 `Initializing` 或 `Playing` 时接受新 Actor。
 
-### 5.4 初始化顺序
+### 初始化顺序
 
 `StartWorldAsync` 执行以下事务：
 
@@ -260,7 +260,7 @@ World 仅在 `Initializing` 或 `Playing` 时接受新 Actor。
 
 任意异常都会中止初始化、结束已注册 Actor、销毁 World-owned Actor、dispose WorldDefinition lease、清空 `CurrentWorld`，然后重新抛出异常。
 
-### 5.5 关闭与 Travel
+### 关闭与 Travel
 
 关闭一旦开始，清理过程不再接受取消：
 
@@ -277,9 +277,9 @@ World 仅在 `Initializing` 或 `Playing` 时接受新 Actor。
 
 `GameInstance.Dispose` 会取消自身 lifetime，使用 `ApplicationShutdown` 立即关闭 World，清理 LocalPlayer 关联并释放 cancellation source。
 
-## 6. WorldSettings 与 WorldDefinition
+## WorldSettings 与 WorldDefinition
 
-### 6.1 Authoring 与 Runtime 职责
+### Authoring 与 Runtime 职责
 
 `WorldSettings` 是 ScriptableObject authoring asset。Runtime 启动时把它解析为不可变 `WorldDefinition`。Runtime 代码通过 `World.Definition` 读取定义。
 
@@ -294,7 +294,7 @@ World 仅在 `Initializing` 或 `Playing` 时接受新 Actor。
 
 GameState 在 GameMode prefab 中配置，或者由 scene Actor 提供。
 
-### 6.2 引用来源
+### 引用来源
 
 | Source | Authoring 值 | Resolver 要求 |
 | --- | --- | --- |
@@ -304,7 +304,7 @@ GameState 在 GameMode prefab 中配置，或者由 scene Actor 提供。
 
 必需引用必须解析为非 null asset。可选 direct reference 可以为空。可选外部引用只要 location 非空，就视为已配置并且必须成功解析。
 
-### 6.3 Resolver 契约
+### Resolver 契约
 
 ~~~csharp
 public interface IWorldSettingsReferenceResolver
@@ -328,7 +328,7 @@ Resolver 实现必须：
 - 不把可变解析状态存入 WorldSettings；
 - 当 location 可能来自项目 asset 之外时，将其作为不可信输入处理。
 
-### 6.4 AssetManagement Resolver
+### AssetManagement Resolver
 
 `AssetManagementWorldSettingsReferenceResolver` 接收显式 `IAssetPackage` 并支持 `AssetReference`。成功的 asset handle 会成为 WorldDefinition lease。它不支持 `PathLocation`。
 
@@ -342,9 +342,9 @@ var instance = new GameInstance(
     referenceResolver: resolver);
 ~~~
 
-## 7. Actor 与 World 所有权
+## Actor 与 World 所有权
 
-### 7.1 Actor 生命周期
+### Actor 生命周期
 
 ~~~mermaid
 stateDiagram-v2
@@ -390,7 +390,7 @@ EndPlay reason 包括：
 - `InitializationFailure`；
 - `ApplicationShutdown`。
 
-### 7.2 Primary Actor Tick
+### Primary Actor Tick
 
 Primary Actor Tick 是可选的 World 生命周期服务，不会替代 Unity 的全部更新机制。`ActorTickPhase.None` 的 Actor 不会进入 Tick registry，也不会收到框架的逐帧 callback。
 
@@ -433,7 +433,7 @@ Actor 仍然是 MonoBehaviour，因此专用子类或同级 component 仍可声�
 
 `GameplayWorldHost` 会在 Runtime 创建一个 sealed `GameplayWorldTickDriver`。直接组合 `GameInstance` 的项目必须通过 `GameInstance.Tick`，从所选 Unity phase 或自定义 loop 中各转发一次。
 
-### 7.3 注册与所有权
+### 注册与所有权
 
 | API | World registry | Begin/End 通知 | World 销毁 GameObject |
 | --- | --- | --- | --- |
@@ -450,7 +450,7 @@ Actor registry 使用 swap-back removal。Registry 顺序以及 `TryGetActor&lt;
 
 诊断和低频工具可在 `0..ActorCount` 范围内调用 `TryGetActorRegistration`。该调用返回 readonly value，不创建 collection snapshot；任何 Actor removal 都会使既有 index 失效，因此不得持久化 index。Unity Actor reference 必须在 main thread 读取。
 
-### 7.4 Deferred Spawn
+### Deferred Spawn
 
 当依赖或状态必须在 BeginPlay 前完成配置时，使用 deferred spawn：
 
@@ -477,7 +477,7 @@ finally
 
 如果 spawn 出的实例原本 active，World 会暂时将其设为 inactive，直到 `FinishSpawningActor`。对已注册 Actor 重复 Finish 是幂等的；Finish 未注册 Actor 会抛出异常。
 
-### 7.5 Actor 服务
+### Actor 服务
 
 Actor 还提供：
 
@@ -493,9 +493,9 @@ Actor 还提供：
 
 Actor owner、Controller possession 和 World ownership 是独立关系。
 
-## 8. GameMode 登录与 Roster
+## GameMode 登录与 Roster
 
-### 8.1 Authority 与生命周期
+### Authority 与生命周期
 
 GameMode 只存在于 authoritative World。其状态为：
 
@@ -505,7 +505,7 @@ Uninitialized -> Initialized -> Starting -> Running -> Stopping -> Stopped
 
 初始化会组合传入的 `IGameSession`，或者创建有界 `GameSession`。`GameModeConfig` 当前用于应用默认 spectator 规则。游戏专属配置 asset 可以继承它并重写 `ApplyTo`。
 
-### 8.2 登录请求边界
+### 登录请求边界
 
 `PlayerLoginRequest` 强制以下限制：
 
@@ -525,7 +525,7 @@ GameMode 要求 `request.IsLocal` 与是否传入 `localPlayer` 参数一致。�
 
 基础 request validation 允许 PlayerName 为 null。GameSession 强制 PlayerId 在单个 session 内唯一；account authenticity、跨 session identity 和 reconnect/rejoin ID 分配仍属于产品准入职责。`PlayerLoginResult.Error` 是诊断文本，任何网络响应都应先进行脱敏和映射。
 
-### 8.3 事务流程
+### 事务流程
 
 ~~~mermaid
 flowchart TD
@@ -566,7 +566,7 @@ flowchart TD
 
 `PostLogin` 会在关系提交且所有 deferred Actor 完成 spawn 后运行。如果 PostLogin 抛出异常，登录事务会回滚。
 
-### 8.4 GameSession
+### GameSession
 
 `GameSession` 同时按 PlayerController reference identity 和非负 PlayerId 索引每个已注册参与者。它拒绝重复 Controller 和重复 PlayerId，并分别维护 player/spectator count。
 
@@ -588,7 +588,7 @@ flowchart TD
 
 Session match notification 成对发布。只有 World 进入 Playing 且全部初始 BeginPlay callback 完成后，`HandleMatchHasStarted` 才会提交。在此之前发生 startup rollback 时，不会发布 `HandleMatchHasEnded`；成功发布一次 start 后，shutdown 会发布一次 end。
 
-### 8.5 Spawn、Restart、Logout 与 Travel
+### Spawn、Restart、Logout 与 Travel
 
 GameMode 首先按精确 portal/GameObject 名称选择 PlayerStart，然后调用 `ChoosePlayerStart`。基础实现选择缓存中的第一个 start。Scene discovery 无排序要求，因此 spawn 选择需要确定性时，应重写 `ChoosePlayerStart`。
 
@@ -598,9 +598,9 @@ GameMode 首先按精确 portal/GameObject 名称选择 PlayerStart，然后调�
 
 `Logout` 是 public non-virtual atomic entry。它会执行 unpossess、注销 roster entry、从 GameState 移除 PlayerState、清理 World/LocalPlayer 关联，并销毁 World-owned 参与者 Actor。通过 protected virtual `HandleLogout` 扩展 logout 行为。Unpossess、roster/GameState 移除、hook 或 Actor 销毁中的异常会被隔离并记录，后续清理仍会继续。
 
-## 9. Controller、Pawn 与 Possession
+## Controller、Pawn 与 Possession
 
-### 9.1 Possession 契约
+### Possession 契约
 
 Controller 必须先注册到 World，并针对与 Pawn 相同的 World 完成初始化。`TryPossess` 对无效输入返回 error；`Possess` 在事务无法提交时抛出异常。
 
@@ -622,7 +622,7 @@ Possession callback 在状态提交后运行。每个 callback 返回后，trans
 
 World unbind 会清除 Controller 的 possession、PlayerState、start spot、input-suppression counter 和 initialization state；non-owned scene Controller 与 externally registered Controller 同样适用。AIController 还会停止 AI 并清除 focus。PlayerController 会清除 LocalPlayer、camera context、CameraManager、SpectatorPawn 和 view-target 关系。在 replacement World 中复用这些 non-owned object 时，必须显式重新初始化。
 
-### 9.2 Controller 输入与 View
+### Controller 输入与 View
 
 Controller 提供：
 
@@ -635,7 +635,7 @@ Controller 提供：
 
 每个 `SetIgnoreMoveInput(true)` 和 `SetIgnoreLookInput(true)` 都应有匹配的 false 调用。`ResetIgnoreInputFlags` 会清空两个 counter。
 
-### 9.3 Pawn
+### Pawn
 
 Pawn 提供：
 
@@ -651,7 +651,7 @@ Pawn 继承可选的 primary Actor Tick，但默认不参与 Tick。Movement ada
 
 `NotifyInitialRotation` 会查找 Pawn 上实现 `IInitialRotationSettable` 的组件，并在 possession 完成前发布 spawn rotation。
 
-### 9.4 PlayerController 与 LocalPlayer
+### PlayerController 与 LocalPlayer
 
 仅在分配 LocalPlayer 时，`PlayerController.IsLocalController` 才为 true。只有本地 PlayerController 可以拥有 CameraManager。Remote PlayerController 可以参与游戏、possess Pawn 并持有 PlayerState，而不创建本地相机状态。
 
@@ -663,15 +663,15 @@ Pawn 继承可选的 primary Actor Tick，但默认不参与 Tick。Movement ada
 
 `SetViewTarget` 创建 manual override。`ClearViewTargetOverride` 恢复 policy-driven targeting。
 
-### 9.5 AIController 与 PlayerStart
+### AIController 与 PlayerStart
 
 AIController 提供 focus Actor/focal point 状态，以及可重写的 `RunAI`/`StopAI`。它拥有 Update phase 的 primary Actor Tick：`RunAI` 启用 Tick，`StopAI` 禁用 Tick。运行期间，Tick 会将 control rotation 转向 focus。产品 behavior tree、navigation 和 perception 仍由 adapter 提供。
 
 PlayerStart registration 为 World-scoped。Custom Editor 支持 3D、side-scroller 和 top-down gizmo 展示，不使用 Runtime static registry。
 
-## 10. PlayerState 与 GameState
+## PlayerState 与 GameState
 
-### 10.1 PlayerState
+### PlayerState
 
 PlayerState 存储：
 
@@ -686,7 +686,7 @@ PlayerState 存储：
 
 `OnPawnSetEvent` 在 possession 提交后发布。Callback observer 可以读取一致的 Controller、Pawn 和 PlayerState 关系。
 
-### 10.2 PlayerStateSnapshot
+### PlayerStateSnapshot
 
 `CaptureSnapshot` 创建包含以下字段的 `PlayerStateSnapshot`：
 
@@ -699,7 +699,7 @@ PlayerState 存储：
 
 Snapshot 不包含 Pawn、Controller、Transform、Unity object reference 和 World membership。序列化与存储由 save 或 network adapter 负责。Capture 会分配 snapshot object，因此应在显式 persistence 或 replication 边界使用。
 
-### 10.3 GameState
+### GameState
 
 GameState 包含参与者 `PlayerArray`、match state 和 in-progress elapsed time。它拒绝 null/重复 PlayerState entry，并校验 World membership。
 
@@ -718,9 +718,9 @@ Elapsed time 仅在 InProgress 时推进。WaitingPostMatch 到 WaitingToStart �
 
 GameMode 拥有 transition policy。需要可恢复结果时使用 `TrySetMatchState`；非法 transition 属于编程错误时使用 `SetMatchState`。
 
-## 11. Camera 系统
+## Camera 系统
 
-### 11.1 计算管线
+### 计算管线
 
 ~~~mermaid
 flowchart LR
@@ -735,7 +735,7 @@ flowchart LR
     VC --> BR["CinemachineBrain.ManualUpdate"]
 ~~~
 
-### 11.2 CameraContext
+### CameraContext
 
 每个 PlayerController 按需创建一个 CameraContext。Context 拥有：
 
@@ -748,7 +748,7 @@ flowchart LR
 
 `TryPushCameraMode` 会拒绝 null、重复实例、clearing 状态和容量溢出。`TryPushOrReplaceOldest` 提供显式 full-stack policy。CameraManager evaluation 期间会拒绝 base-mode replacement 以及 stack push、replace 或 remove，使正在迭代的 stack 保持稳定。Evaluation 期间请求的 `Clear` 会延迟到 evaluation scope 结束；随后按逆序 deactivate stacked mode，再 deactivate base mode。
 
-### 11.3 Camera Mode 与 Blend
+### Camera Mode 与 Blend
 
 继承 `CameraMode` 并实现：
 
@@ -766,7 +766,7 @@ Base mode 最先计算。Stacked mode 随后从 index 0 计算到最新 entry。
 
 `CameraBlendState` 支持 Linear、SmoothStep、EaseOut、EaseIn 和自定义 `ICameraBlendCurve` 计算。负 blend duration 会被限制为零。
 
-### 11.4 CameraManager 与 Cinemachine
+### CameraManager 与 Cinemachine
 
 GameMode 登录过程中，只有本地 PlayerController 且 WorldDefinition 包含 CameraManager prefab 时才创建 CameraManager。
 
@@ -785,7 +785,7 @@ Scene 存在多个 brain 时，应分配 `bootstrapBrain` 或调用 `SetBootstra
 
 World 会拒绝两个 CameraManager 同时拥有同一个 brain。
 
-### 11.5 View Target 与 Post-processor
+### View Target 与 Post-processor
 
 `DefaultGameplayViewTargetPolicy` 依次解析 manual override、suggested target、被 possession 的 Pawn、spectator Pawn 和 PlayerController。
 
@@ -793,7 +793,7 @@ CameraManager 最多支持 16 个已注册 `ICameraPostProcessor`。它们在所
 
 `PerlinNoiseShakePostProcessor` 是带 trauma、amplitude、frequency、decay 和 exponent 控制的 Runtime object。
 
-### 11.6 Camera Action
+### Camera Action
 
 `CameraActionBinding` 将 string action key 映射到 `CameraActionPreset`：
 
@@ -822,7 +822,7 @@ Disable 或 destroy 时，binding 会停止 active action，并从最初接受�
 
 Exit mode 可以不执行操作、停止 action key 或播放 action key。Progress 在 normalized time 跨过配置 threshold 时触发，并可配置为整个 state lifetime 一次，或每个 loop 一次。Enter 和 progress trigger 分别拥有独立 transition gate。
 
-### 11.7 Camera Authoring Asset
+### Camera Authoring Asset
 
 | Asset/Runtime 类型 | 用途 |
 | --- | --- |
@@ -834,7 +834,7 @@ Exit mode 可以不执行操作、停止 action key 或播放 action key。Progr
 
 可在 Runtime 使用的 CameraModes sample 包含 first-person、orbital、third-person follow 和 collision post-processor 示例。
 
-## 12. Integrations
+## Integrations
 
 | Assembly | 必需依赖 assembly | 能力 | 默认使用方引用 |
 | --- | --- | --- | --- |
@@ -843,11 +843,11 @@ Exit mode 可以不执行操作、停止 action key 或播放 action key。Progr
 | `CycloneGames.GameplayFramework.Runtime.Integrations.GameplayTags` | GameplayFramework Runtime、GameplayTags Core 和 Unity Runtime | Actor tag-container extension method | 显式 |
 | `CycloneGames.GameplayFramework.Runtime.Integrations.Navigathena` | GameplayFramework Runtime、Navigathena、Navigathena.SceneManagement、UniTask | `ISceneTransitionHandler` adapter | 显式且有条件 |
 
-### 12.1 AssetManagement
+### AssetManagement
 
 WorldSettings entry 使用 `AssetReference` 时使用 AssetManagement integration。显式组合 `IAssetPackage`，并把 resolver 传给 GameInstance。
 
-### 12.2 GameplayAbilities
+### GameplayAbilities
 
 在 Actor 或其组件上实现 `IAbilitySystemProvider`，然后使用：
 
@@ -858,7 +858,7 @@ Owner 和 avatar override 都是显式参数。未提供 override 时，会在�
 
 该 integration 不负责调度 `AbilitySystemComponent.Tick`。Ability-system owner 选择自身 clock 并显式转发。需要 World 生命周期 gate 时，GameplayFramework Actor 可以从 primary Tick 转发；独立 Unity composition 可以保留专用 MonoBehaviour driver。Movement 和 physics component 继续持有自身 phase。
 
-### 12.3 GameplayTags
+### GameplayTags
 
 在 Actor GameObject 上添加 `GameObjectGameplayTagContainer`。Integration 提供：
 
@@ -873,7 +873,7 @@ Actor 的轻量 string tag 与 GameplayTags container 是独立 API。
 
 该 integration assembly 随包发布并直接引用 GameplayTags Core 与 Unity Runtime，因此 GameplayTags 是显式声明的 package dependency。使用方仍需从自身 asmdef 显式引用 integration assembly；`autoReferenced: false` 会阻止无关 assembly 隐式取得该 API。
 
-### 12.4 Navigathena Package 边界
+### Navigathena Package 边界
 
 Navigathena integration 要求 UPM package 名为 `com.mackysoft.navigathena`，支持范围为 `[1.1.0,2.0.0)`。GameplayFramework 的 `package.json` 不包含 Navigathena dependency，因此安装 GameplayFramework 不会同时安装 Navigathena。新的主版本需要完成 API 兼容验证后再扩展范围。
 
@@ -912,7 +912,7 @@ autoReferenced: false
 }
 ~~~
 
-### 12.5 Navigathena 最小组合
+### Navigathena 最小组合
 
 默认 adapter 将 `ISceneTransitionHandler` 接收的 string 作为 built-in scene name。它向 Navigathena 传递 null transition director，使 `StandardSceneNavigator` 使用自身配置的默认转场。
 
@@ -938,7 +938,7 @@ await world.GameMode.TravelToLevel("Stage02", cancellationToken);
 
 该调用先停止当前 World，再调用 `ISceneNavigator.Change`。目标 scene 的 composition root 负责启动自身 World。Gameplay travel 发生前，应按照 Navigathena 的生命周期初始化传入的 `ISceneNavigator`。
 
-### 12.6 通过 Host 组合 Navigathena
+### 通过 Host 组合 Navigathena
 
 由 `GameplayWorldHost` 持有 GameInstance 时，需要在 Host 启动前提供 Navigator：
 
@@ -973,7 +973,7 @@ public sealed class NavigathenaGameplayWorldHost : GameplayWorldHost
 
 项目 composition root 应在 Unity 调用 Host 的 `Start` 前执行 `Configure`。如果 composition root 无法保证该顺序，请关闭 **Auto Start**，完成配置后再调用 `StartWorldAsync`。
 
-### 12.7 自定义 Navigathena Request
+### 自定义 Navigathena Request
 
 `NavigathenaLoadSceneRequestFactory` 会在每次 Change、Push 和 Replace 时接收操作类型与 scene key。它返回完整的 Navigathena `LoadSceneRequest`，因此同一 adapter 可以选择自定义 scene identifier、transition director、scene data 和 interrupt operation，而不会把这些类型加入 GameplayFramework 核心契约。
 
@@ -1015,7 +1015,7 @@ Scene key 是产品侧输入。Resolver 应在构造 identifier 前拒绝未知�
 
 Integration asmdef 直接引用其依赖 assembly。每个依赖及其对应 integration assembly 应同时存在或同时移除。
 
-## 13. Editor 工具
+## Editor 工具
 
 | 工具 | 功能 |
 | --- | --- |
@@ -1048,7 +1048,7 @@ Tools > CycloneGames > GameplayFramework > Project Validation
 
 Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在目标 Player 和 Profiler 中验证性能。
 
-## 14. 持久化与数据所有权
+## 持久化与数据所有权
 
 框架不会写入 Runtime save file 或 preference key。
 
@@ -1076,9 +1076,9 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 
 不要直接使用 Unity `JsonUtility` 序列化 PlayerStateSnapshot auto-property。应选择并验证在目标 backend 上支持该 DTO 契约的 serializer。
 
-## 15. 性能、线程与平台说明
+## 性能、线程与平台说明
 
-### 15.1 线程所有权
+### 线程所有权
 
 - GameInstance 和 World 修改由单一 owner thread 执行。
 - GameInstance 记录构造线程 ID。
@@ -1089,7 +1089,7 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 - GameSession 不是 thread-safe。
 - Async API 使用 UniTask，并在启动和 asset resolution 期间传播 cancellation。World initialization 会链接 caller、GameInstance 和 World lifetime token；direct World shutdown 会取消 pending async login，阻止 startup 继续提交。
 
-### 15.2 有界结构
+### 有界结构
 
 | 结构/输入 | 限制或默认值 |
 | --- | --- |
@@ -1105,7 +1105,7 @@ Editor 诊断仅用于观测。将诊断结果作为发布依据前，必须在�
 
 World Actor collection 没有模块级 hard cap。Roster 只会在 GameSession 限制内增长。产品容量规划必须定义并验证额外的 Actor、spawn rate 和 scene content budget。
 
-### 15.3 分配点
+### 分配点
 
 性能分析时应检查以下 cold path 或 boundary operation：
 
@@ -1123,7 +1123,7 @@ World Actor collection 没有模块级 hard cap。Roster 只会在 GameSession �
 
 Actor Tick dispatch 会遍历可复用的 phase snapshot，不会扫描 Tick phase 为 None 的 Actor。固定 camera array 和可复用 Tick collection 会减少构造后的 collection growth，但不代表模块整体具备 zero-allocation 保证。Hot path 必须使用 Unity Profiler 和目标设备测量。
 
-### 15.4 Player、IL2CPP 与 Server Build
+### Player、IL2CPP 与 Server Build
 
 - Runtime assembly 引用 UnityEngine、Cinemachine、Burst、Mathematics、UniTask、Factory 和 Logging contract。
 - GameplayWorldHost 使用一个 sealed MonoBehaviour bridge 转发 Update、FixedUpdate 和 LateUpdate。直接组合 GameInstance 时必须提供等价 loop owner。
@@ -1133,9 +1133,9 @@ Actor Tick dispatch 会遍历可复用的 phase snapshot，不会扫描 Tick pha
 - Client mode 本身不提供 replication。
 - Mono、IL2CPP、managed stripping、headless/server 和每个目标平台都需要代表性 Player build 验证。
 
-## 16. 由简到深示例
+## 由简到深示例
 
-### 16.1 查询 World Actor
+### 查询 World Actor
 
 ~~~csharp
 if (world.TryGetActor<PlayerStart>(out PlayerStart start))
@@ -1146,7 +1146,7 @@ if (world.TryGetActor<PlayerStart>(out PlayerStart start))
 
 Type lookup 适合发现，不适合确定性选择。产品选择应使用显式 identifier 或 policy。
 
-### 16.2 创建可选参与 Tick 的 Actor
+### 创建可选参与 Tick 的 Actor
 
 ~~~csharp
 public sealed class RotatingActor : Actor
@@ -1179,7 +1179,7 @@ public sealed class RotatingActor : Actor
 
 可以把该 component 添加到 scene object，也可以通过 World spawn。World 只会在 BeginPlay 后开始 dispatch。调用 `SetActorTickEnabled(false)` 可以暂停该 Actor，而无需禁用 GameObject；调用 `SetActorTickPhase` 可以在 owner thread 上切换 phase。Package 内提供可编译的对应示例：`Samples/Sample.PureUnity/UnitySampleRotatingActor.cs`。
 
-### 16.3 转发直接组合的 GameInstance
+### 转发直接组合的 GameInstance
 
 `GameplayWorldHost` 已经持有这组转发。自定义 composition root 应在自身拥有的每个 phase 中调用同一个 instance 一次：
 
@@ -1202,7 +1202,7 @@ private void LateUpdate()
 
 存在 GameplayWorldHost 时不要添加第二个 forwarder。Headless 或 deterministic host 可以从显式 loop 调用同一 API，但 delta 必须经过校验、有限且非负。
 
-### 16.4 Deferred Spawn 与 Possession
+### Deferred Spawn 与 Possession
 
 ~~~csharp
 Pawn pawn = world.SpawnActorDeferred(pawnPrefab);
@@ -1237,7 +1237,7 @@ finally
 
 Controller 必须已经注册并针对同一 World 完成初始化。
 
-### 16.5 权威端远程登录
+### 权威端远程登录
 
 ~~~csharp
 PlayerLoginRequest request = new PlayerLoginRequest(
@@ -1264,7 +1264,7 @@ PlayerController remoteController = result.PlayerController;
 
 Authentication 和 transport check 必须在调用前完成。该调用应在 World owner thread 执行。
 
-### 16.6 捕获与恢复参与者状态
+### 捕获与恢复参与者状态
 
 ~~~csharp
 PlayerStateSnapshot snapshot = sourcePlayerState.CaptureSnapshot();
@@ -1277,7 +1277,7 @@ if (!targetPlayerState.TryRestoreSnapshot(snapshot, out string error))
 
 `CaptureSnapshot` 与 `TryRestoreSnapshot` 是 Runtime API。持久化 integration 持有 file path、serialization、atomic replace、integrity、encryption policy 和 schema migration。
 
-### 16.7 自定义 Camera Mode
+### 自定义 Camera Mode
 
 ~~~csharp
 public sealed class ShoulderOffsetCameraMode : CameraMode
@@ -1316,9 +1316,9 @@ if (!playerController.TryPushCameraMode(mode))
 
 拥有该 action 的流程结束时，应移除同一个 mode instance。
 
-## 17. 验证
+## 验证
 
-### 17.1 EditMode 测试
+### EditMode 测试
 
 Test assembly 覆盖：
 
@@ -1357,7 +1357,7 @@ Batchmode 示例：
 <unity-editor> -batchmode -nographics -quit -projectPath "<repo-root>/UnityStarter" -runTests -testPlatform EditMode -assemblyNames "CycloneGames.GameplayFramework.Tests.Editor" -testResults "<repo-root>/UnityStarter/TestResults/GameplayFramework.EditMode.xml" -logFile "<repo-root>/UnityStarter/TestResults/GameplayFramework.EditMode.log"
 ~~~
 
-### 17.2 PlayMode 测试
+### PlayMode 测试
 
 PlayMode assembly 验证 auto-start Host 会创建 Playing World、转发 Update/FixedUpdate/LateUpdate Actor Tick phase、随 Host lifetime 停止转发，并随 Host GameObject dispose World。
 
@@ -1366,7 +1366,7 @@ Window > General > Test Runner > PlayMode
 Assembly: CycloneGames.GameplayFramework.Tests.PlayMode
 ~~~
 
-### 17.3 Editor 手动 Smoke Test
+### Editor 手动 Smoke Test
 
 1. Reimport 或 reload 项目，确认 Runtime、Editor、sample 和 test assembly 编译。
 2. 打开 PureUnity sample scene。
@@ -1382,7 +1382,7 @@ Assembly: CycloneGames.GameplayFramework.Tests.PlayMode
 12. 打开 Camera Debug Window，观察 pose/blend 数据。
 13. 退出 Play Mode，确认没有遗留参与者、Tick 或 camera-mode 状态。
 
-### 17.4 Player 与平台验证
+### Player 与平台验证
 
 对每个发布目标：
 
@@ -1396,7 +1396,7 @@ Assembly: CycloneGames.GameplayFramework.Tests.PlayMode
 
 EditMode 测试和源码检查不能证明 Player、IL2CPP、headless 或目标平台验证通过。
 
-## 18. 故障排查
+## 故障排查
 
 | 现象 | 检查项 |
 | --- | --- |

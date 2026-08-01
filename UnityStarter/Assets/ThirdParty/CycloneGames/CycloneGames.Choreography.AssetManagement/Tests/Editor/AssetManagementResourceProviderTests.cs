@@ -82,11 +82,6 @@ namespace CycloneGames.Choreography.AssetManagement.Tests
                 return false;
             }
 
-            public UniTask UnloadUnusedAssetsAsync()
-            {
-                return UniTask.CompletedTask;
-            }
-
             public void SetCacheIdleMemoryBudget(long maxIdleBytes)
             {
             }

@@ -20,7 +20,7 @@ CycloneGames.Networking is a transport-neutral foundation for versioned message 
 
 The module provides transport, connection, runtime-context, serializer, and canonical message-endpoint contracts. Protocol registration is manifest-only, with explicit ID ranges, contract identities, payload budgets, channels, version windows, and fingerprints. Bounded buffers, queues, rate-limit state, sequence windows, reconnection reservations, and simulation histories are owned explicitly by the product composition root or its subsystems. Replication, interest, prediction, lockstep, rollback, session, and host-handoff primitives are building blocks for explicit product composition. Unity runtime bridges, LAN-host permission guidance, Editor diagnostics, and optional backend/serializer integrations complete the package.
 
-There is no RPC framework, generic Service Locator, or automatic state-variable replication. Request, response, command, and notification semantics are product-owned versioned messages. Composition is explicit and instance-owned.
+RPC frameworks, generic Service Locators, and automatic state-variable replication stay outside the module. Request, response, command, and notification semantics are product-owned versioned messages. Composition is explicit and instance-owned.
 
 ### Key Features
 
@@ -67,10 +67,10 @@ flowchart LR
     Family[Domain Networking package] --> Core
 ```
 
-- Core never references Unity, a backend SDK, an optional serializer library, or a domain Networking package.
-- Adapters translate lifecycle, identity, channels, and byte delivery. They do not decide product authority or gameplay policy.
-- Each adapter instance owns its runtime context, connection wrappers, callback bindings, bounded mutable state, and shutdown. No static adapter accessor participates in composition.
-- `NetworkRuntimeContext` is created explicitly, accepts services before `Build()`, then freezes. It is an instance-scoped composition object, not a global lookup point.
+- Core stays free of Unity, backend SDKs, optional serializer libraries, and domain Networking packages.
+- Adapters translate lifecycle, identity, channels, and byte delivery; product authority and gameplay policy stay with the product.
+- Each adapter instance owns its runtime context, connection wrappers, callback bindings, bounded mutable state, and shutdown. Composition uses no static adapter accessor.
+- `NetworkRuntimeContext` is created explicitly, accepts services before `Build()`, then freezes. It is an instance-scoped composition object.
 - Domain packages own non-overlapping ranges inside the Module range. Game-specific contracts use a product-owned User-range manifest.
 
 ## Quick Start
@@ -83,19 +83,19 @@ flowchart LR
 6. Configure message policies, optional rate limiting, sequence protection, signing, payload/wire-byte budgets, logging redaction, and shutdown ownership.
 7. Run bootstrap diagnostics, focused tests, target Player builds, and backend interoperability tests for every shipping platform.
 
-`INetworkMessageEndpoint` never selects a serializer or discovers message types. `GetMaxPayloadSize` combines the protocol descriptor, configured adapter budget, channel support, and backend packet limit. Duplicate handler registration fails immediately; the default handler registry is bounded to 1,024 live registrations; disposing a stale or copied lease cannot remove a newer registration.
+`INetworkMessageEndpoint` selects no serializer and discovers no message types. `GetMaxPayloadSize` combines the protocol descriptor, configured adapter budget, channel support, and backend packet limit. Duplicate handler registration fails immediately; the default handler registry is bounded to 1,024 live registrations; disposing a stale or copied lease cannot remove a newer registration.
 
 ### Unified logging
 
-Networking Core owns `INetworkingDiagnostics`, `NetworkingDiagnosticLevel`, `NullNetworkingDiagnostics`, and the canonical `NetworkingDiagnosticCategories.Root`. It has no reference to `ILogWriter`, `LogChannel`, Unity, or a concrete backend. `RollbackNetcode` overloads without diagnostics use the no-op sink; the explicit diagnostics overload supports a pure host implementation.
+Networking Core owns `INetworkingDiagnostics`, `NetworkingDiagnosticLevel`, `NullNetworkingDiagnostics`, and the canonical `NetworkingDiagnosticCategories.Root`. It avoids references to `ILogWriter`, `LogChannel`, Unity, or a concrete backend. `RollbackNetcode` overloads without diagnostics use the no-op sink; the explicit diagnostics overload supports a pure host implementation.
 
-`NetworkingDiagnosticLevel` has the same stable numeric profile as `LogSeverity`: `Trace = 0`, `Debug = 1`, `Info = 2`, `Warning = 3`, `Error = 4`, `Fatal = 5`, and `None = 6`. `NetworkingLoggingDiagnostics` maps the six output levels exactly; `None` and unknown values are disabled and dropped. Core diagnostics are a best-effort side channel: ordinary exceptions from a custom sink or shared writer are contained and cannot change rollback admission or simulation control flow. `OutOfMemoryException` deliberately remains visible to the host so its process-level resource-exhaustion policy can run. Sinks must remain non-blocking, bounded, and safe for the caller's simulation thread.
+`NetworkingDiagnosticLevel` has the same stable numeric profile as `LogSeverity`: `Trace = 0`, `Debug = 1`, `Info = 2`, `Warning = 3`, `Error = 4`, `Fatal = 5`, and `None = 6`. `NetworkingLogWriterAdapter` maps the six output levels exactly; `None` and unknown values are disabled and dropped. Core diagnostics are a best-effort side channel: ordinary exceptions from a custom sink or shared writer are contained and cannot change rollback admission or simulation control flow. `OutOfMemoryException` deliberately remains visible to the host so its process-level resource-exhaustion policy can run. Sinks must remain non-blocking, bounded, and safe for the caller's simulation thread.
 
 This is an assembly boundary, not yet a separate UPM distribution boundary. The current combined `com.cyclone-games.networking` package root also contains non-Core assemblies and therefore still declares `com.cyclone-games.logging`; installing only Core without that package dependency requires a future physical Core package split.
 
-`NetworkingLoggingDiagnostics` in `CycloneGames.Networking.Integrations.Logging` optionally maps that Core-local contract to an explicit `ILogWriter` or the current `LogRuntime.Writer`. Non-Core logging-producing assemblies continue to centralize category ownership in internal facades such as `NetworkingUnityRuntimeLog`, `NetworkingEditorLog`, `NetworkingMirrorAdapterLog`, `NetworkingMirageAdapterLog`, and `NetworkingPermissionsLog`. Stable specialized categories remain unchanged.
+`NetworkingLogWriterAdapter` in `CycloneGames.Networking.Integrations.Logging` optionally maps that Core-local contract to an explicit `ILogWriter` or the current `LogRuntime.Writer`. Non-Core logging-producing assemblies continue to centralize category ownership in internal facades such as `NetworkingUnityRuntimeLog`, `NetworkingEditorLog`, `NetworkingMirrorAdapterLog`, `NetworkingMirageAdapterLog`, and `NetworkingPermissionsLog`. Stable specialized categories remain unchanged.
 
-Install and own the concrete backend only at the application composition root. Neither Core diagnostics nor the adapter initializes, flushes, disposes, or otherwise owns that backend.
+Install and own the concrete backend only at the application composition root; Core diagnostics and the adapter leave its lifecycle to the host.
 
 ### Define a product protocol
 
@@ -161,11 +161,11 @@ The FNV-1a checksum detects accidental corruption and parser disagreement; it is
 ### Runtime building blocks
 
 - Replication planners, spatial indices, state caches, send budgets, and packet builders are primitives; the product remains the authority for relevance and overload policy.
-- Unity interest managers offer grid, group, team-visibility, and composite choices. The DOD assembly offers two explicitly disposable NativeContainer-backed alternatives: `NativeGridInterestManager` and `NativeTeamVisibilityInterestManager`. It is not an ECS and does not schedule Jobs or use Burst.
+- Unity interest managers offer grid, group, team-visibility, and composite choices. The DOD assembly offers two explicitly disposable NativeContainer-backed alternatives: `NativeGridInterestManager` and `NativeTeamVisibilityInterestManager`. It is a NativeContainer-backed collection, not an ECS; no Jobs or Burst.
 - Prediction, interpolation, lag compensation, lockstep, rollback, reconnection, session directory, matchmaking coordination, and host handoff are independent capabilities.
 - `QuantizedVector3`, `QuantizedQuaternion`, and `DeltaCompressor` use explicit little-endian encodings and fixed quantization configuration. Quantization and delta baselines belong to the protocol manifest and endpoint rollout.
 - `ActorRouteTable` is an in-process helper, not a distributed router. Give it one owner and an external capacity policy.
-- `LocalLoopTransport` supports deterministic in-process development; it does not model latency, loss, NAT, encryption, multi-client load, or release transport behavior.
+- `LocalLoopTransport` supports deterministic in-process development; latency, loss, NAT, encryption, multi-client load, and release transport behavior are out of scope.
 
 ### Optional transport and backend adapters
 
@@ -202,7 +202,7 @@ Create `Assets/Create/CycloneGames/Networking/Bootstrap Preset`. Its custom Insp
 - `Tools/CycloneGames/Networking/LAN Host Permission` shows host guidance, local IPv4 candidates, and Windows firewall status/actions.
 - Optional adapter Inspectors appear only when their SDK integration assemblies are active.
 
-Diagnostics run on request and do not rescan scenes on every repaint. They do not validate unopened build scenes, Player execution, backend connectivity, or platform certification. Before relying on an authoring workflow, verify Undo/Redo, Prefab Overrides, multi-object editing, domain reload, layout, and asset safety in the current Unity version.
+Diagnostics run on request and rescan scenes only then. Unopened build scenes, Player execution, backend connectivity, and platform certification are outside their scope. Before relying on an authoring workflow, verify Undo/Redo, Prefab Overrides, multi-object editing, domain reload, layout, and asset safety in the current Unity version.
 
 ## Advanced Topics
 
@@ -220,7 +220,7 @@ Treat every frame, payload, sequence, token, backend response, and address as un
 - Redact keys, tokens, payloads, account identifiers, and remote error bodies from logs and diagnostics.
 - Process result enums reserve value 0 for `Invalid` or `Unknown`; compatible, accepted, valid, launched, and authenticated outcomes are explicit nonzero values. Default-initialized result structs therefore fail closed.
 
-The package does not implement transport encryption, certificate validation, identity proof, key storage, or key exchange. Use a target-validated TLS/DTLS/WSS or platform/backend security boundary and test its real failure modes.
+Transport encryption, certificate validation, identity proof, key storage, and key exchange stay outside this package. Use a target-validated TLS/DTLS/WSS or platform/backend security boundary and test its real failure modes.
 
 ### Contract and release rules
 
@@ -355,7 +355,7 @@ Run the following checks for every shipping configuration:
 
 ## Related Packages
 
-- `CycloneGames.GameplayAbilities` — owns gameplay state, an explicit authority/replica role, and the authoritative `TryExecuteAuthorityAbility` boundary; it does not own a transport bridge.
+- `CycloneGames.GameplayAbilities` — owns gameplay state, an explicit authority/replica role, and the authoritative `TryExecuteAuthorityAbility` boundary, with no transport bridge of its own.
 - `CycloneGames.GameplayAbilities.Networking` — fixed-wire protocol, codec, structural validator, and result mapper for non-predicted authority-owned `AuthorityOnly` activation. It is a protocol integration rather than a transport endpoint; the product endpoint supplies authentication, ownership, replay/rate policy, bounded pending state, authority-ID mapping, and owner-thread marshaling.
 - `CycloneGames.GameplayFramework.Networking`
 - `CycloneGames.BehaviorTree.Networking`
