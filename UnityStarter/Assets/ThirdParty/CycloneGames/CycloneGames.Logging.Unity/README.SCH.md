@@ -8,7 +8,7 @@
 
 ```mermaid
 flowchart LR
-    Business["业务 assembly"] --> Contract["CycloneGames.Logging"]
+    Business["业务 assembly"] --> Contract["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
     Pipeline["CycloneGames.Logging.Pipeline"] --> Contract
     Unity["CycloneGames.Logging.Unity"] --> Pipeline
     Unity --> Contract
@@ -54,11 +54,11 @@ Canonical asset 不存在时，bootstrap 使用 package defaults。直接传入�
 | 分组 | 字段 | 契约 |
 | --- | --- | --- |
 | Execution | `executionMode` | `Automatic`、`Threaded` 或 `SingleThreaded`；WebGL Player 始终 single-threaded |
-| Core capacity | `maxQueuedMessages`、`maxQueuedCharacters` | 按消息数与保留字符数限制 Pipeline queue |
+| Pipeline capacity | `maxQueuedMessages`、`maxQueuedCharacters` | 按消息数与保留字符数限制 Pipeline queue |
 | Record limits | `maxMessageCharacters`、`maxCategoryCharacters`、`maxSourcePathCharacters`、`maxMemberNameCharacters` | 限制复制的 record 数据 |
 | Filter budget | `maxFilterCategories`、`maxFilterCharacters` | 限制 allow/deny snapshot |
 | Critical reserve | `reservedCriticalMessages`、`reservedCriticalCharacters`、`criticalSeverity` | 减少普通记录竞争，不保证投递 |
-| Backpressure | `overflowPolicy`、`enqueueBlockTimeoutMs` | Core `DropNewest`、`DropOldest` 或有界 `Block` 行为 |
+| Backpressure | `overflowPolicy`、`enqueueBlockTimeoutMs` | Pipeline `DropNewest`、`DropOldest` 或有界 `Block` 行为 |
 | Lifecycle | `shutdownDrainTimeoutMs`、`maintenanceIntervalMs`、`sinkFailureThreshold` | Shutdown 预算、maintenance 频率与 quarantine 阈值 |
 
 ### Sink 注册
@@ -131,13 +131,13 @@ Unity Console 投递包含两个容量边界：
 
 ```mermaid
 flowchart LR
-    Producer --> Core["Core LogPipeline queue<br/>数量 + 字符"]
-    Core --> Adapter["UnityConsoleLogSink"]
+    Producer --> PipelineQueue["LogPipeline 有界 queue<br/>数量 + 字符"]
+    PipelineQueue --> Adapter["UnityConsoleLogSink"]
     Adapter --> Handoff["Main-thread handoff queue<br/>数量 + 字符"]
     Handoff --> Console["Unity Console"]
 ```
 
-Core queue 使用 `maxQueuedMessages`、`maxQueuedCharacters`、字段预算、reserved critical capacity、`overflowPolicy` 与 `enqueueBlockTimeoutMs`。
+Pipeline queue 使用 `maxQueuedMessages`、`maxQueuedCharacters`、字段预算、reserved critical capacity、`overflowPolicy` 与 `enqueueBlockTimeoutMs`。
 
 Unity handoff 独立使用 `unityConsoleMaxQueuedMessages`、`unityConsoleMaxQueuedCharacters` 与 `unityConsoleOverflowPolicy`，并把 queued、reserved 与 in-flight 的消息和字符都计入容量。Unity delivery 不能阻塞 producer/worker thread，因此 handoff 只支持 `DropNewest` 与 `DropOldest`。
 
@@ -145,7 +145,7 @@ Unity handoff 独立使用 `unityConsoleMaxQueuedMessages`、`unityConsoleMaxQue
 
 容量耗尽、格式化条目过大、generation 失效、shutdown 或 reservation 不匹配都可能丢弃 Unity handoff record。`UnityConsoleLogSink.GetStatistics()` 公开 current/reserved/in-flight/peak 数量与字符、总 drop、critical drop，以及 reset 时 abandoned 的条目。
 
-Hidden host 每次 update 最多处理 256 项，core pump budget 为一毫秒，Unity handoff budget 为两毫秒。这些是有界工作控制，不是延迟或投递保证。调整容量前应同时检查 `LogPipeline.GetStatistics()` 与 `UnityConsoleLogSink.GetStatistics()`。
+Hidden host 每次 update 最多处理 256 项，pipeline pump budget 为一毫秒，Unity handoff budget 为两毫秒。这些是有界工作控制，不是延迟或投递保证。调整容量前应同时检查 `LogPipeline.GetStatistics()` 与 `UnityConsoleLogSink.GetStatistics()`。
 
 如果 pipeline 在 worker 上记录终止故障，host 会在下一次 main-thread pump 中观察并重新抛出一次，然后只对该 pipeline 禁用自动 pump，避免逐帧异常循环。Composition owner 仍负责 shutdown 与 replacement。
 
@@ -217,7 +217,7 @@ Cleanup 采用 fail-closed。Marker 记录 schema、transaction、project identi
 
 | Target | 本包中的静态行为 | 必需的产品验证 |
 | --- | --- | --- |
-| WebGL Player | 强制 single-thread processing，把 core `Block` 转换为 `DropNewest`，不注册 file sink | Browser pump、memory、tab close/unload 与 remote-output 策略 |
+| WebGL Player | 强制 single-thread processing，把 pipeline `Block` 转换为 `DropNewest`，不注册 file sink | Browser pump、memory、tab close/unload 与 remote-output 策略 |
 | Dedicated Server | 禁用 Unity Console；无 settings 时默认启用 process console output | stdout capture、service/container shutdown、file quota 与 forced termination |
 | Desktop/mobile Player | Automatic mode 选择 threaded processing；可使用配置的 Unity/process/file sink | IL2CPP/Mono、pause/kill、permission、storage pressure、rotation 与 graceful quit |
 | Editor | 独立 Edit Mode lifecycle 与 source-link tooling | Domain reload on/off、Play Mode transition、assembly reload 与 build cleanup |
@@ -239,7 +239,7 @@ Runtime code 不使用 unsafe code、动态代码生成、runtime reflection dis
 | 初始化返回 `ExistingProcessWriterNotOwned` | 另一个 composition root 拥有 `LogRuntime.Writer`；通过其 owner 关闭，或有意保留 |
 | 初始化返回 `NoSinksConfigured` | 启用至少一个受支持 sink，并检查 file-sink initialization diagnostics |
 | 初始化返回 `ShutdownFailed` | 释放阻塞 sink/dependency，保留所有权，再重试 `Shutdown` 或 `Reinitialize` |
-| 没有记录 | 检查 `minimumSeverity`、`categoryFilter`、active sink、core drop 与 Unity handoff drop |
+| 没有记录 | 检查 `minimumSeverity`、`categoryFilter`、active sink、pipeline drop 与 Unity handoff drop |
 | Burst 时 Unity Console 丢记录 | 检查两层 queue；不能把 critical reserve 当作投递保证 |
 | 文件不存在 | 检查 WebGL exclusion、path mode、绝对 custom path、sandbox、quota 与 `FileLogSink` health |
 | Generated override cleanup 阻止 build | 检查 generated asset 与 marker；identity mismatch 会有意拒绝删除 |

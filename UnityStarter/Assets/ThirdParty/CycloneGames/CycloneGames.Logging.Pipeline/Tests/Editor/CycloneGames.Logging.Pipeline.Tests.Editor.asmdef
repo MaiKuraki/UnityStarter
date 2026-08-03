@@ -2,7 +2,7 @@
     "name": "CycloneGames.Logging.Pipeline.Tests.Editor",
     "rootNamespace": "CycloneGames.Logging.Pipeline.Tests.Editor",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Logging.Pipeline"
     ],
     "includePlatforms": [

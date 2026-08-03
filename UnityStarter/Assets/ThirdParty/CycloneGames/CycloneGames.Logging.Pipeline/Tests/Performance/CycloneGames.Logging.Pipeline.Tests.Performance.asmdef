@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.Logging.Pipeline.Tests.Performance",
     "references": [
         "CycloneGames.Logging.Pipeline",
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "Unity.PerformanceTesting"
     ],
     "includePlatforms": [

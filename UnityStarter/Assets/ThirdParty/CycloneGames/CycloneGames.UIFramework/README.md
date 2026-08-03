@@ -84,7 +84,7 @@ flowchart LR
 | `...Integrations.PrimeTween` | Window transition driver | `com.kyrylokuzyk.primetween` package present |
 | `CycloneGames.UIFramework.Samples` | Opt-in examples | `autoReferenced: false` |
 
-The core runtime references `UniTask`, `CycloneGames.Logging`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` and `defineConstraints`; do not add their `CYCLONEGAMES_HAS_*` symbols manually to PlayerSettings. AssetManagement and Localization integrations use explicit asmdef references to their local assemblies.
+The core runtime references `UniTask`, `CycloneGames.Logging.Core`, and Unity UGUI APIs. Optional DI and motion integrations use asmdef `versionDefines` and `defineConstraints`; do not add their `CYCLONEGAMES_HAS_*` symbols manually to PlayerSettings. AssetManagement and Localization integrations use explicit asmdef references to their local assemblies.
 
 Runtime and sample diagnostics use the stable `CycloneGames.UIFramework` `LogChannel` category; general Editor tooling uses `CycloneGames.UIFramework.Editor`, and localization authoring uses `CycloneGames.UIFramework.Localization.Editor`. The package depends only on the backend-neutral `com.cyclone-games.logging` contract and leaves writer lifecycle to the host. Without a backend, `NullLogWriter` discards messages. The composition root may install `com.cyclone-games.logging.pipeline`, add `com.cyclone-games.logging.unity`, or provide another `ILogWriter`; file path, rotation, retention, redaction, flush, and disposal policy belong to that host.
 

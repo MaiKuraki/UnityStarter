@@ -1,3 +1,4 @@
+using CycloneGames.Logging.Pipeline;
 using CycloneGames.Logging.Unity.Editor;
 using NUnit.Framework;
 

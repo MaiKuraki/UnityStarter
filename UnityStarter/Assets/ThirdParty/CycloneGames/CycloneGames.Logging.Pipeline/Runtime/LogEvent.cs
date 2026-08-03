@@ -1,8 +1,9 @@
 using System;
 using System.Text;
 using System.Threading;
+using CycloneGames.Logging;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public enum LogCategoryFilterMode : byte
     {

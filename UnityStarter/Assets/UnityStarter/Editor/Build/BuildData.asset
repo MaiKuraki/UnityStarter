@@ -13,10 +13,20 @@ MonoBehaviour:
   m_Name: BuildData
   m_EditorClassIdentifier: 
   launchScene: {fileID: 102900000, guid: 99c9720ab356a0642a771bea13969a05, type: 3}
-  applicationVersion: v0.1
+  applicationVersion: 0.1.0
   outputBasePath: Build
-  useBuildalon: 0
+  companyName: CycloneGames
+  productName: UnityStarter
+  applicationIdentifier: com.CycloneGames.UnityStarter
+  versionInfoAssetPath: Assets/Resources/VersionInfoData.asset
+  additionalScenes: []
+  pipelineSteps:
+  - hot-update
+  - asset-content
+  - player
   useHybridCLR: 0
-  useObfuz: 0
+  enablePlayerObfuscation: 0
   cheatBuildMode: 0
-  assetManagementType: 0
+  assetContentProviderId: 
+  assetContentConfiguration: {fileID: 0}
+  hybridCLRBuildConfig: {fileID: 0}

@@ -1,2 +1,5 @@
 # Build Reports
 UnityBuildReports
+
+# Build Pipeline Recovery State
+UnityStarter/.buildpipeline/

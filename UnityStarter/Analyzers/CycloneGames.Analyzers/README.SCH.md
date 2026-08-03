@@ -91,7 +91,7 @@ OnPreTick, OnPostTick
 - `UnityEngine.Debug.Log*`、`UnityEngine.Debug.Assert*` 和 `Debug.unityLogger` 访问。
 - `UnityEngine.MonoBehaviour.print`。
 - `System.Console.Write*` 以及对 `Console.Out` 或 `Console.Error` 的访问。
-- Logging backend assembly 之外对具体 `CycloneGames.Logging.LogPipeline` backend 类型的引用。
+- Logging backend assembly 之外对具体 `CycloneGames.Logging.Pipeline.LogPipeline` backend 类型的引用。
 
 规则只作用于名称以 `CycloneGames.` 开头的 assembly。backend assembly `CycloneGames.Logging.Pipeline`、`CycloneGames.Logging.Unity` 与 `CycloneGames.Logging.Unity.Editor` 不参与检查；明确标识为 Tests、Tools 或 CodeGen 的 assembly 或源码路径也不参与检查，这些位置属于验证或宿主 I/O 边界。Runtime、Editor、Samples 与 Benchmarks 仍在治理范围内。`CycloneGames.Logging.Unity.Samples` composition sample 可以引用 `LogPipeline`，但其中直接使用 Unity 与 Console 输出 API 仍受治理。`CycloneGames.MemoryGovernance.Logging.Pipeline` 或 `CycloneGames.MemoryGovernance.Logging.Pipeline.Editor` 等相似业务名称不是标准 backend assembly，仍会接受检查。
 

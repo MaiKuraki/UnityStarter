@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Text;
 using System.Threading;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor
@@ -14,7 +15,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var logger = CreateSingleThreaded(maxMessages: 1, maxCharacters: 128);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "first", filePath: string.Empty, memberName: string.Empty);
 
             bool invoked = false;
@@ -37,7 +38,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.OverflowPolicy = LogQueueOverflowPolicy.DropOldest;
             using var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             logger.Write(LogSeverity.Error, "critical", filePath: string.Empty, memberName: string.Empty);
             logger.Write(LogSeverity.Info, "normal-old", filePath: string.Empty, memberName: string.Empty);
@@ -55,7 +56,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.OverflowPolicy = LogQueueOverflowPolicy.DropOldest;
             using var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "old", filePath: string.Empty, memberName: string.Empty);
 
             bool invoked = false;
@@ -82,7 +83,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var logger = CreateSingleThreaded(2, 256);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             logger.Write(
                 LogSeverity.Info,
@@ -101,7 +102,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var logger = CreateSingleThreaded(2, 256);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             for (int i = 0; i < 32; i++)
             {
@@ -124,7 +125,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         public void FatalBuilderException_PropagatesAndReleasesReservation()
         {
             using var logger = CreateSingleThreaded(2, 256);
-            logger.AddSink(new RecordingSink());
+            logger.RegisterSink(new RecordingSink());
 
             Assert.Throws<OutOfMemoryException>(() => logger.Write(
                 LogSeverity.Info,
@@ -148,7 +149,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
                     throw new InvalidOperationException("Expected timestamp failure.");
                 });
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "trip", filePath: string.Empty, memberName: string.Empty);
 
             var producers = new Thread[8];
@@ -181,7 +182,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             using var logger = LogPipelineFactory.CreateSingleThreaded(
                 CreateOptions(4, 256),
                 static () => throw new OutOfMemoryException("Synthetic timestamp failure."));
-            logger.AddSink(new RecordingSink());
+            logger.RegisterSink(new RecordingSink());
             LogMemoryPoolStatistics before = LogMemoryPools.GetStatistics();
             bool builderInvoked = false;
 
@@ -206,7 +207,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var logger = CreateSingleThreaded(maxMessages: 4, maxCharacters: 10);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             logger.Write(LogSeverity.Info, "1234567", filePath: string.Empty, memberName: string.Empty);
             logger.Write(LogSeverity.Info, "abcd", filePath: string.Empty, memberName: string.Empty);
@@ -322,8 +323,8 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.MaxCategoryCharacters = 3;
             using var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
-            logger.SetCategoryFilter(LogCategoryFilterMode.DenyList);
+            logger.RegisterSink(sink);
+            logger.CategoryFilter = LogCategoryFilterMode.DenyList;
             logger.AddDeniedCategory("Net");
 
             logger.Write(LogSeverity.Info, "blocked", "NetSuffix", string.Empty, 0, string.Empty);
@@ -340,7 +341,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.MaxMessageCharacters = 5;
             using var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var sink = new RecordingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             logger.Write(LogSeverity.Info, "abcdefgh", filePath: string.Empty, memberName: string.Empty);
             logger.Pump(8);
@@ -358,7 +359,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.MaxMemberNameCharacters = 3;
             using var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var sink = new PayloadShapeSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             logger.Write(
                 LogSeverity.Info,
@@ -394,16 +395,72 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void TryAddSink_DisposesRejectedDifferentInstance()
+        public void RegisterSink_RejectedDifferentInstanceRemainsCallerOwned()
         {
             using var logger = CreateSingleThreaded(4, 128);
             var accepted = new DisposableSink();
             var rejected = new DisposableSink();
 
-            Assert.IsTrue(logger.TryAddSink(accepted));
-            Assert.IsFalse(logger.TryAddSink(rejected));
+            LogSinkRegistrationResult acceptedResult = logger.RegisterSink(
+                accepted,
+                LogSinkRegistrationMode.UniqueExactType);
+            LogSinkRegistrationResult rejectedResult = logger.RegisterSink(
+                rejected,
+                LogSinkRegistrationMode.UniqueExactType);
+
+            Assert.AreEqual(LogSinkRegistrationStatus.Registered, acceptedResult.Status);
+            Assert.IsTrue(acceptedResult.PipelineOwnsSink);
+            Assert.AreEqual(LogSinkRegistrationStatus.RejectedDuplicateType, rejectedResult.Status);
+            Assert.IsTrue(rejectedResult.CallerRetainsOwnership);
             Assert.AreEqual(0, accepted.DisposeCount);
+            Assert.AreEqual(0, rejected.DisposeCount);
+            rejected.Dispose();
             Assert.AreEqual(1, rejected.DisposeCount);
+        }
+
+        [Test]
+        public void RegisterSink_RepeatedSameInstanceReportsExistingOwnership()
+        {
+            using var logger = CreateSingleThreaded(4, 128);
+            var sink = new DisposableSink();
+
+            LogSinkRegistrationResult first = logger.RegisterSink(sink);
+            LogSinkRegistrationResult repeated = logger.RegisterSink(sink);
+
+            Assert.AreEqual(LogSinkRegistrationStatus.Registered, first.Status);
+            Assert.AreEqual(LogSinkRegistrationStatus.AlreadyRegistered, repeated.Status);
+            Assert.IsTrue(repeated.IsRegistered);
+            Assert.IsTrue(repeated.PipelineOwnsSink);
+            Assert.IsFalse(repeated.CallerRetainsOwnership);
+        }
+
+        [Test]
+        public void RegisterSink_AfterShutdownLeavesNewSinkCallerOwned()
+        {
+            var logger = CreateSingleThreaded(4, 128);
+            Assert.IsTrue(logger.Shutdown(LogFlushMode.Buffered).IsComplete);
+            var sink = new DisposableSink();
+
+            LogSinkRegistrationResult result = logger.RegisterSink(sink);
+
+            Assert.AreEqual(LogSinkRegistrationStatus.RejectedPipelineStopping, result.Status);
+            Assert.IsFalse(result.IsRegistered);
+            Assert.IsTrue(result.CallerRetainsOwnership);
+            Assert.AreEqual(0, sink.DisposeCount);
+            sink.Dispose();
+            logger.Dispose();
+        }
+
+        [Test]
+        public void RegisterSink_InvalidModeThrowsWithoutTakingOwnership()
+        {
+            using var logger = CreateSingleThreaded(4, 128);
+            var sink = new DisposableSink();
+
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                logger.RegisterSink(sink, unchecked((LogSinkRegistrationMode)byte.MaxValue)));
+            Assert.AreEqual(0, sink.DisposeCount);
+            sink.Dispose();
         }
 
         [Test]
@@ -414,8 +471,8 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             using var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var failing = new ThrowingSink();
             var recording = new RecordingSink();
-            logger.AddSink(failing);
-            logger.AddSink(recording);
+            logger.RegisterSink(failing);
+            logger.RegisterSink(recording);
 
             for (int i = 0; i < 3; i++)
             {
@@ -440,7 +497,9 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             for (int i = 0; i < 8; i++)
             {
                 var sink = new ThrowingDisposableSink();
-                Assert.IsTrue(logger.TryAddSink(sink));
+                Assert.IsTrue(logger.RegisterSink(
+                    sink,
+                    LogSinkRegistrationMode.UniqueExactType).IsRegistered);
                 logger.Write(LogSeverity.Info, "message", filePath: string.Empty, memberName: string.Empty);
                 logger.Pump(1);
                 Assert.AreEqual(1, sink.CallCount);
@@ -458,7 +517,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var logger = LogPipelineFactory.CreateThreaded(CreateOptions(8, 1024));
             var sink = new BlockingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "blocked", filePath: string.Empty, memberName: string.Empty);
             Assert.IsTrue(sink.Entered.Wait(2000), "Sink did not receive the message.");
 
@@ -485,7 +544,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var logger = LogPipelineFactory.CreateThreaded(CreateOptions(1, 64));
             var sink = new BlockingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "first", filePath: string.Empty, memberName: string.Empty);
             Assert.IsTrue(sink.Entered.Wait(2000), "Sink did not receive the first message.");
 
@@ -505,7 +564,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var logger = LogPipelineFactory.CreateSingleThreaded(CreateOptions(4, 256));
             var sink = new SlowSink(20);
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "one", filePath: string.Empty, memberName: string.Empty);
             logger.Write(LogSeverity.Info, "two", filePath: string.Empty, memberName: string.Empty);
             logger.Write(LogSeverity.Info, "three", filePath: string.Empty, memberName: string.Empty);
@@ -521,7 +580,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             var logger = LogPipelineFactory.CreateThreaded(CreateOptions(8, 1024));
             var sink = new BlockingDisposableSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "blocked", filePath: string.Empty, memberName: string.Empty);
             Assert.IsTrue(sink.Entered.Wait(2000), "Sink did not receive the message.");
 
@@ -578,7 +637,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.ShutdownDrainTimeoutMs = 50;
             var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var sink = new ThrowingBlockingDisposeSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             logger.Write(LogSeverity.Info, "failure", filePath: string.Empty, memberName: string.Empty);
 
             var pumpThread = new Thread(() => logger.Pump(1));
@@ -617,7 +676,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
                 workerExitEntered.Set();
                 allowWorkerExit.Wait();
             };
-            logger.AddSink(first);
+            logger.RegisterSink(first);
 
             LogEvent firstMessage = LogEventPool.Get();
             firstMessage.Initialize(DateTime.UtcNow, LogSeverity.Info, "first", null, null, null, 0, null, 16, 1, 1, 1);
@@ -625,7 +684,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             LogEventPool.Return(firstMessage);
             Assert.IsTrue(first.DisposeEntered.Wait(2000), "First sink disposal did not start.");
 
-            logger.AddSink(second);
+            logger.RegisterSink(second);
             LogEvent secondMessage = LogEventPool.Get();
             secondMessage.Initialize(DateTime.UtcNow, LogSeverity.Info, "second", null, null, null, 0, null, 16, 1, 1, 1);
             var dispatchThread = new Thread(() => logger.DispatchToSinks(secondMessage));
@@ -660,12 +719,17 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.ShutdownDrainTimeoutMs = 50;
             var logger = LogPipelineFactory.CreateSingleThreaded(options);
             var sink = new FlushFailingBlockingDisposeSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             LogPipelineShutdownResult timedOut = logger.Shutdown(LogFlushMode.Durable, 20);
             Assert.AreEqual(LogPipelineShutdownStatus.TimedOut, timedOut.Status);
             Assert.IsFalse(timedOut.SinksFlushed);
             Assert.IsTrue(sink.DisposeEntered.Wait(2000));
+
+            LogSinkRegistrationResult repeated = logger.RegisterSink(sink);
+            Assert.AreEqual(LogSinkRegistrationStatus.AlreadyOwnedByPipeline, repeated.Status);
+            Assert.IsTrue(repeated.PipelineOwnsSink);
+            Assert.IsFalse(repeated.CallerRetainsOwnership);
 
             sink.DisposeRelease.Set();
             LogPipelineShutdownResult completed = logger.Shutdown(LogFlushMode.Durable, 2000);
@@ -682,7 +746,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             var logger = LogPipelineFactory.CreateSingleThreaded(CreateOptions(4, 256));
             var sink = new ThrowingDisposeSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             LogPipelineShutdownResult result = logger.Shutdown(LogFlushMode.Buffered, 2000);
 
@@ -698,7 +762,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             var logger = LogPipelineFactory.CreateSingleThreaded(CreateOptions(4, 256));
             var sink = new TransientThrowingDisposeSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             LogPipelineShutdownResult result = logger.Shutdown(LogFlushMode.Buffered, 2000);
 
@@ -714,7 +778,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             var logger = LogPipelineFactory.CreateSingleThreaded(CreateOptions(4, 256));
             var sink = new NonRetryableThrowingDisposeSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
 
             LogPipelineShutdownResult result = logger.Shutdown(LogFlushMode.Buffered, 2000);
 
@@ -728,10 +792,10 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             var logger = LogPipelineFactory.CreateSingleThreaded(CreateOptions(4, 256));
             var blocker = new BlockingDisposeOnlySink();
-            Assert.IsTrue(logger.AddSink(blocker));
+            Assert.IsTrue(logger.RegisterSink(blocker).IsRegistered);
             for (int i = 1; i < 256; i++)
             {
-                Assert.IsTrue(logger.AddSink(new DisposableSink()));
+                Assert.IsTrue(logger.RegisterSink(new DisposableSink()).IsRegistered);
             }
 
             Exception clearException = null;
@@ -751,10 +815,14 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             Assert.IsTrue(clearThread.Join(3000));
             Assert.IsNull(clearException);
             Assert.AreEqual(256, logger.GetStatistics().PendingSinkDisposalCount);
-            Assert.IsFalse(logger.AddSink(blocker), "A sink already owned by the disposal executor must not be re-registered.");
+            LogSinkRegistrationResult ownedResult = logger.RegisterSink(blocker);
+            Assert.AreEqual(LogSinkRegistrationStatus.AlreadyOwnedByPipeline, ownedResult.Status);
+            Assert.IsTrue(ownedResult.PipelineOwnsSink);
 
             var rejected = new DisposableSink();
-            Assert.IsFalse(logger.AddSink(rejected));
+            LogSinkRegistrationResult rejectedResult = logger.RegisterSink(rejected);
+            Assert.AreEqual(LogSinkRegistrationStatus.RejectedCapacity, rejectedResult.Status);
+            Assert.IsTrue(rejectedResult.CallerRetainsOwnership);
             Assert.AreEqual(0, rejected.DisposeCount);
             rejected.Dispose();
 
@@ -773,7 +841,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             options.ShutdownDrainTimeoutMs = 5000;
             using var logger = LogPipelineFactory.CreateThreaded(options);
             var sink = new CountingSink();
-            logger.AddSink(sink);
+            logger.RegisterSink(sink);
             var threads = new Thread[ProducerCount];
 
             for (int producer = 0; producer < ProducerCount; producer++)

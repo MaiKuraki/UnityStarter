@@ -23,7 +23,7 @@ Derived from Microsoft's [Audio-Manager-for-Unity](https://github.com/microsoft/
 
 Create an `AudioBank` asset, author event graphs in the Audio Graph editor, assign `AudioClip` references (embedded or external), and play events by asset reference or registered name. The runtime pools `AudioSource` objects, bounds voice counts per category, applies parameters and switches per emitter, and schedules state-mix transitions.
 
-The runtime assembly has two direct dependencies: UniTask and the engine-independent `CycloneGames.Logging` producer contract. Integration with AssetManagement, Addressables, or YooAsset happens at the composition boundary through the `IAudioClipProvider` resolver contract.
+The runtime assembly has two direct dependencies: UniTask and the engine-independent `CycloneGames.Logging.Core` producer-contract assembly. Integration with AssetManagement, Addressables, or YooAsset happens at the composition boundary through the `IAudioClipProvider` resolver contract.
 
 ### Key Features
 
@@ -40,7 +40,7 @@ The runtime assembly has two direct dependencies: UniTask and the engine-indepen
 
 | Assembly | Path | Purpose |
 | --- | --- | --- |
-| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`, `IAudioService`, bank/event models, graph execution, source pool, voice policy, clip resolver, residency leases. Depends on `UniTask` and `CycloneGames.Logging`. |
+| `CycloneGames.Audio.Runtime` | `Runtime/` | `AudioManager`, `IAudioService`, bank/event models, graph execution, source pool, voice policy, clip resolver, residency leases. Depends on `UniTask` and `CycloneGames.Logging.Core`. |
 | `CycloneGames.Audio.Editor` | `Editor/` | Audio Graph, custom inspectors, validation, diagnostics, preview, profiler. Editor-only. |
 | `CycloneGames.Audio.Tests.Editor` | `Tests/Editor/` | EditMode tests for path validation, resolver/bank ownership, selection, stable voice locales, and authoring validation. |
 

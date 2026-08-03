@@ -1,8 +1,9 @@
 using System;
 using System.Diagnostics;
 using System.Threading;
+using CycloneGames.Logging;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     internal sealed class ThreadedLogProcessor : ILogProcessor
     {
@@ -57,7 +58,7 @@ namespace CycloneGames.Logging
             int previous = Interlocked.CompareExchange(ref _shutdownState, 1, 0);
             if (previous == 2 && !_workerThread.IsAlive)
             {
-                return new LogPipelineShutdownResult(LogPipelineShutdownStatus.AlreadyStopped, GetStatistics().DroppedMessageCount, true);
+                return new LogPipelineShutdownResult(LogPipelineShutdownStatus.Completed, GetStatistics().DroppedMessageCount, true);
             }
 
             _queue.CompleteAdding();

@@ -571,7 +571,7 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       private static Exception AssertLoadFailure(FileGameplayTagSource source)
       {
          var writer = new RecordingLogWriter();
-         ILogWriter previousWriter = LogRuntime.ReplaceWriter(writer);
+         ILogWriter previousWriter = InstallWriter(writer);
          bool loaded;
          try
          {
@@ -609,6 +609,13 @@ namespace CycloneGames.GameplayTags.Tests.Editor
       private static void RestoreWriter(ILogWriter previousWriter, RecordingLogWriter writer)
       {
          LogRuntime.TryReplaceWriter(writer, previousWriter);
+      }
+
+      private static ILogWriter InstallWriter(ILogWriter writer)
+      {
+         ILogWriter previousWriter = LogRuntime.Writer;
+         Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, writer));
+         return previousWriter;
       }
 
       private readonly struct LogRecord

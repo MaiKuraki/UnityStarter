@@ -1,67 +1,82 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Text.RegularExpressions;
-using UnityEngine;
+using System.Threading.Tasks;
 
 namespace Build.VersionControl.Editor
 {
-    public class VersionControlProviderPerforce : VersionControlProviderBase
+    internal sealed class VersionControlProviderPerforce : IVersionControlProvider
     {
-        private const string P4_EXECUTABLE = "p4";
-        private const int PROCESS_TIMEOUT_MS = 10000;
+        private const string P4Executable = "p4";
+        private const int ProcessTimeoutMilliseconds = 10000;
+        private const int MaximumProcessOutputCharacters = 64 * 1024;
 
         private static readonly Regex ChangeNumberRegex = new Regex(@"Change\s+(\d+)", RegexOptions.Compiled);
         private static readonly Regex ChangeDateRegex = new Regex(@"Change\s+\d+\s+on\s+(\d{4}/\d{2}/\d{2})", RegexOptions.Compiled);
 
-        public override string GetCommitHash()
+        public VersionControlMetadata Capture()
         {
-            string output = RunP4Command("changes -m 1 -s submitted");
-            if (string.IsNullOrEmpty(output))
-                return "0";
-
-            Match match = ChangeNumberRegex.Match(output);
-            return match.Success ? match.Groups[1].Value : "0";
-        }
-
-        public override string GetCommitCount()
-        {
-            // Perforce changelist numbers are monotonically increasing counters.
-            // The latest submitted changelist serves as the de-facto "commit count".
-            return GetCommitHash();
-        }
-
-        public override string GetBranchName()
-        {
-            string output = RunP4Command("client -o");
-            if (string.IsNullOrEmpty(output))
-                return "unknown";
-
-            // Extract Stream field (if using streams) or Client name
-            var streamMatch = Regex.Match(output, @"^Stream:\s+(.+)$", RegexOptions.Multiline);
-            if (streamMatch.Success)
-                return streamMatch.Groups[1].Value.Trim();
-
-            var clientMatch = Regex.Match(output, @"^Client:\s+(.+)$", RegexOptions.Multiline);
-            return clientMatch.Success ? clientMatch.Groups[1].Value.Trim() : "unknown";
-        }
-
-        public override string GetCommitDate()
-        {
-            string output = RunP4Command("changes -m 1 -s submitted");
-            if (string.IsNullOrEmpty(output))
-                return DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-
-            Match match = ChangeDateRegex.Match(output);
-            if (match.Success)
+            string changeOutput = RunP4Command("changes -m 1 -s submitted");
+            Match changeMatch = ChangeNumberRegex.Match(changeOutput);
+            if (!changeMatch.Success)
             {
-                string rawDate = match.Groups[1].Value;
-                if (DateTime.TryParse(rawDate, out DateTime parsed))
-                    return parsed.ToString("yyyy-MM-dd HH:mm:ss");
-                return rawDate;
+                throw new InvalidOperationException(
+                    "Perforce did not return a latest submitted changelist.");
             }
 
-            return DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
+            string change = changeMatch.Groups[1].Value;
+            if (!long.TryParse(
+                    change,
+                    NumberStyles.None,
+                    CultureInfo.InvariantCulture,
+                    out long changeNumber)
+                || changeNumber <= 0)
+            {
+                throw new InvalidOperationException(
+                    "Perforce returned an invalid submitted changelist number.");
+            }
+
+            Match dateMatch = ChangeDateRegex.Match(changeOutput);
+            if (!dateMatch.Success
+                || !DateTime.TryParseExact(
+                    dateMatch.Groups[1].Value,
+                    "yyyy/MM/dd",
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.None,
+                    out DateTime parsedDate))
+            {
+                throw new InvalidOperationException(
+                    "Perforce returned an invalid submitted changelist date.");
+            }
+
+            string clientOutput = RunP4Command("client -o");
+            Match streamMatch = Regex.Match(
+                clientOutput,
+                @"^Stream:\s+(.+)$",
+                RegexOptions.Multiline);
+            Match clientMatch = Regex.Match(
+                clientOutput,
+                @"^Client:\s+(.+)$",
+                RegexOptions.Multiline);
+            string branch = streamMatch.Success
+                ? streamMatch.Groups[1].Value.Trim()
+                : clientMatch.Success
+                    ? clientMatch.Groups[1].Value.Trim()
+                    : string.Empty;
+            if (string.IsNullOrWhiteSpace(branch) || branch.Length > 512)
+            {
+                throw new InvalidOperationException(
+                    "Perforce client metadata does not contain a bounded Stream or Client name.");
+            }
+
+            return new VersionControlMetadata(
+                "Perforce",
+                change,
+                change,
+                branch,
+                parsedDate.ToString("yyyy-MM-dd", CultureInfo.InvariantCulture));
         }
 
         private static string RunP4Command(string arguments)
@@ -70,35 +85,62 @@ namespace Build.VersionControl.Editor
             {
                 var startInfo = new ProcessStartInfo
                 {
-                    FileName = P4_EXECUTABLE,
+                    FileName = P4Executable,
                     Arguments = arguments,
                     RedirectStandardOutput = true,
                     RedirectStandardError = true,
                     UseShellExecute = false,
                     CreateNoWindow = true,
-                    StandardOutputEncoding = Encoding.UTF8
+                    StandardOutputEncoding = Encoding.UTF8,
+                    StandardErrorEncoding = Encoding.UTF8
                 };
 
                 using (var process = new Process { StartInfo = startInfo })
                 {
                     process.Start();
-                    string output = process.StandardOutput.ReadToEnd();
-                    process.WaitForExit(PROCESS_TIMEOUT_MS);
+                    Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+                    Task<string> errorTask = process.StandardError.ReadToEndAsync();
+
+                    if (!process.WaitForExit(ProcessTimeoutMilliseconds))
+                    {
+                        try
+                        {
+                            process.Kill();
+                        }
+                        catch (InvalidOperationException)
+                        {
+                        }
+
+                        process.WaitForExit();
+                        throw new TimeoutException(
+                            $"Perforce command timed out after {ProcessTimeoutMilliseconds} ms: p4 {arguments}");
+                    }
+
+                    process.WaitForExit();
+                    string output = outputTask.GetAwaiter().GetResult();
+                    string error = errorTask.GetAwaiter().GetResult();
+
+                    if (output.Length > MaximumProcessOutputCharacters
+                        || error.Length > MaximumProcessOutputCharacters)
+                    {
+                        throw new InvalidOperationException(
+                            $"Perforce command exceeded its output budget: p4 {arguments}");
+                    }
 
                     if (process.ExitCode != 0)
                     {
-                        string error = process.StandardError.ReadToEnd();
-                        UnityEngine.Debug.LogWarning($"[VC] P4 command failed (exit {process.ExitCode}): p4 {arguments}\n{error}");
-                        return null;
+                        throw new InvalidOperationException(
+                            $"Perforce command failed (exit {process.ExitCode}): p4 {arguments}. {error.Trim()}");
                     }
 
                     return output.Trim();
                 }
             }
-            catch (Exception ex)
+            catch (Exception exception)
             {
-                UnityEngine.Debug.LogWarning($"[VC] P4 command error: p4 {arguments}\n{ex.Message}");
-                return null;
+                throw new InvalidOperationException(
+                    $"Perforce command failed: p4 {arguments}",
+                    exception);
             }
         }
     }

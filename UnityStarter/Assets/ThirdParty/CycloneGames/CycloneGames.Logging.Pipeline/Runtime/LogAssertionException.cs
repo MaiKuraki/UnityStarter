@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public sealed class LogAssertionException : Exception
     {

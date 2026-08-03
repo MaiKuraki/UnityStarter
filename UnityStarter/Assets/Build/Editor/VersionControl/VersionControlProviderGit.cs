@@ -1,158 +1,229 @@
 using System;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Text;
-using UnityEngine;
+using System.Threading.Tasks;
 
 namespace Build.VersionControl.Editor
 {
-    public class VersionControlProviderGit : VersionControlProviderBase
+    internal sealed class VersionControlProviderGit : IVersionControlProvider
     {
-        private const string GIT_EXECUTABLE = "git";
-        private const int PROCESS_TIMEOUT_MS = 10000;
+        private const string GitExecutable = "git";
+        private const int ProcessTimeoutMilliseconds = 10000;
+        private const int MaximumProcessOutputCharacters = 64 * 1024;
+        private const int MaximumCaptureAttempts = 2;
 
-        private static string _projectRoot;
+        private readonly string projectRoot;
 
-        private static string GetProjectRoot()
+        public VersionControlProviderGit(string projectRoot)
         {
-            if (_projectRoot == null)
-            {
-                _projectRoot = FindGitRoot() ?? Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
-            }
-            return _projectRoot;
+            string normalizedRoot = Path.GetFullPath(
+                projectRoot ?? throw new ArgumentNullException(nameof(projectRoot)));
+            this.projectRoot = FindGitRoot(normalizedRoot)
+                ?? throw new InvalidOperationException(
+                    $"No Git worktree was found for '{normalizedRoot}'.");
         }
 
-        /// <summary>
-        /// Walks up from Assets/ to find the .git directory.
-        /// This correctly handles Unity projects nested inside a Git repo.
-        /// </summary>
-        private static string FindGitRoot()
+        internal static string FindGitRoot(string startDirectory)
         {
-            string dir = Path.GetFullPath(Application.dataPath);
-            string root = Path.GetPathRoot(dir);
-            while (dir != null && dir.Length >= root.Length)
+            string directory = Path.GetFullPath(startDirectory);
+            string volumeRoot = Path.GetPathRoot(directory);
+            while (directory != null && directory.Length >= volumeRoot.Length)
             {
-                string gitPath = Path.Combine(dir, ".git");
+                string gitPath = Path.Combine(directory, ".git");
                 if (Directory.Exists(gitPath) || File.Exists(gitPath))
                 {
-                    return dir;
+                    return directory;
                 }
-                dir = Path.GetDirectoryName(dir);
+
+                directory = Path.GetDirectoryName(directory);
             }
+
             return null;
         }
 
-        public override string GetCommitHash()
+        public VersionControlMetadata Capture()
         {
-            return RunGitCommand("rev-parse --short=7 HEAD") ?? "unknown";
-        }
-
-        public override string GetCommitCount()
-        {
-            return RunGitCommand("rev-list --count HEAD") ?? "0";
-        }
-
-        public override string GetBranchName()
-        {
-            return RunGitCommand("rev-parse --abbrev-ref HEAD") ?? "unknown";
-        }
-
-        public override string GetCommitDate()
-        {
-            return RunGitCommand("log -1 --format=%ci") ?? DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-        }
-
-        private static string RunGitCommand(string arguments)
-        {
-            try
+            Exception lastFailure = null;
+            for (int attempt = 1; attempt <= MaximumCaptureAttempts; attempt++)
             {
-                string projectRoot = GetProjectRoot();
+                try
+                {
+                    string headBefore = RunGitCommand("rev-parse --verify HEAD");
+                    string logRecord = RunGitCommand("log -1 --format=%H%x1f%cI HEAD");
+                    string commitCount = RunGitCommand("rev-list --count HEAD");
+                    string branch = RunGitCommand("symbolic-ref --quiet --short HEAD", allowExitCodeOne: true);
+                    string headAfter = RunGitCommand("rev-parse --verify HEAD");
+                    if (!string.Equals(headBefore, headAfter, StringComparison.Ordinal))
+                    {
+                        lastFailure = new InvalidOperationException(
+                            "Git HEAD changed while build version metadata was being captured.");
+                        continue;
+                    }
 
-                // Primary: use -c safe.directory to trust the repo for this invocation.
-                // If Git rejects it (exit 128 = fatal, e.g. cross-drive / cross-user),
-                // permanently register the directory in global Git config and retry.
-                string result = TryRun(arguments, projectRoot);
-                if (result != null)
-                    return result;
+                    string[] logFields = logRecord.Split(new[] { '\u001f' }, StringSplitOptions.None);
+                    if (logFields.Length != 2
+                        || !string.Equals(logFields[0], headBefore, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Git log metadata did not match the captured HEAD revision.");
+                    }
 
-                UnityEngine.Debug.Log($"[VC] Primary attempt failed, registering safe.directory and retrying...");
-                RegisterSafeDirectory(projectRoot);
-                return TryRun(arguments, null);
+                    if (string.IsNullOrWhiteSpace(branch))
+                    {
+                        branch = "detached-" + ShortenHash(headBefore);
+                    }
+
+                    ValidateHash(headBefore);
+                    ValidateCommitCount(commitCount);
+                    ValidateCommitDate(logFields[1]);
+                    ValidateText(branch, "Git branch", 512);
+                    return new VersionControlMetadata(
+                        "Git",
+                        ShortenHash(headBefore),
+                        commitCount,
+                        branch,
+                        logFields[1]);
+                }
+                catch (Exception exception)
+                {
+                    lastFailure = exception;
+                }
             }
-            catch (Exception ex)
-            {
-                UnityEngine.Debug.LogWarning($"[VC] Git command error: git {arguments}\n{ex.Message}");
-                return null;
-            }
+
+            throw new InvalidOperationException(
+                $"Failed to capture a coherent Git metadata snapshot after {MaximumCaptureAttempts} attempts.",
+                lastFailure);
         }
 
-        private static string TryRun(string arguments, string safeDir)
+        private string RunGitCommand(string arguments, bool allowExitCodeOne = false)
         {
-            string args = safeDir != null
-                ? $"-c safe.directory={safeDir.Replace('\\', '/')} {arguments}"
-                : arguments;
-
             var startInfo = new ProcessStartInfo
             {
-                FileName = GIT_EXECUTABLE,
-                Arguments = args,
+                FileName = GitExecutable,
+                Arguments = arguments,
+                WorkingDirectory = projectRoot,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true,
-                StandardOutputEncoding = Encoding.UTF8
+                StandardOutputEncoding = Encoding.UTF8,
+                StandardErrorEncoding = Encoding.UTF8
             };
+            startInfo.EnvironmentVariables["GIT_CONFIG_COUNT"] = "1";
+            startInfo.EnvironmentVariables["GIT_CONFIG_KEY_0"] = "safe.directory";
+            startInfo.EnvironmentVariables["GIT_CONFIG_VALUE_0"] = projectRoot;
+            startInfo.EnvironmentVariables["GIT_OPTIONAL_LOCKS"] = "0";
 
             using (var process = new Process { StartInfo = startInfo })
             {
-                process.Start();
-                string output = process.StandardOutput.ReadToEnd();
-                process.WaitForExit(PROCESS_TIMEOUT_MS);
-
-                if (process.ExitCode != 0)
+                if (!process.Start())
                 {
-                    string error = process.StandardError.ReadToEnd();
-                    UnityEngine.Debug.LogWarning($"[VC] git {args} → exit {process.ExitCode}\n{error}");
-                    return null;
+                    throw new InvalidOperationException(
+                        $"Git process did not start: git {arguments}");
+                }
+
+                Task<string> outputTask = process.StandardOutput.ReadToEndAsync();
+                Task<string> errorTask = process.StandardError.ReadToEndAsync();
+                if (!process.WaitForExit(ProcessTimeoutMilliseconds))
+                {
+                    TryKill(process);
+                    process.WaitForExit();
+                    throw new TimeoutException(
+                        $"Git command timed out after {ProcessTimeoutMilliseconds} ms: git {arguments}");
+                }
+
+                process.WaitForExit();
+                string output = outputTask.GetAwaiter().GetResult();
+                string error = errorTask.GetAwaiter().GetResult();
+                if (output.Length > MaximumProcessOutputCharacters
+                    || error.Length > MaximumProcessOutputCharacters)
+                {
+                    throw new InvalidOperationException(
+                        $"Git command exceeded its output budget: git {arguments}");
+                }
+
+                if (process.ExitCode != 0
+                    && !(allowExitCodeOne && process.ExitCode == 1))
+                {
+                    throw new InvalidOperationException(
+                        $"Git command failed with exit code {process.ExitCode}: git {arguments}. {error.Trim()}");
                 }
 
                 return output.Trim();
             }
         }
 
-        private static void RegisterSafeDirectory(string projectRoot)
+        private static void TryKill(Process process)
         {
             try
             {
-                var startInfo = new ProcessStartInfo
-                {
-                    FileName = GIT_EXECUTABLE,
-                    Arguments = $"config --global --add safe.directory \"{projectRoot}\"",
-                    RedirectStandardOutput = true,
-                    RedirectStandardError = true,
-                    UseShellExecute = false,
-                    CreateNoWindow = true
-                };
+                process.Kill();
+            }
+            catch (InvalidOperationException)
+            {
+            }
+        }
 
-                using (var process = new Process { StartInfo = startInfo })
-                {
-                    process.Start();
-                    process.WaitForExit(PROCESS_TIMEOUT_MS);
+        private static string ShortenHash(string hash)
+        {
+            return hash.Substring(0, Math.Min(12, hash.Length));
+        }
 
-                    if (process.ExitCode == 0)
-                    {
-                        UnityEngine.Debug.Log($"[VC] Registered safe.directory for: {projectRoot}");
-                    }
-                    else
-                    {
-                        string error = process.StandardError.ReadToEnd();
-                        UnityEngine.Debug.LogWarning($"[VC] Failed to register safe.directory: {error}");
-                    }
+        private static void ValidateHash(string value)
+        {
+            if (value == null || (value.Length != 40 && value.Length != 64))
+            {
+                throw new InvalidOperationException("Git returned an invalid HEAD hash.");
+            }
+
+            for (int index = 0; index < value.Length; index++)
+            {
+                char character = value[index];
+                if (!((character >= '0' && character <= '9')
+                      || (character >= 'a' && character <= 'f')
+                      || (character >= 'A' && character <= 'F')))
+                {
+                    throw new InvalidOperationException("Git returned an invalid HEAD hash.");
                 }
             }
-            catch (Exception ex)
+        }
+
+        private static void ValidateCommitCount(string value)
+        {
+            if (!long.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out long count)
+                || count < 0)
             {
-                UnityEngine.Debug.LogWarning($"[VC] Failed to register safe.directory: {ex.Message}");
+                throw new InvalidOperationException("Git returned an invalid commit count.");
+            }
+        }
+
+        private static void ValidateCommitDate(string value)
+        {
+            if (!DateTimeOffset.TryParse(
+                    value,
+                    CultureInfo.InvariantCulture,
+                    DateTimeStyles.RoundtripKind,
+                    out _))
+            {
+                throw new InvalidOperationException("Git returned an invalid commit date.");
+            }
+        }
+
+        private static void ValidateText(string value, string displayName, int maximumLength)
+        {
+            if (string.IsNullOrWhiteSpace(value) || value.Length > maximumLength)
+            {
+                throw new InvalidOperationException($"{displayName} is empty or exceeds its length budget.");
+            }
+
+            for (int index = 0; index < value.Length; index++)
+            {
+                if (char.IsControl(value[index]))
+                {
+                    throw new InvalidOperationException($"{displayName} contains a control character.");
+                }
             }
         }
     }

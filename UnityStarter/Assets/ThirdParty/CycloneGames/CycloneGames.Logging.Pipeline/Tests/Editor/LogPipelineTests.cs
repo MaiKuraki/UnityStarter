@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor
@@ -16,7 +17,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             _pipeline = LogPipelineFactory.CreateSingleThreaded();
             _recordingSink = new RecordingSink();
-            _pipeline.AddSink(_recordingSink);
+            _pipeline.RegisterSink(_recordingSink);
         }
 
         [TearDown]
@@ -43,7 +44,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         [Test]
         public void SeverityFilter_DropsMessagesBelowCurrentLevel()
         {
-            _pipeline.SetMinimumSeverity(LogSeverity.Warning);
+            _pipeline.MinimumSeverity = LogSeverity.Warning;
 
             _pipeline.EnqueueMessage(LogSeverity.Info, "filtered", "Severity", "LogPipelineTests.cs", 20, nameof(SeverityFilter_DropsMessagesBelowCurrentLevel));
             _pipeline.EnqueueMessage(LogSeverity.Error, "accepted", "Severity", "LogPipelineTests.cs", 21, nameof(SeverityFilter_DropsMessagesBelowCurrentLevel));
@@ -55,9 +56,16 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         }
 
         [Test]
+        public void MinimumSeverity_InvalidValue_Throws()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                _pipeline.MinimumSeverity = (LogSeverity)byte.MaxValue);
+        }
+
+        [Test]
         public void AllowListFilter_OnlyAcceptsMatchingCategory()
         {
-            _pipeline.SetCategoryFilter(LogCategoryFilterMode.AllowList);
+            _pipeline.CategoryFilter = LogCategoryFilterMode.AllowList;
             _pipeline.AddAllowedCategory("Gameplay");
 
             _pipeline.EnqueueMessage(LogSeverity.Info, "ignored", "Audio", "LogPipelineTests.cs", 30, nameof(AllowListFilter_OnlyAcceptsMatchingCategory));
@@ -71,7 +79,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         [Test]
         public void AllowListFilter_DropsEmptyCategory()
         {
-            _pipeline.SetCategoryFilter(LogCategoryFilterMode.AllowList);
+            _pipeline.CategoryFilter = LogCategoryFilterMode.AllowList;
             _pipeline.AddAllowedCategory("Gameplay");
 
             _pipeline.EnqueueMessage(LogSeverity.Info, "ignored", null, "LogPipelineTests.cs", 35, nameof(AllowListFilter_DropsEmptyCategory));
@@ -83,7 +91,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         [Test]
         public void DenyListFilter_DropsMatchingCategory()
         {
-            _pipeline.SetCategoryFilter(LogCategoryFilterMode.DenyList);
+            _pipeline.CategoryFilter = LogCategoryFilterMode.DenyList;
             _pipeline.AddDeniedCategory("Net");
 
             _pipeline.EnqueueMessage(LogSeverity.Info, "ignored", "Net", "LogPipelineTests.cs", 40, nameof(DenyListFilter_DropsMatchingCategory));
@@ -95,10 +103,17 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         }
 
         [Test]
+        public void CategoryFilter_InvalidValue_Throws()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                _pipeline.CategoryFilter = (LogCategoryFilterMode)byte.MaxValue);
+        }
+
+        [Test]
         public void BuilderOverload_DoesNotInvokeBuilderWhenMessageIsFiltered()
         {
             bool invoked = false;
-            _pipeline.SetMinimumSeverity(LogSeverity.Error);
+            _pipeline.MinimumSeverity = LogSeverity.Error;
 
             _pipeline.EnqueueMessage(
                 LogSeverity.Info,
@@ -139,8 +154,8 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             _pipeline.ClearSinks();
             _recordingSink = new RecordingSink();
-            _pipeline.AddSink(new ThrowingSink());
-            _pipeline.AddSink(_recordingSink);
+            _pipeline.RegisterSink(new ThrowingSink());
+            _pipeline.RegisterSink(_recordingSink);
 
             _pipeline.EnqueueMessage(LogSeverity.Info, "survives", "Dispatch", "LogPipelineTests.cs", 70, nameof(DispatchToSinks_ContinuesAfterSinkThrows));
             _pipeline.Pump(16);
@@ -150,19 +165,58 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void TryAddSink_RegistersOnlyOneSinkPerConcreteType()
+        public void RegisterSink_UniqueExactTypeRejectsSecondSinkWithoutTakingOwnership()
         {
             _pipeline.ClearSinks();
             var first = new RecordingSink();
             var second = new RecordingSink();
 
-            _pipeline.TryAddSink(first);
-            _pipeline.TryAddSink(second);
-            _pipeline.EnqueueMessage(LogSeverity.Info, "unique", "Registration", "LogPipelineTests.cs", 80, nameof(TryAddSink_RegistersOnlyOneSinkPerConcreteType));
+            LogSinkRegistrationResult firstResult = _pipeline.RegisterSink(
+                first,
+                LogSinkRegistrationMode.UniqueExactType);
+            LogSinkRegistrationResult secondResult = _pipeline.RegisterSink(
+                second,
+                LogSinkRegistrationMode.UniqueExactType);
+            _pipeline.EnqueueMessage(
+                LogSeverity.Info,
+                "unique",
+                "Registration",
+                "LogPipelineTests.cs",
+                80,
+                nameof(RegisterSink_UniqueExactTypeRejectsSecondSinkWithoutTakingOwnership));
             _pipeline.Pump(16);
 
+            Assert.AreEqual(LogSinkRegistrationStatus.Registered, firstResult.Status);
+            Assert.IsTrue(firstResult.PipelineOwnsSink);
+            Assert.AreEqual(LogSinkRegistrationStatus.RejectedDuplicateType, secondResult.Status);
+            Assert.IsTrue(secondResult.CallerRetainsOwnership);
             Assert.AreEqual(1, first.Count);
             Assert.AreEqual(0, second.Count);
+            second.Dispose();
+        }
+
+        [Test]
+        public void RegisterSink_AllowMultipleAcceptsSameConcreteType()
+        {
+            _pipeline.ClearSinks();
+            var first = new RecordingSink();
+            var second = new RecordingSink();
+
+            LogSinkRegistrationResult firstResult = _pipeline.RegisterSink(first);
+            LogSinkRegistrationResult secondResult = _pipeline.RegisterSink(second);
+            _pipeline.EnqueueMessage(
+                LogSeverity.Info,
+                "multiple",
+                "Registration",
+                "LogPipelineTests.cs",
+                100,
+                nameof(RegisterSink_AllowMultipleAcceptsSameConcreteType));
+            _pipeline.Pump(16);
+
+            Assert.AreEqual(LogSinkRegistrationStatus.Registered, firstResult.Status);
+            Assert.AreEqual(LogSinkRegistrationStatus.Registered, secondResult.Status);
+            Assert.AreEqual(1, first.Count);
+            Assert.AreEqual(1, second.Count);
         }
 
         [Test]
@@ -176,7 +230,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
                 OverflowPolicy = LogQueueOverflowPolicy.DropNewest
             });
             var recording = new RecordingSink();
-            pipeline.AddSink(recording);
+            pipeline.RegisterSink(recording);
 
             pipeline.EnqueueMessage(LogSeverity.Info, "first", "Queue", "LogPipelineTests.cs", 90, nameof(ProcessingQueue_DropsNewestWhenQueueIsFull));
             pipeline.EnqueueMessage(LogSeverity.Info, "second", "Queue", "LogPipelineTests.cs", 91, nameof(ProcessingQueue_DropsNewestWhenQueueIsFull));
@@ -199,7 +253,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
                 CriticalSeverity = LogSeverity.Error
             });
             var recording = new RecordingSink();
-            pipeline.AddSink(recording);
+            pipeline.RegisterSink(recording);
 
             pipeline.EnqueueMessage(LogSeverity.Info, "first", "Queue", "LogPipelineTests.cs", 100, nameof(ProcessingQueue_CriticalReservationPreservesOldestNormalMessage));
             pipeline.EnqueueMessage(LogSeverity.Info, "second", "Queue", "LogPipelineTests.cs", 101, nameof(ProcessingQueue_CriticalReservationPreservesOldestNormalMessage));
@@ -219,7 +273,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             try
             {
                 var recording = new RecordingSink();
-                pipeline.AddSink(recording);
+                pipeline.RegisterSink(recording);
                 pipeline.Write(LogSeverity.Info, "di", "Factory");
                 pipeline.Pump(16);
 

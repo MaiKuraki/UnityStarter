@@ -4,6 +4,8 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using System.Threading;
+using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor

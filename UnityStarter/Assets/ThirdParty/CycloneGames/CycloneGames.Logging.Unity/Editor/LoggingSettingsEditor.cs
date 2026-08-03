@@ -1,4 +1,5 @@
 using System;
+using CycloneGames.Logging.Pipeline;
 using UnityEditor;
 using UnityEngine;
 
@@ -123,7 +124,7 @@ namespace CycloneGames.Logging.Unity.Editor
             if (!_overflowPolicy.hasMultipleDifferentValues
                 && (LogQueueOverflowPolicy)_overflowPolicy.enumValueIndex == LogQueueOverflowPolicy.Block)
             {
-                EditorGUILayout.HelpBox("Block can stall a core producer thread. WebGL bootstrap replaces this core policy with DropNewest.", MessageType.Warning);
+                EditorGUILayout.HelpBox("Block can stall a producer thread. WebGL bootstrap replaces this pipeline policy with DropNewest.", MessageType.Warning);
             }
 
             if (!_unityConsoleOverflowPolicy.hasMultipleDifferentValues

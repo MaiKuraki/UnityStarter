@@ -1,11 +1,12 @@
 using System;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 
 namespace CycloneGames.Logging.Unity
 {
     /// <summary>
     /// Capacity and backpressure policy for the Unity main-thread console handoff.
-    /// This queue is independent from the core <see cref="LogPipeline"/> queue.
+    /// This queue is independent from the <see cref="LogPipeline"/> queue.
     /// </summary>
     public sealed class UnityConsoleLogSinkOptions
     {

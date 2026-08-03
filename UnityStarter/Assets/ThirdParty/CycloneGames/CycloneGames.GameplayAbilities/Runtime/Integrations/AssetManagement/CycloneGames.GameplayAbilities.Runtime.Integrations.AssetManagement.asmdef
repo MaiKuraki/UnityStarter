@@ -5,7 +5,7 @@
         "UniTask",
         "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.GameplayAbilities.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

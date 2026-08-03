@@ -2,7 +2,7 @@
     "name": "CycloneGames.BehaviorTree.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Hash.Core"
     ],
     "includePlatforms": [],

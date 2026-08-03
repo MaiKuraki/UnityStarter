@@ -18,7 +18,7 @@
 
 - **项目设置**: 重命名项目、清理包
 - **项目维护**: 深度清理临时文件和缓存
-- **资源处理**: 标准化音频、转换图像
+- **资源处理**: 标准化音频、转换图像和视频
 - **文档生成**: 生成项目结构树
 
 所有工具都是**独立可执行文件** - 无需安装。只需下载并运行。
@@ -29,7 +29,7 @@
 | ------------ | --------------------------------------------------- | ------------------ |
 | **项目设置** | `rename_project`、`remove_unity_packages`           | 初始化和配置新项目 |
 | **项目维护** | `unity_project_full_clean`                          | 清理临时文件和缓存 |
-| **资源处理** | `audio_volume_normalizer`、`texture_channel_packer` | 处理和转换资源     |
+| **资源处理** | `audio_volume_normalizer`、`texture_channel_packer`、`unity_video_webm_converter` | 处理和转换资源     |
 | **文档生成** | `generate_file_tree`                                | 生成项目文档       |
 
 ## 快速参考
@@ -41,6 +41,7 @@
 | **unity_project_full_clean** | 删除临时文件、缓存、构建产物                | 版本控制前、归档、故障排查       | 项目根目录 |
 | **audio_volume_normalizer**  | 批量标准化音频文件（分类别响度目标）        | 处理音频资源以保持一致的响度     | 音频目录   |
 | **texture_channel_packer**   | 将多张图片打包到一张纹理的 RGBA 通道        | 创建 HDRP/URP Mask Map、打包纹理 | 任意位置   |
+| **unity_video_webm_converter** | 使用预设将视频转换为 Unity 友好的 VP8 WebM | 为多平台运行时准备经过音频标准化的视频 | 任意位置 |
 | **generate_file_tree**       | 生成 Markdown 目录树                        | 记录项目结构                     | 项目根目录 |
 
 ## 工具详情
@@ -54,7 +55,7 @@
 - 重命名项目文件夹（`Assets/旧名称` → `Assets/新名称`）
 - 使用词边界匹配更新 `.asmdef` 文件（名称、引用）
 - 更新 `Assets/` 下**所有** `.asmdef` 的引用（不仅限于项目文件夹内）
-- 精确匹配 `BuildScript.cs` 中的常量声明
+- 通过 `BuildData.cs.meta` 的脚本 GUID 发现所有 `BuildData` 资产，并更新其中的 `companyName`、`productName` 和 `applicationIdentifier`
 - 更新 `ProjectSettings.asset`（companyName、productName、applicationIdentifier）
 - 更新 `EditorBuildSettings.asset`（场景路径）
 - 更新 `.meta` 文件引用
@@ -67,7 +68,8 @@
 - **即时输入验证**：输入时立即验证每个名称，而非确认后才验证
 - **保留当前值**：任何提示中按 Enter 即可保留当前值不变
 - **双输出日志**：所有操作同时输出到控制台和 `rename_project.log`
-- **精确替换**：asmdef 使用词边界正则（`\b`），BuildScript.cs 使用精确常量匹配，ProjectSettings 使用精确的 Bundle ID 匹配
+- **精确替换**：asmdef 使用词边界正则（`\b`），`BuildData` 使用 GUID 限定的顶层 YAML 字段匹配，ProjectSettings 使用精确的 Bundle ID 匹配
+- **安全重写 BuildData**：写入任何资产前先验证所有匹配的 BuildData 文档，使用带引号的 YAML 标量，并保证失败重试和重复执行的幂等性
 - **部分失败恢复**：执行过程中保存状态检查点，即使部分失败后重新运行也能正确恢复
 
 **使用场景**: 使用 UnityStarter 作为模板时，将其重命名为您的项目名称。后续可安全地再次运行以更改名称。
@@ -95,7 +97,7 @@ rename_project.exe
 
 - 项目文件夹名称 + `.meta`
 - `.asmdef` 文件：名称字段、引用、文件名（词边界安全匹配）
-- `Assets/Build/Editor/BuildPipeline/BuildScript.cs`（CompanyName、ApplicationName 常量）
+- `Assets/` 下通过 `Assets/Build/Editor/BuildPipeline/BuildData.cs.meta` GUID 识别出的所有 `BuildData` 资产（`companyName`、`productName`、`applicationIdentifier`）
 - `ProjectSettings/ProjectSettings.asset`（companyName、productName、所有平台的 applicationIdentifier、metroPackageName、metroApplicationDescription）
 - `ProjectSettings/EditorBuildSettings.asset`（场景路径前缀）
 
@@ -113,6 +115,7 @@ rename_project.exe
 - 文件夹重命名后保存状态检查点，确保部分失败后也能安全重新运行
 - 词边界匹配防止意外的子字符串替换
 - asmdef 修改后进行 JSON 验证
+- BuildData 发现不依赖 Profile 文件名或路径，并在首次写入前完成所有匹配资产的验证
 
 ---
 
@@ -521,7 +524,7 @@ temp
 - **Generated**: 2026-04-02 12:00:00
 - **Profile**: standard
 
-​`
+```
 MyProject/
 ├── Assets/
 │   ├── Scripts/
@@ -533,7 +536,7 @@ MyProject/
 │   └── Scripts/
 │       └── generate_file_tree.go
 └── README.md
-​`
+```
 ````
 
 **安全性**: 对源目录只读。仅创建输出文件。

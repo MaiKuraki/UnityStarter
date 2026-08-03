@@ -333,11 +333,13 @@ Historical package-specific logger contracts, adapters, constructors, and proper
 
 | Mode | Behavior |
 | --- | --- |
-| `Disabled` | Removes `ENABLE_CHEAT` during `BuildScript` player builds. |
+| `Disabled` | Keeps `ENABLE_CHEAT` disabled during canonical pipeline Player builds. |
 | `DevelopmentBuilds` | Enables `ENABLE_CHEAT` only for debug/development builds. |
-| `Enabled` | Enables `ENABLE_CHEAT` for all `BuildScript` builds. Use only for protected internal builds. |
+| `Enabled` | Enables `ENABLE_CHEAT` for all canonical pipeline Player builds. Use only for protected internal builds. |
 
-CI can override the asset setting with `-enableCheat` or `-disableCheat`. Build support is implemented outside this package: the Build module detects the `CycloneGames.Cheat.Runtime` assembly contract through string symbols, reflection, and Unity compilation metadata, not by package path. The module can live under `Assets`, an embedded UPM package, the package cache, or another Unity-supported source location. If the runtime assembly is not present in the player compilation domain, `ENABLE_CHEAT` is not applied and normal builds continue.
+CI can override the asset setting with `-pipelineEnableCheat` or `-pipelineDisableCheat`. Build support is implemented outside this package: the Build module detects the `CycloneGames.Cheat.Runtime` assembly contract through string symbols, reflection, and Unity compilation metadata, not by package path. The module can live under `Assets`, an embedded UPM package, the package cache, or another Unity-supported source location. If the runtime assembly is absent and Cheat is not requested, normal builds continue without applying `ENABLE_CHEAT`. If the profile or command line requests Cheat, preflight fails instead of producing a mislabeled build.
+
+The Cheat build mode belongs to `BuildData`, not `HybridCLRBuildConfig`, and a Player recipe does not need the `hot-update` step merely to enable Cheat. An ordinary Player build supplies `ENABLE_CHEAT` through `BuildPlayerOptions.extraScriptingDefines` without mutating global PlayerSettings defines. HybridCLR 8.12 does not expose an equivalent per-invocation define input, so a Player recipe combining HybridCLR with effective Cheat support fails preflight; a hot-update or content-only recipe that does not build a Player remains independent.
 
 ## Common Scenarios
 

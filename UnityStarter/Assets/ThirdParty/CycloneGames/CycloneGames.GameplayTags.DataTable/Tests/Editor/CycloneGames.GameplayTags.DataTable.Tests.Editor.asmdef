@@ -5,7 +5,7 @@
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayTags.DataTable",
         "CycloneGames.DataTable.Core",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

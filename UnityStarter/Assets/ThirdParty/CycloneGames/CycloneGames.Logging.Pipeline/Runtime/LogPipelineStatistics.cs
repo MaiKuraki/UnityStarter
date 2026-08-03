@@ -1,4 +1,4 @@
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public readonly struct LogPipelineStatistics
     {
@@ -25,34 +25,6 @@ namespace CycloneGames.Logging
         public readonly long RejectedFilterMutationCount;
         public readonly long TimestampProviderFailureCount;
         public readonly long MessageBuilderFailureCount;
-
-        public LogPipelineStatistics(int queuedCount, long droppedMessageCount, long processedMessageCount)
-            : this(
-                queuedCount,
-                0,
-                0,
-                queuedCount,
-                0,
-                0,
-                0,
-                0,
-                droppedMessageCount,
-                droppedMessageCount,
-                0,
-                0,
-                0,
-                processedMessageCount,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0,
-                0)
-        {
-        }
 
         internal LogPipelineStatistics(
             int queuedCount,

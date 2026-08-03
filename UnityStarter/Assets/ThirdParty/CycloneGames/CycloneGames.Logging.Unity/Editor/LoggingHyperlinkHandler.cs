@@ -2,6 +2,7 @@
 using System;
 using System.Globalization;
 using System.IO;
+using CycloneGames.Logging.Pipeline;
 using UnityEditor;
 using UnityEngine;
 

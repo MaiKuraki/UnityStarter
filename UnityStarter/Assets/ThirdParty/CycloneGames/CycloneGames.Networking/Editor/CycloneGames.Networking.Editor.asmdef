@@ -2,7 +2,7 @@
     "name": "CycloneGames.Networking.Editor",
     "rootNamespace": "CycloneGames.Networking.Editor",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Networking.Core",
         "CycloneGames.Networking.Unity.Runtime",
         "CycloneGames.Networking.Platform.Permissions",

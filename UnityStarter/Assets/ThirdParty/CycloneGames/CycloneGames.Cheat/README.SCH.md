@@ -333,11 +333,13 @@ logging.LogWriter = replacementWriter;
 
 | 模式 | 行为 |
 | --- | --- |
-| `Disabled` | `BuildScript` player 构建期间移除 `ENABLE_CHEAT`。 |
+| `Disabled` | 规范 Pipeline 的 Player 构建期间保持禁用 `ENABLE_CHEAT`。 |
 | `DevelopmentBuilds` | 仅在 debug/development 构建中启用 `ENABLE_CHEAT`。 |
-| `Enabled` | 所有 `BuildScript` 构建都启用 `ENABLE_CHEAT`。仅用于受保护的内部构建。 |
+| `Enabled` | 所有规范 Pipeline 的 Player 构建都启用 `ENABLE_CHEAT`。仅用于受保护的内部构建。 |
 
-CI 可以用 `-enableCheat` 或 `-disableCheat` 覆盖资产设置。Build 支持位于本包之外：Build 模块通过字符串 symbol、反射和 Unity 编译元数据检测 `CycloneGames.Cheat.Runtime` assembly 契约，而不是任何 package 路径。模块可以位于 `Assets`、嵌入式 UPM package、package cache 或其他 Unity 支持的源码位置。如果 player 编译域中不存在 runtime assembly，Build 不会应用 `ENABLE_CHEAT`，普通打包继续执行。
+CI 可以用 `-pipelineEnableCheat` 或 `-pipelineDisableCheat` 覆盖资产设置。Build 支持位于本包之外：Build 模块通过字符串 symbol、反射和 Unity 编译元数据检测 `CycloneGames.Cheat.Runtime` assembly 契约，而不是任何 package 路径。模块可以位于 `Assets`、嵌入式 UPM package、package cache 或其他 Unity 支持的源码位置。如果 runtime assembly 缺失且没有请求 Cheat，普通构建会继续且不应用 `ENABLE_CHEAT`；如果 Profile 或命令行请求了 Cheat，preflight 会失败，而不会生成标记错误的构建。
+
+Cheat 构建模式归 `BuildData` 所有，与 `HybridCLRBuildConfig` 无关；Player recipe 不需要仅为了启用 Cheat 而经过 `hot-update` step。普通 Player 构建通过 `BuildPlayerOptions.extraScriptingDefines` 传入 `ENABLE_CHEAT`，不会修改 PlayerSettings 全局 defines。HybridCLR 8.12 没有等价的单次调用 define 输入，因此同时启用 HybridCLR 和有效 Cheat 的 Player recipe 会在 preflight 失败；不构建 Player 的 hot-update 或 content-only recipe 仍保持独立。
 
 ## 常见场景
 

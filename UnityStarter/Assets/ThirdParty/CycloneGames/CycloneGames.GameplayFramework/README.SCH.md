@@ -123,11 +123,11 @@ Sample asmdef 同时面向 Runtime 和 Editor，因此其 Prefab 组件在 Playe
 
 ### Logging 接入与迁移
 
-GameplayFramework 只产生日志。其 package dependency 是 `com.cyclone-games.logging`，所有直接写日志的 assembly 都显式引用 `CycloneGames.Logging`。Runtime 与 sample 使用稳定 category `CycloneGames.GameplayFramework`，Editor 使用 `CycloneGames.GameplayFramework.Editor`。
+GameplayFramework 只产生日志。其 package dependency 是 `com.cyclone-games.logging`，所有直接写日志的 assembly 都显式引用 `CycloneGames.Logging.Core`，代码使用 `CycloneGames.Logging` API namespace。Runtime 与 sample 使用稳定 category `CycloneGames.GameplayFramework`，Editor 使用 `CycloneGames.GameplayFramework.Editor`。
 
 模块不初始化、持有或关闭具体 backend。应用未安装 `ILogWriter` 时，process writer 是 `NullLogWriter`，所有记录都是安全 no-op。只有应用 composition root 应通过 `LogRuntime` 安装或替换 writer。需要标准 Unity Console 与文件输出时，组合 `com.cyclone-games.logging.pipeline` 和 `com.cyclone-games.logging.unity`，由 `LoggingBootstrap` 持有 pipeline 生命周期。这两个 backend package 都不是 GameplayFramework 的依赖。
 
-Runtime、Editor 与 PureUnity sample 分别拥有 assembly 本地门面 `Runtime/Scripts/Diagnostics/GameplayFrameworkLog.cs`、`Editor/Diagnostics/GameplayFrameworkEditorLog.cs` 和 `Samples/Sample.PureUnity/Diagnostics/GameplayFrameworkSampleLog.cs`，所有门面都提供 `Category`、`Channel` 与 `Create(ILogWriter logWriter)`。包内 ambient 字段命名为 `Log`，显式注入的 instance 字段命名为 `_log`。所有记录都通过这些缓存 channel 使用统一的 `Trace`、`Debug`、`Info`、`Warning`、`Error` 与 `Fatal` 方法，不直接调用平台原生日志或具体 pipeline API。异常使用对应严重级别的重载传递完整 `Exception` 和说明失败操作的 message；包含动态值的普通日志使用 deferred generic-state builder。迁移项目 extension 时，应在自身产生日志的 assembly 中定义同样的门面，而不是由 extension 自行初始化 backend。Ambient channel 每次写入都会解析当前 process writer，因此调用 `LogRuntime.ReplaceWriter` 后不需要重新初始化 GameplayFramework。
+Runtime、Editor 与 PureUnity sample 分别拥有 assembly 本地门面 `Runtime/Scripts/Diagnostics/GameplayFrameworkLog.cs`、`Editor/Diagnostics/GameplayFrameworkEditorLog.cs` 和 `Samples/Sample.PureUnity/Diagnostics/GameplayFrameworkSampleLog.cs`，所有门面都提供 `Category`、`Channel` 与 `Create(ILogWriter logWriter)`。包内 ambient 字段命名为 `Log`，显式注入的 instance 字段命名为 `_log`。所有记录都通过这些缓存 channel 使用统一的 `Trace`、`Debug`、`Info`、`Warning`、`Error` 与 `Fatal` 方法，不直接调用平台原生日志或具体 pipeline API。异常使用对应严重级别的重载传递完整 `Exception` 和说明失败操作的 message；包含动态值的普通日志使用 deferred generic-state builder。迁移项目 extension 时，应在自身产生日志的 assembly 中定义同样的门面，而不是由 extension 自行初始化 backend。Ambient channel 每次写入都会解析当前 process writer，因此成功执行 `LogRuntime.TryReplaceWriter(expected, replacement)` 交接后不需要重新初始化 GameplayFramework。
 
 此日志迁移不新增 serialized state，也不会自行写文件。持久化、轮转、flush、shutdown 与损坏恢复由所选 backend 及其应用级 owner 负责。
 

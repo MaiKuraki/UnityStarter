@@ -1,0 +1,4 @@
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("Build.Pipeline.Tests.Editor")]
+[assembly: InternalsVisibleTo("Build.Pipeline.Integrations.YooAsset3.Editor")]

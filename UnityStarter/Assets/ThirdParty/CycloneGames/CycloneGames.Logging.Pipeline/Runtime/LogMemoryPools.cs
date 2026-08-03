@@ -1,7 +1,7 @@
 using System;
-using CycloneGames.Logging.Internal;
+using CycloneGames.Logging.Pipeline.Internal;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     /// <summary>
     /// Explicit owner for process-wide idle logging pools. These methods never drain a pipeline

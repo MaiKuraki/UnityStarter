@@ -2,7 +2,7 @@
 
 `CycloneGames.Logging.Pipeline` is the Unity-free backend package for `CycloneGames.Logging`. It provides an explicitly owned `LogPipeline`, bounded admission, filtering, sink dispatch, operational statistics, file and console sinks, assertion support, memory-pool maintenance, and deterministic shutdown results.
 
-The package version is `1.0.0`. Its runtime assembly is `CycloneGames.Logging.Pipeline`, references only `CycloneGames.Logging`, and keeps `noEngineReferences: true`.
+The package version is `1.0.0`. Its runtime assembly and public backend namespace are both `CycloneGames.Logging.Pipeline`; the assembly references only `CycloneGames.Logging.Core` and keeps `noEngineReferences: true`.
 
 ## Position in the logging family
 
@@ -35,6 +35,7 @@ Create, configure, install, and shut down one owned pipeline:
 ```csharp
 using System;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 
 var options = new LogPipelineOptions
 {
@@ -45,8 +46,21 @@ var options = new LogPipelineOptions
 };
 
 LogPipeline pipeline = LogPipelineFactory.CreateThreaded(options);
-pipeline.SetMinimumSeverity(LogSeverity.Info);
-pipeline.TryAddSink(new ConsoleLogSink());
+pipeline.MinimumSeverity = LogSeverity.Info;
+var consoleSink = new ConsoleLogSink();
+LogSinkRegistrationResult consoleRegistration = pipeline.RegisterSink(
+    consoleSink,
+    LogSinkRegistrationMode.UniqueExactType);
+if (!consoleRegistration.IsRegistered)
+{
+    if (consoleRegistration.CallerRetainsOwnership)
+    {
+        consoleSink.Dispose();
+    }
+
+    pipeline.Shutdown();
+    throw new InvalidOperationException("The console sink could not be registered.");
+}
 
 if (!LogRuntime.TryInstallWriter(pipeline))
 {
@@ -72,7 +86,7 @@ Use a factory when the processing model matters:
 | `LogPipelineFactory.CreateThreaded` | Background worker dispatches sinks | No producer-side pump required | Desktop, server, and supported mobile hosts |
 | `LogPipelineFactory.CreateSingleThreaded` | Calling thread during `Pump` | Owner calls `Pump(maxItems)` regularly | WebGL and deterministic caller-driven hosts |
 
-The public constructors choose the platform default: threaded except in WebGL Player builds, where they select single-thread processing. `CreateThreaded` throws in WebGL Player builds. An explicitly single-threaded pipeline does not deliver records until the owner pumps or shuts it down.
+Creation goes through `LogPipelineFactory`, so the processing model is explicit at the composition root. `CreateThreaded` throws in WebGL Player builds. An explicitly single-threaded pipeline does not deliver records until the owner pumps or shuts it down.
 
 `ILogSink.Emit` is synchronous. In threaded mode it runs on the worker; in single-thread mode it runs from `Pump`. A sink must be thread-safe, return promptly, and never call a Unity main-thread-only API directly. Cross-thread UI, network, SDK, or Unity work requires a separately owned bounded handoff.
 
@@ -84,8 +98,8 @@ Important defaults are copied into each pipeline during construction:
 
 | Option | Default | Meaning |
 | --- | ---: | --- |
-| `MaxQueuedMessages` | 8192 | Core queue message capacity |
-| `MaxQueuedCharacters` | 4 Mi characters | Core retained-character capacity |
+| `MaxQueuedMessages` | 8192 | Pipeline queue message capacity |
+| `MaxQueuedCharacters` | 4 Mi characters | Pipeline retained-character capacity |
 | `MaxMessageCharacters` | 16 Ki characters | Per-record message limit |
 | `ReservedCriticalMessages` | 64 | Capacity unavailable to records below `CriticalSeverity` |
 | `ReservedCriticalCharacters` | 64 Ki characters | Reserved character capacity |
@@ -126,8 +140,10 @@ A pipeline with no active sink reports records as disabled. This prevents deferr
 
 Registration rules:
 
-- `AddSink` rejects the same instance twice; a successful call transfers ownership to the pipeline.
-- `TryAddSink` permits at most one active sink of the exact runtime type and disposes a rejected newly created instance when required by its documented ownership path.
+- `RegisterSink` is the only registration entry point. The default `AllowMultiple` mode accepts multiple active instances of the same concrete type; `UniqueExactType` rejects a different active instance of the same exact runtime type.
+- `LogSinkRegistrationResult.IsRegistered` is `true` for a newly registered sink and an idempotent registration of the same active instance.
+- `PipelineOwnsSink` is authoritative. When it is true, the caller must not dispose the sink. When `CallerRetainsOwnership` is true, the caller must dispose or reuse the sink.
+- A rejected registration never disposes the supplied sink as a side effect. Inspect `Status` to distinguish duplicate type, capacity, and stopping rejections.
 - `RemoveSink(sink, quiescenceTimeoutMs) == true` means prior dispatches are quiescent and ownership transferred back to the caller. The timeout is bounded from zero through `MaxSupportedShutdownDrainTimeoutMs`; an invalid value is rejected before ownership changes.
 - `RemoveSink(sink) == false` means the caller must not dispose it.
 - `ClearSinks` and pipeline shutdown retire and dispose pipeline-owned sinks; they do not transfer ownership back.
@@ -167,7 +183,18 @@ var fileSink = new FileLogSink(
         SourcePathMode = LogSourcePathMode.FileName
     });
 
-pipeline.TryAddSink(fileSink);
+LogSinkRegistrationResult fileRegistration = pipeline.RegisterSink(
+    fileSink,
+    LogSinkRegistrationMode.UniqueExactType);
+if (!fileRegistration.IsRegistered)
+{
+    if (fileRegistration.CallerRetainsOwnership)
+    {
+        fileSink.Dispose();
+    }
+
+    throw new InvalidOperationException("The file sink could not be registered.");
+}
 ```
 
 `Rotate` bounds the active file and retains only archives matching this sink's archive-name grammar. `WarnOnly` reports growth but does not bound it. `None` performs no size maintenance. `MaxArchiveFiles == 0` removes owned archives after rotation. Archive retention is incremental: each maintenance call scans at most 64 top-level directory entries and deletes at most 16 strictly owned archives, using fixed-size candidate storage instead of materializing or sorting the directory. A rotation never restarts an active scan; it marks a follow-up pass so continuous rotation cannot starve cursor progress. Continued pipeline maintenance--the threaded processor loop, or caller `Pump` calls in single-threaded mode--converges to `MaxArchiveFiles` when the directory becomes stable and the filesystem permits deletion. A directly owned sink that is not registered with a pipeline must call `FileLogSink.PerformMaintenance()` periodically for the same progress and idle-flush behavior. These operation-count budgets bound lock-held work and memory, but cannot bound individual filesystem-call latency. Rotation and retention do not establish an application-wide storage quota.
@@ -204,7 +231,7 @@ The owner shuts down in this order:
 4. inspect `LogPipelineShutdownResult`;
 5. retain and retry the instance if the result is not complete.
 
-Shutdown stops admission, drains the processor within the budget, flushes capable sinks, waits for dispatch/disposal quiescence, disposes owned sinks, and reports one of `Completed`, `CompletedWithDrops`, `CompletedWithFailures`, `TimedOut`, `AlreadyStopped`, or `InProgress`. `Dispose` invokes default shutdown but cannot turn an incomplete result into success; explicit shutdown is preferred when reliability matters.
+Shutdown stops admission, drains the processor within the budget, flushes capable sinks, waits for dispatch/disposal quiescence, disposes owned sinks, and reports one of `Completed`, `CompletedWithDrops`, `CompletedWithFailures`, `TimedOut`, or `InProgress`. Repeated calls after completion return the cached terminal result. `Dispose` invokes default shutdown but cannot turn an incomplete result into success; explicit shutdown is preferred when reliability matters.
 
 Public flush and shutdown entry points validate `LogFlushMode` and their bounded timeout before draining, retiring, or changing sink ownership. `-1` selects the configured shutdown budget; other accepted values range from zero through `MaxSupportedShutdownDrainTimeoutMs`.
 
@@ -222,7 +249,7 @@ The assembly contains no Unity API, reflection discovery, dynamic code generatio
 
 ## Integration checklist
 
-- Business assemblies reference only `CycloneGames.Logging`.
+- Business assemblies reference only `CycloneGames.Logging.Core` and use the `CycloneGames.Logging` producer namespace.
 - A pure C# host references `CycloneGames.Logging.Pipeline` and retains the concrete `LogPipeline` owner.
 - A Unity host references `CycloneGames.Logging.Unity`, which composes this package.
 - Custom sinks are placed in a dedicated integration assembly when they depend on an optional SDK.

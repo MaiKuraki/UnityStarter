@@ -56,8 +56,8 @@ Prepare 箭头有意位于 Bridge 之外。Bridge 收到 Localization 变更时�
 | Editor assembly | `CycloneGames.Audio.Editor.Integrations.Localization` |
 | Test assembly | `CycloneGames.Audio.Localization.Tests.Editor` |
 | 必需项目模块 | `CycloneGames.AssetManagement`、`CycloneGames.Audio`、`CycloneGames.Localization`、`CycloneGames.Logging` 与 UniTask |
-| Runtime 直接程序集引用 | `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Audio.Runtime`、`CycloneGames.Localization.Core`、`CycloneGames.Localization.Runtime`、`CycloneGames.Logging`、`UniTask` |
-| Editor 直接程序集引用 | `CycloneGames.Audio.Runtime.Integrations.Localization`、`CycloneGames.Logging` |
+| Runtime 直接程序集引用 | `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Audio.Runtime`、`CycloneGames.Localization.Core`、`CycloneGames.Localization.Runtime`、`CycloneGames.Logging.Core`、`UniTask` |
+| Editor 直接程序集引用 | `CycloneGames.Audio.Runtime.Integrations.Localization`、`CycloneGames.Logging.Core` |
 
 这是物理独立的本地 integration 包。Audio Runtime 不引用 integration 或 Localization，Localization 也不引用 Audio。依赖方向是 integration 同时指向两个核心模块，因此不会形成循环。
 

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +12,7 @@ import (
 	"regexp"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -20,12 +22,16 @@ import (
 // ============================================================
 
 const (
-	stateFileName  = ".rename_project.json"
-	backupDirName  = ".rename_backup"
-	maxBackupCount = 5
+	stateFileName                   = ".rename_project.json"
+	backupDirName                   = ".rename_backup"
+	maxBackupCount                  = 5
+	buildDataScriptRelativePath     = "Assets/Build/Editor/BuildPipeline/BuildData.cs"
+	buildDataScriptMetaRelativePath = buildDataScriptRelativePath + ".meta"
 )
 
 var namePattern = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_-]*$`)
+var metaGUIDPattern = regexp.MustCompile(`(?m)^guid:\s*([0-9a-fA-F]{32})\s*$`)
+var unityYAMLDocumentPattern = regexp.MustCompile(`(?m)^--- !u!`)
 
 // Directories to exclude when searching for the main project folder
 var excludedDirs = map[string]bool{
@@ -86,6 +92,14 @@ type FileChange struct {
 	Path    string
 	Action  string   // "rename", "modify"
 	Details []string // specific changes within the file
+}
+
+// buildDataAssetUpdate is a validated, in-memory rewrite of one BuildData asset.
+// Planning every update before writing prevents a malformed asset from causing a partial batch update.
+type buildDataAssetUpdate struct {
+	Path           string
+	UpdatedContent []byte
+	Details        []string
 }
 
 // Logger writes to both stdout and a log file simultaneously
@@ -411,17 +425,284 @@ func promptValidatedInput(stepNum int, label, description, currentValue string) 
 	}
 }
 
+// getBuildDataScriptGUID returns the Unity GUID for BuildData.cs. A project without the
+// Build module is valid and returns an empty GUID; a present but malformed module is an error.
+func getBuildDataScriptGUID(projectRoot string) (string, error) {
+	metaPath := filepath.Join(projectRoot, filepath.FromSlash(buildDataScriptMetaRelativePath))
+	content, err := os.ReadFile(metaPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			scriptPath := filepath.Join(projectRoot, filepath.FromSlash(buildDataScriptRelativePath))
+			_, scriptErr := os.Stat(scriptPath)
+			if scriptErr == nil {
+				return "", fmt.Errorf("BuildData script exists but its meta file is missing: %s", metaPath)
+			}
+			if !os.IsNotExist(scriptErr) {
+				return "", fmt.Errorf("failed to inspect BuildData script %s: %v", scriptPath, scriptErr)
+			}
+			return "", nil
+		}
+		return "", fmt.Errorf("failed to read BuildData script meta file %s: %v", metaPath, err)
+	}
+
+	matches := metaGUIDPattern.FindSubmatch(content)
+	if len(matches) != 2 {
+		return "", fmt.Errorf("could not read a valid Unity GUID from %s", metaPath)
+	}
+
+	return string(matches[1]), nil
+}
+
+func buildDataScriptReferencePattern(guid string) *regexp.Regexp {
+	return regexp.MustCompile(
+		`(?m)^[ \t]*m_Script:[ \t]*\{[^\r\n}]*guid:[ \t]*` +
+			regexp.QuoteMeta(guid) +
+			`(?:[ \t]*,|[ \t]*\})`,
+	)
+}
+
+func fileContainsBytes(path string, needle []byte) (bool, error) {
+	if len(needle) == 0 {
+		return false, nil
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer file.Close()
+
+	const chunkSize = 64 * 1024
+	buffer := make([]byte, chunkSize+len(needle)-1)
+	overlap := 0
+	for {
+		count, readErr := file.Read(buffer[overlap:])
+		available := overlap + count
+		if bytes.Contains(buffer[:available], needle) {
+			return true, nil
+		}
+		if readErr == io.EOF {
+			return false, nil
+		}
+		if readErr != nil {
+			return false, readErr
+		}
+		if count == 0 {
+			return false, io.ErrNoProgress
+		}
+
+		overlap = len(needle) - 1
+		if overlap > available {
+			overlap = available
+		}
+		copy(buffer[:overlap], buffer[available-overlap:available])
+	}
+}
+
+// findBuildDataAssets identifies BuildData assets by their serialized MonoScript GUID instead
+// of relying on a project-specific asset path or file name.
+func findBuildDataAssets(projectRoot, scriptGUID string) ([]string, error) {
+	if scriptGUID == "" {
+		return nil, nil
+	}
+
+	assetsRoot := filepath.Join(projectRoot, "Assets")
+	referencePattern := buildDataScriptReferencePattern(scriptGUID)
+	var paths []string
+	err := filepath.Walk(assetsRoot, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if info.IsDir() || !strings.EqualFold(filepath.Ext(info.Name()), ".asset") {
+			return nil
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to inspect symlinked Unity asset: %s", path)
+		}
+
+		relativePath, relErr := filepath.Rel(assetsRoot, path)
+		if relErr != nil || relativePath == ".." || strings.HasPrefix(relativePath, ".."+string(os.PathSeparator)) {
+			return fmt.Errorf("asset path escaped the Assets directory: %s", path)
+		}
+
+		containsGUID, readErr := fileContainsBytes(path, []byte(scriptGUID))
+		if readErr != nil {
+			return fmt.Errorf("failed to read asset %s: %v", path, readErr)
+		}
+		if !containsGUID {
+			return nil
+		}
+
+		content, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return fmt.Errorf("failed to read candidate BuildData asset %s: %v", path, readErr)
+		}
+		if !referencePattern.Match(content) {
+			return nil
+		}
+		paths = append(paths, path)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to discover BuildData assets: %v", err)
+	}
+
+	sort.Strings(paths)
+	return paths, nil
+}
+
+func decodeUnityYAMLScalar(raw string) (string, error) {
+	value := strings.TrimSpace(raw)
+	if len(value) >= 2 && value[0] == '"' && value[len(value)-1] == '"' {
+		decoded, err := strconv.Unquote(value)
+		if err != nil {
+			return "", fmt.Errorf("invalid double-quoted YAML scalar %q: %v", value, err)
+		}
+		return decoded, nil
+	}
+	if len(value) >= 2 && value[0] == '\'' && value[len(value)-1] == '\'' {
+		return strings.ReplaceAll(value[1:len(value)-1], "''", "'"), nil
+	}
+	return value, nil
+}
+
+// replaceBuildDataField updates one top-level serialized BuildData field. User-provided values
+// are inserted as quoted scalars, and never interpreted as regular-expression replacement text.
+func replaceBuildDataField(document, fieldName, newValue string) (string, string, bool, error) {
+	fieldPattern := regexp.MustCompile(
+		`(?m)^([ \t]{2}` + regexp.QuoteMeta(fieldName) + `:[ \t]*)([^\r\n]*)(\r?)$`,
+	)
+	matches := fieldPattern.FindAllStringSubmatchIndex(document, -1)
+	if len(matches) != 1 {
+		return "", "", false, fmt.Errorf(
+			"expected exactly one top-level %s field in a BuildData document, found %d",
+			fieldName,
+			len(matches),
+		)
+	}
+
+	match := matches[0]
+	currentValue, err := decodeUnityYAMLScalar(document[match[4]:match[5]])
+	if err != nil {
+		return "", "", false, fmt.Errorf("could not decode BuildData.%s: %v", fieldName, err)
+	}
+	if currentValue == newValue {
+		return document, "", false, nil
+	}
+
+	encodedValue := strconv.Quote(newValue)
+	updated := document[:match[0]] +
+		document[match[2]:match[3]] +
+		encodedValue +
+		document[match[6]:match[7]] +
+		document[match[1]:]
+	detail := fmt.Sprintf("%s: %q -> %q", fieldName, currentValue, newValue)
+	return updated, detail, true, nil
+}
+
+func updateBuildDataAssetContent(content []byte, scriptGUID, companyName, productName string) ([]byte, []string, error) {
+	text := string(content)
+	referencePattern := buildDataScriptReferencePattern(scriptGUID)
+	documentHeaders := unityYAMLDocumentPattern.FindAllStringIndex(text, -1)
+	boundaries := []int{0}
+	for _, header := range documentHeaders {
+		if header[0] > 0 {
+			boundaries = append(boundaries, header[0])
+		}
+	}
+	boundaries = append(boundaries, len(text))
+
+	applicationIdentifier := "com." + companyName + "." + productName
+	fields := []struct {
+		name  string
+		value string
+	}{
+		{name: "companyName", value: companyName},
+		{name: "productName", value: productName},
+		{name: "applicationIdentifier", value: applicationIdentifier},
+	}
+
+	var builder strings.Builder
+	builder.Grow(len(text) + 64)
+	var details []string
+	matchedDocuments := 0
+	for index := 0; index < len(boundaries)-1; index++ {
+		document := text[boundaries[index]:boundaries[index+1]]
+		if referencePattern.MatchString(document) {
+			matchedDocuments++
+			for _, field := range fields {
+				updatedDocument, detail, changed, err := replaceBuildDataField(document, field.name, field.value)
+				if err != nil {
+					return nil, nil, err
+				}
+				document = updatedDocument
+				if changed {
+					details = append(details, detail)
+				}
+			}
+		}
+		builder.WriteString(document)
+	}
+
+	if matchedDocuments == 0 {
+		return nil, nil, fmt.Errorf("asset did not contain a BuildData document with script GUID %s", scriptGUID)
+	}
+	return []byte(builder.String()), details, nil
+}
+
+// planBuildDataAssetUpdates validates every matching asset before any of them are written.
+func planBuildDataAssetUpdates(projectRoot, companyName, productName string) ([]buildDataAssetUpdate, error) {
+	scriptGUID, err := getBuildDataScriptGUID(projectRoot)
+	if err != nil || scriptGUID == "" {
+		return nil, err
+	}
+
+	assetPaths, err := findBuildDataAssets(projectRoot, scriptGUID)
+	if err != nil {
+		return nil, err
+	}
+
+	updates := make([]buildDataAssetUpdate, 0, len(assetPaths))
+	for _, assetPath := range assetPaths {
+		content, readErr := os.ReadFile(assetPath)
+		if readErr != nil {
+			return nil, fmt.Errorf("failed to read BuildData asset %s: %v", assetPath, readErr)
+		}
+
+		updatedContent, details, updateErr := updateBuildDataAssetContent(
+			content,
+			scriptGUID,
+			companyName,
+			productName,
+		)
+		if updateErr != nil {
+			return nil, fmt.Errorf("failed to plan BuildData asset %s: %v", assetPath, updateErr)
+		}
+		if len(details) > 0 {
+			updates = append(updates, buildDataAssetUpdate{
+				Path:           assetPath,
+				UpdatedContent: updatedContent,
+				Details:        details,
+			})
+		}
+	}
+
+	return updates, nil
+}
+
 // ============================================================
 // Backup
 // ============================================================
 
 // collectFilesToBackup returns the list of files that will be modified.
 // Does NOT include the project folder itself (folder rename is easily reversible).
-func collectFilesToBackup(projectRoot, oldName string) []string {
+func collectFilesToBackup(projectRoot, oldName, newCompanyName, newAppName string) ([]string, error) {
 	var files []string
+	seen := make(map[string]bool)
 	addIfExists := func(path string) {
-		if _, err := os.Stat(path); err == nil {
+		if _, err := os.Stat(path); err == nil && !seen[path] {
 			files = append(files, path)
+			seen[path] = true
 		}
 	}
 
@@ -455,12 +736,20 @@ func collectFilesToBackup(projectRoot, oldName string) []string {
 		return nil
 	})
 
-	// Config files
-	addIfExists(filepath.Join(projectRoot, "Assets", "Build", "Editor", "BuildPipeline", "BuildScript.cs"))
+	// Build profile assets are identified by the BuildData MonoScript GUID, not by file name.
+	buildDataUpdates, err := planBuildDataAssetUpdates(projectRoot, newCompanyName, newAppName)
+	if err != nil {
+		return nil, err
+	}
+	for _, update := range buildDataUpdates {
+		addIfExists(update.Path)
+	}
+
+	// Project configuration files
 	addIfExists(filepath.Join(projectRoot, "ProjectSettings", "ProjectSettings.asset"))
 	addIfExists(filepath.Join(projectRoot, "ProjectSettings", "EditorBuildSettings.asset"))
 
-	return files
+	return files, nil
 }
 
 func createBackup(projectRoot string, files []string) (string, error) {
@@ -525,7 +814,7 @@ func cleanupOldBackups(backupBaseDir string) {
 // Change Preview (Dry-Run)
 // ============================================================
 
-func previewChanges(projectRoot, oldName, newName, oldCompanyName, newCompanyName, oldAppName, newAppName string) []FileChange {
+func previewChanges(projectRoot, oldName, newName, oldCompanyName, newCompanyName, oldAppName, newAppName string) ([]FileChange, error) {
 	var changes []FileChange
 	wordRegex := regexp.MustCompile(`\b` + regexp.QuoteMeta(oldName) + `\b`)
 
@@ -590,26 +879,21 @@ func previewChanges(projectRoot, oldName, newName, oldCompanyName, newCompanyNam
 		return nil
 	})
 
-	// 4. BuildScript.cs
-	buildScriptPath := filepath.Join(projectRoot, "Assets", "Build", "Editor", "BuildPipeline", "BuildScript.cs")
-	if _, statErr := os.Stat(buildScriptPath); statErr == nil {
-		var details []string
-		if oldCompanyName != newCompanyName {
-			details = append(details, fmt.Sprintf("CompanyName: \"%s\" -> \"%s\"", oldCompanyName, newCompanyName))
+	// 4. BuildData assets
+	buildDataUpdates, err := planBuildDataAssetUpdates(projectRoot, newCompanyName, newAppName)
+	if err != nil {
+		return nil, err
+	}
+	for _, update := range buildDataUpdates {
+		relPath, relErr := filepath.Rel(projectRoot, update.Path)
+		if relErr != nil {
+			return nil, fmt.Errorf("failed to resolve BuildData asset path %s: %v", update.Path, relErr)
 		}
-		if oldAppName != newAppName {
-			details = append(details, fmt.Sprintf("ApplicationName: \"%s\" -> \"%s\"", oldAppName, newAppName))
-		}
-		if oldName != newName {
-			details = append(details, fmt.Sprintf("Asset paths: Assets/%s/ -> Assets/%s/", oldName, newName))
-		}
-		if len(details) > 0 {
-			changes = append(changes, FileChange{
-				Path:    filepath.Join("Assets", "Build", "Editor", "BuildPipeline", "BuildScript.cs"),
-				Action:  "modify",
-				Details: details,
-			})
-		}
+		changes = append(changes, FileChange{
+			Path:    relPath,
+			Action:  "modify",
+			Details: update.Details,
+		})
 	}
 
 	// 5. ProjectSettings.asset
@@ -651,7 +935,7 @@ func previewChanges(projectRoot, oldName, newName, oldCompanyName, newCompanyNam
 		}
 	}
 
-	return changes
+	return changes, nil
 }
 
 func printPreview(log *Logger, changes []FileChange) {
@@ -839,56 +1123,37 @@ func updateAsmdefReferencesGlobally(log *Logger, assetsPath, projectFolderPath, 
 	return nil
 }
 
-// updateBuildScript updates BuildScript.cs using precise regex matching on const declarations.
-// Only modifies specific const string lines and asset path references.
-func updateBuildScript(log *Logger, filePath, oldFolderName, newFolderName, oldCompanyName, newCompanyName, oldAppName, newAppName string) error {
-	content, err := os.ReadFile(filePath)
+// updateBuildDataAssets applies a fully validated update plan. Re-planning after the project
+// folder rename ensures BuildData assets remain discoverable even when they live below that folder.
+func updateBuildDataAssets(log *Logger, projectRoot, companyName, productName string) error {
+	updates, err := planBuildDataAssetUpdates(projectRoot, companyName, productName)
 	if err != nil {
 		return err
 	}
-
-	text := string(content)
-	modified := false
-
-	// Precisely replace const CompanyName declaration
-	if oldCompanyName != newCompanyName {
-		re := regexp.MustCompile(`(const\s+string\s+CompanyName\s*=\s*")` + regexp.QuoteMeta(oldCompanyName) + `(")`)
-		newText := re.ReplaceAllString(text, "${1}"+newCompanyName+"${2}")
-		if newText != text {
-			text = newText
-			modified = true
-			log.Println("[OK] Updated BuildScript.cs: CompanyName")
-		}
-	}
-
-	// Precisely replace const ApplicationName declaration
-	if oldAppName != newAppName {
-		re := regexp.MustCompile(`(const\s+string\s+ApplicationName\s*=\s*")` + regexp.QuoteMeta(oldAppName) + `(")`)
-		newText := re.ReplaceAllString(text, "${1}"+newAppName+"${2}")
-		if newText != text {
-			text = newText
-			modified = true
-			log.Println("[OK] Updated BuildScript.cs: ApplicationName")
-		}
-	}
-
-	// Replace asset path references: Assets/OldName/ -> Assets/NewName/
-	if oldFolderName != newFolderName {
-		oldPath := "Assets/" + oldFolderName + "/"
-		newPath := "Assets/" + newFolderName + "/"
-		if strings.Contains(text, oldPath) {
-			text = strings.ReplaceAll(text, oldPath, newPath)
-			modified = true
-			log.Println("[OK] Updated BuildScript.cs: asset paths")
-		}
-	}
-
-	if !modified {
-		log.Println("[--] BuildScript.cs: no changes needed")
+	if len(updates) == 0 {
+		log.Println("[--] BuildData assets: no changes needed")
 		return nil
 	}
 
-	return os.WriteFile(filePath, []byte(text), 0644)
+	for _, update := range updates {
+		if err := os.WriteFile(update.Path, update.UpdatedContent, 0644); err != nil {
+			return fmt.Errorf("failed to write BuildData asset %s: %v", update.Path, err)
+		}
+		persistedContent, readErr := os.ReadFile(update.Path)
+		if readErr != nil {
+			return fmt.Errorf("failed to verify BuildData asset %s: %v", update.Path, readErr)
+		}
+		if !bytes.Equal(persistedContent, update.UpdatedContent) {
+			return fmt.Errorf("BuildData asset verification failed after writing: %s", update.Path)
+		}
+		relPath, relErr := filepath.Rel(projectRoot, update.Path)
+		if relErr != nil {
+			relPath = update.Path
+		}
+		log.Printf("[OK] Updated BuildData asset: %s\n", relPath)
+	}
+
+	return nil
 }
 
 // updateProjectSettings updates ProjectSettings.asset using exact value matching.
@@ -1065,7 +1330,12 @@ func main() {
 
 	// Preview all changes before execution
 	clearScreen()
-	changes := previewChanges(projectRoot, oldName, newProjectName, oldCompanyName, newCompanyName, oldAppName, newAppName)
+	changes, previewErr := previewChanges(projectRoot, oldName, newProjectName, oldCompanyName, newCompanyName, oldAppName, newAppName)
+	if previewErr != nil {
+		log.Printf("Error preparing change preview: %v\n", previewErr)
+		waitForKeyPress()
+		return
+	}
 	printPreview(log, changes)
 
 	if len(changes) == 0 {
@@ -1085,7 +1355,12 @@ func main() {
 
 	// Create backup of all affected files
 	log.Println("\nCreating backup...")
-	filesToBackup := collectFilesToBackup(projectRoot, oldName)
+	filesToBackup, collectErr := collectFilesToBackup(projectRoot, oldName, newCompanyName, newAppName)
+	if collectErr != nil {
+		log.Printf("Error collecting files for backup: %v\n", collectErr)
+		waitForKeyPress()
+		return
+	}
 	backupDir, backupErr := createBackup(projectRoot, filesToBackup)
 	if backupErr != nil {
 		log.Printf("Warning: backup failed: %v\n", backupErr)
@@ -1141,12 +1416,11 @@ func main() {
 		}
 	}
 
-	// 4. Update BuildScript.cs (if exists)
-	buildScriptPath := filepath.Join(projectRoot, "Assets", "Build", "Editor", "BuildPipeline", "BuildScript.cs")
-	if _, statErr := os.Stat(buildScriptPath); statErr == nil {
-		if err := updateBuildScript(log, buildScriptPath, oldName, newProjectName, oldCompanyName, newCompanyName, oldAppName, newAppName); err != nil {
-			log.Printf("Warning: Error updating BuildScript.cs: %v\n", err)
-		}
+	// 4. Update all BuildData assets identified by the BuildData MonoScript GUID.
+	if err := updateBuildDataAssets(log, projectRoot, newCompanyName, newAppName); err != nil {
+		log.Printf("Error updating BuildData assets: %v\n", err)
+		waitForKeyPress()
+		return
 	}
 
 	// 5. Update ProjectSettings.asset

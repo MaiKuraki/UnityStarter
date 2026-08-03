@@ -5,7 +5,7 @@
         "Unity.Cinemachine",
         "UniTask",
         "CycloneGames.GameplayFramework.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"
