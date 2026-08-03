@@ -2,7 +2,7 @@
     "name": "CycloneGames.BehaviorTree.Tests.Support",
     "rootNamespace": "CycloneGames.BehaviorTree.Tests.Support",
     "references": [
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

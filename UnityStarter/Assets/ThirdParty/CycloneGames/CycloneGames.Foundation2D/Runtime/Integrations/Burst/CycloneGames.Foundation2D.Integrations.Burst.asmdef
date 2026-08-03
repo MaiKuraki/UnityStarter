@@ -5,7 +5,7 @@
         "CycloneGames.Foundation2D.Runtime",
         "Unity.Burst",
         "Unity.Collections",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

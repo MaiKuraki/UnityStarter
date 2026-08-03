@@ -18,7 +18,7 @@ These tools automate common but tedious tasks in Unity development:
 
 - **Project Setup**: Rename projects, clean up packages
 - **Project Maintenance**: Deep clean temporary files and caches
-- **Asset Processing**: Normalize audio, convert images
+- **Asset Processing**: Normalize audio, convert images and videos
 - **Documentation**: Generate project structure trees
 
 All tools are **standalone executables** - no installation required. Simply download and run.
@@ -55,7 +55,7 @@ All tools are **standalone executables** - no installation required. Simply down
 - Renames project folder (`Assets/OldName` → `Assets/NewName`)
 - Updates `.asmdef` files (name, references) with word-boundary matching
 - Updates `.asmdef` references across **all** of `Assets/` (not just the project folder)
-- Updates `BuildScript.cs` constants (precise const-declaration matching)
+- Discovers every `BuildData` asset by the `BuildData.cs.meta` script GUID and updates its `companyName`, `productName`, and `applicationIdentifier`
 - Updates `ProjectSettings.asset` (companyName, productName, applicationIdentifier)
 - Updates `EditorBuildSettings.asset` (scene paths)
 - Updates `.meta` file references
@@ -68,7 +68,8 @@ All tools are **standalone executables** - no installation required. Simply down
 - **Immediate input validation**: Validates each name as you enter it, not after confirmation
 - **Keep current values**: Press Enter on any prompt to keep the current value unchanged
 - **Dual-output logging**: All operations logged to both console and `rename_project.log`
-- **Precise replacements**: Uses word-boundary regex (`\b`) for asmdef names, exact const matching for BuildScript.cs, and exact bundle ID matching for ProjectSettings
+- **Precise replacements**: Uses word-boundary regex (`\b`) for asmdef names, GUID-scoped top-level YAML fields for `BuildData`, and exact bundle ID matching for ProjectSettings
+- **Safe BuildData rewriting**: Validates every matching BuildData document before writing any asset, emits quoted YAML scalars, and remains idempotent across retries
 - **Partial failure recovery**: Saves state checkpoints during execution so re-runs can resume correctly even after partial failures
 
 **Use Case**: When using UnityStarter as a template, rename it to your project name. Can be re-run safely to change names again later.
@@ -96,7 +97,7 @@ rename_project.exe
 
 - Project folder name + `.meta`
 - `.asmdef` files: name field, references, file names (word-boundary safe)
-- `Assets/Build/Editor/BuildPipeline/BuildScript.cs` (CompanyName, ApplicationName constants)
+- Every `BuildData` asset under `Assets/`, identified by the `Assets/Build/Editor/BuildPipeline/BuildData.cs.meta` GUID (`companyName`, `productName`, `applicationIdentifier`)
 - `ProjectSettings/ProjectSettings.asset` (companyName, productName, applicationIdentifier for all platforms, metroPackageName, metroApplicationDescription)
 - `ProjectSettings/EditorBuildSettings.asset` (scene path prefixes)
 
@@ -114,6 +115,7 @@ rename_project.exe
 - State checkpoint after folder rename ensures safe re-runs even after partial failures
 - Word-boundary matching prevents accidental substring replacements
 - JSON validation after asmdef modifications
+- BuildData discovery is independent of profile file names and locations; all matching assets are validated before the first one is written
 
 ---
 
@@ -522,7 +524,7 @@ temp
 - **Generated**: 2026-04-02 12:00:00
 - **Profile**: standard
 
-​`
+```
 MyProject/
 ├── Assets/
 │   ├── Scripts/
@@ -534,7 +536,7 @@ MyProject/
 │   └── Scripts/
 │       └── generate_file_tree.go
 └── README.md
-​`
+```
 ````
 
 **Safety**: Read-only on source directories. Only creates the output file.

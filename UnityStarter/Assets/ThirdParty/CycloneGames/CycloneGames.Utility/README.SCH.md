@@ -54,9 +54,9 @@ flowchart LR
 
 | 程序集 | 平台 | `autoReferenced` | 直接引用 |
 | --- | --- | ---: | --- |
-| `CycloneGames.Utility.Runtime` | 所有 Unity target | `true` | `CycloneGames.Hash.Core`、`CycloneGames.Logging`、`UnityEngine.UI` |
+| `CycloneGames.Utility.Runtime` | 所有 Unity target | `true` | `CycloneGames.Hash.Core`、`CycloneGames.Logging.Core`、`UnityEngine.UI` |
 | `CycloneGames.Utility.SplashScreenModifier.Runtime` | 所有 Unity target | `true` | 无 |
-| `CycloneGames.Utility.Editor` | 仅 Editor | `true` | `CycloneGames.Utility.Runtime`、`CycloneGames.Logging` |
+| `CycloneGames.Utility.Editor` | 仅 Editor | `true` | `CycloneGames.Utility.Runtime`、`CycloneGames.Logging.Core` |
 | `CycloneGames.Utility.Tests.Editor` | 仅 Editor | `false` | Runtime、Splash Runtime、Editor、Test Framework |
 | `CycloneGames.Utility.Tests.PlayMode` | Test build | `false` | Runtime、Test Framework |
 | `CycloneGames.Utility.Tests.Performance` | Editor，条件启用 | `false` | Runtime、Performance Testing |

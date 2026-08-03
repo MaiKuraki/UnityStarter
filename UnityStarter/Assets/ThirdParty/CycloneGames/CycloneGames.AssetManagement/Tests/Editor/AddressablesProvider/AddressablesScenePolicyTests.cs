@@ -1,8 +1,9 @@
 using System;
+using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 using System.Runtime.Serialization;
 using System.Threading;
-using System.Collections.Generic;
 
 using NUnit.Framework;
 
@@ -14,6 +15,18 @@ namespace CycloneGames.AssetManagement.Tests.Editor
     {
         private const BindingFlags PrivateInstance = BindingFlags.Instance | BindingFlags.NonPublic;
         private const BindingFlags PrivateStatic = BindingFlags.Static | BindingFlags.NonPublic;
+
+        [Test]
+        public void StreamingVersionPath_UsesCanonicalAddressablesPlayerMapping()
+        {
+            string expected = Path.Combine(
+                UnityEngine.AddressableAssets.Addressables.PlayerBuildDataPath,
+                "AddressablesVersion.json");
+
+            Assert.That(
+                AssetRuntime.AddressablesVersionPathHelper.GetStreamingAssetsVersionPath(),
+                Is.EqualTo(expected));
+        }
 
         [Test]
         public void TerminalUnload_IsIdempotentAndIgnoresCallerCancellation()

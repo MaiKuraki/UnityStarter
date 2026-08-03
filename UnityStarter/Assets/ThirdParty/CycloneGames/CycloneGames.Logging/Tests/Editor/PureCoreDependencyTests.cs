@@ -9,7 +9,7 @@ namespace CycloneGames.Logging.Tests
 {
     public sealed class PureCoreDependencyTests
     {
-        private const string LoggingAssembly = "CycloneGames.Logging";
+        private const string LoggingAssembly = "CycloneGames.Logging.Core";
         private const string LoggingPipelineAssemblyPrefix = "CycloneGames.Logging.Pipeline";
         private const string LoggingUnityAssemblyPrefix = "CycloneGames.Logging.Unity";
         private const string LoggingIntegrationSuffix = ".Integrations.Logging";
@@ -111,7 +111,7 @@ namespace CycloneGames.Logging.Tests
             Assert.That(
                 violations,
                 Is.Empty,
-                "Logging integrations must point from an optional adapter to Core + Logging, never back into Core:\n" +
+                "Logging integrations must point from an optional adapter to the owner Core + CycloneGames.Logging.Core, never back into Core:\n" +
                 string.Join("\n", violations));
         }
 

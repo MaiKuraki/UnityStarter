@@ -6,7 +6,7 @@
         "Unity.Burst",
         "Unity.Mathematics",
         "Unity.Cinemachine",
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Factory.Runtime",
         "CycloneGames.Factory.Unity.Runtime"
     ],

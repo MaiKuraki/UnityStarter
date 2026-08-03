@@ -2,7 +2,7 @@
     "name": "CycloneGames.Utility.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Hash.Core",
         "UnityEngine.UI"
     ],

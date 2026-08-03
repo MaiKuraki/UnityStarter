@@ -1,6 +1,7 @@
 using System;
+using CycloneGames.Logging;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public enum LogQueueOverflowPolicy : byte
     {

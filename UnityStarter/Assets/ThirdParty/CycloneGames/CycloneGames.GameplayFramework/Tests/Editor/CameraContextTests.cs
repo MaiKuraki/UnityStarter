@@ -366,7 +366,11 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
 
             public ScopedSilentLogWriter()
             {
-                previousWriter = LogRuntime.ReplaceWriter(this);
+                previousWriter = LogRuntime.Writer;
+                if (!LogRuntime.TryReplaceWriter(previousWriter, this))
+                {
+                    throw new InvalidOperationException("The process log writer changed while the test scope was being installed.");
+                }
             }
 
             public bool IsEnabled(LogSeverity severity, string category) => false;

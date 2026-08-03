@@ -1107,30 +1107,21 @@ namespace CycloneGames.AssetManagement.Runtime
 
         private async UniTask<string> TryLoadVersionFromStreamingAssetsAsync(CancellationToken cancellationToken)
         {
-            string[] paths = AddressablesVersionPathHelper.GetStreamingAssetsVersionPaths();
-            for (int i = 0; i < paths.Length; i++)
+            string path = AddressablesVersionPathHelper.GetStreamingAssetsVersionPath();
+            cancellationToken.ThrowIfCancellationRequested();
+            try
             {
-                cancellationToken.ThrowIfCancellationRequested();
-                try
-                {
-                    string json = await ReadStreamingAssetsFileAsync(paths[i], cancellationToken);
-                    string version = ParseVersion(json);
-                    if (!string.IsNullOrEmpty(version))
-                    {
-                        return version;
-                    }
-                }
-                catch (OperationCanceledException)
-                {
-                    throw;
-                }
-                catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
-                {
-                    // The next known layout may contain the metadata.
-                }
+                string json = await ReadStreamingAssetsFileAsync(path, cancellationToken);
+                return ParseVersion(json);
             }
-
-            return string.Empty;
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex) when (AssetRuntimeGuard.IsRecoverableException(ex))
+            {
+                return string.Empty;
+            }
         }
 
         private static async UniTask<string> ReadStreamingAssetsFileAsync(

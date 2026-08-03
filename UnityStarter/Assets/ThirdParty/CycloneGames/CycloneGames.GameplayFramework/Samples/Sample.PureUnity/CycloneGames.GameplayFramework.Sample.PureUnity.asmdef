@@ -3,7 +3,7 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.GameplayFramework.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

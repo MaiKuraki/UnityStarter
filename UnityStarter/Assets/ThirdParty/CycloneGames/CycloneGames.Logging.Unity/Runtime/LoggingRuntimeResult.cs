@@ -1,4 +1,4 @@
-using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 
 namespace CycloneGames.Logging.Unity
 {

@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.IO;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using CycloneGames.Logging.Unity.Editor;
 using NUnit.Framework;
 
@@ -156,7 +157,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
             var sink = new FormattingSink();
             try
             {
-                Assert.IsTrue(pipeline.AddSink(sink));
+                Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
                 ((ILogWriter)pipeline).Write(
                     severity,
                     category,

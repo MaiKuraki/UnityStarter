@@ -1,4 +1,4 @@
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     /// <summary>
     /// Result of one bounded release pass over idle logging pools.

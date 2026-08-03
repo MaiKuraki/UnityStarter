@@ -8,7 +8,7 @@ The package version is `1.0.0`. It depends on `com.cyclone-games.logging` and `c
 
 ```mermaid
 flowchart LR
-    Business["Business assemblies"] --> Contract["CycloneGames.Logging"]
+    Business["Business assemblies"] --> Contract["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
     Pipeline["CycloneGames.Logging.Pipeline"] --> Contract
     Unity["CycloneGames.Logging.Unity"] --> Pipeline
     Unity --> Contract
@@ -54,11 +54,11 @@ If the canonical asset is absent, bootstrap uses package defaults. A directly su
 | Group | Fields | Contract |
 | --- | --- | --- |
 | Execution | `executionMode` | `Automatic`, `Threaded`, or `SingleThreaded`; WebGL Player is always single-threaded |
-| Core capacity | `maxQueuedMessages`, `maxQueuedCharacters` | Bound the pipeline queue by count and retained characters |
+| Pipeline capacity | `maxQueuedMessages`, `maxQueuedCharacters` | Bound the pipeline queue by count and retained characters |
 | Record limits | `maxMessageCharacters`, `maxCategoryCharacters`, `maxSourcePathCharacters`, `maxMemberNameCharacters` | Bound copied record data |
 | Filter budget | `maxFilterCategories`, `maxFilterCharacters` | Bound allow/deny snapshots |
 | Critical reserve | `reservedCriticalMessages`, `reservedCriticalCharacters`, `criticalSeverity` | Reduce ordinary contention; do not guarantee delivery |
-| Backpressure | `overflowPolicy`, `enqueueBlockTimeoutMs` | Core `DropNewest`, `DropOldest`, or bounded `Block` behavior |
+| Backpressure | `overflowPolicy`, `enqueueBlockTimeoutMs` | Pipeline `DropNewest`, `DropOldest`, or bounded `Block` behavior |
 | Lifecycle | `shutdownDrainTimeoutMs`, `maintenanceIntervalMs`, `sinkFailureThreshold` | Shutdown budget, maintenance cadence, and quarantine threshold |
 
 ### Sink registration
@@ -131,13 +131,13 @@ Unity Console delivery has two capacity boundaries:
 
 ```mermaid
 flowchart LR
-    Producer --> Core["Core LogPipeline queue<br/>count + characters"]
-    Core --> Adapter["UnityConsoleLogSink"]
+    Producer --> PipelineQueue["LogPipeline bounded queue<br/>count + characters"]
+    PipelineQueue --> Adapter["UnityConsoleLogSink"]
     Adapter --> Handoff["Main-thread handoff queue<br/>count + characters"]
     Handoff --> Console["Unity Console"]
 ```
 
-The core queue uses `maxQueuedMessages`, `maxQueuedCharacters`, per-field budgets, reserved critical capacity, `overflowPolicy`, and `enqueueBlockTimeoutMs`.
+The pipeline queue uses `maxQueuedMessages`, `maxQueuedCharacters`, per-field budgets, reserved critical capacity, `overflowPolicy`, and `enqueueBlockTimeoutMs`.
 
 The Unity handoff independently uses `unityConsoleMaxQueuedMessages`, `unityConsoleMaxQueuedCharacters`, and `unityConsoleOverflowPolicy`. It counts queued, reserved, and in-flight messages and characters. Because Unity delivery must not block producer/worker threads, this handoff supports only `DropNewest` and `DropOldest`.
 
@@ -145,7 +145,7 @@ These handoff values are copied into `UnityConsoleLogSinkOptions`; they are not 
 
 Capacity exhaustion, an oversized formatted entry, stale generation, shutdown, or a reservation mismatch can drop a Unity handoff record. `UnityConsoleLogSink.GetStatistics()` exposes current/reserved/in-flight/peak counts and characters, total drops, critical drops, and entries abandoned by reset.
 
-The hidden host processes at most 256 entries per update, with a one-millisecond core pump budget and a two-millisecond Unity handoff budget. These are bounded work controls, not latency or delivery guarantees. Inspect both `LogPipeline.GetStatistics()` and `UnityConsoleLogSink.GetStatistics()` before changing capacity.
+The hidden host processes at most 256 entries per update, with a one-millisecond pipeline pump budget and a two-millisecond Unity handoff budget. These are bounded work controls, not latency or delivery guarantees. Inspect both `LogPipeline.GetStatistics()` and `UnityConsoleLogSink.GetStatistics()` before changing capacity.
 
 If the pipeline records a terminal fault on its worker, the host observes and rethrows it once from the next main-thread pump, then disables automatic pumping for that exact pipeline to prevent a frame-by-frame exception loop. The composition owner remains responsible for shutdown and replacement.
 
@@ -217,7 +217,7 @@ The package does not use `EditorPrefs`, `PlayerPrefs`, or `SessionState`. Runtim
 
 | Target | Static behavior in this package | Required product validation |
 | --- | --- | --- |
-| WebGL Player | Forces single-thread processing, converts core `Block` to `DropNewest`, and does not register a file sink | Browser pump, memory, tab close/unload, and remote-output strategy |
+| WebGL Player | Forces single-thread processing, converts pipeline `Block` to `DropNewest`, and does not register a file sink | Browser pump, memory, tab close/unload, and remote-output strategy |
 | Dedicated Server | Disables Unity Console; with no settings, enables process console output by default | stdout capture, service/container shutdown, file quota, and forced termination |
 | Desktop/mobile Player | Automatic mode selects threaded processing; configured Unity/process/file sinks are available | IL2CPP/Mono, pause/kill, permissions, storage pressure, rotation, and graceful quit |
 | Editor | Own Edit Mode lifecycle and source-link tooling | Domain reload on/off, Play Mode transitions, assembly reload, and build cleanup |
@@ -239,7 +239,7 @@ Runtime code uses no unsafe code, dynamic code generation, runtime reflection di
 | Initialization reports `ExistingProcessWriterNotOwned` | Another composition root owns `LogRuntime.Writer`; shut it down through that owner or keep it intentionally |
 | Initialization reports `NoSinksConfigured` | Enable at least one supported sink and inspect file-sink initialization diagnostics |
 | Initialization reports `ShutdownFailed` | Release the blocking sink/dependency, retain ownership, then retry `Shutdown` or `Reinitialize` |
-| No records | Check `minimumSeverity`, `categoryFilter`, active sink registration, core drops, and Unity handoff drops |
+| No records | Check `minimumSeverity`, `categoryFilter`, active sink registration, pipeline drops, and Unity handoff drops |
 | Unity Console loses records under burst | Inspect both queue layers; avoid assuming critical reserve guarantees delivery |
 | File is absent | Check WebGL exclusion, selected path mode, absolute custom path, sandbox, quota, and `FileLogSink` health |
 | Build is blocked by generated override cleanup | Inspect the generated asset and marker; identity mismatch intentionally prevents deletion |

@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -15,7 +16,10 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
         {
             LoggingRuntimeHost.CaptureMainThreadForLifecycle();
             LoggingBootstrap.Shutdown();
-            _previousWriter = LogRuntime.ReplaceWriter(NullLogWriter.Instance);
+            _previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(
+                LogRuntime.TryReplaceWriter(_previousWriter, NullLogWriter.Instance),
+                "The test could not acquire the process writer because it changed concurrently.");
 #if UNITY_INCLUDE_TESTS
             LoggingBootstrap.BeforeProcessWriterInstallTestHook = null;
 #endif
@@ -45,7 +49,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
                 ILogWriter writer = pipeline;
                 Assert.IsFalse(writer.IsEnabled(LogSeverity.Info, "CycloneGames.Tests"));
 
-                Assert.IsTrue(pipeline.AddSink(sink));
+                Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
                 Assert.IsTrue(writer.IsEnabled(LogSeverity.Info, "CycloneGames.Tests"));
 
                 writer.Write(LogSeverity.Info, "CycloneGames.Tests", "message");
@@ -68,7 +72,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
             var sink = new RecordingSink();
             try
             {
-                pipeline.AddSink(sink);
+                pipeline.RegisterSink(sink);
                 ILogWriter writer = pipeline;
                 var exception = new InvalidOperationException("failure");
 
@@ -131,7 +135,8 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
         {
             LoggingSettings settings = CreateSettings();
             var foreignWriter = new RecordingWriter();
-            LogRuntime.ReplaceWriter(foreignWriter);
+            ILogWriter expectedWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(expectedWriter, foreignWriter));
 
             try
             {
@@ -167,7 +172,8 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
         {
             LoggingSettings settings = CreateSettings();
             var foreignWriter = new RecordingWriter();
-            LogRuntime.ReplaceWriter(foreignWriter);
+            ILogWriter expectedWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(expectedWriter, foreignWriter));
 
             try
             {
@@ -231,7 +237,8 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
                 LoggingInitializationResult initialization = LoggingBootstrap.Initialize(settings);
                 Assert.IsTrue(initialization.ProcessWriterInstalled);
 
-                ILogWriter ownedWriter = LogRuntime.ReplaceWriter(foreignWriter);
+                ILogWriter ownedWriter = LogRuntime.Writer;
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(ownedWriter, foreignWriter));
                 Assert.IsInstanceOf<LogPipeline>(ownedWriter);
 
                 LoggingInitializationResult repeated = LoggingBootstrap.Initialize(settings);

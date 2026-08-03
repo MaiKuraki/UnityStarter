@@ -84,7 +84,7 @@ flowchart LR
 | `...Integrations.PrimeTween` | 窗口过渡 driver | 存在 `com.kyrylokuzyk.primetween` 包 |
 | `CycloneGames.UIFramework.Samples` | 选择性示例 | `autoReferenced: false` |
 
-核心 Runtime 引用 `UniTask`、`CycloneGames.Logging` 与 Unity UGUI API。可选 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 与 `defineConstraints` 启用；不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。AssetManagement 与 Localization Integration 通过显式 asmdef reference 引用各自的本地 Assembly。
+核心 Runtime 引用 `UniTask`、`CycloneGames.Logging.Core` 与 Unity UGUI API。可选 DI 与 Motion Integration 通过 asmdef 的 `versionDefines` 与 `defineConstraints` 启用；不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。AssetManagement 与 Localization Integration 通过显式 asmdef reference 引用各自的本地 Assembly。
 
 Runtime 与 Sample 诊断使用稳定的 `CycloneGames.UIFramework` `LogChannel` category；通用 Editor 工具使用 `CycloneGames.UIFramework.Editor`，Localization Authoring 使用 `CycloneGames.UIFramework.Localization.Editor`。本包只依赖 backend-neutral 的 `com.cyclone-games.logging` contract，writer 生命周期由 host 负责。未安装 backend 时，`NullLogWriter` 会丢弃消息。应用 composition root 可以安装 `com.cyclone-games.logging.pipeline`，按需加入 `com.cyclone-games.logging.unity`，也可以提供其他 `ILogWriter`；文件路径、轮转、保留、脱敏、flush 与 disposal policy 均由 host 持有。
 

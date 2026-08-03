@@ -1,6 +1,7 @@
 using System;
+using CycloneGames.Logging;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     internal interface ILogProcessor : IDisposable
     {

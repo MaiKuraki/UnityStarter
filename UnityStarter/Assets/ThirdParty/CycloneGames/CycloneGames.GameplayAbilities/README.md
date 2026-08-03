@@ -49,7 +49,7 @@ flowchart LR
     AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement"]
     DataTableCore["CycloneGames.DataTable.Core"]
     UniTask["UniTask"]
-    Logging["CycloneGames.Logging"]
+    Logging["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
     Runtime["GameplayAbilities.Runtime"]
     Editor["GameplayAbilities.Editor<br/>Editor only"]
     DataTable["GameplayAbilities.Runtime.Integrations.DataTable<br/>conditional UPM integration"]
@@ -88,7 +88,7 @@ flowchart LR
 
 `AbilitySpecContainer`, `PredictionManager`, and `ReplicationStateBuilder` are internal Runtime assembly implementation types. Public consumers use the `AbilitySystemComponent` facade, stable `GASReadOnlyListView<T>`, `GASReadOnlySetView<T>`, and `GASReadOnlyTagView` instances, query methods, and diagnostics; they do not receive mutable container or builder access. These internal types are not extension points. Consolidating mutation authority in the ASC narrows the public API and long-term compatibility surface.
 
-The package metadata declares its direct package requirements. In an `Assets/ThirdParty` checkout, `package.json` is descriptive metadata; Unity compilation is determined by the actual asmdef graph, installed packages, constraints, and symbols. The main Runtime assembly directly references the backend-neutral `CycloneGames.Logging` contract but does not reference AssetManagement, DataTable, or a concrete logging backend; optional feature dependencies terminate in their integration assemblies.
+The package metadata declares its direct package requirements. In an `Assets/ThirdParty` checkout, `package.json` is descriptive metadata; Unity compilation is determined by the actual asmdef graph, installed packages, constraints, and symbols. The main Runtime assembly directly references the backend-neutral `CycloneGames.Logging.Core` contract assembly but does not reference AssetManagement, DataTable, or a concrete logging backend; optional feature dependencies terminate in their integration assemblies.
 
 ### Logging contract and backend integration
 
@@ -985,7 +985,7 @@ The Core/Runtime source and asmdefs contain no `UnityEditor` dependency in Runti
 
 ### AssetManagement
 
-`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` is connected through direct asmdef references. It depends on `CycloneGames.AssetManagement.Runtime`, `CycloneGames.Logging`, and the main GameplayAbilities Runtime assembly, and contains `AssetManagementResourceLocator`.
+`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` is connected through direct asmdef references. It depends on `CycloneGames.AssetManagement.Runtime`, `CycloneGames.Logging.Core`, and the main GameplayAbilities Runtime assembly, and contains `AssetManagementResourceLocator`.
 
 The main Runtime assembly owns only `IResourceLocator` and `IResourceHandle<T>`; it has no AssetManagement asmdef reference. The Sample assembly references the integration explicitly and constructs the adapter from its `IAssetPackage`. At assembly level, a project that excludes AssetManagement can keep Core and Runtime and provide another `IResourceLocator`; it must also exclude the AssetManagement integration and any sample composition that references it. `package.json` declares AssetManagement as a direct requirement, so a UPM packaging profile that omits it must update that metadata coherently.
 

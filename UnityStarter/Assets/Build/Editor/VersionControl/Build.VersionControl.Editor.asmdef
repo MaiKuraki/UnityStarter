@@ -1,9 +1,7 @@
 {
     "name": "Build.VersionControl.Editor",
     "rootNamespace": "",
-    "references": [
-        "Build.Data"
-    ],
+    "references": [],
     "includePlatforms": [
         "Editor"
     ],

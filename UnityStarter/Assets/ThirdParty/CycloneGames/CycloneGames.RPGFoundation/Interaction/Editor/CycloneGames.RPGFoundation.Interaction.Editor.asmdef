@@ -5,7 +5,7 @@
         "UniTask",
         "CycloneGames.RPGFoundation.Interaction.Core",
         "CycloneGames.RPGFoundation.Interaction.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

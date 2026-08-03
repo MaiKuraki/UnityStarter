@@ -3,7 +3,7 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.IO.SystemIO",
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.UIFramework.Runtime"
     ],
     "includePlatforms": [

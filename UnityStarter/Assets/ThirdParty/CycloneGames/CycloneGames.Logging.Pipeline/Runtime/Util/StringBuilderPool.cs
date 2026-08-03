@@ -2,7 +2,7 @@ using System;
 using System.Text;
 using System.Threading;
 
-namespace CycloneGames.Logging.Internal
+namespace CycloneGames.Logging.Pipeline.Internal
 {
     internal static class StringBuilderPool
     {

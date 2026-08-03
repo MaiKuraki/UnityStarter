@@ -4,10 +4,10 @@ using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading;
-using CycloneGames.Logging.Internal;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline.Internal;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     /// <summary>
     /// Bounded logging backend and sink owner. Producers write through <see cref="ILogWriter"/>
@@ -195,16 +195,6 @@ namespace CycloneGames.Logging
         private int _timestampProviderFailed;
         private int _messageBuilderFailureEmergencyReported;
 
-        public LogPipeline()
-            : this(CreatePlatformDefaultProcessor, new LogPipelineOptions(), () => DateTime.UtcNow)
-        {
-        }
-
-        public LogPipeline(LogPipelineOptions processingOptions)
-            : this(CreatePlatformDefaultProcessor, processingOptions, () => DateTime.UtcNow)
-        {
-        }
-
         internal LogPipeline(
             Func<LogPipeline, LogPipelineOptions, ILogProcessor> processorFactory,
             LogPipelineOptions processingOptions,
@@ -217,20 +207,18 @@ namespace CycloneGames.Logging
             _processor = (processorFactory ?? throw new ArgumentNullException(nameof(processorFactory)))(this, _processingOptions);
         }
 
-        public void SetMinimumSeverity(LogSeverity severity)
-        {
-            if (severity < LogSeverity.Trace || severity > LogSeverity.None)
-            {
-                throw new ArgumentOutOfRangeException(nameof(severity));
-            }
-
-            _minimumSeverity = severity;
-        }
-
         public LogSeverity MinimumSeverity
         {
             get => _minimumSeverity;
-            set => SetMinimumSeverity(value);
+            set
+            {
+                if (value < LogSeverity.Trace || value > LogSeverity.None)
+                {
+                    throw new ArgumentOutOfRangeException(nameof(value));
+                }
+
+                _minimumSeverity = value;
+            }
         }
 
         bool ILogWriter.IsEnabled(LogSeverity severity, string category)
@@ -299,99 +287,82 @@ namespace CycloneGames.Logging
         public LogCategoryFilterMode CategoryFilter
         {
             get => _categoryFilter;
-            set => SetCategoryFilter(value);
-        }
-
-        public void SetCategoryFilter(LogCategoryFilterMode filter)
-        {
-            if (filter < LogCategoryFilterMode.All || filter > LogCategoryFilterMode.DenyList)
+            set
             {
-                throw new ArgumentOutOfRangeException(nameof(filter));
-            }
-
-            _categoryFilter = filter;
-        }
-
-        public bool AddSink(ILogSink sink)
-        {
-            if (sink == null)
-            {
-                throw new ArgumentNullException(nameof(sink));
-            }
-
-            ThrowIfStopping();
-            _sinksLock.EnterWriteLock();
-            try
-            {
-                ThrowIfStopping();
-                for (int i = 0; i < _sinks.Count; i++)
+                if (value < LogCategoryFilterMode.All || value > LogCategoryFilterMode.DenyList)
                 {
-                    if (ReferenceEquals(_sinks[i].Sink, sink))
-                    {
-                        return false;
-                    }
+                    throw new ArgumentOutOfRangeException(nameof(value));
                 }
 
-                if (_retiredRegistrations.ContainsKey(sink) || _disposingSinks.Contains(sink))
-                {
-                    return false;
-                }
-
-                if (!HasSinkOwnershipCapacityNoLock())
-                {
-                    return false;
-                }
-
-                var registration = new SinkRegistration(sink);
-                SinkRegistration[] snapshot = CreateSnapshotWithAddedSinkNoLock(registration);
-                _sinks.Add(registration);
-                _sinkSnapshot = snapshot;
-                Interlocked.Increment(ref _activeSinkCount);
-                Interlocked.Increment(ref _ownedSinkCount);
-                return true;
-            }
-            finally
-            {
-                _sinksLock.ExitWriteLock();
+                _categoryFilter = value;
             }
         }
 
         /// <summary>
-        /// Adds a sink when no sink of the same exact type is registered. A rejected new
-        /// instance is disposed so callers can safely use TryAddSink(new Sink()).
+        /// Registers a sink and reports the resulting ownership explicitly. Ownership transfers
+        /// to the pipeline only when <see cref="LogSinkRegistrationResult.PipelineOwnsSink"/> is
+        /// true. Rejected sinks are never disposed by this method.
         /// </summary>
-        public bool TryAddSink(ILogSink sink)
+        public LogSinkRegistrationResult RegisterSink(
+            ILogSink sink,
+            LogSinkRegistrationMode mode = LogSinkRegistrationMode.AllowMultiple)
         {
             if (sink == null)
             {
                 throw new ArgumentNullException(nameof(sink));
             }
 
-            ThrowIfStopping();
-            bool disposeRejected = false;
+            if (mode < LogSinkRegistrationMode.AllowMultiple
+                || mode > LogSinkRegistrationMode.UniqueExactType)
+            {
+                throw new ArgumentOutOfRangeException(nameof(mode));
+            }
+
             _sinksLock.EnterWriteLock();
             try
             {
-                ThrowIfStopping();
-                Type type = sink.GetType();
+                bool isStopping = Volatile.Read(ref _lifecycleState) != 0;
+
                 for (int i = 0; i < _sinks.Count; i++)
                 {
-                    if (!_sinks[i].IsRetired && _sinks[i].Sink.GetType() == type)
+                    if (ReferenceEquals(_sinks[i].Sink, sink))
                     {
-                        disposeRejected = !ReferenceEquals(_sinks[i].Sink, sink);
-                        return false;
+                        return new LogSinkRegistrationResult(
+                            isStopping || _sinks[i].IsRetired
+                                ? LogSinkRegistrationStatus.AlreadyOwnedByPipeline
+                                : LogSinkRegistrationStatus.AlreadyRegistered);
                     }
                 }
 
                 if (_retiredRegistrations.ContainsKey(sink) || _disposingSinks.Contains(sink))
                 {
-                    return false;
+                    return new LogSinkRegistrationResult(
+                        LogSinkRegistrationStatus.AlreadyOwnedByPipeline);
+                }
+
+                if (isStopping)
+                {
+                    return new LogSinkRegistrationResult(
+                        LogSinkRegistrationStatus.RejectedPipelineStopping);
+                }
+
+                if (mode == LogSinkRegistrationMode.UniqueExactType)
+                {
+                    Type type = sink.GetType();
+                    for (int i = 0; i < _sinks.Count; i++)
+                    {
+                        if (!_sinks[i].IsRetired && _sinks[i].Sink.GetType() == type)
+                        {
+                            return new LogSinkRegistrationResult(
+                                LogSinkRegistrationStatus.RejectedDuplicateType);
+                        }
+                    }
                 }
 
                 if (!HasSinkOwnershipCapacityNoLock())
                 {
-                    disposeRejected = true;
-                    return false;
+                    return new LogSinkRegistrationResult(
+                        LogSinkRegistrationStatus.RejectedCapacity);
                 }
 
                 var registration = new SinkRegistration(sink);
@@ -400,15 +371,11 @@ namespace CycloneGames.Logging
                 _sinkSnapshot = snapshot;
                 Interlocked.Increment(ref _activeSinkCount);
                 Interlocked.Increment(ref _ownedSinkCount);
-                return true;
+                return new LogSinkRegistrationResult(LogSinkRegistrationStatus.Registered);
             }
             finally
             {
                 _sinksLock.ExitWriteLock();
-                if (disposeRejected)
-                {
-                    TryDisposeSink(sink);
-                }
             }
         }
 
@@ -1078,15 +1045,6 @@ namespace CycloneGames.Logging
             }
 
             return string.IsNullOrEmpty(category) || !_denyListSnapshot.Contains(category);
-        }
-
-        private static ILogProcessor CreatePlatformDefaultProcessor(LogPipeline owner, LogPipelineOptions options)
-        {
-#if UNITY_WEBGL && !UNITY_EDITOR
-            return new SingleThreadLogProcessor(owner, options);
-#else
-            return new ThreadedLogProcessor(owner, options);
-#endif
         }
 
         private void MutateCategorySet(string category, bool allowList, bool add)

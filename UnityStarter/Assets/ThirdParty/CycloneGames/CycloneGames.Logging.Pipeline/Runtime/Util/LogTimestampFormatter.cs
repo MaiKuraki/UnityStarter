@@ -2,7 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Text;
 
-namespace CycloneGames.Logging.Internal
+namespace CycloneGames.Logging.Pipeline.Internal
 {
     /// <summary>
     /// Provides utility methods for formatting DateTime objects with low GC impact.

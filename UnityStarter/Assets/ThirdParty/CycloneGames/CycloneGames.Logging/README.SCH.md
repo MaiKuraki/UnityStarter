@@ -2,7 +2,7 @@
 
 `CycloneGames.Logging` 是 CycloneGames 各包共享的 Unity-free 日志生产者契约。它规定代码如何产生带分类的日志记录，但不选择队列、线程、sink、文件格式、Unity 生命周期或具体后端。
 
-包版本为 `1.0.0`。Runtime assembly 名称为 `CycloneGames.Logging`，设置了 `noEngineReferences: true`。消费方 asmdef 需要显式声明依赖。
+包版本为 `1.0.0`。Core assembly 名称为 `CycloneGames.Logging.Core`，设置了 `noEngineReferences: true`；公共生产者 API 继续使用简洁的 `CycloneGames.Logging` namespace。消费方 asmdef 需要显式声明 assembly 依赖。
 
 ## 架构与命名
 
@@ -10,7 +10,7 @@
 
 ```mermaid
 flowchart LR
-    Producer["业务包"] --> Contract["CycloneGames.Logging<br/>ILogWriter 与 LogChannel"]
+    Producer["业务包"] --> Contract["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
     Host["纯 C# composition root"] --> Pipeline["CycloneGames.Logging.Pipeline<br/>LogPipeline 与 ILogSink"]
     UnityHost["Unity composition root"] --> Unity["CycloneGames.Logging.Unity<br/>settings 与 lifecycle"]
     Pipeline --> Contract
@@ -26,7 +26,7 @@ flowchart LR
 | `com.cyclone-games.logging.pipeline` | 显式拥有的队列、路由、sink、监控与关闭流程 | 无 |
 | `com.cyclone-games.logging.unity` | Unity settings、bootstrap、Console bridge、Editor 工具与示例 | 必需 |
 
-该家族遵循仓库通用 package root：`CycloneGames.Logging` 包含 `Runtime/` 与 `Tests/`；`CycloneGames.Logging.Pipeline` 包含 `Runtime/` 与 `Tests/`；`CycloneGames.Logging.Unity` 额外包含 `Editor/`、`Samples/` 与 `Documents~/`。Runtime source 直接位于 `Runtime/` 或 `Processors/`、`Settings/` 等职责子目录。
+该家族遵循仓库现有 package 惯例：基础 package ID 保持 `com.cyclone-games.logging`，Unity-free 实现物理隔离在 `Core/`，并编译为 `CycloneGames.Logging.Core`。`CycloneGames.Logging.Pipeline` 包含 `Runtime/` 与 `Tests/`；`CycloneGames.Logging.Unity` 额外包含 `Editor/`、`Samples/` 与 `Documents~/`。
 
 业务包只依赖本包，不引用 Pipeline 或 Unity composition 包。具体后端由 host 选择并拥有。该依赖方向使可复用包能够用于 Unity、命令行测试、headless 进程和其他 C# host。
 
@@ -41,7 +41,7 @@ flowchart LR
 | `LogChannel` | 绑定显式 writer 或当前 ambient writer 的不可变 category |
 | `LogChannelExtensions` | 统一的级别方法，以及 string、延迟 builder、generic-state 和 exception 重载 |
 | `LogWriterGuard` | 校验生产者输入并隔离非灾难性后端故障 |
-| `LogRuntime` | 原子安装或替换不拥有生命周期的进程 fallback |
+| `LogRuntime` | 原子安装并按引用身份安全交接不拥有生命周期的进程 fallback |
 | `NullLogWriter` | host 尚未安装后端时使用的静默默认实现 |
 
 `ILogWriter` 只面向生产者。Sink 注册、flush、shutdown 与 disposal 属于具体 owner。
@@ -79,13 +79,13 @@ internal static class AssetManagementLog
 
 ### 严格 PureCore 边界
 
-严格 PureCore assembly 不引用 Unity，也不引用本包。如果它需要 best-effort diagnostics，就自行拥有最小的模块专属 port，例如 `IAssetDiagnostics`，并提供自己的 disabled 实现与诊断级别/category 模型。可选 adapter 放在 `<Module>.Integrations.Logging`，同时引用 PureCore assembly 与 `CycloneGames.Logging`。
+严格 PureCore assembly 不引用 Unity，也不引用本包。如果它需要 best-effort diagnostics，就自行拥有最小的模块专属 port，例如 `IAssetDiagnostics`，并提供自己的 disabled 实现与诊断级别/category 模型。可选 adapter 放在 `<Module>.Integrations.Logging`，同时引用 PureCore assembly 与 `CycloneGames.Logging.Core` 契约 assembly。
 
 ```mermaid
 flowchart LR
     Core["Module.Core"] --> Port["模块自有 diagnostics port"]
     Adapter["Module.Integrations.Logging"] --> Core
-    Adapter --> Contract["CycloneGames.Logging"]
+    Adapter --> Contract["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
 ```
 
 Adapter 从 Core 向外连接，Core 不会获得传递式 Unity 依赖。模块本地 port 也不扩展队列、文件、sink 或生命周期管理。只有确实需要物理 Core 独立时才使用该模式；普通 Runtime assembly 直接使用 `LogChannel`。
@@ -139,10 +139,9 @@ Log.Debug(
 
 `LogRuntime` 只拥有一个原子的 `ILogWriter` 引用：
 
-- `TryInstallWriter` 只在静默默认实现仍被安装时成功；
+- `TryInstallWriter` 只在静默默认实现仍被安装时成功；`NullLogWriter` 哨兵不能取得 owner 身份；
 - `TryReplaceWriter(expected, replacement)` 按引用身份执行受保护的交接；
-- `TryResetWriter(expected)` 只允许预期 owner 恢复静默默认值；
-- `ReplaceWriter` 是无条件管理操作，返回一个不带所有权的引用。
+- `TryResetWriter(expected)` 只允许预期的非哨兵 owner 恢复静默默认值。
 
 这些方法都不会 flush 或 dispose writer。Composition root 必须保留具体 owner，停止或重定向生产者，以身份检查重置 ambient 引用，再按后端契约 drain 并 dispose。除非能独立证明所有权，否则不要 dispose 返回的 writer。
 
@@ -177,7 +176,7 @@ Caller file path 与 member name 属于生产者契约的一部分。将它们�
 普通 CycloneGames 包按以下步骤接入：
 
 1. 在 `package.json` 中加入 `"com.cyclone-games.logging": "1.0.0"`。
-2. 在每个生产者 asmdef 的 `references` 中加入 `CycloneGames.Logging`。
+2. 在每个生产者 asmdef 的 `references` 中加入 `CycloneGames.Logging.Core`。
 3. 新增一个 assembly-local `Diagnostics/<FeatureName>Log.cs` facade。
 4. 构造型服务注入 `ILogWriter`，ambient channel 只用于 static 或 Unity-owned 边界。
 5. 由应用 composition root 选择 `CycloneGames.Logging.Pipeline`、`CycloneGames.Logging.Unity` 或其他 `ILogWriter` 实现。
@@ -190,8 +189,8 @@ Caller file path 与 member name 属于生产者契约的一部分。将它们�
 
 最小包验证：
 
-1. 确认 `CycloneGames.Logging.asmdef` 没有引用，并保持 `noEngineReferences: true`。
-2. 运行 `CycloneGames.Logging.Tests.Editor`。
+1. 确认 `CycloneGames.Logging.Core.asmdef` 没有引用，并保持 `noEngineReferences: true`。
+2. 运行 `CycloneGames.Logging.Core.Tests.Editor`。
 3. 验证 ambient channel 能观察到身份安全的 writer 替换，而显式绑定 channel 不会改变。
 4. 验证 disabled 与无效 severity 路径不会调用延迟 builder。
 5. 只安装本日志包族中的 `com.cyclone-games.logging`，编译一个代表性业务包。

@@ -1,6 +1,8 @@
 using System;
 using System.Text;
-using CycloneGames.Logging.Internal;
+using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
+using CycloneGames.Logging.Pipeline.Internal;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor

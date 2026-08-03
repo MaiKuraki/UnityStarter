@@ -1,4 +1,4 @@
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public enum LogFlushMode : byte
     {
@@ -13,8 +13,7 @@ namespace CycloneGames.Logging
         CompletedWithDrops = 2,
         CompletedWithFailures = 3,
         TimedOut = 4,
-        AlreadyStopped = 5,
-        InProgress = 6
+        InProgress = 5
     }
 
     public readonly struct LogPipelineShutdownResult
@@ -25,8 +24,7 @@ namespace CycloneGames.Logging
 
         public bool IsComplete => Status == LogPipelineShutdownStatus.Completed
             || Status == LogPipelineShutdownStatus.CompletedWithDrops
-            || Status == LogPipelineShutdownStatus.CompletedWithFailures
-            || Status == LogPipelineShutdownStatus.AlreadyStopped;
+            || Status == LogPipelineShutdownStatus.CompletedWithFailures;
 
         public LogPipelineShutdownResult(LogPipelineShutdownStatus status, long droppedMessageCount, bool sinksFlushed)
         {

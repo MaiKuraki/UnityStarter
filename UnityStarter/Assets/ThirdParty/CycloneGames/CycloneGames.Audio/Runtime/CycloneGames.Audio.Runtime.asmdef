@@ -2,7 +2,7 @@
     "name": "CycloneGames.Audio.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "UniTask"
     ],
     "includePlatforms": [],

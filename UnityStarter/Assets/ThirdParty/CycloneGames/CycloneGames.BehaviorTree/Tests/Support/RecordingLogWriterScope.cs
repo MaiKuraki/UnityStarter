@@ -45,7 +45,7 @@ namespace CycloneGames.BehaviorTree.Tests.Support
             }
 
             _category = category;
-            _previousWriter = LogRuntime.ReplaceWriter(this);
+            _previousWriter = Install(this);
         }
 
         public bool IsEnabled(LogSeverity severity, string category)
@@ -150,6 +150,17 @@ namespace CycloneGames.BehaviorTree.Tests.Support
             }
 
             LogRuntime.TryReplaceWriter(this, _previousWriter);
+        }
+
+        private static ILogWriter Install(ILogWriter writer)
+        {
+            ILogWriter previousWriter = LogRuntime.Writer;
+            if (!LogRuntime.TryReplaceWriter(previousWriter, writer))
+            {
+                throw new InvalidOperationException("The process log writer changed while the test scope was being installed.");
+            }
+
+            return previousWriter;
         }
 
         private void Record(

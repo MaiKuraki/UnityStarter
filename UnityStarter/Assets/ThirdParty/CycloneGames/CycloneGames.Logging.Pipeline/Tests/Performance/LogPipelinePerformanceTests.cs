@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 using Unity.PerformanceTesting;
 
@@ -33,8 +34,8 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
         {
             _pipeline = CreatePipeline(CreateOptions());
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
-            _pipeline.SetMinimumSeverity(LogSeverity.Error);
+            _pipeline.RegisterSink(_sink);
+            _pipeline.MinimumSeverity = LogSeverity.Error;
 
             Measure.Method(WriteFilteredMessage)
                 .WarmupCount(WarmupCount)
@@ -49,7 +50,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
         {
             _pipeline = CreatePipeline(CreateOptions());
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
+            _pipeline.RegisterSink(_sink);
 
             Measure.Method(LogAndPump)
                 .WarmupCount(WarmupCount)
@@ -64,7 +65,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
         {
             _pipeline = CreatePipeline(CreateOptions());
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
+            _pipeline.RegisterSink(_sink);
 
             Measure.Method(LogStringAndPump)
                 .WarmupCount(WarmupCount)
@@ -83,7 +84,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
             options.ReservedCriticalCharacters = 0;
             _pipeline = CreatePipeline(options);
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
+            _pipeline.RegisterSink(_sink);
             for (int i = 0; i < options.MaxQueuedMessages; i++)
             {
                 _writer.Write(LogSeverity.Info, null, "queued", filePath: string.Empty, memberName: string.Empty);
@@ -102,8 +103,8 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
         {
             _pipeline = CreatePipeline(CreateOptions());
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
-            _pipeline.SetMinimumSeverity(LogSeverity.Error);
+            _pipeline.RegisterSink(_sink);
+            _pipeline.MinimumSeverity = LogSeverity.Error;
             WriteFilteredMessage();
 
             long before = GC.GetAllocatedBytesForCurrentThread();
@@ -120,7 +121,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
         {
             _pipeline = CreatePipeline(CreateOptions());
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
+            _pipeline.RegisterSink(_sink);
             for (int i = 0; i < 512; i++)
             {
                 LogAndPump();
@@ -140,7 +141,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
         {
             _pipeline = CreatePipeline(CreateOptions());
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
+            _pipeline.RegisterSink(_sink);
             for (int i = 0; i < 512; i++)
             {
                 LogStringAndPump();
@@ -164,7 +165,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Performance
             options.ReservedCriticalCharacters = 0;
             _pipeline = CreatePipeline(options);
             _sink = new CountingSink();
-            _pipeline.AddSink(_sink);
+            _pipeline.RegisterSink(_sink);
             for (int i = 0; i < options.MaxQueuedMessages; i++)
             {
                 _writer.Write(LogSeverity.Info, null, "queued", filePath: string.Empty, memberName: string.Empty);

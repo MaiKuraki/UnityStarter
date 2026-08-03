@@ -3,7 +3,7 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.Foundation2D.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

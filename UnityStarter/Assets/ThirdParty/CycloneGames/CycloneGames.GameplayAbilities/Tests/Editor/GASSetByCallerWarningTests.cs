@@ -19,7 +19,8 @@ namespace CycloneGames.GameplayAbilities.Tests.Editor
         public void SetUp()
         {
             warningWriter = new RecordingWarningWriter();
-            previousWriter = LogRuntime.ReplaceWriter(warningWriter);
+            previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, warningWriter));
         }
 
         [TearDown]

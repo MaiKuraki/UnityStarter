@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using System.Threading;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using UnityEngine;
 
 namespace CycloneGames.Logging.Unity
@@ -195,12 +196,14 @@ namespace CycloneGames.Logging.Unity
             if (useUnity)
             {
                 UnityConsoleLogSinkOptions unityOptions = CreateUnityConsoleOptions(settings, processingOptions);
-                registeredAny |= pipeline.TryAddSink(new UnityConsoleLogSink(unityOptions));
+                registeredAny |= RegisterConfiguredSink(
+                    pipeline,
+                    new UnityConsoleLogSink(unityOptions));
             }
 
             if (useConsole)
             {
-                registeredAny |= pipeline.TryAddSink(new ConsoleLogSink());
+                registeredAny |= RegisterConfiguredSink(pipeline, new ConsoleLogSink());
             }
 
             if (useFile && FileLogSink.IsSupported)
@@ -210,7 +213,7 @@ namespace CycloneGames.Logging.Unity
                     string filePath = ResolveFilePath(settings);
                     FileLogSinkOptions fileOptions = CreateFileOptions(settings);
                     var fileSink = new FileLogSink(filePath, fileOptions);
-                    registeredAny |= pipeline.TryAddSink(fileSink);
+                    registeredAny |= RegisterConfiguredSink(pipeline, fileSink);
                 }
                 catch (Exception exception) when (!(exception is OutOfMemoryException))
                 {
@@ -239,8 +242,8 @@ namespace CycloneGames.Logging.Unity
 
             if (settings != null)
             {
-                pipeline.SetMinimumSeverity(settings.minimumSeverity);
-                pipeline.SetCategoryFilter(settings.categoryFilter);
+                pipeline.MinimumSeverity = settings.minimumSeverity;
+                pipeline.CategoryFilter = settings.categoryFilter;
             }
 
             LoggingRuntimeHost.EnsureBootstrapInstance();
@@ -270,6 +273,37 @@ namespace CycloneGames.Logging.Unity
             return new LoggingInitializationResult(
                 LoggingInitializationStatus.ExistingProcessWriterNotOwned,
                 false);
+        }
+
+        private static bool RegisterConfiguredSink(LogPipeline pipeline, ILogSink sink)
+        {
+            LogSinkRegistrationResult result = pipeline.RegisterSink(
+                sink,
+                LogSinkRegistrationMode.UniqueExactType);
+            if (result.IsRegistered)
+            {
+                return true;
+            }
+
+            if (result.CallerRetainsOwnership)
+            {
+                try
+                {
+                    sink.Dispose();
+                }
+                catch (OutOfMemoryException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    EmergencyLogWriter.TryWrite(
+                        "A rejected configured log sink could not be disposed. "
+                        + exception.GetType().Name);
+                }
+            }
+
+            return false;
         }
 
         private static LogPipelineShutdownResult ShutdownCore(LogFlushMode flushMode)
