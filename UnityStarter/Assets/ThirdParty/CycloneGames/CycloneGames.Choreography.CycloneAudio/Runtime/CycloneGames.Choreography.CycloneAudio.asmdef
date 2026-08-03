@@ -5,7 +5,7 @@
         "CycloneGames.Choreography.Core",
         "CycloneGames.Choreography.Interaction",
         "CycloneGames.Audio.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

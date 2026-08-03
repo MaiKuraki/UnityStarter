@@ -1,4 +1,5 @@
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using UnityEngine;
 
 namespace CycloneGames.Logging.Unity

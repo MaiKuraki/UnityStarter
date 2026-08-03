@@ -20,7 +20,7 @@ namespace CycloneGames.Analyzers
         private const string UnityDebugMetadataName = "UnityEngine.Debug";
         private const string UnityMonoBehaviourMetadataName = "UnityEngine.MonoBehaviour";
         private const string SystemConsoleMetadataName = "System.Console";
-        private const string BackendLogPipelineMetadataName = "CycloneGames.Logging.LogPipeline";
+        private const string BackendLogPipelineMetadataName = "CycloneGames.Logging.Pipeline.LogPipeline";
 
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics =>
             ImmutableArray.Create(DiagnosticRules.DirectLoggingApi);

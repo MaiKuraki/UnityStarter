@@ -2,7 +2,7 @@
 
 `CycloneGames.Logging.Pipeline` 是 `CycloneGames.Logging` 的 Unity-free 后端包。它提供显式拥有的 `LogPipeline`、有界接纳、过滤、sink dispatch、运行统计、文件与 console sink、断言支持、内存池维护，以及结果明确的确定性关闭流程。
 
-包版本为 `1.0.0`。Runtime assembly 名称为 `CycloneGames.Logging.Pipeline`，只引用 `CycloneGames.Logging`，并保持 `noEngineReferences: true`。
+包版本为 `1.0.0`。Runtime assembly 与公共后端 namespace 均为 `CycloneGames.Logging.Pipeline`；该 assembly 只引用 `CycloneGames.Logging.Core`，并保持 `noEngineReferences: true`。
 
 ## 在日志包族中的位置
 
@@ -35,6 +35,7 @@ Host 需要 ambient 生产者入口时，把自己拥有的 pipeline 安装到 `
 ```csharp
 using System;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 
 var options = new LogPipelineOptions
 {
@@ -45,8 +46,21 @@ var options = new LogPipelineOptions
 };
 
 LogPipeline pipeline = LogPipelineFactory.CreateThreaded(options);
-pipeline.SetMinimumSeverity(LogSeverity.Info);
-pipeline.TryAddSink(new ConsoleLogSink());
+pipeline.MinimumSeverity = LogSeverity.Info;
+var consoleSink = new ConsoleLogSink();
+LogSinkRegistrationResult consoleRegistration = pipeline.RegisterSink(
+    consoleSink,
+    LogSinkRegistrationMode.UniqueExactType);
+if (!consoleRegistration.IsRegistered)
+{
+    if (consoleRegistration.CallerRetainsOwnership)
+    {
+        consoleSink.Dispose();
+    }
+
+    pipeline.Shutdown();
+    throw new InvalidOperationException("The console sink could not be registered.");
+}
 
 if (!LogRuntime.TryInstallWriter(pipeline))
 {
@@ -72,7 +86,7 @@ Owner 必须检查 `result`。Shutdown 超时意味着仍有未解决的所有�
 | `LogPipelineFactory.CreateThreaded` | 后台 worker dispatch sink | 不要求生产者侧 pump | Desktop、server 与受支持的 mobile host |
 | `LogPipelineFactory.CreateSingleThreaded` | `Pump` 所在调用线程 | Owner 定期调用 `Pump(maxItems)` | WebGL 与需要确定性 caller-driven 的 host |
 
-Public constructor 选择平台默认值：除 WebGL Player 使用 single-thread 外，其余使用 threaded。`CreateThreaded` 在 WebGL Player 中抛出异常。显式创建的 single-threaded pipeline 在 owner pump 或 shutdown 前不会投递记录。
+Pipeline 统一通过 `LogPipelineFactory` 创建，因此 composition root 必须显式选择处理模型。`CreateThreaded` 在 WebGL Player 中抛出异常。显式创建的 single-threaded pipeline 在 owner pump 或 shutdown 前不会投递记录。
 
 `ILogSink.Emit` 是同步调用。Threaded 模式从 worker 执行，single-thread 模式从 `Pump` 执行。Sink 必须线程安全、尽快返回，而且不能直接调用 Unity main-thread-only API。跨线程 UI、网络、SDK 或 Unity 工作需要另一个被显式拥有的有界 handoff。
 
@@ -84,8 +98,8 @@ Public constructor 选择平台默认值：除 WebGL Player 使用 single-thread
 
 | Option | 默认值 | 含义 |
 | --- | ---: | --- |
-| `MaxQueuedMessages` | 8192 | Core queue 消息容量 |
-| `MaxQueuedCharacters` | 4 Mi characters | Core 保留字符容量 |
+| `MaxQueuedMessages` | 8192 | Pipeline queue 消息容量 |
+| `MaxQueuedCharacters` | 4 Mi characters | Pipeline 保留字符容量 |
 | `MaxMessageCharacters` | 16 Ki characters | 单条消息字符限制 |
 | `ReservedCriticalMessages` | 64 | 低于 `CriticalSeverity` 的记录不能使用的消息容量 |
 | `ReservedCriticalCharacters` | 64 Ki characters | 保留字符容量 |
@@ -126,8 +140,10 @@ Critical 记录可以在普通记录不能驱逐时驱逐非 critical 记录。�
 
 注册规则：
 
-- `AddSink` 拒绝同一实例重复注册；成功后所有权转移给 pipeline。
-- `TryAddSink` 同一精确运行时类型最多保留一个 active sink，并会在其文档规定的所有权路径中 dispose 被拒绝的新实例。
+- `RegisterSink` 是唯一注册入口。默认 `AllowMultiple` 模式允许同一具体类型存在多个 active 实例；`UniqueExactType` 会拒绝同一精确运行时类型的另一个 active 实例。
+- 新实例注册成功或同一 active 实例重复注册时，`LogSinkRegistrationResult.IsRegistered` 为 `true`。
+- `PipelineOwnsSink` 是所有权判断依据。其为 `true` 时调用方不得 dispose sink；`CallerRetainsOwnership` 为 `true` 时，调用方必须 dispose 或复用该 sink。
+- 注册被拒绝时，`RegisterSink` 绝不会隐式 dispose 传入的 sink。可读取 `Status` 区分类型重复、容量不足与 pipeline 正在停止。
 - `RemoveSink(sink, quiescenceTimeoutMs) == true` 表示之前的 dispatch 已静止，所有权已转回调用方。Timeout 只允许从零到 `MaxSupportedShutdownDrainTimeoutMs`；非法值会在所有权变化前被拒绝。
 - `RemoveSink(sink) == false` 表示调用方不得 dispose 它。
 - `ClearSinks` 与 pipeline shutdown 会 retire 并 dispose pipeline-owned sink，不把所有权转回调用方。
@@ -167,7 +183,18 @@ var fileSink = new FileLogSink(
         SourcePathMode = LogSourcePathMode.FileName
     });
 
-pipeline.TryAddSink(fileSink);
+LogSinkRegistrationResult fileRegistration = pipeline.RegisterSink(
+    fileSink,
+    LogSinkRegistrationMode.UniqueExactType);
+if (!fileRegistration.IsRegistered)
+{
+    if (fileRegistration.CallerRetainsOwnership)
+    {
+        fileSink.Dispose();
+    }
+
+    throw new InvalidOperationException("The file sink could not be registered.");
+}
 ```
 
 `Rotate` 限制 active file，并只保留符合本 sink archive 命名语法的归档。`WarnOnly` 只报告增长，不限制大小；`None` 不执行大小维护。`MaxArchiveFiles == 0` 会在 rotation 后删除 owned archive。Archive retention 采用增量维护：每次 maintenance 最多扫描 64 个顶层目录项、删除 16 个严格 owned archive，并使用固定容量候选存储，不会实例化或排序整个目录。Rotation 不会重新开始 active scan，而是标记后续 pass，因此持续 rotation 不会饿死 cursor 推进。在目录趋于稳定且文件系统允许删除后，持续执行 pipeline maintenance——threaded processor loop，或 single-threaded mode 下由调用方执行 `Pump`——会最终收敛到 `MaxArchiveFiles`。如果 sink 由调用方直接持有且没有注册到 pipeline，调用方必须定期调用 `FileLogSink.PerformMaintenance()`，才能获得相同的推进与 idle-flush 行为。这些操作次数预算限制了锁内工作量与内存，但不能限制单次文件系统调用的延迟。Rotation 与 retention 不构成应用全局存储配额。
@@ -204,7 +231,7 @@ Owner 按以下顺序关闭：
 4. 检查 `LogPipelineShutdownResult`；
 5. 如果结果未完成，保留实例并重试。
 
-Shutdown 会停止接纳，在预算内 drain processor，flush 具备能力的 sink，等待 dispatch/disposal 静止，dispose owned sink，并返回 `Completed`、`CompletedWithDrops`、`CompletedWithFailures`、`TimedOut`、`AlreadyStopped` 或 `InProgress`。`Dispose` 会调用默认 shutdown，但不能把未完成结果变成成功；可靠性重要时应显式 shutdown。
+Shutdown 会停止接纳，在预算内 drain processor，flush 具备能力的 sink，等待 dispatch/disposal 静止，dispose owned sink，并返回 `Completed`、`CompletedWithDrops`、`CompletedWithFailures`、`TimedOut` 或 `InProgress`。完成后的重复调用会返回缓存的终止结果。`Dispose` 会调用默认 shutdown，但不能把未完成结果变成成功；可靠性重要时应显式 shutdown。
 
 Public flush 与 shutdown 入口会在 drain、retire 或修改 sink ownership 前校验 `LogFlushMode` 与有界 timeout。`-1` 表示使用已配置 shutdown budget；其他合法值为零到 `MaxSupportedShutdownDrainTimeoutMs`。
 
@@ -222,7 +249,7 @@ Assembly 不使用 Unity API、反射发现、动态代码生成或 unsafe code�
 
 ## Integration 检查清单
 
-- 业务 assembly 只引用 `CycloneGames.Logging`。
+- 业务 assembly 只引用 `CycloneGames.Logging.Core`，代码使用 `CycloneGames.Logging` 生产者 namespace。
 - 纯 C# host 引用 `CycloneGames.Logging.Pipeline`，并保留具体 `LogPipeline` owner。
 - Unity host 引用 `CycloneGames.Logging.Unity`，由其组合本包。
 - 依赖可选 SDK 的自定义 sink 放入专用 integration assembly。

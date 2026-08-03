@@ -38,7 +38,7 @@ CycloneGames.InputSystem 是基于 Unity Input System 的 YAML 驱动输入层�
 
 | Assembly | Path | 用途 |
 | --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | 配置、manager、player、context、响应式输入、存储边界。依赖 Unity Input System、UniTask、R3、VYaml、CycloneGames.Hash 与 CycloneGames.Logging。 |
+| `CycloneGames.InputSystem.Runtime` | `Runtime/Scripts/` | 配置、manager、player、context、响应式输入、存储边界。依赖 Unity Input System、UniTask、R3、VYaml、CycloneGames.Hash 与 `CycloneGames.Logging.Core`。 |
 | `CycloneGames.InputSystem.Editor` | `Editor/` | YAML authoring、validation、安全写入、常量生成。仅 Editor。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.UGUI` | `Runtime/Scripts/Integrations/UGUI/` | `InputDeviceIconSet`、`InputDeviceIconSwitcher`、菜单导航组件。`autoReferenced: false`。 |
 | `CycloneGames.InputSystem.Runtime.Integrations.VContainer` | `Runtime/Scripts/Integrations/DI/VContainer/Base/` | 容器持有的 manager、async startup、resolver adapter。无 AssetManagement 依赖。 |

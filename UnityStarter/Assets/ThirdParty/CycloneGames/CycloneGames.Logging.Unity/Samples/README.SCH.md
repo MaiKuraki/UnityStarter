@@ -2,7 +2,7 @@
 
 这些示例演示 Unity 中的三层日志设计：生产者使用 `LogChannel`，应用 bootstrap 拥有 ambient `LogPipeline`，隔离的诊断工具可以创建自己的显式 pipeline 与 sink。
 
-脚本编译进 `CycloneGames.Logging.Unity.Samples`。该可选 assembly 引用 `CycloneGames.Logging`、`CycloneGames.Logging.Pipeline` 与 `CycloneGames.Logging.Unity`，并设置 `autoReferenced: false`，不属于生产 public API assembly。
+脚本编译进 `CycloneGames.Logging.Unity.Samples`。该可选 assembly 引用 `CycloneGames.Logging.Core`、`CycloneGames.Logging.Pipeline` 与 `CycloneGames.Logging.Unity`，并设置 `autoReferenced: false`，不属于生产 public API assembly。
 
 Sample timing、allocation、queue peak 与文件行为会受到 Editor/Player、backend、硬件、Console 状态、存储、active sink 与 settings 影响。它们只是本地诊断观察。Shipping target 与平台认证需要单独的验证。
 
@@ -13,8 +13,8 @@ Sample timing、allocation、queue peak 与文件行为会受到 Editor/Player�
 | `Diagnostics/LoggingSamplesLog.cs` | Assembly-local category 与 explicit/ambient `LogChannel` 创建 | 集中所有 sample channel 构造 |
 | `LoggingSample.cs` | 最小化使用 project-owned bootstrap 的生产者 | 产生三条记录；不拥有 backend |
 | `LoggingPerformanceTest.cs` | 使用缓存 state builder 的有限 mixed-severity load | 临时修改 minimum severity，并可能注册 file sink；destroy 时恢复并移除 |
-| `LoggingPoolMonitor.cs` | Core queue 与进程级 idle pool 观察 | 附加后两秒执行一次有界 burst |
-| `LoggingBenchmark.cs` | 本地比较 disabled、no-sink、core、burst、file 与 Unity Console path | 每个 case 拥有一个显式 single-threaded pipeline，强制 GC、执行 I/O 并写 report |
+| `LoggingPoolMonitor.cs` | Pipeline queue 与进程级 idle pool 观察 | 附加后两秒执行一次有界 burst |
+| `LoggingBenchmark.cs` | 本地比较 disabled、no-sink、pipeline、burst、file 与 Unity Console path | 每个 case 拥有一个显式 single-threaded pipeline，强制 GC、执行 I/O 并写 report |
 | `SampleScene.unity` | 承载示例 component | `Benchmark` active；`LoggingSample` 与 `PerformanceTest` inactive |
 
 Scene 中没有 `LoggingPoolMonitor`，需要该练习时将它添加到临时 GameObject。
@@ -25,7 +25,7 @@ Scene 中没有 `LoggingPoolMonitor`，需要该练习时将它添加到临时 G
 
    `UnityStarter/Assets/ThirdParty/CycloneGames/CycloneGames.Logging.Unity/Samples/SampleScene.unity`
 
-2. 等待 `CycloneGames.Logging`、`CycloneGames.Logging.Pipeline`、`CycloneGames.Logging.Unity` 与 `CycloneGames.Logging.Unity.Samples` 完成编译。
+2. 等待 `CycloneGames.Logging.Core`、`CycloneGames.Logging.Pipeline`、`CycloneGames.Logging.Unity` 与 `CycloneGames.Logging.Unity.Samples` 完成编译。
 3. 创建或检查 `Assets/Resources/CycloneGames.Logging.Unity/LoggingSettings.asset`。
 4. `Benchmark`、`LoggingSample` 与 `PerformanceTest` 每次只保留一个 active。
 5. 进入 Play Mode，观察选定输出与统计；退出后检查 shutdown 或 disposal diagnostics。
@@ -80,20 +80,20 @@ Pipeline 只在 severity、category、active sink、lifecycle 与 queue reservat
 
 1. 要求当前 `LogRuntime.Writer` 是 `LogPipeline`；
 2. 在 WebGL Player 之外创建 `Application.temporaryCachePath/CycloneGames.Logging/LoadExample.log`；
-3. 可能时通过 `TryAddSink` 注册该 sink；
+3. 通过 `RegisterSink(UniqueExactType)` 注册该 sink；如果注册后所有权仍属于示例，则立即 dispose；
 4. 保存之前的 `MinimumSeverity`，再选择 `Trace`；
 5. 每帧最多六条，覆盖全部 active severity，共提交恰好 10,000 条记录；
-6. 在 `OnDestroy` 中恢复之前的 minimum severity；
-7. 只在 `RemoveSink(...)=true` 转回所有权后 dispose 临时 file sink。
+6. 在运行完成、组件停用或对象销毁时恢复之前的 minimum severity；
+7. 只在 `RemoveSink(...)=true` 转回所有权后 dispose 临时 file sink；若静止等待超时，则在后续完成帧重试清理。
 
 显示的 duration 测量跨帧 submission，不表示 sink delivery 或 durable persistence 已完成。解释结果前应检查：
 
-- `LogPipeline.GetStatistics()` 中的 core admission、processing 与 drop；
+- `LogPipeline.GetStatistics()` 中的 pipeline admission、processing 与 drop；
 - `FileLogSink.Statistics` 与文件内容；
 - 启用 Unity Console 输出时的 `UnityConsoleLogSink.GetStatistics()`；
 - Unity Profiler 数据与目标存储行为。
 
-WebGL 会跳过 file sink。离开 Play Mode 或销毁 component 会执行 cleanup；完成后只禁用 component 不会触发 `OnDestroy`，因此应保留 GameObject 直到正常 scene/Play Mode teardown。
+WebGL 会跳过 file sink。停用或销毁 component 都会尝试执行幂等 cleanup。若完成时等待静止超时，component 会保持启用，并在后续帧继续重试 cleanup，成功后再停用自身。
 
 ## 教程 4：Queue 与 Pool Monitor
 
@@ -101,9 +101,9 @@ WebGL 会跳过 file sink。离开 Play Mode 或销毁 component 会执行 clean
 
 报告包括：
 
-- 当前与峰值 core queue 消息占用；
-- 当前与峰值 core 保留字符占用；
-- core total drop；
+- 当前与峰值 pipeline queue 消息占用；
+- 当前与峰值 pipeline 保留字符占用；
+- pipeline total drop；
 - 当前与峰值 cached `LogEvent` 和 `StringBuilder` 数量；
 - pool miss。
 
@@ -119,7 +119,7 @@ Harness 预热 pool 后测量：
 
 - filtered generic-state record；
 - 无 sink 的 pipeline；
-- 使用 `NullLogSink` 的 core string、capturing-builder 与 generic-state builder case；
+- 使用 `NullLogSink` 的 pipeline string、capturing-builder 与 generic-state builder case；
 - 不进行中间 pumping 的 generic-state burst；
 - WebGL Player 之外的 file output；
 - Unity Console handoff。
@@ -129,7 +129,7 @@ Harness 预热 pool 后测量：
 - `LoggingBenchmarkReport.txt`；
 - `LoggingBenchmarkFile.log`。
 
-每个 pipeline 都会在进入下一个 case 前以五秒 buffered budget shutdown。Report 包含 elapsed time、派生 microseconds/record、派生 records/second、可用时的 current-thread allocation observation、Gen0 count、pool miss/discard 与 core drop。
+每个 pipeline 都会在进入下一个 case 前以五秒 buffered budget shutdown。Report 包含 elapsed time、派生 microseconds/record、派生 records/second、可用时的 current-thread allocation observation、Gen0 count、pool miss/discard 与 pipeline drop。
 
 解释 report 时注意：
 
@@ -150,6 +150,7 @@ Sink 收到借用的 `LogEvent`，只能使用到 `Emit` 返回：
 ```csharp
 using System.Text;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 
 public sealed class ExampleSink : ILogSink
 {
@@ -202,7 +203,7 @@ public sealed class ExampleSink : ILogSink
 1. 使用 sample output 诊断前，运行 `CycloneGames.Logging.Unity.Tests.Editor`。
 2. 每次只运行一个 scenario。
 3. 记录 Editor/Player、scripting backend、target、hardware、build type、settings、sink set 与 Console state。
-4. 检查 core 与 Unity handoff 的 drop/peak counter。
+4. 检查 pipeline 与 Unity handoff 的 drop/peak counter。
 5. 确认 owning scenario 停止后，临时文件可以打开并删除。
 6. 在代表性硬件的 standalone Player 中重复性能调查；使用 IL2CPP 时单独测试。
 

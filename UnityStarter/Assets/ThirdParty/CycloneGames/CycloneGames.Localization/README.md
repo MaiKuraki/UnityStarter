@@ -34,7 +34,7 @@ Use this module for versioned, partitioned, transactional localization through i
 - **Presentation bindings**: `LocalizeTMPText`, `LocalizeImage`, `LocalizationWindowBinder` subscribe only while enabled; no per-frame polling.
 - **Pseudo-localization**: Placeholder- and tag-safe text transformation for layout and content QA.
 - **Editor workspaces**: Multi-language table workspace, incremental CSV exchange (RFC 4180), validation window, partitioned catalog builds.
-- **Pure C# core**: `CycloneGames.Localization.Core` has `noEngineReferences: true`; runtime and components depend on `UniTask` and `CycloneGames.AssetManagement`, while diagnostic-producing assemblies use `CycloneGames.Logging`.
+- **Pure C# core**: `CycloneGames.Localization.Core` has `noEngineReferences: true`; runtime and components depend on `UniTask` and `CycloneGames.AssetManagement`, while diagnostic-producing assemblies reference `CycloneGames.Logging.Core` and use the `CycloneGames.Logging` API namespace.
 
 ## Architecture
 

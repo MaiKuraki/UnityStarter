@@ -3,7 +3,7 @@
     "rootNamespace": "",
     "references": [
         "UniTask",
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.AssetManagement.Runtime",
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayAbilities.Core",

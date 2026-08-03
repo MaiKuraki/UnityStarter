@@ -7,7 +7,7 @@
         "UniTask",
         "R3.Unity",
         "Unity.InputSystem",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

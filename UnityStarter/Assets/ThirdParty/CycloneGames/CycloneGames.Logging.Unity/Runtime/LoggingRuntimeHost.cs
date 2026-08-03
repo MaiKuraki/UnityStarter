@@ -2,6 +2,7 @@ using System;
 using System.Diagnostics;
 using System.Threading;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using UnityEngine;
 
 namespace CycloneGames.Logging.Unity
@@ -92,7 +93,7 @@ namespace CycloneGames.Logging.Unity
 #endif
 
         private const int DefaultPumpItems = 256;
-        private const int CorePumpBudgetMilliseconds = 1;
+        private const int PipelinePumpBudgetMilliseconds = 1;
         private const int UnityConsoleBudgetMilliseconds = 2;
 
         private static readonly object QueueLock = new object();
@@ -732,7 +733,7 @@ namespace CycloneGames.Logging.Unity
 
             try
             {
-                pipeline.PumpWithinBudget(DefaultPumpItems, CorePumpBudgetMilliseconds);
+                pipeline.PumpWithinBudget(DefaultPumpItems, PipelinePumpBudgetMilliseconds);
             }
             catch
             {

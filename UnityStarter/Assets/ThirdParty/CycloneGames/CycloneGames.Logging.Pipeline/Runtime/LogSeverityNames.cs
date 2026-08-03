@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
+using CycloneGames.Logging;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     /// <summary>
     /// Provides pre-cached string representations for LogSeverity values.

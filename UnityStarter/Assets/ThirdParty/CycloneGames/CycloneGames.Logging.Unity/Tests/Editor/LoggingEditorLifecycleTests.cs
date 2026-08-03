@@ -1,6 +1,7 @@
 using System.Threading;
-using CycloneGames.Logging.Unity.Editor;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
+using CycloneGames.Logging.Unity.Editor;
 using NUnit.Framework;
 using UnityEditor;
 using UnityEngine;
@@ -74,7 +75,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
             var sink = new CountingSink();
             try
             {
-                Assert.IsTrue(external.AddSink(sink));
+                Assert.IsTrue(external.RegisterSink(sink).IsRegistered);
 
                 LoggingEditorBootstrap.ProcessPlayModeStateChangeForTests(PlayModeStateChange.ExitingEditMode);
                 LoggingRuntimeHost.ProcessApplicationQuittingForTests();

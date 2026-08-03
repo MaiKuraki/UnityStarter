@@ -7,7 +7,7 @@
         "CycloneGames.Networking.Unity.Runtime",
         "CycloneGames.Networking.Platform.Permissions",
         "CycloneGames.DeterministicMath.Core",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

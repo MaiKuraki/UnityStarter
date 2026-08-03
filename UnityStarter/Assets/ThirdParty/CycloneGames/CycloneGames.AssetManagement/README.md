@@ -77,7 +77,7 @@ Application composition selects a provider module and passes `IAssetPackage` to 
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | no | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` plus an explicit consumer reference |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | no | `jp.hadashikick.vcontainer` plus an explicit consumer reference |
 
-The core runtime directly depends on UniTask, CycloneGames.Logging, CycloneGames.IO Core/SystemIO, and CycloneGames.Hash Core. Installing an optional package is not sufficient: its `versionDefines` range must match and the consumer asmdef must reference the conditional assembly. Never add the generated `CYCLONEGAMES_HAS_*` symbols manually in Player Settings.
+The core runtime directly depends on UniTask, `CycloneGames.Logging.Core`, CycloneGames.IO Core/SystemIO, and CycloneGames.Hash Core. Installing an optional package is not sufficient: its `versionDefines` range must match and the consumer asmdef must reference the conditional assembly. Never add the generated `CYCLONEGAMES_HAS_*` symbols manually in Player Settings.
 
 AssetManagement emits diagnostics through stable `LogChannel` categories under `CycloneGames.AssetManagement`. The package never initializes, flushes, replaces, or shuts down a logging backend. With only `com.cyclone-games.logging` installed, diagnostics safely route to `NullLogWriter`; the application composition root may optionally install `CycloneGames.Logging.Pipeline`, compose `CycloneGames.Logging.Unity`, or provide another `ILogWriter` backend.
 

@@ -5,7 +5,7 @@
         "CycloneGames.RPGFoundation.Movement.Core",
         "CycloneGames.RPGFoundation.Movement.Runtime",
         "Kybernetik.Animancer",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

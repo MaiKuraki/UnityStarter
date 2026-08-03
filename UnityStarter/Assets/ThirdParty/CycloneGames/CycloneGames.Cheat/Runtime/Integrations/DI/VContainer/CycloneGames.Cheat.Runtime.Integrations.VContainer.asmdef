@@ -5,7 +5,7 @@
         "VContainer",
         "CycloneGames.Cheat.Runtime",
         "CycloneGames.Cheat.Core",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Threading;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Unity.Tests.Editor
@@ -126,7 +127,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
             ResetUnityConsoleLogSinkState();
             LogPipeline pipeline = LogPipelineFactory.CreateSingleThreaded(CreateOptions(4, 512));
             var sink = new OutOfMemoryEmitSink();
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
             ((ILogWriter)pipeline).Write(
                 LogSeverity.Info,
                 "RuntimeHost",
@@ -148,7 +149,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
             ResetUnityConsoleLogSinkState();
             LogPipeline pipeline = LogPipelineFactory.CreateThreaded(CreateOptions(4, 512));
             var sink = new OutOfMemoryEmitSink();
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
             ((ILogWriter)pipeline).Write(
                 LogSeverity.Info,
                 "RuntimeHost",
@@ -355,7 +356,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
             var sink = new FormattingSink();
             try
             {
-                Assert.IsTrue(pipeline.AddSink(sink));
+                Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
                 ((ILogWriter)pipeline).Write(
                     severity,
                     category,

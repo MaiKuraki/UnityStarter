@@ -91,7 +91,7 @@ Hot-path rules stay conservative: prefer false negatives over broad false positi
 - `UnityEngine.Debug.Log*`, `UnityEngine.Debug.Assert*`, and `Debug.unityLogger` access.
 - `UnityEngine.MonoBehaviour.print`.
 - `System.Console.Write*` and access to `Console.Out` or `Console.Error`.
-- References to the concrete `CycloneGames.Logging.LogPipeline` backend outside logging backend assemblies.
+- References to the concrete `CycloneGames.Logging.Pipeline.LogPipeline` backend outside logging backend assemblies.
 
 The rule applies only to assemblies whose names start with `CycloneGames.`. The backend assemblies `CycloneGames.Logging.Pipeline`, `CycloneGames.Logging.Unity`, and `CycloneGames.Logging.Unity.Editor` are excluded, as are assemblies or source paths explicitly identified as Tests, Tools, or CodeGen — those sit at verification or host I/O boundaries. Runtime, Editor, Samples, and Benchmarks stay governed. `CycloneGames.Logging.Unity.Samples` may reference `LogPipeline`, but its direct Unity and Console output calls remain governed. Similar names such as `CycloneGames.MemoryGovernance.Logging.Pipeline` or `CycloneGames.MemoryGovernance.Logging.Pipeline.Editor` are not standard backend assemblies and remain in scope.
 

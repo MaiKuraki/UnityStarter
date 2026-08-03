@@ -1098,7 +1098,7 @@ namespace CycloneGames.Localization.Tests.Editor
                 var failedHandle = (ControlledAssetHandle<Sprite>)package.Handles[1];
                 var expectedException = new InvalidOperationException("provider failure");
                 var writer = new RecordingLogWriter();
-                ILogWriter previousWriter = LogRuntime.ReplaceWriter(writer);
+                ILogWriter previousWriter = InstallWriter(writer);
                 try
                 {
                     failedHandle.Fail(expectedException);
@@ -1384,6 +1384,13 @@ namespace CycloneGames.Localization.Tests.Editor
         private static void RestoreWriter(ILogWriter previousWriter, RecordingLogWriter writer)
         {
             LogRuntime.TryReplaceWriter(writer, previousWriter);
+        }
+
+        private static ILogWriter InstallWriter(ILogWriter writer)
+        {
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.That(LogRuntime.TryReplaceWriter(previousWriter, writer), Is.True);
+            return previousWriter;
         }
 
         private readonly struct LogRecord

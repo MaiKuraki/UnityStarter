@@ -6,7 +6,7 @@
         "CycloneGames.InputSystem.Runtime",
         "CycloneGames.InputSystem.Runtime.Integrations.VContainer",
         "CycloneGames.AssetManagement.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

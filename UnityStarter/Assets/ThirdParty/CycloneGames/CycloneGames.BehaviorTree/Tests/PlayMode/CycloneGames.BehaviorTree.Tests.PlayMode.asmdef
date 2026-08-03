@@ -5,7 +5,7 @@
         "CycloneGames.BehaviorTree.Runtime",
         "CycloneGames.BehaviorTree.Benchmarks",
         "CycloneGames.BehaviorTree.Tests.Support",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

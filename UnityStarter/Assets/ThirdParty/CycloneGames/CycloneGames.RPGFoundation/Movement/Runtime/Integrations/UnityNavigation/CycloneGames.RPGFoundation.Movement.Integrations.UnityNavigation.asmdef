@@ -5,7 +5,7 @@
         "CycloneGames.RPGFoundation.Movement.Core",
         "CycloneGames.RPGFoundation.Movement.Runtime",
         "Unity.AI.Navigation",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

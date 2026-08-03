@@ -34,7 +34,7 @@ CycloneGames.Localization 管理版本化文本与本地化资产内容，面向
 - **表现层绑定**：`LocalizeTMPText`、`LocalizeImage`、`LocalizationWindowBinder` 只在 enabled 时订阅；无 per-frame polling。
 - **Pseudo-localization**：保护 placeholder 与 tag 的文本变换，用于布局和内容 QA。
 - **Editor workspace**：多语言 table workspace、增量 CSV 交换（RFC 4180）、validation 窗口、分区 catalog build。
-- **纯 C# 核心**：`CycloneGames.Localization.Core` 设 `noEngineReferences: true`；Runtime 与 Components 依赖 `UniTask` 和 `CycloneGames.AssetManagement`，产生诊断的程序集使用 `CycloneGames.Logging`。
+- **纯 C# 核心**：`CycloneGames.Localization.Core` 设 `noEngineReferences: true`；Runtime 与 Components 依赖 `UniTask` 和 `CycloneGames.AssetManagement`，产生诊断的 assembly 引用 `CycloneGames.Logging.Core`，并使用 `CycloneGames.Logging` API namespace。
 
 ## 架构
 

@@ -234,20 +234,21 @@ When a developer derives a new game from UnityStarter and runs `rename_project`,
 The Build module includes:
 
 - `BuildData` ScriptableObject configuration.
-- Git-based version information through `Build.VersionControl.Editor`.
+- Git or Perforce revision metadata through `Build.VersionControl.Editor`; batch-mode and release builds require one, while only an interactive Development build may use the explicit `LocalDevelopment` fallback.
 - Editor menu items and command-line player build entry points.
-- Optional reflection-detected integrations for HybridCLR, Obfuz, YooAsset, Addressables, and Buildalon.
+- Optional integrations for HybridCLR, Obfuz, YooAsset 3, and Addressables; missing packages do not break the core build assembly.
 - Cheat define control for internal builds.
-- CI-facing methods such as `Build.Pipeline.Editor.BuildScript.PerformBuild_CI`.
+- A single CI entry point: `Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine`.
 
 Minimal command shape:
 
 ```bash
 Unity -batchmode -quit -projectPath UnityStarter \
-  -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
-  -buildTarget StandaloneWindows64 \
-  -output Build/Windows/UnityStarter.exe \
-  -clean
+  -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine \
+  -buildTarget Win64 \
+  -pipelineProfile Assets/UnityStarter/Editor/Build/BuildData.asset \
+  -pipelineOutput Build/Windows/Release/UnityStarter.exe \
+  -pipelineClean
 ```
 
 The [Build README](UnityStarter/Assets/Build/README.md) includes deeper configuration notes, hot-update workflows, and CI examples.
@@ -273,7 +274,7 @@ See [Tools README](Tools/README.md) for usage details.
 ### Requirements
 
 - The Unity version recorded in `UnityStarter/ProjectSettings/ProjectVersion.txt`.
-- Git / Perforce / SVN, used by the Build module for automatic version information.
+- Git or Perforce is required for automatic version metadata in batch-mode and release builds; only an interactive Development build may use deterministic `LocalDevelopment` fallback metadata.
 
 ### First Run
 
@@ -325,7 +326,7 @@ The repository contains tests and analyzer rules, but the safest validation path
 - Open the project in Unity and confirm it compiles without Console errors.
 - Run relevant EditMode tests for any module you change.
 - Build the analyzer project with `dotnet build UnityStarter/Analyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj -c Release`.
-- Use `Build > Print Debug Info` before changing BuildData or CI settings.
+- Use `Build > Pipeline > Print Selected Profile` before changing BuildData or CI settings.
 - Treat Networking as experimental until you complete real multiplayer validation in your target environment.
 
 ## Related Projects

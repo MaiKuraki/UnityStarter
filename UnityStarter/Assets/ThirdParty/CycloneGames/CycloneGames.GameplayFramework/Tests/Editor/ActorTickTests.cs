@@ -145,7 +145,7 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             var expectedException = new InvalidOperationException("Tick failure requested by test.");
             throwingActor.TickAction = _ => throw expectedException;
             var writer = new RecordingLogWriter();
-            ILogWriter previousWriter = LogRuntime.ReplaceWriter(writer);
+            ILogWriter previousWriter = InstallWriter(writer);
 
             try
             {
@@ -272,6 +272,13 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
         private static void RestoreWriter(ILogWriter previousWriter, RecordingLogWriter writer)
         {
             LogRuntime.TryReplaceWriter(writer, previousWriter);
+        }
+
+        private static ILogWriter InstallWriter(ILogWriter writer)
+        {
+            ILogWriter previousWriter = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previousWriter, writer));
+            return previousWriter;
         }
 
         private readonly struct LogRecord

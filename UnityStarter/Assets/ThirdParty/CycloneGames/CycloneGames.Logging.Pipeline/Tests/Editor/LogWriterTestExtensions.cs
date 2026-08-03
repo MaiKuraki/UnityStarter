@@ -2,6 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Text;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor
 {

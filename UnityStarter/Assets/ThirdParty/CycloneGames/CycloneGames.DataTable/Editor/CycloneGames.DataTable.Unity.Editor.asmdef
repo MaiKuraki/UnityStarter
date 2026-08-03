@@ -2,7 +2,7 @@
     "name": "CycloneGames.DataTable.Unity.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.DataTable.Core"
     ],
     "includePlatforms": ["Editor"],

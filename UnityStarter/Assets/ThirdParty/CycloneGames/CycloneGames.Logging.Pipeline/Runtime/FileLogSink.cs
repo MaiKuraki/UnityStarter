@@ -4,9 +4,10 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Text;
-using CycloneGames.Logging.Internal;
+using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline.Internal;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public enum FileLogSinkHealth : byte
     {
@@ -1239,14 +1240,13 @@ namespace CycloneGames.Logging
             _lastDiagnosticTimestamp = now;
             try
             {
-                string failureType = exception == null ? "none" : exception.GetType().Name;
                 string description = detail ?? "sink operation failed";
                 string severity = kind == FileLogSinkFailureKind.None ? "WARNING" : "ERROR";
-                Console.Error.WriteLine(
+                EmergencyLogWriter.TryWrite(
                     "[" + severity + "] FileLogSink: " + description
                     + "; kind=" + kind
-                    + "; exception=" + failureType
-                    + ".");
+                    + ".",
+                    exception);
             }
             catch
             {
@@ -1512,16 +1512,9 @@ namespace CycloneGames.Logging
 
         private static void TryWriteInitializationDiagnostic(Exception exception)
         {
-            try
-            {
-                Console.Error.WriteLine(
-                    "[ERROR] FileLogSink: initialization failed; exception="
-                    + exception.GetType().Name
-                    + ".");
-            }
-            catch
-            {
-            }
+            EmergencyLogWriter.TryWrite(
+                "[ERROR] FileLogSink: initialization failed.",
+                exception);
         }
     }
 }

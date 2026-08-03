@@ -36,7 +36,7 @@ adapter 不保留缓存、Unity object 或全局服务；调用方拥有 AssetMa
 
 | 程序集 | 路径 | 用途 |
 | --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` 与 `InputSystemAssetManagementHelper`。依赖 UniTask、InputSystem.Runtime、InputSystem.Runtime.Integrations.VContainer、AssetManagement.Runtime 与 CycloneGames.Logging。 |
+| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` 与 `InputSystemAssetManagementHelper`。依赖 UniTask、InputSystem.Runtime、InputSystem.Runtime.Integrations.VContainer、AssetManagement.Runtime 与 `CycloneGames.Logging.Core`。 |
 
 该程序集设 `autoReferenced: false`，并使用 package-derived `VCONTAINER_PRESENT` constraint（来自 `jp.hadashikick.vcontainer`）。未安装 VContainer 时不参与编译。消费者必须显式引用 `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`。不要添加 `PlayerSettings` scripting define —— 物理 integration package 及其 asmdef 使该边界在 assembly graph 中显式可见。
 
