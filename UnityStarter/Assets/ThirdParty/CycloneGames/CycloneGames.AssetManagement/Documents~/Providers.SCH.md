@@ -144,6 +144,8 @@ IAssetPackage package = await AssetManager.InitializeDefaultPackageAsync(
 
 Adapter 强制一个 AssetManagement Addressables owner 与一个逻辑 package。Module 初始化与 package 初始化是独立门；`ProviderOptions` 必须为 null。Addressables group、profile、远程路径与 Player 内容必须已由产品管线构建。
 
+产品管线将 `AddressablesVersion.json` 写入 `Addressables.BuildPath`。Addressables 官方 Player processor 会把该目录直接映射到 `StreamingAssets/aa`，因此 adapter 只读取 `StreamingAssets/aa/AddressablesVersion.json`，不会探测其他路径或历史布局。
+
 ```csharp
 if (package is not IAddressablesCatalogMaintenance maintenance)
 {

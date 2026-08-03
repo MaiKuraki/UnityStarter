@@ -5,7 +5,7 @@
         "CycloneGames.Choreography.CycloneAudio",
         "CycloneGames.Choreography.Core",
         "CycloneGames.Audio.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

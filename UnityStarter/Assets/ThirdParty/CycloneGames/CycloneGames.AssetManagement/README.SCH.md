@@ -77,7 +77,7 @@ flowchart TD
 | `CycloneGames.AssetManagement.Runtime.Integrations.Navigathena` | no | `com.mackysoft.navigathena` `[1.1.0,1.1.1)` 加显式 consumer reference |
 | `CycloneGames.AssetManagement.Runtime.Integrations.VContainer` | no | `jp.hadashikick.vcontainer` 加显式 consumer reference |
 
-核心 Runtime 直接依赖 UniTask、CycloneGames.Logging、CycloneGames.IO Core/SystemIO 与 CycloneGames.Hash Core。仅安装可选包不够：其 `versionDefines` 范围必须匹配，且 consumer asmdef 必须引用条件 Assembly。不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。
+核心 Runtime 直接依赖 UniTask、`CycloneGames.Logging.Core`、CycloneGames.IO Core/SystemIO 与 CycloneGames.Hash Core。仅安装可选包不够：其 `versionDefines` 范围必须匹配，且 consumer asmdef 必须引用条件 Assembly。不要在 PlayerSettings 中手工添加 `CYCLONEGAMES_HAS_*` 符号。
 
 AssetManagement 通过 `CycloneGames.AssetManagement` 下的稳定 `LogChannel` category 输出诊断。本包不会初始化、flush、替换或关闭日志 backend。仅安装 `com.cyclone-games.logging` 时，诊断会安全地进入 `NullLogWriter`；应用 composition root 可以按需安装 `CycloneGames.Logging.Pipeline`、组合 `CycloneGames.Logging.Unity`，或提供其他 `ILogWriter` backend。
 

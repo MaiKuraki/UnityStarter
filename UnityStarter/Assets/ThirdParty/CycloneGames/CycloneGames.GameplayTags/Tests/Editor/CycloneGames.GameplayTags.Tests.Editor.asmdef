@@ -6,7 +6,7 @@
         "CycloneGames.GameplayTags.Integrations.Logging",
         "CycloneGames.GameplayTags.Unity.Runtime",
         "CycloneGames.GameplayTags.Unity.Editor",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

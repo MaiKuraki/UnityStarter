@@ -1,7 +1,7 @@
 using System;
 using System.Threading;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     internal static class LogEventPool
     {

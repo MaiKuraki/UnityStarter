@@ -4,14 +4,14 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Threading;
-using CycloneGames.Logging;
-using CycloneGames.Logging.Internal;
+using CycloneGames.Logging.Pipeline;
+using CycloneGames.Logging.Pipeline.Internal;
 using UnityEngine;
 
 namespace CycloneGames.Logging.Unity
 {
     /// <summary>
-    /// Bounded adapter from the synchronous core sink contract to the Unity main thread.
+    /// Bounded adapter from the synchronous pipeline sink contract to the Unity main thread.
     /// </summary>
     public sealed class UnityConsoleLogSink : ILogSink, IFlushableLogSink, IIdempotentLogSinkDisposal
     {

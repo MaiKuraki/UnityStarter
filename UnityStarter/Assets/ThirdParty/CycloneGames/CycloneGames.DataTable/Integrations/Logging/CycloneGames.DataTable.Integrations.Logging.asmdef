@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.DataTable",
     "references": [
         "CycloneGames.DataTable.Core",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

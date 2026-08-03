@@ -58,7 +58,8 @@ namespace CycloneGames.Logging.Tests
             LogChannel channel = LogChannel.Create(TestCategory);
             var first = new RecordingWriter();
             var second = new RecordingWriter();
-            ILogWriter previous = LogRuntime.ReplaceWriter(NullLogWriter.Instance);
+            ILogWriter previous = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previous, NullLogWriter.Instance));
             ILogWriter installed = NullLogWriter.Instance;
 
             try
@@ -68,7 +69,7 @@ namespace CycloneGames.Logging.Tests
                 channel.Info("first");
                 Assert.AreEqual("first", first.Message);
 
-                Assert.AreSame(first, LogRuntime.ReplaceWriter(second));
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(first, second));
                 installed = second;
                 channel.Warning("second");
                 Assert.AreEqual("second", second.Message);
@@ -102,7 +103,8 @@ namespace CycloneGames.Logging.Tests
             var installedWriter = new RecordingWriter();
             var foreignWriter = new RecordingWriter();
             var replacementWriter = new RecordingWriter();
-            ILogWriter previous = LogRuntime.ReplaceWriter(installedWriter);
+            ILogWriter previous = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previous, installedWriter));
             ILogWriter installed = installedWriter;
 
             try
@@ -124,12 +126,30 @@ namespace CycloneGames.Logging.Tests
         }
 
         [Test]
+        public void NullWriter_CannotClaimInstallOrResetOwnership()
+        {
+            ILogWriter previous = LogRuntime.Writer;
+            Assert.IsTrue(LogRuntime.TryReplaceWriter(previous, NullLogWriter.Instance));
+
+            try
+            {
+                Assert.IsFalse(LogRuntime.TryInstallWriter(NullLogWriter.Instance));
+                Assert.IsFalse(LogRuntime.TryResetWriter(NullLogWriter.Instance));
+                Assert.IsFalse(LogRuntime.HasWriter);
+                Assert.AreSame(NullLogWriter.Instance, LogRuntime.Writer);
+            }
+            finally
+            {
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(NullLogWriter.Instance, previous));
+            }
+        }
+
+        [Test]
         public void InvalidWriterMutationArguments_ThrowBeforeMutation()
         {
             ILogWriter current = LogRuntime.Writer;
 
             Assert.Throws<ArgumentNullException>(() => LogRuntime.TryInstallWriter(null));
-            Assert.Throws<ArgumentNullException>(() => LogRuntime.ReplaceWriter(null));
             Assert.Throws<ArgumentNullException>(() => LogRuntime.TryReplaceWriter(null, NullLogWriter.Instance));
             Assert.Throws<ArgumentNullException>(() => LogRuntime.TryReplaceWriter(current, null));
             Assert.Throws<ArgumentNullException>(() => LogRuntime.TryResetWriter(null));
@@ -288,7 +308,8 @@ namespace CycloneGames.Logging.Tests
             internal RuntimeWriterScope(ILogWriter installedWriter)
             {
                 _installedWriter = installedWriter;
-                _previousWriter = LogRuntime.ReplaceWriter(installedWriter);
+                _previousWriter = LogRuntime.Writer;
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(_previousWriter, installedWriter));
             }
 
             public void Dispose()

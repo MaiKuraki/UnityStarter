@@ -5,7 +5,7 @@
         "CycloneGames.Foundation2D.Runtime",
         "CycloneGames.Foundation2D.Integrations.Burst",
         "CycloneGames.Foundation2D.Tests.Support",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

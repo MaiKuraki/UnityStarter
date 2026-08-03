@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.RPGFoundation.Movement.Runtime",
     "references": [
         "Unity.Mathematics",
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.RPGFoundation.Movement.Core"
     ],
     "includePlatforms": [],

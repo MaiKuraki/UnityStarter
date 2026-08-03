@@ -1,6 +1,6 @@
 #if UNITY_EDITOR
 using System;
-using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using UnityEditor;
 
 namespace CycloneGames.Logging.Unity.Editor

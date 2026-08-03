@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.Logging.Unity.Samples",
     "references": [
         "CycloneGames.Logging.Pipeline",
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Logging.Unity"
     ],
     "includePlatforms": [],

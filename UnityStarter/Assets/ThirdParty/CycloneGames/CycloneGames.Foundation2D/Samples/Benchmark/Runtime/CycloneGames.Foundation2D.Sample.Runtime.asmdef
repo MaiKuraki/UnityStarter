@@ -2,7 +2,7 @@
     "name": "CycloneGames.Foundation2D.Sample.Runtime",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Foundation2D.Runtime",
         "CycloneGames.Foundation2D.Integrations.Burst",
         "CycloneGames.Factory.Runtime",

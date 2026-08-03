@@ -2,7 +2,7 @@
   "name": "CycloneGames.Audio.Runtime.Integrations.Localization",
   "rootNamespace": "CycloneGames.Audio.Runtime.Integrations.Localization",
   "references": [
-    "CycloneGames.Logging",
+    "CycloneGames.Logging.Core",
     "CycloneGames.AssetManagement.Runtime",
     "CycloneGames.Audio.Runtime",
     "CycloneGames.Localization.Core",

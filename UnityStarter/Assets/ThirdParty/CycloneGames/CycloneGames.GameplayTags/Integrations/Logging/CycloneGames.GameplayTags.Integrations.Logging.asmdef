@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.GameplayTags",
     "references": [
         "CycloneGames.GameplayTags.Core",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

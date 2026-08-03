@@ -5,7 +5,7 @@
         "CycloneGames.Logging.Pipeline",
         "CycloneGames.Logging.Unity",
         "CycloneGames.Logging.Unity.Editor",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

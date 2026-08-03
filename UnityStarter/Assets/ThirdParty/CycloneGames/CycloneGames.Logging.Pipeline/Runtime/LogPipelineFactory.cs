@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public static class LogPipelineFactory
     {

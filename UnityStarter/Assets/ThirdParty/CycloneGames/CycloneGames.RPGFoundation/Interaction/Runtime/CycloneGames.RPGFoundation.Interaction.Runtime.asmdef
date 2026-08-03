@@ -9,7 +9,7 @@
         "CycloneGames.Factory.Runtime",
         "CycloneGames.Factory.Unity.Runtime",
         "CycloneGames.RPGFoundation.Interaction.Core",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

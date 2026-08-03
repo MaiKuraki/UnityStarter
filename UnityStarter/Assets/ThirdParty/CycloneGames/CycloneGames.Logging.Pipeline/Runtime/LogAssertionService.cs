@@ -2,10 +2,10 @@ using System;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Text;
-using CycloneGames.Logging.Internal;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline.Internal;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public sealed class LogAssertionService : ILogAssertion
     {

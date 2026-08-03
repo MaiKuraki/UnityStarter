@@ -54,9 +54,9 @@ flowchart LR
 
 | Assembly | Platform | `autoReferenced` | Direct references |
 | --- | --- | ---: | --- |
-| `CycloneGames.Utility.Runtime` | All Unity targets | `true` | `CycloneGames.Hash.Core`, `CycloneGames.Logging`, `UnityEngine.UI` |
+| `CycloneGames.Utility.Runtime` | All Unity targets | `true` | `CycloneGames.Hash.Core`, `CycloneGames.Logging.Core`, `UnityEngine.UI` |
 | `CycloneGames.Utility.SplashScreenModifier.Runtime` | All Unity targets | `true` | None |
-| `CycloneGames.Utility.Editor` | Editor only | `true` | `CycloneGames.Utility.Runtime`, `CycloneGames.Logging` |
+| `CycloneGames.Utility.Editor` | Editor only | `true` | `CycloneGames.Utility.Runtime`, `CycloneGames.Logging.Core` |
 | `CycloneGames.Utility.Tests.Editor` | Editor only | `false` | Runtime, Splash Runtime, Editor, Test Framework |
 | `CycloneGames.Utility.Tests.PlayMode` | Test builds | `false` | Runtime, Test Framework |
 | `CycloneGames.Utility.Tests.Performance` | Editor, conditional | `false` | Runtime, Performance Testing |

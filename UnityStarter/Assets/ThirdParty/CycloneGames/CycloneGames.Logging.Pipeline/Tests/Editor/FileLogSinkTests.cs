@@ -2,6 +2,8 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Text;
+using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor

@@ -4,7 +4,7 @@
     "references": [
         "CycloneGames.DataTable.Core",
         "CycloneGames.DataTable.Integrations.Logging",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

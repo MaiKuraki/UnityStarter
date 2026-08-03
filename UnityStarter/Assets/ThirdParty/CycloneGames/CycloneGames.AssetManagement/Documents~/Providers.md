@@ -144,6 +144,8 @@ IAssetPackage package = await AssetManager.InitializeDefaultPackageAsync(
 
 The adapter enforces one AssetManagement Addressables owner and one logical package. Module initialization and package initialization are separate gates; `ProviderOptions` must be null. Addressables Groups, Profiles, remote paths, and Player content must already be built by the product pipeline.
 
+The product pipeline writes `AddressablesVersion.json` into `Addressables.BuildPath`. Addressables' official Player processor maps that directory directly to `StreamingAssets/aa`, so the adapter reads only `StreamingAssets/aa/AddressablesVersion.json`. The provider does not probe alternative or historical layouts.
+
 ```csharp
 if (package is not IAddressablesCatalogMaintenance maintenance)
 {

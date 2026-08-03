@@ -2,7 +2,7 @@
     "name": "CycloneGames.Audio.Editor",
     "rootNamespace": "",
     "references": [
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "CycloneGames.Audio.Runtime"
     ],
     "includePlatforms": [

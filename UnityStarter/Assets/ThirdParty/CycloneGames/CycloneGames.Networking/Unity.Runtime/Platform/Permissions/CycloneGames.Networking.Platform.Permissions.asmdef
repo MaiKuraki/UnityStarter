@@ -3,7 +3,7 @@
     "rootNamespace": "CycloneGames.Networking.Platform",
     "references": [
         "UniTask",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

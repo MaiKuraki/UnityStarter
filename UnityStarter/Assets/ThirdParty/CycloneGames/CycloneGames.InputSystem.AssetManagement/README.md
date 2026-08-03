@@ -36,7 +36,7 @@ Use this package when InputSystem configuration is loaded from an AssetManagemen
 
 | Assembly | Path | Purpose |
 | --- | --- | --- |
-| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` and `InputSystemAssetManagementHelper`. Depends on UniTask, InputSystem.Runtime, InputSystem.Runtime.Integrations.VContainer, AssetManagement.Runtime, and CycloneGames.Logging. |
+| `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement` | `Runtime/Integrations/VContainer/` | `InputSystemAssetManagementVContainerAdapter` and `InputSystemAssetManagementHelper`. Depends on UniTask, InputSystem.Runtime, InputSystem.Runtime.Integrations.VContainer, AssetManagement.Runtime, and `CycloneGames.Logging.Core`. |
 
 The assembly is `autoReferenced: false` and uses a package-derived `VCONTAINER_PRESENT` constraint (from `jp.hadashikick.vcontainer`). It is absent from compilation when VContainer is not installed. Consumers must explicitly reference `CycloneGames.InputSystem.Runtime.Integrations.VContainer.AssetManagement`. Do not add a `PlayerSettings` scripting define — the physical integration package and its asmdef make the boundary explicit in the assembly graph.
 

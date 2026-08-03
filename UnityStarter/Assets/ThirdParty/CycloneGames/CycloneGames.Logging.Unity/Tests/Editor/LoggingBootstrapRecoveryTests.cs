@@ -1,5 +1,5 @@
 using System.Threading;
-using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 using UnityEngine;
 
@@ -32,7 +32,7 @@ namespace CycloneGames.Logging.Unity.Tests.Editor
                 LoggingInitializationResult initialized = LoggingBootstrap.Initialize(settings);
                 Assert.IsTrue(initialized.IsInitialized);
                 Assert.IsTrue(LoggingBootstrap.TryGetOwnedPipeline(out LogPipeline pipeline));
-                Assert.IsTrue(pipeline.AddSink(blocker));
+                Assert.IsTrue(pipeline.RegisterSink(blocker).IsRegistered);
 
                 LogPipelineShutdownResult timedOut = LoggingBootstrap.Shutdown(LogFlushMode.Buffered);
 

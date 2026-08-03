@@ -4,7 +4,7 @@
     "references": [
         "CycloneGames.RPGFoundation.Movement.Core",
         "CycloneGames.RPGFoundation.Movement.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

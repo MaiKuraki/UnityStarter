@@ -5,7 +5,7 @@
         "Mirror",
         "CycloneGames.Networking.Core",
         "CycloneGames.Networking.Unity.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

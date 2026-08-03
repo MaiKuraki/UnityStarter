@@ -5,7 +5,7 @@
         "CycloneGames.InputSystem.Runtime",
         "R3.Unity",
         "UnityEngine.UI",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

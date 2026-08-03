@@ -4,7 +4,7 @@
     "references": [
         "CycloneGames.GameplayTags.Core",
         "CycloneGames.GameplayTags.Unity.Runtime",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [
         "Editor"

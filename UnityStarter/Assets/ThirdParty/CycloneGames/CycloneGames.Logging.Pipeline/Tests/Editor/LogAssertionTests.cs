@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Text;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor
@@ -17,7 +18,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             _pipeline = LogPipelineFactory.CreateSingleThreaded();
             _recordingSink = new RecordingSink();
-            _pipeline.AddSink(_recordingSink);
+            _pipeline.RegisterSink(_recordingSink);
             _assertions = new LogAssertionService(_pipeline);
         }
 
@@ -116,7 +117,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             using var pipeline = LogPipelineFactory.CreateSingleThreaded();
             var recording = new RecordingSink();
-            pipeline.AddSink(recording);
+            pipeline.RegisterSink(recording);
             var assert = new LogAssertionService(pipeline, new LogAssertionOptions
             {
                 FailureSeverity = LogSeverity.Warning,

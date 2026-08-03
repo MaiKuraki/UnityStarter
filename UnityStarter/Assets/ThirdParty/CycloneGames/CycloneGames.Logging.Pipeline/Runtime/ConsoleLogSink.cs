@@ -1,9 +1,10 @@
 using System;
 using System.IO;
 using System.Text;
-using CycloneGames.Logging.Internal;
+using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline.Internal;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     /// <summary>
     /// Synchronous stdout/stderr sink suitable for CLI and dedicated server processes.

@@ -1,8 +1,8 @@
 {
     "name": "CycloneGames.Logging.Pipeline",
-    "rootNamespace": "CycloneGames.Logging",
+    "rootNamespace": "CycloneGames.Logging.Pipeline",
     "references": [
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

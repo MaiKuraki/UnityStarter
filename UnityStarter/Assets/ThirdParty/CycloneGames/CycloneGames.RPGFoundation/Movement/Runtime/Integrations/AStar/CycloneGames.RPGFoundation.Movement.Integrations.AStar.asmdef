@@ -7,7 +7,7 @@
         "AstarPathfindingProject",
         "PackageTools",
         "Drawing",
-        "CycloneGames.Logging"
+        "CycloneGames.Logging.Core"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

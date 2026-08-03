@@ -60,7 +60,7 @@ flowchart LR
     AssetIntegration["GameplayAbilities.Runtime.Integrations.AssetManagement"]
     DataTableCore["CycloneGames.DataTable.Core"]
     UniTask["UniTask"]
-    Logging["CycloneGames.Logging"]
+    Logging["CycloneGames.Logging.Core assembly<br/>CycloneGames.Logging API"]
     Runtime["GameplayAbilities.Runtime"]
     Editor["GameplayAbilities.Editor<br/>Editor only"]
     DataTable["GameplayAbilities.Runtime.Integrations.DataTable<br/>条件 UPM Integration"]
@@ -99,7 +99,7 @@ flowchart LR
 
 `AbilitySpecContainer`、`PredictionManager` 与 `ReplicationStateBuilder` 都是 Runtime Assembly 的 Internal Implementation Type。Public Consumer 通过 `AbilitySystemComponent` Facade、稳定的 `GASReadOnlyListView<T>`、`GASReadOnlySetView<T>`、`GASReadOnlyTagView`、Query Method 与 Diagnostics 工作，不会取得 Mutable Container 或 Builder Access。这些 Internal Type 不是 Extension Point。把 Mutation Authority 收敛在 ASC 可以缩小 Public API 与长期兼容性表面积。
 
-包元数据声明直接 Package 需求。在 `Assets/ThirdParty` checkout 中，`package.json` 是描述性元数据；Unity 是否编译某程序集取决于实际 asmdef 图、已安装 Package、Constraint 和 Symbol。主 Runtime Assembly 直接引用与 Backend 无关的 `CycloneGames.Logging` 契约，但不引用 AssetManagement、DataTable 或具体日志 Backend；可选功能依赖终止在各自的 Integration Assembly。
+包元数据声明直接 Package 需求。在 `Assets/ThirdParty` checkout 中，`package.json` 是描述性元数据；Unity 是否编译某程序集取决于实际 asmdef 图、已安装 Package、Constraint 和 Symbol。主 Runtime Assembly 直接引用与 Backend 无关的 `CycloneGames.Logging.Core` 契约 assembly，但不引用 AssetManagement、DataTable 或具体日志 Backend；可选功能依赖终止在各自的 Integration Assembly。
 
 ### 日志契约与 Backend 集成
 
@@ -996,7 +996,7 @@ Core/Runtime 源码与 asmdef 中，Runtime 不依赖 `UnityEditor`，且不存�
 
 ### AssetManagement
 
-`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` 通过直接 asmdef 引用连接。它依赖 `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Logging` 与 GameplayAbilities 主 Runtime Assembly，并包含 `AssetManagementResourceLocator`。
+`CycloneGames.GameplayAbilities.Runtime.Integrations.AssetManagement` 通过直接 asmdef 引用连接。它依赖 `CycloneGames.AssetManagement.Runtime`、`CycloneGames.Logging.Core` 与 GameplayAbilities 主 Runtime Assembly，并包含 `AssetManagementResourceLocator`。
 
 主 Runtime Assembly 只持有 `IResourceLocator` 与 `IResourceHandle<T>`，没有 AssetManagement asmdef Reference。Sample Assembly 显式引用该 Integration，并使用 `IAssetPackage` 构造 Adapter。从 Assembly 层看，不使用 AssetManagement 的项目可以保留 Core 与 Runtime 并提供其他 `IResourceLocator`，同时必须排除 AssetManagement Integration 及引用它的 Sample Composition。`package.json` 把 AssetManagement 声明为直接需求，因此省略它的 UPM Packaging Profile 必须同步调整该元数据。
 

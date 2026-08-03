@@ -2,6 +2,7 @@ using System;
 using System.Reflection;
 using System.Threading;
 using CycloneGames.Logging;
+using CycloneGames.Logging.Pipeline;
 using NUnit.Framework;
 
 namespace CycloneGames.Logging.Pipeline.Tests.Editor
@@ -31,7 +32,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
                     clearRejected = true;
                 }
             });
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
 
             LogPipelineShutdownResult outerResult = pipeline.Shutdown(LogFlushMode.Buffered, 2000);
 
@@ -48,7 +49,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             LogPipeline pipeline = LogPipelineFactory.CreateSingleThreaded(CreateOptions());
             var sink = new CountingSink();
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
 
             LogPipelineShutdownResult first = default;
             LogPipelineShutdownResult second = default;
@@ -80,7 +81,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             LogPipeline pipeline = LogPipelineFactory.CreateSingleThreaded(CreateOptions());
             var sink = new CountingSink();
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
 
             Assert.Throws<ArgumentOutOfRangeException>(() => pipeline.RemoveSink(sink, -1));
             Assert.Throws<ArgumentOutOfRangeException>(() => pipeline.RemoveSink(
@@ -98,7 +99,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         {
             LogPipeline pipeline = LogPipelineFactory.CreateSingleThreaded(CreateOptions());
             var sink = new FlushTrackingSink();
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
 
             Assert.Throws<ArgumentOutOfRangeException>(() => pipeline.TryFlush((LogFlushMode)255, 100));
             Assert.Throws<ArgumentOutOfRangeException>(() => pipeline.TryFlush(LogFlushMode.Buffered, -2));
@@ -135,12 +136,12 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
         [Test]
         public void ExplicitPipelines_HaveIndependentOwnershipAndDoNotMutateProcessWriter()
         {
-            ILogWriter previous = LogRuntime.ReplaceWriter(NullLogWriter.Instance);
+            ILogWriter previous = LogRuntime.Writer;
             LogPipeline first = LogPipelineFactory.CreateSingleThreaded(CreateOptions());
             LogPipeline second = LogPipelineFactory.CreateSingleThreaded(CreateOptions());
             try
             {
-                Assert.IsTrue(LogRuntime.TryInstallWriter(first));
+                Assert.IsTrue(LogRuntime.TryReplaceWriter(previous, first));
 
                 LogPipelineShutdownResult secondResult = second.Shutdown(LogFlushMode.Buffered, 2000);
 
@@ -149,10 +150,9 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             }
             finally
             {
-                LogRuntime.TryResetWriter(first);
+                LogRuntime.TryReplaceWriter(first, previous);
                 first.Shutdown(LogFlushMode.Buffered, 2000);
                 second.Shutdown(LogFlushMode.Buffered, 2000);
-                LogRuntime.TryReplaceWriter(NullLogWriter.Instance, previous);
             }
         }
 
@@ -185,7 +185,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
 
                 callbackCompleted.Set();
             });
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
 
             pipeline.EnqueueMessage(
                 LogSeverity.Info,
@@ -219,7 +219,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
                 : LogPipelineFactory.CreateSingleThreaded(CreateOptions());
             using var emitEntered = new ManualResetEventSlim(false);
             var sink = new OutOfMemorySink(emitEntered);
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
 
             pipeline.EnqueueMessage(
                 LogSeverity.Info,
@@ -254,8 +254,8 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             LogPipeline pipeline = LogPipelineFactory.CreateSingleThreaded(CreateOptions());
             var fatalSink = new OutOfMemoryDisposeSink();
             var healthySink = new CountingSink();
-            Assert.IsTrue(pipeline.AddSink(fatalSink));
-            Assert.IsTrue(pipeline.AddSink(healthySink));
+            Assert.IsTrue(pipeline.RegisterSink(fatalSink).IsRegistered);
+            Assert.IsTrue(pipeline.RegisterSink(healthySink).IsRegistered);
 
             FieldInfo stopRequested = typeof(LogPipeline).GetField(
                 "_sinkDisposalStopRequested",
@@ -282,7 +282,7 @@ namespace CycloneGames.Logging.Pipeline.Tests.Editor
             const int MessageCount = 64;
             using var maintenanceObserved = new ManualResetEventSlim(false);
             var sink = new SlowMaintainableSink(maintenanceObserved);
-            Assert.IsTrue(pipeline.AddSink(sink));
+            Assert.IsTrue(pipeline.RegisterSink(sink).IsRegistered);
 
             for (int i = 0; i < MessageCount; i++)
             {

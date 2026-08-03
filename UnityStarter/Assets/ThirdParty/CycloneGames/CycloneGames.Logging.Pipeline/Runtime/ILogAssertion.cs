@@ -2,7 +2,7 @@ using System;
 using System.Runtime.CompilerServices;
 using System.Text;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public interface ILogAssertion
     {

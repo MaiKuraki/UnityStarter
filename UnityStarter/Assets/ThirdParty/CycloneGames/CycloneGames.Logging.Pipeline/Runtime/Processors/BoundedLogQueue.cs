@@ -1,7 +1,8 @@
 using System;
 using System.Threading;
+using CycloneGames.Logging;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     internal sealed class BoundedLogQueue : IDisposable
     {

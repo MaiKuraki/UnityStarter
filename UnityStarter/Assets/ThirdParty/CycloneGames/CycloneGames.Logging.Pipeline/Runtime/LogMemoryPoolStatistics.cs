@@ -1,4 +1,4 @@
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     public readonly struct LogMemoryPoolStatistics
     {

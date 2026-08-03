@@ -1,4 +1,4 @@
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     /// <summary>
     /// Read-only operational surface for diagnostics and memory-governance integrations.

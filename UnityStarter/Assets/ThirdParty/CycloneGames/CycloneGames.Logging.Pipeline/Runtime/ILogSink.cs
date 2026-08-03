@@ -1,6 +1,6 @@
 using System;
 
-namespace CycloneGames.Logging
+namespace CycloneGames.Logging.Pipeline
 {
     /// <summary>
     /// Synchronous log sink contract. Emit may run on a background worker when threaded

@@ -1,0 +1,28 @@
+{
+    "name": "Build.Pipeline.Integrations.YooAsset3.Editor",
+    "rootNamespace": "Build.Pipeline.Editor.Integrations.YooAsset3",
+    "references": [
+        "Build.Pipeline.Editor",
+        "YooAsset",
+        "YooAsset.Editor"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "BUILD_PIPELINE_HAS_YOOASSET_3"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.tuyoogame.yooasset",
+            "expression": "[3.0.5,4.0.0)",
+            "define": "BUILD_PIPELINE_HAS_YOOASSET_3"
+        }
+    ],
+    "noEngineReferences": false
+}

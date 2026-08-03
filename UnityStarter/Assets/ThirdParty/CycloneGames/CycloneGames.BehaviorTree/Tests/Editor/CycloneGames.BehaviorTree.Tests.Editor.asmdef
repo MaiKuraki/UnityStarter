@@ -6,7 +6,7 @@
         "CycloneGames.BehaviorTree.Benchmarks",
         "CycloneGames.BehaviorTree.Editor",
         "CycloneGames.BehaviorTree.Tests.Support",
-        "CycloneGames.Logging",
+        "CycloneGames.Logging.Core",
         "Unity.PerformanceTesting"
     ],
     "includePlatforms": [

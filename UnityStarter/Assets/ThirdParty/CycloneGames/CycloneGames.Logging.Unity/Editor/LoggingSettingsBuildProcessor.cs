@@ -5,6 +5,7 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
+using CycloneGames.Logging.Pipeline;
 using UnityEditor;
 using UnityEditor.Build;
 using UnityEditor.Build.Reporting;

@@ -234,20 +234,21 @@ Networking layer 是 experimental foundation。生产接入必须使用选定的
 Build 模块包含：
 
 - `BuildData` ScriptableObject 配置。
-- 通过 `Build.VersionControl.Editor` 获取 Git-based version information。
+- 通过 `Build.VersionControl.Editor` 获取 Git 或 Perforce revision metadata；batch mode 和 release 构建必须具备其中之一，只有交互式 Development 构建可以使用显式 `LocalDevelopment` fallback。
 - Editor menu items 与 command-line player build entry points。
-- HybridCLR、Obfuz、YooAsset、Addressables 和 Buildalon 的可选反射检测 integrations。
+- HybridCLR、Obfuz、YooAsset 3 和 Addressables 可选集成；缺少可选包不会破坏核心构建程序集。
 - 面向内部构建的 Cheat define control。
-- 例如 `Build.Pipeline.Editor.BuildScript.PerformBuild_CI` 的 CI-facing methods。
+- 唯一 CI 入口：`Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine`。
 
 最小命令形态：
 
 ```bash
 Unity -batchmode -quit -projectPath UnityStarter \
-  -executeMethod Build.Pipeline.Editor.BuildScript.PerformBuild_CI \
-  -buildTarget StandaloneWindows64 \
-  -output Build/Windows/UnityStarter.exe \
-  -clean
+  -executeMethod Build.Pipeline.Editor.BuildEntryPoints.RunCommandLine \
+  -buildTarget Win64 \
+  -pipelineProfile Assets/UnityStarter/Editor/Build/BuildData.asset \
+  -pipelineOutput Build/Windows/Release/UnityStarter.exe \
+  -pipelineClean
 ```
 
 [Build README](UnityStarter/Assets/Build/README.SCH.md) 包含更详细的配置说明、hot-update workflows 和 CI examples。
@@ -273,7 +274,7 @@ Unity -batchmode -quit -projectPath UnityStarter \
 ### 环境要求
 
 - `UnityStarter/ProjectSettings/ProjectVersion.txt` 中记录的 Unity 版本。
-- Git / Perforce / SVN 等，用于 Build 模块生成自动版本信息。
+- batch mode 和 release 构建必须使用 Git 或 Perforce 生成自动版本元数据；只有交互式 Development 构建可以使用确定性的 `LocalDevelopment` 回退元数据。
 
 ### 首次运行
 
@@ -325,7 +326,7 @@ git clone https://github.com/MaiKuraki/UnityStarter.git
 - 在 Unity 中打开项目，确认 Console 没有编译错误。
 - 对修改过的模块运行相关 EditMode tests。
 - 使用 `dotnet build UnityStarter/Analyzers/CycloneGames.Analyzers/CycloneGames.Analyzers.csproj -c Release` 构建 analyzer project。
-- 修改 BuildData 或 CI settings 前，使用 `Build > Print Debug Info`。
+- 修改 BuildData 或 CI settings 前，使用 `Build > Pipeline > Print Selected Profile`。
 - Networking 在完成目标环境中的真实多人验证前，应视为 experimental。
 
 ## 相关项目
