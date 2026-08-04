@@ -1,6 +1,8 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading;
 
 namespace CycloneGames.Networking.Lockstep
 {
@@ -15,6 +17,10 @@ namespace CycloneGames.Networking.Lockstep
     /// - Simulation only advances when consensus is reached
     /// - Stall detection when a peer is too far behind
     /// - Configurable input delay (command delay) to hide network latency
+    ///
+    /// The constructing thread owns the instance. All state access, mutation, and callbacks
+    /// must remain on that thread. Editor and Development builds fail fast on violations;
+    /// no lock or implicit cross-thread queue is provided.
     /// </summary>
     public sealed class LockstepManager<TInput> where TInput : unmanaged
     {
@@ -27,6 +33,7 @@ namespace CycloneGames.Networking.Lockstep
         private readonly int _inputDelay;         // Frames of command delay (typically 2-4 for RTS)
         private readonly int _maxStallFrames;      // Max frames to wait before timeout
         private readonly int _maxFramesPerTick;
+        private readonly DevelopmentThreadGuard _threadGuard;
 
         // Inputs indexed by [frame % bufferSize][peerId]
         private readonly TInput[,] _inputBuffer;
@@ -45,13 +52,13 @@ namespace CycloneGames.Networking.Lockstep
         private readonly bool[] _hashReceived;
         private readonly int[] _hashFrames;
 
-        public int CurrentFrame => _currentFrame;
-        public int InputDelay => _inputDelay;
-        public int PeerCount => _peerCount;
-        public int LocalPeerId => _localPeerId;
-        public int StallCounter => _stallCounter;
-        public int MaxFramesPerTick => _maxFramesPerTick;
-        public bool IsStalled => _stallCounter > 0;
+        public int CurrentFrame { get { _threadGuard.AssertOwnerThread(); return _currentFrame; } }
+        public int InputDelay { get { _threadGuard.AssertOwnerThread(); return _inputDelay; } }
+        public int PeerCount { get { _threadGuard.AssertOwnerThread(); return _peerCount; } }
+        public int LocalPeerId { get { _threadGuard.AssertOwnerThread(); return _localPeerId; } }
+        public int StallCounter { get { _threadGuard.AssertOwnerThread(); return _stallCounter; } }
+        public int MaxFramesPerTick { get { _threadGuard.AssertOwnerThread(); return _maxFramesPerTick; } }
+        public bool IsStalled { get { _threadGuard.AssertOwnerThread(); return _stallCounter > 0; } }
 
         public event Action<int> OnFrameAdvanced;
         public event Action<int, int> OnPeerStall;        // (peerId, stalledAtFrame)
@@ -84,6 +91,7 @@ namespace CycloneGames.Networking.Lockstep
             _inputDelay = inputDelay;
             _maxStallFrames = maxStallFrames;
             _maxFramesPerTick = maxFramesPerTick;
+            _threadGuard = new DevelopmentThreadGuard(nameof(LockstepManager<TInput>));
             _bufferSize = bufferSize;
             _bufferMask = bufferSize - 1;
 
@@ -110,6 +118,7 @@ namespace CycloneGames.Networking.Lockstep
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public int SubmitLocalInput(in TInput input)
         {
+            _threadGuard.AssertOwnerThread();
             int targetFrame = _currentFrame + _inputDelay;
             int slot = targetFrame & _bufferMask;
 
@@ -126,6 +135,7 @@ namespace CycloneGames.Networking.Lockstep
         /// </summary>
         public void ReceiveRemoteInput(int peerId, int frame, in TInput input)
         {
+            _threadGuard.AssertOwnerThread();
             if (peerId < 0 || peerId >= _peerCount || peerId == _localPeerId) return;
 
             // Pure lockstep cannot apply input to an already simulated frame. Rejecting
@@ -154,6 +164,7 @@ namespace CycloneGames.Networking.Lockstep
         /// </summary>
         public bool Tick()
         {
+            _threadGuard.AssertOwnerThread();
             bool advanced = false;
 
             // Try to advance as many frames as possible in one call
@@ -191,6 +202,7 @@ namespace CycloneGames.Networking.Lockstep
         /// </summary>
         public void SubmitStateHash(int frame, ulong hash)
         {
+            _threadGuard.AssertOwnerThread();
             int slot = frame & _bufferMask;
             _stateHashes[slot] = hash;
             _hashReceived[slot] = true;
@@ -202,6 +214,7 @@ namespace CycloneGames.Networking.Lockstep
         /// </summary>
         public bool ValidateStateHash(int peerId, int frame, ulong remoteHash)
         {
+            _threadGuard.AssertOwnerThread();
             int slot = frame & _bufferMask;
             if (!_hashReceived[slot] || _hashFrames[slot] != frame) return true; // Can't validate yet
 
@@ -218,6 +231,7 @@ namespace CycloneGames.Networking.Lockstep
         /// </summary>
         public bool TryGetFrameInputs(int frame, Span<TInput> outInputs)
         {
+            _threadGuard.AssertOwnerThread();
             if (outInputs.Length < _peerCount) return false;
 
             int slot = frame & _bufferMask;
@@ -234,6 +248,7 @@ namespace CycloneGames.Networking.Lockstep
         /// </summary>
         public void Reset()
         {
+            _threadGuard.AssertOwnerThread();
             _currentFrame = 0;
             _latestInputFrame = -1;
             _stallCounter = 0;
@@ -316,6 +331,38 @@ namespace CycloneGames.Networking.Lockstep
                     _inputFrames[slot, peer] = frame;
                 }
             }
+        }
+    }
+
+    /// <summary>
+    /// Development-only single-owner thread assertion with no synchronization or queueing.
+    /// </summary>
+    internal readonly struct DevelopmentThreadGuard
+    {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+        private readonly int _ownerThreadId;
+        private readonly string _ownerName;
+#endif
+
+        public DevelopmentThreadGuard(string ownerName)
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            _ownerThreadId = Thread.CurrentThread.ManagedThreadId;
+            _ownerName = ownerName;
+#endif
+        }
+
+        [Conditional("UNITY_EDITOR")]
+        [Conditional("DEVELOPMENT_BUILD")]
+        public void AssertOwnerThread()
+        {
+#if UNITY_EDITOR || DEVELOPMENT_BUILD
+            if (Thread.CurrentThread.ManagedThreadId != _ownerThreadId)
+            {
+                throw new InvalidOperationException(
+                    $"{_ownerName} must be accessed from its constructing owner thread.");
+            }
+#endif
         }
     }
 

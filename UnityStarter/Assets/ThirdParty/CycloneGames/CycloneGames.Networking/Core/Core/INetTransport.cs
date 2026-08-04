@@ -655,6 +655,19 @@ namespace CycloneGames.Networking
     /// <summary>
     /// Low-level transport interface responsible for raw byte delivery and connection lifecycle.
     /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Each transport instance has one owner thread selected by its composition root. Unless
+    /// an implementation explicitly documents a stronger contract, all property access,
+    /// control, send, broadcast, polling, event subscription, and event callbacks must remain
+    /// on that thread. Callbacks are synchronous and inline; implementations do not provide
+    /// an implicit cross-thread queue.
+    /// </para>
+    /// <para>
+    /// Pure Core transports do not require the Unity main thread. Unity adapters own Unity and
+    /// backend SDK objects and therefore use the Unity main thread as their owner thread.
+    /// </para>
+    /// </remarks>
     public interface INetTransport
     {
         bool IsServer { get; }

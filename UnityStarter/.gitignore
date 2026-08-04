@@ -10,6 +10,11 @@
 /[Ll]ogs/
 /[Uu]ser[Ss]ettings/
 
+# Project rename transaction artifacts
+/.rename_project.lock/
+/.rename_backup/
+/rename_project.log
+
 # MemoryCaptures can get excessive in size.
 # They also could contain extremely sensitive data
 /[Mm]emoryCaptures/
