@@ -38,7 +38,7 @@ CycloneGames.DataTable loads typed configuration data — item definitions, game
 | --- | --- | --- |
 | `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Tables, catalogs, registry, limits, manifests, hashes, byte cache, locations, local diagnostics, scopes. Pure C# with `noEngineReferences: true` and no Logging reference. |
 | `CycloneGames.DataTable.Integrations.Logging` | `CycloneGames.DataTable` | Optional pure C# bridge from `IDataTableDiagnostics` to `CycloneGames.Logging`; `autoReferenced: false`. |
-| `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`, custom Inspector, request validation, external-process execution. Editor only. |
+| `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`, custom Inspector, request validation, asynchronous external-process execution. Editor only; requires UniTask. |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | Bounded Luban `ByteBuf` creation and generated table-set construction. |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | Bounded MessagePack row-array decoding. |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | `CycloneGames.DataTable.Unity.Integrations.AssetManagement` | Optional UniTask-based `TextAsset` and raw-file payload loaders; inactive in the asset-style installation. |
@@ -47,7 +47,7 @@ Core is auto-referenced. Editor and integration assemblies use `autoReferenced: 
 
 Core owns the `IDataTableDiagnostics`/`NullDataTableDiagnostics` contract, `DataTableDiagnosticCategories.Root`, and the process-level `DataTableDiagnostics` replacement point. It does not reference `ILogWriter`, `LogChannel`, or Unity. `DataTableLogWriterAdapter` is the optional adapter to the shared pipeline. Non-Core logging-producing assemblies continue to centralize channel construction in `DataTableEditorLog`, `DataTableAssetManagementLog`, or `DataTableMessagePackLog`. `DataTableCoreDiagnostics` is the single failure-isolating boundary used by Core; ordinary sink exceptions cannot change business control flow, while `OutOfMemoryException` deliberately propagates.
 
-This is an assembly boundary, not yet a separate UPM distribution boundary. The current combined `com.cyclone-games.data-table` package root also contains non-Core assemblies and therefore still declares `com.cyclone-games.logging`; installing only Core without that package dependency requires a future physical Core package split.
+This is an assembly boundary, not yet a separate UPM distribution boundary. The current combined `com.cyclone-games.data-table` package root also contains non-Core assemblies and therefore declares `com.cyclone-games.logging` and the UniTask version required by its Editor runner. Installing only Core without those package dependencies requires a future physical Core package split.
 
 ```mermaid
 flowchart LR
@@ -416,9 +416,9 @@ Create `DataTableLubanSettings` from `Assets > Create > CycloneGames > DataTable
 | `LubanTimeoutSeconds` | Maximum external-process duration; invalid serialized values fall back to 300 seconds. |
 | `RefreshAssetsAfterLubanBuild` | Calls `AssetDatabase.Refresh()` only after a successful run. |
 
-The Inspector shows resolved paths and validation status and provides refresh, reveal, validate, and build actions. Script execution validates the project root, working directory, script path, arguments, and timeout before starting the process. Standard output and standard error are captured into a bounded result.
+The Inspector shows resolved paths and validation status and provides refresh, reveal, validate, and build actions. Inspector and menu runs use `RunWithResultAsync` and keep the Editor responsive. The Inspector that starts a run owns its cancellation token and exposes **Cancel Luban Build**; other Inspector instances report the global busy state without cancelling a run they do not own. `RunWithResult` remains synchronous for CI and programmatic batch entry points. Script execution validates the project root, working directory, script path, arguments, and timeout before starting the process. Standard output and standard error are captured into a bounded result.
 
-The runner permits one in-Editor writer. The generation wrapper also uses the directory writer lock so Editor, terminal, and CI invocations cannot publish concurrently. If timeout or cancellation cannot confirm that the child process exited, stop all generator processes, inspect the directory lock and generated output, complete recovery, and restart the Editor before starting another run. Projects with derived generation profiles can subclass `DataTableLubanSettings` and override its virtual methods, including `CreateLubanRunRequest()`, without modifying this package.
+The runner permits one in-Editor writer. Process start, wait, timeout, kill, and output-reader join run on a worker; request creation, `Application`/`AssetDatabase` access, Unity logging, and Inspector finalization run on the main thread. Cancellation returns `Cancelled=true` instead of throwing and does not release the single-writer gate unless termination of the directly owned shell process is confirmed. On runtimes that support `Process.Kill(bool)`, the runner requests process-tree termination. Older Mono runtimes fall back to killing only the directly owned shell; shell exit does not prove that every descendant stopped. The wrapper's residual directory lock is therefore the cross-process fail-closed recovery boundary. If timeout or cancellation cannot establish a safe state, stop all generator descendants, inspect the directory lock and generated output, complete recovery, and restart the Editor before starting another run. Domain reload and Editor quitting retain global best-effort cancellation. Projects with derived generation profiles can subclass `DataTableLubanSettings` and override its virtual methods, including `CreateLubanRunRequest()`, without modifying this package.
 
 ## Advanced Topics
 
@@ -655,7 +655,7 @@ An ordinary diagnostic sink failure after `DataTableRegistry.Publish` commits is
 | MessagePack rejects the security policy | Insufficient security bounds | Start with `MessagePackSecurity.UntrustedData`, keep collision-resistant hashing enabled, bound decompressed size to `MaxBytesPerTable` |
 | MessagePack cannot deserialize a row | Wrong payload shape or missing formatter | Confirm the payload is a top-level `TRow[]`, the row formatter was generated, and the explicit resolver contains it |
 | Luban Inspector reports an invalid path | Misconfigured directory or script | Validate the Unity-project-relative directory, platform script extension, script existence, and unique settings asset |
-| Luban run remains blocked after timeout | Child process did not exit cleanly | Stop generator processes, inspect `.cyclonegames-datatable-writer.lock` and outputs, recover the directory, then restart Unity |
+| Luban run remains blocked after timeout | The owned shell did not exit, or descendant termination is uncertain | Stop all generator descendants, inspect `.cyclonegames-datatable-writer.lock` and outputs, recover the directory, then restart Unity |
 | Reload memory is higher than the cache total | Overlapping generations and decoder scratch | Profile payload sources, copies, decompression, decoder objects, row objects, dictionaries, and old/new generation overlap |
 
 ## Validation
@@ -665,6 +665,7 @@ An ordinary diagnostic sink failure after `DataTableRegistry.Publish` commits is
 Run these EditMode test assemblies from Unity Test Runner or the project's batchmode test entry point:
 
 - `CycloneGames.DataTable.Tests.Editor`
+- `CycloneGames.DataTable.Tests.Editor.Tools.Luban` for async validation, cancellation, and main-thread finalization contracts
 - `CycloneGames.DataTable.Tests.Editor.Integrations.Luban` when Luban is enabled
 - `CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack` when MessagePack is enabled
 - `CycloneGames.DataTable.Tests.Performance`

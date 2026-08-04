@@ -12,18 +12,18 @@ namespace CycloneGames.Networking
     /// </para>
     /// <para>
     /// Callers should check <c>transport is IPollableTransport</c> and call
-    /// <see cref="PollEvents"/> once per frame from the main thread.
+    /// <see cref="PollEvents"/> once per frame from the transport's owner thread.
     /// </para>
     /// <para>
-    /// Thread Safety: Must be called from a single thread. Not safe for concurrent
-    /// invocation from multiple threads.
+    /// Thread Safety: Must be called from the same single owner thread as every other
+    /// transport operation. Not safe for concurrent invocation from multiple threads.
     /// </para>
     /// </remarks>
     public interface IPollableTransport : INetTransport
     {
         /// <summary>
-        /// Drain pending inbound messages and fire any queued connection events.
-        /// Call once per frame from the main thread.
+        /// Drain pending inbound messages and fire any queued connection events inline.
+        /// Call once per frame from the transport's owner thread.
         /// </summary>
         void PollEvents();
     }

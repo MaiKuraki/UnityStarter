@@ -20,7 +20,9 @@ namespace CycloneGames.Networking.Transports
     /// <para>
     /// This transport implements <see cref="IPollableTransport"/> and requires
     /// <see cref="IPollableTransport.PollEvents"/> to be called once per frame to drain
-    /// inbound message queues and fire connection events.
+    /// inbound message queues and fire connection events. Each instance is single-owner;
+    /// construct and access it on one caller-selected thread. Core does not require that
+    /// thread to be the Unity main thread.
     /// </para>
     /// <para>
     /// Message buffers are rented from <see cref="ArrayPool{T}.Shared"/> and returned
@@ -72,8 +74,7 @@ namespace CycloneGames.Networking.Transports
             NetworkTransportFeatureFlags.Client
             | NetworkTransportFeatureFlags.Server
             | NetworkTransportFeatureFlags.Reliable
-            | NetworkTransportFeatureFlags.Backpressure
-            | NetworkTransportFeatureFlags.MainThreadOnly,
+            | NetworkTransportFeatureFlags.Backpressure,
             NetworkChannelFlags.Reliable,
             maxConnections: 1,
             maxPacketSize: NetworkConstants.DefaultMTU,
