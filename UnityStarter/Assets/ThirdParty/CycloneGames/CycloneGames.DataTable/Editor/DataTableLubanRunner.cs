@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using CycloneGames.Logging;
+using Cysharp.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
 
@@ -161,8 +162,7 @@ namespace CycloneGames.DataTable.Unity.Editor
 
         /// <summary>
         /// Best-effort cancellation for an externally owned run or editor shutdown.
-        /// The default synchronous main-thread entry point blocks Inspector interaction,
-        /// so this is not an interactive cancellation guarantee.
+        /// Cancellation is not complete until the worker confirms process termination.
         /// </summary>
         public static bool CancelActiveRun()
         {
@@ -201,7 +201,20 @@ namespace CycloneGames.DataTable.Unity.Editor
         [MenuItem(MenuPath)]
         public static void Run()
         {
-            RunWithResult();
+            RunFromMenuAsync().Forget();
+        }
+
+        private static async UniTaskVoid RunFromMenuAsync()
+        {
+            try
+            {
+                await RunWithResultAsync();
+            }
+            catch (Exception exception)
+            {
+                await UniTask.SwitchToMainThread();
+                Log.Error("[DataTable] Unexpected Luban menu-run failure: " + exception);
+            }
         }
 
         /// <summary>
@@ -258,13 +271,96 @@ namespace CycloneGames.DataTable.Unity.Editor
                 return validationResult;
             }
 
-            var result = RunProcess(request);
+            var startInfo = CreateStartInfo(request);
+            var result = RunProcess(request, startInfo, CancellationToken.None);
+            FinalizeResultOnMainThread(request, result);
+
+            return result;
+        }
+
+        /// <summary>
+        /// Run the default settings without blocking the Unity Editor main thread.
+        /// Validation and finalization run on the main thread; process work runs on a worker thread.
+        /// Cancellation is returned as a structured result rather than thrown.
+        /// </summary>
+        public static async UniTask<DataTableLubanRunResult> RunWithResultAsync(
+            CancellationToken cancellationToken = default)
+        {
+            await UniTask.SwitchToMainThread();
+            return await RunWithResultAsync(DataTableLubanSettings.GetOrCreate(), cancellationToken);
+        }
+
+        /// <summary>
+        /// Run a settings instance without blocking the Unity Editor main thread.
+        /// </summary>
+        public static async UniTask<DataTableLubanRunResult> RunWithResultAsync(
+            DataTableLubanSettings settings,
+            CancellationToken cancellationToken = default)
+        {
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
+            await UniTask.SwitchToMainThread();
+            return await RunWithResultAsync(settings.CreateLubanRunRequest(), cancellationToken);
+        }
+
+        /// <summary>
+        /// Run a fully custom request without blocking the Unity Editor main thread.
+        /// Unity API validation and finalization are confined to the main thread.
+        /// </summary>
+        public static async UniTask<DataTableLubanRunResult> RunWithResultAsync(
+            DataTableLubanRunRequest request,
+            CancellationToken cancellationToken = default)
+        {
+            if (request == null) throw new ArgumentNullException(nameof(request));
+
+            await UniTask.SwitchToMainThread();
+            if (cancellationToken.IsCancellationRequested)
+            {
+                var cancelledBeforeStart = CreateCancelledBeforeStartResult(request);
+                FinalizeResultOnMainThread(request, cancelledBeforeStart);
+                return cancelledBeforeStart;
+            }
+
+            var validationError = ValidateRequest(request);
+            if (!string.IsNullOrEmpty(validationError))
+            {
+                var validationResult = new DataTableLubanRunResult(
+                    false,
+                    false,
+                    -1,
+                    request.ScriptPath,
+                    request.WorkingDirectory,
+                    string.Empty,
+                    string.Empty,
+                    0,
+                    validationError);
+                FinalizeResultOnMainThread(request, validationResult);
+                return validationResult;
+            }
+
+            var startInfo = CreateStartInfo(request);
+            var result = await UniTask.RunOnThreadPool(
+                () => RunProcess(request, startInfo, cancellationToken),
+                cancellationToken: CancellationToken.None);
+
+            await UniTask.SwitchToMainThread();
+            FinalizeResultOnMainThread(request, result);
+
+            return result;
+        }
+
+        private static void FinalizeResultOnMainThread(
+            DataTableLubanRunRequest request,
+            DataTableLubanRunResult result)
+        {
+            if (result.Success && request.AutoRefreshAssets)
+            {
+                AssetDatabase.Refresh();
+            }
+
             if (request.LogOutputToUnity)
             {
                 LogResult(result, request.StreamOutputToUnity || !result.Success);
             }
-
-            return result;
         }
 
         /// <summary>
@@ -453,7 +549,10 @@ namespace CycloneGames.DataTable.Unity.Editor
             return builder.ToString().TrimEnd();
         }
 
-        private static DataTableLubanRunResult RunProcess(DataTableLubanRunRequest request)
+        private static DataTableLubanRunResult RunProcess(
+            DataTableLubanRunRequest request,
+            ProcessStartInfo startInfo,
+            CancellationToken cancellationToken)
         {
             var outputBudget = Math.Max(MIN_CAPTURED_OUTPUT_CHARACTERS, request.MaxCapturedOutputCharacters);
             var output = new BoundedTextBuffer(outputBudget / 2);
@@ -462,7 +561,7 @@ namespace CycloneGames.DataTable.Unity.Editor
 
             using (var process = new Process())
             {
-                process.StartInfo = CreateStartInfo(request);
+                process.StartInfo = startInfo;
                 Thread outputReaderThread = null;
                 Thread errorReaderThread = null;
                 bool processStarted = false;
@@ -486,104 +585,109 @@ namespace CycloneGames.DataTable.Unity.Editor
 
                 try
                 {
-                    processStarted = process.Start();
-                    if (!processStarted)
+                    if (cancellationToken.IsCancellationRequested)
                     {
-                        throw new InvalidOperationException("The operating system did not start the Luban process.");
+                        processTerminationConfirmed = true;
+                        stopwatch.Stop();
+                        return CreateCancelledBeforeStartResult(request, stopwatch.ElapsedMilliseconds);
                     }
 
-                    outputReaderThread = StartReaderThread(process.StandardOutput, output, "DataTable Luban stdout");
-                    errorReaderThread = StartReaderThread(process.StandardError, error, "DataTable Luban stderr");
-
-                    // Cancellation may race the narrow window between ownership publication and
-                    // Process.Start(). Re-check after the process exists so the request cannot be
-                    // lost merely because Kill was attempted on an unstarted Process instance.
-                    if (WasCancellationRequested(process))
+                    using (cancellationToken.Register(() => RequestCancellation(process)))
                     {
-                        TryKill(process, out _);
-                        processTerminationConfirmed = TryWaitForTermination(process);
-                        JoinReaderThreads(outputReaderThread, errorReaderThread);
-                        stopwatch.Stop();
-                        return CreateProcessResult(
-                            request,
-                            output,
-                            error,
-                            stopwatch.ElapsedMilliseconds,
-                            false,
-                            true,
-                            TryGetExitCode(process),
-                            processTerminationConfirmed
-                                ? "[DataTable] Luban build was cancelled."
-                                : "[DataTable] Luban cancellation was requested, but process termination could not be confirmed. " +
-                                  "The single-writer gate remains blocked.");
-                    }
-
-                    var completed = process.WaitForExit(request.TimeoutMilliseconds);
-
-                    if (!completed)
-                    {
-                        TryKill(process, out var terminationError);
-                        processTerminationConfirmed = TryWaitForTermination(process);
-                        JoinReaderThreads(outputReaderThread, errorReaderThread);
-                        stopwatch.Stop();
-                        var timeoutMessage = $"[DataTable] Luban build timed out after {request.TimeoutMilliseconds} ms.";
-                        if (!string.IsNullOrEmpty(terminationError))
+                        processStarted = process.Start();
+                        if (!processStarted)
                         {
-                            timeoutMessage += " Process termination also failed: " + terminationError;
+                            throw new InvalidOperationException("The operating system did not start the Luban process.");
                         }
 
-                        if (!processTerminationConfirmed)
+                        outputReaderThread = StartReaderThread(process.StandardOutput, output, "DataTable Luban stdout");
+                        errorReaderThread = StartReaderThread(process.StandardError, error, "DataTable Luban stderr");
+
+                        // Cancellation may race the narrow window between ownership publication and
+                        // Process.Start(). Re-check after the process exists so the request cannot be
+                        // lost merely because Kill was attempted on an unstarted Process instance.
+                        if (WasCancellationRequested(process))
                         {
-                            timeoutMessage +=
-                                " Process exit could not be confirmed; the single-writer gate remains blocked. " +
-                                "Confirm that all Luban processes stopped and audit the workspace lock/output before restarting the Editor.";
+                            TryKill(process, out _);
+                            processTerminationConfirmed = TryWaitForTermination(process);
+                            JoinReaderThreads(outputReaderThread, errorReaderThread);
+                            stopwatch.Stop();
+                            return CreateProcessResult(
+                                request,
+                                output,
+                                error,
+                                stopwatch.ElapsedMilliseconds,
+                                false,
+                                true,
+                                TryGetExitCode(process),
+                                processTerminationConfirmed
+                                    ? "[DataTable] Luban build was cancelled."
+                                    : "[DataTable] Luban cancellation was requested, but process termination could not be confirmed. " +
+                                      "The single-writer gate remains blocked.");
                         }
 
+                        var completed = process.WaitForExit(request.TimeoutMilliseconds);
+
+                        if (!completed)
+                        {
+                            TryKill(process, out var terminationError);
+                            processTerminationConfirmed = TryWaitForTermination(process);
+                            JoinReaderThreads(outputReaderThread, errorReaderThread);
+                            stopwatch.Stop();
+                            var timeoutMessage = $"[DataTable] Luban build timed out after {request.TimeoutMilliseconds} ms.";
+                            if (!string.IsNullOrEmpty(terminationError))
+                            {
+                                timeoutMessage += " Process termination also failed: " + terminationError;
+                            }
+
+                            if (!processTerminationConfirmed)
+                            {
+                                timeoutMessage +=
+                                    " Process exit could not be confirmed; the single-writer gate remains blocked. " +
+                                    "Confirm that all Luban processes stopped and audit the workspace lock/output before restarting the Editor.";
+                            }
+
+                            return CreateProcessResult(
+                                request,
+                                output,
+                                error,
+                                stopwatch.ElapsedMilliseconds,
+                                true,
+                                false,
+                                -1,
+                                timeoutMessage);
+                        }
+
+                        process.WaitForExit();
+                        processTerminationConfirmed = true;
+                        JoinReaderThreads(outputReaderThread, errorReaderThread);
+                        stopwatch.Stop();
+
+                        if (WasCancellationRequested(process))
+                        {
+                            return CreateProcessResult(
+                                request,
+                                output,
+                                error,
+                                stopwatch.ElapsedMilliseconds,
+                                false,
+                                true,
+                                TryGetExitCode(process),
+                                "[DataTable] Luban build was cancelled.");
+                        }
+
+                        var success = process.ExitCode == 0;
                         return CreateProcessResult(
                             request,
                             output,
                             error,
                             stopwatch.ElapsedMilliseconds,
-                            true,
                             false,
-                            -1,
-                            timeoutMessage);
-                    }
-
-                    process.WaitForExit();
-                    processTerminationConfirmed = true;
-                    JoinReaderThreads(outputReaderThread, errorReaderThread);
-                    stopwatch.Stop();
-
-                    if (WasCancellationRequested(process))
-                    {
-                        return CreateProcessResult(
-                            request,
-                            output,
-                            error,
-                            stopwatch.ElapsedMilliseconds,
                             false,
-                            true,
-                            TryGetExitCode(process),
-                            "[DataTable] Luban build was cancelled.");
+                            process.ExitCode,
+                            success ? null : $"[DataTable] Luban build failed with exit code {process.ExitCode}.",
+                            success);
                     }
-
-                    var success = process.ExitCode == 0;
-                    if (success && request.AutoRefreshAssets)
-                    {
-                        AssetDatabase.Refresh();
-                    }
-
-                    return CreateProcessResult(
-                        request,
-                        output,
-                        error,
-                        stopwatch.ElapsedMilliseconds,
-                        false,
-                        false,
-                        process.ExitCode,
-                        success ? null : $"[DataTable] Luban build failed with exit code {process.ExitCode}.",
-                        success);
                 }
                 catch (Exception ex) when (IsRecoverableException(ex))
                 {
@@ -615,6 +719,24 @@ namespace CycloneGames.DataTable.Unity.Editor
                         !processStarted || processTerminationConfirmed);
                 }
             }
+        }
+
+        private static DataTableLubanRunResult CreateCancelledBeforeStartResult(
+            DataTableLubanRunRequest request,
+            long durationMilliseconds = 0)
+        {
+            return new DataTableLubanRunResult(
+                false,
+                false,
+                true,
+                false,
+                -1,
+                request.ScriptPath,
+                request.WorkingDirectory,
+                string.Empty,
+                string.Empty,
+                durationMilliseconds,
+                "[DataTable] Luban build was cancelled before the process started.");
         }
 
         private static ProcessStartInfo CreateStartInfo(DataTableLubanRunRequest request)
@@ -710,6 +832,21 @@ namespace CycloneGames.DataTable.Unity.Editor
             {
                 return ReferenceEquals(_activeProcess, process) && _cancelRequested;
             }
+        }
+
+        private static void RequestCancellation(Process process)
+        {
+            lock (ActiveProcessSync)
+            {
+                if (!ReferenceEquals(_activeProcess, process))
+                {
+                    return;
+                }
+
+                _cancelRequested = true;
+            }
+
+            TryKill(process, out _);
         }
 
         private static int TryGetExitCode(Process process)

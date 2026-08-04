@@ -38,7 +38,7 @@ CycloneGames.DataTable 将类型化配置数据——物品定义、Gameplay Tag
 | --- | --- | --- |
 | `CycloneGames.DataTable.Core` | `CycloneGames.DataTable` | Table、Catalog、Registry、限制、Manifest、Hash、字节 Cache、Location、本地 diagnostics 和 Scope。纯 C#，启用 `noEngineReferences: true`，且不引用 Logging。 |
 | `CycloneGames.DataTable.Integrations.Logging` | `CycloneGames.DataTable` | 从 `IDataTableDiagnostics` 到 `CycloneGames.Logging` 的可选纯 C# bridge；`autoReferenced: false`。 |
-| `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`、自定义 Inspector、请求校验和外部进程执行。仅 Editor。 |
+| `CycloneGames.DataTable.Unity.Editor` | `CycloneGames.DataTable.Unity.Editor` | `DataTableLubanSettings`、自定义 Inspector、请求校验和异步外部进程执行。仅 Editor；依赖 UniTask。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.Luban` | `CycloneGames.DataTable.Unity.Integrations.Luban` | 有界的 Luban `ByteBuf` 创建和生成表集合构造。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.MessagePack` | `CycloneGames.DataTable.Unity.Integrations.MessagePack` | 有界的 MessagePack 行数组解码。 |
 | `CycloneGames.DataTable.Unity.Runtime.Integrations.AssetManagement` | `CycloneGames.DataTable.Unity.Integrations.AssetManagement` | 可选的 UniTask `TextAsset` 和 raw-file payload loader；在 asset-style 安装方式下不参与编译。 |
@@ -47,7 +47,7 @@ Core 会自动引用。Editor 与 Integration assembly 使用 `autoReferenced: f
 
 Core 自己持有 `IDataTableDiagnostics`/`NullDataTableDiagnostics` 契约、`DataTableDiagnosticCategories.Root` 和进程级 `DataTableDiagnostics` 替换点，不引用 `ILogWriter`、`LogChannel` 或 Unity。`DataTableLogWriterAdapter` 是接入共享管线的可选 adapter。非 Core 的日志生产 assembly 继续把 channel 构造收敛到 `DataTableEditorLog`、`DataTableAssetManagementLog` 或 `DataTableMessagePackLog`。`DataTableCoreDiagnostics` 是 Core 唯一的故障隔离边界；普通 sink 异常不能改变业务控制流，而 `OutOfMemoryException` 会有意继续传播。
 
-这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.data-table` package root 还包含非 Core assembly，因此仍声明 `com.cyclone-games.logging`；若要只安装 Core 且完全不产生该 package dependency，仍需后续进行物理 Core package 拆分。
+这是 assembly 边界，而不是已经拆分完成的 UPM 分发边界。当前组合式 `com.cyclone-games.data-table` package root 还包含非 Core assembly，因此声明 `com.cyclone-games.logging` 以及 Editor runner 所需的 UniTask 版本；若要只安装 Core 且完全不产生这些 package dependency，仍需后续进行物理 Core package 拆分。
 
 ```mermaid
 flowchart LR
@@ -416,9 +416,9 @@ Adapter 要求有界的 untrusted-data policy，在物化 row 前校验 payload 
 | `LubanTimeoutSeconds` | 外部进程最长执行时间；无效的序列化值回退为 300 秒。 |
 | `RefreshAssetsAfterLubanBuild` | 只在成功执行后调用 `AssetDatabase.Refresh()`。 |
 
-Inspector 会显示解析后的路径和校验状态，并提供 refresh、reveal、validate 和 build 操作。启动脚本前会校验项目根目录、工作目录、脚本路径、参数和 timeout。Standard output 和 standard error 会写入有界结果。
+Inspector 会显示解析后的路径和校验状态，并提供 refresh、reveal、validate 和 build 操作。Inspector 与 menu 运行使用 `RunWithResultAsync` 并保持 Editor 响应。启动任务的 Inspector 持有自己的 cancellation token 并显示 **Cancel Luban Build**；其他 Inspector 只报告全局 busy 状态，不取消不属于自己的任务。`RunWithResult` 继续作为 CI 和 programmatic batch 的同步入口。启动脚本前会校验项目根目录、工作目录、脚本路径、参数和 timeout。Standard output 和 standard error 会写入有界结果。
 
-Runner 在 Editor 内只允许一个 writer。生成 wrapper 同时使用writer lock，避免 Editor、终端和 CI 并发发布。Timeout 或 cancellation 后如果无法确认子进程已经退出，应停止全部 Generator 进程、检查writer lock 和生成输出、完成恢复，然后重启 Editor，再执行下一次生成。需要派生生成配置的项目可以继承 `DataTableLubanSettings` 并覆盖其 virtual method，包括 `CreateLubanRunRequest()`，无需修改本 Package。
+Runner 在 Editor 内只允许一个 writer。Process start、wait、timeout、kill 和 output-reader join 在 worker 执行；request 创建、`Application`/`AssetDatabase` 访问、Unity logging 与 Inspector finalization 在主线程执行。Cancellation 以 `Cancelled=true` 返回，不抛出异常；只有确认直接持有的 shell process 已终止后才释放 single-writer gate。运行时支持 `Process.Kill(bool)` 时，Runner 会请求终止 process tree；旧 Mono runtime 只能 fallback 到终止直接持有的 shell，shell 退出并不能证明全部 descendant 都已停止。因此，wrapper 残留的目录 writer lock 是跨进程 fail-closed 恢复边界。Timeout 或 cancellation 后如果无法建立安全状态，应停止全部 Generator descendant、检查 writer lock 和生成输出、完成恢复，然后重启 Editor，再执行下一次生成。Domain reload 与 Editor quitting 保留全局 best-effort cancellation。需要派生生成配置的项目可以继承 `DataTableLubanSettings` 并覆盖其 virtual method，包括 `CreateLubanRunRequest()`，无需修改本 Package。
 
 ## 进阶主题
 
@@ -655,7 +655,7 @@ Core diagnostics 使用 `IDataTableDiagnostics` 和 `DataTableDiagnosticCategori
 | MessagePack 拒绝 security policy | 安全边界不足 | 从 `MessagePackSecurity.UntrustedData` 开始，保持抗 Hash 碰撞，并把解压大小限制到 `MaxBytesPerTable` |
 | MessagePack 无法解码 row | Payload 形状错误或缺少 formatter | 确认 payload 是顶层 `TRow[]`、row formatter 已生成，并且显式 resolver 包含它 |
 | Luban Inspector 报告路径无效 | 目录或脚本配置错误 | 校验相对 Unity 项目的目录、平台脚本扩展名、脚本是否存在，以及设置资产是否唯一 |
-| Timeout 后 Luban 执行仍处于 blocked | 子进程未干净退出 | 停止 Generator 进程，检查 `.cyclonegames-datatable-writer.lock` 和输出，恢复目录，然后重启 Unity |
+| Timeout 后 Luban 执行仍处于 blocked | 持有的 shell 未退出，或无法确认 descendant 已终止 | 停止全部 Generator descendant，检查 `.cyclonegames-datatable-writer.lock` 和输出，恢复目录，然后重启 Unity |
 | 重载内存高于 Cache Total | Generation 重叠和 Decoder scratch | Profile payload source、copy、解压、decoder object、row object、Dictionary 和新旧 generation overlap |
 
 ## 验证
@@ -665,6 +665,7 @@ Core diagnostics 使用 `IDataTableDiagnostics` 和 `DataTableDiagnosticCategori
 通过 Unity Test Runner 或项目的 batchmode test 入口运行以下 EditMode test assembly：
 
 - `CycloneGames.DataTable.Tests.Editor`
+- `CycloneGames.DataTable.Tests.Editor.Tools.Luban`，覆盖 async validation、cancellation 与主线程 finalization 契约
 - 启用 Luban 时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.Luban`
 - 启用 MessagePack 时运行 `CycloneGames.DataTable.Tests.Editor.Integrations.MessagePack`
 - `CycloneGames.DataTable.Tests.Performance`

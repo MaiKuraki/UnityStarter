@@ -1,5 +1,7 @@
 using System;
 using System.IO;
+using System.Threading;
+using Cysharp.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
 using Handles = UnityEditor.Handles;
@@ -31,6 +33,9 @@ namespace CycloneGames.DataTable.Unity.Editor
         private bool _cachedProjectRootExists;
         private bool _cachedWorkingDirectoryExists;
         private bool _cachedScriptExists;
+        private bool _editorEnabled;
+        private bool _runInProgress;
+        private CancellationTokenSource _runCancellation;
         private int _lastTargetHash;
 
         private bool _settingsFoldout = true;
@@ -59,6 +64,7 @@ namespace CycloneGames.DataTable.Unity.Editor
 
         protected virtual void OnEnable()
         {
+            _editorEnabled = true;
             _lubanProjectDir = serializedObject.FindProperty("LubanProjectDir");
             _scriptName = serializedObject.FindProperty("LubanScriptName");
             _scriptArguments = serializedObject.FindProperty("LubanScriptArguments");
@@ -69,6 +75,17 @@ namespace CycloneGames.DataTable.Unity.Editor
                 ? targets.Length + " assets selected"
                 : AssetDatabase.GetAssetPath(target);
             RefreshValidationCache();
+        }
+
+        protected virtual void OnDisable()
+        {
+            _editorEnabled = false;
+            if (_runCancellation == null)
+            {
+                return;
+            }
+
+            _runCancellation.Cancel();
         }
 
         public override void OnInspectorGUI()
@@ -297,16 +314,31 @@ namespace CycloneGames.DataTable.Unity.Editor
             DrawButtonRow("Refresh", RefreshValidationCache, "Reveal Settings", RevealSettingsAsset);
             DrawButtonRow("Open Directory", OpenProjectDirectory, "Validate Paths", RefreshValidationCache);
 
+            if (_runInProgress)
+            {
+                EditorGUILayout.HelpBox(
+                    "This Inspector owns a Luban build running on a worker thread. Cancellation requests termination of its directly owned shell process and waits for the bounded termination path.",
+                    MessageType.Info);
+
+                var cancelRect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
+                if (GUI.Button(cancelRect, "Cancel Luban Build"))
+                {
+                    _runCancellation?.Cancel();
+                }
+
+                return;
+            }
+
             if (DataTableLubanRunner.IsRunning)
             {
                 EditorGUILayout.HelpBox(
-                    "A Luban build is already running. Only the owning caller or editor shutdown can request cancellation.",
+                    "Another caller owns the active Luban build. This Inspector cannot cancel a run that it does not own.",
                     MessageType.Info);
                 return;
             }
 
             EditorGUILayout.HelpBox(
-                "The runner is synchronous and blocks editor interaction while Luban runs, so Inspector cancellation is not available. Shutdown/domain-reload cancellation is best-effort; the positive process timeout is the bounded fallback.",
+                "Inspector runs are asynchronous and keep the Editor responsive. The synchronous API remains available for CI. Shutdown and domain-reload cancellation are best-effort; the positive process timeout is the bounded fallback.",
                 MessageType.Info);
 
             var rect = EditorGUILayout.GetControlRect(false, EditorGUIUtility.singleLineHeight);
@@ -314,7 +346,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             {
                 if (GUI.Button(rect, "Run Luban Build"))
                 {
-                    RunLubanBuild();
+                    StartLubanBuild();
                 }
             }
         }
@@ -448,18 +480,56 @@ namespace CycloneGames.DataTable.Unity.Editor
                 "OK");
         }
 
-        private void RunLubanBuild()
+        private void StartLubanBuild()
         {
-            var result = DataTableLubanRunner.RunWithResult((DataTableLubanSettings)target);
-            if (!result.Success)
+            if (_runInProgress)
             {
-                EditorUtility.DisplayDialog(
-                    "Luban Build Failed",
-                    DataTableLubanRunner.BuildFailureDialogMessage(result),
-                    "OK");
+                return;
             }
 
-            RefreshValidationCache();
+            _runCancellation?.Dispose();
+            _runCancellation = new CancellationTokenSource();
+            _runInProgress = true;
+            Repaint();
+            RunLubanBuildAsync((DataTableLubanSettings)target, _runCancellation).Forget();
+        }
+
+        private async UniTaskVoid RunLubanBuildAsync(
+            DataTableLubanSettings settings,
+            CancellationTokenSource cancellationOwner)
+        {
+            try
+            {
+                var result = await DataTableLubanRunner.RunWithResultAsync(
+                    settings,
+                    cancellationOwner.Token);
+                if (!result.Success && !result.Cancelled)
+                {
+                    EditorUtility.DisplayDialog(
+                        "Luban Build Failed",
+                        DataTableLubanRunner.BuildFailureDialogMessage(result),
+                        "OK");
+                }
+            }
+            catch (Exception exception)
+            {
+                Debug.LogException(exception);
+            }
+            finally
+            {
+                if (ReferenceEquals(_runCancellation, cancellationOwner))
+                {
+                    _runInProgress = false;
+                    _runCancellation.Dispose();
+                    _runCancellation = null;
+                }
+
+                if (this != null && _editorEnabled)
+                {
+                    RefreshValidationCache();
+                    Repaint();
+                }
+            }
         }
 
         private static void DrawPropertyIfPresent(SerializedProperty property, GUIContent label)
