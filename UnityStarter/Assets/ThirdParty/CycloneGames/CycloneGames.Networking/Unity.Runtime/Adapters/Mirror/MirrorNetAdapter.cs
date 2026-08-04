@@ -23,6 +23,10 @@ namespace CycloneGames.Networking.Adapter.Mirror
     /// Mirror implementation of the Cyclone Networking stack.
     /// Implements both low-level transport delivery and canonical message framing.
     /// </summary>
+    /// <remarks>
+    /// The Unity main thread exclusively owns this adapter, Mirror SDK access, and all
+    /// callbacks. Wrong-thread access fails fast; no implicit dispatch queue is provided.
+    /// </remarks>
     [DisallowMultipleComponent]
     public sealed class MirrorNetAdapter : MonoBehaviour, INetTransport, INetworkMessageEndpoint, INetworkSecurityPolicyConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
     {

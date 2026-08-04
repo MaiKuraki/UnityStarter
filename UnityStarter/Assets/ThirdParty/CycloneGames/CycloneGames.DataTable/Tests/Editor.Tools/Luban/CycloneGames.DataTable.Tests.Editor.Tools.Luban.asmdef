@@ -1,0 +1,22 @@
+{
+    "name": "CycloneGames.DataTable.Tests.Editor.Tools.Luban",
+    "rootNamespace": "CycloneGames.DataTable.Tests.Editor.Tools.Luban",
+    "references": [
+        "CycloneGames.DataTable.Unity.Editor",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": false,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}

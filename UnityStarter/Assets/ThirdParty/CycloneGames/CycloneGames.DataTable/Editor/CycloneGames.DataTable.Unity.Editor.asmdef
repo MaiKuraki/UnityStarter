@@ -3,7 +3,8 @@
     "rootNamespace": "",
     "references": [
         "CycloneGames.Logging.Core",
-        "CycloneGames.DataTable.Core"
+        "CycloneGames.DataTable.Core",
+        "UniTask"
     ],
     "includePlatforms": ["Editor"],
     "excludePlatforms": [],

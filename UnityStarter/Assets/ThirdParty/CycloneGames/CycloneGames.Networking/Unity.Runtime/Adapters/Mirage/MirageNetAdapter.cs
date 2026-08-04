@@ -26,6 +26,13 @@ namespace CycloneGames.Networking.Adapter.Mirage
         public ArraySegment<byte> Frame;
     }
 
+    /// <summary>
+    /// Unity main-thread-owned Mirage transport and canonical message adapter.
+    /// </summary>
+    /// <remarks>
+    /// Mirage SDK access and callbacks remain on the Unity main thread. Wrong-thread access
+    /// fails fast; no implicit dispatch queue is provided.
+    /// </remarks>
     [DisallowMultipleComponent]
     public sealed class MirageNetAdapter : MonoBehaviour, INetTransport, INetworkMessageEndpoint, INetworkSecurityPolicyConfigurable, INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider
     {

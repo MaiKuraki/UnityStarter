@@ -1,7 +1,10 @@
+using System;
 using System.Collections.Generic;
+using System.Threading;
 using CycloneGames.GameplayFramework.Runtime;
 using NUnit.Framework;
 using UnityEngine;
+using Object = UnityEngine.Object;
 
 namespace CycloneGames.GameplayFramework.Tests.Editor
 {
@@ -174,11 +177,44 @@ namespace CycloneGames.GameplayFramework.Tests.Editor
             Assert.AreEqual(consumed, pawn.GetLastMovementInputVector());
         }
 
+        [Test]
+        public void WorldBoundActor_OwnerAndInstigatorMutation_RejectWrongThread()
+        {
+            using GameplayTestWorld testWorld = GameplayTestWorld.Start();
+            Actor actor = testWorld.World.SpawnActor(testWorld.World.Definition.PawnClass);
+
+            Exception ownerException = CaptureThreadException(() => actor.SetOwner(null));
+            Exception instigatorException = CaptureThreadException(() => actor.SetInstigator(null));
+
+            Assert.IsInstanceOf<InvalidOperationException>(ownerException);
+            Assert.IsInstanceOf<InvalidOperationException>(instigatorException);
+        }
+
         private T CreateActor<T>(string name) where T : Actor
         {
             GameObject gameObject = new GameObject(name);
             objects.Add(gameObject);
             return gameObject.AddComponent<T>();
+        }
+
+        private static Exception CaptureThreadException(Action action)
+        {
+            Exception captured = null;
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    action();
+                }
+                catch (Exception exception)
+                {
+                    captured = exception;
+                }
+            });
+
+            thread.Start();
+            thread.Join();
+            return captured;
         }
     }
 }

@@ -202,8 +202,13 @@ namespace CycloneGames.GameplayFramework.Runtime
         public Actor GetOwner() => owner;
         public T GetOwner<T>() where T : Actor => owner as T;
 
+        /// <summary>
+        /// Changes the lifetime owner reference. A World-bound Actor must be mutated on the
+        /// World owner thread; <see cref="OwnerChanged"/> is invoked inline on that thread.
+        /// </summary>
         public void SetOwner(Actor newOwner)
         {
+            world?.AssertOwnerThread();
             if (ReferenceEquals(newOwner, this))
             {
                 throw new InvalidOperationException("An Actor cannot own itself.");
@@ -220,7 +225,16 @@ namespace CycloneGames.GameplayFramework.Runtime
 
         public Actor GetInstigator() => instigator;
         public T GetInstigator<T>() where T : Actor => instigator as T;
-        public void SetInstigator(Actor newInstigator) => instigator = newInstigator;
+
+        /// <summary>
+        /// Changes the instigator reference. A World-bound Actor must be mutated on the
+        /// World owner thread.
+        /// </summary>
+        public void SetInstigator(Actor newInstigator)
+        {
+            world?.AssertOwnerThread();
+            instigator = newInstigator;
+        }
         #endregion
 
         #region Name and transform

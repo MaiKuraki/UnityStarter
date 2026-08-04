@@ -18,6 +18,13 @@ namespace CycloneGames.Networking.Adapter.Nakama
         Peer = 2
     }
 
+    /// <summary>
+    /// Unity main-thread-owned Nakama transport and service adapter.
+    /// </summary>
+    /// <remarks>
+    /// Nakama SDK access, task continuations, and callbacks remain on the Unity main thread.
+    /// Wrong-thread access fails fast; no implicit dispatch queue is provided.
+    /// </remarks>
     [DisallowMultipleComponent]
     public sealed class NakamaNetAdapter : MonoBehaviour, INetTransport, INetworkMessageEndpoint,
         INetworkRuntimeContextProvider, INetworkLifecycleProvider, INetworkFeatureProvider,
