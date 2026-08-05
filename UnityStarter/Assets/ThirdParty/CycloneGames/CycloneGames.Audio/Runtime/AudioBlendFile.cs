@@ -103,7 +103,7 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        private async UniTaskVoid LoadClipAsync(AudioEventPreparation preparation, string eventName)
+        private async UniTask LoadClipAsync(AudioEventPreparation preparation, string eventName)
         {
             IAudioClipHandle handle = null;
             bool succeeded = false;
@@ -144,7 +144,9 @@ namespace CycloneGames.Audio.Runtime
                 succeeded = true;
             }
             catch (OperationCanceledException) { }
-            catch (Exception e)
+            catch (Exception e) when (
+                e is not OutOfMemoryException &&
+                e is not AccessViolationException)
             {
                 string referenceName = externalReference != null ? externalReference.name : "<missing>";
                 Log.Error(

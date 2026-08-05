@@ -1741,7 +1741,7 @@ namespace CycloneGames.Audio.Runtime
             }
         }
 
-        private async UniTaskVoid LoadClipAsync(AudioEventPreparation preparation)
+        private async UniTask LoadClipAsync(AudioEventPreparation preparation)
         {
             IAudioClipHandle handle = null;
             bool succeeded = false;
@@ -1789,7 +1789,9 @@ namespace CycloneGames.Audio.Runtime
             {
                 // This is expected if the event is stopped while loading
             }
-            catch (Exception e)
+            catch (Exception e) when (
+                e is not OutOfMemoryException &&
+                e is not AccessViolationException)
             {
                 string referenceName = this.externalReference != null ? this.externalReference.name : "<missing>";
                 Log.Error(

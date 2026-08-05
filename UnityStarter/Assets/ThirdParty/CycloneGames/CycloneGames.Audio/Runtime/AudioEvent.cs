@@ -5,6 +5,7 @@ using UnityEngine;
 using CycloneGames.Logging;
 using System;
 using System.Collections.Generic;
+using System.Threading;
 using Cysharp.Threading.Tasks;
 using UnityEngine.Audio;
 #if UNITY_EDITOR
@@ -32,6 +33,8 @@ namespace CycloneGames.Audio.Runtime
     [Serializable]
     public sealed class AudioEventAction
     {
+        private const float MaximumDelaySeconds = int.MaxValue / 1000f;
+
         [SerializeField]
         private AudioActionType actionType;
         [SerializeField]
@@ -86,9 +89,22 @@ namespace CycloneGames.Audio.Runtime
 
         public void Execute(GameObject emitterObject)
         {
-            if (delaySeconds > 0f)
+            Execute(emitterObject, CancellationToken.None);
+        }
+
+        public void Execute(GameObject emitterObject, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int delayMilliseconds = GetDelayMilliseconds(delaySeconds);
+            if (delayMilliseconds > 0)
             {
-                ExecuteDelayedAsync(this, emitterObject, default, false).Forget();
+                ExecuteDelayedAsync(
+                    this,
+                    emitterObject,
+                    default,
+                    false,
+                    delayMilliseconds,
+                    cancellationToken).Forget();
                 return;
             }
 
@@ -97,26 +113,61 @@ namespace CycloneGames.Audio.Runtime
 
         public void Execute(Vector3 actionPosition)
         {
-            if (delaySeconds > 0f)
+            Execute(actionPosition, CancellationToken.None);
+        }
+
+        public void Execute(Vector3 actionPosition, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int delayMilliseconds = GetDelayMilliseconds(delaySeconds);
+            if (delayMilliseconds > 0)
             {
-                ExecuteDelayedAsync(this, null, actionPosition, true).Forget();
+                ExecuteDelayedAsync(
+                    this,
+                    null,
+                    actionPosition,
+                    true,
+                    delayMilliseconds,
+                    cancellationToken).Forget();
                 return;
             }
 
             ExecuteImmediate(null, actionPosition, true);
         }
 
-        private static async UniTaskVoid ExecuteDelayedAsync(AudioEventAction action, GameObject emitterObject, Vector3 actionPosition, bool hasActionPosition)
+        private static async UniTask ExecuteDelayedAsync(
+            AudioEventAction action,
+            GameObject emitterObject,
+            Vector3 actionPosition,
+            bool hasActionPosition,
+            int delayMilliseconds,
+            CancellationToken cancellationToken)
         {
             if (action == null) return;
 
-            int delayMs = Mathf.Max(0, Mathf.RoundToInt(action.delaySeconds * 1000f));
-            if (delayMs > 0)
+            try
             {
-                await UniTask.Delay(delayMs);
-            }
+                cancellationToken.ThrowIfCancellationRequested();
+                await UniTask.Delay(delayMilliseconds, cancellationToken: cancellationToken);
 
-            action.ExecuteImmediate(emitterObject, actionPosition, hasActionPosition);
+                cancellationToken.ThrowIfCancellationRequested();
+                action.ExecuteImmediate(emitterObject, actionPosition, hasActionPosition);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Cancellation is an expected lifecycle outcome. Suppress it here so module
+                // behavior is independent of UniTaskScheduler global cancellation settings.
+            }
+        }
+
+        private static int GetDelayMilliseconds(float seconds)
+        {
+            if (!(seconds > 0f))
+                return 0;
+            if (float.IsPositiveInfinity(seconds) || seconds >= MaximumDelaySeconds)
+                return int.MaxValue;
+
+            return Mathf.Max(0, Mathf.RoundToInt(seconds * 1000f));
         }
 
         private void ExecuteImmediate(GameObject emitterObject, Vector3 actionPosition, bool hasActionPosition)
@@ -197,21 +248,33 @@ namespace CycloneGames.Audio.Runtime
 
         public void Execute(GameObject emitterObject = null)
         {
+            Execute(emitterObject, CancellationToken.None);
+        }
+
+        public void Execute(GameObject emitterObject, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (actions == null) return;
 
             for (int i = 0; i < actions.Length; i++)
             {
-                actions[i]?.Execute(emitterObject);
+                actions[i]?.Execute(emitterObject, cancellationToken);
             }
         }
 
         public void Execute(Vector3 position)
         {
+            Execute(position, CancellationToken.None);
+        }
+
+        public void Execute(Vector3 position, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
             if (actions == null) return;
 
             for (int i = 0; i < actions.Length; i++)
             {
-                actions[i]?.Execute(position);
+                actions[i]?.Execute(position, cancellationToken);
             }
         }
     }
@@ -296,6 +359,9 @@ namespace CycloneGames.Audio.Runtime
 
         private static AudioDuckingProfile cachedConfig;
         private static bool hasSearchedForConfig;
+        private static bool isSearchingForConfig;
+        private static readonly Func<AudioDuckingProfile> DiscoverConfigCallback =
+            AudioConfigDiscovery.DiscoverAudioDuckingProfile;
 
 #if UNITY_EDITOR
         [UnityEditor.InitializeOnLoadMethod]
@@ -313,51 +379,25 @@ namespace CycloneGames.Audio.Runtime
 
         public static AudioDuckingProfile FindConfig()
         {
-            if (hasSearchedForConfig && cachedConfig != null) return cachedConfig;
-
-            if (hasSearchedForConfig && cachedConfig == null)
-                hasSearchedForConfig = false;
-
-            hasSearchedForConfig = true;
-
-            cachedConfig = Resources.Load<AudioDuckingProfile>("AudioDuckingProfile");
-            if (cachedConfig != null) return cachedConfig;
-
-            cachedConfig = Resources.Load<AudioDuckingProfile>("Audio Ducking Profile");
-            if (cachedConfig != null) return cachedConfig;
-
-            AudioDuckingProfile[] allConfigs = Resources.LoadAll<AudioDuckingProfile>("");
-            if (allConfigs != null && allConfigs.Length > 0)
-            {
-                cachedConfig = allConfigs[0];
-                if (allConfigs.Length > 1)
-                    Log.Warning($"AudioDuckingProfile: Found {allConfigs.Length} configs in Resources. Using first.");
-                return cachedConfig;
-            }
-
-#if UNITY_EDITOR
-            string[] guids = UnityEditor.AssetDatabase.FindAssets("t:AudioDuckingProfile");
-            if (guids.Length > 0)
-            {
-                if (guids.Length > 1)
-                    Log.Warning($"AudioDuckingProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
-                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
-                cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioDuckingProfile>(path);
-            }
-#endif
-            return cachedConfig;
+            return AudioConfigCache.GetOrDiscover(
+                ref hasSearchedForConfig,
+                ref isSearchingForConfig,
+                ref cachedConfig,
+                DiscoverConfigCallback);
         }
 
         public static void SetConfig(AudioDuckingProfile config)
         {
             cachedConfig = config;
             hasSearchedForConfig = true;
+            isSearchingForConfig = false;
         }
 
         public static void ClearCache()
         {
             cachedConfig = null;
             hasSearchedForConfig = false;
+            isSearchingForConfig = false;
         }
     }
 

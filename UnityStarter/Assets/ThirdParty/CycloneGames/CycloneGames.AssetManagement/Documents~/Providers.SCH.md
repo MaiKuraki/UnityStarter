@@ -170,6 +170,8 @@ Pending Addressables 操作在每个平台拒绝 `WaitForAsyncComplete`。应 aw
 
 YooAsset provider 目标为 `[3.0.5,4.0.0)` 范围内的稳定版 `com.tuyoogame.yooasset`。asmdef 范围是 compilation envelope；由于 SemVer prerelease 排在对应正式版之前，范围内的 prerelease 可能进入编译，但 activation test 会把它拒绝为不受支持。`YooAssetModule` 独占进程全局 Yoo runtime。每个需要隔离可写缓存的 client instance，都必须通过 file-system parameters 传入各自独立且显式的 `PackageRoot`。
 
+Pending asset、all-assets、raw-file、instance 与 scene 操作会以 `NotSupportedException` 拒绝 `WaitForAsyncComplete`。应 await wrapper 的 `Task`；terminal 状态下的同步等待调用是 no-op。这替代了过去要求 YooAsset provider 同步推进 pending 操作的行为；`IAssetSyncOperations` 是独立能力，不受影响。
+
 ```csharp
 using YooAsset;
 
@@ -288,7 +290,7 @@ Navigathena 1.1.0 `StandardSceneNavigator` 在 `ISceneHandle.Load` 返回后、`
 | YooAsset package 初始化失败 | `InitializePackageOptions` 子类型错误 | 为所选 play mode 构造确切子类型并通过 `AssetPackageInitOptions.ProviderOptions` 传入 |
 | Addressables catalog 更新分裂 authority | 直接调用 `Addressables.UpdateCatalogs` | 所有 catalog mutation 通过 owning package adapter |
 | Downloader 并发无效 | Provider 全局调度 | Addressables：并发由 provider 管理；YooAsset：每个 downloader 显式 1-32，但多个 downloader 与按需 I/O 会叠加 |
-| `WaitForAsyncComplete` 抛出 | Pending Addressables 操作 | 改为 await `Task` |
+| `WaitForAsyncComplete` 抛出 | Pending Addressables 或 YooAsset 操作 | 改为 await `Task` |
 | YooAsset raw `FilePath` 为空 | 设计如此 | `FilePath` 刻意为空；await `Task` 并使用 `ReadText`/`ReadBytes` |
 | Scene unload 被拒 | 不同 package 或重建 generation | 使用 originating package generation；重建的 generation 被拒 |
 | VContainer shutdown 不 await | Scope dispose 是同步的 | Dispose `LifetimeScope` 前显式 await `module.DestroyAsync()` |
@@ -299,7 +301,7 @@ Navigathena 1.1.0 `StandardSceneNavigator` 在 `ISceneHandle.Load` 返回后、`
 
 1. 锁定确切 SDK 版本并确认条件 assembly 激活。
 2. 编译 provider 及其 consumer composition asmdef。
-3. 验证成功、失败、取消、重复 await、dispose、每个状态读取的主线程拒绝、跨 package 拒绝与 shutdown。Scene 需覆盖 `None`/`Physics2D`/`Physics3D` world、非法 enum、重复/并发 activation 与 unload、mutation 前取消与 commit 后 join、失败 load/unload 恢复、Single/外部 unload 与 exactly-once provider 释放。
+3. 验证成功、失败、取消、重复 await、dispose、每个状态读取的主线程拒绝、跨 package 拒绝与 shutdown。对 YooAsset 的 asset、all-assets、raw-file、instance 与 scene wrapper，确认 pending 同步等待会抛出且不调用 provider wait API、所有 terminal 状态都是 no-op，并且 Dispose、迟到 completion 与 source release 保持 exactly-once。Scene 还需覆盖 `None`/`Physics2D`/`Physics3D` world、非法 enum、重复/并发 activation 与 unload、mutation 前取消与 commit 后 join、失败 load/unload 恢复、Single/外部 unload 与 exactly-once provider 释放。
 4. 演练干净 Player 缓存与内容 build，不仅是 Editor 模拟。
 5. 测试 Mono 与 IL2CPP、stripping、禁用 domain reload、网络丢失、存储满、低内存、suspend/resume 与进程终止。
 6. 记录 workload、设备、内容 build 与原始性能证据；不要把 Editor 结果推广到其他平台。

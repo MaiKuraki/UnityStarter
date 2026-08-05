@@ -1314,6 +1314,17 @@ namespace CycloneGames.Audio.Runtime
             actionEvent.Execute(emitterObject);
         }
 
+        public static void ExecuteActionEvent(
+            AudioActionEvent actionEvent,
+            GameObject emitterObject,
+            CancellationToken cancellationToken)
+        {
+            if (actionEvent == null) throw new ArgumentNullException(nameof(actionEvent));
+
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExecuteActionEvent));
+            actionEvent.Execute(emitterObject, cancellationToken);
+        }
+
         public static void ExecuteActionEvent(AudioActionEvent actionEvent, Vector3 position)
         {
             if (actionEvent == null) throw new ArgumentNullException(nameof(actionEvent));
@@ -1322,6 +1333,19 @@ namespace CycloneGames.Audio.Runtime
             if (!IsFinite(position)) return;
 
             actionEvent.Execute(position);
+        }
+
+        public static void ExecuteActionEvent(
+            AudioActionEvent actionEvent,
+            Vector3 position,
+            CancellationToken cancellationToken)
+        {
+            if (actionEvent == null) throw new ArgumentNullException(nameof(actionEvent));
+
+            AudioRuntimeThreadGuard.EnsureMainThread(nameof(ExecuteActionEvent));
+            if (!IsFinite(position)) return;
+
+            actionEvent.Execute(position, cancellationToken);
         }
 
         /// <summary>
