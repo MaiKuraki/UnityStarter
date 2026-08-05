@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Threading;
+using CycloneGames.Logging;
 using Cysharp.Threading.Tasks;
 using UnityEditor;
 using UnityEngine;
@@ -15,6 +16,8 @@ namespace CycloneGames.DataTable.Unity.Editor
         private const float SectionSpacing = 8f;
         private const float ButtonWidth = 72f;
         private const float ButtonGap = 4f;
+
+        private static readonly LogChannel Log = DataTableEditorLog.SettingsChannel;
 
         private SerializedProperty _lubanProjectDir;
         private SerializedProperty _scriptName;
@@ -494,7 +497,7 @@ namespace CycloneGames.DataTable.Unity.Editor
             RunLubanBuildAsync((DataTableLubanSettings)target, _runCancellation).Forget();
         }
 
-        private async UniTaskVoid RunLubanBuildAsync(
+        private async UniTask RunLubanBuildAsync(
             DataTableLubanSettings settings,
             CancellationTokenSource cancellationOwner)
         {
@@ -511,9 +514,15 @@ namespace CycloneGames.DataTable.Unity.Editor
                         "OK");
                 }
             }
-            catch (Exception exception)
+            catch (OperationCanceledException) when (cancellationOwner.IsCancellationRequested)
             {
-                Debug.LogException(exception);
+                // Inspector shutdown owns this cancellation; it is not a build failure.
+            }
+            catch (Exception exception) when (
+                exception is not OutOfMemoryException &&
+                exception is not AccessViolationException)
+            {
+                Log.Error(exception, "Unexpected Luban settings build failure.");
             }
             finally
             {

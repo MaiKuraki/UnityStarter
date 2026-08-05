@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System;
-using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
@@ -15,8 +14,6 @@ namespace CycloneGames.Audio.Runtime
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Platform Profile")]
     public sealed class AudioPlatformProfile : ScriptableObject
     {
-        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
-
         [Serializable]
         public struct CategoryRuntimeSettings
         {
@@ -375,6 +372,9 @@ namespace CycloneGames.Audio.Runtime
 
         private static AudioPlatformProfile cachedConfig;
         private static bool hasSearchedForConfig;
+        private static bool isSearchingForConfig;
+        private static readonly Func<AudioPlatformProfile> DiscoverConfigCallback =
+            AudioConfigDiscovery.DiscoverAudioPlatformProfile;
 
 #if UNITY_EDITOR
         [UnityEditor.InitializeOnLoadMethod]
@@ -392,51 +392,25 @@ namespace CycloneGames.Audio.Runtime
 
         public static AudioPlatformProfile FindConfig()
         {
-            if (hasSearchedForConfig && cachedConfig != null) return cachedConfig;
-
-            if (hasSearchedForConfig && cachedConfig == null)
-                hasSearchedForConfig = false;
-
-            hasSearchedForConfig = true;
-
-            cachedConfig = Resources.Load<AudioPlatformProfile>("AudioPlatformProfile");
-            if (cachedConfig != null) return cachedConfig;
-
-            cachedConfig = Resources.Load<AudioPlatformProfile>("Audio Platform Profile");
-            if (cachedConfig != null) return cachedConfig;
-
-            AudioPlatformProfile[] allConfigs = Resources.LoadAll<AudioPlatformProfile>(string.Empty);
-            if (allConfigs != null && allConfigs.Length > 0)
-            {
-                cachedConfig = allConfigs[0];
-                if (allConfigs.Length > 1)
-                    Log.Warning($"AudioPlatformProfile: Found {allConfigs.Length} configs in Resources. Using first.");
-                return cachedConfig;
-            }
-
-#if UNITY_EDITOR
-            string[] guids = UnityEditor.AssetDatabase.FindAssets("t:AudioPlatformProfile");
-            if (guids.Length > 0)
-            {
-                if (guids.Length > 1)
-                    Log.Warning($"AudioPlatformProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
-                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
-                cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioPlatformProfile>(path);
-            }
-#endif
-            return cachedConfig;
+            return AudioConfigCache.GetOrDiscover(
+                ref hasSearchedForConfig,
+                ref isSearchingForConfig,
+                ref cachedConfig,
+                DiscoverConfigCallback);
         }
 
         public static void SetConfig(AudioPlatformProfile config)
         {
             cachedConfig = config;
             hasSearchedForConfig = true;
+            isSearchingForConfig = false;
         }
 
         public static void ClearCache()
         {
             cachedConfig = null;
             hasSearchedForConfig = false;
+            isSearchingForConfig = false;
         }
 
         #endregion

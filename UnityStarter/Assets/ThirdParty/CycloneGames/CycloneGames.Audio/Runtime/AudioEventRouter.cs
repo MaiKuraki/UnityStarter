@@ -10,9 +10,25 @@ namespace CycloneGames.Audio.Runtime
     {
         public AudioTrigger[] triggers;
         private readonly List<AudioHandle> activeOnEnabledEvents = new List<AudioHandle>(4);
-        private CancellationTokenSource loopCancellation;
+        private bool[] activeLoopingTriggers = Array.Empty<bool>();
+        private AudioTrigger[] activeLoopingTriggerOwners = Array.Empty<AudioTrigger>();
+        private CancellationTokenSource[] loopingTriggerCancellations =
+            Array.Empty<CancellationTokenSource>();
+        private int activeLoopingTriggerCount;
+        private int activeLoopingWorkerCount;
+        private int loopGeneration;
         private const float MIN_LOOP_TIME = 1.0f;
         private const float MAX_LOOP_TIME = 1000.0f;
+
+        internal int ActiveLoopingTriggerCount => activeLoopingTriggerCount;
+        internal int ActiveLoopingWorkerCount => activeLoopingWorkerCount;
+
+        internal bool IsLoopingTriggerRegistered(int triggerNum, AudioTrigger trigger)
+        {
+            return (uint)triggerNum < (uint)activeLoopingTriggers.Length &&
+                   activeLoopingTriggers[triggerNum] &&
+                   ReferenceEquals(activeLoopingTriggerOwners[triggerNum], trigger);
+        }
 
         public void OnEnable()
         {
@@ -87,8 +103,25 @@ namespace CycloneGames.Audio.Runtime
                 return;
             }
 
-            loopCancellation ??= new CancellationTokenSource();
-            PlayLoopingTriggerAsync(triggerNum, trigger, loopCancellation.Token).Forget();
+            EnsureLoopTrackingCapacity();
+            if (activeLoopingTriggers[triggerNum] &&
+                ReferenceEquals(activeLoopingTriggerOwners[triggerNum], trigger))
+            {
+                return;
+            }
+
+            CancelLoopingTrigger(triggerNum);
+            var cancellation = new CancellationTokenSource();
+            loopingTriggerCancellations[triggerNum] = cancellation;
+            activeLoopingTriggers[triggerNum] = true;
+            activeLoopingTriggerOwners[triggerNum] = trigger;
+            activeLoopingTriggerCount++;
+            activeLoopingWorkerCount++;
+            PlayLoopingTriggerAsync(
+                triggerNum,
+                trigger,
+                cancellation,
+                loopGeneration).Forget();
         }
 
         public void StopEvents(AudioEvent eventToStop)
@@ -138,8 +171,10 @@ namespace CycloneGames.Audio.Runtime
         private async UniTask PlayLoopingTriggerAsync(
             int triggerNum,
             AudioTrigger loopTrigger,
-            CancellationToken cancellationToken)
+            CancellationTokenSource cancellation,
+            int generation)
         {
+            CancellationToken cancellationToken = cancellation.Token;
             try
             {
                 float minimumDelay = Mathf.Clamp(loopTrigger.loopTimeMin, MIN_LOOP_TIME, MAX_LOOP_TIME);
@@ -159,12 +194,17 @@ namespace CycloneGames.Audio.Runtime
                         TimeSpan.FromSeconds(timeUntilNextLoop),
                         DelayType.DeltaTime,
                         PlayerLoopTiming.Update,
-                        cancellationToken);
+                        cancellationToken,
+                        cancelImmediately: false);
                 }
             }
             catch (OperationCanceledException)
             {
                 // Cancellation is the normal shutdown path for a disabled or destroyed router.
+            }
+            finally
+            {
+                CompleteLoopingTrigger(triggerNum, loopTrigger, cancellation, generation);
             }
         }
 
@@ -196,10 +236,66 @@ namespace CycloneGames.Audio.Runtime
             return trigger != null;
         }
 
-        private void CancelLoopingTriggers()
+        private void EnsureLoopTrackingCapacity()
         {
-            CancellationTokenSource cancellation = loopCancellation;
-            loopCancellation = null;
+            int requiredCapacity = triggers?.Length ?? 0;
+            if (activeLoopingTriggers.Length == requiredCapacity)
+            {
+                return;
+            }
+
+            CancelLoopingTriggers();
+            activeLoopingTriggers = requiredCapacity == 0
+                ? Array.Empty<bool>()
+                : new bool[requiredCapacity];
+            activeLoopingTriggerOwners = requiredCapacity == 0
+                ? Array.Empty<AudioTrigger>()
+                : new AudioTrigger[requiredCapacity];
+            loopingTriggerCancellations = requiredCapacity == 0
+                ? Array.Empty<CancellationTokenSource>()
+                : new CancellationTokenSource[requiredCapacity];
+        }
+
+        private void CompleteLoopingTrigger(
+            int triggerNum,
+            AudioTrigger loopTrigger,
+            CancellationTokenSource cancellation,
+            int generation)
+        {
+            if (generation != loopGeneration ||
+                (uint)triggerNum >= (uint)activeLoopingTriggers.Length ||
+                !activeLoopingTriggers[triggerNum] ||
+                !ReferenceEquals(activeLoopingTriggerOwners[triggerNum], loopTrigger) ||
+                !ReferenceEquals(loopingTriggerCancellations[triggerNum], cancellation))
+            {
+                return;
+            }
+
+            activeLoopingTriggers[triggerNum] = false;
+            activeLoopingTriggerOwners[triggerNum] = null;
+            loopingTriggerCancellations[triggerNum] = null;
+            activeLoopingTriggerCount--;
+            activeLoopingWorkerCount--;
+            cancellation.Dispose();
+        }
+
+        private void CancelLoopingTrigger(int triggerNum)
+        {
+            if ((uint)triggerNum >= (uint)loopingTriggerCancellations.Length)
+            {
+                return;
+            }
+
+            CancellationTokenSource cancellation = loopingTriggerCancellations[triggerNum];
+            loopingTriggerCancellations[triggerNum] = null;
+            if (activeLoopingTriggers[triggerNum])
+            {
+                activeLoopingTriggers[triggerNum] = false;
+                activeLoopingTriggerOwners[triggerNum] = null;
+                activeLoopingTriggerCount--;
+                activeLoopingWorkerCount--;
+            }
+
             if (cancellation == null)
             {
                 return;
@@ -212,6 +308,41 @@ namespace CycloneGames.Audio.Runtime
             finally
             {
                 cancellation.Dispose();
+            }
+        }
+
+        private void CancelLoopingTriggers()
+        {
+            unchecked
+            {
+                loopGeneration++;
+            }
+
+            if (activeLoopingTriggerCount > 0)
+            {
+                Array.Clear(activeLoopingTriggers, 0, activeLoopingTriggers.Length);
+                Array.Clear(activeLoopingTriggerOwners, 0, activeLoopingTriggerOwners.Length);
+                activeLoopingTriggerCount = 0;
+                activeLoopingWorkerCount = 0;
+            }
+
+            for (int i = 0; i < loopingTriggerCancellations.Length; i++)
+            {
+                CancellationTokenSource cancellation = loopingTriggerCancellations[i];
+                loopingTriggerCancellations[i] = null;
+                if (cancellation == null)
+                {
+                    continue;
+                }
+
+                try
+                {
+                    cancellation.Cancel();
+                }
+                finally
+                {
+                    cancellation.Dispose();
+                }
             }
         }
     }

@@ -1,8 +1,9 @@
 // Copyright (c) CycloneGames
 // Licensed under the MIT License.
 
-using UnityEngine;
+using System;
 using CycloneGames.Logging;
+using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
 {
@@ -249,6 +250,9 @@ namespace CycloneGames.Audio.Runtime
 
         private static AudioPoolConfig cachedConfig;
         private static bool hasSearchedForConfig;
+        private static bool isSearchingForConfig;
+        private static readonly Func<AudioPoolConfig> DiscoverConfigCallback =
+            AudioConfigDiscovery.DiscoverAudioPoolConfig;
 
 #if UNITY_EDITOR
         [UnityEditor.InitializeOnLoadMethod]
@@ -270,49 +274,11 @@ namespace CycloneGames.Audio.Runtime
         /// </summary>
         public static AudioPoolConfig FindConfig()
         {
-            if (hasSearchedForConfig && cachedConfig != null) return cachedConfig;
-
-            // Reset search flag if config was destroyed
-            if (hasSearchedForConfig && cachedConfig == null)
-            {
-                hasSearchedForConfig = false;
-            }
-
-            hasSearchedForConfig = true;
-
-            // Try to find in Resources first (multiple possible names)
-            cachedConfig = Resources.Load<AudioPoolConfig>("AudioPoolConfig");
-            if (cachedConfig != null) return cachedConfig;
-
-            cachedConfig = Resources.Load<AudioPoolConfig>("Audio Pool Config");
-            if (cachedConfig != null) return cachedConfig;
-
-            // Try to find any AudioPoolConfig in Resources
-            var allConfigs = Resources.LoadAll<AudioPoolConfig>("");
-            if (allConfigs != null && allConfigs.Length > 0)
-            {
-                cachedConfig = allConfigs[0];
-                if (allConfigs.Length > 1)
-                {
-                    Log.Warning($"AudioPoolConfig: Found {allConfigs.Length} configs in Resources. Using first.");
-                }
-                return cachedConfig;
-            }
-
-            // Fallback: find all instances using AssetDatabase (Editor only)
-#if UNITY_EDITOR
-            var guids = UnityEditor.AssetDatabase.FindAssets("t:AudioPoolConfig");
-            if (guids.Length > 0)
-            {
-                if (guids.Length > 1)
-                {
-                    Log.Warning($"AudioPoolConfig: Found {guids.Length} configs in project. Only one should exist. Using first found.");
-                }
-                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
-                cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioPoolConfig>(path);
-            }
-#endif
-            return cachedConfig;
+            return AudioConfigCache.GetOrDiscover(
+                ref hasSearchedForConfig,
+                ref isSearchingForConfig,
+                ref cachedConfig,
+                DiscoverConfigCallback);
         }
 
         /// <summary>
@@ -324,6 +290,7 @@ namespace CycloneGames.Audio.Runtime
         {
             cachedConfig = config;
             hasSearchedForConfig = true;
+            isSearchingForConfig = false;
 
             if (config != null)
             {
@@ -338,6 +305,7 @@ namespace CycloneGames.Audio.Runtime
         {
             cachedConfig = null;
             hasSearchedForConfig = false;
+            isSearchingForConfig = false;
         }
 
         #endregion

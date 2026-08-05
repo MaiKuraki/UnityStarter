@@ -2,7 +2,6 @@
 // Licensed under the MIT License.
 
 using System;
-using CycloneGames.Logging;
 using UnityEngine;
 
 namespace CycloneGames.Audio.Runtime
@@ -14,8 +13,6 @@ namespace CycloneGames.Audio.Runtime
     [CreateAssetMenu(menuName = "CycloneGames/Audio/Audio Voice Policy Profile")]
     public sealed class AudioVoicePolicyProfile : ScriptableObject
     {
-        private static readonly LogChannel Log = AudioRuntimeLog.Channel;
-
         [Serializable]
         public struct CategoryPolicySettings
         {
@@ -145,6 +142,9 @@ namespace CycloneGames.Audio.Runtime
 
         private static AudioVoicePolicyProfile cachedConfig;
         private static bool hasSearchedForConfig;
+        private static bool isSearchingForConfig;
+        private static readonly Func<AudioVoicePolicyProfile> DiscoverConfigCallback =
+            AudioConfigDiscovery.DiscoverAudioVoicePolicyProfile;
 
 #if UNITY_EDITOR
         [UnityEditor.InitializeOnLoadMethod]
@@ -162,51 +162,25 @@ namespace CycloneGames.Audio.Runtime
 
         public static AudioVoicePolicyProfile FindConfig()
         {
-            if (hasSearchedForConfig && cachedConfig != null) return cachedConfig;
-
-            if (hasSearchedForConfig && cachedConfig == null)
-                hasSearchedForConfig = false;
-
-            hasSearchedForConfig = true;
-
-            cachedConfig = Resources.Load<AudioVoicePolicyProfile>("AudioVoicePolicyProfile");
-            if (cachedConfig != null) return cachedConfig;
-
-            cachedConfig = Resources.Load<AudioVoicePolicyProfile>("Audio Voice Policy Profile");
-            if (cachedConfig != null) return cachedConfig;
-
-            AudioVoicePolicyProfile[] allConfigs = Resources.LoadAll<AudioVoicePolicyProfile>("");
-            if (allConfigs != null && allConfigs.Length > 0)
-            {
-                cachedConfig = allConfigs[0];
-                if (allConfigs.Length > 1)
-                    Log.Warning($"AudioVoicePolicyProfile: Found {allConfigs.Length} configs in Resources. Using first.");
-                return cachedConfig;
-            }
-
-#if UNITY_EDITOR
-            string[] guids = UnityEditor.AssetDatabase.FindAssets("t:AudioVoicePolicyProfile");
-            if (guids.Length > 0)
-            {
-                if (guids.Length > 1)
-                    Log.Warning($"AudioVoicePolicyProfile: Found {guids.Length} configs in project. Only one should exist. Using first found.");
-                string path = UnityEditor.AssetDatabase.GUIDToAssetPath(guids[0]);
-                cachedConfig = UnityEditor.AssetDatabase.LoadAssetAtPath<AudioVoicePolicyProfile>(path);
-            }
-#endif
-            return cachedConfig;
+            return AudioConfigCache.GetOrDiscover(
+                ref hasSearchedForConfig,
+                ref isSearchingForConfig,
+                ref cachedConfig,
+                DiscoverConfigCallback);
         }
 
         public static void SetConfig(AudioVoicePolicyProfile config)
         {
             cachedConfig = config;
             hasSearchedForConfig = true;
+            isSearchingForConfig = false;
         }
 
         public static void ClearCache()
         {
             cachedConfig = null;
             hasSearchedForConfig = false;
+            isSearchingForConfig = false;
         }
 
         #endregion

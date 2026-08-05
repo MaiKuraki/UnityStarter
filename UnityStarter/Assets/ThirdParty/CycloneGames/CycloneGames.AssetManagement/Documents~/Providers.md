@@ -170,6 +170,8 @@ Pending Addressables operations reject `WaitForAsyncComplete` on every platform.
 
 The YooAsset provider targets stable `com.tuyoogame.yooasset` releases in `[3.0.5,4.0.0)`. The asmdef range is the compilation envelope; SemVer prereleases sort before their final release, so a prerelease inside that envelope can enter compilation, but the activation test rejects it as unsupported. `YooAssetModule` exclusively owns the process-global Yoo runtime. Each client instance that requires an isolated writable cache must pass a distinct explicit `PackageRoot` through its file-system parameters.
 
+Pending asset, all-assets, raw-file, instance, and scene operations reject `WaitForAsyncComplete` with `NotSupportedException`. Await the wrapper `Task`; a terminal synchronous-wait call is a no-op. This replaces the prior YooAsset behavior that asked the provider to advance a pending operation synchronously; `IAssetSyncOperations` is a separate capability and is unchanged.
+
 ```csharp
 using YooAsset;
 
@@ -288,7 +290,7 @@ Do not add a capability to `IAssetPackage` unless all providers can implement th
 | YooAsset package initialization fails | Wrong `InitializePackageOptions` subtype | Construct the exact subtype for the selected play mode and pass it through `AssetPackageInitOptions.ProviderOptions` |
 | Addressables catalog update split authority | Direct `Addressables.UpdateCatalogs` call | Route every catalog mutation through the owning package adapter |
 | Downloader concurrency not effective | Provider-global scheduling | Addressables: concurrency is provider-managed; YooAsset: explicit 1-32 per downloader, but multiple downloaders and on-demand I/O add together |
-| `WaitForAsyncComplete` throws | Pending Addressables operation | Await `Task` instead |
+| `WaitForAsyncComplete` throws | Pending Addressables or YooAsset operation | Await `Task` instead |
 | YooAsset raw `FilePath` empty | By design | `FilePath` is intentionally empty; await `Task` and use `ReadText`/`ReadBytes` |
 | Scene unload rejected | Different package or recreated generation | Use the originating package generation; a recreated generation is rejected |
 | VContainer shutdown does not await | Scope disposal is synchronous | Explicitly await `module.DestroyAsync()` before disposing the `LifetimeScope` |
@@ -299,7 +301,7 @@ For every claimed provider/platform combination:
 
 1. Lock the exact SDK version and confirm the conditional assembly is active.
 2. Compile the provider and its consumer composition asmdef.
-3. Validate success, fault, cancellation, repeated await, disposal, main-thread rejection for every status read, cross-package rejection, and shutdown. For Scene, cover `None`/`Physics2D`/`Physics3D` worlds, invalid enums, repeated/concurrent activation and unload, cancellation before mutation and join after commit, failed-load/unload recovery, Single/external unload, and exactly-once provider release.
+3. Validate success, fault, cancellation, repeated await, disposal, main-thread rejection for every status read, cross-package rejection, and shutdown. For YooAsset asset, all-assets, raw-file, instance, and scene wrappers, confirm pending synchronous waits throw without invoking provider wait APIs, all terminal statuses are no-ops, and disposal/late completion/source release stay exactly-once. For Scene, cover `None`/`Physics2D`/`Physics3D` worlds, invalid enums, repeated/concurrent activation and unload, cancellation before mutation and join after commit, failed-load/unload recovery, Single/external unload, and exactly-once provider release.
 4. Exercise a clean Player cache and content build, not only Editor simulation.
 5. Test Mono and IL2CPP, stripping, domain reload disabled, network loss, storage full, low memory, suspend/resume, and process termination.
 6. Record workload, device, content build, and raw performance evidence; do not generalize an Editor result to other platforms.
