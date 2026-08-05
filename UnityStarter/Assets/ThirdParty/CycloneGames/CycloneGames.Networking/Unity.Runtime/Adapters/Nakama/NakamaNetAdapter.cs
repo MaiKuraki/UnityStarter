@@ -5,6 +5,7 @@ using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
+using Cysharp.Threading.Tasks;
 using CycloneGames.Hash.Core;
 using CycloneGames.Networking.Security;
 using Nakama;
@@ -41,7 +42,18 @@ namespace CycloneGames.Networking.Adapter.Nakama
         private const string UnsupportedClientRouteError = "The client-side Nakama adapter cannot send through a server-to-client or server-broadcast route.";
         private const string ConnectionCapacityError = "Nakama connection capacity is exhausted.";
         private const string SendCapacityError = "Nakama asynchronous send capacity is exhausted.";
+        private const string AuthenticationOperationCapacityError = "A Nakama authentication operation for another client is already pending.";
+        private const string UnavailableSocketEpochError = "A Nakama socket can have only one adapter owner and one connection epoch. Use a newly created ISocket for another adapter or reconnect.";
+        private const string LeaveMatchCapacityError = "A Nakama leave-match operation is already pending.";
+        private const string MatchmakerStartCapacityError = "A Nakama matchmaker-start operation or ticket is already active.";
+        private const string SocketCloseCapacityError = "Nakama socket-close operation capacity is exhausted.";
+        private const string InvalidMatchmakerResultError = "Nakama matchmaker result contains neither a relayed-match token nor an authoritative match ID.";
         private const long DefaultMatchStateOpCode = 0L;
+        private const int MaximumPendingSocketCloseOperations = 4;
+
+        private static readonly object s_socketEpochRegistryGate = new object();
+        private static readonly ConditionalWeakTable<ISocket, SocketEpochState> s_socketEpochRegistry =
+            new ConditionalWeakTable<ISocket, SocketEpochState>();
 
         [Header("Lifecycle")]
         [SerializeField] private bool _connectOnStart;
@@ -94,7 +106,13 @@ namespace CycloneGames.Networking.Adapter.Nakama
         private IClient _authenticationClient;
         private Task _connectTask = Task.CompletedTask;
         private ISocket _connectTaskSocket;
-        private Task _socketCloseTask = Task.CompletedTask;
+        private int _connectTaskGeneration;
+        private readonly ISocket[] _socketCloseSockets =
+            new ISocket[MaximumPendingSocketCloseOperations + 1];
+        private readonly Task[] _socketCloseTasks =
+            new Task[MaximumPendingSocketCloseOperations + 1];
+        private readonly UnitySocket[] _socketCloseDispatchers =
+            new UnitySocket[MaximumPendingSocketCloseOperations + 1];
         private int _sendSequence;
         private long _bytesSent;
         private long _bytesReceived;
@@ -103,10 +121,60 @@ namespace CycloneGames.Networking.Adapter.Nakama
         private int _pendingSends;
         private int _nextConnectionId;
         private int _operationGeneration;
+        private int _sessionGeneration;
+        private int _authenticationSessionGeneration;
+        private int _socketEventGeneration;
         private int _mainThreadId;
         private bool _socketEventsBound;
+        private bool _socketOwnedByAdapter;
+        private bool _socketConnectionEpochStarted;
         private bool _isDestroyed;
+        private bool _connectOperationPending;
+        private bool _connectRequestQueued;
+        private bool _queuedConnectStartScheduled;
+        private ISocket _queuedConnectSocket;
+        private int _queuedConnectGeneration;
+        private bool _leaveMatchOperationPending;
+        private bool _cancelMatchmakerOperationPending;
+        private bool _addMatchmakerOperationPending;
+        private bool _matchmakerJoinOperationPending;
+        private bool _socketCloseCapacityReported;
+        private ISocket _socketEventSource;
+        private Action<string> _socketClosedHandler;
+        private Action<Exception> _socketErrorHandler;
+        private Action<IMatchState> _matchStateHandler;
+        private Action<IMatchPresenceEvent> _matchPresenceHandler;
+        private Action<IMatchmakerMatched> _matchmakerMatchedHandler;
+        private UnitySocket _ownedSocketDispatcher;
         private NakamaNetConnection _authorityConnection;
+
+        private sealed class SocketEpochState
+        {
+            internal SocketEpochState(NakamaNetAdapter owner, bool isAdapterOwned)
+            {
+                Owner = new WeakReference<NakamaNetAdapter>(owner);
+                IsAdapterOwned = isAdapterOwned;
+            }
+
+            internal WeakReference<NakamaNetAdapter> Owner;
+            internal bool IsAdapterOwned;
+            internal bool EpochStarted;
+        }
+
+        private readonly struct SocketCloseReservation
+        {
+            internal SocketCloseReservation(
+                int slot,
+                TaskCompletionSource<bool> completion)
+            {
+                Slot = slot;
+                Completion = completion;
+            }
+
+            internal int Slot { get; }
+            internal TaskCompletionSource<bool> Completion { get; }
+            internal bool RequiresStart => Completion != null;
+        }
 
         public IClient Client
         {
@@ -277,38 +345,172 @@ namespace CycloneGames.Networking.Adapter.Nakama
         private void OnDestroy()
         {
             _isDestroyed = true;
+            ISocket socket = _socket;
+            UnitySocket ownedDispatcher = _ownedSocketDispatcher;
+            bool ownsSocket = _socketOwnedByAdapter;
+            bool socketEpochStarted = _socketConnectionEpochStarted;
+            bool socketWasActive = socket != null && (socket.IsConnected || socket.IsConnecting);
             UnbindSocketEvents();
             CancelCurrentOperations(createReplacement: false);
-            ISocket socket = _socket;
-            if (socket != null && socket.IsConnected)
-                RequestSocketClose(socket, reportErrors: false);
-
             ClearMatchState(notifyDisconnected: false);
+
+            if (socket != null && (ownsSocket || socketWasActive))
+                RequestSocketClose(
+                    socket,
+                    reportErrors: false,
+                    ownsSocket ? ownedDispatcher : null,
+                    useDestroyReservation: true);
+
+            if (socket != null)
+            {
+                RelinquishSocketClaim(
+                    socket,
+                    this,
+                    retire: ownsSocket || socketEpochStarted || socketWasActive);
+            }
+
+            _client = null;
+            _socket = null;
+            _session = null;
+            _socketOwnedByAdapter = false;
+            _socketConnectionEpochStarted = false;
+            _ownedSocketDispatcher = null;
             _authenticationTask = null;
             _authenticationClient = null;
+            _authenticationSessionGeneration = 0;
             _messageHandlers.Clear();
             _lifecycleState = NetworkLifecycleState.Disposed;
             _runtimeContext?.Dispose();
             _runtimeContext = null;
+
+            OnClientConnected = null;
+            OnClientDisconnected = null;
+            OnConnectedToServer = null;
+            OnDisconnectedFromServer = null;
+            OnError = null;
+            OnDataReceived = null;
+            OnMatchState = null;
+            OnMatched = null;
+            OnPresenceJoined = null;
+            OnPresenceLeft = null;
         }
 
         public void Initialize(IClient client, ISocket socket, ISession session, string matchId = null)
         {
             EnsureMainThread();
-            UnbindSocketEvents();
-            CancelCurrentOperations(createReplacement: true);
-            ClearMatchState(notifyDisconnected: false);
-            if (!ReferenceEquals(_client, client))
+            ThrowIfDisposed();
+            if (client == null)
+                throw new ArgumentNullException(nameof(client));
+            if (socket == null)
+                throw new ArgumentNullException(nameof(socket));
+            if (socket.IsConnected || socket.IsConnecting)
             {
-                _authenticationTask = null;
-                _authenticationClient = null;
+                throw new InvalidOperationException(
+                    "Initialize requires a newly created, disconnected Nakama socket whose connection epoch has not started.");
             }
-            _client = client ?? throw new ArgumentNullException(nameof(client));
-            _socket = socket ?? throw new ArgumentNullException(nameof(socket));
-            _session = session;
-            if (!string.IsNullOrEmpty(matchId))
-                _matchId = matchId;
-            BindSocketEvents();
+            if (ReferenceEquals(_socket, socket) && _socketConnectionEpochStarted)
+            {
+                throw new InvalidOperationException(UnavailableSocketEpochError);
+            }
+            if (ReferenceEquals(_socket, socket) && !ReferenceEquals(_client, client))
+            {
+                throw new InvalidOperationException(
+                    "The current Nakama socket cannot be rebound to a different client.");
+            }
+
+            ISocket previousSocket = _socket;
+            UnitySocket previousOwnedDispatcher = _ownedSocketDispatcher;
+            bool previousSocketOwnedByAdapter = _socketOwnedByAdapter;
+            bool previousSocketEpochStarted = _socketConnectionEpochStarted;
+            bool previousSocketWasActive = previousSocket != null
+                                           && (previousSocket.IsConnected || previousSocket.IsConnecting);
+            bool replacingSocket = !ReferenceEquals(previousSocket, socket);
+            bool requestedSocketOwnedByAdapter = !replacingSocket && previousSocketOwnedByAdapter;
+            bool acquiredSocketClaim = ClaimSocket(socket, this, requestedSocketOwnedByAdapter);
+            bool closePreviousSocket = replacingSocket
+                                       && previousSocket != null
+                                       && (previousSocketOwnedByAdapter
+                                           || previousSocketWasActive);
+            SocketCloseReservation previousCloseReservation = default;
+            if (closePreviousSocket
+                && !TryReserveSocketClose(
+                    previousSocket,
+                    reportErrors: false,
+                    previousSocketOwnedByAdapter ? previousOwnedDispatcher : null,
+                    useDestroyReservation: false,
+                    out previousCloseReservation))
+            {
+                if (acquiredSocketClaim)
+                    RelinquishSocketClaim(socket, this, retire: requestedSocketOwnedByAdapter);
+                throw new InvalidOperationException(SocketCloseCapacityError);
+            }
+
+            bool previousSocketEventsUnbound = false;
+            try
+            {
+                UnbindSocketEvents();
+                previousSocketEventsUnbound = true;
+                CancelCurrentOperations(createReplacement: true);
+                ClearMatchState(notifyDisconnected: false);
+                unchecked
+                {
+                    _sessionGeneration++;
+                }
+                if (_authenticationTask == null || _authenticationTask.IsCompleted)
+                {
+                    _authenticationTask = null;
+                    _authenticationClient = null;
+                    _authenticationSessionGeneration = 0;
+                }
+
+                if (replacingSocket && previousSocket != null)
+                {
+                    RelinquishSocketClaim(
+                        previousSocket,
+                        this,
+                        retire: previousSocketOwnedByAdapter
+                                || previousSocketEpochStarted
+                                || previousSocketWasActive);
+                }
+
+                _client = client;
+                _socket = socket;
+                if (replacingSocket)
+                {
+                    _socketOwnedByAdapter = false;
+                    _socketConnectionEpochStarted = false;
+                    _ownedSocketDispatcher = null;
+                }
+                _session = session;
+                if (!string.IsNullOrEmpty(matchId))
+                    _matchId = matchId;
+
+                BindSocketEvents();
+            }
+            catch (Exception e) when (IsRecoverableException(e))
+            {
+                if (acquiredSocketClaim && !ReferenceEquals(_socket, socket))
+                    RelinquishSocketClaim(socket, this, retire: requestedSocketOwnedByAdapter);
+                throw;
+            }
+            finally
+            {
+                if (closePreviousSocket)
+                {
+                    if (previousSocketEventsUnbound)
+                    {
+                        StartReservedSocketClose(
+                            previousSocket,
+                            reportErrors: false,
+                            previousCloseReservation);
+                    }
+                    else
+                    {
+                        ReleaseSocketCloseReservation(previousCloseReservation);
+                    }
+                }
+            }
+
             _runtimeContext?.Dispose();
             _runtimeContext = BuildRuntimeContext();
         }
@@ -376,12 +578,14 @@ namespace CycloneGames.Networking.Adapter.Nakama
         public void StartServer()
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             throw new NotSupportedException(UnsupportedServerError);
         }
 
         public void StartClient(string address)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (!string.IsNullOrWhiteSpace(address)
                 && !string.Equals(address, _host, StringComparison.OrdinalIgnoreCase))
             {
@@ -390,31 +594,73 @@ namespace CycloneGames.Networking.Adapter.Nakama
                     nameof(address));
             }
 
+            if (_lifecycleState == NetworkLifecycleState.ClientRunning
+                && _socket != null
+                && _socket.IsConnected)
+            {
+                return;
+            }
+
+            if (_connectOperationPending || _queuedConnectStartScheduled)
+            {
+                bool isSameActiveRequest = ReferenceEquals(_connectTaskSocket, _socket)
+                                           && _connectTaskGeneration == _operationGeneration
+                                           && _shutdown != null
+                                           && !_shutdown.IsCancellationRequested
+                                           && _lifecycleState == NetworkLifecycleState.StartingClient;
+                if (isSameActiveRequest)
+                    return;
+
+                ThrowIfInjectedSocketRetired();
+                QueueLatestConnectRequest();
+                return;
+            }
+
+            ThrowIfInjectedSocketRetired();
+            BeginConnect();
+        }
+
+        private void BeginConnect()
+        {
+            EnsureMainThread();
+            ThrowIfDisposed();
+            PrepareSocketForConnectionEpoch();
             CancellationToken cancellationToken = CancelCurrentOperations(createReplacement: true);
             int operationGeneration = _operationGeneration;
-            Task previousConnectTask = ReferenceEquals(_connectTaskSocket, _socket)
-                ? _connectTask
-                : Task.CompletedTask;
             _connectTaskSocket = _socket;
-            _connectTask = ConnectAndJoinAsync(cancellationToken, operationGeneration, previousConnectTask);
+            _connectTaskGeneration = operationGeneration;
+            _connectOperationPending = true;
+            _connectTask = ConnectAndJoinAsync(cancellationToken, operationGeneration);
+            _connectTask.AsUniTask(useCurrentSynchronizationContext: false).Forget();
         }
 
         public void Stop()
         {
             EnsureMainThread();
+            if (_isDestroyed)
+                return;
+            UnbindSocketEvents();
             CancelCurrentOperations(createReplacement: true);
 
             ISocket socket = _socket;
-            if (socket != null && socket.IsConnected)
-                RequestSocketClose(socket, reportErrors: true);
+            bool shouldClose = socket != null
+                               && (_socketOwnedByAdapter || socket.IsConnected || socket.IsConnecting);
 
             ClearMatchState(notifyDisconnected: false);
             _lifecycleState = NetworkLifecycleState.Stopped;
+            if (shouldClose)
+            {
+                RequestSocketClose(
+                    socket,
+                    reportErrors: true,
+                    _socketOwnedByAdapter ? _ownedSocketDispatcher : null);
+            }
         }
 
         public void Disconnect(INetConnection connection)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             throw new NotSupportedException(
                 "Nakama clients cannot disconnect an individual remote presence. Stop the local adapter to leave the match.");
         }
@@ -422,6 +668,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
         public NetworkSendResult Send(INetConnection connection, in ArraySegment<byte> payload, int channelId)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (channelId != GetChannelId(NetworkChannel.Reliable))
                 return NetworkSendResult.Fail(NetworkSendStatus.Unsupported, channelId, connection, UnsupportedChannelError);
             if (!ValidatePayload(payload))
@@ -469,6 +716,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
         public NetworkSendResult Broadcast(IReadOnlyList<INetConnection> connections, in ArraySegment<byte> payload, int channelId)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (connections == null)
                 throw new ArgumentNullException(nameof(connections));
             return NetworkSendResult.Fail(
@@ -480,6 +728,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
         public NetworkMessageHandlerLease RegisterHandler(ushort messageId, NetworkMessageHandler handler)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             return _messageHandlers.Register(messageId, handler);
         }
 
@@ -489,6 +738,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
             NetworkChannel channel = NetworkChannel.Reliable)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (!TryPrepareCanonicalPayload(messageId, channel, payload.Length, null, out _, out NetworkSendResult failure))
                 return failure;
 
@@ -510,6 +760,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
             NetworkChannel channel = NetworkChannel.Reliable)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             int channelId = channel == NetworkChannel.Reliable ? GetChannelId(channel) : (int)channel;
             return NetworkSendResult.Fail(
                 NetworkSendStatus.Unsupported,
@@ -524,6 +775,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
             NetworkChannel channel = NetworkChannel.Reliable)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             int channelId = channel == NetworkChannel.Reliable ? GetChannelId(channel) : (int)channel;
             return NetworkSendResult.Fail(
                 NetworkSendStatus.Unsupported,
@@ -538,6 +790,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
             NetworkChannel channel = NetworkChannel.Reliable)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (connections == null)
                 throw new ArgumentNullException(nameof(connections));
             int channelId = channel == NetworkChannel.Reliable ? GetChannelId(channel) : (int)channel;
@@ -589,12 +842,37 @@ namespace CycloneGames.Networking.Adapter.Nakama
         public void ClearSession()
         {
             EnsureMainThread();
+            ThrowIfDisposed();
+            unchecked
+            {
+                _sessionGeneration++;
+            }
             _session = null;
+
+            if (_connectOperationPending
+                || _connectRequestQueued
+                || _queuedConnectStartScheduled
+                || _lifecycleState == NetworkLifecycleState.StartingClient)
+            {
+                UnbindSocketEvents();
+                CancelCurrentOperations(createReplacement: true);
+                ISocket socket = _socket;
+                if (socket != null
+                    && (_socketOwnedByAdapter || socket.IsConnected || socket.IsConnecting))
+                {
+                    RequestSocketClose(
+                        socket,
+                        reportErrors: false,
+                        _socketOwnedByAdapter ? _ownedSocketDispatcher : null);
+                }
+                _lifecycleState = NetworkLifecycleState.Stopped;
+            }
         }
 
         public bool TrySendMatchState(NetworkMatchId matchId, long operationCode, in ArraySegment<byte> payload, NetworkChannel channel = NetworkChannel.Reliable)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (channel != NetworkChannel.Reliable || !matchId.IsValid || !ValidatePayload(payload))
                 return false;
 
@@ -604,27 +882,43 @@ namespace CycloneGames.Networking.Adapter.Nakama
         public void LeaveMatch(NetworkMatchId matchId)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (_socket == null || !matchId.IsValid)
                 return;
+            if (_leaveMatchOperationPending)
+            {
+                RaiseError(null, TransportError.Congestion, LeaveMatchCapacityError);
+                return;
+            }
 
+            _leaveMatchOperationPending = true;
             LeaveMatchAsync(
                 _socket,
                 matchId.Value,
                 _shutdown != null ? _shutdown.Token : CancellationToken.None,
-                _operationGeneration);
+                _operationGeneration).Forget();
         }
 
         public bool TryCancelMatchmaker(NetworkMatchmakerTicket ticket)
         {
             EnsureMainThread();
-            if (_socket == null || !ticket.IsValid)
+            ThrowIfDisposed();
+            if (_socket == null ||
+                !ticket.IsValid ||
+                !IsMatchmaking ||
+                !CurrentTicket.Equals(ticket))
+            {
+                return false;
+            }
+            if (_cancelMatchmakerOperationPending)
                 return false;
 
+            _cancelMatchmakerOperationPending = true;
             CancelMatchmakerAsync(
                 _socket,
                 ticket.Value,
                 _shutdown != null ? _shutdown.Token : CancellationToken.None,
-                _operationGeneration);
+                _operationGeneration).Forget();
             return true;
         }
 
@@ -650,13 +944,25 @@ namespace CycloneGames.Networking.Adapter.Nakama
         public void StartMatchmaker(string query, int minCount, int maxCount)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
+            if (_addMatchmakerOperationPending ||
+                _cancelMatchmakerOperationPending ||
+                _matchmakerJoinOperationPending ||
+                IsMatchmaking ||
+                CurrentTicket.IsValid)
+            {
+                RaiseError(null, TransportError.Congestion, MatchmakerStartCapacityError);
+                return;
+            }
+
+            _addMatchmakerOperationPending = true;
             AddMatchmakerAsync(
                 _socket,
                 query,
                 minCount,
                 maxCount,
                 _shutdown != null ? _shutdown.Token : CancellationToken.None,
-                _operationGeneration);
+                _operationGeneration).Forget();
         }
 
         private INetworkRuntimeContext BuildRuntimeContext()
@@ -677,6 +983,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
         private void EnsureClientAndSocket()
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (_client == null)
 #if UNITY_WEBGL && !UNITY_EDITOR
                 _client = new Client(_scheme, _host, _port, _serverKey, UnityWebRequestAdapter.Instance);
@@ -684,14 +991,210 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 _client = new Client(_scheme, _host, _port, _serverKey);
 #endif
             if (_socket == null)
-                _socket = _client.NewSocket(true);
+                CreateOwnedSocket();
+            if (!_socketConnectionEpochStarted)
+                BindSocketEvents();
+        }
+
+        private void PrepareSocketForConnectionEpoch()
+        {
+            EnsureClientAndSocket();
+            if (_socketConnectionEpochStarted)
+            {
+                if (!_socketOwnedByAdapter)
+                    throw new InvalidOperationException(UnavailableSocketEpochError);
+
+                RetireOwnedSocket();
+                CreateOwnedSocket();
+            }
+
+            ThrowIfSocketUnavailableForNewEpoch();
             BindSocketEvents();
+            MarkSocketEpochStarted(_socket, this);
+            _socketConnectionEpochStarted = true;
+        }
+
+        private void CreateOwnedSocket()
+        {
+            EnsureMainThread();
+            ThrowIfDisposed();
+            if (_client == null)
+                throw new InvalidOperationException(MissingClientError);
+
+            ISocketAdapter transportAdapter;
+#if UNITY_WEBGL && !UNITY_EDITOR
+            transportAdapter = new JsWebSocketAdapter();
+#else
+            transportAdapter = new WebSocketStdlibAdapter();
+#endif
+            UnitySocket dispatcher = UnitySocket.Create(transportAdapter);
+            try
+            {
+                ISocket socket = global::Nakama.Socket.From(_client, dispatcher);
+                ClaimSocket(socket, this, isAdapterOwned: true);
+                _socket = socket;
+                _ownedSocketDispatcher = dispatcher;
+                _socketOwnedByAdapter = true;
+                _socketConnectionEpochStarted = false;
+                RefreshRuntimeContext();
+            }
+            catch
+            {
+                if (dispatcher != null)
+                    Destroy(dispatcher.gameObject);
+                throw;
+            }
+        }
+
+        private void RetireOwnedSocket()
+        {
+            EnsureMainThread();
+            ISocket retiredSocket = _socket;
+            UnitySocket retiredDispatcher = _ownedSocketDispatcher;
+            if (retiredSocket != null
+                && !RequestSocketClose(retiredSocket, reportErrors: false, retiredDispatcher))
+            {
+                throw new InvalidOperationException(SocketCloseCapacityError);
+            }
+
+            if (retiredSocket != null)
+                RelinquishSocketClaim(retiredSocket, this, retire: true);
+            UnbindSocketEvents();
+            _socket = null;
+            _ownedSocketDispatcher = null;
+            _socketOwnedByAdapter = false;
+            _socketConnectionEpochStarted = false;
+
+        }
+
+        private void ThrowIfInjectedSocketRetired()
+        {
+            if (_socket == null || _socketOwnedByAdapter)
+                return;
+            if (_socketConnectionEpochStarted)
+                throw new InvalidOperationException(UnavailableSocketEpochError);
+
+            ThrowIfSocketUnavailableForNewEpoch();
+        }
+
+        private static bool ClaimSocket(
+            ISocket socket,
+            NakamaNetAdapter owner,
+            bool isAdapterOwned)
+        {
+            lock (s_socketEpochRegistryGate)
+            {
+                if (!s_socketEpochRegistry.TryGetValue(socket, out SocketEpochState state))
+                {
+                    s_socketEpochRegistry.Add(socket, new SocketEpochState(owner, isAdapterOwned));
+                    return true;
+                }
+
+                if (state.EpochStarted)
+                    throw new InvalidOperationException(UnavailableSocketEpochError);
+
+                if (state.Owner != null
+                    && state.Owner.TryGetTarget(out NakamaNetAdapter currentOwner))
+                {
+                    if (!ReferenceEquals(currentOwner, owner)
+                        || state.IsAdapterOwned != isAdapterOwned)
+                    {
+                        throw new InvalidOperationException(UnavailableSocketEpochError);
+                    }
+
+                    return false;
+                }
+
+                if (state.IsAdapterOwned)
+                {
+                    state.EpochStarted = true;
+                    state.Owner = null;
+                    throw new InvalidOperationException(UnavailableSocketEpochError);
+                }
+
+                state.Owner = new WeakReference<NakamaNetAdapter>(owner);
+                state.IsAdapterOwned = isAdapterOwned;
+                return true;
+            }
+        }
+
+        private static void MarkSocketEpochStarted(ISocket socket, NakamaNetAdapter owner)
+        {
+            lock (s_socketEpochRegistryGate)
+            {
+                if (!TryGetSocketStateForOwner(socket, owner, out SocketEpochState state)
+                    || state.EpochStarted)
+                {
+                    throw new InvalidOperationException(UnavailableSocketEpochError);
+                }
+
+                state.EpochStarted = true;
+            }
+        }
+
+        private static void RelinquishSocketClaim(
+            ISocket socket,
+            NakamaNetAdapter owner,
+            bool retire)
+        {
+            lock (s_socketEpochRegistryGate)
+            {
+                if (!TryGetSocketStateForOwner(socket, owner, out SocketEpochState state))
+                    return;
+
+                if (retire || state.IsAdapterOwned || state.EpochStarted)
+                {
+                    state.EpochStarted = true;
+                    state.Owner = null;
+                    return;
+                }
+
+                s_socketEpochRegistry.Remove(socket);
+            }
+        }
+
+        private void ThrowIfSocketUnavailableForNewEpoch()
+        {
+            lock (s_socketEpochRegistryGate)
+            {
+                if (!TryGetSocketStateForOwner(_socket, this, out SocketEpochState state)
+                    || state.EpochStarted)
+                {
+                    throw new InvalidOperationException(UnavailableSocketEpochError);
+                }
+            }
+        }
+
+        private static bool TryGetSocketStateForOwner(
+            ISocket socket,
+            NakamaNetAdapter owner,
+            out SocketEpochState state)
+        {
+            if (socket != null
+                && s_socketEpochRegistry.TryGetValue(socket, out state)
+                && state.Owner != null
+                && state.Owner.TryGetTarget(out NakamaNetAdapter currentOwner)
+                && ReferenceEquals(currentOwner, owner))
+            {
+                return true;
+            }
+
+            state = null;
+            return false;
+        }
+
+        private void RefreshRuntimeContext()
+        {
+            if (_runtimeContext == null)
+                return;
+
+            _runtimeContext.Dispose();
+            _runtimeContext = BuildRuntimeContext();
         }
 
         private async Task ConnectAndJoinAsync(
             CancellationToken cancellationToken,
-            int operationGeneration,
-            Task previousConnectTask)
+            int operationGeneration)
         {
             IClient client = null;
             ISocket socket = null;
@@ -708,13 +1211,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
 
                 _lifecycleState = NetworkLifecycleState.StartingClient;
 
-                if (previousConnectTask != null && !previousConnectTask.IsCompleted)
-                    await previousConnectTask;
-                EnsureMainThread();
-                if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
-                    return;
-
-                Task pendingClose = _socketCloseTask;
+                Task pendingClose = GetPendingSocketCloseTask(socket);
                 if (pendingClose != null && !pendingClose.IsCompleted)
                     await pendingClose;
                 EnsureMainThread();
@@ -724,19 +1221,26 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 if (_session == null && _autoAuthenticateDevice)
                 {
                     string deviceId = string.IsNullOrEmpty(_deviceIdOverride) ? SystemInfo.deviceUniqueIdentifier : _deviceIdOverride;
-                    Task<ISession> authenticationTask = GetOrCreateAuthenticationTask(client, deviceId);
-                    ISession authenticatedSession = await AwaitWithTimeoutAsync(
-                        authenticationTask,
+                    int authenticationSessionGeneration = _sessionGeneration;
+                    Task<ISession> authenticationTask;
+                    ISession authenticatedSession = await AuthenticateDeviceSingleFlightAsync(
+                        client,
+                        deviceId,
                         _connectTimeoutSeconds,
-                        cancellationToken);
+                        cancellationToken,
+                        authenticationSessionGeneration);
+                    authenticationTask = _authenticationTask;
                     EnsureMainThread();
-                    if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
+                    if (!IsOperationCurrent(operationGeneration, cancellationToken, socket)
+                        || authenticationSessionGeneration != _sessionGeneration)
                         return;
                     _session = authenticatedSession;
-                    if (ReferenceEquals(_authenticationTask, authenticationTask))
+                    if (ReferenceEquals(_authenticationTask, authenticationTask)
+                        && _authenticationSessionGeneration == authenticationSessionGeneration)
                     {
                         _authenticationTask = null;
                         _authenticationClient = null;
+                        _authenticationSessionGeneration = 0;
                     }
                 }
 
@@ -776,10 +1280,12 @@ namespace CycloneGames.Networking.Adapter.Nakama
                     return;
 
                 _lifecycleState = NetworkLifecycleState.ClientRunning;
-                OnConnectedToServer?.Invoke();
+                NotifyObserver(OnConnectedToServer);
+                if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
+                    return;
                 AddInitialPresences(_match);
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
@@ -790,12 +1296,75 @@ namespace CycloneGames.Networking.Adapter.Nakama
                     e is TimeoutException ? TransportError.Timeout : TransportError.Unexpected,
                     e.Message);
             }
+            finally
+            {
+                if (IsMainThread())
+                {
+                    _connectOperationPending = false;
+                    ScheduleQueuedConnect();
+                }
+            }
         }
 
-        private Task<ISession> GetOrCreateAuthenticationTask(IClient client, string deviceId)
+        private async Task<ISession> AuthenticateDeviceSingleFlightAsync(
+            IClient client,
+            string deviceId,
+            int timeoutSeconds,
+            CancellationToken cancellationToken,
+            int authenticationSessionGeneration)
+        {
+            while (true)
+            {
+                EnsureMainThread();
+                Task<ISession> authenticationTask = _authenticationTask;
+                if (authenticationTask == null
+                    || authenticationTask.IsCompleted
+                    || (ReferenceEquals(_authenticationClient, client)
+                        && _authenticationSessionGeneration == authenticationSessionGeneration))
+                {
+                    authenticationTask = GetOrCreateAuthenticationTask(
+                        client,
+                        deviceId,
+                        authenticationSessionGeneration);
+                    return await AwaitWithTimeoutAsync(authenticationTask, timeoutSeconds, cancellationToken);
+                }
+
+                try
+                {
+                    await AwaitWithTimeoutAsync(authenticationTask, timeoutSeconds, cancellationToken);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    // A previous client's provider task reached the canceled state. The slot is
+                    // terminal and can be reused without treating that old result as this request.
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (TimeoutException)
+                {
+                    throw;
+                }
+                catch (Exception exception) when (IsRecoverableException(exception))
+                {
+                    // Faults from a previous client are already observed by the authentication
+                    // continuation. Once terminal, they do not poison the next client's request.
+                }
+
+                EnsureMainThread();
+                cancellationToken.ThrowIfCancellationRequested();
+            }
+        }
+
+        private Task<ISession> GetOrCreateAuthenticationTask(
+            IClient client,
+            string deviceId,
+            int authenticationSessionGeneration)
         {
             EnsureMainThread();
             if (ReferenceEquals(_authenticationClient, client)
+                && _authenticationSessionGeneration == authenticationSessionGeneration
                 && _authenticationTask != null
                 && !_authenticationTask.IsCanceled
                 && !_authenticationTask.IsFaulted)
@@ -803,8 +1372,12 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 return _authenticationTask;
             }
 
+            if (_authenticationTask != null && !_authenticationTask.IsCompleted)
+                throw new InvalidOperationException(AuthenticationOperationCapacityError);
+
             Task<ISession> authenticationTask = client.AuthenticateDeviceAsync(deviceId, _username, _createAccount);
             _authenticationClient = client;
+            _authenticationSessionGeneration = authenticationSessionGeneration;
             _authenticationTask = authenticationTask;
             _ = authenticationTask.ContinueWith(
                 static faulted => { _ = faulted.Exception; },
@@ -838,67 +1411,204 @@ namespace CycloneGames.Networking.Adapter.Nakama
             throw new TimeoutException($"Nakama operation exceeded the {timeoutSeconds}-second timeout.");
         }
 
-        private void RequestSocketClose(ISocket socket, bool reportErrors)
+        private bool RequestSocketClose(
+            ISocket socket,
+            bool reportErrors,
+            UnitySocket ownedDispatcher = null,
+            bool useDestroyReservation = false)
         {
-            EnsureMainThread();
-            if (socket == null)
-                return;
-            if (_socketCloseTask != null && !_socketCloseTask.IsCompleted)
-                return;
+            if (!TryReserveSocketClose(
+                    socket,
+                    reportErrors,
+                    ownedDispatcher,
+                    useDestroyReservation,
+                    out SocketCloseReservation reservation))
+            {
+                return false;
+            }
 
-            _socketCloseTask = CloseSocketAsync(socket, reportErrors);
+            StartReservedSocketClose(socket, reportErrors, reservation);
+            return true;
         }
 
-        private async Task CloseSocketAsync(ISocket socket, bool reportErrors)
+        private bool TryReserveSocketClose(
+            ISocket socket,
+            bool reportErrors,
+            UnitySocket ownedDispatcher,
+            bool useDestroyReservation,
+            out SocketCloseReservation reservation)
         {
             EnsureMainThread();
+            reservation = default;
+            if (socket == null)
+                return true;
+
+            int availableSlot = -1;
+            int slotLimit = useDestroyReservation
+                ? _socketCloseTasks.Length
+                : MaximumPendingSocketCloseOperations;
+            for (int i = 0; i < _socketCloseTasks.Length; i++)
+            {
+                Task closeTask = _socketCloseTasks[i];
+                if (closeTask == null || closeTask.IsCompleted)
+                {
+                    _socketCloseSockets[i] = null;
+                    _socketCloseTasks[i] = null;
+                    _socketCloseDispatchers[i] = null;
+                    _socketCloseCapacityReported = false;
+                    if (i < slotLimit && availableSlot < 0)
+                        availableSlot = i;
+                    continue;
+                }
+
+                if (ReferenceEquals(_socketCloseSockets[i], socket))
+                {
+                    if (ownedDispatcher != null && _socketCloseDispatchers[i] == null)
+                        _socketCloseDispatchers[i] = ownedDispatcher;
+                    return true;
+                }
+            }
+
+            if (availableSlot < 0)
+            {
+                if (reportErrors && !_socketCloseCapacityReported)
+                {
+                    _socketCloseCapacityReported = true;
+                    RaiseError(null, TransportError.Congestion, SocketCloseCapacityError);
+                }
+                return false;
+            }
+
+            var completion = new TaskCompletionSource<bool>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            _socketCloseSockets[availableSlot] = socket;
+            _socketCloseTasks[availableSlot] = completion.Task;
+            _socketCloseDispatchers[availableSlot] = ownedDispatcher;
+            reservation = new SocketCloseReservation(availableSlot, completion);
+            return true;
+        }
+
+        private void StartReservedSocketClose(
+            ISocket socket,
+            bool reportErrors,
+            SocketCloseReservation reservation)
+        {
+            if (!reservation.RequiresStart)
+                return;
+
+            CloseSocketAsync(
+                socket,
+                reportErrors,
+                reservation.Completion,
+                reservation.Slot).Forget();
+        }
+
+        private void ReleaseSocketCloseReservation(SocketCloseReservation reservation)
+        {
+            if (!reservation.RequiresStart)
+                return;
+
+            int slot = reservation.Slot;
+            if ((uint)slot < (uint)_socketCloseTasks.Length
+                && ReferenceEquals(_socketCloseTasks[slot], reservation.Completion.Task))
+            {
+                _socketCloseSockets[slot] = null;
+                _socketCloseTasks[slot] = null;
+                _socketCloseDispatchers[slot] = null;
+            }
+
+            reservation.Completion.TrySetResult(true);
+        }
+
+        private Task GetPendingSocketCloseTask(ISocket socket)
+        {
+            for (int i = 0; i < _socketCloseTasks.Length; i++)
+            {
+                Task closeTask = _socketCloseTasks[i];
+                if (closeTask == null || closeTask.IsCompleted)
+                {
+                    _socketCloseSockets[i] = null;
+                    _socketCloseTasks[i] = null;
+                    _socketCloseDispatchers[i] = null;
+                    _socketCloseCapacityReported = false;
+                    continue;
+                }
+
+                if (ReferenceEquals(_socketCloseSockets[i], socket))
+                    return closeTask;
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private async UniTask CloseSocketAsync(
+            ISocket socket,
+            bool reportErrors,
+            TaskCompletionSource<bool> completion,
+            int closeSlot)
+        {
             try
             {
+                EnsureMainThread();
                 await socket.CloseAsync();
                 EnsureMainThread();
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 EnsureMainThread();
-                if (reportErrors)
+                if (reportErrors && ReferenceEquals(socket, _socket))
                     RaiseError(null, TransportError.ConnectionClosed, e.Message);
+            }
+            finally
+            {
+                UnitySocket ownedDispatcher = closeSlot >= 0 && closeSlot < _socketCloseDispatchers.Length
+                    ? _socketCloseDispatchers[closeSlot]
+                    : null;
+                if (ownedDispatcher != null && IsMainThread())
+                    Destroy(ownedDispatcher.gameObject);
+                completion.TrySetResult(true);
             }
         }
 
-        private async void LeaveMatchAsync(
+        private async UniTask LeaveMatchAsync(
             ISocket socket,
             string matchId,
             CancellationToken cancellationToken,
             int operationGeneration)
         {
-            EnsureMainThread();
             try
             {
+                EnsureMainThread();
                 await socket.LeaveMatchAsync(matchId);
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
                     return;
                 if (_match != null && string.Equals(_match.Id, matchId, StringComparison.Ordinal))
-                    ClearMatchState(notifyDisconnected: true);
+                ClearMatchState(notifyDisconnected: true);
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
                     return;
                 RaiseError(null, TransportError.Unexpected, e.Message);
             }
+            finally
+            {
+                if (IsMainThread())
+                    _leaveMatchOperationPending = false;
+            }
         }
 
-        private async void CancelMatchmakerAsync(
+        private async UniTask CancelMatchmakerAsync(
             ISocket socket,
             string ticket,
             CancellationToken cancellationToken,
             int operationGeneration)
         {
-            EnsureMainThread();
             try
             {
+                EnsureMainThread();
                 await socket.RemoveMatchmakerAsync(ticket);
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
@@ -906,16 +1616,21 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 IsMatchmaking = false;
                 CurrentTicket = default;
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
                     return;
                 RaiseError(null, TransportError.Unexpected, e.Message);
             }
+            finally
+            {
+                if (IsMainThread())
+                    _cancelMatchmakerOperationPending = false;
+            }
         }
 
-        private async void AddMatchmakerAsync(
+        private async UniTask AddMatchmakerAsync(
             ISocket socket,
             string query,
             int minCount,
@@ -923,15 +1638,15 @@ namespace CycloneGames.Networking.Adapter.Nakama
             CancellationToken cancellationToken,
             int operationGeneration)
         {
-            EnsureMainThread();
-            if (socket == null || !socket.IsConnected)
-            {
-                RaiseError(null, TransportError.Unexpected, MissingSocketError);
-                return;
-            }
-
             try
             {
+                EnsureMainThread();
+                if (socket == null || !socket.IsConnected)
+                {
+                    RaiseError(null, TransportError.Unexpected, MissingSocketError);
+                    return;
+                }
+
                 IMatchmakerTicket ticket = await socket.AddMatchmakerAsync(query, minCount, maxCount);
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
@@ -939,7 +1654,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 CurrentTicket = new NetworkMatchmakerTicket(ticket.Ticket);
                 IsMatchmaking = true;
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
@@ -947,39 +1662,87 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 IsMatchmaking = false;
                 RaiseError(null, TransportError.Unexpected, e.Message);
             }
+            finally
+            {
+                if (IsMainThread())
+                    _addMatchmakerOperationPending = false;
+            }
         }
 
         private void BindSocketEvents()
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (_socket == null || _socketEventsBound)
                 return;
 
-            _socket.Closed += OnSocketClosed;
-            _socket.ReceivedError += OnSocketError;
-            _socket.ReceivedMatchState += OnReceivedMatchState;
-            _socket.ReceivedMatchPresence += OnReceivedMatchPresence;
-            _socket.ReceivedMatchmakerMatched += OnReceivedMatchmakerMatched;
+            unchecked
+            {
+                _socketEventGeneration++;
+            }
+            int socketEventGeneration = _socketEventGeneration;
+            ISocket boundSocket = _socket;
+            _socketEventSource = boundSocket;
+            _socketClosedHandler = reason =>
+                OnSocketClosed(reason, boundSocket, socketEventGeneration);
+            _socketErrorHandler = exception =>
+                OnSocketError(exception, boundSocket, socketEventGeneration);
+            _matchStateHandler = state =>
+                OnReceivedMatchState(state, boundSocket, socketEventGeneration);
+            _matchPresenceHandler = presence =>
+                OnReceivedMatchPresence(presence, boundSocket, socketEventGeneration);
+            _matchmakerMatchedHandler = matched =>
+                OnReceivedMatchmakerMatched(matched, boundSocket, socketEventGeneration);
+            boundSocket.Closed += _socketClosedHandler;
+            boundSocket.ReceivedError += _socketErrorHandler;
+            boundSocket.ReceivedMatchState += _matchStateHandler;
+            boundSocket.ReceivedMatchPresence += _matchPresenceHandler;
+            boundSocket.ReceivedMatchmakerMatched += _matchmakerMatchedHandler;
             _socketEventsBound = true;
         }
 
         private void UnbindSocketEvents()
         {
             EnsureMainThread();
-            if (_socket == null || !_socketEventsBound)
+            if (!_socketEventsBound)
                 return;
 
-            _socket.Closed -= OnSocketClosed;
-            _socket.ReceivedError -= OnSocketError;
-            _socket.ReceivedMatchState -= OnReceivedMatchState;
-            _socket.ReceivedMatchPresence -= OnReceivedMatchPresence;
-            _socket.ReceivedMatchmakerMatched -= OnReceivedMatchmakerMatched;
+            ISocket boundSocket = _socketEventSource;
+            if (boundSocket != null)
+            {
+                if (_socketClosedHandler != null)
+                    boundSocket.Closed -= _socketClosedHandler;
+                if (_socketErrorHandler != null)
+                    boundSocket.ReceivedError -= _socketErrorHandler;
+                if (_matchStateHandler != null)
+                    boundSocket.ReceivedMatchState -= _matchStateHandler;
+                if (_matchPresenceHandler != null)
+                    boundSocket.ReceivedMatchPresence -= _matchPresenceHandler;
+                if (_matchmakerMatchedHandler != null)
+                    boundSocket.ReceivedMatchmakerMatched -= _matchmakerMatchedHandler;
+            }
+
+            _socketEventSource = null;
+            _socketClosedHandler = null;
+            _socketErrorHandler = null;
+            _matchStateHandler = null;
+            _matchPresenceHandler = null;
+            _matchmakerMatchedHandler = null;
             _socketEventsBound = false;
+            unchecked
+            {
+                _socketEventGeneration++;
+            }
         }
 
-        private void OnSocketClosed(string reason)
+        private void OnSocketClosed(
+            string reason,
+            ISocket socket,
+            int socketEventGeneration)
         {
             EnsureMainThread();
+            if (!IsSocketEventCurrent(socket, socketEventGeneration))
+                return;
 
             // UnitySocket dispatches close notifications from its Update queue. A completed close can
             // therefore be observed after a serialized restart has already reconnected the same socket.
@@ -992,37 +1755,93 @@ namespace CycloneGames.Networking.Adapter.Nakama
             }
 
             ClearMatchState(notifyDisconnected: true);
+            if (!IsSocketEventCurrent(socket, socketEventGeneration))
+                return;
             _lifecycleState = NetworkLifecycleState.Stopped;
             _lastError = TransportError.ConnectionClosed;
             _lastErrorMessage = reason ?? string.Empty;
-            OnDisconnectedFromServer?.Invoke();
+            NotifyObserver(OnDisconnectedFromServer);
         }
 
-        private void OnSocketError(Exception exception)
+        private void OnSocketError(
+            Exception exception,
+            ISocket socket,
+            int socketEventGeneration)
         {
             EnsureMainThread();
+            if (!IsSocketEventCurrent(socket, socketEventGeneration))
+                return;
             RaiseError(null, TransportError.Unexpected, exception != null ? exception.Message : string.Empty);
         }
 
-        private async void OnReceivedMatchmakerMatched(IMatchmakerMatched matched)
+        private void OnReceivedMatchmakerMatched(
+            IMatchmakerMatched matched,
+            ISocket socket,
+            int socketEventGeneration)
         {
             EnsureMainThread();
-            if (matched == null)
+            if (matched == null ||
+                _matchmakerJoinOperationPending ||
+                !IsSocketEventCurrent(socket, socketEventGeneration) ||
+                !IsMatchmaking ||
+                !CurrentTicket.IsValid ||
+                !string.Equals(CurrentTicket.Value, matched.Ticket, StringComparison.Ordinal))
+            {
                 return;
+            }
 
-            ISocket socket = _socket;
-            CancellationToken cancellationToken = _shutdown != null ? _shutdown.Token : CancellationToken.None;
+            CancellationToken cancellationToken = _shutdown != null
+                ? _shutdown.Token
+                : CancellationToken.None;
             int operationGeneration = _operationGeneration;
-
-            IsMatchmaking = false;
-            CurrentTicket = new NetworkMatchmakerTicket(matched.Ticket);
-            OnMatched?.Invoke(CurrentTicket, new NetworkMatchId(matched.MatchId));
-
-            if (string.IsNullOrEmpty(matched.MatchId))
+            if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
                 return;
 
+            _matchmakerJoinOperationPending = true;
+            HandleMatchmakerMatchedAsync(
+                matched,
+                socket,
+                cancellationToken,
+                operationGeneration,
+                CurrentTicket).Forget();
+        }
+
+        private async UniTask HandleMatchmakerMatchedAsync(
+            IMatchmakerMatched matched,
+            ISocket socket,
+            CancellationToken cancellationToken,
+            int operationGeneration,
+            NetworkMatchmakerTicket expectedTicket)
+        {
             try
             {
+                EnsureMainThread();
+                if (!IsOperationCurrent(operationGeneration, cancellationToken, socket) ||
+                    !IsMatchmaking ||
+                    !CurrentTicket.Equals(expectedTicket) ||
+                    !string.Equals(expectedTicket.Value, matched.Ticket, StringComparison.Ordinal))
+                {
+                    return;
+                }
+
+                if (string.IsNullOrEmpty(matched.MatchId) && string.IsNullOrEmpty(matched.Token))
+                {
+                    IsMatchmaking = false;
+                    CurrentTicket = default;
+                    RaiseError(null, TransportError.Unexpected, InvalidMatchmakerResultError);
+                    return;
+                }
+
+                IsMatchmaking = false;
+                CurrentTicket = new NetworkMatchmakerTicket(matched.Ticket);
+                NotifyMatchedObservers(CurrentTicket, new NetworkMatchId(matched.MatchId));
+
+                if (!IsOperationCurrent(operationGeneration, cancellationToken, socket) ||
+                    !CurrentTicket.Equals(expectedTicket))
+                {
+                    return;
+                }
+
                 IMatch joinedMatch = await socket.JoinMatchAsync(matched);
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
@@ -1034,19 +1853,116 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 _matchId = joinedMatch.Id;
                 AddInitialPresences(joinedMatch);
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 EnsureMainThread();
                 if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
                     return;
+                if (CurrentTicket.Equals(expectedTicket))
+                    CurrentTicket = default;
                 RaiseError(null, TransportError.Unexpected, e.Message);
+            }
+            finally
+            {
+                if (IsMainThread())
+                    _matchmakerJoinOperationPending = false;
             }
         }
 
-        private void OnReceivedMatchPresence(IMatchPresenceEvent presenceEvent)
+        private void NotifyMatchedObservers(
+            NetworkMatchmakerTicket ticket,
+            NetworkMatchId matchId)
+        {
+            try
+            {
+                OnMatched?.Invoke(ticket, matchId);
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                // Product observers do not own the transport state machine. Publish their
+                // failure through the same observed UniTask boundary without aborting JoinMatch.
+                PublishObserverException(exception);
+            }
+        }
+
+        private void NotifyObserver(Action observer)
+        {
+            try
+            {
+                observer?.Invoke();
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                PublishObserverException(exception);
+            }
+        }
+
+        private void NotifyObserver<T>(Action<T> observer, T value)
+        {
+            try
+            {
+                observer?.Invoke(value);
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                PublishObserverException(exception);
+            }
+        }
+
+        private void NotifyObserver<T1, T2>(Action<T1, T2> observer, T1 value1, T2 value2)
+        {
+            try
+            {
+                observer?.Invoke(value1, value2);
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                PublishObserverException(exception);
+            }
+        }
+
+        private void NotifyObserver<T1, T2, T3>(
+            Action<T1, T2, T3> observer,
+            T1 value1,
+            T2 value2,
+            T3 value3)
+        {
+            try
+            {
+                observer?.Invoke(value1, value2, value3);
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                PublishObserverException(exception);
+            }
+        }
+
+        private void NotifyObserver<T1, T2, T3, T4>(
+            Action<T1, T2, T3, T4> observer,
+            T1 value1,
+            T2 value2,
+            T3 value3,
+            T4 value4)
+        {
+            try
+            {
+                observer?.Invoke(value1, value2, value3, value4);
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                PublishObserverException(exception);
+            }
+        }
+
+        private void OnReceivedMatchPresence(
+            IMatchPresenceEvent presenceEvent,
+            ISocket socket,
+            int socketEventGeneration)
         {
             EnsureMainThread();
-            if (presenceEvent == null || !IsCurrentMatch(presenceEvent.MatchId))
+            if (!IsSocketEventCurrent(socket, socketEventGeneration) ||
+                presenceEvent == null ||
+                !IsCurrentMatch(presenceEvent.MatchId))
             {
                 return;
             }
@@ -1057,7 +1973,8 @@ namespace CycloneGames.Networking.Adapter.Nakama
             {
                 foreach (IUserPresence joined in joins)
                 {
-                    if (!IsCurrentMatch(presenceEvent.MatchId))
+                    if (!IsSocketEventCurrent(socket, socketEventGeneration)
+                        || !IsCurrentMatch(presenceEvent.MatchId))
                         return;
                     if (joined == null)
                         continue;
@@ -1068,11 +1985,20 @@ namespace CycloneGames.Networking.Adapter.Nakama
                                             && existingConnection.IsConnected;
                         NakamaNetConnection connection = GetOrCreateConnection(joined);
                         if (connection != null && !wasConnected)
-                            OnClientConnected?.Invoke(connection);
+                        {
+                            NotifyObserver(OnClientConnected, (INetConnection)connection);
+                            if (!IsSocketEventCurrent(socket, socketEventGeneration)
+                                || !IsCurrentMatch(presenceEvent.MatchId)
+                                || !IsCurrentConnection(connection))
+                            {
+                                return;
+                            }
+                        }
                     }
-                    if (!IsCurrentMatch(presenceEvent.MatchId))
+                    if (!IsSocketEventCurrent(socket, socketEventGeneration)
+                        || !IsCurrentMatch(presenceEvent.MatchId))
                         return;
-                    OnPresenceJoined?.Invoke(matchId, ToNetworkPresence(joined));
+                    NotifyObserver(OnPresenceJoined, matchId, ToNetworkPresence(joined));
                 }
             }
 
@@ -1082,7 +2008,8 @@ namespace CycloneGames.Networking.Adapter.Nakama
 
             foreach (IUserPresence left in leaves)
             {
-                if (!IsCurrentMatch(presenceEvent.MatchId))
+                if (!IsSocketEventCurrent(socket, socketEventGeneration)
+                    || !IsCurrentMatch(presenceEvent.MatchId))
                     return;
                 if (left == null)
                     continue;
@@ -1092,19 +2019,25 @@ namespace CycloneGames.Networking.Adapter.Nakama
                     _connectionsBySessionId.Remove(GetPresenceKey(left));
                     _connectionsById.Remove(connection.ConnectionId);
                     connection.Invalidate();
-                    OnClientDisconnected?.Invoke(connection);
+                    NotifyObserver(OnClientDisconnected, (INetConnection)connection);
                 }
 
-                if (!IsCurrentMatch(presenceEvent.MatchId))
+                if (!IsSocketEventCurrent(socket, socketEventGeneration)
+                    || !IsCurrentMatch(presenceEvent.MatchId))
                     return;
-                OnPresenceLeft?.Invoke(matchId, ToNetworkPresence(left));
+                NotifyObserver(OnPresenceLeft, matchId, ToNetworkPresence(left));
             }
         }
 
-        private void OnReceivedMatchState(IMatchState state)
+        private void OnReceivedMatchState(
+            IMatchState state,
+            ISocket socket,
+            int socketEventGeneration)
         {
             EnsureMainThread();
-            if (state == null || state.State == null)
+            if (!IsSocketEventCurrent(socket, socketEventGeneration) ||
+                state == null ||
+                state.State == null)
                 return;
 
             if (_match == null
@@ -1138,8 +2071,15 @@ namespace CycloneGames.Networking.Adapter.Nakama
             Interlocked.Increment(ref _packetsReceived);
 
             var raw = new ArraySegment<byte>(state.State);
-            OnMatchState?.Invoke(new NetworkMatchId(state.MatchId), connection, raw, state.OpCode);
-            if (!IsCurrentMatch(state.MatchId))
+            NotifyObserver(
+                OnMatchState,
+                new NetworkMatchId(state.MatchId),
+                (INetConnection)connection,
+                raw,
+                state.OpCode);
+            if (!IsSocketEventCurrent(socket, socketEventGeneration)
+                || !IsCurrentMatch(state.MatchId)
+                || !IsCurrentConnection(connection))
                 return;
 
             if (state.OpCode != _matchStateOpCode)
@@ -1148,7 +2088,17 @@ namespace CycloneGames.Networking.Adapter.Nakama
             if (!TryValidateIncoming(connection, raw, out NetworkEnvelopeHeader header, out ArraySegment<byte> payload))
                 return;
 
-            OnDataReceived?.Invoke(connection, payload, GetChannelId(header.Channel));
+            NotifyObserver(
+                OnDataReceived,
+                (INetConnection)connection,
+                payload,
+                GetChannelId(header.Channel));
+            if (!IsSocketEventCurrent(socket, socketEventGeneration)
+                || !IsCurrentMatch(state.MatchId)
+                || !IsCurrentConnection(connection))
+            {
+                return;
+            }
             try
             {
                 var bytes = new ReadOnlySpan<byte>(payload.Array, payload.Offset, payload.Count);
@@ -1159,9 +2109,18 @@ namespace CycloneGames.Networking.Adapter.Nakama
                     bytes);
                 _messageHandlers.TryDispatch(in message);
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
-                RaiseError(connection, TransportError.InvalidReceive, e.Message);
+                if (IsSocketEventCurrent(socket, socketEventGeneration)
+                    && IsCurrentMatch(state.MatchId)
+                    && IsCurrentConnection(connection))
+                {
+                    RaiseError(connection, TransportError.InvalidReceive, e.Message);
+                }
+                else
+                {
+                    PublishObserverException(e);
+                }
             }
         }
 
@@ -1193,10 +2152,17 @@ namespace CycloneGames.Networking.Adapter.Nakama
                                     && existingConnection.IsConnected;
                 NakamaNetConnection connection = GetOrCreateConnection(presence);
                 if (connection != null && !wasConnected)
-                    OnClientConnected?.Invoke(connection);
+                {
+                    NotifyObserver(OnClientConnected, (INetConnection)connection);
+                    if (!IsCurrentMatch(match.Id) || !IsCurrentConnection(connection))
+                        return;
+                }
                 if (!IsCurrentMatch(match.Id))
                     return;
-                OnPresenceJoined?.Invoke(new NetworkMatchId(match.Id), ToNetworkPresence(presence));
+                NotifyObserver(
+                    OnPresenceJoined,
+                    new NetworkMatchId(match.Id),
+                    ToNetworkPresence(presence));
             }
         }
 
@@ -1228,7 +2194,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
                     ? NetworkSendResult.Queued(frameLength, channelId)
                     : NetworkSendResult.Fail(status, channelId, reason: GetSendFailureReason(status));
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 RaiseError(null, TransportError.InvalidSend, e.Message);
                 return NetworkSendResult.Fail(NetworkSendStatus.InvalidPayload, channelId, reason: e.Message);
@@ -1307,8 +2273,13 @@ namespace CycloneGames.Networking.Adapter.Nakama
             IEnumerable<IUserPresence> presences)
         {
             ISocket socket = _socket;
-            if (socket == null || !socket.IsConnected)
+            if (socket == null
+                || !socket.IsConnected
+                || !_socketEventsBound
+                || !ReferenceEquals(socket, _socketEventSource))
+            {
                 return NetworkSendStatus.NotConnected;
+            }
 
             if (Interlocked.Increment(ref _pendingSends) > _maxPendingSends)
             {
@@ -1316,16 +2287,28 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 return NetworkSendStatus.Backpressure;
             }
 
-            SendMatchStateAsync(socket, matchId, opCode, payload, presences);
+            CancellationToken cancellationToken = _shutdown != null
+                ? _shutdown.Token
+                : CancellationToken.None;
+            SendMatchStateAsync(
+                socket,
+                matchId,
+                opCode,
+                payload,
+                presences,
+                cancellationToken,
+                _operationGeneration).Forget();
             return NetworkSendStatus.Queued;
         }
 
-        private async void SendMatchStateAsync(
+        private async UniTask SendMatchStateAsync(
             ISocket socket,
             string matchId,
             long opCode,
             ArraySegment<byte> payload,
-            IEnumerable<IUserPresence> presences)
+            IEnumerable<IUserPresence> presences,
+            CancellationToken cancellationToken,
+            int operationGeneration)
         {
             byte[] rented = null;
             try
@@ -1339,9 +2322,11 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 Interlocked.Add(ref _bytesSent, payload.Count);
                 Interlocked.Increment(ref _packetsSent);
             }
-            catch (Exception e)
+            catch (Exception e) when (IsRecoverableException(e))
             {
                 EnsureMainThread();
+                if (!IsOperationCurrent(operationGeneration, cancellationToken, socket))
+                    return;
                 RaiseError(null, TransportError.InvalidSend, e.Message);
             }
             finally
@@ -1523,6 +2508,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
         internal void SetPlayerId(NakamaNetConnection connection, ulong playerId)
         {
             EnsureMainThread();
+            ThrowIfDisposed();
             if (!IsCurrentConnection(connection))
                 throw new ObjectDisposedException(nameof(NakamaNetConnection));
 
@@ -1575,7 +2561,85 @@ namespace CycloneGames.Networking.Adapter.Nakama
 
             _lastError = error;
             _lastErrorMessage = message ?? string.Empty;
-            OnError?.Invoke(connection, error, _lastErrorMessage);
+            try
+            {
+                OnError?.Invoke(connection, error, _lastErrorMessage);
+            }
+            catch (Exception exception) when (IsRecoverableException(exception))
+            {
+                // Error observers cannot re-enter an async transport catch block and cause a
+                // duplicate notification. Their failure still reaches the UniTask global hook.
+                PublishObserverException(exception);
+            }
+        }
+
+        private static void PublishObserverException(Exception exception)
+        {
+            UniTask.FromException(exception).Forget();
+        }
+
+        private void QueueLatestConnectRequest()
+        {
+            if (_isDestroyed || _shutdown == null || _shutdown.IsCancellationRequested)
+                return;
+
+            _connectRequestQueued = true;
+            _queuedConnectSocket = _socket;
+            _queuedConnectGeneration = _operationGeneration;
+        }
+
+        private void ScheduleQueuedConnect()
+        {
+            if (!_connectRequestQueued || _queuedConnectStartScheduled || _isDestroyed)
+                return;
+
+            CancellationToken cancellationToken = _shutdown != null
+                ? _shutdown.Token
+                : CancellationToken.None;
+            _queuedConnectStartScheduled = true;
+            StartQueuedConnectAsync(cancellationToken).Forget();
+        }
+
+        private async UniTask StartQueuedConnectAsync(CancellationToken cancellationToken)
+        {
+            try
+            {
+                await UniTask.Yield(PlayerLoopTiming.Update, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                if (IsMainThread())
+                {
+                    _queuedConnectStartScheduled = false;
+                    ScheduleQueuedConnect();
+                }
+                return;
+            }
+
+            EnsureMainThread();
+            _queuedConnectStartScheduled = false;
+            if (!_connectRequestQueued)
+                return;
+
+            ISocket expectedSocket = _queuedConnectSocket;
+            int expectedGeneration = _queuedConnectGeneration;
+            ClearQueuedConnectRequest();
+            if (_isDestroyed
+                || cancellationToken.IsCancellationRequested
+                || expectedGeneration != _operationGeneration
+                || !ReferenceEquals(expectedSocket, _socket))
+            {
+                return;
+            }
+
+            BeginConnect();
+        }
+
+        private void ClearQueuedConnectRequest()
+        {
+            _connectRequestQueued = false;
+            _queuedConnectSocket = null;
+            _queuedConnectGeneration = 0;
         }
 
         private CancellationToken CancelCurrentOperations(bool createReplacement)
@@ -1584,6 +2648,8 @@ namespace CycloneGames.Networking.Adapter.Nakama
             {
                 _operationGeneration++;
             }
+
+            ClearQueuedConnectRequest();
 
             CancellationTokenSource previous = _shutdown;
             _shutdown = createReplacement ? new CancellationTokenSource() : null;
@@ -1604,9 +2670,34 @@ namespace CycloneGames.Networking.Adapter.Nakama
                    && ReferenceEquals(socket, _socket);
         }
 
+        private bool IsSocketEventCurrent(ISocket socket, int socketEventGeneration)
+        {
+            return _socketEventsBound
+                   && socketEventGeneration == _socketEventGeneration
+                   && ReferenceEquals(socket, _socketEventSource)
+                   && ReferenceEquals(socket, _socket);
+        }
+
+        private bool IsMainThread()
+        {
+            return _mainThreadId != 0 && Thread.CurrentThread.ManagedThreadId == _mainThreadId;
+        }
+
+        private static bool IsRecoverableException(Exception exception)
+        {
+            return exception is not OutOfMemoryException
+                   && exception is not AccessViolationException;
+        }
+
+        private void ThrowIfDisposed()
+        {
+            if (_isDestroyed || _lifecycleState == NetworkLifecycleState.Disposed)
+                throw new ObjectDisposedException(nameof(NakamaNetAdapter));
+        }
+
         private void EnsureMainThread()
         {
-            if (_mainThreadId == 0 || Thread.CurrentThread.ManagedThreadId != _mainThreadId)
+            if (!IsMainThread())
             {
                 throw new InvalidOperationException(
                     "NakamaNetAdapter requires the injected ISocket callbacks and task continuations to run on the Unity main owner thread after Awake. Cross-thread callbacks are rejected and are not queued.");
@@ -1615,6 +2706,7 @@ namespace CycloneGames.Networking.Adapter.Nakama
 
         private void ClearMatchState(bool notifyDisconnected)
         {
+            int notificationGeneration = _operationGeneration;
             List<NakamaNetConnection> disconnected = notifyDisconnected && _connectionsBySessionId.Count > 0
                 ? new List<NakamaNetConnection>(_connectionsBySessionId.Values)
                 : null;
@@ -1633,7 +2725,11 @@ namespace CycloneGames.Networking.Adapter.Nakama
                 return;
 
             for (int i = 0; i < disconnected.Count; i++)
-                OnClientDisconnected?.Invoke(disconnected[i]);
+            {
+                NotifyObserver(OnClientDisconnected, (INetConnection)disconnected[i]);
+                if (_isDestroyed || notificationGeneration != _operationGeneration)
+                    return;
+            }
         }
 
         private static NetworkMessageFlags GetMessageFlags(NetworkChannel channel)

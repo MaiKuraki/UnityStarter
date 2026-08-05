@@ -16,6 +16,23 @@ namespace CycloneGames.AssetManagement.Tests.Editor
         private const BindingFlags PrivateStatic = BindingFlags.Static | BindingFlags.NonPublic;
 
         [Test]
+        public void SynchronousWait_RejectsPendingOperations()
+        {
+            Assert.Throws<NotSupportedException>(
+                () => AssetRuntime.YooSynchronousWait.EnsureTerminal(
+                    Cysharp.Threading.Tasks.UniTaskStatus.Pending));
+        }
+
+        [TestCase(Cysharp.Threading.Tasks.UniTaskStatus.Succeeded)]
+        [TestCase(Cysharp.Threading.Tasks.UniTaskStatus.Faulted)]
+        [TestCase(Cysharp.Threading.Tasks.UniTaskStatus.Canceled)]
+        public void SynchronousWait_AllowsTerminalOperations(
+            Cysharp.Threading.Tasks.UniTaskStatus status)
+        {
+            Assert.DoesNotThrow(() => AssetRuntime.YooSynchronousWait.EnsureTerminal(status));
+        }
+
+        [Test]
         public void DownloadControls_EnforceQualifiedConcurrencyLimit()
         {
             MethodInfo validateMethod = typeof(AssetRuntime.YooAssetPackage).GetMethod(

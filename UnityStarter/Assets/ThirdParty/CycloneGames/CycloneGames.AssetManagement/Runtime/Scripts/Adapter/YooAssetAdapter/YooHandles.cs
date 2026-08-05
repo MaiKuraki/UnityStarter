@@ -52,6 +52,19 @@ namespace CycloneGames.AssetManagement.Runtime
         }
     }
 
+    internal static class YooSynchronousWait
+    {
+        public static void EnsureTerminal(UniTaskStatus status)
+        {
+            if (status == UniTaskStatus.Pending)
+            {
+                throw new NotSupportedException(
+                    "Pending YooAsset operations cannot be completed synchronously through this adapter. " +
+                    "Await IOperation.Task instead.");
+            }
+        }
+    }
+
     internal sealed class YooAssetHandle<TAsset> : IAssetHandle<TAsset>, IReferenceCounted,
         IInternalCacheable, IAssetMemoryFootprint, IAssetBackendLifetime, ITrackedAssetHandle
         where TAsset : UnityEngine.Object
@@ -109,7 +122,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public void WaitForAsyncComplete()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            Raw?.WaitForAsyncComplete();
+            YooSynchronousWait.EnsureTerminal(_completion.Task.Status);
         }
 
         public void Retain()
@@ -273,7 +286,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public void WaitForAsyncComplete()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            _raw?.WaitForAsyncComplete();
+            YooSynchronousWait.EnsureTerminal(_completion.Task.Status);
         }
 
         public void Retain()
@@ -437,25 +450,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public void WaitForAsyncComplete()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            if (_completion.Task.Status != UniTaskStatus.Pending)
-            {
-                return;
-            }
-
-            AssetHandle raw = Volatile.Read(ref _raw);
-            if (raw != null && raw.IsValid)
-            {
-                raw.WaitForAsyncComplete();
-            }
-
-            // YooAsset 3 invokes its native completion continuation inline during synchronous waiting. The
-            // snapshot and its broadcast task must therefore also be terminal before this method may return.
-            // Keep a defensive fallback so a provider scheduling change cannot expose a false completion.
-            if (_completion.Task.Status == UniTaskStatus.Pending)
-            {
-                throw new NotSupportedException(
-                    "YooAsset could not materialize the raw-file snapshot synchronously. Await Task instead.");
-            }
+            YooSynchronousWait.EnsureTerminal(_completion.Task.Status);
         }
 
         public string ReadText()
@@ -717,7 +712,7 @@ namespace CycloneGames.AssetManagement.Runtime
         public void WaitForAsyncComplete()
         {
             AssetRuntimeGuard.EnsureMainThread();
-            _raw?.WaitForCompletion();
+            YooSynchronousWait.EnsureTerminal(_completion.Task.Status);
         }
         public void Retain()
         {

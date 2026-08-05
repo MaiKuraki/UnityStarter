@@ -3,6 +3,7 @@
     "rootNamespace": "CycloneGames.Networking.Adapter.Nakama",
     "references": [
         "NakamaRuntime",
+        "UniTask",
         "CycloneGames.Networking.Core",
         "CycloneGames.Networking.Unity.Runtime",
         "CycloneGames.Hash.Core"
