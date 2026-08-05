@@ -75,7 +75,7 @@ flowchart LR
 | `IAudioBankClipLeaseProvider` / `IAudioBankClipLease` | 调用方自有的 Bank Clip 驻留可选能力 |
 | `VoiceLocaleId` / `AudioVoiceLocaleSnapshot` | 稳定语音 Locale 标识和有界的“主 Locale + 回退”选择 |
 | `IAudioVoiceLocaleControl` / `AudioVoiceLocaleControl` | 可选、可显式构造的语音 Locale 状态与变更通知 |
-| `AudioPoolConfig`、`AudioPlatformProfile`、`AudioVoicePolicyProfile` | 池、平台和 Voice Policy 的配置资产 |
+| `AudioPoolConfig`、`AudioPlatformProfile`、`AudioVoicePolicyProfile`、`AudioDuckingProfile` | 池、平台、Voice Policy 和 Ducking 的配置资产 |
 
 ## 快速上手
 
@@ -91,6 +91,8 @@ AudioManager.SetInstance(audioManagerComponent);
 ```
 
 所有音频服务和 Resolver 调用必须在 Unity 主线程。
+
+产品持有配置位置时，应在 `AudioManager` 上分配四种可选配置 override。自动发现仍是主线程同步执行的兼容 fallback。内部发现策略通过 `nameof` 将每个规范 Resources 名称绑定到对应配置类型，因此规范名称不含空格，也不需要维护重复的路径字符串字面量。每个 cache lifetime 内，每种 profile 类型会先调用 `Resources.Load`，再调用 `Resources.LoadAll<T>("")`；Editor 中还可能调用 `AssetDatabase.FindAssets`。不同名称的同类型资产仍可由按类型扫描的 fallback 找到，但不再享有特殊名称优先级。未找到结果会被负缓存；`ClearCache`、subsystem registration 或缓存的 Unity Object 被销毁后允许再次搜索。发现过程抛出异常时不会发布缓存 miss，因此下一次请求可以重试。`LoadAll` 成本会随 Resources 内容增长。若要避开首次扫描，应使用 serialized override，或在首次请求前通过外部 provider 加载并调用 `SetConfig`。接受该 fallback 前，必须在目标 Player 中 Profile 冷态首次访问。
 
 ### 2. 创作 Bank
 
@@ -165,6 +167,16 @@ Editor 校验拒绝缺失输出、环路、重复所有权、外部连接和超�
 每次异步操作携带启动时的 `ActiveEvent` 生成号——过期完成无法将 Clip 附加到已回收的池化 Event。`AudioHandle.IsPlaying` 表示槽位/生成号仍然有效，在 `Preparing` 期间也可是 `true`。需要区分时检查 `ActiveEvent.status`。
 
 不要在播放停止后保留原始 `ActiveEvent`——同一对象可能被回收用于另一播放。任何超出现播放寿命的引用使用 `AudioHandle`。
+
+### 延迟 Action Event 的所有权
+
+`AudioEventAction.Execute`、`AudioActionEvent.Execute` 与 `AudioManager.ExecuteActionEvent` 提供接受调用方所有 `CancellationToken` 的 additive overload。应传入 scene、feature、interaction 或其他显式产品生命周期：
+
+```csharp
+actionEvent.Execute(gameObject, featureLifetimeToken);
+```
+
+Cancellation 会阻止尚未开始的 delayed action 执行，但不会回滚已执行的 action。Token 不会存入共享 `ScriptableObject`，因此一个调用方不会取消另一调用方的执行。Legacy overload 保持源码兼容并使用 `CancellationToken.None`；它们是有意 detached 的，因此除非产品明确接受该生命周期，否则不能用于无限重复调度。`.Forget()` 负责观察 delayed worker 的终态异常，并不是 cancellation 机制。Worker 会显式把自身 token 的取消视为正常终态，因此行为不依赖 `UniTaskScheduler.PropagateOperationCanceledException`；默认的 PlayerLoop polling cancellation 会让 continuation 与 Unity API 访问继续停留在 main owner thread。
 
 ### 暂停模型
 
@@ -453,6 +465,10 @@ IAudioBankClipLease lease = await residencyProvider
 
 运行时池化 `ActiveEvent` 和 `AudioSource`，使用固定每 Event Source/Parameter 数组，缓存准备的 Event 数据，限制图执行和 Bank/引用扫描。初始化、池增长、异步状态机、外部 Provider、集合扩容、Unity 对象创建和音频解码仍可能分配。在目标 Player 中 Profile 代表性图、Voice 数量和 Provider 行为后再设预算。
 
+`AudioEventRouter` 对每个 trigger index 最多接纳一个活动 looping task。同一 index 且同一 trigger 对象的重复 `StartLoopingTrigger` 调用在该 loop 退出或 Router 取消 loop 前保持幂等；确实需要重叠 loop 的调用方必须使用不同 trigger index。在某个 index 替换 trigger 对象并启动时，会立即取消该槽位原有的 worker。Disable 或销毁会使完整 loop generation 失效。Trigger 数组长度改变后，下一次启动请求会使旧 generation 失效；如果没有新的启动请求，已运行的 loop 会在下一次 delay 后的 index/reference 检查中退出。迟到完成不能清除新启动的 loop。
+
+每次 delayed action execution 都会持有一个 UniTask timer/state machine，直到执行或取消。可能重复触发的系统必须自行施加 admission/rate policy，并传入有界 lifetime token；legacy detached overload 不是 zero-allocation 或防泄漏的调度原语。
+
 `AudioManager.GetMemoryStats()` 为治理 adapter 提供 additive 主线程 snapshot。external cache 的生命周期计数、引用总数与解码字节估算均采用增量记账，因此采样成本相对 cache 大小为 O(1)。`TrimIdleMemory(maximumItems)` 只释放零引用 external clip 与超过 initial pool 的 idle source；active playback 和 bank clip lease 会受到保护。其参数是 external cache 条目扫描与 source slot 扫描共同使用的一份 work budget，受 `MaximumIdleTrimItemsPerCall`（1,024）hard ceiling 约束，不代表保证释放的数量。
 
 有界 external cache 维护使用持久 round-robin cursor，扫描量不超过传入 work budget。自动 TTL/预算维护使用这条路径，每次最多扫描 256 个条目。内部 legacy 双参数 `EvictExpiredEntries` 调用保持源码兼容，并有意保留原行为：扫描完整 cache、对 eligible victim 做全局 score 排序；使用正数 memory budget 时，在一次驱逐恢复预算后停止。它只应作为兼容冷路径，不能用于 update loop 或治理 responder。显式三参数 overload 与 `TrimIdleMemory` 是有界路径，请求 work 会被 clamp 或校验到 1,024 条目的 ceiling 内。
@@ -485,7 +501,7 @@ Editor 测试：
 ```text
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter \
   -runTests -testPlatform EditMode \
-  -assemblyNames CycloneGames.Audio.Tests.Editor -testResults <result-path> -quit
+  -assemblyNames CycloneGames.Audio.Tests.Editor -testResults <result-path>
 ```
 
 手动检查：
@@ -497,6 +513,8 @@ Editor 测试：
 6. 重复准备和释放按 Locale 划分的 Bank；确认准备失败会保留先前 Locale 和 Lease。
 7. 构建每个目标 Player，Profile 分配、Voice 压力、Locale 切换延迟和按 Locale 驻留。
 8. 创建超过一个自动维护批次的未使用 external clip；确认重复调用会继续遍历 cache、每次调用都不超过 work budget，且仍有引用的 clip 保持驻留。
+9. 在没有自动配置资产时准备多个不同 Event，确认每种 profile 类型只执行一次配置发现；调用 `ClearCache` 后确认只允许一次新的发现。
+10. 重复启动同一个 Router loop，确认只有一条 loop 保持活动；随后 disable/re-enable Router，确认新 generation 可以正常启动。
 
 ## 参考
 

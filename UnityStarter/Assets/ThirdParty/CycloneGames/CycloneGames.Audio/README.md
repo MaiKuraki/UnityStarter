@@ -75,7 +75,7 @@ The three ownership lines on the right are independent: registry membership, the
 | `IAudioBankClipLeaseProvider` / `IAudioBankClipLease` | Optional capability for caller-owned bank clip residency |
 | `VoiceLocaleId` / `AudioVoiceLocaleSnapshot` | Stable voice-locale identifier and bounded primary-plus-fallback selection |
 | `IAudioVoiceLocaleControl` / `AudioVoiceLocaleControl` | Optional, explicitly constructible voice-locale state and change notification |
-| `AudioPoolConfig`, `AudioPlatformProfile`, `AudioVoicePolicyProfile` | Assets for pool, platform, and voice-policy configuration |
+| `AudioPoolConfig`, `AudioPlatformProfile`, `AudioVoicePolicyProfile`, `AudioDuckingProfile` | Assets for pool, platform, voice-policy, and ducking configuration |
 
 ## Quick Start
 
@@ -91,6 +91,8 @@ AudioManager.SetInstance(audioManagerComponent);
 ```
 
 All audio service and resolver calls require the Unity main thread.
+
+Assign the four optional configuration overrides on `AudioManager` when the product owns their location. Automatic discovery remains a synchronous main-thread compatibility fallback. The internal discovery policy binds each canonical Resources name to its configuration type with `nameof`, so canonical names contain no spaces and no duplicated path literal needs maintenance. Once per cache lifetime, each profile type uses `Resources.Load` and then `Resources.LoadAll<T>("")`; in the Editor it may additionally call `AssetDatabase.FindAssets`. A differently named asset can still be found by the type-wide fallback, but receives no special name priority. A not-found result is negative-cached, while `ClearCache`, subsystem registration, or destruction of the cached Unity object permits another search. A discovery exception does not publish a cached miss, so the next request may retry. The `LoadAll` cost grows with the Resources content. Use serialized overrides, or load through an external provider and call `SetConfig` before the first request, to avoid this initial scan. Profile cold first access in the target Player before accepting the fallback.
 
 ### 2. Author a bank
 
@@ -165,6 +167,16 @@ An event with embedded clips prepares synchronously. An event with external refe
 Each async operation carries the `ActiveEvent` generation that started it — a stale completion cannot attach a clip to a recycled pooled event. `AudioHandle.IsPlaying` means the slot/generation is still valid and can be `true` during `Preparing`. Check `ActiveEvent.status` when the distinction matters.
 
 Never retain a raw `ActiveEvent` after playback stops — the same object may be recycled for a different playback. Use `AudioHandle` for anything that outlives the current playback.
+
+### Delayed action-event ownership
+
+`AudioEventAction.Execute`, `AudioActionEvent.Execute`, and `AudioManager.ExecuteActionEvent` provide additive overloads that accept a caller-owned `CancellationToken`. Use a scene, feature, interaction, or other explicit product lifetime:
+
+```csharp
+actionEvent.Execute(gameObject, featureLifetimeToken);
+```
+
+Cancellation prevents delayed actions that have not started from executing; it does not roll back actions that already ran. The token is not stored in the shared `ScriptableObject`, so one caller cannot cancel another caller's execution. The legacy overloads remain source compatible and use `CancellationToken.None`; they are intentionally detached and therefore must not be used for indefinitely repeated scheduling unless the product accepts that lifetime. `.Forget()` observes the delayed worker's terminal exception but is not a cancellation mechanism. The worker explicitly treats cancellation from its own token as a normal terminal outcome, independent of `UniTaskScheduler.PropagateOperationCanceledException`; default PlayerLoop-polled cancellation keeps continuation and Unity API access on the main owner thread.
 
 ### Pause model
 
@@ -453,6 +465,10 @@ IAudioBankClipLease lease = await residencyProvider
 
 The runtime pools `ActiveEvent` and `AudioSource` objects, uses fixed per-event source/parameter arrays, caches prepared event data, and bounds graph execution and bank scans. Initialization, pool growth, async state machines, external providers, collection growth, Unity object creation, and audio decoding can still allocate. Profile representative graphs, voice counts, codecs, and asset-provider behavior in target Players before setting budgets.
 
+`AudioEventRouter` admits at most one active looping task per trigger index. Repeated `StartLoopingTrigger` calls for the same index and trigger object are idempotent until that loop exits or the router cancels its loops; callers that intentionally need overlapping loops must use distinct trigger indices. Replacing the trigger object at an index and starting it immediately cancels that slot's prior worker. Disable or destruction invalidates the complete loop generation. When the trigger-array length changes, the next start request invalidates the old generation; without a new start request, an already running loop exits at its next post-delay index/reference check. A late completion cannot clear a newly started loop.
+
+Each delayed action execution owns one UniTask timer/state machine until it runs or is canceled. Systems that can trigger repeatedly must impose their own admission/rate policy and pass a bounded lifetime token; the legacy detached overload is not a zero-allocation or leak-proof scheduling primitive.
+
 `AudioManager.GetMemoryStats()` exposes an additive main-thread snapshot for governance adapters. External-cache lifecycle counts, reference totals, and decoded-byte estimates are maintained incrementally, so sampling is O(1) with respect to cache size. `TrimIdleMemory(maximumItems)` only releases zero-reference external clips and idle sources above the initial pool; active playback and bank clip leases are protected. Its argument is one shared work budget for both external-cache entry scans and source-slot scans, with the hard ceiling `MaximumIdleTrimItemsPerCall` (1,024), not a guaranteed release count.
 
 Bounded external-cache maintenance uses a persistent round-robin cursor and scans no more than the supplied work budget. Automatic TTL/budget maintenance uses this path and scans at most 256 entries per invocation. The internal legacy two-parameter `EvictExpiredEntries` call remains source-compatible and intentionally preserves its original behavior: it scans the full cache, globally score-sorts eligible victims, and, for a positive memory budget, stops after an eviction restores that budget. It is a compatibility cold path and must not be called from update loops or governance responders. The explicit three-parameter overload and `TrimIdleMemory` are the bounded paths; their requested work is clamped or validated against the 1,024-entry ceiling.
@@ -485,7 +501,7 @@ Editor tests:
 ```text
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter \
   -runTests -testPlatform EditMode \
-  -assemblyNames CycloneGames.Audio.Tests.Editor -testResults <result-path> -quit
+  -assemblyNames CycloneGames.Audio.Tests.Editor -testResults <result-path>
 ```
 
 Manual checks:
@@ -497,6 +513,8 @@ Manual checks:
 6. Prepare and release locale-specific banks repeatedly; confirm a failed preparation leaves the previous locale and leases active.
 7. Build each target Player and profile allocation, voice pressure, locale-switch latency, and per-locale residency.
 8. Populate more than one automatic maintenance batch of unused external clips; confirm repeated calls advance through the cache, each call stays within its work budget, and referenced clips remain resident.
+9. With no automatic configuration assets, prepare multiple distinct events and confirm configuration discovery occurs once per profile type; call `ClearCache` and confirm one new discovery is allowed.
+10. Start the same router loop repeatedly, confirm only one loop remains active, then disable/re-enable the router and confirm the new generation can start normally.
 
 ## References
 

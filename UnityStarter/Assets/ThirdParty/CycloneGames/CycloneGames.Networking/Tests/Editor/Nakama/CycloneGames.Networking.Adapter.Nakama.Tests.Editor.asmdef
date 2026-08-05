@@ -1,0 +1,34 @@
+{
+    "name": "CycloneGames.Networking.Adapter.Nakama.Tests.Editor",
+    "rootNamespace": "CycloneGames.Networking.Adapter.Nakama.Tests.Editor",
+    "references": [
+        "CycloneGames.Networking.Adapter.Nakama",
+        "CycloneGames.Networking.Core",
+        "NakamaRuntime",
+        "UniTask"
+    ],
+    "includePlatforms": [
+        "Editor"
+    ],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": true,
+    "precompiledReferences": [
+        "Nakama.dll"
+    ],
+    "autoReferenced": false,
+    "defineConstraints": [
+        "CYCLONE_NETWORKING_HAS_NAKAMA"
+    ],
+    "versionDefines": [
+        {
+            "name": "com.heroiclabs.nakama-unity",
+            "expression": "",
+            "define": "CYCLONE_NETWORKING_HAS_NAKAMA"
+        }
+    ],
+    "noEngineReferences": false,
+    "optionalUnityReferences": [
+        "TestAssemblies"
+    ]
+}
