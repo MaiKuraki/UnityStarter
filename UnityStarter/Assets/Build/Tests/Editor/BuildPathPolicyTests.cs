@@ -70,66 +70,66 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void EnsureLegacyWindowsPathBudget_AtFileBoundary_Succeeds()
+        public void EnsureWin32MaxPathBudget_AtFileBoundary_Succeeds()
         {
             string path = CreateAbsolutePathWithLength(
-                BuildPathPolicy.LegacyWindowsMaximumPathCharacters);
+                BuildPathPolicy.Win32MaxPathCharacters);
 
             Assert.That(
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(path, "Artifact"),
+                BuildPathPolicy.EnsureWin32MaxPathBudget(path, "Artifact"),
                 Is.EqualTo(Path.GetFullPath(path)));
         }
 
         [Test]
-        public void EnsureLegacyWindowsPathBudget_BeyondFileBoundary_ThrowsActionableError()
+        public void EnsureWin32MaxPathBudget_BeyondFileBoundary_ThrowsActionableError()
         {
             string path = CreateAbsolutePathWithLength(
-                BuildPathPolicy.LegacyWindowsMaximumPathCharacters + 1);
+                BuildPathPolicy.Win32MaxPathCharacters + 1);
 
             PathTooLongException exception = Assert.Throws<PathTooLongException>(() =>
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(path, "Artifact"));
+                BuildPathPolicy.EnsureWin32MaxPathBudget(path, "Artifact"));
 
             StringAssert.Contains("Shorten the repository checkout", exception.Message);
             StringAssert.Contains("maximum=259", exception.Message);
         }
 
         [Test]
-        public void EnsureLegacyWindowsPathBudget_ReservedSuffixIsPartOfBudget()
+        public void EnsureWin32MaxPathBudget_ReservedSuffixIsPartOfBudget()
         {
             const int suffixLength = 8;
             string path = CreateAbsolutePathWithLength(
-                BuildPathPolicy.LegacyWindowsMaximumPathCharacters - suffixLength + 1);
+                BuildPathPolicy.Win32MaxPathCharacters - suffixLength + 1);
 
             Assert.Throws<PathTooLongException>(() =>
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     path,
                     "Artifact",
                     suffixLength));
         }
 
         [Test]
-        public void EnsureLegacyWindowsDirectoryPathBudget_UsesCreateDirectoryBoundary()
+        public void EnsureWin32MaxDirectoryPathBudget_UsesCreateDirectoryBoundary()
         {
             string accepted = CreateAbsolutePathWithLength(
-                BuildPathPolicy.LegacyWindowsMaximumDirectoryPathCharacters);
+                BuildPathPolicy.Win32MaxDirectoryPathCharacters);
             string rejected = CreateAbsolutePathWithLength(
-                BuildPathPolicy.LegacyWindowsMaximumDirectoryPathCharacters + 1);
+                BuildPathPolicy.Win32MaxDirectoryPathCharacters + 1);
 
             Assert.DoesNotThrow(() =>
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     accepted,
                     "Generated directory"));
             Assert.Throws<PathTooLongException>(() =>
-                BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                     rejected,
                     "Generated directory"));
         }
 
         [Test]
-        public void EnsureLegacyWindowsPathBudget_ExtendedNamespace_Throws()
+        public void EnsureWin32MaxPathBudget_ExtendedNamespace_Throws()
         {
             Assert.Throws<NotSupportedException>(() =>
-                BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                BuildPathPolicy.EnsureWin32MaxPathBudget(
                     @"\\?\C:\Build\Artifact.bin",
                     "Artifact"));
         }
@@ -477,7 +477,9 @@ namespace Build.Pipeline.Tests.Editor
                     BindingFlags.Static | BindingFlags.NonPublic);
                 Assert.That(validateMethod, Is.Not.Null);
 
-                string error = (string)validateMethod.Invoke(null, new object[] { config, projectRoot });
+                string error = (string)validateMethod.Invoke(
+                    null,
+                    new object[] { "asset-content", config, projectRoot });
                 StringAssert.Contains("must not overlap", error);
             }
             finally

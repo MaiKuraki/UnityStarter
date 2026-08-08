@@ -15,15 +15,18 @@ namespace Build.Pipeline.Editor
     }
 
     [AssetContentProviderAuthoring(
-        AssetContentProviderIds.Addressables,
+        AddressablesBuildConfig.ProviderIdValue,
         "Addressables",
         Description = "Build and publish Unity Addressables content.",
         RequiredEditorTypeName = "UnityEditor.AddressableAssets.Settings.AddressableAssetSettings",
         Order = 100)]
     [CreateAssetMenu(menuName = "CycloneGames/Build/Addressables Build Config")]
-    public sealed class AddressablesBuildConfig : ScriptableObject
+    public sealed class AddressablesBuildConfig : AssetContentBuildConfiguration
     {
-        internal const string DefaultBuildOutputDirectory = "Build/AddressablesContent";
+        public const string ProviderIdValue = "addressables";
+        internal const string DefaultBuildOutputBaseDirectory = "Build/AddressablesContent";
+
+        public override string ProviderId => ProviderIdValue;
 
         [HideInInspector]
         public bool buildRemoteCatalog = false;
@@ -33,6 +36,14 @@ namespace Build.Pipeline.Editor
 
         [HideInInspector]
         public string buildOutputDirectory = "";
+
+        [HideInInspector]
+        [Tooltip("Official addressables_content_state.bin from a previous pipeline publication. Used only by Incremental asset-content invocations.")]
+        public UnityEngine.Object contentUpdateBaselineAsset;
+
+        [HideInInspector]
+        [Tooltip("Portable project-relative path to a previously published addressables_content_state.bin. CI can restore the baseline at this path before invoking the pipeline.")]
+        public string contentUpdateBaselinePath = "";
 
         [HideInInspector]
         [Tooltip("Allow evaluated Addressables profile build paths outside the Unity project. Keep disabled unless the external source is explicitly owned by CI.")]

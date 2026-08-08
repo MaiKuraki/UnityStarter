@@ -15,11 +15,11 @@ namespace Build.Pipeline.Tests.Editor
     {
         private const string ProjectSandboxOwnerFileName = ".recovery-registry-test-owner";
 
-        private static readonly string[] DefaultStepIds =
+        private static readonly string[] DefaultStepTypeIds =
         {
-            BuildStepIds.HotUpdate,
-            BuildStepIds.AssetContent,
-            BuildStepIds.Player
+            BuildStepTypeIds.HotUpdate,
+            BuildStepTypeIds.AssetContent,
+            BuildStepTypeIds.Player
         };
 
         private BuildData buildData;
@@ -41,24 +41,28 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void PipelineSteps_ForDefaultProfile_ReturnsBuiltInOrder()
+        public void RecipeInvocations_ForDefaultProfile_ExposeConfiguredEntriesAndOnlyEnablePlayer()
         {
-            CollectionAssert.AreEqual(DefaultStepIds, buildData.PipelineSteps);
+            CollectionAssert.AreEqual(
+                DefaultStepTypeIds,
+                buildData.RecipeInvocations.Select(entry => entry.InvocationId));
+            CollectionAssert.AreEqual(
+                new[] { BuildStepTypeIds.Player },
+                buildData.EnabledInvocationIds);
         }
 
         [TestCase(true)]
         [TestCase(false)]
-        public void PipelineSteps_WhenSerializedValueIsMissingOrEmpty_DoesNotCreateImplicitPlan(bool useNull)
+        public void RecipeInvocations_WhenSerializedValueIsMissingOrEmpty_DoesNotCreateImplicitPlan(bool useNull)
         {
-            SetSerializedPipelineSteps(useNull ? null : Array.Empty<string>());
+            SetSerializedRecipeInvocations(useNull ? null : Array.Empty<BuildRecipeInvocation>());
 
-            Assert.That(buildData.PipelineSteps, Is.Empty);
+            Assert.That(buildData.EnabledInvocationIds, Is.Empty);
 
             BuildRequest request = BuildRequestFactory.CreateInteractive(
                 buildData,
                 BuildTarget.StandaloneWindows64,
-                debugBuild: false,
-                incrementality: BuildIncrementality.Clean);
+                debugBuild: false);
             var context = new BuildExecutionContext(request, "test-run", new NoOpEventSink());
             InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
                 () => BuildPlanCompiler.Compile(context));
@@ -66,15 +70,147 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void PipelineSteps_WhenReturnedArrayIsMutated_PreservesProfileState()
+        public void RecipeInvocations_WhenReturnedSnapshotIsMutated_PreservesProfileState()
         {
-            string[] firstRead = buildData.PipelineSteps;
-            firstRead[0] = "mutated-by-test";
+            BuildRecipeInvocation[] firstRead = buildData.RecipeInvocations.ToArray();
+            firstRead[0] = new BuildRecipeInvocation("mutated-by-test", "mutated-by-test");
 
-            CollectionAssert.AreEqual(DefaultStepIds, buildData.PipelineSteps);
+            CollectionAssert.AreEqual(
+                DefaultStepTypeIds,
+                buildData.RecipeInvocations.Select(entry => entry.InvocationId));
+        }
+
+        [Test]
+        public void Compile_MultipleInvocationsOfOneType_UsesInvocationSpecificEdges()
+        {
+            BuildExecutionContext context = CreatePlanContext(
+                CreateMultipleInvocation(
+                    "a1",
+                    new BuildInvocationDependency("b1", BuildDependencyMode.Required)),
+                CreateMultipleInvocation("b1"),
+                CreateMultipleInvocation("b2"));
+
+            IReadOnlyList<CompiledBuildStep> plan = BuildPlanCompiler.Compile(context);
+
+            CollectionAssert.AreEqual(
+                new[] { "b1", "a1", "b2" },
+                plan.Select(step => step.Invocation.InvocationId));
+        }
+
+        [Test]
+        public void Compile_IfSelectedMissingDependency_UsesStableInvocationIdentityOrder()
+        {
+            BuildExecutionContext context = CreatePlanContext(
+                CreateMultipleInvocation(
+                    "a1",
+                    new BuildInvocationDependency("not-selected", BuildDependencyMode.IfSelected)),
+                CreateMultipleInvocation("b1"),
+                CreateMultipleInvocation("b2"));
+
+            IReadOnlyList<CompiledBuildStep> plan = BuildPlanCompiler.Compile(context);
+
+            CollectionAssert.AreEqual(
+                new[] { "a1", "b1", "b2" },
+                plan.Select(step => step.Invocation.InvocationId));
+        }
+
+        [Test]
+        public void Compile_IndependentInvocations_IsInvariantToSerializedOrder()
+        {
+            BuildExecutionContext first = CreatePlanContext(
+                CreateMultipleInvocation("z-last"),
+                CreateMultipleInvocation("a-first"),
+                CreateMultipleInvocation("m-middle"));
+            BuildExecutionContext second = CreatePlanContext(
+                CreateMultipleInvocation("m-middle"),
+                CreateMultipleInvocation("z-last"),
+                CreateMultipleInvocation("a-first"));
+
+            string[] firstOrder = BuildPlanCompiler.Compile(first)
+                .Select(step => step.Invocation.InvocationId)
+                .ToArray();
+            string[] secondOrder = BuildPlanCompiler.Compile(second)
+                .Select(step => step.Invocation.InvocationId)
+                .ToArray();
+
+            CollectionAssert.AreEqual(
+                new[] { "a-first", "m-middle", "z-last" },
+                firstOrder);
+            CollectionAssert.AreEqual(firstOrder, secondOrder);
+        }
+
+        [Test]
+        public void Compile_RequiredMissingDependency_Throws()
+        {
+            BuildExecutionContext context = CreatePlanContext(
+                CreateMultipleInvocation(
+                    "a1",
+                    new BuildInvocationDependency("not-selected", BuildDependencyMode.Required)));
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BuildPlanCompiler.Compile(context));
+            StringAssert.Contains("requires missing invocation 'not-selected'", exception.Message);
+        }
+
+        [Test]
+        public void Compile_SelfDuplicateAndCyclicDependencies_Throw()
+        {
+            BuildExecutionContext self = CreatePlanContext(
+                CreateMultipleInvocation(
+                    "a1",
+                    new BuildInvocationDependency("a1", BuildDependencyMode.Required)));
+            StringAssert.Contains(
+                "dependency cycle",
+                Assert.Throws<InvalidOperationException>(() => BuildPlanCompiler.Compile(self)).Message);
+
+            BuildExecutionContext duplicate = CreatePlanContext(
+                CreateMultipleInvocation(
+                    "a1",
+                    new BuildInvocationDependency("b1", BuildDependencyMode.Required),
+                    new BuildInvocationDependency("B1", BuildDependencyMode.IfSelected)),
+                CreateMultipleInvocation("b1"));
+            StringAssert.Contains(
+                "duplicate invocation dependency",
+                Assert.Throws<InvalidOperationException>(() => BuildPlanCompiler.Compile(duplicate)).Message);
+
+            BuildExecutionContext cycle = CreatePlanContext(
+                CreateMultipleInvocation(
+                    "a1",
+                    new BuildInvocationDependency("b1", BuildDependencyMode.Required)),
+                CreateMultipleInvocation(
+                    "b1",
+                    new BuildInvocationDependency("a1", BuildDependencyMode.Required)));
+            StringAssert.Contains(
+                "dependency cycle",
+                Assert.Throws<InvalidOperationException>(() => BuildPlanCompiler.Compile(cycle)).Message);
+        }
+
+        [Test]
+        public void Compile_DuplicateInvocationId_Throws()
+        {
+            BuildExecutionContext context = CreatePlanContext(
+                CreateMultipleInvocation("content"),
+                CreateMultipleInvocation("content"));
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BuildPlanCompiler.Compile(context));
+            StringAssert.Contains("configured more than once", exception.Message);
+        }
+
+        [Test]
+        public void Compile_SingleMultiplicityStepType_RejectsMultipleInvocations()
+        {
+            BuildExecutionContext context = CreatePlanContext(
+                new BuildStepInvocation("player-one", BuildStepTypeIds.Player),
+                new BuildStepInvocation("player-two", BuildStepTypeIds.Player));
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BuildPlanCompiler.Compile(context));
+            StringAssert.Contains("allows one invocation per recipe", exception.Message);
         }
 
         [TestCase("sign,artifacts")]
+        [TestCase("sign=artifacts")]
         [TestCase(" sign-artifacts")]
         public void BuildStepRegistration_RejectsIdsThatCannotRoundTripThroughCi(
             string stepId)
@@ -90,7 +226,21 @@ namespace Build.Pipeline.Tests.Editor
                 new BuildStepRegistrationAttribute(
                     new string(
                         'a',
-                        BuildStepRegistrationAttribute.MaximumIdCharacters + 1)));
+                        BuildIdentityPolicy.MaximumBuildIdentifierCharacters + 1)));
+        }
+
+        [Test]
+        public void InvocationContracts_RejectUnknownPolicyEnumValues()
+        {
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new BuildInvocationDependency(
+                    "dependency",
+                    (BuildDependencyMode)99));
+            Assert.Throws<ArgumentOutOfRangeException>(() =>
+                new BuildStepInvocation(
+                    "invocation",
+                    "custom-step",
+                    incrementality: (BuildIncrementality)99));
         }
 
         [Test]
@@ -112,10 +262,12 @@ namespace Build.Pipeline.Tests.Editor
             BuildRequest request = BuildRequestFactory.CreateInteractive(
                 buildData,
                 BuildTarget.StandaloneWindows64,
-                debugBuild: false,
-                incrementality: BuildIncrementality.Clean);
+                debugBuild: false);
 
-            SetSerializedPipelineSteps(new[] { "mutated-after-request" });
+            SetSerializedRecipeInvocations(new[]
+            {
+                new BuildRecipeInvocation("mutated-after-request", "mutated-after-request")
+            });
             var serialized = new SerializedObject(buildData);
             serialized.FindProperty("companyName").stringValue = "MutatedCompany";
             serialized.FindProperty("productName").stringValue = "MutatedProduct";
@@ -125,9 +277,11 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(request.CompanyName, Is.EqualTo("TestCompany"));
             Assert.That(request.ProductName, Is.EqualTo("TestProduct"));
             Assert.That(request.ApplicationIdentifier, Is.EqualTo("com.example.test"));
-            CollectionAssert.AreEqual(DefaultStepIds, request.StepIds);
+            CollectionAssert.AreEqual(
+                new[] { BuildStepTypeIds.Player },
+                request.StepTypeIds);
             Assert.Throws<NotSupportedException>(
-                () => ((IList<string>)request.StepIds)[0] = "mutated-through-request");
+                () => ((IList<string>)request.StepTypeIds)[0] = "mutated-through-request");
         }
 
         [Test]
@@ -144,21 +298,36 @@ namespace Build.Pipeline.Tests.Editor
         public void ResolveAssetContentAdapter_SnapshotsOneAdapterInstancePerBuildRun()
         {
             CountingContentBuildAdapter.ConstructorCallCount = 0;
-            var serialized = new UnityEditor.SerializedObject(buildData);
-            serialized.FindProperty("assetContentProviderId").stringValue = CountingContentBuildAdapter.Provider;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-            BuildRequest request = BuildRequestFactory.CreateInteractive(
-                buildData,
-                BuildTarget.StandaloneWindows64,
-                debugBuild: false,
-                incrementality: BuildIncrementality.Clean);
-            var context = new BuildExecutionContext(request, "test-run", new NoOpEventSink());
+            var configuration = ScriptableObject.CreateInstance<CountingContentBuildConfiguration>();
+            string configurationPath =
+                $"Assets/Build/Tests/Editor/CountingContent-{Guid.NewGuid():N}.asset";
+            AssetDatabase.CreateAsset(configuration, configurationPath);
+            try
+            {
+                SetSerializedRecipeInvocations(new[]
+                {
+                    new BuildRecipeInvocation(
+                        BuildStepTypeIds.AssetContent,
+                        BuildStepTypeIds.AssetContent,
+                        configuration: configuration)
+                });
+                BuildRequest request = BuildRequestFactory.CreateInteractive(
+                    buildData,
+                    BuildTarget.StandaloneWindows64,
+                    debugBuild: false);
+                var context = new BuildExecutionContext(request, "test-run", new NoOpEventSink());
+                BuildStepInvocation invocation = request.GetInvocation(BuildStepTypeIds.AssetContent);
 
-            IAssetContentBuildAdapter first = context.ResolveAssetContentAdapter();
-            IAssetContentBuildAdapter second = context.ResolveAssetContentAdapter();
+                IAssetContentBuildAdapter first = context.ResolveAssetContentAdapter(invocation);
+                IAssetContentBuildAdapter second = context.ResolveAssetContentAdapter(invocation);
 
-            Assert.That(first, Is.SameAs(second));
-            Assert.That(CountingContentBuildAdapter.ConstructorCallCount, Is.EqualTo(1));
+                Assert.That(first, Is.SameAs(second));
+                Assert.That(CountingContentBuildAdapter.ConstructorCallCount, Is.EqualTo(1));
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(configurationPath);
+            }
         }
 
         [Test]
@@ -166,9 +335,9 @@ namespace Build.Pipeline.Tests.Editor
         {
             ExplodingUnrequestedBuildStep.ConstructorCallCount = 0;
 
-            IReadOnlyList<IBuildStep> steps = BuildPipelineRegistry.ResolveSteps(DefaultStepIds);
+            IReadOnlyList<IBuildStep> steps = BuildPipelineRegistry.ResolveSteps(DefaultStepTypeIds);
 
-            CollectionAssert.AreEquivalent(DefaultStepIds, GetStepIds(steps));
+            CollectionAssert.AreEquivalent(DefaultStepTypeIds, GetStepTypeIds(steps));
             Assert.That(ExplodingUnrequestedBuildStep.ConstructorCallCount, Is.Zero);
         }
 
@@ -180,8 +349,10 @@ namespace Build.Pipeline.Tests.Editor
             IReadOnlyList<BuildStepDescriptor> descriptors =
                 BuildPipelineRegistry.GetBuildStepDescriptors();
 
-            string[] descriptorIds = descriptors.Select(descriptor => descriptor.Id).ToArray();
-            foreach (string builtInId in DefaultStepIds)
+            string[] descriptorIds = descriptors
+                .Select(descriptor => descriptor.StepTypeId)
+                .ToArray();
+            foreach (string builtInId in DefaultStepTypeIds)
             {
                 Assert.That(descriptorIds, Does.Contain(builtInId));
             }
@@ -201,41 +372,65 @@ namespace Build.Pipeline.Tests.Editor
             AssetContentProviderDescriptor addressables = descriptors.Single(
                 descriptor => string.Equals(
                     descriptor.ProviderId,
-                    AssetContentProviderIds.Addressables,
+                    AddressablesBuildConfig.ProviderIdValue,
                     StringComparison.Ordinal));
             AssetContentProviderDescriptor yooAsset = descriptors.Single(
                 descriptor => string.Equals(
                     descriptor.ProviderId,
-                    AssetContentProviderIds.YooAsset,
+                    YooAssetBuildConfig.ProviderIdValue,
                     StringComparison.Ordinal));
 
             Assert.That(addressables.ConfigurationType, Is.EqualTo(typeof(AddressablesBuildConfig)));
             Assert.That(yooAsset.ConfigurationType, Is.EqualTo(typeof(YooAssetBuildConfig)));
+            Assert.That(
+                descriptors.All(descriptor =>
+                    typeof(AssetContentBuildConfiguration).IsAssignableFrom(
+                        descriptor.ConfigurationType)),
+                Is.True);
         }
 
         [Test]
-        public void ResolveSteps_OnlyInstantiatesUniqueHighestPriorityOverride()
+        public void ResolveSteps_DuplicateStepTypeId_FailsBeforeInstantiationAndListsAllTypes()
         {
-            ExplodingLowerPriorityBuildStep.ConstructorCallCount = 0;
+            DuplicateBuildStepA.ConstructorCallCount = 0;
+            DuplicateBuildStepB.ConstructorCallCount = 0;
 
-            IReadOnlyList<IBuildStep> steps = BuildPipelineRegistry.ResolveSteps(
-                new[] { HighestPriorityBuildStep.StepId });
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BuildPipelineRegistry.ResolveSteps(
+                    new[] { DuplicateBuildStepA.StepTypeIdValue }));
 
-            Assert.That(steps.Count, Is.EqualTo(1));
-            Assert.That(steps[0], Is.TypeOf<HighestPriorityBuildStep>());
-            Assert.That(ExplodingLowerPriorityBuildStep.ConstructorCallCount, Is.Zero);
+            StringAssert.Contains(DuplicateBuildStepA.StepTypeIdValue, exception.Message);
+            StringAssert.Contains(typeof(DuplicateBuildStepA).FullName, exception.Message);
+            StringAssert.Contains(typeof(DuplicateBuildStepB).FullName, exception.Message);
+            Assert.That(
+                exception.Message.IndexOf(typeof(DuplicateBuildStepA).FullName, StringComparison.Ordinal),
+                Is.LessThan(exception.Message.IndexOf(
+                    typeof(DuplicateBuildStepB).FullName,
+                    StringComparison.Ordinal)));
+            Assert.That(DuplicateBuildStepA.ConstructorCallCount, Is.Zero);
+            Assert.That(DuplicateBuildStepB.ConstructorCallCount, Is.Zero);
         }
 
         [Test]
-        public void ResolveContentAdapter_OnlyInstantiatesUniqueHighestPriorityOverride()
+        public void ResolveContentAdapter_DuplicateProviderId_FailsBeforeInstantiationAndListsAllTypes()
         {
-            ExplodingLowerPriorityContentAdapter.ConstructorCallCount = 0;
+            DuplicateContentAdapterA.ConstructorCallCount = 0;
+            DuplicateContentAdapterB.ConstructorCallCount = 0;
 
-            IAssetContentBuildAdapter adapter = BuildPipelineRegistry.ResolveContentAdapter(
-                HighestPriorityContentAdapter.Provider);
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BuildPipelineRegistry.ResolveContentAdapter(
+                    DuplicateContentAdapterA.Provider));
 
-            Assert.That(adapter, Is.TypeOf<HighestPriorityContentAdapter>());
-            Assert.That(ExplodingLowerPriorityContentAdapter.ConstructorCallCount, Is.Zero);
+            StringAssert.Contains(DuplicateContentAdapterA.Provider, exception.Message);
+            StringAssert.Contains(typeof(DuplicateContentAdapterA).FullName, exception.Message);
+            StringAssert.Contains(typeof(DuplicateContentAdapterB).FullName, exception.Message);
+            Assert.That(
+                exception.Message.IndexOf(typeof(DuplicateContentAdapterA).FullName, StringComparison.Ordinal),
+                Is.LessThan(exception.Message.IndexOf(
+                    typeof(DuplicateContentAdapterB).FullName,
+                    StringComparison.Ordinal)));
+            Assert.That(DuplicateContentAdapterA.ConstructorCallCount, Is.Zero);
+            Assert.That(DuplicateContentAdapterB.ConstructorCallCount, Is.Zero);
         }
 
         [Test]
@@ -252,55 +447,49 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void ResolveRecoveryParticipants_OnlyInstantiatesUniqueHighestPriorityOverride()
+        public void ResolveRecoveryParticipants_DuplicateIdFailsBeforeInstantiationAndListsAllTypes()
         {
-            ExplodingLowerPriorityRecoveryParticipant.ConstructorCallCount = 0;
+            DuplicateRecoveryParticipantB.ConstructorCallCount = 0;
 
-            IReadOnlyList<IBuildRecoveryParticipant> participants =
-                BuildPipelineRegistry.ResolveRecoveryParticipants();
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
+                () => BuildPipelineRegistry.ResolveRecoveryParticipants(
+                    new[]
+                    {
+                        new BuildPipelineRegistry.RecoveryRegistrationCandidate(
+                            typeof(DuplicateRecoveryParticipantA),
+                            new BuildRecoveryRegistrationAttribute(
+                                DuplicateRecoveryParticipantA.ParticipantId,
+                                priority: 100)),
+                        new BuildPipelineRegistry.RecoveryRegistrationCandidate(
+                            typeof(DuplicateRecoveryParticipantB),
+                            new BuildRecoveryRegistrationAttribute(
+                                DuplicateRecoveryParticipantA.ParticipantId,
+                                priority: -100))
+                    }));
 
-            IBuildRecoveryParticipant selected = participants.Single(
-                participant => string.Equals(
-                    participant.Id,
-                    HighestPriorityRecoveryParticipant.ParticipantId,
-                    StringComparison.Ordinal));
-            Assert.That(selected, Is.TypeOf<HighestPriorityRecoveryParticipant>());
-            Assert.That(ExplodingLowerPriorityRecoveryParticipant.ConstructorCallCount, Is.Zero);
+            StringAssert.Contains(DuplicateRecoveryParticipantA.ParticipantId, exception.Message);
+            StringAssert.Contains(typeof(DuplicateRecoveryParticipantA).FullName, exception.Message);
+            StringAssert.Contains(typeof(DuplicateRecoveryParticipantB).FullName, exception.Message);
+            Assert.That(DuplicateRecoveryParticipantB.ConstructorCallCount, Is.Zero);
         }
 
         [Test]
-        public void Runner_RecoversProjectCentralStateBeforeRequestValidation()
+        public void AuthoringRegistration_RejectsNonPortableProviderIdentifiers()
         {
-            string projectRoot = GetCurrentProjectRoot();
-            string sandboxRoot = CreateProjectSandboxRoot(projectRoot);
-            try
-            {
-                RecoveryOrderingParticipant.BeginProbe(projectRoot);
-                BuildRequest request = CreateSandboxRequest(
-                    projectRoot,
-                    sandboxRoot,
-                    companyName: string.Empty,
-                    stepIds: new[] { RecoveryOrderingBuildStep.StepId });
-
-                BuildRunResult result = new BuildPipelineRunner(
-                        new NoOpEventSink(),
-                        projectRoot,
-                        () => false)
-                    .Run(request);
-
-                Assert.That(result.Succeeded, Is.False);
-                Assert.That(RecoveryOrderingParticipant.WasRecovered, Is.True);
-                StringAssert.Contains("Company name is required", result.Failure.ToString());
-            }
-            finally
-            {
-                RecoveryOrderingParticipant.EndProbe();
-                DeleteProjectSandboxRoot(projectRoot, sandboxRoot);
-            }
+            Assert.Throws<ArgumentException>(
+                () => new AssetContentProviderAuthoringAttribute("Content Provider", "Content"));
+            Assert.Throws<ArgumentException>(
+                () => new AssetContentAdapterRegistrationAttribute("Content/Adapter"));
+            Assert.Throws<ArgumentException>(
+                () => new HotUpdateProviderAuthoringAttribute("Hot/Update", "Hot Update"));
+            Assert.Throws<ArgumentException>(
+                () => new HotUpdateAdapterRegistrationAttribute(
+                    "Hot Adapter",
+                    typeof(HybridCLRBuildConfig)));
         }
 
         [Test]
-        public void Runner_RecoversProjectCentralStateBeforeStepApplicability()
+        public void Runner_DoesNotRecoverProjectCentralStateDuringRequestValidation()
         {
             string projectRoot = GetCurrentProjectRoot();
             string sandboxRoot = CreateProjectSandboxRoot(projectRoot);
@@ -311,7 +500,8 @@ namespace Build.Pipeline.Tests.Editor
                     projectRoot,
                     sandboxRoot,
                     companyName: "TestCompany",
-                    stepIds: new[] { RecoveryOrderingBuildStep.StepId });
+                    stepTypeIds: new[] { RecoveryOrderingBuildStep.StepTypeIdValue },
+                    applicationVersion: "invalid\nversion");
 
                 BuildRunResult result = new BuildPipelineRunner(
                         new NoOpEventSink(),
@@ -320,12 +510,43 @@ namespace Build.Pipeline.Tests.Editor
                     .Run(request);
 
                 Assert.That(result.Succeeded, Is.False);
-                Assert.That(RecoveryOrderingParticipant.WasRecovered, Is.True);
+                Assert.That(RecoveryOrderingParticipant.WasRecovered, Is.False);
+                StringAssert.Contains("Application version", result.Failure.ToString());
+            }
+            finally
+            {
+                RecoveryOrderingParticipant.EndProbe();
+                DeleteProjectSandboxRoot(projectRoot, sandboxRoot);
+            }
+        }
+
+        [Test]
+        public void Runner_DoesNotRecoverProjectCentralStateDuringStepApplicability()
+        {
+            string projectRoot = GetCurrentProjectRoot();
+            string sandboxRoot = CreateProjectSandboxRoot(projectRoot);
+            try
+            {
+                RecoveryOrderingParticipant.BeginProbe(projectRoot);
+                BuildRequest request = CreateSandboxRequest(
+                    projectRoot,
+                    sandboxRoot,
+                    companyName: "TestCompany",
+                    stepTypeIds: new[] { RecoveryOrderingBuildStep.StepTypeIdValue });
+
+                BuildRunResult result = new BuildPipelineRunner(
+                        new NoOpEventSink(),
+                        projectRoot,
+                        () => false)
+                    .Run(request);
+
+                Assert.That(result.Succeeded, Is.False);
+                Assert.That(RecoveryOrderingParticipant.WasRecovered, Is.False);
                 StringAssert.Contains(
-                    RecoveryOrderingBuildStep.ApplicabilitySentinel,
+                    RecoveryOrderingBuildStep.RecoveryMissingSentinel,
                     result.Failure.ToString());
                 StringAssert.DoesNotContain(
-                    RecoveryOrderingBuildStep.RecoveryMissingSentinel,
+                    RecoveryOrderingBuildStep.ApplicabilitySentinel,
                     result.Failure.ToString());
             }
             finally
@@ -346,7 +567,7 @@ namespace Build.Pipeline.Tests.Editor
                     projectRoot,
                     sandboxRoot,
                     companyName: "TestCompany",
-                    stepIds: new[] { RecoveryOrderingBuildStep.StepId });
+                    stepTypeIds: new[] { RecoveryOrderingBuildStep.StepTypeIdValue });
 
                 BuildRunResult result = new BuildPipelineRunner(
                         new NoOpEventSink(),
@@ -366,11 +587,13 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void OptionalRecoveryStateGuard_WhenYooAssetParticipantIsUnavailableAndStateExists_FailsClosed()
+        public void WorkspaceInspection_WhenOptionalParticipantIsUnavailableAndStateExists_FailsClosed()
         {
             string sandboxRoot = CreateSandboxRoot();
             try
             {
+                Directory.CreateDirectory(Path.Combine(sandboxRoot, "Assets"));
+                Directory.CreateDirectory(Path.Combine(sandboxRoot, "ProjectSettings"));
                 string stateRoot = Path.Combine(
                     sandboxRoot,
                     ".buildpipeline",
@@ -380,15 +603,15 @@ namespace Build.Pipeline.Tests.Editor
                 string evidencePath = Path.Combine(stateRoot, "pending.evidence");
                 File.WriteAllText(evidencePath, "preserve");
 
-                InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
-                    OptionalRecoveryStateGuard.EnsureNoUnavailableRecoveryState(
-                        sandboxRoot,
-                        Array.Empty<IBuildRecoveryParticipant>()));
+                BuildWorkspaceSnapshot snapshot = BuildWorkspaceService.Inspect(
+                    sandboxRoot,
+                    Array.Empty<IBuildRecoveryParticipant>(),
+                    editorIsBusy: false);
 
                 Assert.That(File.ReadAllText(evidencePath), Is.EqualTo("preserve"));
-                StringAssert.Contains(
-                    "pending YooAsset 3 publication transaction exists",
-                    exception.Message);
+                Assert.That(snapshot.Status, Is.EqualTo(BuildWorkspaceHealthStatus.Blocked));
+                Assert.That(snapshot.CanRecover, Is.False);
+                Assert.That(snapshot.Issues.Single().Title, Is.EqualTo("Unavailable recovery participant"));
             }
             finally
             {
@@ -400,12 +623,16 @@ namespace Build.Pipeline.Tests.Editor
         public void Compile_EvaluatesApplicabilityExactlyOnceAndStoresTheDecision()
         {
             SnapshotApplicabilityBuildStep.ApplicabilityCallCount = 0;
-            SetSerializedPipelineSteps(new[] { SnapshotApplicabilityBuildStep.StepId });
+            SetSerializedRecipeInvocations(new[]
+            {
+                new BuildRecipeInvocation(
+                    SnapshotApplicabilityBuildStep.StepTypeIdValue,
+                    SnapshotApplicabilityBuildStep.StepTypeIdValue)
+            });
             BuildRequest request = BuildRequestFactory.CreateInteractive(
                 buildData,
                 BuildTarget.StandaloneWindows64,
-                debugBuild: false,
-                incrementality: BuildIncrementality.Clean);
+                debugBuild: false);
             var context = new BuildExecutionContext(request, "test-run", new NoOpEventSink());
 
             IReadOnlyList<CompiledBuildStep> plan = BuildPlanCompiler.Compile(context);
@@ -419,41 +646,103 @@ namespace Build.Pipeline.Tests.Editor
         public void HybridClrAndCheatConflict_IsOwnedOnlyByThePlayerStep()
         {
             var hybridConfig = ScriptableObject.CreateInstance<HybridCLRBuildConfig>();
+            string configurationPath =
+                $"Assets/Build/Tests/Editor/HybridCLR-{Guid.NewGuid():N}.asset";
+            AssetDatabase.CreateAsset(hybridConfig, configurationPath);
             try
             {
                 var serialized = new SerializedObject(buildData);
-                serialized.FindProperty("useHybridCLR").boolValue = true;
                 serialized.FindProperty("cheatBuildMode").enumValueIndex =
                     (int)CheatBuildMode.Enabled;
-                serialized.FindProperty("hybridCLRBuildConfig").objectReferenceValue =
-                    hybridConfig;
                 serialized.ApplyModifiedPropertiesWithoutUndo();
+                SetSerializedRecipeInvocations(new[]
+                {
+                    new BuildRecipeInvocation(
+                        BuildStepTypeIds.HotUpdate,
+                        BuildStepTypeIds.HotUpdate,
+                        configuration: hybridConfig),
+                    new BuildRecipeInvocation(
+                        BuildStepTypeIds.Player,
+                        BuildStepTypeIds.Player,
+                        dependencies: new[]
+                        {
+                            new BuildInvocationDependency(
+                                BuildStepTypeIds.HotUpdate)
+                        })
+                });
 
                 BuildRequest request = BuildRequestFactory.CreateInteractive(
                     buildData,
                     BuildTarget.StandaloneWindows64,
-                    debugBuild: false,
-                    incrementality: BuildIncrementality.Clean);
+                    debugBuild: false);
                 var context = new BuildExecutionContext(
                     request,
                     "test-run",
                     new NoOpEventSink());
+                BuildStepInvocation hotUpdateInvocation =
+                    request.GetInvocation(BuildStepTypeIds.HotUpdate);
+                BuildStepInvocation playerInvocation =
+                    request.GetInvocation(BuildStepTypeIds.Player);
+                context.SetPlan(new[]
+                {
+                    new CompiledBuildStep(
+                        hotUpdateInvocation,
+                        new HotUpdateBuildStep(),
+                        isApplicable: true),
+                    new CompiledBuildStep(
+                        playerInvocation,
+                        new PlayerBuildStep(),
+                        isApplicable: true)
+                });
 
                 IReadOnlyList<string> hotUpdateErrors =
-                    new HotUpdateBuildStep().Validate(context);
+                    new HotUpdateBuildStep().Validate(
+                        context,
+                        hotUpdateInvocation);
                 Assert.That(
                     hotUpdateErrors.Any(error => error.Contains("per-build ENABLE_CHEAT")),
                     Is.False);
 
                 IReadOnlyList<string> playerErrors =
-                    new PlayerBuildStep().Validate(context);
+                    new PlayerBuildStep().Validate(
+                        context,
+                        playerInvocation);
                 Assert.That(
                     playerErrors.Any(error => error.Contains("per-build ENABLE_CHEAT")),
                     Is.True);
             }
             finally
             {
-                UnityEngine.Object.DestroyImmediate(hybridConfig);
+                AssetDatabase.DeleteAsset(configurationPath);
+            }
+        }
+
+        [Test]
+        public void Runner_RequirementsFreeRecipe_DoesNotRequirePlayerAuthoringFields()
+        {
+            string projectRoot = GetCurrentProjectRoot();
+            string sandboxRoot = CreateProjectSandboxRoot(projectRoot);
+            try
+            {
+                RequirementsFreeBuildStep.Executed = false;
+                BuildRequest request = CreateSandboxRequest(
+                    projectRoot,
+                    sandboxRoot,
+                    companyName: string.Empty,
+                    stepTypeIds: new[] { RequirementsFreeBuildStep.StepTypeIdValue });
+
+                BuildRunResult result = new BuildPipelineRunner(
+                        new NoOpEventSink(),
+                        projectRoot,
+                        () => false)
+                    .Run(request);
+
+                Assert.That(result.Succeeded, Is.True, result.Failure?.ToString());
+                Assert.That(RequirementsFreeBuildStep.Executed, Is.True);
+            }
+            finally
+            {
+                DeleteProjectSandboxRoot(projectRoot, sandboxRoot);
             }
         }
 
@@ -463,6 +752,60 @@ namespace Build.Pipeline.Tests.Editor
             var adapter = new AddressablesContentBuildAdapter();
 
             Assert.That(adapter, Is.InstanceOf<IAssetContentPlayerBuildSessionFactory>());
+        }
+
+        [Test]
+        public void AddressablesAdapter_DefaultPublicationRoot_IsScopedByInvocation()
+        {
+            string projectRoot = GetCurrentProjectRoot();
+            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            try
+            {
+                configuration.copyToOutputDirectory = true;
+                configuration.buildOutputDirectory = string.Empty;
+                var adapter = new AddressablesContentBuildAdapter();
+                var firstRequest = new AssetContentBuildRequest(
+                    "content-base",
+                    BuildTarget.StandaloneWindows64,
+                    "1.0.0",
+                    projectRoot,
+                    configuration,
+                    BuildIncrementality.Clean,
+                    batchMode: false);
+                var secondRequest = new AssetContentBuildRequest(
+                    "content-dlc",
+                    BuildTarget.StandaloneWindows64,
+                    "1.0.0",
+                    projectRoot,
+                    configuration,
+                    BuildIncrementality.Clean,
+                    batchMode: false);
+
+                string first = adapter.GetExclusiveOutputPaths(firstRequest).Single();
+                string second = adapter.GetExclusiveOutputPaths(secondRequest).Single();
+
+                Assert.That(
+                    first,
+                    Is.EqualTo(Path.GetFullPath(Path.Combine(
+                        projectRoot,
+                        "Build",
+                        "AddressablesContent",
+                        "content-base",
+                        BuildTarget.StandaloneWindows64.ToString()))));
+                Assert.That(
+                    second,
+                    Is.EqualTo(Path.GetFullPath(Path.Combine(
+                        projectRoot,
+                        "Build",
+                        "AddressablesContent",
+                        "content-dlc",
+                        BuildTarget.StandaloneWindows64.ToString()))));
+                Assert.That(first, Is.Not.EqualTo(second));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(configuration);
+            }
         }
 
         [TestCase("DefaultPackage")]
@@ -541,21 +884,21 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(YooAssetBuildTokenPolicy.IsValidPackageVersion("version\r\nnext"), Is.False);
         }
 
-        private void SetSerializedPipelineSteps(string[] value)
+        private void SetSerializedRecipeInvocations(BuildRecipeInvocation[] value)
         {
             FieldInfo field = typeof(BuildData).GetField(
-                "pipelineSteps",
+                "recipeInvocations",
                 BindingFlags.Instance | BindingFlags.NonPublic);
             Assert.That(field, Is.Not.Null);
             field.SetValue(buildData, value);
         }
 
-        private static string[] GetStepIds(IReadOnlyList<IBuildStep> steps)
+        private static string[] GetStepTypeIds(IReadOnlyList<IBuildStep> steps)
         {
             var ids = new string[steps.Count];
             for (int index = 0; index < steps.Count; index++)
             {
-                ids[index] = steps[index].Id;
+                ids[index] = steps[index].StepTypeId;
             }
 
             return ids;
@@ -565,7 +908,23 @@ namespace Build.Pipeline.Tests.Editor
             string projectRoot,
             string sandboxRoot,
             string companyName,
-            IReadOnlyList<string> stepIds)
+            IReadOnlyList<string> stepTypeIds,
+            string applicationVersion = "0.1.0")
+        {
+            return CreateSandboxRequest(
+                projectRoot,
+                sandboxRoot,
+                companyName,
+                CreateInvocations(stepTypeIds),
+                applicationVersion);
+        }
+
+        private static BuildRequest CreateSandboxRequest(
+            string projectRoot,
+            string sandboxRoot,
+            string companyName,
+            IReadOnlyList<BuildStepInvocation> invocations,
+            string applicationVersion = "0.1.0")
         {
             string buildRoot = Path.Combine(sandboxRoot, "Build");
             string outputDirectory = Path.Combine(buildRoot, "Windows", "Release");
@@ -574,10 +933,9 @@ namespace Build.Pipeline.Tests.Editor
                 companyName,
                 "TestProduct",
                 "com.example.test",
-                "Assets/Resources/VersionInfoData.asset",
+                "Assets/Build/Runtime/Resources/VersionInfoData.asset",
                 Array.Empty<string>(),
                 CheatBuildMode.Disabled,
-                null,
                 BuildTarget.StandaloneWindows64,
                 NamedBuildTarget.Standalone,
                 ScriptingImplementation.Mono2x,
@@ -586,19 +944,53 @@ namespace Build.Pipeline.Tests.Editor
                 outputPath,
                 outputDirectory,
                 outputIsFolder: false,
-                incrementality: BuildIncrementality.Clean,
                 deleteDebugFiles: true,
                 debugBuild: true,
                 exportAndroidProject: false,
                 allowExternalOutput: false,
                 cheatOverride: null,
                 batchMode: false,
-                applicationVersion: "0.1.0",
-                assetContentProviderId: string.Empty,
-                assetContentConfiguration: null,
-                useHybridClr: false,
-                enablePlayerObfuscation: false,
-                stepIds: stepIds);
+                applicationVersion: applicationVersion,
+                identityOverride: BuildIdentityOverride.Empty,
+                steps: invocations);
+        }
+
+        private static BuildExecutionContext CreatePlanContext(
+            params BuildStepInvocation[] invocations)
+        {
+            string sandboxRoot = Path.Combine(
+                Path.GetTempPath(),
+                "UnityStarter-BuildPlanCompilerTests");
+            BuildRequest request = CreateSandboxRequest(
+                GetCurrentProjectRoot(),
+                sandboxRoot,
+                "TestCompany",
+                invocations);
+            return new BuildExecutionContext(request, "test-run", new NoOpEventSink());
+        }
+
+        private static BuildStepInvocation CreateMultipleInvocation(
+            string invocationId,
+            params BuildInvocationDependency[] dependencies)
+        {
+            return new BuildStepInvocation(
+                invocationId,
+                MultipleInvocationBuildStep.StepTypeIdValue,
+                dependencies: dependencies);
+        }
+
+        private static BuildStepInvocation[] CreateInvocations(
+            IReadOnlyList<string> stepTypeIds)
+        {
+            var result = new BuildStepInvocation[stepTypeIds.Count];
+            for (int index = 0; index < stepTypeIds.Count; index++)
+            {
+                result[index] = new BuildStepInvocation(
+                    stepTypeIds[index],
+                    stepTypeIds[index]);
+            }
+
+            return result;
         }
 
         private static string CreateSandboxRoot()
@@ -723,8 +1115,8 @@ namespace Build.Pipeline.Tests.Editor
 
         private sealed class NoOpEventSink : IBuildEventSink
         {
-            public void RunStarted(BuildExecutionContext context, System.Collections.Generic.IReadOnlyList<IBuildStep> plan) { }
-            public void StepStarted(BuildExecutionContext context, IBuildStep step) { }
+            public void RunStarted(BuildExecutionContext context, System.Collections.Generic.IReadOnlyList<CompiledBuildStep> plan) { }
+            public void StepStarted(BuildExecutionContext context, CompiledBuildStep step) { }
             public void StepFinished(BuildExecutionContext context, BuildStepResult result) { }
             public void RunFinished(BuildExecutionContext context, BuildRunResult result) { }
         }
@@ -741,28 +1133,48 @@ namespace Build.Pipeline.Tests.Editor
             throw new InvalidOperationException("This constructor must not run for an unrelated build plan.");
         }
 
-        public string Id => "build-pipeline-tests.exploding-unrequested";
-        public int Priority => 0;
-        public bool IsApplicable(BuildExecutionContext context) => true;
-        public IReadOnlyList<string> GetRequiredStepIds(BuildExecutionContext context) => Array.Empty<string>();
-        public IReadOnlyList<string> Validate(BuildExecutionContext context) => Array.Empty<string>();
-        public void Execute(BuildExecutionContext context) { }
-        public void Cleanup(BuildExecutionContext context) { }
+        public string StepTypeId => "build-pipeline-tests.exploding-unrequested";
+        public bool IsApplicable(BuildExecutionContext context, BuildStepInvocation invocation) => true;
+        public IReadOnlyList<string> Validate(BuildExecutionContext context, BuildStepInvocation invocation) => Array.Empty<string>();
+        public void Execute(BuildExecutionContext context, BuildStepInvocation invocation) { }
     }
 
-    [BuildStepRegistration(SnapshotApplicabilityBuildStep.StepId, HiddenFromAuthoring = true)]
+    [BuildStepRegistration(SnapshotApplicabilityBuildStep.StepTypeIdValue, HiddenFromAuthoring = true)]
     public sealed class SnapshotApplicabilityBuildStep : IBuildStep
     {
-        public const string StepId = "build-pipeline-tests.applicability-snapshot";
+        public const string StepTypeIdValue = "build-pipeline-tests.applicability-snapshot";
         public static int ApplicabilityCallCount;
 
-        public string Id => StepId;
-        public int Priority => 0;
-        public bool IsApplicable(BuildExecutionContext context) => ++ApplicabilityCallCount == 1;
-        public IReadOnlyList<string> GetRequiredStepIds(BuildExecutionContext context) => Array.Empty<string>();
-        public IReadOnlyList<string> Validate(BuildExecutionContext context) => Array.Empty<string>();
-        public void Execute(BuildExecutionContext context) { }
-        public void Cleanup(BuildExecutionContext context) { }
+        public string StepTypeId => StepTypeIdValue;
+        public bool IsApplicable(BuildExecutionContext context, BuildStepInvocation invocation) => ++ApplicabilityCallCount == 1;
+        public IReadOnlyList<string> Validate(BuildExecutionContext context, BuildStepInvocation invocation) => Array.Empty<string>();
+        public void Execute(BuildExecutionContext context, BuildStepInvocation invocation) { }
+    }
+
+    [BuildStepRegistration(
+        MultipleInvocationBuildStep.StepTypeIdValue,
+        HiddenFromAuthoring = true,
+        Multiplicity = BuildStepMultiplicity.Multiple)]
+    public sealed class MultipleInvocationBuildStep : IBuildStep
+    {
+        public const string StepTypeIdValue = "build-pipeline-tests.multiple-invocation";
+
+        public string StepTypeId => StepTypeIdValue;
+        public bool IsApplicable(BuildExecutionContext context, BuildStepInvocation invocation) => true;
+        public IReadOnlyList<string> Validate(BuildExecutionContext context, BuildStepInvocation invocation) => Array.Empty<string>();
+        public void Execute(BuildExecutionContext context, BuildStepInvocation invocation) { }
+    }
+
+    [BuildStepRegistration(RequirementsFreeBuildStep.StepTypeIdValue, HiddenFromAuthoring = true)]
+    public sealed class RequirementsFreeBuildStep : IBuildStep
+    {
+        public const string StepTypeIdValue = "build-pipeline-tests.requirements-free";
+        public static bool Executed;
+
+        public string StepTypeId => StepTypeIdValue;
+        public bool IsApplicable(BuildExecutionContext context, BuildStepInvocation invocation) => true;
+        public IReadOnlyList<string> Validate(BuildExecutionContext context, BuildStepInvocation invocation) => Array.Empty<string>();
+        public void Execute(BuildExecutionContext context, BuildStepInvocation invocation) => Executed = true;
     }
 
     [AssetContentAdapterRegistration(CountingContentBuildAdapter.Provider)]
@@ -777,107 +1189,113 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         public string ProviderId => Provider;
-        public int Priority => 0;
 
         public AssetContentBuildResult Validate(AssetContentBuildRequest request)
         {
             return AssetContentBuildResult.Success(Provider, "test", request.PackageVersion);
         }
 
-        public IReadOnlyList<AssetContentBuildResult> Build(AssetContentBuildRequest request)
+        public AssetContentBuildOperation Build(AssetContentBuildRequest request)
         {
-            return new[] { Validate(request) };
+            return new AssetContentBuildOperation(new[] { Validate(request) });
         }
     }
 
-    [BuildStepRegistration(HighestPriorityBuildStep.StepId, priority: 100, HiddenFromAuthoring = true)]
-    public sealed class HighestPriorityBuildStep : IBuildStep
+    [BuildStepRegistration(DuplicateBuildStepA.StepTypeIdValue, HiddenFromAuthoring = true)]
+    public sealed class DuplicateBuildStepA : IBuildStep
     {
-        public const string StepId = "build-pipeline-tests.priority-override";
+        public const string StepTypeIdValue = "build-pipeline-tests.duplicate-step-id";
+        public static int ConstructorCallCount;
 
-        public string Id => StepId;
-        public int Priority => 100;
-        public bool IsApplicable(BuildExecutionContext context) => true;
-        public IReadOnlyList<string> GetRequiredStepIds(BuildExecutionContext context) => Array.Empty<string>();
-        public IReadOnlyList<string> Validate(BuildExecutionContext context) => Array.Empty<string>();
-        public void Execute(BuildExecutionContext context) { }
-        public void Cleanup(BuildExecutionContext context) { }
+        public DuplicateBuildStepA()
+        {
+            ConstructorCallCount++;
+        }
+
+        public string StepTypeId => StepTypeIdValue;
+        public bool IsApplicable(BuildExecutionContext context, BuildStepInvocation invocation) => true;
+        public IReadOnlyList<string> Validate(BuildExecutionContext context, BuildStepInvocation invocation) => Array.Empty<string>();
+        public void Execute(BuildExecutionContext context, BuildStepInvocation invocation) { }
     }
 
-    [BuildStepRegistration(HighestPriorityBuildStep.StepId, priority: -100, HiddenFromAuthoring = true)]
-    public sealed class ExplodingLowerPriorityBuildStep : IBuildStep
+    [BuildStepRegistration(DuplicateBuildStepA.StepTypeIdValue, HiddenFromAuthoring = true)]
+    public sealed class DuplicateBuildStepB : IBuildStep
     {
         public static int ConstructorCallCount;
 
-        public ExplodingLowerPriorityBuildStep()
+        public DuplicateBuildStepB()
         {
             ConstructorCallCount++;
-            throw new InvalidOperationException("The lower-priority build step must never be instantiated.");
         }
 
-        public string Id => HighestPriorityBuildStep.StepId;
-        public int Priority => -100;
-        public bool IsApplicable(BuildExecutionContext context) => true;
-        public IReadOnlyList<string> GetRequiredStepIds(BuildExecutionContext context) => Array.Empty<string>();
-        public IReadOnlyList<string> Validate(BuildExecutionContext context) => Array.Empty<string>();
-        public void Execute(BuildExecutionContext context) { }
-        public void Cleanup(BuildExecutionContext context) { }
+        public string StepTypeId => DuplicateBuildStepA.StepTypeIdValue;
+        public bool IsApplicable(BuildExecutionContext context, BuildStepInvocation invocation) => true;
+        public IReadOnlyList<string> Validate(BuildExecutionContext context, BuildStepInvocation invocation) => Array.Empty<string>();
+        public void Execute(BuildExecutionContext context, BuildStepInvocation invocation) { }
     }
 
-    [AssetContentAdapterRegistration(HighestPriorityContentAdapter.Provider, priority: 100)]
-    public sealed class HighestPriorityContentAdapter : IAssetContentBuildAdapter
+    [AssetContentAdapterRegistration(DuplicateContentAdapterA.Provider)]
+    public sealed class DuplicateContentAdapterA : IAssetContentBuildAdapter
     {
-        public const string Provider = "build-pipeline-tests.adapter-priority-override";
+        public const string Provider = "build-pipeline-tests.duplicate-adapter-id";
+        public static int ConstructorCallCount;
+
+        public DuplicateContentAdapterA()
+        {
+            ConstructorCallCount++;
+        }
 
         public string ProviderId => Provider;
-        public int Priority => 100;
         public AssetContentBuildResult Validate(AssetContentBuildRequest request) =>
             AssetContentBuildResult.Success(Provider, "test", request.PackageVersion);
-        public IReadOnlyList<AssetContentBuildResult> Build(AssetContentBuildRequest request) =>
-            new[] { Validate(request) };
+        public AssetContentBuildOperation Build(AssetContentBuildRequest request) =>
+            new AssetContentBuildOperation(new[] { Validate(request) });
     }
 
-    [AssetContentAdapterRegistration(HighestPriorityContentAdapter.Provider, priority: -100)]
-    public sealed class ExplodingLowerPriorityContentAdapter : IAssetContentBuildAdapter
+    [AssetContentAdapterRegistration(DuplicateContentAdapterA.Provider)]
+    public sealed class DuplicateContentAdapterB : IAssetContentBuildAdapter
     {
         public static int ConstructorCallCount;
 
-        public ExplodingLowerPriorityContentAdapter()
+        public DuplicateContentAdapterB()
         {
             ConstructorCallCount++;
-            throw new InvalidOperationException("The lower-priority content adapter must never be instantiated.");
         }
 
-        public string ProviderId => HighestPriorityContentAdapter.Provider;
-        public int Priority => -100;
+        public string ProviderId => DuplicateContentAdapterA.Provider;
         public AssetContentBuildResult Validate(AssetContentBuildRequest request) => null;
-        public IReadOnlyList<AssetContentBuildResult> Build(AssetContentBuildRequest request) => null;
+        public AssetContentBuildOperation Build(AssetContentBuildRequest request) => null;
     }
 
-    [BuildRecoveryRegistration(HighestPriorityRecoveryParticipant.ParticipantId, priority: 100)]
-    public sealed class HighestPriorityRecoveryParticipant : IBuildRecoveryParticipant
+    public sealed class DuplicateRecoveryParticipantA : IBuildRecoveryParticipant
     {
-        public const string ParticipantId = "build-pipeline-tests.recovery-priority-override";
+        public const string ParticipantId = "build-pipeline-tests.duplicate-recovery-id";
+        private static readonly string[] StatePaths =
+        {
+            ".buildpipeline/transactions/test-duplicate-recovery-a"
+        };
 
         public string Id => ParticipantId;
         public int Priority => 100;
+        public IReadOnlyList<string> StateDirectoryRelativePaths => StatePaths;
         public void Recover(string projectRoot) { }
     }
 
-    [BuildRecoveryRegistration(HighestPriorityRecoveryParticipant.ParticipantId, priority: -100)]
-    public sealed class ExplodingLowerPriorityRecoveryParticipant : IBuildRecoveryParticipant
+    public sealed class DuplicateRecoveryParticipantB : IBuildRecoveryParticipant
     {
         public static int ConstructorCallCount;
 
-        public ExplodingLowerPriorityRecoveryParticipant()
+        public DuplicateRecoveryParticipantB()
         {
             ConstructorCallCount++;
             throw new InvalidOperationException(
-                "The lower-priority recovery participant must never be instantiated.");
+                "Duplicate recovery registrations must be rejected before instantiation.");
         }
 
-        public string Id => HighestPriorityRecoveryParticipant.ParticipantId;
+        public string Id => DuplicateRecoveryParticipantA.ParticipantId;
         public int Priority => -100;
+        public IReadOnlyList<string> StateDirectoryRelativePaths =>
+            Array.Empty<string>();
         public void Recover(string projectRoot) { }
     }
 
@@ -885,12 +1303,17 @@ namespace Build.Pipeline.Tests.Editor
     public sealed class RecoveryOrderingParticipant : IBuildRecoveryParticipant
     {
         public const string ParticipantId = "build-pipeline-tests.recovery-ordering";
+        private static readonly string[] StatePaths =
+        {
+            ".buildpipeline/transactions/test-recovery-ordering"
+        };
         private static readonly object ProbeGate = new object();
         private static string expectedProjectRoot;
         private static bool wasRecovered;
 
         public string Id => ParticipantId;
         public int Priority => 0;
+        public IReadOnlyList<string> StateDirectoryRelativePaths => StatePaths;
 
         public static bool WasRecovered
         {
@@ -938,19 +1361,18 @@ namespace Build.Pipeline.Tests.Editor
         }
     }
 
-    [BuildStepRegistration(RecoveryOrderingBuildStep.StepId, HiddenFromAuthoring = true)]
+    [BuildStepRegistration(RecoveryOrderingBuildStep.StepTypeIdValue, HiddenFromAuthoring = true)]
     public sealed class RecoveryOrderingBuildStep : IBuildStep
     {
-        public const string StepId = "build-pipeline-tests.recovery-ordering-step";
+        public const string StepTypeIdValue = "build-pipeline-tests.recovery-ordering-step";
         public const string ApplicabilitySentinel =
             "Recovery ordering step reached applicability after recovery.";
         public const string RecoveryMissingSentinel =
             "Recovery ordering step reached applicability before recovery.";
 
-        public string Id => StepId;
-        public int Priority => 0;
+        public string StepTypeId => StepTypeIdValue;
 
-        public bool IsApplicable(BuildExecutionContext context)
+        public bool IsApplicable(BuildExecutionContext context, BuildStepInvocation invocation)
         {
             if (!RecoveryOrderingParticipant.WasRecovered)
             {
@@ -960,10 +1382,7 @@ namespace Build.Pipeline.Tests.Editor
             throw new InvalidOperationException(ApplicabilitySentinel);
         }
 
-        public IReadOnlyList<string> GetRequiredStepIds(BuildExecutionContext context) =>
-            Array.Empty<string>();
-        public IReadOnlyList<string> Validate(BuildExecutionContext context) => Array.Empty<string>();
-        public void Execute(BuildExecutionContext context) { }
-        public void Cleanup(BuildExecutionContext context) { }
+        public IReadOnlyList<string> Validate(BuildExecutionContext context, BuildStepInvocation invocation) => Array.Empty<string>();
+        public void Execute(BuildExecutionContext context, BuildStepInvocation invocation) { }
     }
 }

@@ -5,23 +5,46 @@ using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Security.Cryptography;
 using System.Text;
+using System.Threading;
 using UnityEngine;
 
 namespace Build.Pipeline.Editor
 {
+    internal sealed class PlayerOutputSimulatedTerminationException : Exception
+    {
+        internal PlayerOutputSimulatedTerminationException(string checkpoint)
+            : base($"Simulated Player output process termination at checkpoint '{checkpoint}'.")
+        {
+        }
+    }
+
     /// <summary>
     /// Publishes a complete Player output directory without exposing a partial
     /// build or deleting the last-known-good output before BuildPlayer succeeds.
     /// </summary>
-    internal sealed class PlayerOutputTransaction : IDisposable
+    internal sealed class PlayerOutputTransaction : IBuildDeferredPublication
     {
         internal const string PreparedCheckpoint = "prepared";
+        internal const string PrepareJournalWrittenCheckpoint = "prepare-journal-written";
+        internal const string PrepareOwnerWrittenCheckpoint = "prepare-owner-written";
+        internal const string PrepareStageCreatedCheckpoint = "prepare-stage-created";
+        internal const string PrepareAnchorWrittenCheckpoint = "prepare-anchor-written";
+        internal const string PreparePayloadCreatedCheckpoint = "prepare-payload-created";
         internal const string ReadyCheckpoint = "ready";
         internal const string BackupMovedCheckpoint = "backup-moved";
+        internal const string StageMovedCheckpoint = "stage-moved";
         internal const string StagePromotedCheckpoint = "stage-promoted";
         internal const string BackupDeletedCheckpoint = "backup-deleted";
 
-        private const string SchemaVersion = "1";
+        private const string PrepareOwnerPendingCheckpoint = "prepare-owner-pending";
+        private const string PrepareStagePendingCheckpoint = "prepare-stage-pending";
+        private const string PrepareAnchorPendingCheckpoint = "prepare-anchor-pending";
+        private const string PreparePayloadPendingCheckpoint = "prepare-payload-pending";
+
+        private const int JournalFormatVersion = 1;
+        private const int OwnerFormatVersion = 1;
+        private const int CompatibilityIdentityFormatVersion = 1;
+        internal const int PlayerPipelineCompatibilityRevision = 1;
         private const string StateRelativePath = ".buildpipeline/transactions/player";
         private const string JournalFileName = "active.json";
         private const string LockFileName = "active.lock";
@@ -35,10 +58,17 @@ namespace Build.Pipeline.Editor
         private const long MaximumTreeBytes = 256L * 1024L * 1024L * 1024L;
         private const int BufferSize = 64 * 1024;
         private const int PlayerGeneratedChildPathReserve = 48;
+        private const int MaximumDirectoryMoveAttempts = 8;
+        private const int InitialDirectoryMoveRetryDelayMilliseconds = 50;
+        private const int MaximumDirectoryMoveRetryDelayMilliseconds = 2000;
+        private const int ErrorAccessDenied = 5;
+        private const int ErrorSharingViolation = 32;
+        private const int ErrorLockViolation = 33;
 
         private static readonly UTF8Encoding StrictUtf8 = new UTF8Encoding(false, true);
 
         private readonly BuildRequest request;
+        private readonly BuildIncrementality incrementality;
         private readonly string transactionId;
         private readonly string stateRoot;
         private readonly string journalPath;
@@ -50,19 +80,24 @@ namespace Build.Pipeline.Editor
         private readonly string stageAnchorPath;
         private readonly string publishedOwnerPath;
         private readonly string relativeOutputPath;
+        private readonly CompatibilityIdentity compatibilityIdentity;
         private readonly Action<string> faultInjector;
         private FileStream lockStream;
+        private bool published;
         private bool completed;
         private bool disposed;
 
         private PlayerOutputTransaction(
             BuildRequest request,
+            BuildIncrementality incrementality,
+            string playerExtensionFingerprint,
             string transactionId,
             string stateRoot,
             FileStream lockStream,
             Action<string> faultInjector)
         {
             this.request = request;
+            this.incrementality = incrementality;
             this.transactionId = transactionId;
             this.stateRoot = stateRoot;
             this.lockStream = lockStream;
@@ -89,6 +124,11 @@ namespace Build.Pipeline.Editor
             stagePayloadRoot = GetStagePayloadRoot(stageRoot, finalRoot);
             publishedOwnerPath = GetPublishedOwnerPath(finalRoot);
             relativeOutputPath = GetRelativeOutputPath(finalRoot, request.OutputPath);
+            compatibilityIdentity = CreateCompatibilityIdentity(
+                request,
+                finalRoot,
+                relativeOutputPath,
+                playerExtensionFingerprint);
 
             ValidateTransactionPathBudgets();
         }
@@ -97,15 +137,27 @@ namespace Build.Pipeline.Editor
             ? stagePayloadRoot
             : Path.Combine(stagePayloadRoot, relativeOutputPath);
 
+        public string Id => BuildStepTypeIds.Player;
+        public string RecoveryStateRelativePath => StateRelativePath;
+
         internal string StageRoot => stageRoot;
 
-        public static PlayerOutputTransaction Begin(BuildRequest request)
+        public static PlayerOutputTransaction Begin(
+            BuildRequest request,
+            BuildIncrementality incrementality,
+            string playerExtensionFingerprint)
         {
-            return Begin(request, null);
+            return Begin(
+                request,
+                incrementality,
+                playerExtensionFingerprint,
+                null);
         }
 
         internal static PlayerOutputTransaction Begin(
             BuildRequest request,
+            BuildIncrementality incrementality,
+            string playerExtensionFingerprint,
             Action<string> faultInjector)
         {
             if (request == null)
@@ -114,13 +166,13 @@ namespace Build.Pipeline.Editor
             }
 
             string stateRoot = GetStateRoot(request.ProjectRoot);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 stateRoot,
                 "Player transaction state root");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, LockFileName),
                 "Player transaction lock");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalFileName),
                 "Player transaction journal",
                 ".bak".Length);
@@ -135,13 +187,20 @@ namespace Build.Pipeline.Editor
                     FileShare.None,
                     1,
                     FileOptions.WriteThrough);
-                RecoverPendingLocked(request.ProjectRoot, stateRoot);
+                if (File.Exists(Path.Combine(stateRoot, JournalFileName)))
+                {
+                    throw new InvalidOperationException(
+                        "A pending Player publication transaction requires explicit workspace recovery before another build can begin.");
+                }
+
                 EnsureNoUnjournaledScratch(
                     NormalizeDirectoryPath(request.OutputDirectory));
 
                 string transactionId = Guid.NewGuid().ToString("N");
                 var transaction = new PlayerOutputTransaction(
                     request,
+                    incrementality,
+                    RequirePlayerExtensionFingerprint(playerExtensionFingerprint),
                     transactionId,
                     stateRoot,
                     lockStream,
@@ -151,6 +210,11 @@ namespace Build.Pipeline.Editor
                 {
                     transaction.Prepare();
                     return transaction;
+                }
+                catch (PlayerOutputSimulatedTerminationException)
+                {
+                    transaction.AbandonForSimulatedTermination();
+                    throw;
                 }
                 catch (Exception prepareException)
                 {
@@ -191,10 +255,10 @@ namespace Build.Pipeline.Editor
                 return;
             }
 
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, LockFileName),
                 "Player transaction recovery lock");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalFileName),
                 "Player transaction recovery journal",
                 ".bak".Length);
@@ -211,36 +275,56 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        public void Commit()
+        public void Publish()
         {
             ThrowIfUnavailable();
+            if (published)
+            {
+                throw new InvalidOperationException(
+                    "Player output transaction has already published its stage.");
+            }
 
             ValidateStageAnchor(stageAnchorPath, transactionId);
             EnsureStageContainerLayout(stageRoot, finalRoot, requirePayload: true);
             TreeIdentity newIdentity = ComputeTreeIdentity(stagePayloadRoot, null);
-            WriteOwner(stageOwnerPath, "ready", transactionId, newIdentity);
 
+            ValidateReplaceableFinalRoot(finalRoot, publishedOwnerPath);
             bool hadOriginal = Directory.Exists(finalRoot);
-            if (File.Exists(finalRoot))
-            {
-                throw new IOException(
-                    $"Player output directory resolves to a file: '{finalRoot}'.");
-            }
-
-            if (File.Exists(publishedOwnerPath))
-            {
-                if (!hadOriginal)
-                {
-                    throw new InvalidOperationException(
-                        $"A detached Player output ownership marker requires manual inspection: '{publishedOwnerPath}'.");
-                }
-
-                ValidatePublishedOwnerFile(publishedOwnerPath, finalRoot);
-            }
+            bool originalWasOwned = File.Exists(publishedOwnerPath);
 
             TreeIdentity originalIdentity = hadOriginal
                 ? ComputeTreeIdentity(finalRoot, null)
                 : null;
+            string originalOwnerTransactionId = string.Empty;
+            CompatibilityIdentity originalCompatibilityIdentity = null;
+            if (originalWasOwned)
+            {
+                Owner originalOwner = ReadPublishedOwner(publishedOwnerPath);
+                ValidatePublishedOwner(originalOwner);
+                if (!IdentitiesEqual(originalOwner.identity, originalIdentity))
+                {
+                    throw new InvalidOperationException(
+                        "Original Player output ownership changed before publication.");
+                }
+
+                if (incrementality == BuildIncrementality.Incremental
+                    && !CompatibilityIdentitiesEqual(
+                        originalOwner.compatibilityIdentity,
+                        compatibilityIdentity))
+                {
+                    throw new InvalidOperationException(
+                        "Incremental Player output compatibility identity changed after staging. "
+                        + "The staged output was not published; run this Player invocation with Clean incrementality.");
+                }
+
+                originalOwnerTransactionId = originalOwner.transactionId;
+                originalCompatibilityIdentity = originalOwner.compatibilityIdentity;
+            }
+
+            if (hadOriginal && !originalWasOwned && originalIdentity.entryCount != 0)
+            {
+                throw CreateUnownedNonEmptyOutputException(finalRoot, publishedOwnerPath);
+            }
             ValidateMappedTreePathBudget(
                 stagePayloadRoot,
                 finalRoot,
@@ -253,17 +337,30 @@ namespace Build.Pipeline.Editor
                     "Player backup artifact");
             }
 
+            WriteOwner(
+                stageOwnerPath,
+                "ready",
+                transactionId,
+                newIdentity,
+                compatibilityIdentity);
+
             var journal = CreateJournal(
                 ReadyCheckpoint,
                 hadOriginal,
+                originalWasOwned,
+                originalOwnerTransactionId,
                 originalIdentity,
+                originalCompatibilityIdentity,
                 newIdentity);
             WriteJournal(journalPath, journal);
             faultInjector?.Invoke(ReadyCheckpoint);
 
             if (hadOriginal)
             {
-                Directory.Move(finalRoot, backupRoot);
+                MoveDirectoryWithTransientRetry(
+                    finalRoot,
+                    backupRoot,
+                    "back up the current Player output");
                 AssertIdentity(backupRoot, originalIdentity, null, "Player output backup");
             }
 
@@ -271,13 +368,20 @@ namespace Build.Pipeline.Editor
             WriteJournal(journalPath, journal);
             faultInjector?.Invoke(BackupMovedCheckpoint);
 
-            Directory.Move(stagePayloadRoot, finalRoot);
+            MoveDirectoryWithTransientRetry(
+                stagePayloadRoot,
+                finalRoot,
+                "promote the staged Player output");
+            faultInjector?.Invoke(StageMovedCheckpoint);
             AssertIdentity(finalRoot, newIdentity, null, "Published Player output");
             WritePublishedOwner(
                 publishedOwnerPath,
                 transactionId,
                 newIdentity,
-                originalIdentity);
+                compatibilityIdentity,
+                originalOwnerTransactionId,
+                originalIdentity,
+                originalCompatibilityIdentity);
             DeletePromotedStageContainer(stageRoot, finalRoot, transactionId);
             DeleteFileStrict(stageOwnerPath);
 
@@ -285,17 +389,47 @@ namespace Build.Pipeline.Editor
             WriteJournal(journalPath, journal);
             faultInjector?.Invoke(StagePromotedCheckpoint);
 
-            if (hadOriginal)
+            published = true;
+        }
+
+        public void Complete()
+        {
+            ThrowIfUnavailable();
+            if (!published)
             {
-                AssertIdentity(backupRoot, originalIdentity, null, "Player output backup");
-                DeleteDirectoryStrict(backupRoot, request);
+                throw new InvalidOperationException(
+                    "Player output transaction must publish before completion.");
             }
+
+            Journal journal = ReadJournal(journalPath);
+            ValidateJournal(request.ProjectRoot, journal);
+            if (!string.Equals(
+                    journal.checkpoint,
+                    StagePromotedCheckpoint,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Player output transaction is not awaiting terminal completion.");
+            }
+
+            FinishPromotedOutput(
+                journal,
+                new RecoveryRequest(
+                    journal.projectRoot,
+                    journal.buildRoot,
+                    journal.allowExternalOutput));
 
             journal.checkpoint = BackupDeletedCheckpoint;
             WriteJournal(journalPath, journal);
             faultInjector?.Invoke(BackupDeletedCheckpoint);
             DeleteFileStrict(journalPath);
             completed = true;
+        }
+
+        internal void Commit()
+        {
+            Publish();
+            Complete();
         }
 
         public void Dispose()
@@ -376,26 +510,50 @@ namespace Build.Pipeline.Editor
                     "A Player output transaction scratch path already exists.");
             }
 
-            if (File.Exists(publishedOwnerPath))
+            if (incrementality == BuildIncrementality.Incremental)
             {
-                if (!Directory.Exists(finalRoot))
-                {
-                    throw new InvalidOperationException(
-                        $"A detached Player output ownership marker requires manual inspection: '{publishedOwnerPath}'.");
-                }
-
-                ValidatePublishedOwnerFile(publishedOwnerPath, finalRoot);
+                ValidateIncrementalBaseline();
+            }
+            else
+            {
+                ValidateReplaceableFinalRoot(finalRoot, publishedOwnerPath);
             }
 
-            WriteJournal(
-                journalPath,
-                CreateJournal(PreparedCheckpoint, false, null, null));
-            WriteOwner(stageOwnerPath, "stage", transactionId, null);
-            Directory.CreateDirectory(stageRoot);
-            WriteStageAnchor(stageAnchorPath, transactionId);
-            Directory.CreateDirectory(stagePayloadRoot);
+            var journal = CreateJournal(
+                PrepareOwnerPendingCheckpoint,
+                false,
+                false,
+                string.Empty,
+                null,
+                null,
+                null);
+            WriteJournal(journalPath, journal);
+            faultInjector?.Invoke(PrepareJournalWrittenCheckpoint);
 
-            if (request.Incrementality == BuildIncrementality.Incremental
+            WriteOwner(
+                stageOwnerPath,
+                "stage",
+                transactionId,
+                null,
+                compatibilityIdentity);
+            faultInjector?.Invoke(PrepareOwnerWrittenCheckpoint);
+
+            journal.checkpoint = PrepareStagePendingCheckpoint;
+            WriteJournal(journalPath, journal);
+            Directory.CreateDirectory(stageRoot);
+            faultInjector?.Invoke(PrepareStageCreatedCheckpoint);
+
+            journal.checkpoint = PrepareAnchorPendingCheckpoint;
+            WriteJournal(journalPath, journal);
+            WriteStageAnchor(stageAnchorPath, transactionId);
+            faultInjector?.Invoke(PrepareAnchorWrittenCheckpoint);
+
+            journal.checkpoint = PreparePayloadPendingCheckpoint;
+            WriteJournal(journalPath, journal);
+            Directory.CreateDirectory(stagePayloadRoot);
+            faultInjector?.Invoke(PreparePayloadCreatedCheckpoint);
+
+            if (incrementality == BuildIncrementality.Incremental
                 && Directory.Exists(finalRoot))
             {
                 TreeIdentity before = ComputeTreeIdentity(finalRoot, null);
@@ -404,18 +562,23 @@ namespace Build.Pipeline.Editor
                 AssertIdentityEqual(before, after, "Incremental Player output staging");
             }
 
+            journal.checkpoint = PreparedCheckpoint;
+            WriteJournal(journalPath, journal);
             faultInjector?.Invoke(PreparedCheckpoint);
         }
 
         private Journal CreateJournal(
             string checkpoint,
             bool hadOriginal,
+            bool originalWasOwned,
+            string originalOwnerTransactionId,
             TreeIdentity originalIdentity,
+            CompatibilityIdentity originalCompatibilityIdentity,
             TreeIdentity newIdentity)
         {
             return new Journal
             {
-                schemaVersion = SchemaVersion,
+                formatVersion = JournalFormatVersion,
                 transactionId = transactionId,
                 checkpoint = checkpoint,
                 projectRoot = Path.GetFullPath(request.ProjectRoot),
@@ -426,10 +589,15 @@ namespace Build.Pipeline.Editor
                 backupRoot = backupRoot,
                 stageOwnerPath = stageOwnerPath,
                 hadOriginal = hadOriginal,
+                originalWasOwned = originalWasOwned,
+                originalOwnerTransactionId = originalOwnerTransactionId,
                 hasOriginalIdentity = originalIdentity != null,
                 originalIdentity = originalIdentity,
+                hasOriginalCompatibilityIdentity = originalCompatibilityIdentity != null,
+                originalCompatibilityIdentity = originalCompatibilityIdentity,
                 hasNewIdentity = newIdentity != null,
                 newIdentity = newIdentity,
+                newCompatibilityIdentity = compatibilityIdentity,
                 checksum = string.Empty
             };
         }
@@ -463,6 +631,10 @@ namespace Build.Pipeline.Editor
 
             switch (journal.checkpoint)
             {
+                case PrepareOwnerPendingCheckpoint:
+                case PrepareStagePendingCheckpoint:
+                case PrepareAnchorPendingCheckpoint:
+                case PreparePayloadPendingCheckpoint:
                 case PreparedCheckpoint:
                     if (backupExists)
                     {
@@ -470,7 +642,7 @@ namespace Build.Pipeline.Editor
                             "Prepared Player transaction unexpectedly contains a backup.");
                     }
 
-                    DeleteOwnedStage(journal, recoveryRequest, requireReady: false);
+                    DeletePreparingStage(journal, recoveryRequest);
                     break;
 
                 case ReadyCheckpoint:
@@ -495,11 +667,14 @@ namespace Build.Pipeline.Editor
                                 "Ready Player transaction has an inconsistent output/backup layout.");
                         }
 
-                        DeleteOwnedStage(journal, recoveryRequest, requireReady: true);
+                        DeleteReadyStage(journal, recoveryRequest);
                     }
                     else
                     {
-                        FinishPromotedOutput(journal, recoveryRequest);
+                        ResolvePreCheckpointPromotedOutput(
+                            projectRoot,
+                            journal,
+                            recoveryRequest);
                         DeletePromotedStageContainerIfPresent(journal);
                     }
                     break;
@@ -515,21 +690,52 @@ namespace Build.Pipeline.Editor
 
                         ValidateReadyStage(journal);
                         RestoreOriginal(journal, recoveryRequest);
-                        DeleteOwnedStage(journal, recoveryRequest, requireReady: true);
+                        DeleteReadyStage(journal, recoveryRequest);
                     }
                     else
                     {
-                        FinishPromotedOutput(journal, recoveryRequest);
+                        ResolvePreCheckpointPromotedOutput(
+                            projectRoot,
+                            journal,
+                            recoveryRequest);
                         DeletePromotedStageContainerIfPresent(journal);
                     }
                     break;
 
                 case StagePromotedCheckpoint:
-                case BackupDeletedCheckpoint:
                     if (stageExists)
                     {
                         throw new InvalidOperationException(
                             "Promoted Player transaction unexpectedly still contains its stage directory.");
+                    }
+
+                    BuildPublicationDecision decision =
+                        BuildPublicationBarrier.GetDecision(
+                            projectRoot,
+                            BuildStepTypeIds.Player,
+                            StateRelativePath);
+                    switch (decision)
+                    {
+                        case BuildPublicationDecision.Rollback:
+                            RollbackPromotedOutput(journal, recoveryRequest);
+                            break;
+                        case BuildPublicationDecision.Commit:
+                            FinishPromotedOutput(journal, recoveryRequest);
+                            break;
+                        default:
+                            throw new InvalidOperationException(
+                                "Promoted Player output has no durable terminal publication decision. " +
+                                "Recovery stopped fail-closed without changing the output.");
+                    }
+
+                    DeletePromotedStageContainerIfPresent(journal);
+                    break;
+
+                case BackupDeletedCheckpoint:
+                    if (stageExists)
+                    {
+                        throw new InvalidOperationException(
+                            "Completed Player transaction unexpectedly still contains its stage directory.");
                     }
 
                     FinishPromotedOutput(journal, recoveryRequest);
@@ -565,7 +771,14 @@ namespace Build.Pipeline.Editor
                 finalOwnerPath,
                 journal.transactionId,
                 journal.newIdentity,
-                journal.hadOriginal ? journal.originalIdentity : null);
+                journal.newCompatibilityIdentity,
+                journal.originalWasOwned
+                    ? journal.originalOwnerTransactionId
+                    : null,
+                journal.hadOriginal ? journal.originalIdentity : null,
+                journal.originalWasOwned
+                    ? journal.originalCompatibilityIdentity
+                    : null);
 
             if (Directory.Exists(journal.backupRoot))
             {
@@ -605,7 +818,10 @@ namespace Build.Pipeline.Editor
                         "Refusing to overwrite an unexpected Player output during rollback.");
                 }
 
-                Directory.Move(journal.backupRoot, journal.finalRoot);
+                MoveDirectoryWithTransientRetry(
+                    journal.backupRoot,
+                    journal.finalRoot,
+                    "restore the previous Player output");
                 AssertIdentity(
                     journal.finalRoot,
                     journal.originalIdentity,
@@ -619,10 +835,70 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        private static void DeleteOwnedStage(
+        private static void MoveDirectoryWithTransientRetry(
+            string source,
+            string destination,
+            string operation)
+        {
+            int delayMilliseconds = InitialDirectoryMoveRetryDelayMilliseconds;
+            for (int attempt = 1; attempt <= MaximumDirectoryMoveAttempts; attempt++)
+            {
+                try
+                {
+                    Directory.Move(source, destination);
+                    return;
+                }
+                catch (Exception exception) when (IsTransientWindowsDirectoryMoveFailure(exception))
+                {
+                    bool sourceStillExists = Directory.Exists(source);
+                    bool destinationAppeared = Directory.Exists(destination)
+                        || File.Exists(destination);
+                    if (!sourceStillExists || destinationAppeared)
+                    {
+                        throw new IOException(
+                            $"Failed to {operation} because the publication layout changed during a transient Windows directory-move failure. " +
+                            $"SourceExists={sourceStillExists}, DestinationExists={destinationAppeared}, " +
+                            $"Source='{source}', Destination='{destination}'.",
+                            exception);
+                    }
+
+                    if (attempt == MaximumDirectoryMoveAttempts)
+                    {
+                        int nativeError = exception.HResult & 0xFFFF;
+                        throw new IOException(
+                            $"Failed to {operation} after {MaximumDirectoryMoveAttempts} bounded attempts because Windows kept the source directory locked. " +
+                            $"NativeError={nativeError}, Source='{source}', Destination='{destination}'. " +
+                            "Close processes using the Player output and check antivirus or indexing exclusions for the build root.",
+                            exception);
+                    }
+
+                    Thread.Sleep(delayMilliseconds);
+                    delayMilliseconds = Math.Min(
+                        delayMilliseconds * 2,
+                        MaximumDirectoryMoveRetryDelayMilliseconds);
+                }
+            }
+
+            throw new InvalidOperationException("Unreachable Player directory publication state.");
+        }
+
+        private static bool IsTransientWindowsDirectoryMoveFailure(Exception exception)
+        {
+            if (Path.DirectorySeparatorChar != '\\'
+                || (!(exception is IOException) && !(exception is UnauthorizedAccessException)))
+            {
+                return false;
+            }
+
+            int nativeError = exception.HResult & 0xFFFF;
+            return nativeError == ErrorAccessDenied
+                || nativeError == ErrorSharingViolation
+                || nativeError == ErrorLockViolation;
+        }
+
+        private static void DeleteReadyStage(
             Journal journal,
-            RecoveryRequest request,
-            bool requireReady)
+            RecoveryRequest request)
         {
             if (!Directory.Exists(journal.stageRoot))
             {
@@ -632,8 +908,9 @@ namespace Build.Pipeline.Editor
                     ValidateOwner(
                         detachedOwner,
                         journal.transactionId,
-                        requireReady ? "ready" : null,
-                        requireReady ? journal.newIdentity : null);
+                        "ready",
+                        journal.newIdentity,
+                        journal.newCompatibilityIdentity);
                     DeleteFileStrict(journal.stageOwnerPath);
                 }
 
@@ -644,8 +921,9 @@ namespace Build.Pipeline.Editor
             ValidateOwner(
                 owner,
                 journal.transactionId,
-                requireReady ? "ready" : null,
-                requireReady ? journal.newIdentity : null);
+                "ready",
+                journal.newIdentity,
+                journal.newCompatibilityIdentity);
             ValidateStageAnchor(
                 Path.Combine(journal.stageRoot, StageAnchorFileName),
                 journal.transactionId);
@@ -654,32 +932,289 @@ namespace Build.Pipeline.Editor
                 journal.finalRoot,
                 requirePayload: true);
             string payloadRoot = GetStagePayloadRoot(journal.stageRoot, journal.finalRoot);
-            if (requireReady || string.Equals(owner.kind, "ready", StringComparison.Ordinal))
+            AssertIdentity(
+                payloadRoot,
+                journal.newIdentity,
+                null,
+                "Player output stage");
+
+            DeleteDirectoryStrict(journal.stageRoot, request);
+            DeleteFileStrict(journal.stageOwnerPath);
+        }
+
+        private static void RollbackPromotedOutput(
+            Journal journal,
+            RecoveryRequest request,
+            bool allowPreOwnerRewriteCheckpoint = false)
+        {
+            if (!Directory.Exists(journal.finalRoot))
             {
-                TreeIdentity expectedIdentity = requireReady
-                    ? journal.newIdentity
-                    : owner.identity;
-                AssertIdentity(
-                    payloadRoot,
-                    expectedIdentity,
-                    null,
-                    "Player output stage");
+                throw new InvalidOperationException(
+                    "The promoted Player output is missing during coordinated rollback.");
             }
-            else
+
+            AssertIdentity(
+                journal.finalRoot,
+                journal.newIdentity,
+                null,
+                "Published Player output");
+            string ownerPath = GetPublishedOwnerPath(journal.finalRoot);
+            if (File.Exists(ownerPath))
             {
-                ValidateStageAnchor(
-                    Path.Combine(journal.stageRoot, StageAnchorFileName),
-                    journal.transactionId);
+                Owner owner = ReadPublishedOwner(ownerPath);
+                ValidatePublishedOwner(owner);
+                bool isNewOwner = string.Equals(
+                                      owner.transactionId,
+                                      journal.transactionId,
+                                      StringComparison.Ordinal)
+                                  && IdentitiesEqual(owner.identity, journal.newIdentity)
+                                  && CompatibilityIdentitiesEqual(
+                                      owner.compatibilityIdentity,
+                                      journal.newCompatibilityIdentity);
+                bool isOriginalOwnerBeforeRewrite =
+                    allowPreOwnerRewriteCheckpoint
+                    && journal.hadOriginal
+                    && journal.originalWasOwned
+                    && string.Equals(
+                        owner.transactionId,
+                        journal.originalOwnerTransactionId,
+                        StringComparison.Ordinal)
+                    && IdentitiesEqual(owner.identity, journal.originalIdentity)
+                    && CompatibilityIdentitiesEqual(
+                        owner.compatibilityIdentity,
+                        journal.originalCompatibilityIdentity);
+                if (!isNewOwner && !isOriginalOwnerBeforeRewrite)
+                {
+                    throw new InvalidOperationException(
+                        "Published Player ownership changed before coordinated rollback.");
+                }
+            }
+            else if (!allowPreOwnerRewriteCheckpoint
+                     || (journal.hadOriginal && journal.originalWasOwned))
+            {
+                throw new InvalidOperationException(
+                    "Published Player ownership is missing before coordinated rollback.");
+            }
+
+            DeleteDirectoryStrict(journal.finalRoot, request);
+            DeleteFileStrict(ownerPath);
+            RestoreOriginal(journal, request);
+            if (journal.hadOriginal && journal.originalWasOwned)
+            {
+                WriteOwner(
+                    ownerPath,
+                    "published",
+                    journal.originalOwnerTransactionId,
+                    journal.originalIdentity,
+                    journal.originalCompatibilityIdentity);
+            }
+        }
+
+        private static void ResolvePreCheckpointPromotedOutput(
+            string projectRoot,
+            Journal journal,
+            RecoveryRequest request)
+        {
+            BuildPublicationDecision decision = BuildPublicationBarrier.GetDecision(
+                projectRoot,
+                BuildStepTypeIds.Player,
+                StateRelativePath);
+            if (decision == BuildPublicationDecision.Rollback)
+            {
+                RollbackPromotedOutput(
+                    journal,
+                    request,
+                    allowPreOwnerRewriteCheckpoint: true);
+                return;
+            }
+
+            if (decision == BuildPublicationDecision.Commit)
+            {
+                throw new InvalidOperationException(
+                    "Committed terminal barrier references a Player publication that did not persist its promoted checkpoint.");
+            }
+
+            throw new InvalidOperationException(
+                "Promoted Player output has no durable terminal publication decision. " +
+                "Recovery stopped fail-closed without changing the output.");
+        }
+
+        private static void DeletePreparingStage(
+            Journal journal,
+            RecoveryRequest request)
+        {
+            bool ownerExists = File.Exists(journal.stageOwnerPath);
+            bool stageExists = Directory.Exists(journal.stageRoot);
+            bool ownerMayBeAbsent = string.Equals(
+                journal.checkpoint,
+                PrepareOwnerPendingCheckpoint,
+                StringComparison.Ordinal);
+            bool stageMayBeAbsent = ownerMayBeAbsent || string.Equals(
+                journal.checkpoint,
+                PrepareStagePendingCheckpoint,
+                StringComparison.Ordinal);
+
+            if (!ownerExists && !ownerMayBeAbsent)
+            {
+                throw new InvalidOperationException(
+                    "Preparing Player stage owner is missing after its durable write-ahead transition.");
+            }
+
+            Owner stageOwner = null;
+            if (ownerExists)
+            {
+                stageOwner = ReadOwner(journal.stageOwnerPath);
+                string requiredKind = string.Equals(
+                    journal.checkpoint,
+                    PreparedCheckpoint,
+                    StringComparison.Ordinal)
+                    ? null
+                    : "stage";
+                ValidateOwner(
+                    stageOwner,
+                    journal.transactionId,
+                    requiredKind,
+                    null,
+                    journal.newCompatibilityIdentity);
+                if (requiredKind == null
+                    && !string.Equals(stageOwner.kind, "stage", StringComparison.Ordinal)
+                    && !string.Equals(stageOwner.kind, "ready", StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Prepared Player stage owner has an unsupported kind.");
+                }
+            }
+
+            if (!stageExists)
+            {
+                if (!stageMayBeAbsent)
+                {
+                    throw new InvalidOperationException(
+                        "Preparing Player stage is missing after its durable write-ahead transition.");
+                }
+
+                DeleteFileStrict(journal.stageOwnerPath);
+                return;
+            }
+
+            if (!ownerExists)
+            {
+                throw new InvalidOperationException(
+                    "Refusing to delete a preparing Player stage without its transaction owner.");
+            }
+
+            if (ownerMayBeAbsent)
+            {
+                throw new InvalidOperationException(
+                    "Preparing Player stage exists before its durable stage-pending transition.");
+            }
+
+            ValidatePreparingStageLayout(journal);
+            if (stageOwner != null && string.Equals(stageOwner.kind, "ready", StringComparison.Ordinal))
+            {
+                if (!stageOwner.hasIdentity || stageOwner.identity == null)
+                {
+                    throw new InvalidOperationException(
+                        "Ready Player stage pending journal promotion has no output identity.");
+                }
+
+                ValidateIdentity(stageOwner.identity);
+                AssertIdentity(
+                    GetStagePayloadRoot(journal.stageRoot, journal.finalRoot),
+                    stageOwner.identity,
+                    null,
+                    "Ready Player stage pending journal promotion");
             }
 
             DeleteDirectoryStrict(journal.stageRoot, request);
             DeleteFileStrict(journal.stageOwnerPath);
         }
 
+        private static void ValidatePreparingStageLayout(Journal journal)
+        {
+            bool anchorMayExist = !string.Equals(
+                journal.checkpoint,
+                PrepareStagePendingCheckpoint,
+                StringComparison.Ordinal);
+            bool anchorRequired = string.Equals(
+                                      journal.checkpoint,
+                                      PreparePayloadPendingCheckpoint,
+                                      StringComparison.Ordinal)
+                                  || string.Equals(
+                                      journal.checkpoint,
+                                      PreparedCheckpoint,
+                                      StringComparison.Ordinal);
+            bool payloadMayExist = anchorRequired;
+            bool payloadRequired = string.Equals(
+                journal.checkpoint,
+                PreparedCheckpoint,
+                StringComparison.Ordinal);
+            string anchorPath = Path.Combine(journal.stageRoot, StageAnchorFileName);
+            string payloadPath = GetStagePayloadRoot(journal.stageRoot, journal.finalRoot);
+
+            foreach (string entry in Directory.EnumerateFileSystemEntries(journal.stageRoot))
+            {
+                FileAttributes attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    throw new InvalidOperationException(
+                        $"Preparing Player stage contains a reparse-point entry: '{entry}'.");
+                }
+
+                if (PathsEqual(entry, anchorPath))
+                {
+                    if (!anchorMayExist || (attributes & FileAttributes.Directory) != 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"Preparing Player stage has an anchor inconsistent with checkpoint '{journal.checkpoint}'.");
+                    }
+
+                    continue;
+                }
+
+                if (PathsEqual(entry, payloadPath))
+                {
+                    if (!payloadMayExist || (attributes & FileAttributes.Directory) == 0)
+                    {
+                        throw new InvalidOperationException(
+                            $"Preparing Player stage has a payload inconsistent with checkpoint '{journal.checkpoint}'.");
+                    }
+
+                    continue;
+                }
+
+                throw new InvalidOperationException(
+                    $"Preparing Player stage contains an unowned entry: '{entry}'.");
+            }
+
+            bool anchorExists = File.Exists(anchorPath);
+            bool payloadExists = Directory.Exists(payloadPath);
+            if (Directory.Exists(anchorPath)
+                || File.Exists(payloadPath)
+                || (anchorRequired && !anchorExists)
+                || (!anchorMayExist && anchorExists)
+                || (payloadRequired && !payloadExists)
+                || (!payloadMayExist && payloadExists))
+            {
+                throw new InvalidOperationException(
+                    $"Preparing Player stage layout does not match checkpoint '{journal.checkpoint}'.");
+            }
+
+            if (anchorExists)
+            {
+                ValidateStageAnchor(anchorPath, journal.transactionId);
+            }
+        }
+
         private static void ValidateReadyStage(Journal journal)
         {
             Owner owner = ReadOwner(journal.stageOwnerPath);
-            ValidateOwner(owner, journal.transactionId, "ready", journal.newIdentity);
+            ValidateOwner(
+                owner,
+                journal.transactionId,
+                "ready",
+                journal.newIdentity,
+                journal.newCompatibilityIdentity);
             ValidateStageAnchor(
                 Path.Combine(journal.stageRoot, StageAnchorFileName),
                 journal.transactionId);
@@ -697,12 +1232,12 @@ namespace Build.Pipeline.Editor
         private static void ValidateJournal(string projectRoot, Journal journal)
         {
             if (journal == null
-                || !string.Equals(journal.schemaVersion, SchemaVersion, StringComparison.Ordinal)
+                || journal.formatVersion != JournalFormatVersion
                 || !IsTransactionId(journal.transactionId)
                 || string.IsNullOrWhiteSpace(journal.checkpoint))
             {
                 throw new InvalidOperationException(
-                    "Player output transaction journal has an unsupported or incomplete schema.");
+                    "Player output transaction journal has an unsupported or incomplete format.");
             }
 
             string actualProject = Path.GetFullPath(projectRoot);
@@ -721,8 +1256,13 @@ namespace Build.Pipeline.Editor
                 journal.backupRoot,
                 journal.stageOwnerPath,
                 journal.transactionId);
+            ValidateCompatibilityIdentity(journal.newCompatibilityIdentity);
 
-            if (journal.checkpoint != PreparedCheckpoint)
+            if (journal.checkpoint != PrepareOwnerPendingCheckpoint
+                && journal.checkpoint != PrepareStagePendingCheckpoint
+                && journal.checkpoint != PrepareAnchorPendingCheckpoint
+                && journal.checkpoint != PreparePayloadPendingCheckpoint
+                && journal.checkpoint != PreparedCheckpoint)
             {
                 if (!journal.hasNewIdentity || journal.newIdentity == null)
                 {
@@ -740,12 +1280,59 @@ namespace Build.Pipeline.Editor
                     }
 
                     ValidateIdentity(journal.originalIdentity);
+                    if (!journal.originalWasOwned
+                        && journal.originalIdentity.entryCount != 0)
+                    {
+                        throw new InvalidOperationException(
+                            "Player output journal attempts to adopt a non-empty unowned original output.");
+                    }
                 }
                 else if (journal.hasOriginalIdentity)
                 {
                     throw new InvalidOperationException(
                         "Player output journal contains an original identity without an original output.");
                 }
+
+                if (journal.originalWasOwned && !journal.hadOriginal)
+                {
+                    throw new InvalidOperationException(
+                        "Player output journal records ownership without an original output.");
+                }
+
+                if (journal.originalWasOwned)
+                {
+                    if (!IsTransactionId(journal.originalOwnerTransactionId))
+                    {
+                        throw new InvalidOperationException(
+                            "Player output journal does not contain the original ownership transaction.");
+                    }
+
+                    if (!journal.hasOriginalCompatibilityIdentity)
+                    {
+                        throw new InvalidOperationException(
+                            "Player output journal does not contain the original compatibility identity.");
+                    }
+
+                    ValidateCompatibilityIdentity(journal.originalCompatibilityIdentity);
+                }
+                else if (!string.IsNullOrEmpty(journal.originalOwnerTransactionId))
+                {
+                    throw new InvalidOperationException(
+                        "Player output journal contains an ownership transaction for an unowned original output.");
+                }
+
+                if (!journal.originalWasOwned
+                    && journal.hasOriginalCompatibilityIdentity)
+                {
+                    throw new InvalidOperationException(
+                        "Player output journal contains compatibility identity for an unowned original output.");
+                }
+            }
+            else if (!string.IsNullOrEmpty(journal.originalOwnerTransactionId)
+                     || journal.hasOriginalCompatibilityIdentity)
+            {
+                throw new InvalidOperationException(
+                    "Preparing Player output journal unexpectedly contains original ownership state.");
             }
         }
 
@@ -792,29 +1379,29 @@ namespace Build.Pipeline.Editor
                 buildRoot,
                 allowExternalOutput);
 
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 final,
                 "Player output directory",
                 1 + PlayerGeneratedChildPathReserve);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 expectedStage,
                 "Player transaction stage root");
             string expectedPayload = GetStagePayloadRoot(expectedStage, final);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 expectedPayload,
                 "Player transaction stage payload",
                 1 + PlayerGeneratedChildPathReserve);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 expectedBackup,
                 "Player transaction backup root");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 expectedStage + ".owner.json",
                 "Player transaction stage owner",
                 ".bak".Length);
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(expectedStage, StageAnchorFileName),
                 "Player transaction stage anchor");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 GetPublishedOwnerPath(final),
                 "Published Player ownership marker",
                 ".bak".Length);
@@ -855,11 +1442,11 @@ namespace Build.Pipeline.Editor
                 backupRoot,
                 stageOwnerPath,
                 transactionId);
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 journalPath,
                 "Player transaction journal",
                 ".bak".Length);
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 StageOutputPath,
                 "Player BuildPlayer staging destination");
         }
@@ -869,7 +1456,7 @@ namespace Build.Pipeline.Editor
             string destinationRoot,
             string displayName)
         {
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 destinationRoot,
                 displayName + " root");
             foreach (string entry in EnumerateTreeEntries(sourceRoot))
@@ -879,13 +1466,13 @@ namespace Build.Pipeline.Editor
                 FileAttributes attributes = File.GetAttributes(entry);
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                         destination,
                         displayName);
                 }
                 else
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         destination,
                         displayName);
                 }
@@ -901,20 +1488,20 @@ namespace Build.Pipeline.Editor
                 FileAttributes attributes = File.GetAttributes(entry);
                 if ((attributes & FileAttributes.Directory) != 0)
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                         destination,
                         "Incremental Player staging directory");
                     Directory.CreateDirectory(destination);
                 }
                 else
                 {
-                    BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                    BuildPathPolicy.EnsureWin32MaxPathBudget(
                         destination,
                         "Incremental Player staging artifact");
                     string parent = Path.GetDirectoryName(destination);
                     if (!string.IsNullOrEmpty(parent))
                     {
-                        BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                        BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                             parent,
                             "Incremental Player staging directory");
                         Directory.CreateDirectory(parent);
@@ -1157,15 +1744,18 @@ namespace Build.Pipeline.Editor
             string path,
             string kind,
             string transactionId,
-            TreeIdentity identity)
+            TreeIdentity identity,
+            CompatibilityIdentity compatibilityIdentity)
         {
+            ValidateCompatibilityIdentity(compatibilityIdentity);
             var owner = new Owner
             {
-                schemaVersion = SchemaVersion,
+                formatVersion = OwnerFormatVersion,
                 kind = kind,
                 transactionId = transactionId,
                 hasIdentity = identity != null,
                 identity = identity,
+                compatibilityIdentity = compatibilityIdentity,
                 checksum = string.Empty
             };
             owner.checksum = ComputeTextHash(JsonUtility.ToJson(owner, false));
@@ -1176,8 +1766,12 @@ namespace Build.Pipeline.Editor
             string path,
             string transactionId,
             TreeIdentity newIdentity,
-            TreeIdentity replaceableIdentity)
+            CompatibilityIdentity newCompatibilityIdentity,
+            string replaceableTransactionId,
+            TreeIdentity replaceableIdentity,
+            CompatibilityIdentity replaceableCompatibilityIdentity)
         {
+            ValidateCompatibilityIdentity(newCompatibilityIdentity);
             if (File.Exists(path))
             {
                 Owner existing = ReadPublishedOwner(path);
@@ -1186,9 +1780,21 @@ namespace Build.Pipeline.Editor
                                           existing.transactionId,
                                           transactionId,
                                           StringComparison.Ordinal)
-                                      && IdentitiesEqual(existing.identity, newIdentity);
-                bool isReplaceableOwner = replaceableIdentity != null
-                                          && IdentitiesEqual(existing.identity, replaceableIdentity);
+                                      && IdentitiesEqual(existing.identity, newIdentity)
+                                      && CompatibilityIdentitiesEqual(
+                                          existing.compatibilityIdentity,
+                                          newCompatibilityIdentity);
+                bool isReplaceableOwner = IsTransactionId(replaceableTransactionId)
+                                          && string.Equals(
+                                              existing.transactionId,
+                                              replaceableTransactionId,
+                                              StringComparison.Ordinal)
+                                          && replaceableIdentity != null
+                                          && IdentitiesEqual(existing.identity, replaceableIdentity)
+                                          && replaceableCompatibilityIdentity != null
+                                          && CompatibilityIdentitiesEqual(
+                                              existing.compatibilityIdentity,
+                                              replaceableCompatibilityIdentity);
                 if (!isCurrentOwner && !isReplaceableOwner)
                 {
                     throw new InvalidOperationException(
@@ -1196,7 +1802,12 @@ namespace Build.Pipeline.Editor
                 }
             }
 
-            WriteOwner(path, "published", transactionId, newIdentity);
+            WriteOwner(
+                path,
+                "published",
+                transactionId,
+                newIdentity,
+                newCompatibilityIdentity);
         }
 
         private static void ValidatePublishedOwnerFile(string path, string finalRoot)
@@ -1210,10 +1821,403 @@ namespace Build.Pipeline.Editor
                 "Previously published Player output");
         }
 
+        private void ValidateIncrementalBaseline()
+        {
+            if (!Directory.Exists(finalRoot) || !File.Exists(publishedOwnerPath))
+            {
+                throw new InvalidOperationException(
+                    "Incremental Player builds require a previously published, pipeline-owned output. "
+                    + "Run this Player invocation with Clean incrementality before using Incremental. "
+                    + $"Output: '{finalRoot}'.");
+            }
+
+            ValidatePublishedOwnerFile(publishedOwnerPath, finalRoot);
+            Owner owner = ReadPublishedOwner(publishedOwnerPath);
+            if (CompatibilityIdentitiesEqual(
+                    owner.compatibilityIdentity,
+                    compatibilityIdentity))
+            {
+                return;
+            }
+
+            throw new InvalidOperationException(
+                "Incremental Player output compatibility identity does not match the current build request. "
+                + DescribeCompatibilityMismatch(
+                    owner.compatibilityIdentity,
+                    compatibilityIdentity)
+                + " Run this Player invocation with Clean incrementality to replace the incompatible output. "
+                + $"Output: '{finalRoot}'.");
+        }
+
+        private static CompatibilityIdentity CreateCompatibilityIdentity(
+            BuildRequest request,
+            string finalRoot,
+            string relativeOutputPath,
+            string playerExtensionFingerprint)
+        {
+            string artifactPath = relativeOutputPath.Length == 0
+                ? Path.GetFileName(NormalizeDirectoryPath(finalRoot))
+                : relativeOutputPath;
+            if (string.IsNullOrWhiteSpace(artifactPath))
+            {
+                throw new InvalidOperationException(
+                    "Player output compatibility identity requires a stable artifact name.");
+            }
+
+            var identity = new CompatibilityIdentity
+            {
+                formatVersion = CompatibilityIdentityFormatVersion,
+                playerPipelineCompatibilityRevision =
+                    PlayerPipelineCompatibilityRevision,
+                unityVersion = Application.unityVersion,
+                buildTarget = request.Target.ToString(),
+                namedBuildTarget = request.NamedTarget.TargetName,
+                scriptingBackend = request.ScriptingBackend.ToString(),
+                outputArtifactPath = artifactPath.Replace('\\', '/'),
+                outputIsFolder = request.OutputIsFolder,
+                companyName = request.CompanyName,
+                productName = request.ProductName,
+                applicationIdentifier = request.ApplicationIdentifier,
+                exportAndroidProject = request.ExportAndroidProject,
+                debugBuild = request.DebugBuild,
+                deleteDebugFiles = request.DeleteDebugFiles,
+                cheatEnabled = request.CheatEnabled,
+                playerExtensionFingerprint = RequirePlayerExtensionFingerprint(
+                    playerExtensionFingerprint),
+                digest = string.Empty
+            };
+            identity.digest = ComputeCompatibilityDigest(identity);
+            ValidateCompatibilityIdentity(identity);
+            return identity;
+        }
+
+        private static string DescribeCompatibilityMismatch(
+            CompatibilityIdentity existing,
+            CompatibilityIdentity requested)
+        {
+            var differences = new List<string>();
+            AddCompatibilityDifference(
+                differences,
+                "PlayerPipelineCompatibilityRevision",
+                existing.playerPipelineCompatibilityRevision,
+                requested.playerPipelineCompatibilityRevision);
+            AddCompatibilityDifference(
+                differences,
+                "UnityVersion",
+                existing.unityVersion,
+                requested.unityVersion);
+            AddCompatibilityDifference(
+                differences,
+                "BuildTarget",
+                existing.buildTarget,
+                requested.buildTarget);
+            AddCompatibilityDifference(
+                differences,
+                "NamedBuildTarget",
+                existing.namedBuildTarget,
+                requested.namedBuildTarget);
+            AddCompatibilityDifference(
+                differences,
+                "ScriptingBackend",
+                existing.scriptingBackend,
+                requested.scriptingBackend);
+            AddCompatibilityDifference(
+                differences,
+                "OutputArtifactPath",
+                existing.outputArtifactPath,
+                requested.outputArtifactPath);
+            AddCompatibilityDifference(
+                differences,
+                "OutputIsFolder",
+                existing.outputIsFolder,
+                requested.outputIsFolder);
+            AddCompatibilityDifference(
+                differences,
+                "CompanyName",
+                existing.companyName,
+                requested.companyName);
+            AddCompatibilityDifference(
+                differences,
+                "ProductName",
+                existing.productName,
+                requested.productName);
+            AddCompatibilityDifference(
+                differences,
+                "ApplicationIdentifier",
+                existing.applicationIdentifier,
+                requested.applicationIdentifier);
+            AddCompatibilityDifference(
+                differences,
+                "ExportAndroidProject",
+                existing.exportAndroidProject,
+                requested.exportAndroidProject);
+            AddCompatibilityDifference(
+                differences,
+                "DebugBuild",
+                existing.debugBuild,
+                requested.debugBuild);
+            AddCompatibilityDifference(
+                differences,
+                "DeleteDebugFiles",
+                existing.deleteDebugFiles,
+                requested.deleteDebugFiles);
+            AddCompatibilityDifference(
+                differences,
+                "CheatEnabled",
+                existing.cheatEnabled,
+                requested.cheatEnabled);
+            AddCompatibilityDifference(
+                differences,
+                "PlayerExtensionFingerprint",
+                existing.playerExtensionFingerprint,
+                requested.playerExtensionFingerprint);
+            return differences.Count == 0
+                ? "Persisted compatibility data differs."
+                : "Changed fields: " + string.Join(", ", differences) + ".";
+        }
+
+        private static void AddCompatibilityDifference(
+            ICollection<string> differences,
+            string fieldName,
+            string existing,
+            string requested)
+        {
+            if (!string.Equals(existing, requested, StringComparison.Ordinal))
+            {
+                differences.Add(
+                    $"{fieldName} ('{existing}' -> '{requested}')");
+            }
+        }
+
+        private static void AddCompatibilityDifference(
+            ICollection<string> differences,
+            string fieldName,
+            int existing,
+            int requested)
+        {
+            if (existing != requested)
+            {
+                differences.Add(
+                    $"{fieldName} ('{existing}' -> '{requested}')");
+            }
+        }
+
+        private static void AddCompatibilityDifference(
+            ICollection<string> differences,
+            string fieldName,
+            bool existing,
+            bool requested)
+        {
+            if (existing != requested)
+            {
+                differences.Add(
+                    $"{fieldName} ('{existing}' -> '{requested}')");
+            }
+        }
+
+        private static bool CompatibilityIdentitiesEqual(
+            CompatibilityIdentity left,
+            CompatibilityIdentity right)
+        {
+            ValidateCompatibilityIdentity(left);
+            ValidateCompatibilityIdentity(right);
+            return left.formatVersion == right.formatVersion
+                   && left.playerPipelineCompatibilityRevision ==
+                   right.playerPipelineCompatibilityRevision
+                   && string.Equals(
+                       left.unityVersion,
+                       right.unityVersion,
+                       StringComparison.Ordinal)
+                   && string.Equals(left.buildTarget, right.buildTarget, StringComparison.Ordinal)
+                   && string.Equals(left.namedBuildTarget, right.namedBuildTarget, StringComparison.Ordinal)
+                   && string.Equals(left.scriptingBackend, right.scriptingBackend, StringComparison.Ordinal)
+                   && string.Equals(left.outputArtifactPath, right.outputArtifactPath, StringComparison.Ordinal)
+                   && left.outputIsFolder == right.outputIsFolder
+                   && string.Equals(left.companyName, right.companyName, StringComparison.Ordinal)
+                   && string.Equals(left.productName, right.productName, StringComparison.Ordinal)
+                   && string.Equals(left.applicationIdentifier, right.applicationIdentifier, StringComparison.Ordinal)
+                   && left.exportAndroidProject == right.exportAndroidProject
+                   && left.debugBuild == right.debugBuild
+                   && left.deleteDebugFiles == right.deleteDebugFiles
+                   && left.cheatEnabled == right.cheatEnabled
+                   && string.Equals(
+                       left.playerExtensionFingerprint,
+                       right.playerExtensionFingerprint,
+                       StringComparison.Ordinal)
+                   && string.Equals(left.digest, right.digest, StringComparison.Ordinal);
+        }
+
+        private static void ValidateCompatibilityIdentity(CompatibilityIdentity identity)
+        {
+            if (identity == null
+                || identity.formatVersion != CompatibilityIdentityFormatVersion
+                || identity.playerPipelineCompatibilityRevision <= 0
+                || string.IsNullOrWhiteSpace(identity.unityVersion)
+                || identity.unityVersion.Length > 128
+                || string.IsNullOrWhiteSpace(identity.buildTarget)
+                || string.IsNullOrWhiteSpace(identity.namedBuildTarget)
+                || string.IsNullOrWhiteSpace(identity.scriptingBackend)
+                || string.IsNullOrWhiteSpace(identity.outputArtifactPath)
+                || Path.IsPathRooted(identity.outputArtifactPath)
+                || identity.companyName == null
+                || identity.productName == null
+                || identity.applicationIdentifier == null
+                || identity.playerExtensionFingerprint == null
+                || identity.playerExtensionFingerprint.Length != 64
+                || identity.digest == null
+                || identity.digest.Length != 64)
+            {
+                throw new InvalidOperationException(
+                    "Player output compatibility identity is invalid or unsupported.");
+            }
+
+            try
+            {
+                BuildIdentityPolicy.ValidatePlainText(
+                    identity.unityVersion,
+                    "Player output compatibility Unity version",
+                    128);
+            }
+            catch (ArgumentException exception)
+            {
+                throw new InvalidOperationException(
+                    "Player output compatibility identity contains an invalid Unity version.",
+                    exception);
+            }
+
+            BuildPathPolicy.ValidatePortableProjectRelativePath(
+                identity.outputArtifactPath,
+                "Player output compatibility artifact");
+            string expectedDigest = ComputeCompatibilityDigest(identity);
+            if (!string.Equals(identity.digest, expectedDigest, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Player output compatibility identity digest verification failed.");
+            }
+        }
+
+        private static string ComputeCompatibilityDigest(CompatibilityIdentity identity)
+        {
+            var builder = new StringBuilder(512);
+            AppendCompatibilityValue(
+                builder,
+                identity.formatVersion.ToString(CultureInfo.InvariantCulture));
+            AppendCompatibilityValue(
+                builder,
+                identity.playerPipelineCompatibilityRevision.ToString(
+                    CultureInfo.InvariantCulture));
+            AppendCompatibilityValue(builder, identity.unityVersion);
+            AppendCompatibilityValue(builder, identity.buildTarget);
+            AppendCompatibilityValue(builder, identity.namedBuildTarget);
+            AppendCompatibilityValue(builder, identity.scriptingBackend);
+            AppendCompatibilityValue(builder, identity.outputArtifactPath);
+            AppendCompatibilityValue(builder, identity.outputIsFolder);
+            AppendCompatibilityValue(builder, identity.companyName);
+            AppendCompatibilityValue(builder, identity.productName);
+            AppendCompatibilityValue(builder, identity.applicationIdentifier);
+            AppendCompatibilityValue(builder, identity.exportAndroidProject);
+            AppendCompatibilityValue(builder, identity.debugBuild);
+            AppendCompatibilityValue(builder, identity.deleteDebugFiles);
+            AppendCompatibilityValue(builder, identity.cheatEnabled);
+            AppendCompatibilityValue(builder, identity.playerExtensionFingerprint);
+            return ComputeTextHash(builder.ToString());
+        }
+
+        private static string RequirePlayerExtensionFingerprint(string fingerprint)
+        {
+            if (string.IsNullOrWhiteSpace(fingerprint)
+                || fingerprint.Length != 64)
+            {
+                throw new ArgumentException(
+                    "Player extension fingerprint must be a 64-character SHA-256 digest.",
+                    nameof(fingerprint));
+            }
+
+            for (int index = 0; index < fingerprint.Length; index++)
+            {
+                char character = fingerprint[index];
+                if (!((character >= '0' && character <= '9')
+                      || (character >= 'a' && character <= 'f')))
+                {
+                    throw new ArgumentException(
+                        "Player extension fingerprint must use lowercase hexadecimal SHA-256 text.",
+                        nameof(fingerprint));
+                }
+            }
+
+            return fingerprint;
+        }
+
+        private static void AppendCompatibilityValue(StringBuilder builder, string value)
+        {
+            string normalized = value ?? string.Empty;
+            builder.Append(normalized.Length.ToString(CultureInfo.InvariantCulture));
+            builder.Append(':');
+            builder.Append(normalized);
+            builder.Append('\n');
+        }
+
+        private static void AppendCompatibilityValue(StringBuilder builder, bool value)
+        {
+            AppendCompatibilityValue(builder, value ? "1" : "0");
+        }
+
+        private static void ValidateReplaceableFinalRoot(string finalRoot, string publishedOwnerPath)
+        {
+            if (File.Exists(finalRoot))
+            {
+                throw new IOException(
+                    $"Player output directory resolves to a file: '{finalRoot}'.");
+            }
+
+            bool finalExists = Directory.Exists(finalRoot);
+            if (File.Exists(publishedOwnerPath))
+            {
+                if (!finalExists)
+                {
+                    throw new InvalidOperationException(
+                        $"A detached Player output ownership marker requires manual inspection: '{publishedOwnerPath}'.");
+                }
+
+                ValidatePublishedOwnerFile(publishedOwnerPath, finalRoot);
+                return;
+            }
+
+            if (!finalExists)
+            {
+                return;
+            }
+
+            FileAttributes attributes = File.GetAttributes(finalRoot);
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException(
+                    $"Player output root may not be a reparse point: '{finalRoot}'.");
+            }
+
+            using (IEnumerator<string> entries = Directory.EnumerateFileSystemEntries(finalRoot).GetEnumerator())
+            {
+                if (entries.MoveNext())
+                {
+                    throw CreateUnownedNonEmptyOutputException(finalRoot, publishedOwnerPath);
+                }
+            }
+        }
+
+        private static InvalidOperationException CreateUnownedNonEmptyOutputException(
+            string finalRoot,
+            string publishedOwnerPath)
+        {
+            return new InvalidOperationException(
+                $"Refusing to replace non-empty Player output without a valid ownership marker. "
+                + $"Move or clear the directory once, then let a successful build create '{publishedOwnerPath}'. "
+                + $"Output: '{finalRoot}'.");
+        }
+
         private static void ValidatePublishedOwner(Owner owner)
         {
             if (owner == null
-                || !string.Equals(owner.schemaVersion, SchemaVersion, StringComparison.Ordinal)
+                || owner.formatVersion != OwnerFormatVersion
                 || !string.Equals(owner.kind, "published", StringComparison.Ordinal)
                 || !IsTransactionId(owner.transactionId)
                 || !owner.hasIdentity
@@ -1224,6 +2228,7 @@ namespace Build.Pipeline.Editor
             }
 
             ValidateIdentity(owner.identity);
+            ValidateCompatibilityIdentity(owner.compatibilityIdentity);
         }
 
         private static Owner ReadPublishedOwner(string path)
@@ -1272,16 +2277,26 @@ namespace Build.Pipeline.Editor
             Owner owner,
             string transactionId,
             string requiredKind,
-            TreeIdentity expectedIdentity)
+            TreeIdentity expectedIdentity,
+            CompatibilityIdentity expectedCompatibilityIdentity)
         {
             if (owner == null
-                || !string.Equals(owner.schemaVersion, SchemaVersion, StringComparison.Ordinal)
+                || owner.formatVersion != OwnerFormatVersion
                 || !string.Equals(owner.transactionId, transactionId, StringComparison.Ordinal)
                 || (requiredKind != null
                     && !string.Equals(owner.kind, requiredKind, StringComparison.Ordinal)))
             {
                 throw new InvalidOperationException(
                     "Player output ownership marker does not match the active transaction.");
+            }
+
+            ValidateCompatibilityIdentity(owner.compatibilityIdentity);
+            if (!CompatibilityIdentitiesEqual(
+                    owner.compatibilityIdentity,
+                    expectedCompatibilityIdentity))
+            {
+                throw new InvalidOperationException(
+                    "Player output ownership marker has an incompatible build identity.");
             }
 
             if (requiredKind == "ready")
@@ -1303,7 +2318,7 @@ namespace Build.Pipeline.Editor
 
         private static void WriteJsonAtomically(string path, string json)
         {
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 path,
                 "Player transaction JSON",
                 ".bak".Length);
@@ -1314,16 +2329,16 @@ namespace Build.Pipeline.Editor
                     $"JSON transaction path has no parent directory: '{path}'.");
             }
 
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 directory,
                 "Player transaction JSON directory");
             Directory.CreateDirectory(directory);
             string temporaryPath = path + ".tmp";
             string backupPath = path + ".bak";
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 temporaryPath,
                 "Player transaction JSON temporary file");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 backupPath,
                 "Player transaction JSON backup file");
             DeleteFileStrict(temporaryPath);
@@ -1745,6 +2760,13 @@ namespace Build.Pipeline.Editor
             return builder.ToString();
         }
 
+        internal void AbandonForSimulatedTermination()
+        {
+            disposed = true;
+            lockStream?.Dispose();
+            lockStream = null;
+        }
+
         private void ThrowIfUnavailable()
         {
             if (disposed)
@@ -1762,7 +2784,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public string schemaVersion;
+            public int formatVersion;
             public string transactionId;
             public string checkpoint;
             public string projectRoot;
@@ -1773,22 +2795,50 @@ namespace Build.Pipeline.Editor
             public string backupRoot;
             public string stageOwnerPath;
             public bool hadOriginal;
+            public bool originalWasOwned;
+            public string originalOwnerTransactionId;
             public bool hasOriginalIdentity;
             public TreeIdentity originalIdentity;
+            public bool hasOriginalCompatibilityIdentity;
+            public CompatibilityIdentity originalCompatibilityIdentity;
             public bool hasNewIdentity;
             public TreeIdentity newIdentity;
+            public CompatibilityIdentity newCompatibilityIdentity;
             public string checksum;
         }
 
         [Serializable]
         private sealed class Owner
         {
-            public string schemaVersion;
+            public int formatVersion;
             public string kind;
             public string transactionId;
             public bool hasIdentity;
             public TreeIdentity identity;
+            public CompatibilityIdentity compatibilityIdentity;
             public string checksum;
+        }
+
+        [Serializable]
+        private sealed class CompatibilityIdentity
+        {
+            public int formatVersion;
+            public int playerPipelineCompatibilityRevision;
+            public string unityVersion;
+            public string buildTarget;
+            public string namedBuildTarget;
+            public string scriptingBackend;
+            public string outputArtifactPath;
+            public bool outputIsFolder;
+            public string companyName;
+            public string productName;
+            public string applicationIdentifier;
+            public bool exportAndroidProject;
+            public bool debugBuild;
+            public bool deleteDebugFiles;
+            public bool cheatEnabled;
+            public string playerExtensionFingerprint;
+            public string digest;
         }
 
         [Serializable]

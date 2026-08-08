@@ -18,15 +18,25 @@ MonoBehaviour:
   companyName: CycloneGames
   productName: UnityStarter
   applicationIdentifier: com.CycloneGames.UnityStarter
-  versionInfoAssetPath: Assets/Resources/VersionInfoData.asset
+  versionInfoAssetPath: Assets/Build/Runtime/Resources/VersionInfoData.asset
   additionalScenes: []
-  pipelineSteps:
-  - hot-update
-  - asset-content
-  - player
-  useHybridCLR: 0
-  enablePlayerObfuscation: 0
+  recipeInvocations:
+  - enabled: 1
+    invocationId: player
+    stepTypeId: player
+    configuration: {fileID: 0}
+    incrementality: 0
+    dependencies: []
+  - enabled: 0
+    invocationId: asset-content
+    stepTypeId: asset-content
+    configuration: {fileID: 0}
+    incrementality: 0
+    dependencies: []
+  - enabled: 0
+    invocationId: hot-update
+    stepTypeId: hot-update
+    configuration: {fileID: 0}
+    incrementality: 0
+    dependencies: []
   cheatBuildMode: 0
-  assetContentProviderId: 
-  assetContentConfiguration: {fileID: 0}
-  hybridCLRBuildConfig: {fileID: 0}

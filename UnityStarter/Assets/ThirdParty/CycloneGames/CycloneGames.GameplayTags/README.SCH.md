@@ -236,7 +236,13 @@ GameplayTagManager.InitializeIfNeeded();
 
 ### Player Build Data
 
-Player build 前，Editor 把除 `None` 外的全部定义写入 `Assets/Resources/GameplayTags.bytes`：
+Player build 前，Editor 会把除 `None` 外的全部定义发布到隔离的 build-only 资产路径：
+
+```text
+Assets/Generated/CycloneGames.GameplayTags/Resources/CycloneGames.GameplayTags/GameplayTags.bytes
+```
+
+Runtime adapter 通过 `Resources.Load<TextAsset>("CycloneGames.GameplayTags/GameplayTags")` 加载该资产。二进制格式如下：
 
 ```text
 4 bytes ASCII signature "CGTG"
@@ -246,6 +252,31 @@ uint64 contentHash
 ```
 
 Runtime 在注册前严格校验 signature、strict UTF-8、size、count、name、flag、duplicate、trailing data 和 content hash。数据缺失或损坏会导致初始化失败，而非静默以空注册表启动。
+
+生成资产由 write-ahead transaction 管理。修改 `Assets` 前，Editor 会把每个计划中的文件和目录 effect、其“不存在”的前状态、预期 SHA-256、大小预算以及生成的 Unity GUID 写入：
+
+```text
+.buildpipeline/transactions/gameplay-tags/active.json
+```
+
+普通 build preprocess 绝不会隐式恢复 pending state。存在 pending journal、journal candidate、scratch 目录或未知状态项时，会在创建新输出前停止构建。Postprocess 在删除任何内容前，会校验所有生成文件，并扫描每个由事务创建的目录是否含有未知内容；任一清理失败都会使构建失败，并保留 journal 与现场证据。
+
+恢复必须显式执行：
+
+```csharp
+BuildTags.Recover(projectRoot);
+```
+
+这个 public static facade 位于 GameplayTags Editor 程序集，不依赖项目的 Build 模块，因此 CI/build orchestrator 可以通过 reflection 调用。恢复只接受固定的 GameplayTags 路径集合，拒绝路径穿越与 reparse point，对读取实施大小预算，校验精确 hash，并且绝不递归删除目录。未知或被修改的文件会被保留，必须人工核对。
+
+持久化契约：
+
+| 状态 | Owner | 版本控制 | 生命周期与安全清理方式 |
+| --- | --- | --- | --- |
+| `.buildpipeline/transactions/gameplay-tags/active.json` | GameplayTags build asset transaction | 排除出 Git | 从 preprocess 持续到 postprocess 成功；只能通过 `BuildTags.Recover` 清理 |
+| `.buildpipeline/transactions/gameplay-tags/active.json.new` | 原子 journal writer | 排除出 Git | 中断后可能残留；显式恢复会先校验并协调它 |
+| `.buildpipeline/transactions/gameplay-tags/scratch/` | Transaction staging | 排除出 Git | 只允许 journal 命名的 staging 文件；显式恢复会拒绝未知项 |
+| `.buildpipeline/transactions/gameplay-tags/build.lock` | 跨进程互斥 | 排除出 Git | 空的、可重建的协调文件；不承载构建事实 |
 
 ## 进阶主题
 
@@ -369,7 +400,8 @@ Core 为 managed C#，不依赖 UnityEngine、native plugin 或 runtime reflecti
 | `RequestTag` 找不到标签 | 注册表未初始化或标签未注册 | 在请求前调用 `InitializeIfNeeded()`；检查标签是否存在于来源定义中 |
 | Container 操作抛出 index mismatch | Reload 后 RuntimeIndexEpoch 变化 | 捕获新的 container，或在非保留式 reload 后 `Clear()` |
 | 修改 query graph 后始终返回 false | Compiled cache 过期 | 修改 expression graph 后调用 `InvalidateCompiledCache()` |
-| Player build 启动时注册表为空 | Build data 缺失或损坏 | 检查 `Assets/Resources/GameplayTags.bytes` 是否存在且 content hash 通过校验 |
+| Player build 启动时注册表为空 | Build data 缺失或损坏 | 检查隔离生成路径下的 `GameplayTags.bytes` 是否被打入 Player 且 content hash 通过校验 |
+| Player build 因 GameplayTags 需要恢复而拒绝启动 | 上次构建中断或清理证据存在歧义 | 检查 `.buildpipeline/transactions/gameplay-tags/`，再运行 Build workspace recovery 命令或 `BuildTags.Recover(projectRoot)`；不要盲目删除被修改或未知的文件 |
 | JSON 文件编辑未被识别 | 外部编辑导致 conflict | 检查 `ProjectSettings/GameplayTags/` 下是否有 `.tmp`/`.bak` recovery 文件 |
 | Count callback 未触发 | 从 1 递增到 2 不会触发 `NewOrRemoved` | `NewOrRemoved` 仅在 0↔1 转换时触发；所有变化请使用 `AnyCountChange` |
 

@@ -4,6 +4,7 @@ using System.IO;
 using Build.Pipeline.Editor;
 using NUnit.Framework;
 using UnityEditor;
+using UnityEditor.Build;
 using UnityEngine;
 
 namespace Build.Pipeline.Tests.Editor
@@ -36,22 +37,14 @@ namespace Build.Pipeline.Tests.Editor
         public void CreateForCommandLine_WithExplicitOutput_ResolvesRelativeToProjectRootOnce()
         {
             string relativeOutput = Path.Combine("Build", "Artifacts", "Game.exe");
-            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64),
+            BuildRequest request = CreateCommandLineRequest(
                 BuildCommandLineOptionNames.Output,
-                relativeOutput
-            });
-
-            BuildRequest request = BuildRequestFactory.CreateForCommandLine(buildData, options);
+                relativeOutput);
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
             string expected = Path.GetFullPath(Path.Combine(projectRoot, relativeOutput));
 
             Assert.That(request.OutputPath, Is.EqualTo(expected));
-            Assert.That(
-                request.OutputDirectory,
-                Is.EqualTo(Path.GetDirectoryName(expected)));
+            Assert.That(request.OutputDirectory, Is.EqualTo(Path.GetDirectoryName(expected)));
             StringAssert.DoesNotContain(
                 Path.Combine("Build", "Build") + Path.DirectorySeparatorChar,
                 request.OutputPath);
@@ -60,13 +53,7 @@ namespace Build.Pipeline.Tests.Editor
         [Test]
         public void CreateForCommandLine_WithoutOutput_UsesBuildRootPlatformDefault()
         {
-            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64)
-            });
-
-            BuildRequest request = BuildRequestFactory.CreateForCommandLine(buildData, options);
+            BuildRequest request = CreateCommandLineRequest();
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
             string expected = Path.GetFullPath(Path.Combine(
                 projectRoot,
@@ -90,131 +77,282 @@ namespace Build.Pipeline.Tests.Editor
                 "deep",
                 "external",
                 "Game.exe");
-
-            BuildCommandLineOptions deniedOptions = BuildCommandLine.Parse(new[]
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64),
+            BuildCommandLineOptions denied = ParseCommandLine(
                 BuildCommandLineOptionNames.Output,
-                externalOutput
-            });
+                externalOutput);
 
             Assert.Throws<InvalidOperationException>(
-                () => BuildRequestFactory.CreateForCommandLine(buildData, deniedOptions));
+                () => BuildRequestFactory.CreateForCommandLine(buildData, denied));
 
-            BuildCommandLineOptions allowedOptions = BuildCommandLine.Parse(new[]
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64),
+            BuildRequest allowed = CreateCommandLineRequest(
                 BuildCommandLineOptionNames.Output,
                 externalOutput,
-                BuildCommandLineOptionNames.AllowExternalOutput
-            });
-
-            BuildRequest request = BuildRequestFactory.CreateForCommandLine(buildData, allowedOptions);
-
-            Assert.That(request.OutputPath, Is.EqualTo(Path.GetFullPath(externalOutput)));
-            Assert.That(request.OutputDirectory, Is.EqualTo(Path.GetDirectoryName(Path.GetFullPath(externalOutput))));
-            Assert.That(request.AllowExternalOutput, Is.True);
+                BuildCommandLineOptionNames.AllowExternalOutput);
+            Assert.That(allowed.OutputPath, Is.EqualTo(Path.GetFullPath(externalOutput)));
+            Assert.That(allowed.AllowExternalOutput, Is.True);
         }
 
         [Test]
-        public void CreateForCommandLine_OutputFileDirectlyUnderBuildRoot_RejectsSharedCleanDirectory()
-        {
-            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64),
-                BuildCommandLineOptionNames.Output,
-                Path.Combine("Build", "Game.exe")
-            });
-
-            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(
-                () => BuildRequestFactory.CreateForCommandLine(buildData, options));
-            StringAssert.Contains("dedicated directory", exception.Message);
-        }
-
-        [Test]
-        public void CreateForCommandLine_AndroidDefault_ProducesApkInReleaseDirectory()
-        {
-            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.Android)
-            });
-
-            BuildRequest request = BuildRequestFactory.CreateForCommandLine(buildData, options);
-
-            StringAssert.EndsWith(
-                Path.Combine("Android", "Release", buildData.ProductName + ".apk"),
-                request.OutputPath);
-            Assert.That(request.ExportAndroidProject, Is.False);
-            Assert.That(request.OutputIsFolder, Is.False);
-        }
-
-        [Test]
-        public void CreateForCommandLine_AndroidDirectoryOutput_RequiresExportFlag()
+        public void CreateForCommandLine_AndroidExportRejectsRecipeWithoutPlayerInvocation()
         {
             BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
             {
                 BuildCommandLineOptionNames.BuildTarget,
                 nameof(BuildTarget.Android),
-                BuildCommandLineOptionNames.Output,
-                "Build/Android/Export"
+                BuildCommandLineOptionNames.ExportAndroidProject,
+                BuildCommandLineOptionNames.Recipe,
+                "base-content=" + BuildStepTypeIds.AssetContent
             });
 
             ArgumentException exception = Assert.Throws<ArgumentException>(
                 () => BuildRequestFactory.CreateForCommandLine(buildData, options));
-            StringAssert.Contains(BuildCommandLineOptionNames.ExportAndroidProject, exception.Message);
+            StringAssert.Contains(BuildStepTypeIds.Player, exception.Message);
         }
 
         [Test]
-        public void CreateForCommandLine_AndroidExportRejectsContentOnlyRecipe()
+        public void CreateForCommandLine_ProfileRecipe_PreservesInvocationPolicyAndDependencies()
         {
-            var serialized = new SerializedObject(buildData);
-            SerializedProperty steps = serialized.FindProperty("pipelineSteps");
-            steps.arraySize = 2;
-            steps.GetArrayElementAtIndex(0).stringValue = BuildStepIds.HotUpdate;
-            steps.GetArrayElementAtIndex(1).stringValue = BuildStepIds.AssetContent;
-            serialized.ApplyModifiedPropertiesWithoutUndo();
-
-            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
+            SetRecipe(new[]
             {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.Android),
-                BuildCommandLineOptionNames.ExportAndroidProject
+                new BuildRecipeInvocation(
+                    "base-content",
+                    BuildStepTypeIds.AssetContent,
+                    incrementality: BuildIncrementality.Incremental),
+                new BuildRecipeInvocation(
+                    "player-client",
+                    BuildStepTypeIds.Player,
+                    dependencies: new[]
+                    {
+                        new BuildInvocationDependency(
+                            "base-content",
+                            BuildDependencyMode.Required)
+                    })
             });
 
-            ArgumentException exception = Assert.Throws<ArgumentException>(
-                () => BuildRequestFactory.CreateForCommandLine(buildData, options));
-            StringAssert.Contains(BuildStepIds.Player, exception.Message);
+            BuildRequest request = CreateCommandLineRequest();
+
+            Assert.That(request.Steps.Count, Is.EqualTo(2));
+            Assert.That(
+                request.GetInvocation("base-content").Incrementality,
+                Is.EqualTo(BuildIncrementality.Incremental));
+            Assert.That(
+                request.GetInvocation("player-client").Dependencies[0].InvocationId,
+                Is.EqualTo("base-content"));
+            Assert.That(
+                request.GetInvocation("player-client").Dependencies[0].Mode,
+                Is.EqualTo(BuildDependencyMode.Required));
         }
 
         [Test]
-        public void CreateForCommandLine_WithAssetProviderNone_ClearsProfileBinding()
+        public void CreateForCommandLine_ProfileSelection_ExpandsRequiredClosureAndRetainsAuthoredState()
         {
-            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            var contentConfiguration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            string configurationPath = CreateAsset(contentConfiguration);
             try
             {
-                var serialized = new SerializedObject(buildData);
-                serialized.FindProperty("assetContentProviderId").stringValue =
-                    AssetContentProviderIds.Addressables;
-                serialized.FindProperty("assetContentConfiguration").objectReferenceValue =
-                    configuration;
-                serialized.ApplyModifiedPropertiesWithoutUndo();
+                SetRecipe(new[]
+                {
+                    new BuildRecipeInvocation(
+                        "hot-release",
+                        BuildStepTypeIds.HotUpdate,
+                        enabled: false,
+                        incrementality: BuildIncrementality.Incremental),
+                    new BuildRecipeInvocation(
+                        "content-base",
+                        BuildStepTypeIds.AssetContent,
+                        enabled: false,
+                        configuration: contentConfiguration,
+                        dependencies: new[]
+                        {
+                            new BuildInvocationDependency(
+                                "hot-release",
+                                BuildDependencyMode.Required)
+                        }),
+                    new BuildRecipeInvocation(
+                        "optional-content",
+                        BuildStepTypeIds.AssetContent,
+                        enabled: false),
+                    new BuildRecipeInvocation(
+                        "player-client",
+                        BuildStepTypeIds.Player,
+                        enabled: false,
+                        dependencies: new[]
+                        {
+                            new BuildInvocationDependency(
+                                "content-base",
+                                BuildDependencyMode.Required),
+                            new BuildInvocationDependency(
+                                "optional-content",
+                                BuildDependencyMode.IfSelected)
+                        })
+                });
 
                 BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
                 {
                     BuildCommandLineOptionNames.BuildTarget,
                     nameof(BuildTarget.StandaloneWindows64),
-                    BuildCommandLineOptionNames.Provider,
-                    "none"
+                    BuildCommandLineOptionNames.Profile,
+                    "Assets/BuildProfiles/Release.asset",
+                    BuildCommandLineOptionNames.Selection,
+                    "player-client",
+                    BuildCommandLineOptionNames.StepIncrementality,
+                    "content-base=Incremental"
+                });
+                BuildRequest request = BuildRequestFactory.CreateForCommandLine(
+                    buildData,
+                    options);
+
+                Assert.That(request.Steps.Count, Is.EqualTo(3));
+                Assert.That(request.GetInvocation("player-client"), Is.Not.Null);
+                Assert.That(request.GetInvocation("content-base"), Is.Not.Null);
+                Assert.That(
+                    request.GetInvocation("content-base").Configuration,
+                    Is.SameAs(contentConfiguration));
+                Assert.That(
+                    request.GetInvocation("content-base").Incrementality,
+                    Is.EqualTo(BuildIncrementality.Incremental));
+                Assert.That(
+                    request.GetInvocation("hot-release").Incrementality,
+                    Is.EqualTo(BuildIncrementality.Incremental));
+                Assert.That(request.GetInvocation("optional-content"), Is.Null);
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(configurationPath);
+            }
+        }
+
+        [Test]
+        public void CreateForCommandLine_ProfileSelection_RejectsUnknownInvocation()
+        {
+            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
+            {
+                BuildCommandLineOptionNames.BuildTarget,
+                nameof(BuildTarget.StandaloneWindows64),
+                BuildCommandLineOptionNames.Profile,
+                "Assets/BuildProfiles/Release.asset",
+                BuildCommandLineOptionNames.Selection,
+                "missing-content"
+            });
+
+            BuildFailedException exception = Assert.Throws<BuildFailedException>(() =>
+                BuildRequestFactory.CreateForCommandLine(buildData, options));
+
+            StringAssert.Contains("unknown invocation", exception.Message);
+        }
+
+        [Test]
+        public void CreateForCommandLine_ExplicitRecipe_AllowsRepeatedStepTypesAndAppliesInvocationOverrides()
+        {
+            var firstConfiguration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            var secondConfiguration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            string firstPath = CreateAsset(firstConfiguration);
+            string secondPath = CreateAsset(secondConfiguration);
+            try
+            {
+                BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
+                {
+                    BuildCommandLineOptionNames.BuildTarget,
+                    nameof(BuildTarget.StandaloneWindows64),
+                    BuildCommandLineOptionNames.Recipe,
+                    "base-content=" + BuildStepTypeIds.AssetContent,
+                    BuildCommandLineOptionNames.Recipe,
+                    "dlc-content=" + BuildStepTypeIds.AssetContent,
+                    BuildCommandLineOptionNames.StepConfiguration,
+                    "base-content=" + firstPath,
+                    BuildCommandLineOptionNames.StepConfiguration,
+                    "dlc-content=" + secondPath,
+                    BuildCommandLineOptionNames.StepIncrementality,
+                    "dlc-content=Incremental",
+                    BuildCommandLineOptionNames.StepDependency,
+                    "dlc-content=Required:base-content"
                 });
 
                 BuildRequest request = BuildRequestFactory.CreateForCommandLine(buildData, options);
+                BuildStepInvocation first = request.GetInvocation("base-content");
+                BuildStepInvocation second = request.GetInvocation("dlc-content");
 
-                Assert.That(request.AssetContentProviderId, Is.Empty);
-                Assert.That(request.AssetContentConfiguration, Is.Null);
+                Assert.That(first.StepTypeId, Is.EqualTo(BuildStepTypeIds.AssetContent));
+                Assert.That(second.StepTypeId, Is.EqualTo(BuildStepTypeIds.AssetContent));
+                Assert.That(first.Configuration, Is.SameAs(firstConfiguration));
+                Assert.That(second.Configuration, Is.SameAs(secondConfiguration));
+                Assert.That(first.Incrementality, Is.EqualTo(BuildIncrementality.Clean));
+                Assert.That(second.Incrementality, Is.EqualTo(BuildIncrementality.Incremental));
+                Assert.That(second.Dependencies[0].InvocationId, Is.EqualTo("base-content"));
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(firstPath);
+                AssetDatabase.DeleteAsset(secondPath);
+            }
+        }
+
+        [Test]
+        public void CreateForCommandLine_ExplicitRecipe_DoesNotImplicitlyInheritAuthoredState()
+        {
+            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            string configurationPath = CreateAsset(configuration);
+            try
+            {
+                SetRecipe(new[]
+                {
+                    new BuildRecipeInvocation(
+                        "content",
+                        BuildStepTypeIds.AssetContent,
+                        configuration: configuration,
+                        incrementality: BuildIncrementality.Incremental,
+                        dependencies: new[]
+                        {
+                            new BuildInvocationDependency("foundation")
+                        })
+                });
+
+                BuildRequest request = CreateCommandLineRequest(
+                    BuildCommandLineOptionNames.Recipe,
+                    "content=" + BuildStepTypeIds.AssetContent);
+                BuildStepInvocation invocation = request.GetInvocation("content");
+
+                Assert.That(invocation.Configuration, Is.Null);
+                Assert.That(invocation.Incrementality, Is.EqualTo(BuildIncrementality.Clean));
+                Assert.That(invocation.Dependencies, Is.Empty);
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(configurationPath);
+            }
+        }
+
+        [Test]
+        public void CreateForCommandLine_OverrideForUnselectedInvocation_FailsClosed()
+        {
+            BuildCommandLineOptions options = ParseCommandLine(
+                BuildCommandLineOptionNames.Recipe,
+                "player-client=" + BuildStepTypeIds.Player,
+                BuildCommandLineOptionNames.StepIncrementality,
+                "content=Incremental");
+
+            BuildFailedException exception = Assert.Throws<BuildFailedException>(() =>
+                BuildRequestFactory.CreateForCommandLine(buildData, options));
+            StringAssert.Contains("does not target a selected recipe invocation", exception.Message);
+        }
+
+        [Test]
+        public void CreateForCommandLine_WhenSelectedConfigurationIsNotPersistent_FailsClosed()
+        {
+            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            try
+            {
+                SetRecipe(new[]
+                {
+                    new BuildRecipeInvocation(
+                        "content",
+                        BuildStepTypeIds.AssetContent,
+                        configuration: configuration)
+                });
+
+                BuildFailedException exception = Assert.Throws<BuildFailedException>(
+                    () => CreateCommandLineRequest());
+                StringAssert.Contains("persistent .asset below Assets", exception.Message);
             }
             finally
             {
@@ -223,45 +361,121 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
-        public void CreateForCommandLine_ContentOnlyRecipeRejectsProviderNone()
+        public void CreateInteractive_FocusedSelection_IgnoresDirtyConfigurationOutsideSelection()
         {
-            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
+            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            string configurationPath = CreateAsset(configuration);
+            AssetDatabase.SaveAssetIfDirty(configuration);
+            try
             {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64),
-                BuildCommandLineOptionNames.Provider,
-                "none",
-                BuildCommandLineOptionNames.Steps,
-                $"{BuildStepIds.HotUpdate},{BuildStepIds.AssetContent}"
-            });
+                SetRecipe(new[]
+                {
+                    new BuildRecipeInvocation(
+                        "content",
+                        BuildStepTypeIds.AssetContent,
+                        configuration: configuration),
+                    new BuildRecipeInvocation("player-client", BuildStepTypeIds.Player)
+                });
+                EditorUtility.SetDirty(configuration);
 
-            ArgumentException exception = Assert.Throws<ArgumentException>(
-                () => BuildRequestFactory.CreateForCommandLine(buildData, options));
+                BuildRequest request = BuildRequestFactory.CreateInteractive(
+                    buildData,
+                    BuildTarget.StandaloneWindows64,
+                    debugBuild: false,
+                    invocationIdsOverride: new[] { "player-client" });
 
-            StringAssert.Contains(BuildStepIds.AssetContent, exception.Message);
-            StringAssert.Contains("Asset Content Provider", exception.Message);
+                Assert.That(request.Steps.Count, Is.EqualTo(1));
+                Assert.That(request.Steps[0].InvocationId, Is.EqualTo("player-client"));
+                Assert.That(EditorUtility.IsDirty(configuration), Is.True);
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(configurationPath);
+            }
+        }
+
+        [Test]
+        public void CreateInteractive_WhenRequiredConfigurationIsDirty_FailsWithoutSavingIt()
+        {
+            var configuration = ScriptableObject.CreateInstance<AddressablesBuildConfig>();
+            string configurationPath = CreateAsset(configuration);
+            AssetDatabase.SaveAssetIfDirty(configuration);
+            try
+            {
+                SetRecipe(new[]
+                {
+                    new BuildRecipeInvocation(
+                        "content",
+                        BuildStepTypeIds.AssetContent,
+                        configuration: configuration,
+                        enabled: false),
+                    new BuildRecipeInvocation(
+                        "player-client",
+                        BuildStepTypeIds.Player,
+                        dependencies: new[]
+                        {
+                            new BuildInvocationDependency(
+                                "content",
+                                BuildDependencyMode.Required)
+                        })
+                });
+                EditorUtility.SetDirty(configuration);
+
+                InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+                    BuildRequestFactory.CreateInteractive(
+                        buildData,
+                        BuildTarget.StandaloneWindows64,
+                        debugBuild: false,
+                        invocationIdsOverride: new[] { "player-client" }));
+
+                StringAssert.Contains("unsaved changes", exception.Message);
+                StringAssert.Contains(configurationPath, exception.Message);
+                Assert.That(EditorUtility.IsDirty(configuration), Is.True);
+            }
+            finally
+            {
+                AssetDatabase.DeleteAsset(configurationPath);
+            }
         }
 
         [Test]
         public void CreateForCommandLine_WithVersionInfoPath_NormalizesSeparators()
         {
-            BuildCommandLineOptions options = BuildCommandLine.Parse(new[]
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64),
+            BuildRequest request = CreateCommandLineRequest(
                 BuildCommandLineOptionNames.VersionInfo,
-                "Assets\\Resources\\Build\\VersionInfoData.asset"
-            });
-
-            BuildRequest request = BuildRequestFactory.CreateForCommandLine(buildData, options);
+                "Assets\\Resources\\Build\\VersionInfoData.asset");
 
             Assert.That(
                 request.VersionInfoAssetPath,
                 Is.EqualTo("Assets/Resources/Build/VersionInfoData.asset"));
         }
 
+        [Test]
+        public void CreateForCommandLine_WithIdentityOverride_PreservesExplicitValues()
+        {
+            BuildRequest request = CreateCommandLineRequest(
+                BuildCommandLineOptionNames.BuildNumber,
+                "17",
+                BuildCommandLineOptionNames.SourceProvider,
+                "git",
+                BuildCommandLineOptionNames.SourceRevision,
+                "abc123",
+                BuildCommandLineOptionNames.SourceBranch,
+                "main",
+                BuildCommandLineOptionNames.CiProvider,
+                "jenkins",
+                BuildCommandLineOptionNames.CiRunId,
+                "job-17");
+
+            Assert.That(request.IdentityOverride.BuildNumber, Is.EqualTo(17));
+            Assert.That(request.IdentityOverride.SourceProvider, Is.EqualTo("git"));
+            Assert.That(request.IdentityOverride.SourceRevision, Is.EqualTo("abc123"));
+            Assert.That(request.IdentityOverride.SourceBranch, Is.EqualTo("main"));
+            Assert.That(request.IdentityOverride.CiProvider, Is.EqualTo("jenkins"));
+            Assert.That(request.IdentityOverride.CiRunId, Is.EqualTo("job-17"));
+        }
+
         [TestCase(CheatBuildMode.Disabled, false, null, false)]
-        [TestCase(CheatBuildMode.DevelopmentBuilds, false, null, false)]
         [TestCase(CheatBuildMode.DevelopmentBuilds, true, null, true)]
         [TestCase(CheatBuildMode.Enabled, false, null, true)]
         [TestCase(CheatBuildMode.Disabled, false, BuildCommandLineOptionNames.EnableCheat, true)]
@@ -276,54 +490,87 @@ namespace Build.Pipeline.Tests.Editor
             serialized.FindProperty("cheatBuildMode").enumValueIndex = (int)mode;
             serialized.ApplyModifiedPropertiesWithoutUndo();
 
-            var arguments = new List<string>
-            {
-                BuildCommandLineOptionNames.BuildTarget,
-                nameof(BuildTarget.StandaloneWindows64)
-            };
+            var extra = new List<string>();
             if (debugBuild)
             {
-                arguments.Add(BuildCommandLineOptionNames.Development);
+                extra.Add(BuildCommandLineOptionNames.Development);
             }
 
             if (!string.IsNullOrEmpty(overrideOption))
             {
-                arguments.Add(overrideOption);
+                extra.Add(overrideOption);
             }
 
             BuildRequest request = BuildRequestFactory.CreateForCommandLine(
                 buildData,
-                BuildCommandLine.Parse(arguments));
+                ParseCommandLine(extra.ToArray()));
 
             Assert.That(request.CheatEnabled, Is.EqualTo(expected));
             Assert.That(request.CheatBuildMode, Is.EqualTo(mode));
             Assert.That(request.DebugBuild, Is.EqualTo(debugBuild));
         }
 
-        [Test]
-        public void ContainsCheatDefine_RequiresAnExactEffectiveCompilerSymbol()
+        private BuildRequest CreateCommandLineRequest(params string[] extraArguments)
         {
-            Assert.That(
-                CheatBuildDefineUtility.ContainsCheatDefine(
-                    new[] { "OTHER", " ENABLE_CHEAT " }),
-                Is.True);
-            Assert.That(
-                CheatBuildDefineUtility.ContainsCheatDefine(
-                    new[] { "enable_cheat", "ENABLE_CHEAT_EXTRA" }),
-                Is.False);
-            Assert.That(
-                CheatBuildDefineUtility.ContainsCheatDefine(null),
-                Is.False);
-            Assert.That(
-                CheatBuildDefineUtility.IsCheatRuntimeAssemblyWithDefine(
-                    "Unrelated.Runtime",
-                    new[] { CheatBuildDefineUtility.DefineSymbol }),
-                Is.False);
-            Assert.That(
-                CheatBuildDefineUtility.IsCheatRuntimeAssemblyWithDefine(
-                    "CycloneGames.Cheat.Runtime",
-                    new[] { CheatBuildDefineUtility.DefineSymbol }),
-                Is.True);
+            return BuildRequestFactory.CreateForCommandLine(
+                buildData,
+                ParseCommandLine(extraArguments));
+        }
+
+        private static BuildCommandLineOptions ParseCommandLine(params string[] extraArguments)
+        {
+            var arguments = new List<string>
+            {
+                BuildCommandLineOptionNames.BuildTarget,
+                nameof(BuildTarget.StandaloneWindows64)
+            };
+            arguments.AddRange(extraArguments);
+            return BuildCommandLine.Parse(arguments);
+        }
+
+        private static string CreateAsset(ScriptableObject configuration)
+        {
+            string path = $"Assets/Build/Tests/Editor/RequestFactory-{Guid.NewGuid():N}.asset";
+            AssetDatabase.CreateAsset(configuration, path);
+            return path;
+        }
+
+        private void SetRecipe(IReadOnlyList<BuildRecipeInvocation> entries)
+        {
+            var serialized = new SerializedObject(buildData);
+            SerializedProperty recipe = serialized.FindProperty("recipeInvocations");
+            recipe.arraySize = entries.Count;
+            for (int index = 0; index < entries.Count; index++)
+            {
+                BuildRecipeInvocation entry = entries[index];
+                SerializedProperty element = recipe.GetArrayElementAtIndex(index);
+                element.FindPropertyRelative("enabled").boolValue = entry.Enabled;
+                element.FindPropertyRelative("invocationId").stringValue = entry.InvocationId;
+                element.FindPropertyRelative("stepTypeId").stringValue = entry.StepTypeId;
+                element.FindPropertyRelative("configuration").objectReferenceValue =
+                    entry.Configuration;
+                element.FindPropertyRelative("incrementality").enumValueIndex =
+                    (int)entry.Incrementality;
+
+                IReadOnlyList<BuildInvocationDependency> dependencies = entry.Dependencies;
+                SerializedProperty serializedDependencies =
+                    element.FindPropertyRelative("dependencies");
+                serializedDependencies.arraySize = dependencies.Count;
+                for (int dependencyIndex = 0;
+                     dependencyIndex < dependencies.Count;
+                     dependencyIndex++)
+                {
+                    BuildInvocationDependency dependency = dependencies[dependencyIndex];
+                    SerializedProperty serializedDependency =
+                        serializedDependencies.GetArrayElementAtIndex(dependencyIndex);
+                    serializedDependency.FindPropertyRelative("invocationId").stringValue =
+                        dependency.InvocationId;
+                    serializedDependency.FindPropertyRelative("mode").enumValueIndex =
+                        (int)dependency.Mode;
+                }
+            }
+
+            serialized.ApplyModifiedPropertiesWithoutUndo();
         }
     }
 }

@@ -11,9 +11,15 @@ namespace Build.Pipeline.Editor
     public sealed class AddressablesRecoveryCoordinator : IBuildRecoveryParticipant
     {
         public const string ParticipantId = "Addressables";
+        private static readonly string[] StatePaths =
+        {
+            ".buildpipeline/transactions/addressables-settings",
+            ".buildpipeline/transactions/addressables"
+        };
 
         public string Id => ParticipantId;
         public int Priority => 100;
+        public System.Collections.Generic.IReadOnlyList<string> StateDirectoryRelativePaths => StatePaths;
 
         public void Recover(string projectRoot)
         {

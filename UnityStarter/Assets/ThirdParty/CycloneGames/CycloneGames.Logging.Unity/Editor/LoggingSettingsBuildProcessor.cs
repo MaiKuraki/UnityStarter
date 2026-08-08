@@ -3,8 +3,6 @@ using System;
 using System.Globalization;
 using System.IO;
 using System.Runtime.CompilerServices;
-using System.Security.Cryptography;
-using System.Text;
 using CycloneGames.Logging.Pipeline;
 using UnityEditor;
 using UnityEditor.Build;
@@ -19,35 +17,13 @@ namespace CycloneGames.Logging.Unity.Editor
     internal sealed class LoggingSettingsBuildProcessor : IPreprocessBuildWithReport, IPostprocessBuildWithReport
     {
         internal const string CanonicalSettingsAssetPath = "Assets/Resources/" + UnityLoggingSettings.SettingsResourcePath + ".asset";
-        internal const string GeneratedSettingsAssetPath = "Assets/Generated/CycloneGames.Logging.Unity/Resources/CycloneGames.Logging.Unity/LoggingSettingsBuildOverride.asset";
-        internal const int MaximumMarkerFileBytes = 64 * 1024;
+        internal const string GeneratedSettingsAssetPath = LoggingSettingsBuildOverrideTransaction.GeneratedSettingsAssetPath;
 
-        private const int MarkerSchemaVersion = 1;
-        private const string GeneratedRootFolderPath = "Assets/Generated/CycloneGames.Logging.Unity";
-        private const string GeneratedResourcesFolderPath = GeneratedRootFolderPath + "/Resources";
-        private const string GeneratedSettingsFolderPath = GeneratedResourcesFolderPath + "/CycloneGames.Logging.Unity";
-        private const string MarkerDirectoryRelativePath = "Library/CycloneGames.Logging.Unity";
-        private const string MarkerFileName = "LoggingSettingsBuildOverride.marker.json";
-        private const string MarkerPhasePrepared = "Prepared";
-        private const string MarkerPhaseActive = "Active";
         private const string LogPrefix = "[LogPipeline Build]";
         private static readonly char[] PortableInvalidFileNameCharacters = { '<', '>', ':', '"', '/', '\\', '|', '?', '*' };
+        private static LoggingSettingsBuildOverrideTransaction _activeTransaction;
 
         public int callbackOrder => -850;
-
-        [InitializeOnLoadMethod]
-        private static void CleanupStaleBuildOverride()
-        {
-            try
-            {
-                CleanupTrackedOverride(false);
-                EnsureGeneratedAssetPathIsClear();
-            }
-            catch (Exception exception) when (!(exception is OutOfMemoryException))
-            {
-                UnityConsoleOutput.Write(LogType.Error, $"{LogPrefix} Stale override cleanup failed closed. No generated asset was deleted unless its marker identity matched exactly. {exception.Message}");
-            }
-        }
 
         [MenuItem("Tools/CycloneGames/Logging/Create Default Settings", priority = 100)]
         private static void CreateDefaultSettings()
@@ -60,8 +36,25 @@ namespace CycloneGames.Logging.Unity.Editor
 
         public void OnPreprocessBuild(BuildReport report)
         {
-            CleanupTrackedOverride(false);
-            EnsureGeneratedAssetPathIsClear();
+            if (_activeTransaction != null)
+            {
+                throw new BuildFailedException($"{LogPrefix} A LoggingSettings build transaction is already active.");
+            }
+
+            string projectRoot = GetProjectRoot();
+            try
+            {
+                LoggingSettingsBuildOverrideTransaction.ThrowIfPendingEvidence(projectRoot);
+            }
+            catch (OutOfMemoryException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw new BuildFailedException(
+                    $"{LogPrefix} Build cannot start until LoggingSettings recovery succeeds: {exception.Message}");
+            }
 
             var options = LoggingBuildCommandLineOptions.Resolve();
             if (!options.HasOverrides)
@@ -70,51 +63,51 @@ namespace CycloneGames.Logging.Unity.Editor
                 return;
             }
 
-            CreateGeneratedBuildOverride(options);
+            _activeTransaction = CreateGeneratedBuildOverride(projectRoot, options);
         }
 
         public void OnPostprocessBuild(BuildReport report)
         {
-            CleanupTrackedOverride(true);
-            EnsureGeneratedAssetPathIsClear();
-        }
-
-        internal static string ComputeProjectIdentityForTests(string dataPath)
-        {
-            return ComputeProjectIdentity(dataPath);
-        }
-
-        internal static bool ValidateMarkerForTests(
-            string json,
-            string expectedProjectIdentity,
-            string actualAssetGuid,
-            out string error)
-        {
-            if (!TryDeserializeMarker(json, out var marker, out error))
+            LoggingSettingsBuildOverrideTransaction transaction = _activeTransaction;
+            _activeTransaction = null;
+            if (transaction == null)
             {
-                return false;
+                try
+                {
+                    LoggingSettingsBuildOverrideTransaction.ThrowIfPendingEvidence(GetProjectRoot());
+                    return;
+                }
+                catch (OutOfMemoryException)
+                {
+                    throw;
+                }
+                catch (Exception exception)
+                {
+                    throw new BuildFailedException(
+                        $"{LogPrefix} Post-build verification found a pending LoggingSettings transaction: {exception.Message}");
+                }
             }
 
-            return ValidateCompleteMarker(marker, expectedProjectIdentity, actualAssetGuid, out error);
-        }
-
-        internal static bool CanCleanupPreparedMarkerForTests(
-            string json,
-            string expectedProjectIdentity,
-            bool generatedAssetExists,
-            out string error)
-        {
-            if (!TryDeserializeMarker(json, out var marker, out error))
+            try
             {
-                return false;
+                transaction.Complete();
+                UnityConsoleOutput.Write(
+                    LogType.Log,
+                    $"{LogPrefix} Removed the verified generated LoggingSettings build override.");
             }
-
-            return CanCleanupPreparedMarker(marker, expectedProjectIdentity, generatedAssetExists, out error);
-        }
-
-        internal static string ReadMarkerJsonForTests(string markerPath)
-        {
-            return ReadBoundedMarkerJson(markerPath);
+            catch (OutOfMemoryException)
+            {
+                throw;
+            }
+            catch (Exception exception)
+            {
+                throw new BuildFailedException(
+                    $"{LogPrefix} Post-build LoggingSettings cleanup failed; recovery evidence was retained: {exception.Message}");
+            }
+            finally
+            {
+                transaction.Dispose();
+            }
         }
 
         internal static bool ApplyOptionsForTests(
@@ -128,86 +121,45 @@ namespace CycloneGames.Logging.Unity.Editor
             return options.HasOverrides;
         }
 
-        private static void CreateGeneratedBuildOverride(LoggingBuildCommandLineOptions options)
+        private static LoggingSettingsBuildOverrideTransaction CreateGeneratedBuildOverride(
+            string projectRoot,
+            LoggingBuildCommandLineOptions options)
         {
-            EnsureGeneratedAssetPathIsClear();
-
-            var marker = new LoggingSettingsBuildMarker
-            {
-                schemaVersion = MarkerSchemaVersion,
-                transactionId = Guid.NewGuid().ToString("N"),
-                projectIdentity = ComputeProjectIdentity(Application.dataPath),
-                generatedAssetGuid = string.Empty,
-                assetPath = GeneratedSettingsAssetPath,
-                phase = MarkerPhasePrepared
-            };
-
-            SaveMarkerAtomic(marker);
-
             UnityLoggingSettings generatedSettings = null;
-            bool assetCreated = false;
             try
             {
                 generatedSettings = CloneCanonicalSettings();
                 generatedSettings.name = "LoggingSettingsBuildOverride";
                 options.ApplyTo(generatedSettings);
                 ValidateSettings(generatedSettings);
-
-                EnsureAssetFolder(GeneratedSettingsFolderPath);
-                EnsureGeneratedAssetPathIsClear();
-                AssetDatabase.CreateAsset(generatedSettings, GeneratedSettingsAssetPath);
-                assetCreated = true;
-                generatedSettings = null;
-
-                AssetDatabase.SaveAssets();
-                AssetDatabase.ImportAsset(GeneratedSettingsAssetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
-
-                string generatedGuid = AssetDatabase.AssetPathToGUID(GeneratedSettingsAssetPath);
-                if (!IsValidAssetGuid(generatedGuid))
-                {
-                    throw new BuildFailedException($"{LogPrefix} Unity did not assign a valid GUID to the generated LoggingSettings override.");
-                }
-
-                marker.generatedAssetGuid = generatedGuid;
-                marker.phase = MarkerPhaseActive;
-                SaveMarkerAtomic(marker);
-
-                var generatedAsset = AssetDatabase.LoadAssetAtPath<UnityLoggingSettings>(GeneratedSettingsAssetPath);
-                if (generatedAsset == null)
-                {
-                    throw new BuildFailedException($"{LogPrefix} Generated LoggingSettings override could not be loaded after import.");
-                }
-
-                UnityConsoleOutput.Write(LogType.Log, $"{LogPrefix} Generated isolated build override at {GeneratedSettingsAssetPath}: {options.Describe(generatedAsset)}");
+                LoggingSettingsBuildOverrideTransaction transaction =
+                    LoggingSettingsBuildOverrideTransaction.Begin(projectRoot, generatedSettings);
+                UnityLoggingSettings generatedAsset =
+                    AssetDatabase.LoadAssetAtPath<UnityLoggingSettings>(GeneratedSettingsAssetPath);
+                UnityConsoleOutput.Write(
+                    LogType.Log,
+                    $"{LogPrefix} Generated isolated build override at {GeneratedSettingsAssetPath}: {options.Describe(generatedAsset)}");
+                return transaction;
             }
             catch (OutOfMemoryException)
             {
-                if (generatedSettings != null)
-                {
-                    UnityEngine.Object.DestroyImmediate(generatedSettings);
-                }
-
                 throw;
             }
             catch (Exception exception)
             {
-                if (generatedSettings != null)
-                {
-                    UnityEngine.Object.DestroyImmediate(generatedSettings);
-                }
-
-                if (!assetCreated && !DoesAssetPathExist(GeneratedSettingsAssetPath))
-                {
-                    DeleteMarkerFileIfPresent();
-                    CleanupGeneratedFolders();
-                }
-
                 if (exception is BuildFailedException)
                 {
                     throw;
                 }
 
                 throw new BuildFailedException($"{LogPrefix} Failed to create the generated LoggingSettings build override: {exception.Message}");
+            }
+            finally
+            {
+                if (generatedSettings != null)
+                {
+                    UnityEngine.Object.DestroyImmediate(generatedSettings);
+                }
             }
         }
 
@@ -256,365 +208,9 @@ namespace CycloneGames.Logging.Unity.Editor
             EnsureAssetFolder(GetAssetDirectory(CanonicalSettingsAssetPath));
             settings = ScriptableObject.CreateInstance<UnityLoggingSettings>();
             AssetDatabase.CreateAsset(settings, CanonicalSettingsAssetPath);
-            AssetDatabase.SaveAssets();
+            AssetDatabase.SaveAssetIfDirty(settings);
             AssetDatabase.ImportAsset(CanonicalSettingsAssetPath, ImportAssetOptions.ForceSynchronousImport | ImportAssetOptions.ForceUpdate);
             return settings;
-        }
-
-        private static void CleanupTrackedOverride(bool logResult)
-        {
-            string markerPath = GetMarkerAbsolutePath();
-            if (!File.Exists(markerPath))
-            {
-                return;
-            }
-
-            LoggingSettingsBuildMarker marker;
-            try
-            {
-                string json = ReadBoundedMarkerJson(markerPath);
-                if (!TryDeserializeMarker(json, out marker, out string parseError))
-                {
-                    throw new BuildFailedException($"{LogPrefix} Build override marker is invalid; cleanup was refused: {parseError}");
-                }
-            }
-            catch (BuildFailedException)
-            {
-                throw;
-            }
-            catch (Exception exception) when (!(exception is OutOfMemoryException))
-            {
-                throw new BuildFailedException($"{LogPrefix} Build override marker could not be read; cleanup was refused: {exception.Message}");
-            }
-
-            string expectedProjectIdentity = ComputeProjectIdentity(Application.dataPath);
-            bool generatedAssetExists = DoesAssetPathExist(GeneratedSettingsAssetPath);
-            if (string.Equals(marker.phase, MarkerPhasePrepared, StringComparison.Ordinal))
-            {
-                if (!CanCleanupPreparedMarker(marker, expectedProjectIdentity, generatedAssetExists, out string preparedMarkerError))
-                {
-                    throw new BuildFailedException($"{LogPrefix} Prepared build override marker cleanup was refused: {preparedMarkerError}");
-                }
-
-                DeleteMarkerFileIfPresent();
-                CleanupGeneratedFolders();
-                AssetDatabase.SaveAssets();
-                if (logResult)
-                {
-                    UnityConsoleOutput.Write(LogType.Log, $"{LogPrefix} Removed an interrupted prepared build override marker because no generated asset existed.");
-                }
-
-                return;
-            }
-
-            string actualGuid = AssetDatabase.AssetPathToGUID(GeneratedSettingsAssetPath);
-            if (!ValidateCompleteMarker(marker, expectedProjectIdentity, actualGuid, out string validationError))
-            {
-                throw new BuildFailedException($"{LogPrefix} Build override marker identity check failed; cleanup was refused: {validationError}");
-            }
-
-            if (!AssetDatabase.DeleteAsset(GeneratedSettingsAssetPath))
-            {
-                throw new BuildFailedException($"{LogPrefix} Unity refused to delete the identity-matched generated settings asset. The marker was preserved.");
-            }
-
-            if (DoesAssetPathExist(GeneratedSettingsAssetPath))
-            {
-                throw new BuildFailedException($"{LogPrefix} Generated settings asset still exists after AssetDatabase.DeleteAsset. The marker was preserved.");
-            }
-
-            DeleteMarkerFileIfPresent();
-            CleanupGeneratedFolders();
-            AssetDatabase.SaveAssets();
-
-            if (logResult)
-            {
-                UnityConsoleOutput.Write(LogType.Log, $"{LogPrefix} Removed the identity-matched generated LoggingSettings build override.");
-            }
-        }
-
-        private static string ReadBoundedMarkerJson(string markerPath)
-        {
-            var fileInfo = new FileInfo(markerPath);
-            if (fileInfo.Length > MaximumMarkerFileBytes)
-            {
-                throw new InvalidDataException(
-                    $"Build override marker exceeds the {MaximumMarkerFileBytes.ToString(CultureInfo.InvariantCulture)}-byte limit.");
-            }
-
-            byte[] buffer = new byte[MaximumMarkerFileBytes + 1];
-            int bytesRead = 0;
-            using (var stream = new FileStream(
-                       markerPath,
-                       FileMode.Open,
-                       FileAccess.Read,
-                       FileShare.Read,
-                       4096,
-                       FileOptions.SequentialScan))
-            {
-                while (bytesRead < buffer.Length)
-                {
-                    int read = stream.Read(buffer, bytesRead, buffer.Length - bytesRead);
-                    if (read == 0)
-                    {
-                        break;
-                    }
-
-                    bytesRead += read;
-                }
-            }
-
-            if (bytesRead > MaximumMarkerFileBytes)
-            {
-                throw new InvalidDataException(
-                    $"Build override marker exceeds the {MaximumMarkerFileBytes.ToString(CultureInfo.InvariantCulture)}-byte limit.");
-            }
-
-            return Encoding.UTF8.GetString(buffer, 0, bytesRead);
-        }
-
-        private static void EnsureGeneratedAssetPathIsClear()
-        {
-            if (!DoesAssetPathExist(GeneratedSettingsAssetPath))
-            {
-                return;
-            }
-
-            throw new BuildFailedException(
-                $"{LogPrefix} Generated override path is already occupied without a verified active transaction: {GeneratedSettingsAssetPath}. " +
-                "Cleanup was refused to protect the existing asset.");
-        }
-
-        private static bool TryDeserializeMarker(string json, out LoggingSettingsBuildMarker marker, out string error)
-        {
-            marker = null;
-            if (string.IsNullOrWhiteSpace(json))
-            {
-                error = "the marker is empty";
-                return false;
-            }
-
-            try
-            {
-                marker = JsonUtility.FromJson<LoggingSettingsBuildMarker>(json);
-            }
-            catch (Exception exception) when (!(exception is OutOfMemoryException))
-            {
-                error = $"JSON parsing failed: {exception.Message}";
-                return false;
-            }
-
-            if (marker == null)
-            {
-                error = "JSON did not contain a marker object";
-                return false;
-            }
-
-            error = string.Empty;
-            return true;
-        }
-
-        private static bool CanCleanupPreparedMarker(
-            LoggingSettingsBuildMarker marker,
-            string expectedProjectIdentity,
-            bool generatedAssetExists,
-            out string error)
-        {
-            if (marker.schemaVersion != MarkerSchemaVersion)
-            {
-                error = $"unsupported marker schema {marker.schemaVersion}";
-                return false;
-            }
-
-            if (!Guid.TryParseExact(marker.transactionId, "N", out _))
-            {
-                error = "transactionId is missing or invalid";
-                return false;
-            }
-
-            if (string.IsNullOrEmpty(marker.projectIdentity) ||
-                !string.Equals(marker.projectIdentity, expectedProjectIdentity, StringComparison.Ordinal))
-            {
-                error = "project identity does not match this checkout";
-                return false;
-            }
-
-            if (!string.Equals(marker.assetPath, GeneratedSettingsAssetPath, StringComparison.Ordinal))
-            {
-                error = "asset path does not match the Logging-owned generated path";
-                return false;
-            }
-
-            if (!string.Equals(marker.phase, MarkerPhasePrepared, StringComparison.Ordinal))
-            {
-                error = $"marker phase is not {MarkerPhasePrepared}";
-                return false;
-            }
-
-            if (!string.IsNullOrEmpty(marker.generatedAssetGuid))
-            {
-                error = "a prepared marker must not contain a generated asset GUID";
-                return false;
-            }
-
-            if (generatedAssetExists)
-            {
-                error = "the generated asset path still exists, so ownership cannot be proven safely";
-                return false;
-            }
-
-            error = string.Empty;
-            return true;
-        }
-
-        private static bool ValidateCompleteMarker(
-            LoggingSettingsBuildMarker marker,
-            string expectedProjectIdentity,
-            string actualAssetGuid,
-            out string error)
-        {
-            if (marker.schemaVersion != MarkerSchemaVersion)
-            {
-                error = $"unsupported marker schema {marker.schemaVersion}";
-                return false;
-            }
-
-            if (!Guid.TryParseExact(marker.transactionId, "N", out _))
-            {
-                error = "transactionId is missing or invalid";
-                return false;
-            }
-
-            if (string.IsNullOrEmpty(marker.projectIdentity) ||
-                !string.Equals(marker.projectIdentity, expectedProjectIdentity, StringComparison.Ordinal))
-            {
-                error = "project identity does not match this checkout";
-                return false;
-            }
-
-            if (!string.Equals(marker.assetPath, GeneratedSettingsAssetPath, StringComparison.Ordinal))
-            {
-                error = "asset path does not match the Logging-owned generated path";
-                return false;
-            }
-
-            if (!string.Equals(marker.phase, MarkerPhaseActive, StringComparison.Ordinal))
-            {
-                error = $"marker phase is not {MarkerPhaseActive}";
-                return false;
-            }
-
-            if (!IsValidAssetGuid(marker.generatedAssetGuid))
-            {
-                error = "generated asset GUID is missing or invalid";
-                return false;
-            }
-
-            if (!IsValidAssetGuid(actualAssetGuid) ||
-                !string.Equals(marker.generatedAssetGuid, actualAssetGuid, StringComparison.OrdinalIgnoreCase))
-            {
-                error = "generated asset GUID does not match the asset currently at the tracked path";
-                return false;
-            }
-
-            error = string.Empty;
-            return true;
-        }
-
-        private static void SaveMarkerAtomic(LoggingSettingsBuildMarker marker)
-        {
-            string markerPath = GetMarkerAbsolutePath();
-            string directory = Path.GetDirectoryName(markerPath);
-            if (string.IsNullOrEmpty(directory))
-            {
-                throw new InvalidOperationException($"{LogPrefix} Marker directory could not be resolved.");
-            }
-
-            Directory.CreateDirectory(directory);
-            string transactionSuffix = string.IsNullOrEmpty(marker.transactionId) ? Guid.NewGuid().ToString("N") : marker.transactionId;
-            string temporaryPath = markerPath + "." + transactionSuffix + ".tmp";
-            string backupPath = markerPath + "." + transactionSuffix + ".bak";
-
-            try
-            {
-                string json = JsonUtility.ToJson(marker);
-                using (var stream = new FileStream(temporaryPath, FileMode.Create, FileAccess.Write, FileShare.None))
-                using (var writer = new StreamWriter(stream, new UTF8Encoding(false)))
-                {
-                    writer.Write(json);
-                    writer.Flush();
-                    stream.Flush(true);
-                }
-
-                if (File.Exists(markerPath))
-                {
-                    File.Replace(temporaryPath, markerPath, backupPath, true);
-                    if (File.Exists(backupPath))
-                    {
-                        File.Delete(backupPath);
-                    }
-                }
-                else
-                {
-                    File.Move(temporaryPath, markerPath);
-                }
-            }
-            catch
-            {
-                if (File.Exists(temporaryPath))
-                {
-                    File.Delete(temporaryPath);
-                }
-
-                throw;
-            }
-        }
-
-        private static void DeleteMarkerFileIfPresent()
-        {
-            string markerPath = GetMarkerAbsolutePath();
-            if (File.Exists(markerPath))
-            {
-                File.Delete(markerPath);
-            }
-        }
-
-        private static string GetMarkerAbsolutePath()
-        {
-            return Path.Combine(GetProjectRoot(), MarkerDirectoryRelativePath, MarkerFileName);
-        }
-
-        private static string ComputeProjectIdentity(string dataPath)
-        {
-            if (string.IsNullOrWhiteSpace(dataPath))
-            {
-                throw new ArgumentException("A project Assets path is required.", nameof(dataPath));
-            }
-
-            string normalizedPath = Path.GetFullPath(dataPath)
-                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)
-                .Replace('\\', '/');
-            if (Path.DirectorySeparatorChar == '\\')
-            {
-                normalizedPath = normalizedPath.ToUpperInvariant();
-            }
-
-            byte[] pathBytes = Encoding.UTF8.GetBytes(normalizedPath);
-            byte[] hash;
-            using (var algorithm = SHA256.Create())
-            {
-                hash = algorithm.ComputeHash(pathBytes);
-            }
-
-            const string hex = "0123456789abcdef";
-            var result = new char[hash.Length * 2];
-            for (int i = 0; i < hash.Length; i++)
-            {
-                result[i * 2] = hex[hash[i] >> 4];
-                result[i * 2 + 1] = hex[hash[i] & 0x0F];
-            }
-
-            return new string(result);
         }
 
         private static void EnsureAssetFolder(string folderPath)
@@ -647,47 +243,6 @@ namespace CycloneGames.Logging.Unity.Editor
 
                 current = next;
             }
-        }
-
-        private static void CleanupGeneratedFolders()
-        {
-            CleanupEmptyLoggingOwnedFolder(GeneratedSettingsFolderPath);
-            CleanupEmptyLoggingOwnedFolder(GeneratedResourcesFolderPath);
-            CleanupEmptyLoggingOwnedFolder(GeneratedRootFolderPath);
-        }
-
-        private static void CleanupEmptyLoggingOwnedFolder(string assetFolderPath)
-        {
-            if (!IsLoggingOwnedGeneratedFolder(assetFolderPath) || !AssetDatabase.IsValidFolder(assetFolderPath))
-            {
-                return;
-            }
-
-            string absolutePath = AssetPathToAbsolutePath(assetFolderPath);
-            if (!Directory.Exists(absolutePath))
-            {
-                return;
-            }
-
-            using (var entries = Directory.EnumerateFileSystemEntries(absolutePath).GetEnumerator())
-            {
-                if (entries.MoveNext())
-                {
-                    return;
-                }
-            }
-
-            if (!AssetDatabase.DeleteAsset(assetFolderPath))
-            {
-                UnityConsoleOutput.Write(LogType.Warning, $"{LogPrefix} Unity did not remove empty Logging-owned folder: {assetFolderPath}");
-            }
-        }
-
-        private static bool IsLoggingOwnedGeneratedFolder(string assetFolderPath)
-        {
-            return string.Equals(assetFolderPath, GeneratedSettingsFolderPath, StringComparison.Ordinal) ||
-                   string.Equals(assetFolderPath, GeneratedResourcesFolderPath, StringComparison.Ordinal) ||
-                   string.Equals(assetFolderPath, GeneratedRootFolderPath, StringComparison.Ordinal);
         }
 
         private static bool DoesAssetPathExist(string assetPath)
@@ -738,28 +293,6 @@ namespace CycloneGames.Logging.Unity.Editor
             return string.Equals(normalizedCandidate, normalizedRoot, comparison) ||
                    normalizedCandidate.StartsWith(normalizedRoot + Path.DirectorySeparatorChar, comparison) ||
                    normalizedCandidate.StartsWith(normalizedRoot + Path.AltDirectorySeparatorChar, comparison);
-        }
-
-        private static bool IsValidAssetGuid(string value)
-        {
-            if (string.IsNullOrEmpty(value) || value.Length != 32)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < value.Length; i++)
-            {
-                char character = value[i];
-                bool isHex = character >= '0' && character <= '9' ||
-                             character >= 'a' && character <= 'f' ||
-                             character >= 'A' && character <= 'F';
-                if (!isHex)
-                {
-                    return false;
-                }
-            }
-
-            return true;
         }
 
         internal static void ValidateSettings(UnityLoggingSettings settings)
@@ -946,17 +479,6 @@ namespace CycloneGames.Logging.Unity.Editor
         {
             int index = assetPath.LastIndexOf('/');
             return index < 0 ? string.Empty : assetPath.Substring(0, index);
-        }
-
-        [Serializable]
-        private sealed class LoggingSettingsBuildMarker
-        {
-            public int schemaVersion;
-            public string transactionId;
-            public string projectIdentity;
-            public string generatedAssetGuid;
-            public string assetPath;
-            public string phase;
         }
 
         private sealed class LoggingBuildCommandLineOptions

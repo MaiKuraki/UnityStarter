@@ -31,8 +31,9 @@ namespace Build.Pipeline.Tests.Editor
                 null);
 
             Assert.That(result.ProviderId, Is.EqualTo("LocalDevelopment"));
-            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.0"));
+            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.1"));
             Assert.That(result.CommitHash, Is.EqualTo("local"));
+            Assert.That(result.IdentityOrigin, Is.EqualTo(BuildIdentityOrigin.LocalDevelopment));
         }
 
         [Test]
@@ -53,6 +54,140 @@ namespace Build.Pipeline.Tests.Editor
             Assert.That(provider.CaptureCount, Is.EqualTo(1));
             Assert.That(result.ProviderId, Is.EqualTo("TestVcs"));
             Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.42"));
+            Assert.That(result.DetectedProviderId, Is.EqualTo("TestVcs"));
+            Assert.That(result.EffectiveSourceRevision, Is.EqualTo("abcdef123456"));
+            Assert.That(result.IdentityOrigin, Is.EqualTo(BuildIdentityOrigin.VersionControl));
+        }
+
+        [Test]
+        public void Resolve_ExplicitIdentityOverridesBuildNumberAndBranch_WhenSourceMatches()
+        {
+            var identityOverride = new BuildIdentityOverride(
+                9001,
+                "TestVcs",
+                "ABCDEF123456",
+                "release/1.0",
+                "TeamCity",
+                "build-9001");
+            var provider = new FakeProvider(
+                new VersionControlMetadata(
+                    "TestVcs",
+                    "abcdef123456",
+                    "42",
+                    "main",
+                    "2026-08-02T00:00:00Z"));
+
+            BuildVersionContext result = BuildVersionResolver.Resolve(
+                CreateRequest(
+                    batchMode: true,
+                    debugBuild: false,
+                    identityOverride: identityOverride),
+                provider);
+
+            Assert.That(result.BuildNumber, Is.EqualTo(9001));
+            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.9001"));
+            Assert.That(result.ProviderId, Is.EqualTo("TestVcs"));
+            Assert.That(result.CommitHash, Is.EqualTo("ABCDEF123456"));
+            Assert.That(result.Branch, Is.EqualTo("release/1.0"));
+            Assert.That(result.DetectedCommitHash, Is.EqualTo("abcdef123456"));
+            Assert.That(result.DetectedBranch, Is.EqualTo("main"));
+            Assert.That(result.DetectedBuildNumber, Is.EqualTo(42));
+            Assert.That(result.IdentityOrigin, Is.EqualTo(BuildIdentityOrigin.ExplicitOverride));
+            Assert.That(result.CiProvider, Is.EqualTo("TeamCity"));
+            Assert.That(result.CiRunId, Is.EqualTo("build-9001"));
+        }
+
+        [TestCase("OtherVcs", "abcdef123456")]
+        [TestCase("TestVcs", "different")]
+        public void Resolve_WhenExplicitSourceDisagreesWithDetectedWorkspace_Fails(
+            string sourceProvider,
+            string sourceRevision)
+        {
+            var identityOverride = new BuildIdentityOverride(
+                100,
+                sourceProvider,
+                sourceRevision,
+                "main",
+                null,
+                null);
+            var provider = new FakeProvider(
+                new VersionControlMetadata(
+                    "TestVcs",
+                    "abcdef123456",
+                    "42",
+                    "main",
+                    "2026-08-02T00:00:00Z"));
+
+            Assert.Throws<BuildFailedException>(
+                () => BuildVersionResolver.Resolve(
+                    CreateRequest(true, false, identityOverride),
+                    provider));
+        }
+
+        [Test]
+        public void Resolve_WithoutDetectedProvider_CompleteExplicitIdentitySucceeds()
+        {
+            var identityOverride = new BuildIdentityOverride(
+                73,
+                "Git",
+                "0123456789abcdef",
+                "refs/heads/release",
+                "Jenkins",
+                "release-73");
+
+            BuildVersionContext result = BuildVersionResolver.Resolve(
+                CreateRequest(true, false, identityOverride),
+                null);
+
+            Assert.That(result.PackageVersion, Is.EqualTo("1.0.0.73"));
+            Assert.That(result.DetectedProviderId, Is.Empty);
+            Assert.That(result.ProviderId, Is.EqualTo("Git"));
+            Assert.That(result.IdentityOrigin, Is.EqualTo(BuildIdentityOrigin.ExplicitOverride));
+        }
+
+        [Test]
+        public void BuildIdentityOverride_RejectsPartialGroupsAndInvalidBuildNumber()
+        {
+            Assert.Throws<ArgumentException>(
+                () => new BuildIdentityOverride(
+                    null,
+                    "Git",
+                    null,
+                    "main",
+                    null,
+                    null));
+            Assert.Throws<ArgumentException>(
+                () => new BuildIdentityOverride(
+                    null,
+                    null,
+                    null,
+                    null,
+                    "Jenkins",
+                    null));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new BuildIdentityOverride(
+                    0,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null));
+            Assert.Throws<ArgumentOutOfRangeException>(
+                () => new BuildIdentityOverride(
+                    (long)int.MaxValue + 1L,
+                    null,
+                    null,
+                    null,
+                    null,
+                    null));
+            Assert.Throws<ArgumentException>(
+                () => new BuildIdentityOverride(
+                    null,
+                    null,
+                    null,
+                    null,
+                    "Jenkins\n",
+                    "run-1"));
         }
 
         [Test]
@@ -72,7 +207,10 @@ namespace Build.Pipeline.Tests.Editor
                     provider));
         }
 
-        private static BuildRequest CreateRequest(bool batchMode, bool debugBuild)
+        private static BuildRequest CreateRequest(
+            bool batchMode,
+            bool debugBuild,
+            BuildIdentityOverride identityOverride = null)
         {
             string projectRoot = Path.GetFullPath(
                 Path.Combine(Path.GetTempPath(), "BuildVersionResolverTests"));
@@ -85,7 +223,6 @@ namespace Build.Pipeline.Tests.Editor
                 "Assets/Resources/VersionInfoData.asset",
                 Array.Empty<string>(),
                 CheatBuildMode.Disabled,
-                null,
                 BuildTarget.StandaloneWindows64,
                 NamedBuildTarget.Standalone,
                 ScriptingImplementation.Mono2x,
@@ -94,7 +231,6 @@ namespace Build.Pipeline.Tests.Editor
                 Path.Combine(outputDirectory, "TestProduct.exe"),
                 outputDirectory,
                 outputIsFolder: false,
-                incrementality: BuildIncrementality.Clean,
                 deleteDebugFiles: true,
                 debugBuild: debugBuild,
                 exportAndroidProject: false,
@@ -102,11 +238,11 @@ namespace Build.Pipeline.Tests.Editor
                 cheatOverride: null,
                 batchMode: batchMode,
                 applicationVersion: "1.0.0",
-                assetContentProviderId: string.Empty,
-                assetContentConfiguration: null,
-                useHybridClr: false,
-                enablePlayerObfuscation: false,
-                stepIds: new[] { BuildStepIds.Player });
+                identityOverride: identityOverride ?? BuildIdentityOverride.Empty,
+                steps: new[]
+                {
+                    new BuildStepInvocation(BuildStepTypeIds.Player, BuildStepTypeIds.Player)
+                });
         }
 
         private sealed class FakeProvider : IVersionControlProvider
