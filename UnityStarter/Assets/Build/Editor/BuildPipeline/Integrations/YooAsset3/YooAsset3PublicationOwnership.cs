@@ -16,7 +16,7 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         internal const string PackageOutputKind = "PackageOutput";
         internal const string BundledPackageKind = "BundledPackage";
 
-        private const int MarkerSchemaVersion = 1;
+        private const int MarkerFormatVersion = 1;
         private const int MaximumMarkerBytes = 64 * 1024;
         private const int MaximumIdentityEntries = 250000;
         private const int MaximumIdentityDepth = 64;
@@ -57,11 +57,22 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                     string.Empty,
                     string.Empty,
                     string.Empty,
+                    string.Empty,
+                    string.Empty,
                     emptyIdentity.Hash,
                     emptyIdentity.EntryCount);
             }
 
-            return ReadAndValidateOwned(root, expectedKind, expectedPackageName, null, null, null, null);
+            return ReadAndValidateOwned(
+                root,
+                expectedKind,
+                expectedPackageName,
+                null,
+                null,
+                null,
+                null,
+                null,
+                null);
         }
 
         public static PublicationSnapshot Seal(
@@ -70,6 +81,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string kind,
             string packageName,
             string packageVersion,
+            string cryptographyAdapterId,
+            string runtimeDecryptContractId,
             string transactionId)
         {
             string root = Path.GetFullPath(directory);
@@ -79,8 +92,14 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new DirectoryNotFoundException($"Publication stage does not exist: '{root}'.");
             }
 
-            ValidateMarkerIdentity(kind, packageName, packageVersion, transactionId);
-            string markerPath = BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            ValidateMarkerIdentity(
+                kind,
+                packageName,
+                packageVersion,
+                cryptographyAdapterId,
+                runtimeDecryptContractId,
+                transactionId);
+            string markerPath = BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(root, MarkerFileName),
                 "YooAsset publication ownership marker");
             if (Directory.Exists(markerPath))
@@ -96,11 +115,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             ContentIdentity identity = ComputeContentIdentity(root);
             var marker = new PublicationMarker
             {
-                schemaVersion = MarkerSchemaVersion,
+                formatVersion = MarkerFormatVersion,
                 owner = Owner,
                 kind = kind,
                 packageName = packageName,
                 packageVersion = packageVersion,
+                cryptographyAdapterId = cryptographyAdapterId,
+                runtimeDecryptContractId = runtimeDecryptContractId,
                 transactionId = transactionId,
                 contentIdentity = identity.Hash,
                 entryCount = identity.EntryCount
@@ -134,6 +155,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 kind,
                 packageName,
                 packageVersion,
+                cryptographyAdapterId,
+                runtimeDecryptContractId,
                 transactionId,
                 identity.Hash,
                 identity.EntryCount);
@@ -145,6 +168,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string expectedKind,
             string expectedPackageName,
             string expectedPackageVersion,
+            string expectedCryptographyAdapterId,
+            string expectedRuntimeDecryptContractId,
             string expectedTransactionId,
             string expectedContentIdentity,
             int expectedEntryCount)
@@ -161,6 +186,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 expectedKind,
                 expectedPackageName,
                 expectedPackageVersion,
+                expectedCryptographyAdapterId,
+                expectedRuntimeDecryptContractId,
                 expectedTransactionId,
                 expectedContentIdentity,
                 expectedEntryCount);
@@ -189,6 +216,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
+                string.Empty,
                 identity.Hash,
                 identity.EntryCount);
         }
@@ -204,6 +233,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string expectedKind,
             string expectedPackageName,
             string expectedPackageVersion,
+            string expectedCryptographyAdapterId,
+            string expectedRuntimeDecryptContractId,
             string expectedTransactionId,
             string expectedContentIdentity,
             int? expectedEntryCount)
@@ -236,13 +267,19 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 throw new InvalidOperationException($"Build-owned publication marker is not valid JSON: '{markerPath}'.", exception);
             }
 
-            if (marker == null || marker.schemaVersion != MarkerSchemaVersion ||
+            if (marker == null || marker.formatVersion != MarkerFormatVersion ||
                 !string.Equals(marker.owner, Owner, StringComparison.Ordinal))
             {
-                throw new InvalidOperationException($"Build-owned publication marker has an unsupported owner or schema: '{markerPath}'.");
+                throw new InvalidOperationException($"Build-owned publication marker has an unsupported owner or format: '{markerPath}'.");
             }
 
-            ValidateMarkerIdentity(marker.kind, marker.packageName, marker.packageVersion, marker.transactionId);
+            ValidateMarkerIdentity(
+                marker.kind,
+                marker.packageName,
+                marker.packageVersion,
+                marker.cryptographyAdapterId,
+                marker.runtimeDecryptContractId,
+                marker.transactionId);
             if (!string.Equals(marker.checksum, ComputeMarkerChecksum(marker), StringComparison.OrdinalIgnoreCase))
             {
                 throw new InvalidOperationException($"Build-owned publication marker checksum is invalid: '{markerPath}'.");
@@ -251,6 +288,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             if (!string.Equals(marker.kind, expectedKind, StringComparison.Ordinal) ||
                 !string.Equals(marker.packageName, expectedPackageName, StringComparison.Ordinal) ||
                 expectedPackageVersion != null && !string.Equals(marker.packageVersion, expectedPackageVersion, StringComparison.Ordinal) ||
+                expectedCryptographyAdapterId != null && !string.Equals(marker.cryptographyAdapterId, expectedCryptographyAdapterId, StringComparison.Ordinal) ||
+                expectedRuntimeDecryptContractId != null && !string.Equals(marker.runtimeDecryptContractId, expectedRuntimeDecryptContractId, StringComparison.Ordinal) ||
                 expectedTransactionId != null && !string.Equals(marker.transactionId, expectedTransactionId, StringComparison.Ordinal) ||
                 expectedContentIdentity != null && !string.Equals(marker.contentIdentity, expectedContentIdentity, StringComparison.OrdinalIgnoreCase) ||
                 expectedEntryCount.HasValue && marker.entryCount != expectedEntryCount.Value)
@@ -272,6 +311,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 marker.kind,
                 marker.packageName,
                 marker.packageVersion,
+                marker.cryptographyAdapterId,
+                marker.runtimeDecryptContractId,
                 marker.transactionId,
                 marker.contentIdentity,
                 marker.entryCount);
@@ -432,6 +473,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             string kind,
             string packageName,
             string packageVersion,
+            string cryptographyAdapterId,
+            string runtimeDecryptContractId,
             string transactionId)
         {
             if ((!string.Equals(kind, PackageOutputKind, StringComparison.Ordinal) &&
@@ -442,16 +485,25 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             {
                 throw new InvalidOperationException("Publication marker identity is incomplete or unsupported.");
             }
+
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                cryptographyAdapterId,
+                "YooAsset cryptography adapter id");
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                runtimeDecryptContractId,
+                "YooAsset runtime decrypt contract id");
         }
 
         private static string ComputeMarkerChecksum(PublicationMarker marker)
         {
             var builder = new StringBuilder();
-            AppendChecksumValue(builder, marker.schemaVersion.ToString(CultureInfo.InvariantCulture));
+            AppendChecksumValue(builder, marker.formatVersion.ToString(CultureInfo.InvariantCulture));
             AppendChecksumValue(builder, marker.owner);
             AppendChecksumValue(builder, marker.kind);
             AppendChecksumValue(builder, marker.packageName);
             AppendChecksumValue(builder, marker.packageVersion);
+            AppendChecksumValue(builder, marker.cryptographyAdapterId);
+            AppendChecksumValue(builder, marker.runtimeDecryptContractId);
             AppendChecksumValue(builder, marker.transactionId);
             AppendChecksumValue(builder, marker.contentIdentity);
             AppendChecksumValue(builder, marker.entryCount.ToString(CultureInfo.InvariantCulture));
@@ -484,11 +536,13 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
         [Serializable]
         private sealed class PublicationMarker
         {
-            public int schemaVersion;
+            public int formatVersion;
             public string owner;
             public string kind;
             public string packageName;
             public string packageVersion;
+            public string cryptographyAdapterId;
+            public string runtimeDecryptContractId;
             public string transactionId;
             public string contentIdentity;
             public int entryCount;
@@ -505,6 +559,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 string.Empty,
                 string.Empty,
                 string.Empty,
+                string.Empty,
+                string.Empty,
                 0);
 
             public PublicationSnapshot(
@@ -513,6 +569,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 string kind,
                 string packageName,
                 string packageVersion,
+                string cryptographyAdapterId,
+                string runtimeDecryptContractId,
                 string transactionId,
                 string contentIdentity,
                 int entryCount)
@@ -522,6 +580,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
                 Kind = kind;
                 PackageName = packageName;
                 PackageVersion = packageVersion;
+                CryptographyAdapterId = cryptographyAdapterId;
+                RuntimeDecryptContractId = runtimeDecryptContractId;
                 TransactionId = transactionId;
                 ContentIdentity = contentIdentity;
                 EntryCount = entryCount;
@@ -532,6 +592,8 @@ namespace Build.Pipeline.Editor.Integrations.YooAsset3
             public string Kind { get; }
             public string PackageName { get; }
             public string PackageVersion { get; }
+            public string CryptographyAdapterId { get; }
+            public string RuntimeDecryptContractId { get; }
             public string TransactionId { get; }
             public string ContentIdentity { get; }
             public int EntryCount { get; }

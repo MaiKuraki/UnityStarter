@@ -8,12 +8,12 @@ namespace Build.Pipeline.Editor
     public static class BuildPathPolicy
     {
         // Unity 2022.3 Editor/Mono and third-party build tools still reach Win32
-        // APIs that use the legacy MAX_PATH contract. MAX_PATH includes the
+        // APIs that remain limited by the Win32 MAX_PATH contract. MAX_PATH includes the
         // terminating null, so the longest path passed to those APIs is 259
         // UTF-16 code units. Keep this policy host-independent so a profile
         // validated on macOS/Linux does not later fail on a Windows CI agent.
-        public const int LegacyWindowsMaximumPathCharacters = 259;
-        public const int LegacyWindowsMaximumDirectoryPathCharacters = 247;
+        public const int Win32MaxPathCharacters = 259;
+        public const int Win32MaxDirectoryPathCharacters = 247;
 
         private const int MaximumDeleteTreeEntryCount = 1000000;
         private const int MaximumPortableRelativePathUtf8ByteCount = 1024;
@@ -53,13 +53,13 @@ namespace Build.Pipeline.Editor
             };
 
         /// <summary>
-        /// Validates an absolute path against the Win32 legacy MAX_PATH budget.
+        /// Validates an absolute path against the Win32 MAX_PATH budget.
         /// <paramref name="reservedSuffixCharacters"/> reserves capacity for a
         /// known suffix that will be appended later, including any separator.
         /// Extended/device path prefixes are intentionally rejected because
         /// Unity APIs and package code do not consume them consistently.
         /// </summary>
-        public static string EnsureLegacyWindowsPathBudget(
+        public static string EnsureWin32MaxPathBudget(
             string path,
             string displayName,
             int reservedSuffixCharacters = 0)
@@ -85,15 +85,15 @@ namespace Build.Pipeline.Editor
             RejectWindowsDeviceNamespace(fullPath, name);
 
             long requiredCharacters = checked((long)fullPath.Length + reservedSuffixCharacters);
-            if (requiredCharacters > LegacyWindowsMaximumPathCharacters)
+            if (requiredCharacters > Win32MaxPathCharacters)
             {
                 string reservation = reservedSuffixCharacters == 0
                     ? string.Empty
                     : $", reserved suffix={reservedSuffixCharacters}";
                 throw new PathTooLongException(
-                    $"{name} exceeds the Unity 2022.3/Mono Windows legacy MAX_PATH budget. " +
+                    $"{name} exceeds the Unity 2022.3/Mono Win32 MAX_PATH budget. " +
                     $"Path length={fullPath.Length}{reservation}, required={requiredCharacters}, " +
-                    $"maximum={LegacyWindowsMaximumPathCharacters}. Shorten the repository checkout, " +
+                    $"maximum={Win32MaxPathCharacters}. Shorten the repository checkout, " +
                     "configured output root, product/package name, or generated artifact path. " +
                     "The build pipeline intentionally does not pass Windows extended-path prefixes to Unity APIs. " +
                     $"Path: '{fullPath}'.");
@@ -103,28 +103,28 @@ namespace Build.Pipeline.Editor
         }
 
         /// <summary>
-        /// Validates a directory passed to legacy Win32 CreateDirectory/MoveFile
+        /// Validates a directory passed to MAX_PATH-limited Win32 CreateDirectory/MoveFile
         /// paths. The 247-character ceiling preserves the documented 8.3 child
         /// capacity below MAX_PATH. A child reservation is additionally checked
         /// against the 259-character file-path ceiling.
         /// </summary>
-        public static string EnsureLegacyWindowsDirectoryPathBudget(
+        public static string EnsureWin32MaxDirectoryPathBudget(
             string path,
             string displayName,
             int reservedChildPathCharacters = 0)
         {
-            string fullPath = EnsureLegacyWindowsPathBudget(
+            string fullPath = EnsureWin32MaxPathBudget(
                 path,
                 displayName,
                 reservedChildPathCharacters);
-            if (fullPath.Length > LegacyWindowsMaximumDirectoryPathCharacters)
+            if (fullPath.Length > Win32MaxDirectoryPathCharacters)
             {
                 string name = string.IsNullOrWhiteSpace(displayName)
                     ? "Build directory"
                     : displayName;
                 throw new PathTooLongException(
-                    $"{name} exceeds the Unity 2022.3/Mono Windows legacy directory budget. " +
-                    $"Path length={fullPath.Length}, maximum={LegacyWindowsMaximumDirectoryPathCharacters}. " +
+                    $"{name} exceeds the Unity 2022.3/Mono Win32 MAX_PATH directory budget. " +
+                    $"Path length={fullPath.Length}, maximum={Win32MaxDirectoryPathCharacters}. " +
                     "Shorten the repository checkout or configured output directory. " +
                     $"Path: '{fullPath}'.");
             }
@@ -268,7 +268,7 @@ namespace Build.Pipeline.Editor
             EnsureNotProtectedProjectDirectory(root, resolved);
             ValidatePortableProjectRelativePath(configuredPath, "Build output root");
             EnsureNoReparsePoints(root, resolved, includeAnchor: false);
-            return EnsureLegacyWindowsDirectoryPathBudget(resolved, "Build output root");
+            return EnsureWin32MaxDirectoryPathBudget(resolved, "Build output root");
         }
 
         /// <summary>
@@ -291,7 +291,7 @@ namespace Build.Pipeline.Editor
                     $"Build output root resolves to a file: '{resolved}'.");
             }
 
-            return EnsureLegacyWindowsDirectoryPathBudget(resolved, "Build output root");
+            return EnsureWin32MaxDirectoryPathBudget(resolved, "Build output root");
         }
 
         public static string ResolveOutputPath(
@@ -340,7 +340,7 @@ namespace Build.Pipeline.Editor
                 ValidatePortableProjectRelativePath(requestedPath, "Player output path");
             }
 
-            return EnsureLegacyWindowsPathBudget(resolved, "Player output path");
+            return EnsureWin32MaxPathBudget(resolved, "Player output path");
         }
 
         public static string ResolveOutputDirectory(
@@ -365,7 +365,7 @@ namespace Build.Pipeline.Editor
                 directory,
                 approvedBuildRoot,
                 allowExternalOutput);
-            return EnsureLegacyWindowsDirectoryPathBudget(directory, "Player output directory");
+            return EnsureWin32MaxDirectoryPathBudget(directory, "Player output directory");
         }
 
         public static string ResolveGeneratedAssetsDirectory(string projectRoot, string configuredPath)
@@ -412,7 +412,7 @@ namespace Build.Pipeline.Editor
                 throw new InvalidOperationException($"Generated output directory resolves to a file: '{resolved}'.");
             }
 
-            return EnsureLegacyWindowsDirectoryPathBudget(resolved, "Generated Assets directory");
+            return EnsureWin32MaxDirectoryPathBudget(resolved, "Generated Assets directory");
         }
 
         public static string EnsureSafeReadableFile(string approvedRoot, string filePath)
@@ -436,7 +436,7 @@ namespace Build.Pipeline.Editor
                 throw new FileNotFoundException("Required source artifact was not found.", file);
             }
 
-            return EnsureLegacyWindowsPathBudget(file, "Source artifact");
+            return EnsureWin32MaxPathBudget(file, "Source artifact");
         }
 
         public static string ResolvePublicationSourceRoot(
@@ -470,7 +470,7 @@ namespace Build.Pipeline.Editor
                     $"Publication source root resolves to a file: '{source}'.");
             }
 
-            return EnsureLegacyWindowsDirectoryPathBudget(source, "Publication source root");
+            return EnsureWin32MaxDirectoryPathBudget(source, "Publication source root");
         }
 
         public static void EnsureSafeDeleteTarget(string projectRoot, string targetPath, string approvedBuildRoot, bool allowExternalOutput)

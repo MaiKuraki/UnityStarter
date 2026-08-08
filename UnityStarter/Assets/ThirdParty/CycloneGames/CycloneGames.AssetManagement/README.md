@@ -135,7 +135,9 @@ The application owner constructs and shuts down the module. The module owns name
 
 Asset, all-assets, and raw-file load calls return non-pooled caller leases. A lease pins a shared provider handle until the lease is disposed. Lease disposal is idempotent. Access after disposal throws `ObjectDisposedException`. `IOperation.Task` is memoized and safe for repeated or concurrent awaiters. Its first terminal transition wins: provider plus adapter post-processing success completes it, a real provider or adapter failure faults it, and caller-wait cancellation, provider cancellation, or authoritative owner retirement while pending cancels it. `Error` is diagnostic text that never replaces awaiting `Task`.
 
-`WaitForAsyncComplete` is not a portable replacement for async flow. Addressables rejects it for every pending operation. Await `Task`. Synchronous single-asset access is an optional `IAssetSyncOperations` capability; scenes only expose the asynchronous lifecycle.
+`WaitForAsyncComplete` is not a portable replacement for async flow. Addressables and YooAsset reject it for every pending operation; terminal calls are no-ops. Await `Task`. Synchronous single-asset access is an optional `IAssetSyncOperations` capability; scenes only expose the asynchronous lifecycle.
+
+This is a behavior migration for YooAsset wrappers: a pending call that previously asked the provider to advance synchronously now throws `NotSupportedException`. Existing callers must await `IOperation.Task`; the separate `IAssetSyncOperations` capability is unchanged.
 
 Caller cancellation cancels that caller's wait, not a shared backend load that may be used by other callers. The caller must still dispose its lease. This separates request cancellation from shared-resource ownership.
 
@@ -507,7 +509,7 @@ Minimum validation for a runtime change:
 1. Build `CycloneGames.AssetManagement.Runtime` and `CycloneGames.AssetManagement.Runtime.CacheRetention` from Unity-generated projects.
 2. Run all `CycloneGames.AssetManagement.Tests.Editor` EditMode tests, `CycloneGames.AssetManagement.Tests.PlayMode` PlayMode tests, and both `AssetCachePerformanceTests` harnesses.
 3. In Play Mode, exercise package initialize/load/cancel/dispose, Resources' deferred-destruction barrier, repeated awaits of memoized tasks, provider-fault propagation, owner-retirement cancellation with late provider success/failure and tail drain, cross-package rejection, manual activation/unload, low-memory idle clearing, downloader prepare/start faults and cancellation, shutdown cleanup of leaked operations, and shutdown retry.
-4. For each optional provider, install the exact locked dependency, compile the provider assembly, run provider-specific tests, and exercise a clean Player cache. Verify `PrepareAsync` performs no payload writes, totals become authoritative only after preparation, and disposal is idempotent.
+4. For each optional provider, install the exact locked dependency, compile the provider assembly, run provider-specific tests, and exercise a clean Player cache. For YooAsset asset, all-assets, raw-file, instance, and scene wrappers, verify pending synchronous waits throw without invoking provider wait APIs; succeeded, faulted, and canceled terminal calls are no-ops; and disposal, late completion, and source release remain exactly-once. Verify `PrepareAsync` performs no payload writes, totals become authoritative only after preparation, and disposal is idempotent.
 5. Run clean-clone CI and target Player builds for every claimed Windows, Linux, macOS, iOS, Android, WebGL, Dedicated Server, and approved console configuration. Repeat critical scenarios under Mono and IL2CPP, low storage, disk full, denied permissions, network loss, suspend/resume, and domain reload disabled.
 
 An Editor or CLI assembly result does not establish Player, IL2CPP, long-session, storage-device, or cross-platform correctness. Record every unexecuted validation dimension explicitly in the release validation record.
@@ -516,7 +518,7 @@ An Editor or CLI assembly result does not establish Player, IL2CPP, long-session
 <UnityEditor> -batchmode -nographics -projectPath <repo-root>/UnityStarter \
   -runTests -testPlatform EditMode \
   -testFilter CycloneGames.AssetManagement \
-  -testResults <result-path> -quit
+  -testResults <result-path>
 ```
 
 Repeat with `-testPlatform PlayMode -assemblyNames CycloneGames.AssetManagement.Tests.PlayMode` for the deferred Unity object-destruction contract.

@@ -127,28 +127,134 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        internal static void GenerateAllAndCopy(BuildTarget target, HybridCLRBuildConfig config)
+        internal static IBuildDownstreamInputPublication GenerateAllAndCopy(
+            BuildTarget target,
+            HybridCLRBuildConfig config,
+            HybridCLRReleaseBaselineExpectation baselineExpectation,
+            string playerInvocationId,
+            BuildVersionContext sourceVersion,
+            out IBuildDeferredPublication baselinePublication)
         {
+            baselinePublication = null;
             bool obfuscateHotUpdateAssemblies = ValidateRequest(config);
-            Build(target);
-            if (obfuscateHotUpdateAssemblies)
+            HybridCLRGenerationTransaction generation =
+                HybridCLRGenerationTransaction.Begin(
+                    HybridCLRGenerationPlanFactory.Create(
+                        target,
+                        fullGeneration: true,
+                        includeObfuz: obfuscateHotUpdateAssemblies));
+            try
             {
-                RunObfuzPostProcessing(target);
-            }
+                Build(target);
+                if (obfuscateHotUpdateAssemblies)
+                {
+                    RunObfuzPostProcessing(target);
+                }
 
-            CopyHotUpdateDlls(target, config);
+                string aotSourceDirectory = GetAOTDllSourceDir(target);
+                IBuildDownstreamInputPublication publication = CopyHotUpdateDlls(
+                    target,
+                    config,
+                    generation,
+                    aotSourceDirectory);
+                generation = null;
+                if (baselineExpectation != null)
+                {
+                    try
+                    {
+                        baselinePublication = HybridCLRReleaseBaselineTransaction.Stage(
+                            baselineExpectation,
+                            playerInvocationId,
+                            aotSourceDirectory,
+                            sourceVersion);
+                    }
+                    catch
+                    {
+                        publication.Dispose();
+                        throw;
+                    }
+                }
+
+                return publication;
+            }
+            catch (Exception generationFailure)
+            {
+                RollbackGenerationAndRethrow(generationFailure, generation);
+                throw;
+            }
         }
 
-        internal static void CompileDllAndCopy(BuildTarget target, HybridCLRBuildConfig config)
+        internal static IBuildDownstreamInputPublication CompileDllAndCopy(
+            BuildTarget target,
+            HybridCLRBuildConfig config,
+            HybridCLRReleaseBaseline baseline)
         {
-            bool obfuscateHotUpdateAssemblies = ValidateRequest(config);
-            CompileDllOnly(target);
-            if (obfuscateHotUpdateAssemblies)
+            if (baseline == null)
             {
-                RunObfuzPostProcessing(target);
+                throw new ArgumentNullException(nameof(baseline));
             }
 
-            CopyHotUpdateDlls(target, config);
+            bool obfuscateHotUpdateAssemblies = ValidateRequest(config);
+            if (obfuscateHotUpdateAssemblies)
+            {
+                throw new InvalidOperationException(
+                    "Incremental HybridCLR + Obfuz is fail-closed because the installed Obfuz4HybridCLR API cannot consume an explicit release-baseline AOT directory.");
+            }
+
+            HybridCLRGenerationTransaction generation =
+                HybridCLRGenerationTransaction.Begin(
+                    HybridCLRGenerationPlanFactory.Create(
+                        target,
+                        fullGeneration: false,
+                        includeObfuz: obfuscateHotUpdateAssemblies));
+            try
+            {
+                CompileDllOnly(target);
+                if (obfuscateHotUpdateAssemblies)
+                {
+                    RunObfuzPostProcessing(target);
+                }
+
+                IBuildDownstreamInputPublication publication = CopyHotUpdateDlls(
+                    target,
+                    config,
+                    generation,
+                    baseline.AOTDirectory);
+                generation = null;
+                return publication;
+            }
+            catch (Exception generationFailure)
+            {
+                RollbackGenerationAndRethrow(generationFailure, generation);
+                throw;
+            }
+        }
+
+        private static void RollbackGenerationAndRethrow(
+            Exception generationFailure,
+            HybridCLRGenerationTransaction generation)
+        {
+            Exception failure = generationFailure;
+            if (generation != null)
+            {
+                try
+                {
+                    generation.Dispose();
+                    if (generation.RestoredAssets)
+                    {
+                        AssetDatabase.Refresh();
+                    }
+                }
+                catch (Exception rollbackFailure)
+                {
+                    failure = new AggregateException(
+                        "HybridCLR generation failed and durable generation rollback did not complete.",
+                        generationFailure,
+                        rollbackFailure);
+                }
+            }
+
+            ExceptionDispatchInfo.Capture(failure).Throw();
         }
 
         private static bool ValidateRequest(HybridCLRBuildConfig config)
@@ -160,7 +266,7 @@ namespace Build.Pipeline.Editor
 
             ValidateHybridCLRSettings(config);
 
-            if (!config.ObfuscateHotUpdateAssemblies)
+            if (config.Variant != HybridCLRBuildVariant.Obfuz)
             {
                 return false;
             }
@@ -188,10 +294,20 @@ namespace Build.Pipeline.Editor
             ObfuzIntegrator.GenerateAOTGenericReference(target, outputDirectory);
         }
 
-        private static void CopyHotUpdateDlls(BuildTarget target, HybridCLRBuildConfig config)
+        private static IBuildDownstreamInputPublication CopyHotUpdateDlls(
+            BuildTarget target,
+            HybridCLRBuildConfig config,
+            HybridCLRGenerationTransaction generation,
+            string aotSourceDirectory)
         {
+            if (generation == null)
+            {
+                throw new ArgumentNullException(nameof(generation));
+            }
+
+            generation.ValidateActive();
             string sourceDirectory = GetHybridCLROutputDir(target);
-            if (config.ObfuscateHotUpdateAssemblies)
+            if (config.Variant == HybridCLRBuildVariant.Obfuz)
             {
                 sourceDirectory = ObfuzIntegrator.GetObfuscatedHotUpdateAssemblyOutputPath(target);
                 if (string.IsNullOrWhiteSpace(sourceDirectory) || !Directory.Exists(sourceDirectory))
@@ -209,12 +325,11 @@ namespace Build.Pipeline.Editor
                     $"HybridCLR output directory was not found after generation: '{sourceDirectory}'.");
             }
 
-            string aotSourceDirectory = GetAOTDllSourceDir(target);
-            if (!Directory.Exists(aotSourceDirectory))
+            if (string.IsNullOrWhiteSpace(aotSourceDirectory)
+                || !Directory.Exists(aotSourceDirectory))
             {
                 throw new DirectoryNotFoundException(
-                    $"HybridCLR stripped-AOT directory was not found after generation: '{aotSourceDirectory}'. " +
-                    "Run a full HybridCLR build before using fast mode.");
+                    $"Validated HybridCLR AOT input directory was not found: '{aotSourceDirectory}'.");
             }
 
             string projectRoot = Path.GetFullPath(Path.Combine(Application.dataPath, ".."));
@@ -222,43 +337,175 @@ namespace Build.Pipeline.Editor
             HybridCLROutputTransaction transaction = HybridCLROutputTransaction.Begin(projectRoot, outputTargets);
             try
             {
-                using (transaction)
-                {
-                    StageConfiguredAssemblies(
-                        projectRoot,
-                        sourceDirectory,
-                        config.GetHotUpdateAssemblyNames(),
-                        HotUpdateOutputRole,
-                        "HotUpdate.bytes",
-                        transaction);
+                StageConfiguredAssemblies(
+                    projectRoot,
+                    sourceDirectory,
+                    config.GetHotUpdateAssemblyNames(),
+                    HotUpdateOutputRole,
+                    "HotUpdate.bytes",
+                    transaction);
 
-                    StageAOTAssemblies(projectRoot, aotSourceDirectory, transaction);
-                    transaction.Commit();
-                }
+                StageAOTAssemblies(projectRoot, aotSourceDirectory, transaction);
+                return new HybridCLROutputPublication(transaction, generation);
             }
-            catch (Exception publicationException)
+            catch (Exception stagingException)
             {
-                if (transaction.OutputsCommitted)
+                Exception failure = stagingException;
+                try
+                {
+                    transaction.Dispose();
+                }
+                catch (Exception rollbackException)
+                {
+                    failure = new AggregateException(
+                        "HybridCLR output staging failed and durable cleanup did not complete.",
+                        stagingException,
+                        rollbackException);
+                }
+
+                ExceptionDispatchInfo.Capture(failure).Throw();
+                throw;
+            }
+        }
+
+        private sealed class HybridCLROutputPublication : IBuildDownstreamInputPublication
+        {
+            private HybridCLROutputTransaction transaction;
+            private HybridCLRGenerationTransaction generation;
+            private bool activated;
+
+            public HybridCLROutputPublication(
+                HybridCLROutputTransaction transaction,
+                HybridCLRGenerationTransaction generation)
+            {
+                this.transaction = transaction
+                    ?? throw new ArgumentNullException(nameof(transaction));
+                this.generation = generation
+                    ?? throw new ArgumentNullException(nameof(generation));
+            }
+
+            public string Id => HybridCLROutputTransaction.PublicationId;
+            public string RecoveryStateRelativePath =>
+                HybridCLROutputTransaction.StateRelativePath;
+
+            public void ActivateForDownstream()
+            {
+                ThrowIfDisposed();
+                if (activated)
+                {
+                    throw new InvalidOperationException(
+                        "HybridCLR outputs have already been activated for downstream steps.");
+                }
+
+                generation.ValidateActive();
+                transaction.ActivateForDownstream();
+                activated = true;
+                AssetDatabase.Refresh();
+            }
+
+            public void Publish()
+            {
+                ThrowIfDisposed();
+                generation.ValidateActive();
+                transaction.Publish();
+            }
+
+            public void Complete()
+            {
+                ThrowIfDisposed();
+                // Generation commits first. If the process terminates before the final output
+                // transaction completes, the shared terminal decision still directs output
+                // recovery to commit rather than roll back.
+                generation.Commit();
+                transaction.Complete();
+            }
+
+            public void Dispose()
+            {
+                if (transaction == null && generation == null)
+                {
+                    return;
+                }
+
+                Exception failure = null;
+                try
+                {
+                    transaction?.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    failure = exception;
+                }
+                finally
+                {
+                    transaction = null;
+                }
+
+                try
+                {
+                    generation?.Dispose();
+                }
+                catch (Exception exception)
+                {
+                    failure = failure == null
+                        ? exception
+                        : new AggregateException(
+                            "HybridCLR output and generation cleanup both failed.",
+                            failure,
+                            exception);
+                }
+                finally
+                {
+                    if (generation != null && generation.RestoredAssets)
+                    {
+                        try
+                        {
+                            AssetDatabase.Refresh();
+                        }
+                        catch (Exception exception)
+                        {
+                            failure = failure == null
+                                ? exception
+                                : new AggregateException(
+                                    "HybridCLR cleanup and generation AssetDatabase refresh both failed.",
+                                    failure,
+                                    exception);
+                        }
+                    }
+
+                    generation = null;
+                }
+
+                if (activated)
                 {
                     try
                     {
                         AssetDatabase.Refresh();
                     }
-                    catch (Exception refreshException)
+                    catch (Exception exception)
                     {
-                        throw new AggregateException(
-                            "HybridCLR outputs committed, but post-commit cleanup and AssetDatabase refresh both failed.",
-                            publicationException,
-                            refreshException);
+                        failure = failure == null
+                            ? exception
+                            : new AggregateException(
+                                "HybridCLR rollback and AssetDatabase refresh both failed.",
+                                failure,
+                                exception);
                     }
                 }
 
-                ExceptionDispatchInfo.Capture(publicationException).Throw();
+                if (failure != null)
+                {
+                    ExceptionDispatchInfo.Capture(failure).Throw();
+                }
             }
 
-            // Import only the fully committed output set. Staging and rollback never expose
-            // partial generated files to the AssetDatabase.
-            AssetDatabase.Refresh();
+            private void ThrowIfDisposed()
+            {
+                if (transaction == null || generation == null)
+                {
+                    throw new ObjectDisposedException(nameof(HybridCLROutputPublication));
+                }
+            }
         }
 
         internal static void ValidateManagedOutputOwnership(HybridCLRBuildConfig config, string projectRoot)
@@ -268,7 +515,7 @@ namespace Build.Pipeline.Editor
                 throw new ArgumentNullException(nameof(config));
             }
 
-            RecoverPendingManagedOutputs(projectRoot);
+            HybridCLROutputTransaction.EnsureNoPendingRecovery(projectRoot);
 
             IReadOnlyList<HybridCLROutputTarget> targets = CreateManagedOutputTargets(config, projectRoot);
             HybridCLROutputTransaction.ValidateExistingOutputs(targets);
@@ -283,6 +530,17 @@ namespace Build.Pipeline.Editor
             {
                 // Recovery is itself atomic. Refresh only after it has restored the complete
                 // pre-transaction output set or finished committed-state cleanup.
+                AssetDatabase.Refresh();
+            }
+        }
+
+        internal static void RecoverPendingGenerationInputs(string projectRoot)
+        {
+            bool recovered = HybridCLRGenerationTransaction.RecoverPending(
+                projectRoot,
+                out bool assetsChanged);
+            if (recovered && assetsChanged)
+            {
                 AssetDatabase.Refresh();
             }
         }

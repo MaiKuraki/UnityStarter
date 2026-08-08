@@ -28,7 +28,7 @@ namespace Build.Pipeline.Editor
                 throw new InvalidOperationException($"Addressables build lock escaped the project root: '{lockPath}'.");
             }
 
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 lockPath,
                 "Addressables build lock");
 
@@ -38,7 +38,7 @@ namespace Build.Pipeline.Editor
                 throw new InvalidOperationException("Addressables build lock has no parent directory.");
             }
 
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 lockDirectory,
                 "Addressables build lock directory");
 
@@ -90,15 +90,16 @@ namespace Build.Pipeline.Editor
 
     internal sealed class AddressablesPublicationTransaction : IDisposable
     {
+        private const string PublicationIdPrefix = "asset-content:addressables:";
         internal const string PreparedCheckpoint = "Prepared";
         internal const string BackupMovedCheckpoint = "BackupMoved";
         internal const string InstalledCheckpoint = "Installed";
         internal const string CommittedCheckpoint = "Committed";
 
-        private const int JournalSchemaVersion = 1;
+        private const int JournalFormatVersion = 1;
         private const int MaximumJournalBytes = 64 * 1024;
         private const string JournalOwner = "Build.Pipeline.AddressablesPublication";
-        private const string StateRelativePath = ".buildpipeline/transactions/addressables";
+        internal const string StateRootRelativePath = ".buildpipeline/transactions/addressables";
         private const string JournalFileName = "active.json";
         private const string JournalTemporaryFileName = "active.json.tmp";
         private const string JournalBackupFileName = "active.json.bak";
@@ -115,6 +116,9 @@ namespace Build.Pipeline.Editor
         private readonly string projectRoot;
         private readonly string publicationRoot;
         private readonly string destination;
+        private readonly string invocationId;
+        private readonly string publicationId;
+        private readonly string stateRelativePath;
         private readonly string stateRoot;
         private readonly string journalPath;
         private readonly Journal journal;
@@ -127,33 +131,42 @@ namespace Build.Pipeline.Editor
             string projectRoot,
             string publicationRoot,
             string destination,
+            string invocationId,
             Journal journal)
         {
             this.projectRoot = projectRoot;
             this.publicationRoot = publicationRoot;
             this.destination = destination;
+            this.invocationId = NormalizeInvocationId(invocationId);
+            publicationId = GetPublicationId(this.invocationId);
+            stateRelativePath = GetStateRelativePath(this.invocationId);
             this.journal = journal;
-            stateRoot = GetStateRoot(projectRoot);
+            stateRoot = GetStateRoot(projectRoot, this.invocationId);
             journalPath = Path.Combine(stateRoot, JournalFileName);
         }
 
         public string StagingDirectory => journal.stage;
         public string TransactionId => journal.transactionId;
+        public string PublicationId => publicationId;
+        public string StateRelativePath => stateRelativePath;
 
         public static AddressablesPublicationTransaction Begin(
             string projectRoot,
             string publicationRoot,
             string destination,
+            string invocationId,
             string deterministicTransactionKey = null)
         {
             string normalizedProjectRoot = Path.GetFullPath(projectRoot);
             string normalizedPublicationRoot = Path.GetFullPath(publicationRoot);
             string normalizedDestination = Path.GetFullPath(destination);
+            string normalizedInvocationId = NormalizeInvocationId(invocationId);
             ValidateRoots(normalizedProjectRoot, normalizedPublicationRoot, normalizedDestination);
 
             string transactionId = string.IsNullOrEmpty(deterministicTransactionKey)
                 ? Guid.NewGuid().ToString("N")
-                : CreateDeterministicTransactionId(deterministicTransactionKey);
+                : CreateDeterministicTransactionId(
+                    normalizedInvocationId + "\n" + deterministicTransactionKey);
             string destinationName = Path.GetFileName(normalizedDestination);
             string stage = Path.Combine(
                 normalizedPublicationRoot,
@@ -163,14 +176,16 @@ namespace Build.Pipeline.Editor
                 destinationName + ".backup-" + transactionId);
             ValidateTransactionPathBudget(
                 normalizedProjectRoot,
+                normalizedInvocationId,
                 normalizedPublicationRoot,
                 normalizedDestination,
                 stage,
                 backup);
             var journal = new Journal
             {
-                schemaVersion = JournalSchemaVersion,
+                formatVersion = JournalFormatVersion,
                 owner = JournalOwner,
+                invocationId = normalizedInvocationId,
                 transactionId = transactionId,
                 phase = PreparedPhase,
                 state = PreparedState,
@@ -188,6 +203,7 @@ namespace Build.Pipeline.Editor
                 normalizedProjectRoot,
                 normalizedPublicationRoot,
                 normalizedDestination,
+                normalizedInvocationId,
                 journal);
         }
 
@@ -228,40 +244,41 @@ namespace Build.Pipeline.Editor
 
         private static void ValidateTransactionPathBudget(
             string projectRoot,
+            string invocationId,
             string publicationRoot,
             string destination,
             string stage,
             string backup)
         {
-            string stateRoot = GetStateRoot(projectRoot);
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            string stateRoot = GetStateRoot(projectRoot, invocationId);
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 stateRoot,
                 "Addressables publication transaction state root");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalFileName),
                 "Addressables publication transaction journal");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalTemporaryFileName),
                 "Addressables publication temporary journal");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stateRoot, JournalBackupFileName),
                 "Addressables publication backup journal");
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 publicationRoot,
                 "Addressables publication root");
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 destination,
                 "Addressables publication destination");
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 stage,
                 "Addressables publication stage directory");
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 backup,
                 "Addressables publication backup directory");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stage, AddressablesPublicationOwnership.OwnerFileName),
                 "Addressables publication stage owner");
-            BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+            BuildPathPolicy.EnsureWin32MaxPathBudget(
                 Path.Combine(stage, AddressablesPublicationOwnership.OwnerTemporaryFileName),
                 "Addressables publication temporary owner");
         }
@@ -269,44 +286,152 @@ namespace Build.Pipeline.Editor
         public static void RecoverPending(string projectRoot)
         {
             string normalizedProjectRoot = Path.GetFullPath(projectRoot);
-            string stateRoot = GetStateRoot(normalizedProjectRoot);
+            string providerStateRoot = GetProviderStateRoot(normalizedProjectRoot);
+            if (!PathExists(providerStateRoot))
+            {
+                return;
+            }
+
+            if (!IsDirectory(providerStateRoot))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables provider transaction state root is not a directory: '{providerStateRoot}'.");
+            }
+
+            AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
+                normalizedProjectRoot,
+                providerStateRoot);
+            string[] invocationStateRoots = Directory.GetDirectories(
+                providerStateRoot,
+                "*",
+                SearchOption.TopDirectoryOnly);
+            if (invocationStateRoots.Length > 256)
+            {
+                throw new InvalidOperationException(
+                    "Addressables publication recovery exceeds the 256-invocation safety budget.");
+            }
+
+            foreach (string entry in Directory.GetFiles(
+                         providerStateRoot,
+                         "*",
+                         SearchOption.TopDirectoryOnly))
+            {
+                throw new InvalidOperationException(
+                    $"Unknown Addressables provider transaction state file requires manual review: '{entry}'.");
+            }
+
+            Array.Sort(invocationStateRoots, StringComparer.Ordinal);
+            foreach (string invocationStateRoot in invocationStateRoots)
+            {
+                AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
+                    normalizedProjectRoot,
+                    invocationStateRoot);
+                string invocationId = NormalizeInvocationId(
+                    Path.GetFileName(invocationStateRoot));
+                RecoverPendingInvocation(normalizedProjectRoot, invocationId);
+            }
+        }
+
+        private static void RecoverPendingInvocation(
+            string normalizedProjectRoot,
+            string invocationId)
+        {
+            string stateRoot = GetStateRoot(normalizedProjectRoot, invocationId);
             string journalPath = Path.Combine(stateRoot, JournalFileName);
             RecoverJournalScratch(normalizedProjectRoot, stateRoot, journalPath);
             if (!PathExists(journalPath))
             {
                 EnsureCentralStateIsEmpty(normalizedProjectRoot, stateRoot);
+                TryDeleteEmptyStateDirectories(
+                    normalizedProjectRoot,
+                    invocationId);
                 return;
             }
 
             Journal recovered = ReadAndValidateJournal(journalPath, normalizedProjectRoot);
             RecoverPending(
                 normalizedProjectRoot,
+                invocationId,
                 recovered.publicationRoot,
                 recovered.destination);
         }
 
+        internal static void EnsureNoPendingRecovery(
+            string projectRoot,
+            string invocationId)
+        {
+            if (string.IsNullOrWhiteSpace(projectRoot))
+            {
+                throw new ArgumentException("A Unity project root is required.", nameof(projectRoot));
+            }
+
+            string normalizedProjectRoot = Path.GetFullPath(projectRoot);
+            string normalizedInvocationId = NormalizeInvocationId(invocationId);
+            string stateRoot = GetStateRoot(
+                normalizedProjectRoot,
+                normalizedInvocationId);
+            if (!PathExists(stateRoot))
+            {
+                return;
+            }
+
+            if (!IsDirectory(stateRoot))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables publication recovery state root is not a directory: '{stateRoot}'.");
+            }
+
+            AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
+                normalizedProjectRoot,
+                stateRoot);
+            string evidencePath = Directory
+                .EnumerateFileSystemEntries(stateRoot, "*", SearchOption.TopDirectoryOnly)
+                .FirstOrDefault();
+            if (evidencePath != null)
+            {
+                throw new InvalidOperationException(
+                    $"Pending Addressables publication recovery must be completed before starting another build: '{stateRoot}'. " +
+                    "Use the Build workspace recovery action or -pipelineRecoverOnly.");
+            }
+        }
+
         public static void RecoverPending(
             string projectRoot,
+            string invocationId,
             string publicationRoot,
             string destination)
         {
             string normalizedProjectRoot = Path.GetFullPath(projectRoot);
+            string normalizedInvocationId = NormalizeInvocationId(invocationId);
             string normalizedPublicationRoot = Path.GetFullPath(publicationRoot);
             string normalizedDestination = Path.GetFullPath(destination);
             ValidateRoots(normalizedProjectRoot, normalizedPublicationRoot, normalizedDestination);
 
-            string stateRoot = GetStateRoot(normalizedProjectRoot);
+            string stateRoot = GetStateRoot(
+                normalizedProjectRoot,
+                normalizedInvocationId);
             string journalPath = Path.Combine(stateRoot, JournalFileName);
             RecoverJournalScratch(normalizedProjectRoot, stateRoot, journalPath);
             if (!PathExists(journalPath))
             {
                 EnsureNoDetachedState(normalizedPublicationRoot, normalizedDestination, stateRoot, null);
+                TryDeleteEmptyStateDirectories(
+                    normalizedProjectRoot,
+                    normalizedInvocationId);
                 return;
             }
 
             Journal recovered = ReadAndValidateJournal(
                 journalPath,
                 normalizedProjectRoot);
+            if (!string.Equals(
+                    recovered.invocationId,
+                    normalizedInvocationId,
+                    StringComparison.Ordinal))
+            {
+                throw new InvalidDataException(
+                    "Addressables publication journal invocation does not match its isolated state directory.");
+            }
             EnsureNoDetachedState(
                 recovered.publicationRoot,
                 recovered.destination,
@@ -314,7 +439,39 @@ namespace Build.Pipeline.Editor
                 recovered);
             CleanupJournalTemporaryFiles(normalizedProjectRoot, stateRoot, journalPath);
 
-            if (string.Equals(recovered.phase, CommittedPhase, StringComparison.Ordinal))
+            BuildPublicationDecision decision = BuildPublicationBarrier.GetDecision(
+                normalizedProjectRoot,
+                GetPublicationId(normalizedInvocationId),
+                GetStateRelativePath(normalizedInvocationId));
+            if (decision == BuildPublicationDecision.Commit)
+            {
+                if (!string.Equals(recovered.phase, CommittedPhase, StringComparison.Ordinal))
+                {
+                    if (!string.Equals(recovered.phase, CommittingPhase, StringComparison.Ordinal)
+                        || !string.Equals(recovered.state, InstalledState, StringComparison.Ordinal))
+                    {
+                        throw new InvalidOperationException(
+                            "Committed terminal barrier references an Addressables publication that was not fully installed.");
+                    }
+
+                    EnsureInstalledIdentity(recovered, recovered.destination);
+                    recovered.phase = CommittedPhase;
+                    WriteJournal(recovered, journalPath, createNew: false);
+                }
+
+                CleanupCommitted(recovered, journalPath);
+            }
+            else if (decision == BuildPublicationDecision.Rollback)
+            {
+                if (string.Equals(recovered.phase, CommittedPhase, StringComparison.Ordinal))
+                {
+                    throw new InvalidOperationException(
+                        "Prepared terminal barrier conflicts with a committed Addressables publication journal.");
+                }
+
+                Rollback(recovered, journalPath);
+            }
+            else if (string.Equals(recovered.phase, CommittedPhase, StringComparison.Ordinal))
             {
                 CleanupCommitted(recovered, journalPath);
             }
@@ -410,6 +567,14 @@ namespace Build.Pipeline.Editor
 
         internal void Commit(Action validatePublishedState, Action<string> checkpoint)
         {
+            Publish(validatePublishedState, checkpoint);
+            Complete(checkpoint);
+        }
+
+        internal void Publish(
+            Action validatePublishedState,
+            Action<string> checkpoint = null)
+        {
             ThrowIfDisposed();
             EnsurePrepared();
             if (!string.Equals(journal.state, ReadyState, StringComparison.Ordinal)
@@ -493,13 +658,6 @@ namespace Build.Pipeline.Editor
                 }
 
                 validatePublishedState?.Invoke();
-                journal.phase = CommittedPhase;
-                WriteJournal(journal, journalPath, createNew: false);
-                preserveForRecovery = true;
-                checkpoint?.Invoke(CommittedCheckpoint);
-                CleanupCommitted(journal, journalPath);
-                preserveForRecovery = false;
-                completed = true;
             }
             catch (AddressablesSimulatedTerminationException)
             {
@@ -537,6 +695,42 @@ namespace Build.Pipeline.Editor
             }
         }
 
+        internal void Complete(Action<string> checkpoint = null)
+        {
+            ThrowIfDisposed();
+            EnsurePrepared();
+            if (!string.Equals(journal.phase, CommittingPhase, StringComparison.Ordinal)
+                || !string.Equals(journal.state, InstalledState, StringComparison.Ordinal))
+            {
+                throw new InvalidOperationException(
+                    "Addressables publication has not reached the terminal decision barrier.");
+            }
+
+            try
+            {
+                journal.phase = CommittedPhase;
+                WriteJournal(journal, journalPath, createNew: false);
+                preserveForRecovery = true;
+                checkpoint?.Invoke(CommittedCheckpoint);
+                CleanupCommitted(journal, journalPath);
+                preserveForRecovery = false;
+                completed = true;
+            }
+            catch (AddressablesSimulatedTerminationException)
+            {
+                preserveForRecovery = true;
+                throw;
+            }
+            catch (Exception completionException)
+            {
+                preserveForRecovery = true;
+                throw new InvalidOperationException(
+                    "Addressables publication was selected by the terminal commit barrier, " +
+                    "but durable transaction cleanup did not complete. Explicit recovery will preserve the new output.",
+                    completionException);
+            }
+        }
+
         public void Abort()
         {
             ThrowIfDisposed();
@@ -547,6 +741,12 @@ namespace Build.Pipeline.Editor
 
             if (prepared && PathExists(journalPath))
             {
+                if (ShouldPreserveForTerminalDecision())
+                {
+                    preserveForRecovery = true;
+                    return;
+                }
+
                 Rollback(journal, journalPath);
             }
 
@@ -563,14 +763,81 @@ namespace Build.Pipeline.Editor
             disposed = true;
             if (!completed && !preserveForRecovery && prepared && PathExists(journalPath))
             {
+                if (ShouldPreserveForTerminalDecision())
+                {
+                    preserveForRecovery = true;
+                    return;
+                }
+
                 Rollback(journal, journalPath);
                 completed = true;
             }
         }
 
-        internal static string GetStateRoot(string projectRoot)
+        private bool ShouldPreserveForTerminalDecision()
         {
-            return Path.Combine(Path.GetFullPath(projectRoot), StateRelativePath);
+            if (!string.Equals(journal.phase, CommittingPhase, StringComparison.Ordinal)
+                || !string.Equals(journal.state, InstalledState, StringComparison.Ordinal))
+            {
+                return string.Equals(journal.phase, CommittedPhase, StringComparison.Ordinal);
+            }
+
+            return BuildPublicationBarrier.GetDecision(
+                       projectRoot,
+                       publicationId,
+                       stateRelativePath)
+                   == BuildPublicationDecision.Commit;
+        }
+
+        internal static string GetProviderStateRoot(string projectRoot)
+        {
+            return Path.Combine(
+                Path.GetFullPath(projectRoot),
+                StateRootRelativePath.Replace('/', Path.DirectorySeparatorChar));
+        }
+
+        internal static string GetStateRoot(
+            string projectRoot,
+            string invocationId)
+        {
+            return Path.Combine(
+                GetProviderStateRoot(projectRoot),
+                NormalizeInvocationId(invocationId));
+        }
+
+        internal static string GetStateRelativePath(string invocationId)
+        {
+            return StateRootRelativePath + "/" + NormalizeInvocationId(invocationId);
+        }
+
+        internal static string GetPublicationId(string invocationId)
+        {
+            return PublicationIdPrefix + NormalizeInvocationId(invocationId);
+        }
+
+        private static string NormalizeInvocationId(string invocationId)
+        {
+            BuildIdentityPolicy.ValidateBuildIdentifier(
+                invocationId,
+                "Addressables content invocation id");
+            BuildPathPolicy.ValidatePortableFileName(
+                invocationId,
+                "Addressables content invocation state directory",
+                BuildIdentityPolicy.MaximumBuildIdentifierCharacters);
+            return invocationId;
+        }
+
+        private static bool IsValidInvocationId(string invocationId)
+        {
+            try
+            {
+                NormalizeInvocationId(invocationId);
+                return true;
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
         }
 
         private void EnsurePrepared()
@@ -802,14 +1069,56 @@ namespace Build.Pipeline.Editor
 
         private static void DeleteOwnedJournalFile(Journal recovered, string journalPath)
         {
+            string stateRoot = GetStateRoot(
+                recovered.projectRoot,
+                recovered.invocationId);
             CleanupJournalTemporaryFiles(
                 recovered.projectRoot,
-                GetStateRoot(recovered.projectRoot),
+                stateRoot,
                 journalPath);
             DeleteExactFile(
                 recovered.projectRoot,
-                GetStateRoot(recovered.projectRoot),
+                stateRoot,
                 journalPath);
+            TryDeleteEmptyStateDirectories(
+                recovered.projectRoot,
+                recovered.invocationId);
+        }
+
+        private static void TryDeleteEmptyStateDirectories(
+            string projectRoot,
+            string invocationId)
+        {
+            TryDeleteEmptyStateDirectory(
+                projectRoot,
+                GetStateRoot(projectRoot, invocationId));
+            TryDeleteEmptyStateDirectory(
+                projectRoot,
+                GetProviderStateRoot(projectRoot));
+        }
+
+        private static void TryDeleteEmptyStateDirectory(
+            string projectRoot,
+            string path)
+        {
+            if (!PathExists(path))
+            {
+                return;
+            }
+
+            if (!IsDirectory(path))
+            {
+                throw new InvalidOperationException(
+                    $"Addressables transaction state path is not a directory: '{path}'.");
+            }
+
+            AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
+                projectRoot,
+                path);
+            if (!Directory.EnumerateFileSystemEntries(path).Any())
+            {
+                Directory.Delete(path, recursive: false);
+            }
         }
 
         private static void RejectFilesAtDirectoryPaths(Journal recovered)
@@ -854,8 +1163,9 @@ namespace Build.Pipeline.Editor
             }
 
             if (recovered == null
-                || recovered.schemaVersion != JournalSchemaVersion
+                || recovered.formatVersion != JournalFormatVersion
                 || !string.Equals(recovered.owner, JournalOwner, StringComparison.Ordinal)
+                || !IsValidInvocationId(recovered.invocationId)
                 || string.IsNullOrWhiteSpace(recovered.transactionId)
                 || !Guid.TryParseExact(recovered.transactionId, "N", out _)
                 || !IsKnownPhase(recovered.phase)
@@ -866,7 +1176,32 @@ namespace Build.Pipeline.Editor
                     ? !string.IsNullOrEmpty(recovered.stagedIdentity)
                     : !IsOwnedPublicationIdentity(recovered.stagedIdentity)))
             {
-                throw new InvalidDataException("Addressables publication journal contract is invalid.");
+                throw new InvalidDataException("Addressables publication journal format is invalid.");
+            }
+
+            string expectedStateRoot = GetStateRoot(
+                projectRoot,
+                recovered.invocationId);
+            string candidateDirectory = Path.GetDirectoryName(journalPath);
+            string candidateName = Path.GetFileName(journalPath);
+            bool candidateNameIsKnown = string.Equals(
+                    candidateName,
+                    JournalFileName,
+                    StringComparison.Ordinal)
+                || string.Equals(
+                    candidateName,
+                    JournalTemporaryFileName,
+                    StringComparison.Ordinal)
+                || string.Equals(
+                    candidateName,
+                    JournalBackupFileName,
+                    StringComparison.Ordinal);
+            if (string.IsNullOrEmpty(candidateDirectory)
+                || !PathsEqual(candidateDirectory, expectedStateRoot)
+                || !candidateNameIsKnown)
+            {
+                throw new InvalidDataException(
+                    "Addressables publication journal is outside its invocation-owned state directory.");
             }
 
             string expectedChecksum = recovered.checksum;
@@ -927,7 +1262,7 @@ namespace Build.Pipeline.Editor
 
             AddressablesPublicationOwnership.EnsurePathComponentsAreNotReparsePoints(
                 projectRoot,
-                GetStateRoot(projectRoot));
+                GetStateRoot(projectRoot, journal.invocationId));
         }
 
         private static void ValidateRoots(
@@ -1256,6 +1591,10 @@ namespace Build.Pipeline.Editor
                     expected.transactionId,
                     candidate.transactionId,
                     StringComparison.Ordinal)
+                || !string.Equals(
+                    expected.invocationId,
+                    candidate.invocationId,
+                    StringComparison.Ordinal)
                 || !PathsEqual(expected.projectRoot, candidate.projectRoot)
                 || !PathsEqual(expected.publicationRoot, candidate.publicationRoot)
                 || !PathsEqual(expected.destination, candidate.destination)
@@ -1492,8 +1831,9 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class Journal
         {
-            public int schemaVersion;
+            public int formatVersion;
             public string owner;
+            public string invocationId;
             public string transactionId;
             public string phase;
             public string state;
@@ -1523,9 +1863,10 @@ namespace Build.Pipeline.Editor
         internal const string EmptyIdentity = "EMPTY";
         internal const string OwnerFileName = ".buildpipeline-owner.json";
         internal const string OwnerTemporaryFileName = ".bp-owner.tmp";
-        internal const string ArtifactManifestFileName = "AddressablesArtifacts.json";
+        internal const string ArtifactManifestFileName =
+            AddressablesArtifactManifestFormat.FileName;
 
-        private const int OwnerSchemaVersion = 1;
+        private const int OwnerFormatVersion = 1;
         private const int MaximumOwnerBytes = 64 * 1024;
         private const int MaximumManifestBytes = 16 * 1024 * 1024;
         private const int MaximumEntries = 250000;
@@ -1552,7 +1893,7 @@ namespace Build.Pipeline.Editor
 
             var marker = new StageOwnerDocument
             {
-                schemaVersion = OwnerSchemaVersion,
+                formatVersion = OwnerFormatVersion,
                 owner = StageOwnerIdentifier,
                 transactionId = transactionId,
                 checksum = string.Empty
@@ -1594,7 +1935,7 @@ namespace Build.Pipeline.Editor
                 "Addressables artifact manifest");
             var owner = new OwnerDocument
             {
-                schemaVersion = OwnerSchemaVersion,
+                formatVersion = OwnerFormatVersion,
                 owner = OwnerIdentifier,
                 transactionId = transactionId,
                 manifestSha256 = ComputeSha256(manifestBytes)
@@ -1725,7 +2066,7 @@ namespace Build.Pipeline.Editor
             byte[] ownerBytes;
             byte[] manifestBytes;
             OwnerDocument owner;
-            PublicationManifest manifest;
+            AddressablesArtifactManifest manifest;
             try
             {
                 ownerBytes = ReadBoundedFile(
@@ -1737,7 +2078,9 @@ namespace Build.Pipeline.Editor
                     MaximumManifestBytes,
                     "Addressables artifact manifest");
                 owner = JsonUtility.FromJson<OwnerDocument>(DecodeStrictUtf8(ownerBytes, "Addressables ownership document"));
-                manifest = JsonUtility.FromJson<PublicationManifest>(DecodeStrictUtf8(manifestBytes, "Addressables artifact manifest"));
+                manifest = AddressablesArtifactManifestFormat.Deserialize(
+                    DecodeStrictUtf8(manifestBytes, "Addressables artifact manifest"),
+                    $"Addressables artifact manifest '{manifestPath}'");
             }
             catch (Exception exception)
             {
@@ -1748,7 +2091,7 @@ namespace Build.Pipeline.Editor
 
             string manifestHash = ComputeSha256(manifestBytes);
             if (owner == null
-                || owner.schemaVersion != OwnerSchemaVersion
+                || owner.formatVersion != OwnerFormatVersion
                 || !string.Equals(owner.owner, OwnerIdentifier, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(owner.transactionId)
                 || !Guid.TryParseExact(owner.transactionId, "N", out _)
@@ -1760,9 +2103,7 @@ namespace Build.Pipeline.Editor
                     $"Addressables publication ownership is invalid or belongs to another transaction: '{publicationDirectory}'.");
             }
 
-            if (manifest == null
-                || manifest.schemaVersion != 2
-                || string.IsNullOrWhiteSpace(manifest.buildTarget)
+            if (string.IsNullOrWhiteSpace(manifest.buildTarget)
                 || string.IsNullOrWhiteSpace(manifest.contentVersion)
                 || manifest.files == null
                 || manifest.files.Length == 0)
@@ -1818,7 +2159,7 @@ namespace Build.Pipeline.Editor
             }
 
             if (marker == null
-                || marker.schemaVersion != OwnerSchemaVersion
+                || marker.formatVersion != OwnerFormatVersion
                 || !string.Equals(marker.owner, StageOwnerIdentifier, StringComparison.Ordinal)
                 || !string.Equals(marker.transactionId, transactionId, StringComparison.Ordinal)
                 || string.IsNullOrWhiteSpace(marker.checksum))
@@ -1974,7 +2315,7 @@ namespace Build.Pipeline.Editor
                     $"Addressables publication source tree is unavailable or unsafe: '{sourceRoot}'.");
             }
 
-            BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+            BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                 destinationRoot,
                 "Addressables publication mapped backup directory");
             var pending = new Stack<Tuple<string, string, int>>();
@@ -2010,7 +2351,7 @@ namespace Build.Pipeline.Editor
                         Path.GetFileName(sourceEntry));
                     if ((attributes & FileAttributes.Directory) != 0)
                     {
-                        BuildPathPolicy.EnsureLegacyWindowsDirectoryPathBudget(
+                        BuildPathPolicy.EnsureWin32MaxDirectoryPathBudget(
                             mappedEntry,
                             "Addressables publication mapped backup directory");
                         pending.Push(Tuple.Create(
@@ -2020,7 +2361,7 @@ namespace Build.Pipeline.Editor
                     }
                     else
                     {
-                        BuildPathPolicy.EnsureLegacyWindowsPathBudget(
+                        BuildPathPolicy.EnsureWin32MaxPathBudget(
                             mappedEntry,
                             "Addressables publication mapped backup file");
                     }
@@ -2028,7 +2369,9 @@ namespace Build.Pipeline.Editor
             }
         }
 
-        private static void ValidateExactManifestTree(string root, PublicationManifest manifest)
+        private static void ValidateExactManifestTree(
+            string root,
+            AddressablesArtifactManifest manifest)
         {
             if (manifest.files.Length > MaximumEntries)
             {
@@ -2043,7 +2386,7 @@ namespace Build.Pipeline.Editor
             };
             var allowedDirectories = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             long totalBytes = 0;
-            foreach (PublicationManifestEntry entry in manifest.files)
+            foreach (AddressablesArtifactManifestEntry entry in manifest.files)
             {
                 if (entry == null || string.IsNullOrWhiteSpace(entry.path)
                     || string.IsNullOrWhiteSpace(entry.kind)
@@ -2333,7 +2676,7 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class OwnerDocument
         {
-            public int schemaVersion;
+            public int formatVersion;
             public string owner;
             public string transactionId;
             public string manifestSha256;
@@ -2342,28 +2685,11 @@ namespace Build.Pipeline.Editor
         [Serializable]
         private sealed class StageOwnerDocument
         {
-            public int schemaVersion;
+            public int formatVersion;
             public string owner;
             public string transactionId;
             public string checksum;
         }
 
-        [Serializable]
-        private sealed class PublicationManifest
-        {
-            public int schemaVersion = 0;
-            public string buildTarget = string.Empty;
-            public string contentVersion = string.Empty;
-            public PublicationManifestEntry[] files = Array.Empty<PublicationManifestEntry>();
-        }
-
-        [Serializable]
-        private sealed class PublicationManifestEntry
-        {
-            public string kind = string.Empty;
-            public string path = string.Empty;
-            public long size = 0;
-            public string sha256 = string.Empty;
-        }
     }
 }

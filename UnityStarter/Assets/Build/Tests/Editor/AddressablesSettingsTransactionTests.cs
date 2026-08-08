@@ -77,6 +77,40 @@ namespace Build.Pipeline.Tests.Editor
                 Is.Empty);
         }
 
+        [Test]
+        public void EnsureNoPendingRecovery_WhenNoStateExists_IsZeroWrite()
+        {
+            string stateRoot = GetStateRoot();
+
+            Assert.That(Directory.Exists(stateRoot), Is.False);
+            Assert.DoesNotThrow(() =>
+                AddressablesSettingsTransaction.EnsureNoPendingRecovery(projectRoot));
+            Assert.That(Directory.Exists(stateRoot), Is.False);
+        }
+
+        [Test]
+        public void Begin_WhenRecoveryEvidenceExists_FailsClosedWithoutRestoringIt()
+        {
+            AddressablesSettingsTransaction transaction = BeginTransaction();
+            MutateConfigurationFiles();
+            byte[] mutatedAssetBytes = File.ReadAllBytes(assetPath);
+            byte[] mutatedMetaBytes = File.ReadAllBytes(metaPath);
+            string journalPath = Path.Combine(GetStateRoot(), "active.json");
+            byte[] journalBeforeRetry = File.ReadAllBytes(journalPath);
+
+            InvalidOperationException exception = Assert.Throws<InvalidOperationException>(() =>
+                BeginTransaction());
+
+            StringAssert.Contains("Pending Addressables settings recovery", exception.Message);
+            Assert.That(File.ReadAllBytes(assetPath), Is.EqualTo(mutatedAssetBytes));
+            Assert.That(File.ReadAllBytes(metaPath), Is.EqualTo(mutatedMetaBytes));
+            Assert.That(File.ReadAllBytes(journalPath), Is.EqualTo(journalBeforeRetry));
+
+            transaction.RestoreAndComplete();
+            AssertOriginalIdentity();
+            AssertStateCleared();
+        }
+
         [TestCase(AddressablesSettingsTransaction.JournalPreparedCheckpoint)]
         [TestCase(AddressablesSettingsTransaction.TransactionDirectoryCreatedCheckpoint)]
         [TestCase(AddressablesSettingsTransaction.OwnerTemporaryWrittenCheckpoint)]

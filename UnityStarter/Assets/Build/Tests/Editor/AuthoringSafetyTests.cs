@@ -135,6 +135,18 @@ namespace Build.Pipeline.Tests.Editor
         }
 
         [Test]
+        public void RuntimeVersionInfoPath_RequiresExactResourcesDirectory()
+        {
+            Assert.DoesNotThrow(() => RuntimeVersionInfoPathPolicy.Validate(
+                "Assets/Build/Runtime/Resources/VersionInfoData.asset"));
+
+            ArgumentException exception = Assert.Throws<ArgumentException>(() =>
+                RuntimeVersionInfoPathPolicy.Validate(
+                    "Assets/Build/Runtime/Generated/VersionInfoData.asset"));
+            Assert.That(exception.Message, Does.Contain("Resources"));
+        }
+
+        [Test]
         public void ProjectRelativeDirectory_UsesHostFileSystemCasingRule()
         {
             string parent = Path.Combine(Path.GetTempPath(), "BuildAuthoringPathFieldCase");

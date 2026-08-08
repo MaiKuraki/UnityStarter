@@ -47,7 +47,7 @@ This asset-style package lives below `Assets/ThirdParty/CycloneGames`; its `pack
 | `CycloneGames.Networking.Serializer.MessagePack` | MessagePack adapter. | Explicit asmdef reference; requires `com.github.messagepack-csharp`. |
 | `CycloneGames.Networking.Adapter.Mirror` | Mirror transport bridge. | Explicit asmdef reference; requires `com.mirror-networking.mirror`. |
 | `CycloneGames.Networking.Adapter.Mirage` | Mirage transport bridge. | Explicit asmdef reference; requires `com.miragenet.mirage`. |
-| `CycloneGames.Networking.Adapter.Nakama` | Nakama client/backend bridge. | Explicit asmdef reference; requires `com.heroiclabs.nakama-unity`. |
+| `CycloneGames.Networking.Adapter.Nakama` | Nakama client/backend bridge. | Explicit asmdef reference; requires `com.heroiclabs.nakama-unity` and UniTask. |
 
 An optional assembly is eligible to compile when its target platform matches, every assembly reference resolves, its `versionDefines` capability symbols are generated, and its `defineConstraints` pass. `autoReferenced: false` does not disable assembly compilation; it means a consumer must add an explicit asmdef reference before using that assembly's API. Do not duplicate generated capability symbols in PlayerSettings.
 
@@ -173,13 +173,25 @@ The FNV-1a checksum detects accidental corruption and parser disagreement; it is
 | --- | --- | --- |
 | Mirror | Client/server/host Unity bridge. | All Mirror SDK access, lifecycle work, sends, broadcasts, disconnects, and callbacks stay on the Unity main owner thread. There is no cross-thread send queue. The reported payload ceiling is the configured limit capped by `NetworkMessages.MaxContentSize` after the worst-case `ArraySegment<byte>` prefix and Cyclone header; a missing or unqueryable transport reports zero. |
 | Mirage | Client/server Unity bridge. | All Mirage SDK access stays on the Unity main owner thread. Server sends, broadcasts, and disconnects accept authenticated remote-client routes only; host-local and client-to-authority routes have distinct internal roles. The reported payload ceiling is capped by assigned `SocketFactory` limits after Mirage message-ID, packed-length, and Cyclone-header overhead; missing factories report zero. |
-| Nakama | Client-side auth, socket, realtime match, presence, and matchmaking bridge. | Reliable match-state channel only. Injected `ISocket` callbacks and task continuations must remain on the Unity main owner thread; violations fail immediately and are not queued. Pending sends and live connection routes are bounded. `SendToServer` requires an authoritative match; server-to-client and server-broadcast endpoint routes are unsupported; presence-origin state is dispatched as peer-to-peer. |
+| Nakama | Client-side auth, socket, realtime match, presence, and matchmaking bridge. | Reliable match-state channel only. Injected `ISocket` callbacks and task continuations must remain on the Unity main owner thread; violations fail immediately and are not queued. Every connect epoch uses a new socket: adapter-owned sockets rotate automatically, while an injected socket must be newly created, disconnected, unused, and owned by no other adapter. Pending sends, live connection routes, and socket-close operations are bounded. `SendToServer` requires an authoritative match; server-to-client and server-broadcast endpoint routes are unsupported; presence-origin state is dispatched as peer-to-peer. |
 
 Mirror and Mirage allocate one managed connection wrapper for each live directional route and reuse it for packet dispatch, error reporting, statistics, and lifecycle callbacks. Disconnect, backend-object replacement, server/client stop, and adapter destruction invalidate the wrapper, remove it from the owner cache, and release its backend reference. Mirage host mode intentionally has separate authority and host-local wrappers because those routes have different send permissions. This removes per-packet struct-to-`INetConnection` boxing in adapter dispatch. Nakama likewise caches one bounded wrapper per authority or peer route; match replacement, presence leave, stop, and destruction remove the route before notification and clear adapter, presence, and target references. Invalidated wrappers keep only stable value diagnostics and reject routing or mutation. These are adapter-local allocation and lifetime properties, not an end-to-end zero-allocation claim because SDK serialization, transports, delegates, and product handlers may still allocate. Compile and test each adapter with the exact SDK version used by the product before relying on its runtime behavior.
 
 Adapters use explicit instance references and receive canonical bytes through `INetworkMessageEndpoint`; they do not select a serializer. Unsupported channels, capabilities, unknown non-system message IDs, or operations fail explicitly. Product code must handle `NetworkSendStatus`/boolean failure and backend exceptions according to the called API.
 
 `NakamaNetAdapter.TrySendMatchState` is a backend service primitive rather than an `INetworkMessageEndpoint` authority route. It follows Nakama target-presence semantics; the product owns authorization and recipient policy when using it directly. SDK references exposed by the Nakama integration remain subject to the same Unity main-owner-thread contract.
+
+The adapter keeps its synchronous queue/control API and socket-event signatures, but delegates asynchronous SDK work to observed `UniTask` workers. `.Forget()` is the terminal exception observer for these detached workers; it does not own or add cancellation. Expected provider faults are routed through `OnError`; any exception that escapes that boundary is published through UniTask's unobserved-exception pipeline instead of escaping an `async void` callback. Every product observer (`OnConnectedToServer`, disconnect, route, presence, match-state, data, matchmaker, and error notifications) is isolated from the transport state machine. After any observer that can re-enter lifecycle code, the adapter revalidates socket epoch, match, and connection before continuing dispatch. Observer exceptions are published once through the same UniTask pipeline.
+
+Connect work is bounded to one active provider operation plus one coalesced latest request. A duplicate `StartClient` during the same `StartingClient` generation is idempotent. A restart requested after `Stop`, client/socket replacement, or a re-entrant failure observer overwrites the sole latest slot and starts on the next Unity `Update` after the active worker reaches a terminal state; this one-frame handoff prevents synchronous provider failures from creating recursive retry loops. `Stop`, `Initialize`, and destruction invalidate queued work. There is no predecessor-task chain. If the active provider task never terminates, the latest request remains blocked and capacity stays constant rather than growing. The adapter never reconnects the same socket because Nakama 3.21.1 queues Unity-thread events against mutable listener lists. Adapter-owned sockets therefore receive a new `UnitySocket` dispatcher for each epoch, and the retired dispatcher is destroyed after its tracked close terminates. A process-wide weak registry claims every adapter-owned or injected socket before event binding, so an `ISocket` exposed by one adapter cannot be injected into another adapter and two adapters cannot bind the same fresh socket. Replacing or destroying an adapter releases an unused injected-socket claim; once a connection epoch begins, or when an adapter-owned socket is relinquished, that socket remains retired while referenced. Call `Initialize` with a new disconnected `ISocket` before restarting an injected socket. Replacing a socket also requests close of the previous connected or connecting instance before publishing the replacement. Mutating APIs reject use after destruction; `Stop` remains an idempotent teardown no-op after destruction.
+
+Device authentication has a separate adapter-wide single-flight gate, including across injected-client replacement. Stop or timeout cancels only the current connection's wait. `ClearSession` and `Initialize` advance a session/authentication epoch; an older provider result remains observed until terminal but is discarded and cannot restore the cleared or replaced session. `ClearSession` also invalidates an active, coalesced, or next-frame scheduled connect request, so logout cannot trigger an automatic reauthentication during the handoff window. A later explicit authentication waits for the old real request to terminate before creating another. With the currently audited Nakama UnityWebRequest adapter, the SDK cancellation path completes its task but does not physically abort the underlying `UnityWebRequest`; mechanically passing each lifecycle token would therefore permit orphan HTTP requests to overlap after rapid restart. The adapter deliberately keeps the real provider task alive and observed and fails on the configured wait timeout. Real request cancellation requires a verified SDK/source adapter that aborts and disposes the request and its token registration.
+
+Leave-match, matchmaker-add, matchmaker-remove, and matched-join SDK operations each have a single-flight gate. Stop invalidates their state generation and unbinds socket events, but those Nakama SDK methods do not accept the adapter cancellation token: each gate remains held until the underlying SDK task actually reaches a terminal state. Socket delegates capture their bound socket identity and event generation, and physical socket replacement prevents a retired Unity event queue from targeting the new epoch. Sends are admitted only while that binding is active; stale send faults are suppressed, pooled payload memory is returned only after the provider task is terminal, and successful byte/packet counters remain adapter-lifetime statistics. A provider task that never completes therefore fails closed by blocking another operation of that kind instead of allowing unbounded task growth; the product should treat that adapter instance as unhealthy and replace it through its composition/lifecycle policy.
+
+Socket close operations are deduplicated by socket object identity rather than by one adapter-wide task. The in-flight slot is published before calling the SDK, so synchronous completion, failure, or event re-entry cannot start a duplicate close. During `Initialize` replacement, capacity is reserved first, old socket events are unbound and the replacement state is committed, and only then is the old provider close started; an inline `Closed` callback therefore cannot re-enter a half-published replacement transaction. Up to four ordinary distinct closes may be pending concurrently; one additional slot is reserved for adapter destruction so teardown cannot be starved by reconnect churn. A fifth ordinary close reports `TransportError.Congestion` at most once until capacity recovers, and socket replacement fails before publishing partial state when it cannot reserve a close slot. Completed slots are reclaimed on the next close or connect request. Adapter-owned Unity dispatchers are destroyed only after their tracked provider close reaches a terminal state. Connecting a socket waits only for that same socket's tracked close, not an unrelated socket shutdown. A late close fault from a retired socket does not dispatch `OnError` against the replacement socket's lifecycle.
+
+Nakama can return an authoritative `MatchId`, a relayed-match `Token`, or both. The adapter rejects a result only when both join credentials are empty and clears the ticket so matchmaking can be retried. A token-only result is still passed to `ISocket.JoinMatchAsync(IMatchmakerMatched)`; the pre-join `OnMatched` callback receives an invalid `NetworkMatchId` because the backend-neutral contract has no token field, while the joined match ID becomes available through adapter match state after the SDK join succeeds. A failed join clears the ticket before reporting the error, so a subsequent matchmaker request is not locked out.
 
 Before shipping, verify the installed SDK version, native/browser transport, callback threads, suspend/resume, shutdown, reconnect, encryption, packet limits, stripping/code generation, and backend outage behavior. Adapter capability flags are declarations, not platform evidence.
 
@@ -251,6 +263,49 @@ public void ReceiveMoveCommand(ReadOnlySpan<byte> payload)
 }
 ```
 
+#### Single-owner thread and desync validation contract
+
+Every `INetTransport` instance has one composition-selected owner thread. Control, send,
+broadcast, polling, event subscription, and synchronous callbacks remain on that thread;
+the transport contract provides no lock or implicit cross-thread queue. Pure Core transports
+may select any constructing/composition thread. Mirror, Mirage, Nakama, and other Unity
+adapters use the Unity main thread because they own Unity and backend SDK objects.
+
+`LockstepManager<TInput>` and `DesyncDetector<THasher>` capture their constructing thread as
+owner. All state access and callbacks remain on it. Editor and Development builds fail fast
+on a wrong-thread call; release hot paths add no synchronization or queueing. A transport
+callback that receives lockstep input must therefore already run on the lockstep owner thread,
+or the product must marshal explicitly at its bounded adapter boundary before calling Core.
+
+Core lockstep and transport callbacks are synchronous and do not carry a cancellation token.
+During shutdown or session teardown, the owner must stop the transport, detach callbacks, and
+clear its bounded queues before releasing the Core objects. Unity adapters perform their
+backend-callback cleanup through `OnDisable`/`OnDestroy`; they must not leave backend callbacks
+registered across destruction or a domain reload.
+
+`DesyncDetector<THasher>` stamps every hash-history slot with its exact frame. Use
+`EvaluateRemoteHash` for an allocation-free `DesyncValidationResult`:
+
+| Verdict | Meaning | `ValidateRemoteHash` compatibility result | Desync event |
+| --- | --- | --- | --- |
+| `HashMatch` | The exact retained frame hash matches. | `true` | No |
+| `HashMismatch` | The exact retained frame hash differs. | `false` | `OnDesyncDetected` fires inline |
+| `FrameUnavailable` | The frame is future or was never finalized locally. | `true` | No |
+| `Expired` | The frame is outside the retained history window. | `true` | No |
+
+Use `TryGetFrameHash` before sending a historical hash. Legacy `GetFrameHash` remains for
+source compatibility and reads the raw ring slot, which may belong to another frame after
+reuse. `Reset` clears both hashes and frame stamps. Unavailable and expired verdicts are
+protocol blind spots, not proof of synchronization; the product decides whether to retry,
+request a snapshot, disconnect, or record diagnostics.
+
+`OnDesyncDetected` is now reserved for confirmed `HashMismatch` results. Earlier revisions
+also raised it for expired evidence; callers that used that behavior as a blind-spot warning
+must migrate to `OnValidationUnavailable` or inspect `EvaluateRemoteHash`. Frame ordering uses
+modular `int` arithmetic and supports `int.MaxValue` to `int.MinValue` rollover; comparisons
+separated by `2^31` or more ticks are intentionally unsupported because their ordering is
+ambiguous.
+
 ### Host-handoff session recovery
 
 A session recovery flow preserves connection state during a host migration:
@@ -294,7 +349,7 @@ if (!pipeline.ValidateIncoming(connectionId, messageId, frameHeader, payload, ou
 | `NetworkBufferPool` | Process pool; each `Get` returns one lease disposed exactly once. | Pool bookkeeping is synchronized; buffer contents remain single-owner. | Retention is bounded and configurable. Stale/default/double return fails explicitly; clearing sensitive bytes costs CPU. |
 | `NetworkBuffer` | Generation-checked `readonly struct` lease. Copies share the same token. | Never read/write one lease concurrently. | Disposing one copy invalidates all copies. Borrowed spans/segments expire with the lease. |
 | `NetworkMessageCatalog` | Composition root registers cold-start manifests. | Catalog mutation/query is locked; do not register per tick. | Conflicts return `false` without partial publication. |
-| `LocalLoopTransport` | One in-process development pair; caller stops/disposes it. | Main-thread polling. | One peer, reliable channel, bounded queues and bounded dispatch; unavailable in release builds. |
+| `LocalLoopTransport` | One in-process development pair; caller stops/disposes it. | Single caller-selected owner thread; Core does not require Unity main-thread polling. | One peer, reliable channel, bounded queues and bounded dispatch; unavailable in release builds. |
 | `RateLimiter` | One session/security owner; remove disconnected peers and prune idle state. | Concurrent connection table with per-bucket synchronization. | Bounded tracked connections and token budgets; invalid time or exhausted capacity fails closed. |
 | `NetworkReplayGuard` | One session/security owner; clear on shutdown. | Concurrent connection table with locked per-message windows. | Bounded peers/streams and a 64-sequence window; duplicate, stale, invalid, or over-capacity input is rejected. |
 | `NetworkProfiler` | Diagnostics owner; reset at session boundaries. | Counters/statistics are synchronized. | Tracked message IDs are capped; stable-copy queries are cold-path and allocate. |
@@ -348,7 +403,7 @@ Run the following checks for every shipping configuration:
 1. Force Unity script refresh/reimport and confirm every active assembly compiles.
 2. Run `CycloneGames.Networking.Tests.Editor` and the activated serializer test assemblies.
 3. Run every repository domain Networking package test suite whose manifest or adapter references Core.
-4. Compile optional Mirror, Mirage, Nakama, and MessagePack assemblies only with the exact supported dependency installed; test both present and absent dependency states.
+4. Compile optional Mirror, Mirage, Nakama, and MessagePack assemblies only with the exact supported dependency installed; test both present and absent dependency states. For Nakama, run `CycloneGames.Networking.Adapter.Nakama.Tests.Editor`, verify each SDK fault reports through `OnError` once, subscriber exceptions reach the configured UniTask unobserved-exception pipeline, stale completions cannot mutate state after shutdown/generation changes, two adapters cannot claim the same socket, a socket cannot be reused across epochs, an inline close callback cannot re-enter a half-published replacement, `ClearSession` cancels queued handoff work, and every send terminal path returns its pooled buffer and decrements the pending-send count.
 5. Run target Player/IL2CPP builds, stripping checks, backend interoperability, suspend/resume, shutdown, packet-loss/fuzz tests, and long-duration load for every shipping configuration.
 6. Profile allocation, throughput, latency, scale, memory ceilings, and NativeContainer performance with representative workloads.
 7. Manually verify Inspector Undo/Redo, Prefab Overrides, multi-object editing, domain reload, and asset safety.

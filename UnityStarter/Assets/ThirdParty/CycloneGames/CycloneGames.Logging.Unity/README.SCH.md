@@ -195,9 +195,11 @@ Environment variable 先解析，command-line argument 后解析。同一个 opt
 
 `loggingSettings` 必须指向当前项目 `Assets/` 树中的 `LoggingSettings` asset，不能指向 generated override asset。
 
-只要存在任意 override，preprocessing 就会 clone canonical asset 或 defaults，应用并校验 override，再创建 generated Resources asset。Player bootstrap 优先加载该 override。Postprocessing 在身份校验后删除它。
+只要存在任意 override，preprocessing 就会 clone canonical asset 或 defaults，应用并校验 override，再创建 generated Resources asset。Player bootstrap 优先加载该 override。Postprocessing 只有在 provenance、payload hash、Unity GUID 与文件 hash 全部校验通过后才删除它。Processor 只保存 generated settings asset，不会调用项目级全局 `AssetDatabase.SaveAssets()`。
 
-Cleanup 采用 fail-closed。Marker 记录 schema、transaction、project identity、asset path、phase 与 generated asset GUID。JSON parsing 前 marker input 受 64 KiB 上限约束；过大、不可读或不匹配的 marker 会与未知 asset 一起保留，并让 cleanup 失败，而不是删除未经验证的数据。
+Cleanup 是 fail-closed transaction。`journal.json` 记录随机 transaction ID、可随项目移动的 project token、phase、revision、受管 asset path、payload SHA-256、Unity GUID、文件 SHA-256/size，以及 transaction 拥有的每次 folder creation。调用 `AssetDatabase.CreateFolder` 前会先 flush 带 transaction-unique staging path 的 folder intent；随后将 staging folder GUID 以 `Applied` 状态持久化，在 GUID 不变的前提下把目录移动到最终路径，再将记录推进为 `Identified`。显式恢复会在清理前协调 intent-only、staged、已移动但尚未发布、已识别四类目录；它不会把最终路径上无关的空目录当作 ownership 证据，因此能在不删除歧义数据的前提下关闭 folder creation、GUID 查询、move 和 journal 发布周围的中断窗口。Generated asset 自身携带匹配的隐藏 provenance 与 payload hash，因此 `AssetDatabase.CreateAsset` 和 active journal 发布之间的崩溃窗口也能安全恢复。Journal 输入上限为 64 KiB，generated asset hash 上限为 1 MiB，state entry 数量有界；受管路径拒绝 traversal 与 reparse point。
+
+正常 preprocessing 永远不会执行恢复。中断操作留下的 `journal.json`、`journal.json.tmp`、`journal.json.bak`、`journal.recovery.json`、lock 或 generated override 都会阻止下一次 build。恢复必须显式调用 `CycloneGames.Logging.Unity.Editor.LoggingSettingsBuildRecovery.Recover(string projectRoot)`。恢复会评估所有 journal candidate，在删除 asset 前验证 ownership；身份不明确时保留全部证据。恢复规范化会先 flush `journal.recovery.json`，裁剪旧 candidate 时始终保留该 anchor，最后将其原子改名为 main journal；因此恢复过程自身被中断时仍至少保留一份持久 ownership 记录。Journal 不存储 checkout 的绝对路径，因此完整移动项目不会让原本匹配的 transaction 失效。
 
 ## 持久化与清理
 
@@ -205,7 +207,8 @@ Cleanup 采用 fail-closed。Marker 记录 schema、transaction、project identi
 | --- | --- | --- |
 | Canonical settings | `Assets/Resources/CycloneGames.Logging.Unity/LoggingSettings.asset` | 项目拥有的 Unity asset；通常提交；删除后回退 package defaults |
 | Build override | `Assets/Generated/CycloneGames.Logging.Unity/Resources/CycloneGames.Logging.Unity/LoggingSettingsBuildOverride.asset` | 临时 build transaction；不要提交或作为 profile 使用 |
-| Build marker | `Library/CycloneGames.Logging.Unity/LoggingSettingsBuildOverride.marker.json`，UTF-8 JSON，最大 64 KiB | Build processor；只在有界读取且身份完全匹配后清理 |
+| Build transaction | `.buildpipeline/transactions/logging-settings/`，UTF-8 JSON 与 exclusive lock | 可显式恢复、被 Git 忽略的 Editor state；main、temporary、backup 与 recovery-anchor journal 都是 candidate |
+| Folder staging | `Assets/**/__CycloneGamesLoggingBuild_<transactionId>_<index>` 与 Unity `.meta` | Transaction 拥有、通常短暂存在的 Editor evidence；匹配 journal 存在时不得提交或手工删除；显式恢复会验证 GUID/空目录条件并移动或清理 |
 | Active default log | `Application.persistentDataPath/App.log`，UTF-8 without BOM 明文 | `FileLogSink` 写入/rotation；产品拥有 privacy、quota、backup、retention 与最终 cleanup |
 | Rotated archives | Active log 同目录 | `FileLogSink` 只删除符合自身命名语法且超出配置数量的 archive |
 | Custom log | Fully qualified `customFilePath` | 产品/platform owner；显式验证 sandbox 与 cleanup |
@@ -242,7 +245,7 @@ Runtime code 不使用 unsafe code、动态代码生成、runtime reflection dis
 | 没有记录 | 检查 `minimumSeverity`、`categoryFilter`、active sink、pipeline drop 与 Unity handoff drop |
 | Burst 时 Unity Console 丢记录 | 检查两层 queue；不能把 critical reserve 当作投递保证 |
 | 文件不存在 | 检查 WebGL exclusion、path mode、绝对 custom path、sandbox、quota 与 `FileLogSink` health |
-| Generated override cleanup 阻止 build | 检查 generated asset 与 marker；identity mismatch 会有意拒绝删除 |
+| LoggingSettings recovery 阻止 build | 检查 `.buildpipeline/transactions/logging-settings/` 与 generated asset，再通过 owning build workspace 调用 `LoggingSettingsBuildRecovery.Recover(projectRoot)`；identity mismatch 会有意拒绝删除 |
 | Play 中 settings 修改未生效 | Runtime state 在初始化时已经复制；在 main thread 调用 `Reinitialize` 并检查结果 |
 
 ## 验证
@@ -258,7 +261,7 @@ Release validation 还应执行：
 1. 在 domain reload 启用与禁用两种情况下反复进入、退出 Play Mode；
 2. 验证 external writer ownership、initialization race、no-sink behavior 与 shutdown-timeout recovery；
 3. 分别执行无 override build，以及 environment、command-line、profile、mode 与 individual override 组合 build；
-4. 确认成功 build 后 generated override 与 marker 被清理，并用 identity mismatch fixture 验证 fail-closed 保留；
+4. 确认成功 build 后 generated override、journal 与 staging folder 被清理，并用 identity mismatch 和 non-empty-folder fixture 验证 fail-closed evidence 保留；
 5. 让两级 queue 的 count/character 饱和，并检查 critical/drop/abandoned counter；
 6. 在每个 target 测试 pause、graceful quit、forced termination、file permission、rotation、low storage 与 recovery；
 7. 使用 IL2CPP 时单独构建；

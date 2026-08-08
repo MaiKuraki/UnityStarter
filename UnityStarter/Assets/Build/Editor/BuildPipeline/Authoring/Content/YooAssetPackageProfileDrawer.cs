@@ -21,6 +21,7 @@ namespace Build.Pipeline.Editor
             "packageNote",
             "compression",
             "fileNameStyle",
+            "cryptography",
             "bundledCopyOption",
             "bundledCopyTags",
             "useAssetDependencyDatabase",
@@ -48,6 +49,10 @@ namespace Build.Pipeline.Editor
                 }
 
                 height += Spacing + EditorGUI.GetPropertyHeight(child, includeChildren: true);
+                if (fieldName == "cryptography")
+                {
+                    height += Spacing + GetCryptographyDiagnosticHeight(child);
+                }
             }
 
             return height + Spacing;
@@ -87,6 +92,14 @@ namespace Build.Pipeline.Editor
                     if (fieldName == "packageName")
                     {
                         DrawPackageName(childRect, child);
+                    }
+                    else if (fieldName == "cryptography")
+                    {
+                        DrawCryptography(childRect, child);
+                        Rect diagnosticRect = TakeLine(
+                            ref position,
+                            GetCryptographyDiagnosticHeight(child));
+                        DrawCryptographyDiagnostic(diagnosticRect, child);
                     }
                     else
                     {
@@ -142,6 +155,13 @@ namespace Build.Pipeline.Editor
 
         private static bool ShouldDraw(SerializedProperty profile, string fieldName)
         {
+            if (fieldName == "compression")
+            {
+                return (YooAssetBuildPipelineKind)profile
+                    .FindPropertyRelative("buildPipeline")
+                    .intValue == YooAssetBuildPipelineKind.Scriptable;
+            }
+
             if (fieldName != "bundledCopyTags")
             {
                 return true;
@@ -152,6 +172,42 @@ namespace Build.Pipeline.Editor
                 .enumValueIndex;
             return option == YooAssetBundledCopyOption.ClearAndCopyByTags
                 || option == YooAssetBundledCopyOption.OnlyCopyByTags;
+        }
+
+        private static void DrawCryptography(
+            Rect position,
+            SerializedProperty property)
+        {
+            EditorGUI.PropertyField(
+                position,
+                property,
+                new GUIContent(
+                    "Cryptography",
+                    "Optional typed configuration asset. No class names, keys, or EditorPrefs values are entered here."));
+        }
+
+        private static float GetCryptographyDiagnosticHeight(SerializedProperty property)
+        {
+            YooAssetCryptographyAvailability availability =
+                YooAssetCryptographyAuthoringCatalog.Inspect(
+                    property.objectReferenceValue as YooAssetCryptographyConfiguration);
+            return EditorStyles.helpBox.CalcHeight(
+                new GUIContent(availability.Diagnostic),
+                Math.Max(100f, EditorGUIUtility.currentViewWidth - 80f));
+        }
+
+        private static void DrawCryptographyDiagnostic(
+            Rect position,
+            SerializedProperty property)
+        {
+            YooAssetCryptographyAvailability availability =
+                YooAssetCryptographyAuthoringCatalog.Inspect(
+                    property.objectReferenceValue as YooAssetCryptographyConfiguration);
+            MessageType type = availability.Status == YooAssetCryptographyAvailabilityStatus.Available
+                || availability.Status == YooAssetCryptographyAvailabilityStatus.None
+                    ? MessageType.Info
+                    : MessageType.Error;
+            EditorGUI.HelpBox(position, availability.Diagnostic, type);
         }
 
         private static Rect TakeLine(ref Rect remaining, float height)
